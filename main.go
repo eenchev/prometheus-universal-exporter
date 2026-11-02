@@ -405,6 +405,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(logExportLoopDone)
 		server.OTLPLogExportLoop(loopsCtx)
 	}()
+	traceExportLoopDone := make(chan struct{})
+	go func() {
+		defer close(traceExportLoopDone)
+		server.OTLPTraceExportLoop(loopsCtx)
+	}()
 	// The allocator client heartbeats and takes new bundles until run
 	// returns: through --web.shutdown-delay too, its heartbeats saying the
 	// exporter is shutting down.
@@ -521,6 +526,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		<-exportLoopDone
 		<-scrapeLoopDone
 		<-logExportLoopDone
+		<-traceExportLoopDone
 		// The allocator client stops once nothing is served any more, and is
 		// waited for: a bundle it is writing is put in force or refused
 		// before the process ends, rather than left half written.

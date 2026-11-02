@@ -15,7 +15,8 @@ import (
 
 // The debug page's endpoint test, at --web.debug=full with otlp.enabled:
 // one empty export, an ExportMetricsServiceRequest without a resource, or
-// with otlp.logs an ExportLogsServiceRequest, sent to the endpoint the
+// with otlp.logs an ExportLogsServiceRequest and with otlp.traces an
+// ExportTraceServiceRequest, sent to the endpoint the
 // configuration in force names — never to one the visitor names — as an
 // export is sent (postOTLP): with otlp.headers, otlp.tls, otlp.compression
 // and otlp.timeout. What it answers is reported whole: its status, how long
@@ -35,14 +36,15 @@ import (
 // X-Debug-Run header and a JSON body, which a page of another site cannot
 // send, behind web.basic_auth.
 
-// The bodies of an empty export of metrics and of logs.
+// The bodies of an empty export of metrics, of logs and of traces.
 const (
 	debugOTLPEmptyMetrics = `{"resourceMetrics":[]}`
 	debugOTLPEmptyLogs    = `{"resourceLogs":[]}`
+	debugOTLPEmptyTraces  = `{"resourceSpans":[]}`
 )
 
 // debugOTLPTestRequest is what the test takes: which endpoint, metrics,
-// the default, or logs.
+// the default, logs or traces.
 type debugOTLPTestRequest struct {
 	Signal string `json:"signal"`
 }
@@ -110,7 +112,7 @@ func (s *Server) debugOTLPTestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.manager.Get().OTLP
-	target, logs := cfg, false
+	target, kind := cfg, otlpSignalMetrics
 	switch req.Signal {
 	case "", "metrics":
 		req.Signal = "metrics"
@@ -123,9 +125,15 @@ func (s *Server) debugOTLPTestHandler(w http.ResponseWriter, r *http.Request) {
 			refuse(http.StatusConflict, "the OTLP log export is off (otlp.enabled and otlp.logs.enabled): there is no logs endpoint to test")
 			return
 		}
-		target.Endpoint, logs = cfg.Logs.Endpoint, true
+		target.Endpoint, kind = cfg.Logs.Endpoint, otlpSignalLogs
+	case "traces":
+		if !otlpTracesOn(cfg) {
+			refuse(http.StatusConflict, "the OTLP trace export is off (otlp.enabled and otlp.traces.enabled): there is no traces endpoint to test")
+			return
+		}
+		target.Endpoint, kind = cfg.Traces.Endpoint, otlpSignalTraces
 	default:
-		refuse(http.StatusBadRequest, "signal %q is no endpoint of the export; send metrics or logs", req.Signal)
+		refuse(http.StatusBadRequest, "signal %q is no endpoint of the export; send metrics, logs or traces", req.Signal)
 		return
 	}
 	if !s.debugOTLPTesting.CompareAndSwap(false, true) {
@@ -133,17 +141,20 @@ func (s *Server) debugOTLPTestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.debugOTLPTesting.Store(false)
-	answer := s.testOTLPEndpoint(r.Context(), target, req.Signal, logs)
+	answer := s.testOTLPEndpoint(r.Context(), target, req.Signal, kind)
 	s.unexportedLogger().Info("debug OTLP endpoint test served", "signal", req.Signal, "endpoint", answer.Endpoint, "ok", answer.OK)
 	writeDebugJSON(w, http.StatusOK, answer)
 }
 
 // testOTLPEndpoint sends cfg.Endpoint one empty export of the signal and
 // says what it answered.
-func (s *Server) testOTLPEndpoint(ctx context.Context, cfg model.OTLPConfig, signal string, logs bool) debugOTLPTestAnswer {
+func (s *Server) testOTLPEndpoint(ctx context.Context, cfg model.OTLPConfig, signal string, kind otlpSignalKind) debugOTLPTestAnswer {
 	raw := debugOTLPEmptyMetrics
-	if logs {
+	switch kind {
+	case otlpSignalLogs:
 		raw = debugOTLPEmptyLogs
+	case otlpSignalTraces:
+		raw = debugOTLPEmptyTraces
 	}
 	answer := debugOTLPTestAnswer{Signal: signal, Endpoint: redactedOTLPEndpoint(cfg.Endpoint), Body: raw,
 		Notes: []string{"One attempt: the test does not retry, where an export retries a network error, 429, 502, 503 and 504 within its budget. It counts in none of the export's self-metrics and changes nothing the status page shows."}}
@@ -180,7 +191,7 @@ func (s *Server) testOTLPEndpoint(ctx context.Context, cfg model.OTLPConfig, sig
 	answer.Status = fmt.Sprintf("%d %s", resp.status, http.StatusText(resp.status))
 	answer.Headers = headerLines(resp.header)
 	answer.Response = shownStart(bodyExcerpt(resp.body), debugBodyLimit)
-	made, err := otlpAnswerOf(resp, logs)
+	made, err := otlpAnswerOf(resp, kind)
 	switch {
 	case err == nil:
 		answer.OK = true

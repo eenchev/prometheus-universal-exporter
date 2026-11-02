@@ -629,7 +629,8 @@ func TestTheOTLPEndpointTestOfTheLogsEndpoint(t *testing.T) {
 }
 
 // The endpoint test is refused at edit, without OTLP, for the logs without
-// otlp.logs, without the run header, for another site, and while another
+// otlp.logs, for the traces without otlp.traces, for a signal OTLP has not,
+// without the run header, for another site, and while another
 // is in progress.
 func TestTheOTLPEndpointTestIsGuarded(t *testing.T) {
 	var requests atomic.Int32
@@ -643,7 +644,10 @@ func TestTheOTLPEndpointTestIsGuarded(t *testing.T) {
 	if answer := postOTLPTest(t, server, "logs", http.StatusConflict); !strings.Contains(answer.Error, "log export is off") {
 		t.Errorf("logs off: %+v", answer)
 	}
-	postOTLPTest(t, server, "traces", http.StatusBadRequest)
+	if answer := postOTLPTest(t, server, "traces", http.StatusConflict); !strings.Contains(answer.Error, "trace export is off") {
+		t.Errorf("traces off: %+v", answer)
+	}
+	postOTLPTest(t, server, "spans", http.StatusBadRequest)
 	request := otlpTestRequest(t, "metrics")
 	request.Header.Del("X-Debug-Run")
 	if code := serve(server, request).Code; code != http.StatusForbidden {

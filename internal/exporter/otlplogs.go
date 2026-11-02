@@ -601,7 +601,7 @@ func (s *Server) exportOTLPLogs(ctx context.Context, cfg model.OTLPConfig, budge
 	if !otlpLogsOn(cfg) || len(records) == 0 {
 		return
 	}
-	signal := otlpSignal{logs: true, logger: s.otlpLogsLogger}
+	signal := otlpSignal{kind: otlpSignalLogs, logger: s.otlpLogsLogger}
 	target := cfg
 	target.Endpoint = cfg.Logs.Endpoint
 	start := time.Now()

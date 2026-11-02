@@ -1092,7 +1092,10 @@ func validateOTLP(o *model.OTLPConfig, options loadOptions) error {
 	if err := checkExporterInstance(&o.ExporterInstance, o.ResourceAttributes, options); err != nil {
 		return err
 	}
-	return validateOTLPLogs(&o.Logs, u)
+	if err := validateOTLPLogs(&o.Logs, u); err != nil {
+		return err
+	}
+	return validateOTLPTraces(&o.Traces, u)
 }
 
 // hostname is os.Hostname; a variable for the tests.
@@ -1223,6 +1226,51 @@ func validateOTLPLogs(l *model.OTLPLogsConfig, metrics *url.URL) error {
 	return nil
 }
 
+// validateOTLPTraces checks otlp.traces, of a block switched on whose
+// endpoint is metrics, and fills in its defaults. The traces go where the
+// logs do: to the collector the metrics go to, at its standard path for
+// traces, unless the block names another endpoint, which it must where
+// otlp.endpoint does not end in /v1/metrics.
+func validateOTLPTraces(t *model.OTLPTracesConfig, metrics *url.URL) error {
+	if !t.Enabled {
+		return nil
+	}
+	switch {
+	case strings.TrimSpace(t.Endpoint) != "":
+		if _, ok := otlpEndpointURL(t.Endpoint); !ok {
+			return errors.New("otlp.traces.endpoint must be an http or https URL")
+		}
+	case strings.HasSuffix(metrics.Path, otlpMetricsPath):
+		derived := *metrics
+		derived.Path = strings.TrimSuffix(metrics.Path, otlpMetricsPath) + otlpTracesPath
+		derived.RawPath = ""
+		t.Endpoint = derived.String()
+	default:
+		return fmt.Errorf("otlp.traces.endpoint is required when otlp.endpoint does not end in %s, which would be made %s for the traces", otlpMetricsPath, otlpTracesPath)
+	}
+	// A threshold under a millisecond would export the trace of nearly
+	// every probe, which is no longer the slow ones.
+	switch {
+	case t.Threshold == 0:
+		t.Threshold = model.Duration(model.DefaultOTLPTracesThreshold)
+	case t.Threshold < model.Duration(model.MinOTLPTracesThreshold):
+		return fmt.Errorf("otlp.traces.threshold %s is under the least, 1ms; leave it out for the default, %s", time.Duration(t.Threshold), model.DefaultOTLPTracesThreshold)
+	}
+	switch {
+	case t.Interval == 0:
+		t.Interval = model.Duration(model.DefaultOTLPTracesInterval)
+	case t.Interval < model.Duration(time.Second):
+		return fmt.Errorf("otlp.traces.interval %s is under the least, 1s; leave it out for the default, %s", time.Duration(t.Interval), model.DefaultOTLPTracesInterval)
+	}
+	switch {
+	case t.MaxPendingSpans < 0:
+		return errors.New("otlp.traces.max_pending_spans must not be negative")
+	case t.MaxPendingSpans == 0:
+		t.MaxPendingSpans = model.DefaultOTLPTracesMaxPendingSpans
+	}
+	return nil
+}
+
 // otlpEndpointURL reads an OTLP/HTTP endpoint, which is an http or https
 // URL with a host.
 func otlpEndpointURL(endpoint string) (*url.URL, bool) {
@@ -1230,10 +1278,11 @@ func otlpEndpointURL(endpoint string) (*url.URL, bool) {
 	return u, err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// The standard paths of OTLP/HTTP's metrics and logs.
+// The standard paths of OTLP/HTTP's metrics, logs and traces.
 const (
 	otlpMetricsPath = "/v1/metrics"
 	otlpLogsPath    = "/v1/logs"
+	otlpTracesPath  = "/v1/traces"
 )
 
 // LoadOption adjusts how a configuration document is read. Options are

@@ -17,6 +17,13 @@ package exporter
 // text/plain, where the body is read to see that it is JSON. prescript is
 // jq_items after a pre-script that passes the items on, so it measures
 // handing a document to a Python worker and reading one back.
+//
+// BenchmarkProbeTraced is BenchmarkProbe of a few collectors with the OTLP
+// export on, which queues every probe's series: off is with otlp.traces off,
+// what the others are measured against; recorded, under a threshold no
+// probe reaches, is the record every probe makes and forgets with it on
+// (otlptraces.go); exported, under one every probe reaches, is the spans
+// made and queued too.
 
 import (
 	"fmt"
@@ -29,8 +36,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 const probeBenchConfig = `
@@ -299,6 +308,35 @@ func BenchmarkProbeFilebeatExample(b *testing.B) {
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusOK {
 			b.Fatal(recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func BenchmarkProbeTraced(b *testing.B) {
+	server, target := probeBenchServer(b, 100)
+	for _, traced := range []struct {
+		name      string
+		threshold time.Duration
+	}{{"off", 0}, {"recorded", time.Hour}, {"exported", time.Nanosecond}} {
+		cfg := server.manager.Get()
+		cfg.OTLP = model.OTLPConfig{Enabled: true, Endpoint: "http://127.0.0.1:1/v1/metrics", Compression: model.OTLPCompressionNone,
+			Traces: model.OTLPTracesConfig{Enabled: traced.threshold > 0, Endpoint: "http://127.0.0.1:1/v1/traces", Threshold: model.Duration(traced.threshold)}}
+		handler := server.Handler()
+		for _, collector := range []string{"jq_items", "jq_cached", "prom"} {
+			b.Run(collector+"/n=100/"+traced.name, func(b *testing.B) {
+				path := "/probe?collector=" + collector + "&target=" + url.QueryEscape(target)
+				b.ReportAllocs()
+				for b.Loop() {
+					recorder := httptest.NewRecorder()
+					handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+					if recorder.Code != http.StatusOK {
+						b.Fatalf("%d %s", recorder.Code, recorder.Body.String()[:min(300, recorder.Body.Len())])
+					}
+					// What waits is the export's to send; the queue is
+					// emptied so that every probe's spans are queued.
+					_ = server.otlpTraces.drain()
+				}
+			})
 		}
 	}
 }

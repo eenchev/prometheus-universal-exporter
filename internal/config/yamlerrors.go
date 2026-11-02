@@ -45,6 +45,7 @@ var yamlPlaces = map[string]string{
 	"ErrorHandling":              "error_handling",
 	"OTLPConfig":                 "otlp",
 	"OTLPLogsConfig":             "otlp.logs",
+	"OTLPTracesConfig":           "otlp.traces",
 	"OTLPScopeConfig":            "otlp.scope",
 	"OTLPExporterInstanceConfig": "otlp.exporter_instance",
 	"Limits":                     "limits",

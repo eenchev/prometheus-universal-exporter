@@ -647,7 +647,7 @@ func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
 		traceOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())
 		return nil, err
 	}
-	traceOutcome(req.Context(), resp.Status)
+	traceHTTPOutcome(req.Context(), resp)
 	return resp, nil
 }
 
@@ -658,13 +658,18 @@ func traceLogin(ctx context.Context, method string, u *url.URL, header http.Head
 	if !ok {
 		return
 	}
-	header = header.Clone()
-	if header == nil {
-		header = http.Header{}
-	}
-	// Host is shown when it is not the URL's own, as traceRequest shows it.
-	if host != "" && host != u.Host {
-		header.Set("Host", host)
+	if t.spans {
+		// An exported trip's spans show no headers (requesttrace.go).
+		header = nil
+	} else {
+		header = header.Clone()
+		if header == nil {
+			header = http.Header{}
+		}
+		// Host is shown when it is not the URL's own, as traceRequest shows it.
+		if host != "" && host != u.Host {
+			header.Set("Host", host)
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -997,15 +1002,6 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 // oauth2EmptyAnswer is the library's error for an answer without a token,
 // which quotes nothing of it.
 const oauth2EmptyAnswer = "oauth2: server response missing access_token"
-
-// debugRun reports whether ctx is a debug run's — a debug probe, a debug
-// scrape of a static target or a debug page's fetch — whose trips record
-// their requests (WithRequestTrace) and count in no self-metric of the
-// collector's (§ 42.17).
-func debugRun(ctx context.Context) bool {
-	_, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
-	return ok
-}
 
 // loginCache holds the tokens logins gave, and how many logins each
 // collector made and how many failed, for its self-metrics.

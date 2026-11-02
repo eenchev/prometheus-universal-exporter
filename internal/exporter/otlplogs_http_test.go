@@ -418,10 +418,10 @@ func TestOTLPLogsRefusedAndRejectedAreDropped(t *testing.T) {
 	if got := otlpDetails(t, server).Logs.DroppedBy.Refused; got != 1 {
 		t.Errorf("%d records counted refused, want 1", got)
 	}
-	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"too old"}}`), "application/json", true); got.rejected != 2 || got.message != "too old" {
+	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"too old"}}`), "application/json", otlpSignalLogs); got.rejected != 2 || got.message != "too old" {
 		t.Errorf("a log export's partial success reads as %+v", got)
 	}
-	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedDataPoints":"2"}}`), "application/json", true); got.rejected != 0 {
+	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedDataPoints":"2"}}`), "application/json", otlpSignalLogs); got.rejected != 0 {
 		t.Errorf("a log export's partial success reads rejected data points: %+v", got)
 	}
 }

@@ -714,6 +714,28 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <p class="muted">Log export is off.</p>
 {{- end}}
 {{- end}}
+<h3 id="otlp-traces">Trace export</h3>
+{{- with .Traces}}
+{{- if .Enabled}}
+<p>The traces of the probes and static target scrapes that took {{.Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}, exported every {{.Interval}}. Failing trace exports do not make the exporter unready.</p>
+<div class="scroll">
+<table class="facts">
+<tbody>
+<tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Pending</th><td>{{.Pending}} span{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
+<tr><th>Dropped since start</th><td>{{.Dropped}} span{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
+<tr><th>Since start</th><td>{{.Sent}} span{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="muted">Trace export is off.</p>
+{{- end}}
+{{- end}}
 {{- else}}
 <p class="muted">OTLP export is off.</p>
 {{- end}}

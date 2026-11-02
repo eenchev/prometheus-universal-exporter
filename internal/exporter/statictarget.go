@@ -80,6 +80,10 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	rec.read = s.readTargetAt(generation, target.Name)
 	count := rec.update
 	count(func(st *serverStats) { st.probes++ })
+	// With otlp.traces on, the scrape records its trace, exported at its
+	// end when it was slow, or failed under otlp.traces.errors
+	// (otlptraces.go).
+	ctx, spans := beginTrace(ctx, cfg.OTLP)
 
 	// Repeats of the same failure are logged sparingly (failurelog.go).
 	log := collectLog{
@@ -127,6 +131,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			fetched = time.Time{}
 		}
 		s.publishStaticResult(rec.read, target, identity, published, fetched, at)
+		if spans != nil {
+			s.endScrapeTrace(cfg.OTLP, spans, &target, c, address, start, len(result.Metrics), status.cached, status.err)
+		}
 	}
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
@@ -165,7 +172,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
 	}
 	if model.CacheTTL(c) > 0 {
-		if cached, cachedAt, ok := s.cache.Get(cacheKey, time.Now()); ok {
+		mark := time.Now()
+		if cached, cachedAt, ok := s.cache.Get(cacheKey, mark); ok {
+			spans.step("cache", "hit", mark, time.Now(), "")
 			count(func(st *serverStats) {
 				st.cacheHits++
 				st.success++
@@ -178,6 +187,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			finish(1)
 			return
 		}
+		spans.step("cache", "miss", mark, time.Now(), "")
 	}
 
 	job := collectJob{
@@ -208,7 +218,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		// failing. One that finds no cache entry is a miss once it has its
 		// slot and goes to the target: one turned away, or cut short by the
 		// shutdown while it waited, fetched nothing in place of an entry.
+		mark := time.Now()
 		if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
+			spans.step("slot", "failed", mark, time.Now(), err.Error())
 			if shuttingDown(ctx) {
 				s.abortedByShutdown(target, c)
 				return
@@ -219,6 +231,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			return
 		}
 		defer s.trips.release(c.Name)
+		spans.step("slot", "ok", mark, time.Now(), "")
 		if model.CacheTTL(c) > 0 {
 			count(func(st *serverStats) { st.cacheMisses++ })
 		}

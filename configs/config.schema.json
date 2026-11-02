@@ -4708,6 +4708,9 @@
         "tls": [
           "enabled"
         ],
+        "traces": [
+          "enabled"
+        ],
         "unready_after_failures": [
           "enabled"
         ]
@@ -4971,6 +4974,70 @@
           },
           "type": "object"
         },
+        "traces": {
+          "additionalProperties": false,
+          "dependentRequired": {
+            "endpoint": [
+              "enabled"
+            ],
+            "errors": [
+              "enabled"
+            ],
+            "interval": [
+              "enabled"
+            ],
+            "max_pending_spans": [
+              "enabled"
+            ],
+            "threshold": [
+              "enabled"
+            ]
+          },
+          "description": "Export over OTLP/HTTP of a trace of each probe and static target scrape that took otlp.traces.threshold or longer, and with errors of each that failed: a span for the probe or scrape and one for each of its stages and requests. With the block's headers, tls, compression, timeout, batch bounds, scope and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#traces-of-slow-requests.",
+          "properties": {
+            "enabled": {
+              "description": "Turn the trace export on. false keeps the block's settings without using them.",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "description": "OTLP/HTTP traces endpoint, such as http://otel-collector:4318/v1/traces. Left out, otlp.endpoint with its /v1/metrics made /v1/traces; required when otlp.endpoint does not end in /v1/metrics.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "errors": {
+              "description": "Also export the trace of every probe and scrape that failed, however long it took. Defaults to false: only the slow ones.",
+              "type": "boolean"
+            },
+            "interval": {
+              "description": "How often the spans waiting are exported. At least 1s once the block is switched on; defaults to 5s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "max_pending_spans": {
+              "description": "The most spans kept waiting for export; a trace that finds no room for all of its spans is dropped whole and counted rather than waited for, and a failed export's spans past it drop the oldest. Defaults to 10000.",
+              "type": "integer"
+            },
+            "threshold": {
+              "description": "The least duration of a probe or a static target scrape whose trace is exported. At least 1ms once the block is switched on; defaults to 1s.",
+              "maximum": 0,
+              "minimum": 0,
+              "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "unready_after_failures": {
           "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes. At most 1000.",
           "type": "integer"
@@ -5171,6 +5238,45 @@
                 }
               }
             ]
+          },
+          "traces": {
+            "if": {
+              "properties": {
+                "enabled": {
+                  "const": true
+                }
+              },
+              "required": [
+                "enabled"
+              ]
+            },
+            "then": {
+              "properties": {
+                "interval": {
+                  "not": {
+                    "not": {
+                      "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                    },
+                    "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                    "type": "string"
+                  },
+                  "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+                },
+                "max_pending_spans": {
+                  "minimum": 0
+                },
+                "threshold": {
+                  "not": {
+                    "not": {
+                      "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                    },
+                    "pattern": "^\\+?((0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))(us|µs|μs)|(0*((\\.[0-9]*)?))ms|(0*((\\.(|0|00(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000(0[0-9]*)?|00001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000([0-1][0-9]*)?|0000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                    "type": "string"
+                  },
+                  "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+                }
+              }
+            }
           },
           "unready_after_failures": {
             "maximum": 1000,

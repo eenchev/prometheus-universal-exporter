@@ -80,6 +80,94 @@ type OTLPStatusDetails struct {
 	LastSuccessAge string `json:"-"`
 	// Logs is the export of the exporter's own log (otlplogs.go).
 	Logs otlpLogsSection `json:"logs"`
+	// Traces is the export of the traces of slow and failed probes and
+	// scrapes (otlptraces.go).
+	Traces otlpTracesSection `json:"traces"`
+}
+
+// otlpTracesSection is the trace export's part of the OTLP section:
+// {"enabled": false} alone while otlp.traces is off.
+type otlpTracesSection struct {
+	Enabled bool `json:"enabled"`
+	*OTLPTracesStatusDetails
+}
+
+// OTLPTracesStatusDetails is the trace export's part while it is on,
+// exported for encoding/json as OTLPStatusDetails is. Readiness is not among
+// it: the trace export does not make the exporter unready.
+type OTLPTracesStatusDetails struct {
+	// Endpoint is otlp.traces.endpoint with its credentials withheld.
+	Endpoint  string `json:"endpoint"`
+	Threshold string `json:"threshold"`
+	Errors    bool   `json:"errors"`
+	Interval  string `json:"interval"`
+	// LastExport is when the last export began, LastResult how it went
+	// and LastSpans the spans it carried.
+	LastExport  string `json:"last_export,omitempty"`
+	LastResult  string `json:"last_result,omitempty"`
+	LastSpans   int    `json:"last_spans,omitempty"`
+	LastSuccess string `json:"last_success,omitempty"`
+	Failing     bool   `json:"failing"`
+	Failures    int    `json:"consecutive_failures"`
+	LastError   string `json:"last_error,omitempty"`
+	LastErrorAt string `json:"last_error_at,omitempty"`
+	// Pending are the spans waiting, MaxPending
+	// otlp.traces.max_pending_spans.
+	Pending    int `json:"pending_spans"`
+	MaxPending int `json:"max_pending_spans"`
+	Sent       int `json:"spans_sent"`
+	// Dropped is http_exporter_otlp_spans_dropped_total, DroppedBy the
+	// same by why.
+	Dropped   int                  `json:"spans_dropped"`
+	DroppedBy otlpTraceDroppedKind `json:"spans_dropped_by_reason"`
+	Succeeded int                  `json:"exports_succeeded"`
+	FailedAll int                  `json:"exports_failed"`
+}
+
+// otlpTraceDroppedKind is the spans given up on, by why
+// (otlpTraceDropReason).
+type otlpTraceDroppedKind struct {
+	PendingCap int `json:"over_max_pending_spans"`
+	Refused    int `json:"refused"`
+	Shutdown   int `json:"last_export_at_shutdown"`
+}
+
+// otlpTracesSectionFor is the trace export's part of the OTLP section with
+// cfg in force.
+func (s *Server) otlpTracesSectionFor(cfg model.OTLPConfig) otlpTracesSection {
+	if !otlpTracesOn(cfg) {
+		return otlpTracesSection{}
+	}
+	interval := time.Duration(cfg.Traces.Interval)
+	if interval <= 0 {
+		interval = model.DefaultOTLPTracesInterval
+	}
+	d := &OTLPTracesStatusDetails{Endpoint: redactedOTLPEndpoint(cfg.Traces.Endpoint), Threshold: otlpTraceThreshold(cfg).String(), Errors: cfg.Traces.Errors, Interval: interval.String(), MaxPending: otlpMaxPendingSpans(cfg)}
+	t := s.otlpTraces
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	d.Pending, d.Sent, d.Succeeded, d.FailedAll = len(t.queue), t.sent, t.successes, t.failures
+	d.Dropped = t.droppedLocked()
+	d.DroppedBy = otlpTraceDroppedKind{PendingCap: t.dropped[otlpTraceDropPendingCap], Refused: t.dropped[otlpTraceDropRefused], Shutdown: t.dropped[otlpTraceDropShutdown]}
+	// The record of another endpoint is not this one's.
+	if t.endpoint != cfg.Traces.Endpoint {
+		return otlpTracesSection{Enabled: true, OTLPTracesStatusDetails: d}
+	}
+	h := t.history
+	if !h.lastStarted.IsZero() {
+		d.LastExport, d.LastResult, d.LastSpans = h.lastStarted.UTC().Format(time.RFC3339), statusFailed, h.lastRecords
+		if h.lastOK {
+			d.LastResult = statusSuccess
+		}
+	}
+	if !h.lastSuccess.IsZero() {
+		d.LastSuccess = h.lastSuccess.UTC().Format(time.RFC3339)
+	}
+	d.Failures, d.Failing, d.LastError = h.failures, h.failures > 0, h.errorText
+	if !h.failedAt.IsZero() {
+		d.LastErrorAt = h.failedAt.UTC().Format(time.RFC3339)
+	}
+	return otlpTracesSection{Enabled: true, OTLPTracesStatusDetails: d}
 }
 
 // otlpLogsSection is the log export's part of the OTLP section:
@@ -240,6 +328,7 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 		MaxPending:   maxPending,
 		UnreadyAfter: max(cfg.UnreadyAfterFailures, 0),
 		Logs:         s.otlpLogsSectionFor(cfg),
+		Traces:       s.otlpTracesSectionFor(cfg),
 	}
 	if e := cfg.ExporterInstance; e.Enabled && e.Attribute != "" && e.Value != "" {
 		d.ExporterInstance = &otlpExporterInstanceStatus{Attribute: e.Attribute, Value: e.Value}

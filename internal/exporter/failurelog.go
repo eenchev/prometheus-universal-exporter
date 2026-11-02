@@ -144,6 +144,9 @@ const (
 	// logExportSubject is the export of the exporter's own log over OTLP
 	// (otlpLogsKey), which has no parts: there is one.
 	logExportSubject = 'l'
+	// traceExportSubject is the export of the exporter's traces over OTLP
+	// (otlpTracesKey), which has no parts either.
+	traceExportSubject = 't'
 )
 
 // failureAspect is what of a subject a failure is, when it is not the

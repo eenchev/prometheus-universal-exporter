@@ -16,7 +16,9 @@ import (
 )
 
 // A probe, the self-metrics and the static targets endpoint answer in the
-// format asked for, and say so, and vary on Accept.
+// format asked for, and say so, and vary on Accept: a probe in OpenMetrics
+// when Prometheus 3 asks for protobuf first, which it does not write, the
+// self-metrics in protobuf.
 func TestEndpointsAnswerInTheFormatAskedFor(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -38,6 +40,11 @@ func TestEndpointsAnswerInTheFormatAskedFor(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			server.Handler().ServeHTTP(recorder, request)
 			body := recorder.Body.String()
+			if path == "/self-metrics" && tc.accept == prometheus3Accept {
+				// The self-metrics answer such a Prometheus, which asks for
+				// protobuf first, in protobuf (nativehistograms_http_test.go).
+				tc.contentType, tc.ending = protobufContentType, ""
+			}
 			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != tc.contentType || !strings.HasSuffix(body, tc.ending) {
 				t.Fatalf("%s with Accept %q: %d %q\n%s", path, tc.accept, recorder.Code, recorder.Header().Get("Content-Type"), body)
 			}

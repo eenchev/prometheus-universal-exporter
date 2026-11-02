@@ -47,17 +47,28 @@ var scrapeDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 
 // dropped those statistics, cannot be observed in the histogram of a collector
 // brought back under the name, which would then hold an observation older
 // than its creation time (selfcreated.go).
+//
+// The same observations are kept in exponential buckets too
+// (model.ExponentialHistogram), which the protobuf answer of the self-metrics
+// writes as a native histogram and the OTLP export, with
+// otlp.exponential_histograms, as an exponential histogram. They cost at most
+// 160 counters a collector, and resolve a duration to within a few percent
+// wherever it falls, where the fixed buckets can only say it was between 2.5
+// and 5 seconds.
 type durationHistogram struct {
-	counts []uint64 // per bucket, not cumulative; made by the first observation
-	sum    float64
-	count  uint64
+	counts      []uint64 // per bucket, not cumulative; made by the first observation
+	sum         float64
+	count       uint64
+	exponential *model.ExponentialHistogram
 }
 
 func (h *durationHistogram) observe(elapsed time.Duration) {
 	seconds := elapsed.Seconds()
 	if h.counts == nil {
 		h.counts = make([]uint64, len(scrapeDurationBuckets))
+		h.exponential = model.NewExponentialHistogram()
 	}
+	h.exponential.Observe(seconds, model.ExponentialMaxSize)
 	h.sum += seconds
 	h.count++
 	for i, bound := range scrapeDurationBuckets {
@@ -72,6 +83,11 @@ func (h *durationHistogram) observe(elapsed time.Duration) {
 // scraped yet has an empty one.
 func (h *durationHistogram) histogram() *model.Histogram {
 	out := &model.Histogram{Sum: h.sum, Count: h.count}
+	if h.exponential != nil {
+		out.Exponential = h.exponential.AtMostScale(h.exponential.Scale)
+	} else {
+		out.Exponential = model.NewExponentialHistogram()
+	}
 	var cumulative uint64
 	for i, bound := range scrapeDurationBuckets {
 		if h.counts != nil {

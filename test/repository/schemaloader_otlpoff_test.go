@@ -49,6 +49,7 @@ var otlpKeys = map[string]struct {
 		noValue: []string{"[a]", "{a: [b]}", "x"},
 	},
 	"probe_attributes":       {noValue: []string{"maybe", "1"}},
+	"exponential_histograms": {noValue: []string{"maybe", "1"}},
 	"compression":            {checked: []otlpValue{{"zstd", ""}, {"GZIP", ""}, {`" "`, ""}, {"5", ""}, {"true", ""}}, noValue: []string{"[gzip]", "{a: b}"}},
 	"max_pending_points":     {checked: []otlpValue{{"-1", ""}, {"-100000", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}, {"1001", ""}}, noValue: []string{"1.5", "many", "[1]"}},

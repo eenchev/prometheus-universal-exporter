@@ -250,6 +250,8 @@ func debugOTLPKind(kind int) string {
 		return "sum (cumulative, monotonic)"
 	case otlpKindHistogram:
 		return "histogram (cumulative)"
+	case otlpKindExponentialHistogram:
+		return "exponential histogram (cumulative)"
 	}
 	return otlpKindNames[kind]
 }

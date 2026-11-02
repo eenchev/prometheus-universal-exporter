@@ -7961,7 +7961,32 @@ NOT be observed. The buckets MUST be fixed at 0.005, 0.01, 0.025, 0.05, 0.1,
 0.25, 0.5, 1, 2.5, 5, 10, 30 and 60 seconds, plus `+Inf`. Every configured
 collector MUST have a histogram, empty until its first trip. Durations MUST only
 be recorded while verbose mode is on, so turning it on does not publish a
-history nobody asked to be kept.
+history nobody asked to be kept. The same durations MUST also be kept in
+exponential buckets (§ 42.1, `otlp.exponential_histograms`), which the
+protobuf answer below writes as native histograms.
+
+`web.self_metrics.native_histograms`, a boolean that MUST default to true,
+MUST make the self-metrics endpoint answer in Prometheus's delimited protobuf
+format, as `application/vnd.google.protobuf;
+proto=io.prometheus.client.MetricFamily; encoding=delimited` with `nosniff`
+and `Vary: Accept`, a request whose `Accept` gives that media type, with those
+two parameters, a higher quality than any type the text format or OpenMetrics
+answers (§ 21); a tie, or the setting false, MUST get the text formats as
+before. Only the self-metrics endpoint MAY answer protobuf: `/probe` and the
+static targets endpoint MUST NOT, since what they pass on has classic buckets
+alone. The answer MUST be one length-delimited
+`io.prometheus.client.MetricFamily` per family of the text answer, with its
+name, help, type and every series, labels in order of their names; a series'
+timestamp in `timestamp_ms`; and, with `web.self_metrics.created_timestamps`
+and only then, a counter's, histogram's or summary's creation time in its
+`created_timestamp`. A histogram MUST carry its classic buckets without the
+`+Inf` one, its `sample_count` and `sample_sum`, and, for the scrape-time
+histogram, its native buckets too: `schema` the recorder's scale lowered to
+at most 3 by merging buckets, `zero_threshold` 2^-128, `zero_count`, and
+`positive_span` and `positive_delta` as Prometheus defines them, bucket `i`
+of OpenTelemetry being Prometheus's `i+1`. The protobuf answer MUST be
+written without `google.golang.org/protobuf`, which only the `grpc` request
+type may link (§ 14.1).
 
 Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
 gauge a static target's health series carry on its endpoint and over OTLP
@@ -30290,6 +30315,22 @@ resource attributes MUST be preserved:
   explicit bounds, and one count more than bounds, the last being everything
   above the highest bound — Prometheus's `+Inf` bucket, which MUST NOT appear
   as a bound. The per-bucket counts MUST add up to the count.
+- With `otlp.exponential_histograms`, a boolean that MUST default to false,
+  the exporter's own duration histograms (§ 22) MUST be exported as OTLP
+  exponential histograms instead, and nothing else: a histogram read from a
+  target has classic buckets alone and stays an explicit-bucket histogram.
+  Such a point MUST have cumulative temporality (`aggregationTemporality`
+  `2`), its count, sum, `scale`, `zeroCount` (the observations of 0), its
+  positive buckets as `positive.offset` and per-bucket `bucketCounts`, no
+  negative buckets, and `min` and `max` once it has observed anything; the
+  zero count and the bucket counts MUST add up to the count. Bucket `i` MUST
+  hold the durations `v` with base^i < v <= base^(i+1), base being
+  2^(2^-scale), mapped as OpenTelemetry's data model specifies: an exact
+  power of two by its exponent, any other value as ceil(log2(v) × 2^scale)
+  − 1. The recorder MUST start at scale 20 and keep at most 160 buckets, as
+  OpenTelemetry's SDKs do by default, lowering the scale by as little as
+  keeps every bucket within 160 whenever an observation would need more, by
+  merging each 2^n neighbouring buckets into the bucket i >> n.
 - A summary MUST be an OTLP summary with its count, sum and quantiles, and a
   summary without quantiles, such as `go_gc_duration_seconds` (§ 22.0a), MUST
   still carry its count and sum. OTLP's summary cannot leave either out, an

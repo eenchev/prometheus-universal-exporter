@@ -465,18 +465,22 @@ func (f expositionFormat) appendMetricSet(b []byte, s *model.MetricSet) []byte {
 // the answer to anything else: no Accept, a browser's, a tie, or only types
 // the exporter does not write, such as Prometheus' protobuf format.
 func negotiateFormat(accept string) expositionFormat {
-	bestOM, bestText, omVersion := -1.0, -1.0, ""
-	for _, entry := range strings.Split(accept, ",") {
+	bestOM, bestText, omVersion := acceptQualities(accept)
+	if bestOM > bestText {
+		return expositionFormat{openMetrics: true, version: omVersion}
+	}
+	return formatText
+}
+
+// acceptQualities is the highest quality an Accept header gives OpenMetrics,
+// of a version the exporter writes, with the version it asked for, and the
+// highest it gives a type the text format answers; -1 where it gives none.
+func acceptQualities(accept string) (bestOM, bestText float64, omVersion string) {
+	bestOM, bestText = -1.0, -1.0
+	for entry := range strings.SplitSeq(accept, ",") {
 		mediaType, params := parseMediaRange(entry)
-		q := 1.0
-		if raw, ok := params["q"]; ok {
-			parsed, err := strconv.ParseFloat(raw, 64)
-			if err != nil || parsed < 0 || parsed > 1 {
-				continue
-			}
-			q = parsed
-		}
-		if q == 0 {
+		q, ok := acceptQuality(params)
+		if !ok || q == 0 {
 			continue
 		}
 		switch mediaType {
@@ -495,10 +499,21 @@ func negotiateFormat(accept string) expositionFormat {
 			bestText = max(bestText, q)
 		}
 	}
-	if bestOM > bestText {
-		return expositionFormat{openMetrics: true, version: omVersion}
+	return bestOM, bestText, omVersion
+}
+
+// acceptQuality is a media range's q parameter, 1 when it has none; false
+// for one that is not a number from 0 to 1, which leaves the range out.
+func acceptQuality(params map[string]string) (float64, bool) {
+	raw, ok := params["q"]
+	if !ok {
+		return 1, true
 	}
-	return formatText
+	q, err := strconv.ParseFloat(raw, 64)
+	if err != nil || q < 0 || q > 1 {
+		return 0, false
+	}
+	return q, true
 }
 
 // parseMediaRange splits one entry of an Accept header into its media type,

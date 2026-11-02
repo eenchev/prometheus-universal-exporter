@@ -1,6 +1,6 @@
 # Exporter self-metrics
 
-Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers `GET` and `HEAD`, and any other method `405` with `Allow: GET, HEAD`; and like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)). The Helm chart's self-metrics monitor, `<fullname>-self`, scrapes the exporter itself, apart from the target-probing monitors of `monitors`. It is configured by the `selfMetrics` block: `enabled`, `type: service` (a ServiceMonitor) or `type: pod` (a PodMonitor), `path`, `interval`, `scrapeTimeout`, `labels`, `annotations`, and Prometheus Operator `relabelings` and `metricRelabelings` (see the [chart README](../charts/prometheus-universal-exporter/README.md#4-configure-prometheus)).
+Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers `GET` and `HEAD`, and any other method `405` with `Allow: GET, HEAD`; and like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)); unlike `/probe`, it answers in Prometheus's protobuf format a scraper that asks for that first (see [Native histograms](#native-histograms)). The Helm chart's self-metrics monitor, `<fullname>-self`, scrapes the exporter itself, apart from the target-probing monitors of `monitors`. It is configured by the `selfMetrics` block: `enabled`, `type: service` (a ServiceMonitor) or `type: pod` (a PodMonitor), `path`, `interval`, `scrapeTimeout`, `labels`, `annotations`, and Prometheus Operator `relabelings` and `metricRelabelings` (see the [chart README](../charts/prometheus-universal-exporter/README.md#4-configure-prometheus)).
 
 ## Collector metrics
 
@@ -809,6 +809,52 @@ exporter could answer. Static targets are observed like probes. Every
 configured collector has a histogram, empty until its first trip, and the
 durations are only recorded while verbose mode is on.
 
+#### Native histograms
+
+The fixed buckets can only say that a scrape took between 2.5 and 5 seconds.
+The same durations are also kept in exponential buckets, which Prometheus
+calls a native histogram and OpenTelemetry an exponential histogram: buckets
+that are powers of a base, each a few percent wider than the one before,
+placed wherever the durations fall. A collector's histogram starts as finely
+as OpenTelemetry's SDKs start, and halves its resolution whenever it would
+need more than 160 buckets, so durations from 5 ms to a minute settle at
+eight buckets per doubling, each 9% wider than the last.
+
+Prometheus can only read a native histogram from its protobuf format: the
+text format has no way to write one, and OpenMetrics 2.0, which will, is
+still a draft. So the self-metrics endpoint answers in protobuf a Prometheus
+that asks for it first, as Prometheus does when it scrapes native histograms
+(`scrape_native_histograms: true`, or the `native-histograms` feature flag of
+earlier versions):
+
+```yaml
+web:
+  self_metrics:
+    verbose: true
+    native_histograms: true   # the default
+```
+
+The histogram is then written with both kinds of buckets, as Prometheus' Go
+client writes one with a bucket factor: the classic buckets above, which a
+Prometheus scraping classic histograms too
+(`always_scrape_classic_histograms`) keeps, and the native ones, at schema 3
+— a bucket factor of 1.09 — or coarser while the durations need it, with a
+zero bucket for durations of 0. Prometheus' `native_histogram_min_bucket_factor`
+lowers the resolution further, if you want fewer buckets per series:
+
+```promql
+histogram_quantile(0.95, sum by (collector) (rate(http_exporter_collector_scrape_duration_seconds[5m])))
+```
+
+Every other family is the same in protobuf as in the text format. Anyone else
+— a scraper that asks for the text format or OpenMetrics, gives it the same
+quality as protobuf, or does not ask — gets the text formats as before, with
+no trace of the native buckets; so does everyone with `native_histograms:
+false`. Only the self-metrics answer protobuf: `/probe` and the static
+targets pass on targets' histograms, which have classic buckets alone. The
+[OTLP export](OTLP.md#exponential-histograms) can send the same buckets as
+exponential histograms.
+
 ### Python workers
 
 For every collector with a Python transform or pre-script, verbose mode publishes
@@ -971,8 +1017,11 @@ the samples:
   series from zero and see one that started again, and stores no `_created`
   series. Check that your Prometheus version does this for OpenMetrics text
   before turning the setting on for it; early versions of the feature read
-  created timestamps only from the protobuf format, which the exporter does
-  not write.
+  created timestamps only from the protobuf format, which the self-metrics
+  endpoint writes for a Prometheus that asks for it
+  ([native histograms](#native-histograms)), with each counter's, histogram's
+  and summary's creation time in its `created_timestamp`, under the same
+  setting.
 
 The time is when the series began to count:
 

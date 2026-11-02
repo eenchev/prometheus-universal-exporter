@@ -4672,6 +4672,9 @@
         "endpoint": [
           "enabled"
         ],
+        "exponential_histograms": [
+          "enabled"
+        ],
         "exporter_instance": [
           "enabled"
         ],
@@ -4759,6 +4762,10 @@
             "number",
             "boolean"
           ]
+        },
+        "exponential_histograms": {
+          "description": "Send the exporter's own duration histograms as OTLP exponential histograms, whose buckets follow the durations observed, rather than with their fixed buckets. Defaults to false. See docs/OTLP.md#exponential-histograms.",
+          "type": "boolean"
         },
         "exporter_instance": {
           "additionalProperties": false,
@@ -5449,6 +5456,10 @@
           "additionalProperties": false,
           "properties": {
             "created_timestamps": {
+              "type": "boolean"
+            },
+            "native_histograms": {
+              "description": "Answer a scraper that asks for Prometheus's protobuf format with it, the exporter's own duration histograms carrying native (exponential) buckets beside their classic ones. Defaults to true; the text formats are unchanged either way. See docs/SELF-METRICS.md#native-histograms.",
               "type": "boolean"
             },
             "resource_metrics_enabled": {

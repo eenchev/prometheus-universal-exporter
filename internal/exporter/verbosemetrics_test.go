@@ -79,7 +79,14 @@ func TestTheHistogramOfTheStatisticsCountsAsTheOneKeptByNameDid(t *testing.T) {
 		return out
 	}
 	stats := newServerStats(time.Now())
-	if got, want := stats.tripHistogram(), histogram("c"); !reflect.DeepEqual(got, want) {
+	// The exponential buckets kept beside the classic ones are compared in
+	// nativehistograms_http_test.go.
+	classic := func() *model.Histogram {
+		h := stats.tripHistogram()
+		h.Exponential = nil
+		return h
+	}
+	if got, want := classic(), histogram("c"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("before the first trip: %+v, want %+v", got, want)
 	}
 	// Trips from a microsecond to two minutes, on the bounds and between.
@@ -90,7 +97,7 @@ func TestTheHistogramOfTheStatisticsCountsAsTheOneKeptByNameDid(t *testing.T) {
 		}
 		observe("c", elapsed)
 		stats.durations.observe(elapsed)
-		if got, want := stats.tripHistogram(), histogram("c"); !reflect.DeepEqual(got, want) {
+		if got, want := classic(), histogram("c"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("after %d trips, the last of %v: %+v, want %+v", i+1, elapsed, got, want)
 		}
 		elapsed = elapsed*21/16 + time.Microsecond

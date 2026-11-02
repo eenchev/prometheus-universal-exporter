@@ -140,6 +140,10 @@ func TestCreatedTimestampsAreOffUnlessConfigured(t *testing.T) {
 func TestCreatedSamplesAreWrittenOnlyWithTheSettingAndOnlyInOpenMetrics(t *testing.T) {
 	target := textTarget(t, "value=42\n")
 	server := createdServer(t, false, false)
+	// Prometheus 3's Accept asks for protobuf first, which the self-metrics
+	// answer only while native histograms are on; the creation times in
+	// protobuf are TestProtobufCarriesCreationTimesOnlyWithTheSetting's.
+	server.manager.Get().Web.SelfMetrics.NativeHistograms = new(false)
 	probeOnce(t, server, probePath("kept", target.URL, ""), nil)
 
 	type answer struct{ contentType, body string }
@@ -922,6 +926,13 @@ func TestOTLPStartsTheExportersOwnSeriesAtTheirCreation(t *testing.T) {
 		case m.Histogram != nil:
 			kinds["histogram"]++
 			for _, p := range m.Histogram.DataPoints {
+				points = append(points, point{p.Attributes, p.StartTimeUnixNano})
+			}
+		case m.ExponentialHistogram != nil:
+			// The scrape-time histogram, as otlp.exponential_histograms
+			// exports it, starts at its creation as the classic one does.
+			kinds["histogram"]++
+			for _, p := range m.ExponentialHistogram.DataPoints {
 				points = append(points, point{p.Attributes, p.StartTimeUnixNano})
 			}
 		case m.Summary != nil:

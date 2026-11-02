@@ -26,6 +26,7 @@ otlp:
   #   deployment.environment: production
   # probe_attributes: false
   # metric_names: prometheus
+  # exponential_histograms: false
   # scope:
   #   name: prometheus-universal-exporter
   #   version: ""
@@ -481,6 +482,35 @@ Two names the translation makes one — a gauge `jobs` and a counter
 name under the resource, written as two kinds
 ([above](#two-writers-of-one-series-or-one-name)): what was written last is
 exported, and the other is left out and logged.
+
+## Exponential histograms
+
+The exporter's own duration histogram,
+`http_exporter_collector_scrape_duration_seconds` (see
+[Scrape-time histograms](SELF-METRICS.md#scrape-time-histograms)), is kept in
+fixed buckets and in exponential ones. It is exported with its fixed buckets
+unless the block says otherwise:
+
+```yaml
+otlp:
+  exponential_histograms: true
+```
+
+It is then an OTLP exponential histogram: cumulative, with its `scale`, the
+count of durations of 0 in `zeroCount`, the counts of its buckets from
+`positive.offset` on, its sum, count, `min` and `max`. Bucket `i` holds the
+durations above base^i and up to base^(i+1), the base being 2^(2^-scale),
+as OpenTelemetry's SDKs bucket them: the histogram starts at scale 20 and
+lowers the scale, merging neighbouring buckets in pairs, whenever it would
+need more than 160 buckets, so a collector whose scrapes take 5 ms to a
+minute is sent at scale 3, a bucket per 9% of the duration.
+
+It is off by default because the receiver has to take exponential
+histograms: an OpenTelemetry Collector does, while Prometheus' OTLP endpoint
+stores them as native histograms only when it ingests those. Every other
+histogram — anything read from a target — has fixed buckets alone and is sent
+as before. The self-metrics endpoint answers the same buckets to a Prometheus
+that asks for protobuf ([native histograms](SELF-METRICS.md#native-histograms)).
 
 ## Instrumentation scope
 

@@ -99,6 +99,19 @@ type SelfMetricsConfig struct {
 	// Prometheus without its created-timestamp feature stores every _created
 	// line as one more series.
 	CreatedTimestamps bool `yaml:"created_timestamps"`
+	// NativeHistograms answers a scraper that asks for Prometheus's protobuf
+	// format with it, the exporter's own duration histograms carrying native
+	// buckets beside their classic ones. Unset means true: only a scraper
+	// that asks for protobuf gets it, and the text formats are as they are
+	// without; false answers every scraper in text. See
+	// NativeHistogramsEnabled.
+	NativeHistograms *bool `yaml:"native_histograms"`
+}
+
+// NativeHistogramsEnabled reports whether the self-metrics answer in
+// protobuf, with native histograms, a scraper that asks for it.
+func (c SelfMetricsConfig) NativeHistogramsEnabled() bool {
+	return c.NativeHistograms == nil || *c.NativeHistograms
 }
 
 // ResourceMetricsEnabled reports whether the go_ and process_ series are
@@ -688,6 +701,12 @@ type OTLPConfig struct {
 	// names them, a counter without _total and a unit suffix moved into
 	// the metric's unit (exporter/otlpnames.go).
 	MetricNames string `yaml:"metric_names"`
+	// ExponentialHistograms sends the exporter's own duration histograms as
+	// OTLP exponential histograms, whose buckets follow the durations
+	// observed, rather than with their fixed classic buckets. Off by default:
+	// a receiver must support them, and Prometheus' OTLP endpoint stores them
+	// as native histograms only when it ingests those.
+	ExponentialHistograms bool `yaml:"exponential_histograms"`
 	// Scope is the instrumentation scope the export's metrics and log
 	// records are sent under; nil is DefaultOTLPScopeName without a
 	// version.

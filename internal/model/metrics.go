@@ -71,6 +71,11 @@ type Histogram struct {
 	Count   uint64
 	NoSum   bool
 	NoCount bool
+	// Exponential, when set, is the same observations in exponential
+	// buckets (exponential.go), which only the exporter's own durations
+	// have: it is written where a format can carry it, beside the classic
+	// buckets, and left out where not.
+	Exponential *ExponentialHistogram
 }
 
 // InfBucket is the count of the histogram's +Inf bucket, and whether it has
@@ -793,6 +798,9 @@ func CloneMetric(in Metric) Metric {
 	if in.Histogram != nil {
 		histogram := *in.Histogram
 		histogram.Buckets = append([]Bucket(nil), in.Histogram.Buckets...)
+		if in.Histogram.Exponential != nil {
+			histogram.Exponential = in.Histogram.Exponential.AtMostScale(in.Histogram.Exponential.Scale)
+		}
 		out.Histogram = &histogram
 	}
 	if in.Summary != nil {

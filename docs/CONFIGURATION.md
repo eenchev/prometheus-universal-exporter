@@ -4255,6 +4255,12 @@ scrape_configs:
     scrape_protocols: [PrometheusText0.0.4]
 ```
 
+A Prometheus that asks for its protobuf format first, as it does when it
+scrapes native histograms, gets OpenMetrics from `/probe` and the static
+targets endpoint, which do not write protobuf, and protobuf from the
+self-metrics endpoint, whose scrape-time histograms then carry native buckets
+too; see [Native histograms](SELF-METRICS.md#native-histograms).
+
 ## Response caching
 
 A collector may cache its results with `ttl`, a Go duration such as `60s`,

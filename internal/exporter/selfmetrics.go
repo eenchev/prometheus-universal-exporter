@@ -334,6 +334,10 @@ func selfMetricNames() []string {
 //
 // The series' creation times are written, as OpenMetrics' _created samples,
 // only with web.self_metrics.created_timestamps (selfcreated.go).
+//
+// A scraper that prefers Prometheus's protobuf format is answered in it, with
+// native histograms, unless web.self_metrics.native_histograms is false
+// (protobuf.go).
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	// The self-metrics are read as the probes and the static targets are:
 	// any other method is refused, before anything is gathered.
@@ -341,8 +345,13 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := s.selfMetricSet()
-	if !s.manager.Get().Web.SelfMetrics.CreatedTimestamps {
+	cfg := s.manager.Get().Web.SelfMetrics
+	if !cfg.CreatedTimestamps {
 		withoutCreated(&set)
+	}
+	if cfg.NativeHistogramsEnabled() && prefersProtobuf(r.Header.Get("Accept")) {
+		writeProtobufMetricSet(w, &set)
+		return
 	}
 	writeMetricSet(w, r, &set)
 }

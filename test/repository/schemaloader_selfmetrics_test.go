@@ -35,9 +35,9 @@ func TestSchemaAndExporterAgreeOnSelfMetrics(t *testing.T) {
 			agree(t, schema, "web.self_metrics."+key+": "+written, "web: {self_metrics: {"+key+": "+written+"}}\n"+testutil.MinimalConfig, accepted)
 		}
 	}
-	if !keys["created_timestamps"] || !keys["verbose"] || !keys["resource_metrics_enabled"] {
+	if !keys["created_timestamps"] || !keys["verbose"] || !keys["resource_metrics_enabled"] || !keys["native_histograms"] {
 		t.Fatalf("the keys tried are %v", keys)
 	}
-	agree(t, schema, "every switch on", "web: {self_metrics: {verbose: true, resource_metrics_enabled: true, created_timestamps: true}}\n"+testutil.MinimalConfig, true)
+	agree(t, schema, "every switch on", "web: {self_metrics: {verbose: true, resource_metrics_enabled: true, created_timestamps: true, native_histograms: true}}\n"+testutil.MinimalConfig, true)
 	agree(t, schema, "a key the block does not have", "web: {self_metrics: {created_timestamp: true}}\n"+testutil.MinimalConfig, false)
 }

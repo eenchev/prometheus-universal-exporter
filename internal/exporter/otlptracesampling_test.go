@@ -159,7 +159,10 @@ func TestTheDecisionSaysWhy(t *testing.T) {
 	if why := d.why(cfg, 12*time.Millisecond, false, parent); !strings.Contains(why, "its caller's traceparent has the sampled flag, and otlp.traces.parent_based exports it") {
 		t.Errorf("the line of a trace its caller sampled: %s", why)
 	}
-	cfg.Traces.Errors = true
+	// With no caller's traceparent the trace id is made anew, at random, so
+	// the ratio is switched off here: at 1% it kept one such trace in about
+	// a hundred, and the line then began with the ratio's keeping.
+	cfg.Traces.Errors, cfg.Traces.SampleRatio = true, 0
 	d = decideTrace(cfg, 12*time.Millisecond, false, traceParent{})
 	if why := d.why(cfg, 12*time.Millisecond, false, traceParent{}); !strings.Contains(why, "; it did not fail; it has no caller's traceparent for otlp.traces.parent_based") {
 		t.Errorf("the line of a trace of no caller's: %s", why)

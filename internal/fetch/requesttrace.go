@@ -82,6 +82,10 @@ type TracedRequest struct {
 	// Attempt is which attempt of the request it is under request.retry,
 	// from 0; a redirect, a login and a page each begin at 0.
 	Attempt int
+	// SpanID is the span id the request was sent under in its traceparent
+	// (otlp.traces.propagate), which its CLIENT span is made with; zero
+	// when it sent none of the exporter's.
+	SpanID  [8]byte
 	started time.Time
 }
 

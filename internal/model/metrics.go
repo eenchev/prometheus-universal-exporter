@@ -76,6 +76,21 @@ type Histogram struct {
 	// have: it is written where a format can carry it, beside the classic
 	// buckets, and left out where not.
 	Exponential *ExponentialHistogram
+	// InfExemplar is the exemplar of the +Inf bucket, which Buckets has no
+	// place for when the bucket is written from the count; nil for none.
+	InfExemplar *Exemplar
+}
+
+// Exemplar is an observation of a histogram's bucket that stands for the
+// bucket: its value, when it was made, and the trace of the probe or the
+// scrape that made it. Only the exporter's own durations have them, of
+// traces that were exported, and only a format that can carry exemplars
+// writes them: OpenMetrics, protobuf and OTLP.
+type Exemplar struct {
+	// TraceID and SpanID are as OTLP/JSON writes them, 32 and 16 hex digits.
+	TraceID, SpanID string
+	Value           float64
+	Time            time.Time
 }
 
 // InfBucket is the count of the histogram's +Inf bucket, and whether it has
@@ -114,6 +129,8 @@ func (h *Histogram) Settle() error {
 type Bucket struct {
 	UpperBound      float64
 	CumulativeCount uint64
+	// Exemplar is the bucket's exemplar, nil for none.
+	Exemplar *Exemplar
 }
 
 // Summary is the value of a summary series. NoSum and NoCount say that the

@@ -165,6 +165,9 @@ func (f *probeFlights) doTraced(ctx context.Context, key flightKey, traced bool,
 			// The trip's context is the starter's, values and all, so its
 			// recorder takes the place of the starter's there.
 			workCtx, flight.spans = withTripSpans(workCtx, nil)
+			// Its requests are sent under the starter's trace
+			// (otlptraceslink.go), which the starter's context carries.
+			flight.spans.sentUnder = traceLinkFrom(workCtx)
 		}
 		f.flights[key] = flight
 		go f.run(workCtx, key, flight, work)

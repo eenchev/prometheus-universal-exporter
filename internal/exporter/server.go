@@ -496,12 +496,15 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// at its end when a sampling rule keeps it (otlptracesampling.go). A
 	// caller's traceparent makes it a span of the caller's trace, its
 	// sampled flag and tracestate read for the rules and the spans.
-	ctx, spans := beginTrace(r.Context(), cfg.OTLP)
-	var traced probeTraceEnd
 	var parent traceParent
-	if spans != nil {
+	if otlpTracesOn(cfg.OTLP) || cfg.OTLP.Traces.Propagate {
 		parent = callerTrace(r.Header)
 	}
+	ctx, spans := beginTrace(r.Context(), cfg.OTLP, parent)
+	// With otlp.traces.propagate, the trip's requests carry the probe's
+	// trace, or with the trace export off the caller's as it came.
+	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), parent, r.Header)
+	var traced probeTraceEnd
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no
 	// new request tracked. It is called once the answer is ready, before it
@@ -715,12 +718,12 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	// or denied_targets changed or before the target's name resolved
 	// elsewhere, left in the cache.
 	if result.refused {
-		s.logger.Debug("probe refused by the target policy; no stale result served", p.logAttrs()...)
+		s.logger.DebugContext(ctx, "probe refused by the target policy; no stale result served", p.logAttrs()...)
 		return result
 	}
 	staleKey := p.failureKey().aspect(staleAspect)
 	if result.ok {
-		s.failures.recoveredFor(p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
+		s.failures.recoveredFor(ctx, p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
 		return result
 	}
 	now := time.Now()
@@ -736,7 +739,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		x.staleServed++
 		x.emitted += uint64(len(cached.Metrics))
 	})
-	s.failures.failedFor(p.rec.read, s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
+	s.failures.failedFor(ctx, p.rec.read, s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
 	out.metrics = &answer
 	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
@@ -807,7 +810,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			now := time.Now()
 			tripSpansFrom(ctx).step("slot", "refused", now, now, full.message)
 			rec.update(func(x *serverStats) { countRejection(x, full) })
-			s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+			s.failures.failedFor(ctx, rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 			http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 			rejected := out.result(false)
 			rejected.outcome, rejected.failure = probeRejected, shownFailureText(full.message)

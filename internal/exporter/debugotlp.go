@@ -117,6 +117,13 @@ type debugOTLPLogRecord struct {
 	Attributes     []debugOTLPAttribute `json:"attributes,omitempty"`
 	Exported       bool                 `json:"exported"`
 	Note           string               `json:"note,omitempty"`
+	// TraceID and SpanID are the run's trace and the span the line was
+	// logged in, which a probe's record is linked to when its trace is
+	// exported (otlptraceslink.go), and Link says so: the run's trace is
+	// never exported, and its records are not linked.
+	TraceID string `json:"trace_id,omitempty"`
+	SpanID  string `json:"span_id,omitempty"`
+	Link    string `json:"link,omitempty"`
 }
 
 // debugLogRecords are a run's log lines as records, with their levels, as
@@ -125,13 +132,19 @@ type debugLogRecords struct {
 	mu      sync.Mutex
 	levels  []slog.Level
 	records [][]byte
+	// links are the run's trace each record was logged in, if any, and
+	// times when it was logged.
+	links []*traceLink
+	times []time.Time
 }
 
-func (d *debugLogRecords) add(level slog.Level, record []byte) {
+func (d *debugLogRecords) add(level slog.Level, record []byte, link *traceLink, at time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.levels = append(d.levels, level)
 	d.records = append(d.records, record)
+	d.links = append(d.links, link)
+	d.times = append(d.times, at)
 }
 
 // debugOTLPOf is the OTLP tab of a run made at, nil while the export is
@@ -236,10 +249,12 @@ func (s *Server) debugOTLPOf(report *debugReport, at time.Time) *debugOTLP {
 		body = []byte(err.Error())
 	}
 	out.Body = string(body)
+	// The spans first: the log records are shown with the ids of the span
+	// each was logged in.
+	out.Traces = s.debugOTLPTracesOf(cfg, report)
 	if records := report.trace.otlpRecords; records != nil {
 		out.Logs = debugOTLPLogsOf(cfg, records)
 	}
-	out.Traces = s.debugOTLPTracesOf(cfg, report)
 	return out
 }
 
@@ -479,7 +494,7 @@ func debugOTLPNotes(cfg model.OTLPConfig, payload otlpPayload, p debugProbe, cum
 // debugOTLPLogsOf is the run's log as the log export would send it.
 func debugOTLPLogsOf(cfg model.OTLPConfig, records *debugLogRecords) *debugOTLPLogs {
 	records.mu.Lock()
-	levels, raw := records.levels, records.records
+	levels, raw, links, times := records.levels, records.records, records.links, records.times
 	records.mu.Unlock()
 	level, _ := model.LogLevel(cfg.Logs.Level)
 	out := &debugOTLPLogs{Level: strings.ToLower(level.String()), Records: []debugOTLPLogRecord{}}
@@ -495,6 +510,10 @@ func debugOTLPLogsOf(cfg model.OTLPConfig, records *debugLogRecords) *debugOTLPL
 		}
 		for _, a := range r.Attributes {
 			shown.Attributes = append(shown.Attributes, debugOTLPAttribute{Key: a.Key, Value: debugAnyValue(a.Value)})
+		}
+		if trace, span, ok := links[k].spanAt(times[k]); ok {
+			shown.TraceID, shown.SpanID = trace, span
+			shown.Link = "would link to the trace and the span of the OTLP tab's spans, with the sampled flag, if the trace were exported; a run's never is, and its record carries no ids"
 		}
 		if shown.Exported {
 			exported = append(exported, record)

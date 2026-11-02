@@ -34,9 +34,10 @@ import (
 //	Summary       sample_count 1, sample_sum 2, quantile 3 (quantile 1,
 //	              value 2), created_timestamp 4
 //	Histogram     sample_count 1, sample_sum 2, bucket 3 (cumulative_count
-//	              1, upper_bound 2), schema 5, zero_threshold 6,
+//	              1, upper_bound 2, exemplar 3), schema 5, zero_threshold 6,
 //	              zero_count 7, positive_span 12 (offset 1, length 2),
-//	              positive_delta 13, created_timestamp 15
+//	              positive_delta 13, created_timestamp 15, exemplars 16
+//	Exemplar      label 1, value 2, timestamp 3
 //	Timestamp     seconds 1, nanos 2
 //
 // A histogram with exponential buckets is written with both: its classic
@@ -240,13 +241,65 @@ func appendProtoHistogram(b []byte, m model.Metric) []byte {
 		var classic []byte
 		classic = appendProtoUint(classic, 1, bucket.CumulativeCount)
 		classic = appendProtoDouble(classic, 2, bucket.UpperBound)
+		if bucket.Exemplar != nil {
+			classic = appendProtoTag(classic, 3, wireBytes)
+			classic = appendProtoBytes(classic, appendProtoExemplar(nil, bucket.Exemplar))
+		}
 		b = appendProtoTag(b, 3, wireBytes)
 		b = appendProtoBytes(b, classic)
 	}
 	if h.Exponential != nil {
 		b = appendNativeBuckets(b, h.Exponential.AtMostScale(nativeHistogramSchema))
+		// A native histogram's exemplars are a list of their own, which
+		// Prometheus reads when it stores the histogram as a native one:
+		// the classic buckets', the +Inf one's among them, in the order of
+		// their values, as the buckets have them.
+		for _, x := range histogramExemplars(h) {
+			b = appendProtoTag(b, 16, wireBytes)
+			b = appendProtoBytes(b, appendProtoExemplar(nil, x))
+		}
 	}
 	return appendProtoCreated(b, 15, m.Created)
+}
+
+// histogramExemplars are a histogram's exemplars, its buckets' in ascending
+// order of their bounds and the +Inf bucket's last.
+func histogramExemplars(h *model.Histogram) []*model.Exemplar {
+	var out []*model.Exemplar
+	var e expositionWriter
+	for _, bucket := range e.ascendingBuckets(h.Buckets) {
+		if bucket.Exemplar != nil {
+			out = append(out, bucket.Exemplar)
+		}
+	}
+	if h.InfExemplar != nil {
+		out = append(out, h.InfExemplar)
+	}
+	return out
+}
+
+// appendProtoExemplar appends an Exemplar: its trace_id and span_id labels,
+// its value and its timestamp.
+func appendProtoExemplar(b []byte, x *model.Exemplar) []byte {
+	for _, label := range [][2]string{{"trace_id", x.TraceID}, {"span_id", x.SpanID}} {
+		var pair []byte
+		pair = appendProtoTag(pair, 1, wireBytes)
+		pair = appendProtoString(pair, label[0])
+		pair = appendProtoTag(pair, 2, wireBytes)
+		pair = appendProtoString(pair, label[1])
+		b = appendProtoTag(b, 1, wireBytes)
+		b = appendProtoBytes(b, pair)
+	}
+	b = appendProtoDouble(b, 2, x.Value)
+	var ts []byte
+	ts = appendProtoTag(ts, 1, wireVarint)
+	ts = binary.AppendUvarint(ts, uint64(x.Time.Unix())) //nolint:gosec // G115: an int64 field's varint is its two's complement
+	if nanos := x.Time.Nanosecond(); nanos != 0 {
+		ts = appendProtoTag(ts, 2, wireVarint)
+		ts = binary.AppendUvarint(ts, uint64(nanos)) //nolint:gosec // G115: an int32 field's varint is its two's complement
+	}
+	b = appendProtoTag(b, 3, wireBytes)
+	return appendProtoBytes(b, ts)
 }
 
 // appendNativeBuckets appends the native fields of exponential buckets.

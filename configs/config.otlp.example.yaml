@@ -53,7 +53,11 @@ otlp:
   # parent_based exports those whose caller's traceparent is sampled too,
   # sample_ratio a share (0 to 1) of the rest by their trace ids, as
   # OpenTelemetry's consistent probability sampling decides it, and
-  # max_per_second caps all of them, 0 being no cap.
+  # max_per_second caps all of them, 0 being no cap. propagate sends each
+  # request to a target the trace's traceparent, so that the target's spans
+  # are children of the exporter's (with traces off, a probe's caller's is
+  # passed on as it came). Log records and the scrape-time histogram's
+  # exemplars link to the traces exported.
   # traces:
   #   enabled: true
   #   threshold: 1s
@@ -61,6 +65,7 @@ otlp:
   #   parent_based: false
   #   sample_ratio: 0
   #   max_per_second: 0
+  #   propagate: false
   #   endpoint: http://otel-collector:4318/v1/traces
 
 # Optional exporter endpoint protection. Do not enable this together with a

@@ -8027,6 +8027,22 @@ of OpenTelemetry being Prometheus's `i+1`. The protobuf answer MUST be
 written without `google.golang.org/protobuf`, which only the `grpc` request
 type may link (§ 14.1).
 
+With the trace export on (§ 42.1c), each bucket of the scrape-time
+histogram, the `+Inf` one included, MUST keep as its exemplar the latest
+trip observed in it whose trace was exported, and none of a trace dropped
+or not yet decided: the trace id and the probe's or the scrape's span id,
+as `trace_id` and `span_id`, the trip's duration and the time it was
+observed; a trace exported after a later trip's MUST NOT replace it. A
+trip shared by identical probes MUST be of the trace of the probe that
+started it. OpenMetrics MUST write a bucket's exemplar after its count, as
+`# {trace_id="…",span_id="…"} <value> <timestamp in seconds>`; protobuf in
+the classic bucket's `exemplar` and, the same ones in the order of their
+values, in the histogram's `exemplars`; the OTLP export on the histogram's
+and the exponential histogram's points, as `exemplars` with `traceId`,
+`spanId`, `asDouble` and `timeUnixNano`. The Prometheus text format MUST
+NOT carry any, and no other series MUST: the gauges of one probe's
+duration can have none in OpenMetrics.
+
 Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
 gauge a static target's health series carry on its endpoint and over OTLP
 (§ 42.14): the two
@@ -29978,6 +29994,24 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAProbeThatLeftAJoinedTripSaysItWaitedForIt`: probe A starts a trip, B joins it and B's caller leaves: A's trace has the trip whole under its root, no status; B's root is ERROR `the caller went away while the probe waited for an identical probe's trip`, its `shared_trip` span `cancelled` under the root, with the trip's `GET` marked `request.unfinished` `true`; no span's parent is missing.
 - `TestATraceEndedAfterAReloadSwitchedTracesOffIsNeverSent`: a probe in flight when a reload switches `otlp.traces` off ends with no span queued, and after a reload switching it on again the next export sends nothing of it.
 
+## 34.259 Metrics, logs and traces linked, otlp.traces.propagate
+
+- `TestALogRecordIsLinkedToItsProbesTraceOnlyWhenExported`: with `otlp.logs` and `otlp.traces` on under a `40ms` threshold, the `probe failed` record of a probe of a target answering 500 after `60ms` carries the exported trace's `traceId`, the `spanId` of its failed `http_status` stage and `flags` 1; that of a target answering 500 at once, whose trace is dropped, carries none, and no record an empty `traceId`; stderr's lines carry no trace or span id; with `otlp.traces` off no record carries any.
+- `TestALogRecordIsLinkedWhenItsTraceIsDecidedBeforeItLeaves`: a record drained before its trace is decided carries no ids; once the trace is exported, a line logged within a stage carries the stage's span id and one logged after it the root's, with the trace id and `flags` 1; a record of a dropped trace carries none.
+- `TestTheScrapeTimeHistogramCarriesExemplarsOfExportedTraces`: of trips of 60, 70 and 80 ms whose traces are exported in the order 70, 60 and dropped, the `le="0.1"` bucket's exemplar is the 70 ms one, written in OpenMetrics as `… 4 # {trace_id="…",span_id="…"} 0.07 <seconds>`; a 90 s trip's is on the `+Inf` bucket; a 3 ms trip's, undecided, makes none until its trace is exported; the text format carries none.
+- `TestTheProtobufAnswerCarriesTheHistogramsExemplars`: the protobuf answer, decoded with protowire, has the exemplar on the `0.1` classic bucket (field 3) and once among the histogram's exemplars (field 16), with the labels `trace_id` and `span_id` alone, the value 0.07 and its timestamp.
+- `TestTheOTLPHistogramPointsCarryTheExemplars`: the histogram's and the exponential histogram's OTLP points carry `"exemplars":[{"timeUnixNano":…,"asDouble":0.07,"spanId":…,"traceId":…}]`, and a target's histogram none.
+- `TestAnExportedProbesTripIsItsBucketsExemplar`: with verbose self-metrics and a `40ms` threshold, a `60ms` probe's trip is the one exemplar of its collector's histogram, with the exported trace's id and its probe span's id, on a bucket of at least `0.05`; a fast probe's makes none.
+- `TestAProbesRequestCarriesItsTraceparent`: with `propagate`, a probe's request carries `00-<trace>-<span>-<flags>` of its exported trace and its `GET` span's id: flags `00` with no rule decided, `01` and `tracestate` `ot=th:0` with `sample_ratio: 1`, the caller's trace id, `01` and its `tracestate` `ot=th:8,vendor=x` under `parent_based` for a caller that sampled it, `00` and `vendor=x` for one that did not; without `propagate` nothing.
+- `TestPropagateWithTheTraceExportOffPassesTheCallersOn`: with `otlp.traces.enabled: false` and `propagate`, the caller's `traceparent` and `tracestate` arrive as they came; none for no caller's, or one that cannot be read; a `traceparent` in `request.headers` arrives as it is, with no `tracestate`, with the export on or off.
+- `TestTheDebugPageShowsTheTraceparentSentAndTheLinks`: with `propagate` a run's request line shows the `Traceparent` the target got; a run's log record shows a `trace_id` and `span_id` of the tab's spans, saying it `would link`, and its log body carries no `traceId`.
+- `TestAStaticTargetsScrapeIsLinkedAsAProbeIs`: a static target's `static target scrape failed` record carries the trace and the failed stage's span, and its request the `traceparent` of its `GET` span, flags `00`.
+- `TestASharedTripIsSentUnderItsStartersTraceparent`: two probes sharing a trip send one request, under the starter's trace: the starter's `GET` span has the id sent, the joiner's another.
+- `TestATripsRequestsCarryItsTraceparent` (fetch): a request and the redirect it follows carry the trip's `traceparent` under span ids of their own, recorded with each request, its flags and `tracestate`; the login's request carries none.
+- `TestAConfiguredTraceparentIsSentAsItIs` (fetch): a caller's context passed on arrives as it came, with no span id recorded; a `traceparent` of `request.headers`, or forwarded in lower case, is sent as it is with no `tracestate`; without propagation nothing is sent.
+- `TestAGRPCCallCarriesItsTraceparent` (fetch): a gRPC call's metadata carries the trip's `traceparent` under the span id recorded with the call and its `tracestate`; one `request.metadata` sets is sent as it is.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: `traces: {enabled: false, propagate: true}` is accepted by both, and `propagate: maybe` refused by both.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30749,6 +30783,17 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   dropped and counted. No line logged after it is exported.
 - The log export MUST NOT change readiness (§ 23), and its state MUST be on
   the status page (§ 42.14a).
+- With `otlp.traces` on too (§ 42.1c), a record of a line logged during a
+  probe or a scrape, its own or a shared trip's, MUST carry the trace's
+  `traceId`, the `spanId` of the innermost stage span whose times hold the
+  line's time, else the probe's or the scrape's span, and `flags` 1, the
+  sampled bit, when the trace was exported by the time the export takes the
+  record from its queue, and none of them otherwise: a trace dropped, or
+  not yet decided, MUST NOT be linked, then or later. A stage's failure
+  MUST be logged before the stage ends. A trace's ids MUST be made when the
+  probe or the scrape begins, so that the line, which waits in the queue,
+  is linked to the spans made of them at its end. The lines on stderr MUST
+  carry no trace or span id.
 
 ### 42.1c Traces of slow requests
 
@@ -30806,8 +30851,24 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its
   parent; its sampled flag MUST keep the trace only under `parent_based`,
-  and the other rules MUST decide it as any other. The exporter MUST NOT
-  send a `traceparent` to its targets.
+  and the other rules MUST decide it as any other.
+- With `otlp.traces.propagate`, false by default, each HTTP request (a
+  graphite one's too) and each gRPC call, as metadata, of a probe or a
+  scrape MUST carry a W3C `traceparent` of its trace with a span id of the
+  request's own, which its CLIENT span MUST then have, a redirect followed
+  one of its own, and the `tracestate` its spans would carry if kept by the
+  rule that has already kept it, else the caller's without a `th`. Its
+  sampled flag MUST be `01` only where `parent_based` (the caller's flag)
+  or `sample_ratio` (the trace id) has kept the trace when the request is
+  sent, and `00` otherwise. With the trace export off, a probe's caller's
+  readable `traceparent`, and its readable `tracestate`, MUST be passed on
+  as they came, no id made. A `traceparent` the request sets itself, in
+  `request.headers`, `request.metadata` or a forwarded header, MUST be
+  sent as it is, with no `tracestate` added; a login's request MUST carry
+  none. A trip shared by identical probes MUST be sent under the trace of
+  the probe that started it, and only that probe's span of a request MAY
+  have the id it was sent under. Without `propagate`, the exporter MUST
+  NOT send a `traceparent` to its targets.
 - A trace MUST be decided once, at its end, by these rules in this order,
   the first that keeps it naming why, and MUST be dropped when none does:
   `slow`, it took `otlp.traces.threshold` or longer; `error`, it failed,
@@ -30873,7 +30934,10 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   rule would keep it, with the ratio's randomness and threshold when the
   ratio was tried, and that the rate cap is not taken by a run; its
   endpoint test MUST offer the traces endpoint, sent
-  `{"resourceSpans":[]}`.
+  `{"resourceSpans":[]}`. A run MUST have trace ids, which its requests
+  carry under `propagate` and its request lines show; its log records MUST
+  show the trace and the span they would be linked to, saying that a run's
+  are not, and its log export body MUST carry none.
 - A probe MUST NOT wait for the export: the spans waiting MUST be bounded
   by `otlp.traces.max_pending_spans`, 10000 by default, a negative value
   refused, and a trace that finds no room for all of its spans MUST be

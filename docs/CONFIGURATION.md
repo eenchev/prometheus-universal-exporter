@@ -13,7 +13,11 @@ deliberately not part of it: Prometheus supplies each one per scrape.
 and static target scrape — of each failed one too with `errors`, of each
 its caller sampled with `parent_based`, of a `sample_ratio` share of the
 rest, at most `max_per_second` a second
-([Which traces are exported](OTLP.md#which-traces-are-exported)) — and with
+([Which traces are exported](OTLP.md#which-traces-are-exported)), linked to
+the log records and the self-metrics' exemplars of the same probe, and with
+`propagate` sent to the targets as their `traceparent`
+([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces))
+— and with
 [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
 that sends them on every resource.
 
@@ -5804,7 +5808,10 @@ is what the export does, not a description of it:
   shown as the metrics' body is, a tree for each request when the records
   are more than one holds. A
   probe logs a failure as `probe failed`, where a run says `debug run
-  failed`, and a repeated one once and then every five minutes.
+  failed`, and a repeated one once and then every five minutes. With
+  `otlp.traces` on, each record shows the trace and the span it would be
+  linked to, which a run's never is
+  ([Linking metrics, logs and traces](OTLP.md#on-the-debug-page)).
 - **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on: the
   spans the trace export would make of the run, by the export's own code —
   the probe's or the scrape's, each stage's and each request's — as a tree
@@ -5817,7 +5824,8 @@ is what the export does, not a description of it:
   `traceparent`) and `otlp.traces.sample_ratio`, with the run's trace id's
   randomness against the threshold. `otlp.traces.max_per_second` is not
   taken, and the line says so of a trace kept. The run's own trace is
-  never exported.
+  never exported. With `otlp.traces.propagate`, the run's requests carry
+  its `traceparent`, which their request lines show.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and
@@ -5921,7 +5929,10 @@ alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
 (each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
 `prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
 `left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
-`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`), and with
+`otlp.logs`, `logs` (`level`, `records`, each with `time`,
+`severity_number`, `severity_text`, `body`, `attributes`, `exported`,
+`note` and, with `otlp.traces`, `trace_id`, `span_id` and `link`, `notes`
+and `body`), and with
 `otlp.traces`, `traces` (`threshold`, `errors`, `parent_based`,
 `sample_ratio`, `max_per_second`, `took`, `failed`, `exported`, `reason`
 when it would be, as `sampling.reason` names it, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,

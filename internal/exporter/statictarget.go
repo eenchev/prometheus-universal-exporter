@@ -83,7 +83,10 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// With otlp.traces on, the scrape records its trace, exported at its
 	// end when it was slow, or failed under otlp.traces.errors
 	// (otlptraces.go).
-	ctx, spans := beginTrace(ctx, cfg.OTLP)
+	ctx, spans := beginTrace(ctx, cfg.OTLP, traceParent{})
+	// With otlp.traces.propagate too, its requests carry its trace; a
+	// scrape has no caller whose trace it could pass on.
+	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), traceParent{}, nil)
 
 	// Repeats of the same failure are logged sparingly (failurelog.go).
 	log := collectLog{
@@ -164,7 +167,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {
-		s.logCollectFailure(rec.read, log, "credentials", err)
+		s.logCollectFailure(ctx, rec.read, log, "credentials", err)
 		failed(err)
 		return
 	}
@@ -226,7 +229,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 				return
 			}
 			count(func(st *serverStats) { countRejection(st, err) })
-			s.logCollectFailure(rec.read, log, "concurrency", err)
+			s.logCollectFailure(ctx, rec.read, log, "concurrency", err)
 			failed(err)
 			return
 		}

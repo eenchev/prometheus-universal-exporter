@@ -129,6 +129,22 @@ and `### Fixed` follow when they have lines.
 
 ### New
 
+- Metrics, logs and traces linked, with `otlp.traces` on
+  ([Linking metrics, logs and traces](docs/OTLP.md#linking-metrics-logs-and-traces)).
+  With `otlp.logs` too, a log record of a line a probe or a static target
+  scrape logged, such as `probe failed`, carries its trace's `traceId`, the
+  `spanId` of the stage it was logged in and `flags` 1, when that trace was
+  exported by the time the record is sent; stderr's lines are as before.
+  With verbose self-metrics, each bucket of
+  `http_exporter_collector_scrape_duration_seconds` has as its exemplar the
+  latest trip of an exported trace, in OpenMetrics, protobuf (classic and
+  native) and OTLP. `otlp.traces.propagate: true` sends each HTTP, graphite
+  and gRPC request to a target a W3C `traceparent` under its span's id, the
+  sampled flag set where `parent_based` or `sample_ratio` has already kept
+  the trace, and with the trace export off passes a probe's caller's
+  `traceparent` and `tracestate` on as they came; a `traceparent` in
+  `request.headers` or forwarded is sent as it is, and a login carries none.
+
 - Sampling rules for `otlp.traces`, tried after `threshold` and `errors`:
   `parent_based: true` exports the trace of a probe whose caller's
   `traceparent` is sampled, and `sample_ratio` a share, 0 to 1, of the rest,

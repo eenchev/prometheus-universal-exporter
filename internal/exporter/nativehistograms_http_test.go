@@ -41,7 +41,7 @@ func histogramServer(t *testing.T, change func(*model.Config), durations ...time
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
 	_, _, stats := server.collectorStats()
 	for _, d := range durations {
-		server.observeTargetScrape(stats["app"], d)
+		server.observeTargetScrape(stats["app"], d, nil)
 	}
 	return server
 }

@@ -828,6 +828,10 @@ type OTLPTracesConfig struct {
 	// finds no room for all of its spans is dropped whole rather than
 	// waited for.
 	MaxPendingSpans int `yaml:"max_pending_spans"`
+	// Propagate sends the trace context to the targets: each request of a
+	// probe or a scrape carries its traceparent, and with the trace export
+	// off a probe's caller's is passed on as it came.
+	Propagate bool `yaml:"propagate"`
 }
 
 // UnmarshalYAML reads otlp.traces, refusing settings that enabled does not

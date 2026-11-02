@@ -98,6 +98,27 @@ type otlpHistogramDataPoint struct {
 	Sum               *otlpDouble     `json:"sum,omitempty"`
 	BucketCounts      []string        `json:"bucketCounts"`
 	ExplicitBounds    []otlpDouble    `json:"explicitBounds"`
+	Exemplars         []otlpExemplar  `json:"exemplars,omitempty"`
+}
+
+// otlpExemplar is an exemplar of a histogram's point (model.Exemplar): its
+// time, its value and the trace and the span it was observed in, hex as
+// OTLP/JSON writes ids. Only the exporter's own durations have them.
+type otlpExemplar struct {
+	TimeUnixNano string     `json:"timeUnixNano"`
+	AsDouble     otlpDouble `json:"asDouble"`
+	SpanID       string     `json:"spanId"`
+	TraceID      string     `json:"traceId"`
+}
+
+// otlpExemplars are a histogram's exemplars as OTLP points carry them, nil
+// for none.
+func otlpExemplars(h *model.Histogram) []otlpExemplar {
+	var out []otlpExemplar
+	for _, x := range histogramExemplars(h) {
+		out = append(out, otlpExemplar{TimeUnixNano: strconv.FormatInt(x.Time.UnixNano(), 10), AsDouble: otlpDouble(x.Value), SpanID: x.SpanID, TraceID: x.TraceID})
+	}
+	return out
 }
 
 type otlpExponentialHistogram struct {
@@ -123,6 +144,7 @@ type otlpExponentialHistogramDataPoint struct {
 	Positive          otlpExponentialSet `json:"positive"`
 	Min               *otlpDouble        `json:"min,omitempty"`
 	Max               *otlpDouble        `json:"max,omitempty"`
+	Exemplars         []otlpExemplar     `json:"exemplars,omitempty"`
 }
 
 type otlpExponentialSet struct {
@@ -1549,6 +1571,7 @@ func otlpHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) o
 		previous = b.CumulativeCount
 	}
 	point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(count-previous, 10))
+	point.Exemplars = otlpExemplars(h)
 	return point
 }
 
@@ -1574,6 +1597,7 @@ func otlpExponentialHistogramPoint(m model.Metric, attributes []otlpAttribute, a
 		low, high := otlpDouble(x.Min), otlpDouble(x.Max)
 		point.Min, point.Max = &low, &high
 	}
+	point.Exemplars = otlpExemplars(h)
 	return point
 }
 

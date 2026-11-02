@@ -109,8 +109,8 @@ func traceRandomness(id [16]byte, state traceState) uint64 {
 // rule what it went by, which the debug page tells.
 type traceDecision struct {
 	reason samplingReason
-	// traceID is the trace's id: the caller's, or one made for the ratio's
-	// rule; zero where no rule needed one, and buildSpans makes it.
+	// traceID is the trace's id: the caller's, or the one made when the
+	// trace began.
 	traceID [16]byte
 	// randomness and threshold are what the ratio's rule compared, set
 	// when it was reached.
@@ -123,10 +123,17 @@ type traceDecision struct {
 // It is run at the end of every probe while the trace export is on, and
 // makes nothing of the trace's spans: they are made only of one kept.
 func decideTrace(cfg model.OTLPConfig, elapsed time.Duration, failed bool, parent traceParent) traceDecision {
-	d := traceDecision{}
-	if parent.ok {
-		d.traceID = parent.traceID
+	id := parent.traceID
+	if !parent.ok {
+		id = newTraceID()
 	}
+	return decideTraceOf(cfg, elapsed, failed, parent, id)
+}
+
+// decideTraceOf is decideTrace of the trace whose id is id, made when it
+// began (traceLink): the caller's, or one of its own.
+func decideTraceOf(cfg model.OTLPConfig, elapsed time.Duration, failed bool, parent traceParent, id [16]byte) traceDecision {
+	d := traceDecision{traceID: id}
 	t := cfg.Traces
 	switch {
 	case elapsed >= otlpTraceThreshold(cfg):
@@ -136,9 +143,6 @@ func decideTrace(cfg model.OTLPConfig, elapsed time.Duration, failed bool, paren
 	case t.ParentBased && parent.ok && parent.sampled:
 		d.reason = keptParent
 	case t.SampleRatio > 0:
-		if !parent.ok {
-			d.traceID = newTraceID()
-		}
 		d.ratioTried = true
 		d.randomness, d.threshold = traceRandomness(d.traceID, parent.state), ratioThreshold(t.SampleRatio)
 		if d.randomness >= d.threshold {

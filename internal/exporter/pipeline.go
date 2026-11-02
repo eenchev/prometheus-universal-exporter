@@ -101,11 +101,11 @@ type collectLog struct {
 }
 
 // logCollectFailure logs a failure of stage at error level, for a caller
-// that read its collector as read says (tripFailed). The error is bounded
+// that read its collector as read says (tripFailed), with ctx, the trip's. The error is bounded
 // here (boundedTripFailure): it is that of a stage before the trip, which
 // collect has not seen.
-func (s *Server) logCollectFailure(read configRead, l collectLog, stage string, err error, extra ...any) {
-	s.logTripFailure(context.Background(), read, l, stage, boundedTripFailure(err), extra...)
+func (s *Server) logCollectFailure(ctx context.Context, read configRead, l collectLog, stage string, err error, extra ...any) {
+	s.logTripFailure(ctx, read, l, stage, boundedTripFailure(err), extra...)
 }
 
 // logTripFailure is logCollectFailure for a trip, which a debug probe's
@@ -213,7 +213,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		// is in neither, nor is one backoff kept from the target.
 		if trace == nil && j.backingOff == nil {
 			rec.scraped(time.Now())
-			s.observeTargetScrape(rec.collector, time.Since(start))
+			s.observeTargetScrape(rec.collector, time.Since(start), traceLinkFrom(ctx))
 		}
 	}()
 	// stageFailed applies a stage's error policy to the stage's error,
@@ -234,21 +234,20 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		err = explainBudget(ctx, trip, j.budget, j.budgetSource, err)
 		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
-		switch policy {
-		case model.ErrorPolicyLog, model.ErrorPolicyIgnore:
-			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
-		default:
-			stages.step(stage, "failed", mark, err.Error())
-		}
+		// The failure is logged before its stage ends, so that its line is
+		// the stage's in the trace (otlptraceslink.go).
 		switch policy {
 		case model.ErrorPolicyLog:
 			s.tripFailed(ctx, rec.read, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
+			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
 			return collected{carriedOn: true}
 		case model.ErrorPolicyIgnore:
 			s.tripDebug(ctx, j.log.continuing, append(attrs, "error", err)...)
+			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
 			return collected{carriedOn: true}
 		}
 		s.logTripFailure(ctx, rec.read, j.log, stage, err, extra...)
+		stages.step(stage, "failed", mark, err.Error())
 		return collected{stage: stage, err: err}
 	}
 	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
@@ -301,8 +300,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.Is(err, fetch.ErrTargetRefused) {
 			err = boundedTripFailure(err)
 			rec.update(func(x *serverStats) { x.refused++ })
-			stages.step(stageTargetPolicy, "refused", mark, err.Error())
 			s.logTripFailure(ctx, rec.read, j.log, stageTargetPolicy, err)
+			stages.step(stageTargetPolicy, "refused", mark, err.Error())
 			return collected{stage: stageTargetPolicy, err: err, refused: true}
 		}
 		var extra []any
@@ -459,8 +458,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 				if cutShort(ctx) {
 					return collected{stage: "metric", err: err, aborted: true}
 				}
-				stages.step("transform", "failed", mark, "metric "+failure.Metric+": "+err.Error())
 				s.logTripFailure(ctx, rec.read, j.log, "metric", err, "metric", failure.Metric)
+				stages.step("transform", "failed", mark, "metric "+failure.Metric+": "+err.Error())
 				return collected{stage: "metric", err: err, metric: failure.Metric}
 			}
 			return stageFailed("transform", err, c.ErrorHandling.OnTransformError)

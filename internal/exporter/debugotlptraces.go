@@ -93,9 +93,14 @@ func (s *Server) debugOTLPTracesOf(cfg model.OTLPConfig, report *debugReport) *d
 	// The run's trace is decided as a probe's or a scrape's would be, by
 	// the rules alone: a run has no caller's traceparent, and the rate cap,
 	// which goes by the traces exported before it, is not taken.
-	decision := decideTrace(cfg, report.took, report.failed, traceParent{})
+	link := report.spans.link
+	decision := decideTraceOf(cfg, report.took, report.failed, traceParent{}, link.traceID)
 	sampledRoot(&root, cfg, decision, traceParent{})
+	root.spanID = link.rootID
 	made := buildSpans(root, stages, requests)
+	// The run's log records are shown with the ids they would be linked to
+	// (debugOTLPLogsOf), which are those of these spans.
+	link.settle(false, stages, made)
 	t := cfg.Traces
 	out := &debugOTLPTraces{Threshold: otlpTraceThreshold(cfg).String(), Errors: t.Errors, ParentBased: t.ParentBased, SampleRatio: t.SampleRatio, MaxPerSecond: t.MaxPerSecond,
 		Took: shownScrapeDuration(report.took), Failed: report.failed}

@@ -419,7 +419,7 @@ func (f *failureLog) uncountLocked(st *failureState) {
 
 // failed logs a failure at level, or counts it as a repeat.
 func (f *failureLog) failed(logger *slog.Logger, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
-	f.failedFor(configRead{}, logger, level, key, msg, stage, err, attrs...)
+	f.failedFor(context.Background(), configRead{}, logger, level, key, msg, stage, err, attrs...)
 }
 
 // failedFor is failed for a trip that read its collector as read says. When
@@ -429,9 +429,10 @@ func (f *failureLog) failed(logger *slog.Logger, level slog.Level, key subjectKe
 // the collector now under the name nor ends a run of that one's, and is
 // logged at debug level only, as superseded. So is the failure of a static
 // target's scrape whose target a reload removed or changed since
-// (logStands).
-func (f *failureLog) failedFor(read configRead, logger *slog.Logger, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
-	f.failedOf(read, logger, level, false, key, "", "", "", msg, stage, err, attrs...)
+// (logStands). The line is logged with ctx, the trip's, so that its log
+// record is linked to the trip's trace (otlptraceslink.go).
+func (f *failureLog) failedFor(ctx context.Context, read configRead, logger *slog.Logger, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
+	f.failedOf(ctx, read, logger, level, false, key, "", "", "", msg, stage, err, attrs...)
 }
 
 // ruleFailedFor is failedFor for the failure of a rule of the trip or file
@@ -453,14 +454,14 @@ func (f *failureLog) failedFor(read configRead, logger *slog.Logger, level slog.
 // failure is remembered and was not before. So a rule that fails on every
 // scrape has its key made once, and one whose failure a full log does not
 // remember has none made, on any of the scrapes the log stays full for.
-func (f *failureLog) ruleFailedFor(read configRead, logger *slog.Logger, level slog.Level, trip subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
-	return f.failedOf(read, logger, level, true, trip, metric, expression, items, msg, stage, err, attrs...)
+func (f *failureLog) ruleFailedFor(ctx context.Context, read configRead, logger *slog.Logger, level slog.Level, trip subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
+	return f.failedOf(ctx, read, logger, level, true, trip, metric, expression, items, msg, stage, err, attrs...)
 }
 
 // failedOf is failedFor, and ruleFailedFor when rule says the failure is
 // that of the rule of the trip whose key is key that metric, expression and
 // items tell apart, for which it returns what ruleFailedFor does.
-func (f *failureLog) failedOf(read configRead, logger *slog.Logger, level slog.Level, rule bool, key subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
+func (f *failureLog) failedOf(ctx context.Context, read configRead, logger *slog.Logger, level slog.Level, rule bool, key subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
 	errText := ""
 	if err != nil {
 		// What is remembered is no longer than a failure's text may be,
@@ -486,7 +487,7 @@ func (f *failureLog) failedOf(read configRead, logger *slog.Logger, level slog.L
 	}
 	if !read.logStands(key.collector) {
 		f.mu.Unlock()
-		logger.Log(context.Background(), slog.LevelDebug, msg, append(attrs, "superseded", true)...)
+		logger.Log(ctx, slog.LevelDebug, msg, append(attrs, "superseded", true)...)
 		return key.bytes
 	}
 	f.sweepLocked(now)
@@ -516,7 +517,7 @@ func (f *failureLog) failedOf(read configRead, logger *slog.Logger, level slog.L
 			key.bytes = ""
 		}
 		f.mu.Unlock()
-		logger.Log(context.Background(), level, msg, attrs...)
+		logger.Log(ctx, level, msg, attrs...)
 		return key.bytes
 	}
 	st.failures++
@@ -524,13 +525,13 @@ func (f *failureLog) failedOf(read configRead, logger *slog.Logger, level slog.L
 	if now.Sub(st.logged) < f.interval {
 		st.suppressed++
 		f.mu.Unlock()
-		logger.Log(context.Background(), slog.LevelDebug, msg, append(attrs, "repeat", true)...)
+		logger.Log(ctx, slog.LevelDebug, msg, append(attrs, "repeat", true)...)
 		return key.bytes
 	}
 	repeated, since := st.suppressed+1, st.first
 	st.suppressed, st.logged = 0, now
 	f.mu.Unlock()
-	logger.Log(context.Background(), level, msg, append(attrs, "repeated", repeated, "failing_since", since.UTC().Format(time.RFC3339))...)
+	logger.Log(ctx, level, msg, append(attrs, "repeated", repeated, "failing_since", since.UTC().Format(time.RFC3339))...)
 	return key.bytes
 }
 
@@ -558,7 +559,7 @@ func (f *failureLog) sweepLocked(now time.Time) {
 // One forgotten already, not reported for failureLogForget, is not logged
 // as recovering.
 func (f *failureLog) recovered(logger *slog.Logger, key subjectKey, msg string, attrs ...any) {
-	f.recoveredFor(configRead{}, logger, key, msg, attrs...)
+	f.recoveredFor(context.Background(), configRead{}, logger, key, msg, attrs...)
 }
 
 // recoveredFor is recovered for a trip that read its collector as read says:
@@ -566,7 +567,7 @@ func (f *failureLog) recovered(logger *slog.Logger, key subjectKey, msg string, 
 // recovery of the collector now under the name, whose failure stays
 // remembered, and neither is the success of a static target's scrape whose
 // target no longer stands (logStands).
-func (f *failureLog) recoveredFor(read configRead, logger *slog.Logger, key subjectKey, msg string, attrs ...any) {
+func (f *failureLog) recoveredFor(ctx context.Context, read configRead, logger *slog.Logger, key subjectKey, msg string, attrs ...any) {
 	f.mu.Lock()
 	st := f.entries[key.bytes]
 	// Asked only when there is a failure to forget: a trip that recovers
@@ -581,7 +582,7 @@ func (f *failureLog) recoveredFor(read configRead, logger *slog.Logger, key subj
 	if stale {
 		return
 	}
-	logger.Info(msg, append(attrs, "stage", st.stage, "failed_for", f.now().Sub(st.first).Round(time.Second).String(), "failures", st.failures)...)
+	logger.InfoContext(ctx, msg, append(attrs, "stage", st.stage, "failed_for", f.now().Sub(st.first).Round(time.Second).String(), "failures", st.failures)...)
 }
 
 // remembersRules reports whether a failure of any rule is remembered for the

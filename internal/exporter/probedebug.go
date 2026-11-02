@@ -286,7 +286,7 @@ func (s *Server) tripFailed(ctx context.Context, read configRead, level slog.Lev
 		t.failed(ctx, level, msg, err, attrs...)
 		return
 	}
-	s.failures.failedFor(read, s.logger, level, key, msg, stage, err, attrs...)
+	s.failures.failedFor(ctx, read, s.logger, level, key, msg, stage, err, attrs...)
 }
 
 // failed logs a failure of a debug probe's trip to its report, which is
@@ -313,7 +313,7 @@ func (s *Server) ruleFailed(ctx context.Context, read configRead, level slog.Lev
 		t.failed(ctx, level, msg, err, attrs...)
 		return key
 	}
-	return s.failures.ruleFailedFor(read, s.logger, level, trip, metric, expression, items, msg, stage, err, attrs...)
+	return s.failures.ruleFailedFor(ctx, read, s.logger, level, trip, metric, expression, items, msg, stage, err, attrs...)
 }
 
 // tripRecovered is tripFailed's recovery: a debug probe has nothing to
@@ -322,7 +322,7 @@ func (s *Server) tripRecovered(ctx context.Context, read configRead, key subject
 	if probeTraceFrom(ctx) != nil {
 		return
 	}
-	s.failures.recoveredFor(read, s.logger, key, msg, attrs...)
+	s.failures.recoveredFor(ctx, read, s.logger, key, msg, attrs...)
 }
 
 // tripDebug logs at debug level, to a debug probe's report when it is one.
@@ -331,7 +331,7 @@ func (s *Server) tripDebug(ctx context.Context, msg string, attrs ...any) {
 		t.logger.Debug(msg, attrs...)
 		return
 	}
-	s.logger.Debug(msg, attrs...)
+	s.logger.DebugContext(ctx, msg, attrs...)
 }
 
 // debugProbe is one run of the debug engine (runDebug): a debug probe, a
@@ -450,8 +450,16 @@ func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	// the requests its report records, for the OTLP tab to show the spans
 	// the export would make of it; nothing of it is queued.
 	var spans *tripSpans
-	if p.kind == debugKindPage && otlpTracesOn(s.manager.Get().OTLP) {
-		ctx, spans = withTripSpans(ctx, trace.requests)
+	if cfg := s.manager.Get().OTLP; p.kind == debugKindPage && otlpTracesOn(cfg) {
+		// Its ids are made now, as a probe's are, so that its log lines,
+		// and with otlp.traces.propagate its requests, show the links a
+		// probe's would carry (otlptraceslink.go); the run's trace is never
+		// exported, and nothing is linked to it.
+		link := newTraceLink(traceParent{})
+		link.run = true
+		ctx, spans = withTripSpans(withTraceLink(ctx, link), trace.requests)
+		spans.link = link
+		ctx = withPropagation(ctx, cfg, link, traceParent{}, nil)
 	}
 	if p.budget > 0 {
 		var cancel context.CancelFunc

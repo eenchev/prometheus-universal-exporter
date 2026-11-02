@@ -5053,6 +5053,9 @@
             "parent_based": [
               "enabled"
             ],
+            "propagate": [
+              "enabled"
+            ],
             "sample_ratio": [
               "enabled"
             ],
@@ -5098,6 +5101,10 @@
             },
             "parent_based": {
               "description": "Also export the trace of every probe whose caller's W3C traceparent has the sampled flag set (01). Defaults to false. Tried after threshold and errors.",
+              "type": "boolean"
+            },
+            "propagate": {
+              "description": "Send the W3C trace context to the targets: each HTTP request, a graphite one's too, and each gRPC call of a probe or a static target scrape carries a traceparent of its trace, under a span id of its own that its span is made with, its sampled flag set only where parent_based or sample_ratio has kept the trace already, and a tracestate. With the trace export off (this block's enabled, or otlp's, false), a probe's caller's traceparent and tracestate are passed on as they came instead. A traceparent the request sets itself, in request.headers or forwarded, is sent as it is, and a login's request carries none. Defaults to false. See docs/OTLP.md#linking-metrics-logs-and-traces.",
               "type": "boolean"
             },
             "sample_ratio": {

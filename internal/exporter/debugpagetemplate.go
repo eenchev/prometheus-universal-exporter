@@ -223,6 +223,7 @@ table.series td.value { text-align: right; white-space: nowrap; }
 table.series td.type { color: var(--muted); font-family: inherit; }
 table.series td.lint { font-family: inherit; min-width: 9em; }
 table.series td.otlp-notes { font-family: inherit; min-width: 12em; }
+#otlp-logs-table td { white-space: pre-line; }
 ul.otlp-notes { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; color: var(--muted); }
 #otlp-resource th { position: static; width: 1%; }
 table.series td.span-name, table.series td.span-time { white-space: nowrap; }
@@ -479,7 +480,7 @@ p.danger strong { color: var(--bad); }
 <h3>Log records</h3>
 <ul class="otlp-notes" id="otlp-logs-notes"></ul>
 <p class="note" id="otlp-logs-count"></p>
-<div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
+<div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">trace</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
 <details id="otlp-logs-body-part">
 <summary>Request body (ExportLogsServiceRequest)</summary>
 <div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-logs-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-logs-body">Collapse all</button><span class="copy-done" id="otlp-logs-copied"></span></div>
@@ -2409,7 +2410,8 @@ function showOTLP(otlp, ran) {
       $("otlp-logs-box").hidden = records.length === 0;
       $("otlp-logs-rows").replaceChildren(...records.map((r) => {
         const tr = document.createElement("tr");
-        for (const text of [r.time || "", r.severity_text + " (" + r.severity_number + ")", r.body, attributeText(r.attributes), r.exported ? "yes" : "no: " + (r.note || "")]) {
+        const linked = r.trace_id ? "trace_id " + r.trace_id + "\nspan_id " + r.span_id + "\n" + r.link : "";
+        for (const text of [r.time || "", r.severity_text + " (" + r.severity_number + ")", r.body, attributeText(r.attributes), linked, r.exported ? "yes" : "no: " + (r.note || "")]) {
           const td = document.createElement("td");
           td.textContent = text;
           tr.append(td);

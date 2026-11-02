@@ -323,7 +323,9 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 				traceHTTPOutcome(ctx, req.Response)
 			}
 			hop := settleRedirect(ctx, req, via)
+			span := propagateTrace(ctx, req.Header, true)
 			traceRequest(ctx, req.Method, req.URL.String(), req.Header, req.Host, true)
+			traceSpanID(ctx, span)
 			traceWithheld(ctx, hop.withheld, hop.traceNote())
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")

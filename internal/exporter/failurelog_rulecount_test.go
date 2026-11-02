@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,11 +59,11 @@ func (r reportedFailure) subject() subjectKey { return r.trip.rule(r.key) }
 func (r reportedFailure) failed(f *failureLog, read configRead, logger *slog.Logger, stage string, err error) {
 	switch {
 	case !r.rule:
-		f.failedFor(read, logger, slog.LevelWarn, r.trip, "failed", stage, err)
+		f.failedFor(context.Background(), read, logger, slog.LevelWarn, r.trip, "failed", stage, err)
 	case r.keyed:
 		f.ruleFailedUnderKey(read, logger, slog.LevelWarn, r.trip, r.key, "failed", stage, err)
 	default:
-		under := f.ruleFailedFor(read, logger, slog.LevelWarn, r.trip, r.metric, r.expression, r.items, "failed", stage, err)
+		under := f.ruleFailedFor(context.Background(), read, logger, slog.LevelWarn, r.trip, r.metric, r.expression, r.items, "failed", stage, err)
 		if remembered := f.remembers(r.key); under != r.key && under != "" || remembered != (under != "") {
 			panic(fmt.Sprintf("the failure of the rule %q, %q, %q of %q is said to be remembered under %q; its key is %q, and an entry is under it: %v", r.metric, r.expression, r.items, r.trip.bytes, under, r.key, remembered))
 		}
@@ -228,7 +229,7 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 					return "the failure of a retired collector's rule"
 				}
 				gone := failureKey("gone", "http://a", "")
-				f.recoveredFor(retired, logger, gone.rule(ruleFailureKey(gone.bytes, "m", ".a", "")), "recovered")
+				f.recoveredFor(context.Background(), retired, logger, gone.rule(ruleFailureKey(gone.bytes, "m", ".a", "")), "recovered")
 				return "the recovery of a retired collector's rule"
 			case 8:
 				if slow {

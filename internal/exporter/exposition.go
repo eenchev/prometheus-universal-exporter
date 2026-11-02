@@ -1000,17 +1000,43 @@ func (e *expositionWriter) appendOpenMetricsHistogram(b []byte, family string, m
 // appendOpenMetricsBuckets writes a histogram's bucket lines as samples
 // named name: the +Inf bucket last, with its own count (model.Histogram), and
 // none for a histogram that has none, which is written as unknown families.
+// A bucket's exemplar, which only the exporter's own durations have, follows
+// its count (appendOpenMetricsExemplar).
 func (e *expositionWriter) appendOpenMetricsBuckets(b []byte, name string, m model.Metric) []byte {
 	for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
 		if math.IsInf(x.UpperBound, 1) {
 			continue
 		}
 		b = e.appendOpenMetricsCount(b, name, m.Labels, "le", openMetricsFloat(x.UpperBound), x.CumulativeCount, m)
+		b = appendOpenMetricsExemplar(b, x.Exemplar)
 	}
 	if inf, has := m.Histogram.InfBucket(); has {
 		b = e.appendOpenMetricsCount(b, name, m.Labels, "le", "+Inf", inf, m)
+		b = appendOpenMetricsExemplar(b, m.Histogram.InfExemplar)
 	}
 	return b
+}
+
+// appendOpenMetricsExemplar writes x, when there is one, on the line b ends
+// with, as OpenMetrics writes an exemplar after a bucket's count and its
+// timestamp: " # {trace_id="…",span_id="…"} value timestamp", the timestamp
+// in seconds. Its labels are 32 and 16 hex digits under their names, 63
+// characters, within the 128 an exemplar's labels may have. The Prometheus
+// text format has no exemplars, and writes none.
+func appendOpenMetricsExemplar(b []byte, x *model.Exemplar) []byte {
+	if x == nil {
+		return b
+	}
+	b = b[:len(b)-1]
+	b = append(b, ` # {trace_id="`...)
+	b = append(b, x.TraceID...)
+	b = append(b, `",span_id="`...)
+	b = append(b, x.SpanID...)
+	b = append(b, `"} `...)
+	b = strconv.AppendFloat(b, x.Value, 'g', -1, 64)
+	b = append(b, ' ')
+	b = strconv.AppendFloat(b, float64(x.Time.UnixMilli())/1000, 'f', -1, 64)
+	return append(b, '\n')
 }
 
 func (e *expositionWriter) appendOpenMetricsSummary(b []byte, family string, m model.Metric) []byte {

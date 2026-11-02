@@ -855,6 +855,33 @@ targets pass on targets' histograms, which have classic buckets alone. The
 [OTLP export](OTLP.md#exponential-histograms) can send the same buckets as
 exponential histograms.
 
+#### Exemplars
+
+With the [trace export](OTLP.md#traces-of-slow-requests) on too, each bucket
+has an exemplar: the latest trip observed in it whose trace was exported,
+with that trace's id and the probe's or the scrape's own span id, the trip's
+duration and when it was observed. A trace is decided at the end of its
+probe, and a trip is the bucket's exemplar from then on; a bucket whose
+trips' traces were all dropped has none. From a slow bucket, a dashboard
+goes straight to the trace of a slow trip
+([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces)).
+
+Only a format that carries exemplars has them. OpenMetrics writes one after
+its bucket's count:
+
+```text
+http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.1"} 40 # {trace_id="4bf92f3577b34da6a3ce929d0e0e4736",span_id="00f067aa0ba902b7"} 0.067 1793646517.204
+```
+
+protobuf on its classic bucket and, the same ones, among the native
+histogram's exemplars, which Prometheus stores with
+`--enable-feature=exemplar-storage`; the OTLP export on the histogram's and
+the exponential histogram's points. The Prometheus text format has no
+exemplars, and is written as before. No other series has any: the
+durations of one probe, `http_exporter_scrape_duration_seconds` and
+`http_exporter_target_scrape_duration_seconds`, are gauges, which
+OpenMetrics gives no exemplars.
+
 ### Python workers
 
 For every collector with a Python transform or pre-script, verbose mode publishes

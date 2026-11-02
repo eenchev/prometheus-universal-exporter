@@ -29882,6 +29882,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheOTLPEndpointTestIsAPanelOfItsOwn`: with `otlp.enabled` the served page has, below the Output panel's `</section>` and inside `</main>`, a `section.panel` `otlp-test-panel` titled `OTLP endpoints`, not hidden, with the metrics button, disabled at `edit` with `otlp-test-unavailable`, and the result box; the Output panel has none of `otlp-test` or `Test the`; without `otlp.logs` and `otlp.traces` it has no logs or traces button, with both on and at `full` it has all three, none disabled, and the note `Each button sends one empty export`.
 - `TestEveryAttemptAndPageIsASpan` keeps both traces by `sample_ratio: 1` under an hour's threshold instead of a 1ms threshold a fast local probe did not always reach; it checks the same spans, and passes 50 of 50 runs and 20 under `-race`.
 
+## 34.257 Module downloads in the workflows tried again
+
+- `TestEveryModuleDownloadOfTheWorkflowsIsTriedAgain`: every step of the workflows whose script runs `go mod download` runs it in a loop of three attempts that waits between them and fails after the last; a step running it once, as before, fails the test.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33607,6 +33611,12 @@ the `go mod download` that fills their module cache, and reach every make
 target the jobs run other than the installing ones, so that a clean local
 `make ci` means a clean CI run; every target of the Makefile MUST be
 `.PHONY`, since none makes a file of its name. A test MUST check both.
+
+Every workflow step that runs `go mod download` MUST try it up to three
+times, waiting between tries: the module proxy now and then breaks off a
+download (`stream error: … INTERNAL_ERROR`), which would otherwise fail a job
+for nothing the change did. A test MUST check every such step of the
+workflows.
 
 A dependency update can raise the go directive in a pull request that touches no
 workflow, which leaves every later build failing with `go.mod requires go >= X`

@@ -181,11 +181,19 @@ type staticStatusRow struct {
 	BackoffUntil   string            `json:"backoff_until,omitempty"`
 	BackoffTrial   bool              `json:"backoff_trial"`
 	BackoffFailure int               `json:"backoff_failures,omitempty"`
+	// LastErrorRecovered, given with LastError alone, says the last error
+	// is of a scrape before the last, which succeeded: the error is kept,
+	// so that a failure in the night can still be read in the morning, but
+	// the target is past it.
+	LastErrorRecovered *bool `json:"last_error_recovered,omitempty"`
 	// LabelText, Age and DurationText are the row's values as the page
 	// writes them.
 	LabelText    string `json:"-"`
 	Age          string `json:"-"`
 	DurationText string `json:"-"`
+	// LastErrorAge is how long ago the last error's scrape began, as the
+	// page writes it.
+	LastErrorAge string `json:"-"`
 }
 
 // staticStatusPage is the page, and the JSON: the static targets, then the
@@ -296,7 +304,11 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			row.LastError = st.errorText
 			if !st.failedAt.IsZero() {
 				row.LastErrorAt = st.failedAt.UTC().Format(time.RFC3339)
+				row.LastErrorAge = shortDuration(max(now.Sub(st.failedAt), 0))
 			}
+			// A scrape that succeeded began after every one that failed
+			// before it, so the error kept is older than it.
+			row.LastErrorRecovered = errorRecovered(st.errorText, last.ok)
 			switch {
 			case last.ok:
 				row.Result = statusSuccess
@@ -335,6 +347,31 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		return page.Rows[i].Name < page.Rows[j].Name
 	})
 	return page
+}
+
+// lastErrorCell is a Last error cell of the status page as the template
+// "lasterror" writes it: Text, the error, of an attempt that began At, Age
+// ago, and Recovered when a later attempt, the latest, succeeded. A
+// recovered error is still shown, muted and said to be past, so the cell
+// does not contradict the result beside it.
+type lastErrorCell struct {
+	Text, At, Age string
+	Recovered     bool
+}
+
+// errorRecovered is a LastErrorRecovered: nil without an error, so that the
+// JSON has it beside last_error alone, and otherwise whether what failed has
+// succeeded since.
+func errorRecovered(errorText string, succeededSince bool) *bool {
+	if errorText == "" {
+		return nil
+	}
+	return &succeededSince
+}
+
+// statusLastError is the template function lastError.
+func statusLastError(text, at, age string, recovered bool) lastErrorCell {
+	return lastErrorCell{Text: text, At: at, Age: age, Recovered: recovered}
 }
 
 // rootLink is the landing page as a link relative to the page at path.
@@ -423,6 +460,8 @@ table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .bad { color: var(--bad); font-weight: 600; }
 .good { color: var(--good); }
 .muted { color: var(--muted); }
+.recovered-label { display: block; margin-bottom: 2px; color: var(--muted); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; }
+.recovered { color: var(--muted); }
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
@@ -611,6 +650,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 </main>
 </body>
 </html>
+{{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{.At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{.At}}</span>{{end}}{{end}}
 {{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
 {{- if .Allocator}}
@@ -635,7 +675,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
 <td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
-<td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
+<td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}
 </tbody>
@@ -658,7 +698,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
 <td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
-<td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{end}}</td>
+<td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}
 </tbody>
@@ -676,13 +716,16 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+{{- with .ExporterInstance}}
+<tr><th>Exporter instance</th><td><code>{{.Attribute}}</code> = {{.Value}}<br><span class="muted">on every resource the export sends</span></td></tr>
+{{- end}}
 <tr><th>Last export</th><td>{{with .LastExport}}{{.Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 {{- if .UnreadyAfter}}
 <tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
 {{- end}}
-<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
 <tr><th>Dropped since start</th><td>{{.Dropped}} data point{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.Refused}} refused, {{.DroppedBy.Rejected}} rejected, {{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
 <tr><th>Since start</th><td>{{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</td></tr>
@@ -700,7 +743,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
-<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "long" (long "error" .LastError)}}<br><span class="muted">at {{.LastErrorAt}}</span>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} log record{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
 <tr><th>Dropped since start</th><td>{{.Dropped}} log record{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
 <tr><th>Since start</th><td>{{.Sent}} log record{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>
@@ -709,6 +752,28 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 </div>
 {{- else}}
 <p class="muted">Log export is off.</p>
+{{- end}}
+{{- end}}
+<h3 id="otlp-traces">Trace export</h3>
+{{- with .Traces}}
+{{- if .Enabled}}
+<p>The traces of the probes and static target scrapes that took {{.Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}, exported every {{.Interval}}. Failing trace exports do not make the exporter unready.</p>
+<div class="scroll">
+<table class="facts">
+<tbody>
+<tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
+<tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Pending</th><td>{{.Pending}} span{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
+<tr><th>Dropped since start</th><td>{{.Dropped}} span{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
+<tr><th>Since start</th><td>{{.Sent}} span{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>
+</tbody>
+</table>
+</div>
+{{- else}}
+<p class="muted">Trace export is off.</p>
 {{- end}}
 {{- end}}
 {{- else}}

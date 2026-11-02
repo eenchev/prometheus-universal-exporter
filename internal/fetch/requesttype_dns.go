@@ -301,7 +301,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 		doc.NotFound = true
 	case err != nil:
 		failure := dnsFailure(ctx, doc.RecordType, name, shownServer, err)
-		traceOutcome(ctx, "error: "+failure.Error())
+		traceFailedOutcome(ctx, "error: "+failure.Error())
 		return nil, failure
 	}
 	sortDNSAnswers(answers)

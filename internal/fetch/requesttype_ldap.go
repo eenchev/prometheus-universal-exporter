@@ -687,18 +687,18 @@ func ldapStartTLSOn(ctx context.Context, session *ldapConn, label string, cfg *t
 	}
 	if err != nil {
 		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: %w", err))
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
 	}
 	tlsConn := tls.Client(session.conn, cfg)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: TLS handshake with %s: %w", hostPort, err))
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
 	}
 	if err := session.startTLS(tlsConn); err != nil {
 		err = fmt.Errorf("STARTTLS: %w", err)
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
 	}
 	traceOutcome(ctx, "success, "+tls.VersionName(tlsConn.ConnectionState().Version))
@@ -734,7 +734,7 @@ func ldapBind(ctx context.Context, session *ldapConn, label, dn, password string
 			bind = bind.ForCaller(shown)
 		}
 		err = ldapFailure(ctx, model.Errorf("%s: %w", bind, err))
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
 	}
 	traceOutcome(ctx, "success")
@@ -815,7 +815,7 @@ func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapC
 		cookie, err = ldapSearchPage(session, op, cookie, s, result, &entries, maxEntries)
 		if err != nil {
 			err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
-			traceOutcome(pageCtx, "error: "+err.Error())
+			traceFailedOutcome(pageCtx, "error: "+err.Error())
 			return nil, err
 		}
 		outcome := fmt.Sprintf("success, %d entries", result.Count-before)

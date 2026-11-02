@@ -264,6 +264,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *expandStaticTargetsEnv {
 		staticTargetsLoadOptions = append(staticTargetsLoadOptions, config.WithStaticTargetsEnvExpansion())
 	}
+	// In allocator mode a replica is known by its member name, which
+	// otlp.exporter_instance names it by too; otherwise by its host name.
+	var instanceName string
+	if alloc != nil {
+		instanceName = alloc.member
+		loadOptions = append(loadOptions, config.WithExporterInstanceName(instanceName))
+	}
 
 	logger, otlpLogs := newExporterLogger(*logLevel, stderr)
 	if *check {
@@ -280,6 +287,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			PythonPath:       *pythonPath,
 			ExpandEnv:        *expandEnv,
 			ExpandTargetsEnv: *expandStaticTargetsEnv,
+			ExporterInstance: instanceName,
 			Watch:            *watchConfig,
 			WatchInterval:    *watchInterval,
 		}, stdout, logger)
@@ -337,6 +345,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	manager.SetPythonPath(*pythonPath)
 	manager.SetEnvExpansion(*expandEnv)
 	manager.SetStaticTargetsEnvExpansion(*expandStaticTargetsEnv)
+	manager.SetExporterInstanceName(instanceName)
 	if *watchConfig {
 		manager.SetWatchInterval(*watchInterval)
 	}
@@ -396,6 +405,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(logExportLoopDone)
 		server.OTLPLogExportLoop(loopsCtx)
 	}()
+	traceExportLoopDone := make(chan struct{})
+	go func() {
+		defer close(traceExportLoopDone)
+		server.OTLPTraceExportLoop(loopsCtx)
+	}()
 	// The allocator client heartbeats and takes new bundles until run
 	// returns: through --web.shutdown-delay too, its heartbeats saying the
 	// exporter is shutting down.
@@ -424,6 +438,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if alloc != nil {
 		startup = append(startup, "allocator", alloc.url, "allocator_cache_dir", alloc.cacheDir, "allocator_member", alloc.member, "allocator_advertise", alloc.advertise,
 			"awaiting_configuration", manager.Awaiting())
+	}
+	// The name every OTLP resource carries, as the configuration resolved
+	// it: a host name read at startup is otherwise nowhere to be seen.
+	if e := conf.OTLP.ExporterInstance; conf.OTLP.Enabled && e.Enabled {
+		startup = append(startup, "otlp_exporter_instance_attribute", e.Attribute, "otlp_exporter_instance", e.Value)
 	}
 	logger.Info("starting exporter", startup...)
 	httpServer := exporter.NewHTTPServer(*listenAddress, server.Handler())
@@ -507,6 +526,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		<-exportLoopDone
 		<-scrapeLoopDone
 		<-logExportLoopDone
+		<-traceExportLoopDone
 		// The allocator client stops once nothing is served any more, and is
 		// waited for: a bundle it is writing is put in force or refused
 		// before the process ends, rather than left half written.

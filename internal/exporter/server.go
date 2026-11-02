@@ -35,6 +35,9 @@ type Server struct {
 	// counts every run of the debug engine.
 	debug      DebugLevel
 	debugSlots chan struct{}
+	// debugOTLPTesting is set while the debug page's OTLP endpoint test is
+	// in progress, which one at a time may be (debugotlptest.go).
+	debugOTLPTesting atomic.Bool
 	// debugDangerous is --web.debug.dangerous: the playground may run
 	// Python, name the server's files and make its own request
 	// (debuglevel.go).
@@ -114,6 +117,11 @@ type Server struct {
 	// it, to stderr alone, that the log export logs to (otlplogs.go).
 	otlpLogs       *OTLPLogs
 	otlpLogsLogger *slog.Logger
+	// otlpTraces is the trace export's queue (otlptraces.go).
+	otlpTraces *otlpTraces
+	// installs wakes the OTLP export loops when a configuration is put in
+	// force, so they wait by its intervals (otlpEvery).
+	installs installSignal
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
 	// scrapesCtx is what static target scrapes run under, until
@@ -153,7 +161,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), recent: newRecentProbes(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout, compression: newAnswerCompression(DefaultGzipLevel), fetchCollector: fetch.FetchCollector}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), recent: newRecentProbes(), trips: newTripLimiter(), backoffs: newFailureBackoffs(), otlp: &otlpStatus{}, otlpTraces: &otlpTraces{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout, compression: newAnswerCompression(DefaultGzipLevel), fetchCollector: fetch.FetchCollector}
 	// The collectors the exporter starts with count from its start; one a
 	// reload adds, from when its statistics are made (selfcreated.go).
 	cfg, targets := m.InForce()
@@ -182,6 +190,11 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	// one.
 	m.OnPrepare(s.prepareReload)
 	m.OnInstall(s.followReload)
+	// A reload that switches the trace export off drops what waits for it.
+	m.OnInstall(func() { s.otlpTraces.configure(s.manager.Get().OTLP) })
+	// The OTLP export loops wait by the intervals of the configuration in
+	// force, the one a reload put in force included.
+	m.OnInstall(s.installs.installed)
 	// What a reload changed, which it logs, is told by the same fingerprints
 	// (keptFingerprint).
 	m.SetFingerprint(s.keptFingerprint)
@@ -217,7 +230,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
-	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath:
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload", debugPagePath, debugRunPath, debugCollectorPath, debugOTLPTestPath:
 		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
 	}
 	return path, nil
@@ -320,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+debugPagePath, protected(s.debugPageHandler))
 		mux.HandleFunc(debugRunPath, protected(s.debugRunHandler))
 		mux.HandleFunc(debugCollectorPath, protected(s.debugCollectorHandler))
+		mux.HandleFunc(debugOTLPTestPath, protected(s.debugOTLPTestHandler))
 	}
 	return s.countInProgress(s.writeBounded(mux))
 }
@@ -477,11 +491,28 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// (configRead).
 	rec.read = s.readAt(followed.generation)
 	rec.update(func(x *serverStats) { x.probes++ })
+	// With otlp.traces on, the probe records its trace, which is exported
+	// at its end when it was slow, or failed under otlp.traces.errors
+	// (otlptraces.go). A caller's traceparent makes it a span of the
+	// caller's trace.
+	ctx, spans := beginTrace(r.Context(), cfg.OTLP)
+	var traced probeTraceEnd
+	var parent traceParent
+	if spans != nil {
+		parent = parseTraceparent(r.Header.Get("traceparent"))
+	}
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no
-	// new request tracked.
+	// new request tracked. It is called once the answer is ready, before it
+	// is written, and ends the probe's trace then too, which traced says
+	// the end of: the time a caller takes to read the answer is neither the
+	// probe's duration nor its span's.
 	finish := func(ok, refused bool) {
-		duration := time.Since(start)
+		ready := time.Now()
+		duration := ready.Sub(start)
+		if spans != nil {
+			s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, ready, parent, traced)
+		}
 		s.load.addProbe(duration)
 		rec.update(func(x *serverStats) {
 			if ok {
@@ -502,13 +533,18 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		cacheKey = key
 	}
 	if model.CacheTTL(c) > 0 {
-		if cached, fetched, ok := s.cache.Get(cacheKey, time.Now()); ok {
+		mark := time.Now()
+		if cached, fetched, ok := s.cache.Get(cacheKey, mark); ok {
 			rec.update(func(x *serverStats) {
 				x.cacheHits++
 				x.emitted += uint64(len(cached.Metrics))
 			})
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+			if spans != nil {
+				spans.step("cache", "hit", mark, time.Now(), "answered from the response cache, fetched "+fetched.UTC().Format(time.RFC3339))
+				traced = probeTraceEnd{status: http.StatusOK, series: len(answer.Metrics), cached: true}
+			}
 			finish(true, false)
 			s.noteProbe(rec.read, recentKey(), recentProbe{
 				at: start, duration: time.Since(start), result: probeCached,
@@ -520,6 +556,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// A miss is counted when the trip goes to the target (probeTrip);
 		// a probe that shares another's trip is counted as coalesced.
+		spans.step("cache", "miss", mark, time.Now(), "")
 	}
 	budget, budgetSource := s.probeDeadline(r.Header, overrides)
 	// upstream is the trip to the target, counted on trip.
@@ -543,7 +580,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// is no identity to share a trip by: every such probe would share one.
 	if !coalesceProbes(c) || key == "" {
 		// The trip is this probe's alone, and is counted where the probe is.
-		result := upstream(r.Context(), rec)
+		result := upstream(ctx, rec)
+		if spans != nil {
+			traced = probeTraceEndOf(result)
+		}
 		// A trip its caller abandoned ends without the target policy's
 		// verdict, as a shared one every caller left does below: counted on
 		// the collector, and no new request tracked.
@@ -562,7 +602,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// probes of this stay of the collector only (flightKey): the trip writes
 	// under the collector's name as the probe that started it may.
 	trip := rec.forTrip()
-	result, shared, err := s.flights.do(r.Context(), flightKey{probe: key, defined: followed.defined[name]}, func(ctx context.Context) *probeResult {
+	mark := time.Now()
+	result, shared, err := s.flights.do(ctx, flightKey{probe: key, defined: followed.defined[name]}, func(ctx context.Context) *probeResult {
 		result := upstream(ctx, trip)
 		trip.commit(result.refused || result.abandoned)
 		return result
@@ -571,10 +612,16 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// This caller went away while it waited; there is nobody to answer,
 		// and no verdict of the target policy to go by. The probe starts no
 		// tracked request, whatever becomes of the trip.
+		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: "the caller went away while the probe waited for an identical probe's trip"}
 		finish(false, true)
 		return
 	}
+	if spans != nil {
+		traced = probeTraceEndOf(result)
+	}
 	if shared {
+		// The trip was another probe's, whose trace has its stages.
+		spans.step("shared_trip", "ok", mark, time.Now(), "answered by the trip of an identical probe in flight")
 		rec.update(func(x *serverStats) { x.coalesced++ })
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
 	}
@@ -673,6 +720,9 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	out := newProbeRecorder()
 	out.metrics = &answer
 	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
+	if spans := tripSpansFrom(ctx); spans != nil {
+		spans.step("stale", "ok", now, time.Now(), "answered with the last good result, "+now.Sub(fetched).Round(time.Second).String()+" old (cache.stale_if_error)")
+	}
 	// A stale answer is not a success: the trip failed.
 	stale := out.result(false)
 	stale.outcome, stale.failure = probeStale, result.failure
@@ -734,6 +784,8 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		// (triplimit.go).
 		limit := maxConcurrentProbes(c)
 		if full := s.trips.tryAcquire(name, limit); full != nil {
+			now := time.Now()
+			tripSpansFrom(ctx).step("slot", "refused", now, now, full.message)
 			rec.update(func(x *serverStats) { countRejection(x, full) })
 			s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 			http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)

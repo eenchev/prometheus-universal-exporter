@@ -238,15 +238,21 @@ func (l *OTLPLogs) record(endpoint string, started time.Time, records, sent int,
 // the log export takes to its queue too. attrs are the attributes WithAttrs
 // gave it, as the record carries them, and prefix the groups WithGroup
 // opened, each name followed by a dot.
+//
+// A debug run's log goes through one too, with run in place of logs: it
+// takes every line the run logs, as the record it would be, with its level,
+// for the debug page to show which would be exported (debugotlp.go), and
+// queues nothing.
 type otlpLogHandler struct {
 	logs   *OTLPLogs
+	run    *debugLogRecords
 	base   slog.Handler
 	attrs  []otlpAnyAttribute
 	prefix string
 }
 
 func (h *otlpLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.base.Enabled(ctx, level) || h.logs.wants(level)
+	return h.base.Enabled(ctx, level) || h.run != nil || h.logs.wants(level)
 }
 
 func (h *otlpLogHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -256,7 +262,10 @@ func (h *otlpLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	if h.base.Enabled(ctx, r.Level) {
 		err = h.base.Handle(ctx, r)
 	}
-	if h.logs.wants(r.Level) {
+	switch {
+	case h.run != nil:
+		h.run.add(r.Level, h.encode(r))
+	case h.logs.wants(r.Level):
 		h.logs.add(h.encode(r))
 	}
 	return err
@@ -470,7 +479,8 @@ type otlpLogRequest struct {
 }
 
 // otlpLogRequests makes the requests that send records to the endpoint
-// under the exporter-wide resource: each of at most otlp.batch_max_size
+// under the exporter-wide resource, which the debug page shows of a run's
+// records too (debugotlp.go): each of at most otlp.batch_max_size
 // records and otlp.batch_max_bytes bytes of JSON, as the metrics' requests
 // are bounded, a record larger alone in a request of its own. The records
 // are JSON already, so a request is made by writing them into the envelope
@@ -527,6 +537,17 @@ func (s *Server) SetOTLPLogs(logs *OTLPLogs) {
 	s.manager.OnInstall(func() { logs.configure(s.manager.Get().OTLP) })
 }
 
+// unexportedLogger is the logger of the lines the log export never takes:
+// stderr's alone while the exporter logs through the tee, and the server's
+// otherwise. The debug page logs that it served a run or an endpoint test
+// with it, as a run is never seen by the export (debugotlp.go).
+func (s *Server) unexportedLogger() *slog.Logger {
+	if s.otlpLogsLogger != nil {
+		return s.otlpLogsLogger
+	}
+	return s.logger
+}
+
 // OTLPLogExportLoop sends the records the tee queued every
 // otlp.logs.interval until ctx ends. It returns without a last export,
 // which FlushOTLP makes after the metrics' last.
@@ -534,20 +555,14 @@ func (s *Server) OTLPLogExportLoop(ctx context.Context) {
 	if s.otlpLogs == nil {
 		return
 	}
-	for {
-		interval := time.Duration(s.manager.Get().OTLP.Logs.Interval)
-		if interval <= 0 {
-			interval = model.DefaultOTLPLogsInterval
+	s.otlpEvery(ctx, func(cfg model.OTLPConfig) time.Duration {
+		if interval := time.Duration(cfg.Logs.Interval); interval > 0 {
+			return interval
 		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		s.exportOTLPLogs(ctx, s.manager.Get().OTLP, interval, false)
-	}
+		return model.DefaultOTLPLogsInterval
+	}, func(cfg model.OTLPConfig, interval time.Duration) {
+		s.exportOTLPLogs(ctx, cfg, interval, false)
+	})
 }
 
 // flushOTLPLogs makes the last log export at shutdown, until deadline and
@@ -580,7 +595,7 @@ func (s *Server) exportOTLPLogs(ctx context.Context, cfg model.OTLPConfig, budge
 	if !otlpLogsOn(cfg) || len(records) == 0 {
 		return
 	}
-	signal := otlpSignal{logs: true, logger: s.otlpLogsLogger}
+	signal := otlpSignal{kind: otlpSignalLogs, logger: s.otlpLogsLogger}
 	target := cfg
 	target.Endpoint = cfg.Logs.Endpoint
 	start := time.Now()

@@ -915,6 +915,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, err
 		}
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
+		traceAttempt(requestContext, attempt)
 		traceRateLimitWait(requestContext, waited, false)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -922,7 +923,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// of an answer that is no HTTP, its first line, which a
 			// probe's caller is not told (answerquoted.go).
 			err = withAnswerWithheld(RedactURLErrors(err))
-			traceOutcome(requestContext, "error: "+err.Error())
+			traceFailedOutcome(requestContext, "error: "+err.Error())
 			// Headers over the bound are over it on every attempt, and
 			// Go's own words for it name neither the limit's reason nor
 			// what to do about it.
@@ -972,7 +973,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			}
 			return nil, fmt.Errorf("HTTP request failed: %w", err)
 		}
-		traceOutcome(requestContext, resp.Status)
+		traceHTTPOutcome(requestContext, resp)
 		// A Content-Length over the limit refuses the answer before a byte
 		// of it is read. A HEAD answer's Content-Length is the size of a
 		// body it does not have, so it is not held against it.

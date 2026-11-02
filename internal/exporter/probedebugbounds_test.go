@@ -79,7 +79,7 @@ func debugTripOf(t *testing.T, server *Server, collector, target string, query u
 	if limited := server.trips.tryAcquire(collector, maxConcurrentProbes(c)); limited != nil {
 		t.Fatal(limited.message)
 	}
-	verdict, answer, _ := server.debugTrip(ctx, trace, p)
+	verdict, answer, _, _ := server.debugTrip(ctx, trace, p)
 	return debugTrip{trace: trace, probe: p, verdict: verdict, answer: answer}
 }
 

@@ -827,7 +827,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "running the statement", err)
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, stop, err
 	}
 	finish = func() { done(); stop() }
@@ -838,7 +838,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)
 		err = p.sqlDeadline(ctx, "reading the rows", err)
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, finish, err
 	}
 	traceOutcome(ctx, fmt.Sprintf("returned %d rows of the columns %s", len(result.rows), strings.Join(result.columns, ", ")))
@@ -1087,7 +1087,7 @@ func traceSQL(ctx context.Context, key sqlPoolKey, args int, reused bool, err er
 	}
 	traceRequest(ctx, sqlMethod, pathURL(key.base.driver, key.address.hostPort, "/"+database), header, "", false)
 	if err != nil {
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 	}
 }
 

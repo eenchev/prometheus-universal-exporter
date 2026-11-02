@@ -665,8 +665,11 @@ target:
   is not counted as a failed scrape;
 - the error of the last failed scrape and when that scrape began. It stays
   shown after the target recovers, so a failure in the night can be read in
-  the morning, and while scrapes are skipped by backoff, so the error that
-  made the exporter back off is the one shown. It is the error the log has,
+  the morning: once the last scrape succeeded, it is shown muted under the
+  label *Earlier failure, recovered since*, with how long ago it was, so it
+  does not contradict the `success` beside it. It stays as it was while
+  scrapes are skipped by backoff, so the error that made the exporter back
+  off is the one shown. It is the error the log has,
   with every URL's credentials withheld, its userinfo too where the text
   only quotes the URL, anything else that reads as a credential masked, and
   cut to 2000 bytes. The values of the target's answer it quotes and what is
@@ -699,7 +702,7 @@ curl 'http://exporter:8080/static-targets/status?format=json'
    "last_scrape": "2026-10-24T08:59:41Z", "last_scrape_age_seconds": 19.2, "duration_seconds": 0.0001,
    "cached": false, "stale": false, "consecutive_failures": 3,
    "last_error": "fetch http://legacy-eu:8080: received HTTP status 503",
-   "last_error_at": "2026-10-24T08:58:41Z",
+   "last_error_at": "2026-10-24T08:58:41Z", "last_error_recovered": false,
    "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3},
   {"name": "billing_eu", "...": "..."}
  ]}
@@ -711,6 +714,8 @@ off. `consecutive_failures` counts the target's failed scrapes of every kind
 but those skipped by backoff, `backoff_failures` the failed trips
 `failure_backoff` counts (see
 [Backing off from failing targets](CONFIGURATION.md#backing-off-from-failing-targets)).
+`last_error_recovered`, given with `last_error` alone, is `true` when the last
+scrape succeeded after the one `last_error` is of, and `false` otherwise.
 
 What the page keeps of a target is forgotten when a reload, or a new bundle
 from the allocator, removes the target, whether or not anything reads the
@@ -758,7 +763,13 @@ Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
 refused on any other. `resource_attributes` may not set `service.name`, which
 `service_name` sets: the resource would carry it twice, so the file is
-refused pointing at `service_name`. Over OTLP every series carries `static_target`, as on
+refused pointing at `service_name`. With
+[`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, the resource
+also carries the attribute naming the exporter replica that scraped the
+target, whether the target has an `otlp` block or not; a target whose
+`resource_attributes` or `labels_as_resource` name that attribute, or whose
+`instance_id` would set it where it is `service.instance.id`, is refused,
+the message naming the target. Over OTLP every series carries `static_target`, as on
 the endpoint: targets often share a resource — the same collector, the
 exporter-wide identity — and the label is what keeps their series apart.
 

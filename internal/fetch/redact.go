@@ -363,22 +363,59 @@ var textCredentials = []struct {
 }
 
 // textField is a key or a field's name in text and what follows it up to
-// its value: token=, "api_key": ", password: .
-var textField = regexp.MustCompile(`([A-Za-z0-9_.-]+)["']?\s*[:=]\s*["']?`)
+// its value: token=, "api_key": ", password: , and \"password\":\" of
+// JSON written as a string in JSON, its quotes escaped. Its second group is
+// the quote opening the value, if any.
+var textField = regexp.MustCompile(`([A-Za-z0-9_.-]+)\\?["']?\s*[:=]\s*(\\?["']?)`)
 
 // textValue is the value that follows a textField.
 var textValue = regexp.MustCompile(`^[^\s"'&,;}<>]+`)
 
+// escapedTextValue is the value that follows a textField whose quote is
+// escaped, \": it ends at the escaped quote that closes it, and keeps an
+// escaped character of its own, \\ or \n, as part of it.
+var escapedTextValue = regexp.MustCompile(`^(?:\\[^"']|[^\s"'&,;}<>\\])+`)
+
+// textElement is an XML element whose content is text alone or one CDATA
+// section, <password>…</password> or <ns:apiKey a="1"><![CDATA[…]]></ns:apiKey>:
+// its name, its local name, its content and the name it is closed with,
+// which must be its name for it to be one element (RE2 has no
+// backreference to say so).
+var textElement = regexp.MustCompile(`(?s)<((?:[A-Za-z_][A-Za-z0-9_.-]*:)?([A-Za-z_][A-Za-z0-9_.-]*))(?:\s[^<>]*)?>(<!\[CDATA\[.*?\]\]>|[^<]*)</([A-Za-z_][A-Za-z0-9_.:-]*)\s*>`)
+
+// redactElements masks the content of each XML element in text whose local
+// name reads as a credential's (CredentialName): <password>hunter2</password>
+// of a SOAP or XML login, which no name=value of textField finds.
+func redactElements(text string) string {
+	var b strings.Builder
+	done := 0
+	for _, m := range textElement.FindAllStringSubmatchIndex(text, -1) {
+		if text[m[2]:m[3]] != text[m[8]:m[9]] || !CredentialName(text[m[4]:m[5]]) || strings.TrimSpace(text[m[6]:m[7]]) == "" {
+			continue
+		}
+		b.WriteString(text[done:m[6]])
+		b.WriteString(Redacted)
+		done = m[7]
+	}
+	if done == 0 {
+		return text
+	}
+	b.WriteString(text[done:])
+	return b.String()
+}
+
 // RedactText masks what reads as a credential in text the exporter did not
 // write, such as an error page's body it logs the start of: a bearer or
 // basic credential, a JSON Web Token, a URL's userinfo, and the value of a
-// key or field whose name reads as a credential's (CredentialName, the rule
-// a header's and a query parameter's name are held to). It errs towards masking: a word that
-// only looks like a credential's value may be masked too.
+// key, a field or an XML element whose name reads as a credential's
+// (CredentialName, the rule a header's and a query parameter's name are
+// held to). It errs towards masking: a word that only looks like a
+// credential's value may be masked too.
 func RedactText(text string) string {
 	for _, c := range textCredentials {
 		text = c.pattern.ReplaceAllString(text, c.keep)
 	}
+	text = redactElements(text)
 	var b strings.Builder
 	done := 0
 	for _, m := range textField.FindAllStringSubmatchIndex(text, -1) {
@@ -386,7 +423,11 @@ func RedactText(text string) string {
 		if m[0] < done || !CredentialName(text[m[2]:m[3]]) {
 			continue
 		}
-		value := textValue.FindStringIndex(text[m[1]:])
+		values := textValue
+		if strings.HasPrefix(text[m[4]:m[5]], `\`) {
+			values = escapedTextValue
+		}
+		value := values.FindStringIndex(text[m[1]:])
 		if value == nil {
 			continue
 		}

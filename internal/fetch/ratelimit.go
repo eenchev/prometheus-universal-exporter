@@ -245,7 +245,7 @@ func waitRateLimit(ctx context.Context, u *url.URL) (rateLimitWait, error) {
 	// A debug run's requests take their turns as any other's, so a debug
 	// probe asks the target no faster than the limit, but count in no
 	// self-metric of the collector's or of rate_limits' (§ 42.17).
-	_, debug := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	debug := debugRun(ctx)
 	var out rateLimitWait
 	var taken []rateLimitTurn
 	for _, turn := range rateLimitTurns(setting, u) {
@@ -308,6 +308,7 @@ func traceRateLimitWait(ctx context.Context, w rateLimitWait, recordedBefore boo
 	if n := len(t.requests); n > 0 {
 		r := &t.requests[n-1]
 		r.Wait = joinWaits(r.Wait, w.note)
+		r.RateLimitWait += w.waited
 		if recordedBefore {
 			r.started = r.started.Add(w.waited)
 		}

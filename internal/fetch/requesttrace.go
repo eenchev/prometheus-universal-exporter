@@ -16,11 +16,21 @@ import (
 // RequestTrace of the context, when there is one; a trip without it records
 // nothing. Credentials are recorded as sent: the caller redacts them before
 // showing anything.
+//
+// The trace of a probe or a scrape exported over OTLP (otlp.traces) records
+// the same requests, with WithSpanTrace, for its spans: each one's method,
+// URL, page, status and times, and none of its headers, which no span shows
+// and which would be a copy of every request's for nothing. Such a trip is
+// no debug run (debugRun): it counts in every self-metric as it would
+// without its trace.
 
-// RequestTrace is the requests one trip sent, in order.
+// RequestTrace is the requests one trip sent, in order. spans says it is the
+// trace of an exported trip's spans, which keeps no headers and is no debug
+// run's.
 type RequestTrace struct {
 	mu       sync.Mutex
 	requests []TracedRequest
+	spans    bool
 }
 
 // TracedRequest is one request a trip sent.
@@ -42,8 +52,20 @@ type TracedRequest struct {
 	// and WithheldWhy says why the redirect was not trusted.
 	Withheld    []string
 	WithheldWhy string
-	// Outcome is how it ended: a status, a gRPC code, or the error.
+	// Outcome is how it ended: a status, a gRPC code, or the error, as a
+	// debug report shows it. It may quote what the target sent — a
+	// greeting, a command's stderr, a status line's reason — so a span,
+	// which leaves the exporter as a log line does, never carries it: a
+	// span has Failed and Facts instead.
 	Outcome string
+	// Failed says the request got no answer, or an answer its request type
+	// takes for a failure: an error, or a connection lost before it was
+	// answered. An HTTP answer's failure is its Status.
+	Failed bool
+	// Facts are what the request type tells of how the request ended, for
+	// its span: numbers and yes-or-no answers the exporter worked out of
+	// the answer, never text the target sent.
+	Facts []TraceFact
 	// Wait is, under request.retry.retry_after, how long the trip waited
 	// before retrying the request and why, or why it was not retried when
 	// a Retry-After asked for longer than its time left; and, under
@@ -51,8 +73,30 @@ type TracedRequest struct {
 	// it was sent; "" otherwise.
 	Wait     string
 	Duration time.Duration
-	started  time.Time
+	// Status is the HTTP status of the answer to an HTTP request, 0 for
+	// one that got none and for a request of another type.
+	Status int
+	// RateLimitWait is how long the request waited for its turn under
+	// request.rate_limit before it was sent.
+	RateLimitWait time.Duration
+	// Attempt is which attempt of the request it is under request.retry,
+	// from 0; a redirect, a login and a page each begin at 0.
+	Attempt int
+	started time.Time
 }
+
+// TraceFact is one fact of TracedRequest.Facts: an integer, or a boolean
+// when IsBool is set, under Key.
+type TraceFact struct {
+	Key    string
+	Int    int64
+	Bool   bool
+	IsBool bool
+}
+
+// Start is when the request was sent: after any wait for its turn under
+// request.rate_limit, which is no time the target took.
+func (r TracedRequest) Start() time.Time { return r.started }
 
 type requestTraceKey struct{}
 
@@ -65,6 +109,24 @@ type pageKey struct{}
 func WithRequestTrace(ctx context.Context) (context.Context, *RequestTrace) {
 	t := &RequestTrace{}
 	return context.WithValue(ctx, requestTraceKey{}, t), t
+}
+
+// WithSpanTrace returns a context whose trips record their requests in the
+// returned trace as an exported trip's spans need them, without their
+// headers, and are no debug run's.
+func WithSpanTrace(ctx context.Context) (context.Context, *RequestTrace) {
+	t := &RequestTrace{spans: true}
+	return context.WithValue(ctx, requestTraceKey{}, t), t
+}
+
+// debugRun reports whether ctx is a debug run's — a debug probe, a debug
+// scrape of a static target or a debug page's fetch — whose trips record
+// their requests (WithRequestTrace) and count in no self-metric of the
+// collector's (§ 42.17). An exported trip's
+// trace (WithSpanTrace) is no debug run's.
+func debugRun(ctx context.Context) bool {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	return ok && !t.spans
 }
 
 // Requests returns the requests recorded so far.
@@ -80,14 +142,18 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	if !ok {
 		return
 	}
-	header = header.Clone()
-	if header == nil {
-		header = http.Header{}
-	}
-	// Host is shown when it is not the URL's own, as a request.headers Host
-	// or a forwarded one makes it.
-	if u, err := neturl.Parse(url); host != "" && (err != nil || u.Host != host) {
-		header.Set("Host", host)
+	if !t.spans {
+		header = header.Clone()
+		if header == nil {
+			header = http.Header{}
+		}
+		// Host is shown when it is not the URL's own, as a request.headers
+		// Host or a forwarded one makes it.
+		if u, err := neturl.Parse(url); host != "" && (err != nil || u.Host != host) {
+			header.Set("Host", host)
+		}
+	} else {
+		header = nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -157,6 +223,53 @@ func traceOutcome(ctx context.Context, outcome string) {
 		// the target can make as long as its headers may be: the report
 		// shows no more of it than of any failure (model.MaxFailureBytes).
 		r.Outcome, r.Duration = model.CutTo(outcome, model.MaxFailureBytes, false), time.Since(r.started)
+	}
+}
+
+// traceFailedOutcome is traceOutcome of a request that failed: it got no
+// answer, or lost its connection before one (TracedRequest.Failed).
+func traceFailedOutcome(ctx context.Context, outcome string) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	if n := len(t.requests); n > 0 && t.requests[n-1].Outcome == "" {
+		t.requests[n-1].Failed = true
+	}
+	t.mu.Unlock()
+	traceOutcome(ctx, outcome)
+}
+
+// traceHTTPOutcome is traceOutcome of an HTTP answer, whose status it
+// records too.
+func traceHTTPOutcome(ctx context.Context, resp *http.Response) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	if n := len(t.requests); n > 0 && t.requests[n-1].Outcome == "" {
+		t.requests[n-1].Status = resp.StatusCode
+	}
+	t.mu.Unlock()
+	traceOutcome(ctx, resp.Status)
+}
+
+// traceAttempt records which attempt under request.retry the last request
+// recorded is.
+func traceAttempt(ctx context.Context, attempt int) {
+	if attempt == 0 {
+		return
+	}
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 {
+		t.requests[n-1].Attempt = attempt
 	}
 }
 

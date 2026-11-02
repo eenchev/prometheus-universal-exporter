@@ -732,12 +732,12 @@ func redisSend(ctx context.Context, session *redisConn, label string, args []str
 	reply, err := session.do(args)
 	if err != nil {
 		err = redisFailure(ctx, fmt.Errorf("%s: %w", shown, err))
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, err
 	}
 	if failed, ok := reply.(*redisError); ok {
 		err := fmt.Errorf("%s: %w", shown, failed)
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, err
 	}
 	traceOutcome(ctx, redisKind(reply))

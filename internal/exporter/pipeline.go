@@ -195,6 +195,10 @@ const stageTargetPolicy = "target_policy"
 func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	c, rec := j.collector, j.rec
 	trace := probeTraceFrom(ctx)
+	// Each stage is recorded once, for a debug probe's report and for the
+	// trip's trace, which are kept only for a debug run and while
+	// otlp.traces is on (otlptraces.go).
+	stages := tripStagesFrom(ctx)
 	// The trip's parameters fill the placeholders of the collector's label
 	// values where the transform reads them, for a response and for each
 	// file of a directory alike (transform.WithLabelParams). Nearly every
@@ -221,7 +225,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	mark := start
 	reported := func(stage string, err error, policy string, extra ...any) collected {
 		if cutShort(ctx) {
-			trace.step(stage, "cancelled", time.Since(mark), err.Error())
+			stages.step(stage, "cancelled", mark, err.Error())
 			return collected{stage: stage, err: err, aborted: true}
 		}
 		trip := "probe"
@@ -232,9 +236,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
 		switch policy {
 		case model.ErrorPolicyLog, model.ErrorPolicyIgnore:
-			trace.step(stage, "failed", time.Since(mark), err.Error()+"; carried on, error_handling "+policy)
+			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
 		default:
-			trace.step(stage, "failed", time.Since(mark), err.Error())
+			stages.step(stage, "failed", mark, err.Error())
 		}
 		switch policy {
 		case model.ErrorPolicyLog:
@@ -279,6 +283,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
 	trace.record(func(t *probeTrace) { t.response = sentResponse(response) })
+	if response != nil {
+		stages.spans.fetched(len(response.Body))
+	}
 	grpcCode, grpc := fetch.GRPCStatusCode(requester, err)
 	if err != nil {
 		rec.update(func(x *serverStats) {
@@ -294,7 +301,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.Is(err, fetch.ErrTargetRefused) {
 			err = boundedTripFailure(err)
 			rec.update(func(x *serverStats) { x.refused++ })
-			trace.step(stageTargetPolicy, "refused", time.Since(mark), err.Error())
+			stages.step(stageTargetPolicy, "refused", mark, err.Error())
 			s.logTripFailure(ctx, rec.read, j.log, stageTargetPolicy, err)
 			return collected{stage: stageTargetPolicy, err: err, refused: true}
 		}
@@ -312,7 +319,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if response.GRPCCode != nil {
 		grpcCode = *response.GRPCCode
 	}
-	trace.step(fetch.FetchStage(requester), "ok", time.Since(mark), fetchedNote(response, j.pasted != nil))
+	stages.step(fetch.FetchStage(requester), "ok", mark, fetchedNote(response, j.pasted != nil))
 	rec.update(func(x *serverStats) {
 		// A 304 is described as the target sent it, with no body; the
 		// response the trip goes on with is the cached one.
@@ -387,7 +394,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		mark = time.Now()
 		set = s.collectDirectory(ctx, response.Directory, c, rec, s.pythonStats(&j), j.display, j.target)
-		trace.step("files", "ok", time.Since(mark), fmt.Sprintf("%d files, %d series", len(response.Directory.Files), len(set.Metrics)))
+		stages.step("files", "ok", mark, fmt.Sprintf("%d files, %d series", len(response.Directory.Files), len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
 	} else {
 		mark = time.Now()
@@ -406,7 +413,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			rec.update(func(x *serverStats) { x.parseErrors++ })
 			return reported("decode", err, c.ErrorHandling.OnDecodeError)
 		}
-		trace.step("decode", "ok", time.Since(mark), decoded.Kind)
+		stages.step("decode", "ok", mark, decoded.Kind)
 		trace.record(func(t *probeTrace) { t.decoded = decoded.Kind })
 		rec.update(func(x *serverStats) { x.decodeOK++ })
 		s.noteGraphite(ctx, decoded, c, rec, j.display, j.target, "")
@@ -416,6 +423,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		var repaired utf8Repairs
 		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec, j.log)
 		recordScriptDuration(rec, timer)
+		stages.scripts(timer, mark)
 		if errors.Is(err, model.ErrLimitExceeded) {
 			// A transform stops at the first series past
 			// limits.max_metrics, which is the validation's failure,
@@ -451,13 +459,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 				if cutShort(ctx) {
 					return collected{stage: "metric", err: err, aborted: true}
 				}
-				trace.step("transform", "failed", time.Since(mark), "metric "+failure.Metric+": "+err.Error())
+				stages.step("transform", "failed", mark, "metric "+failure.Metric+": "+err.Error())
 				s.logTripFailure(ctx, rec.read, j.log, "metric", err, "metric", failure.Metric)
 				return collected{stage: "metric", err: err, metric: failure.Metric}
 			}
 			return stageFailed("transform", err, c.ErrorHandling.OnTransformError)
 		}
-		trace.step("transform", "ok", time.Since(mark), fmt.Sprintf("%d series", len(set.Metrics)))
+		stages.step("transform", "ok", mark, fmt.Sprintf("%d series", len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
 		s.noteUTF8Repairs(ctx, repaired, rec, c, j.display, j.target, "")
 	}
@@ -471,7 +479,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if err != nil {
 		return stageFailed("validation", err, model.ErrorPolicyFail)
 	}
-	trace.step("validation", "ok", time.Since(mark), "")
+	stages.step("validation", "ok", mark, "")
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(set.Metrics)) })
 	s.tripRecovered(ctx, rec.read, j.log.key, j.log.recovery, j.log.attrs...)
 	// A directory read the deadline cut short answers this probe with what

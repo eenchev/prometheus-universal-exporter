@@ -37,8 +37,8 @@ import (
 // (config.ParseCollector), so a mistake reads as a load would report it, and
 // is never put in force. A run reads and fills no cache, shares no trip,
 // counts in no collector's self-metrics and in no failure log, queues
-// nothing for OTLP and logs one line at info: what it logged goes to its
-// answer, as a debug probe's goes to its report. It counts in
+// nothing for OTLP and logs one line at info, which the OTLP log export
+// does not take (unexportedLogger): what it logged goes to its answer, as a debug probe's goes to its report. It counts in
 // http_exporter_debug_runs_total{kind="page"} alone, but for the Python
 // worker series of a configured collector that runs a script, which count
 // what the workers did, as for a debug probe.
@@ -105,10 +105,13 @@ import (
 // exporter never allows. A browser that says where a request comes from
 // (Sec-Fetch-Site) must say it comes from the exporter's own pages.
 
-// debugPagePath and debugRunPath are the page and what its runs post to.
+// debugPagePath and debugRunPath are the page and what its runs post to,
+// and debugOTLPTestPath what its OTLP endpoint test posts to
+// (debugotlptest.go).
 const (
-	debugPagePath = "/debug"
-	debugRunPath  = "/debug/run"
+	debugPagePath     = "/debug"
+	debugRunPath      = "/debug/run"
+	debugOTLPTestPath = "/debug/otlp-test"
 )
 
 // debugRunHeader must be on every run (debugSameOrigin).
@@ -250,6 +253,9 @@ type debugAnswer struct {
 	// playground runs Python, names the server's files and makes its own
 	// request.
 	Dangerous bool `json:"dangerous,omitempty"`
+	// OTLP is what the next OTLP export would send of the run's series,
+	// with otlp.enabled alone (debugotlp.go).
+	OTLP *debugOTLP `json:"otlp,omitempty"`
 }
 
 type debugStage struct {
@@ -422,16 +428,7 @@ func debugSamples(set *model.MetricSet) []debugSample {
 
 // writeDebugAnswer writes answer as JSON with status code.
 func writeDebugAnswer(w http.ResponseWriter, code int, answer debugAnswer) {
-	body, err := json.Marshal(answer)
-	if err != nil {
-		http.Error(w, "the answer could not be written", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(code)
-	_, _ = w.Write(append(body, '\n'))
+	writeDebugJSON(w, code, answer)
 }
 
 // debugSameOrigin refuses a run that a page of another site could have
@@ -610,6 +607,9 @@ func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
 func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, Dangerous: s.playgroundUnbound(), ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
 	page.Forms = debugForms{Playground: playgroundForm(), Types: typeForms(), Collectors: map[string]debugForm{}}
+	if otlp := s.manager.Get().OTLP; otlp.Enabled && otlp.Endpoint != "" {
+		page.OTLP, page.OTLPLogs, page.OTLPTraces = true, otlpLogsOn(otlp), otlpTracesOn(otlp)
+	}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).
 	followed := s.reconcile()
@@ -713,8 +713,9 @@ func (s *Server) debugRunHandler(w http.ResponseWriter, r *http.Request) {
 	answer := debugAnswerOf(report)
 	answer.Notes = append(notes, answer.Notes...)
 	answer.Dangerous = s.playgroundUnbound()
+	answer.OTLP = s.debugOTLPOf(report, time.Now())
 	s.countDebugRun(debugKindPage, report.result())
-	s.logger.Info("debug run served", "collector", p.collector.Name, "edited", p.edited, "on", p.source)
+	s.unexportedLogger().Info("debug run served", "collector", p.collector.Name, "edited", p.edited, "on", p.source)
 	writeDebugAnswer(w, http.StatusOK, answer)
 }
 

@@ -104,6 +104,59 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Traces of slow requests over OTLP: with `otlp.traces` switched on, each
+  probe and static target scrape that took `otlp.traces.threshold` (1s by
+  default) or longer, and with `otlp.traces.errors: true` each that failed,
+  is exported as a trace to the collector's `/v1/traces`: a span for the
+  probe or the scrape, and under it one for each stage of its trip — the
+  cache, the wait for a slot, the fetch, the decode, the Python scripts, the
+  transform, the validation — and one for each request it sent, every retry,
+  redirect, page and login, by OpenTelemetry's conventions, credentials and
+  query values withheld. A caller's `traceparent` is continued. The traces
+  go under the probes' and the static targets' resources with
+  `otlp.exporter_instance` and `otlp.scope`, wait in a queue bounded by
+  `otlp.traces.max_pending_spans`, cost a probe nothing while the block is
+  off, and are counted in `http_exporter_otlp_trace_exports_total`,
+  `http_exporter_otlp_spans_sent_total` and
+  `http_exporter_otlp_spans_dropped_total` and on the status page's *Trace
+  export* part. The debug page's *OTLP* tab shows a run's spans as a tree
+  with their times and whether the export would send them, and tests the
+  traces endpoint; a run is never exported. See
+  [Traces of slow requests](docs/OTLP.md#traces-of-slow-requests).
+
+- `otlp.exporter_instance` names the exporter replica that sends the OTLP
+  export, as one more attribute of every resource it sends: the probes',
+  the exporter's own metrics', every static target's and the log records'.
+  The attribute is `pue.exporter.instance` unless `attribute` names another,
+  and the value is `value`, or, left out, the `--allocator.member` name in
+  allocator mode and the host name, a pod's name, otherwise. An attribute
+  the resource has already — `service.name`, a key of
+  `otlp.resource_attributes`, a static target's own attribute, a label it
+  moves to the resource, or `service.instance.id` beside its `instance_id` —
+  is refused. The status page's OTLP section, the debug page's OTLP tab,
+  `--dry-run` and the start's line show it; off, the default, the export is
+  as before. See
+  [The exporter instance](docs/OTLP.md#the-exporter-instance).
+- The debug page's collector editor colours the YAML as it is typed — keys,
+  strings, numbers, booleans, comments, a list's dashes, block scalars,
+  anchors, tags, `{{param_<name>}}` placeholders and `${NAME}` references,
+  and a withheld value muted — in either theme, the text staying the
+  browser's own, with undo, Tab and paste. A block folds behind a button in
+  the gutter, which the keyboard reaches too, its first line saying how many
+  lines it hides and the gutter keeping each line's number, with *Expand
+  all* and *Collapse all*; the playground is read-only while a block of it
+  is folded, and a click on its text edits it there.
+- The debug page has an *OTLP* tab beside *Table* and *Text*, with
+  `otlp.enabled`: what the next export would send of a run's series, made by
+  the export's own code — the resource, the scope, each data point with its
+  OTLP name, kind, unit, attributes, value and what was changed of it, the
+  points left out and why, and the request's JSON as a tree that folds,
+  coloured, with *Expand all* and *Collapse all*, a folded attribute
+  reading `service.name = "…"` — and with `otlp.logs` the
+  run's log lines as log records. Nothing of a run is exported. At
+  `--web.debug=full` it tests the endpoint with one empty export, sent once
+  with the export's headers, TLS, compression and timeout
+  (`POST /debug/otlp-test`).
 - `--python.max-idle-workers` (the chart's `server.pythonMaxIdleWorkers`),
   `1` by default, says how many workers of each collector's script stay idle
   after a burst of concurrent scrapes; `0` keeps none, each worker stopping
@@ -184,6 +237,48 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- A trace's spans no longer carry text the target sent that the log never
+  shows: the CLIENT span of a tcp or sshexec request that went through had
+  the server's greeting, or the command's whole stderr, as `request.outcome`,
+  and a failed request the reason of its HTTP status line. A span now has,
+  of a request that went through, only numbers its request type works out
+  (`tcp.greeting.bytes`, `tcp.greeting.matched`, `tcp.answer.bytes`,
+  `process.exit.code`, `sshexec.stdout.bytes`, `sshexec.stderr.bytes`), and
+  of a failure what the log line of that failure says.
+- A failed trace export, or a reload lowering `otlp.traces.max_pending_spans`,
+  no longer cuts the oldest trace waiting span by span, which exported the
+  rest of it without its root or its stages: the oldest traces are dropped
+  whole.
+- A probe whose caller read its answer slowly is no longer taken for a slow
+  probe by `otlp.traces.threshold`: it is timed, and its span ends, when its
+  answer is ready, as its duration in the self-metrics is.
+- A new `otlp.interval`, `otlp.logs.interval` or `otlp.traces.interval` is
+  followed at once: a reload that shortened one waited out the old interval
+  first, turning the export on waited up to 30 seconds, and an exporter in
+  allocator mode made its first export about 30 seconds after its first
+  bundle, whatever its interval said. The next export is now an interval of
+  the new configuration after the last one.
+- The debug page's OTLP endpoint test shows every `otlp.headers` value as
+  `<redacted>`, by its name alone: a vendor's API key under a name that
+  does not read as a credential's, `x-honeycomb-team` or `uptrace-dsn`, was
+  shown as sent.
+- The debug page's configured view and *Edit a copy* withhold a request
+  body that writes a credential as an XML element, `<password>…</password>`,
+  its text or its CDATA, or as JSON written as a string in JSON
+  (`\"password\":\"…\"`); the log masks both in a target's error body too.
+- The debug page withholds a `tcp` send that logs in with IMAP's
+  `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, `AUTH` framed as RESP,
+  or `AUTH …` after a `;`.
+- The debug page's *OTLP* tab writes a run's points at whole milliseconds,
+  as the export does, not in nanoseconds.
+- The line that a debug probe or a debug scrape was served is written to
+  stderr alone and no longer reaches the OTLP log export.
+- The status page no longer shows the last error of a static target whose
+  last scrape succeeded as if it still failed beside `success` and 0
+  failures: the error stays, muted, under *Earlier failure, recovered since*,
+  with when it was and how long ago. The recent probes and the OTLP, log and
+  trace exports' last error follow the same rule, and the JSON says it with
+  `last_error_recovered`.
 - The debug page no longer shows a credential written in free text of a
   configured collector's request, in its view or in *Edit a copy*: an `http`
   body, a `grpc` message, a `tcp` send (`AUTH …`, `PASS …`), a `redis`

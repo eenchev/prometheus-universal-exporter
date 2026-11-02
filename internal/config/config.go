@@ -36,14 +36,18 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // the request, limits, formats and error policies — stop that collector at
 // the first mistake; its metric rules are then each checked in full.
 func Validate(c *model.Config) error {
-	return validate(c, false)
+	return validate(c, loadOptions{})
 }
 
-// validate is Validate. namedFilesUnread leaves the files the configuration
-// names unopened (WithoutNamedFiles): the TLS files of otlp.tls, the files of
-// web.basic_auth and the descriptor files of grpc collectors, whose method
-// and messages are then not checked against them. Every other check is made.
-func validate(c *model.Config, namedFilesUnread bool) error {
+// validate is Validate, read with options. namedFilesUnread leaves the files
+// the configuration names unopened (WithoutNamedFiles): the TLS files of
+// otlp.tls, the files of web.basic_auth and the descriptor files of grpc
+// collectors, whose method and messages are then not checked against them.
+// Every other check is made. exporterInstance is the value
+// otlp.exporter_instance takes when it is left out
+// (WithExporterInstanceName).
+func validate(c *model.Config, options loadOptions) error {
+	namedFilesUnread := options.namedFilesUnread
 	if len(c.Collectors) == 0 {
 		if len(c.CollectorFiles) > 0 {
 			return errors.New("no collectors: neither collectors nor the files collector_files matched define any")
@@ -74,7 +78,7 @@ func validate(c *model.Config, namedFilesUnread bool) error {
 			c.Warnings[j] = defaultsNoted(c.Warnings[j], x)
 		}
 	}
-	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, namedFilesUnread))
+	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, options))
 	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}
@@ -994,11 +998,12 @@ func validateWebAuthSettings(c *model.Config, namedFilesUnread bool) error {
 const otlpServiceNameAttribute = "service.name"
 
 // validateOTLP checks the OTLP export settings and fills in their defaults.
-// namedFilesUnread leaves the TLS files unread (validate).
-func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
+// options.namedFilesUnread leaves the TLS files unread (validate).
+func validateOTLP(o *model.OTLPConfig, options loadOptions) error {
 	if !o.Enabled {
 		return nil
 	}
+	namedFilesUnread := options.namedFilesUnread
 	if strings.TrimSpace(o.Endpoint) == "" {
 		return errors.New("otlp.endpoint is required when OTLP is enabled")
 	}
@@ -1084,7 +1089,74 @@ func validateOTLP(o *model.OTLPConfig, namedFilesUnread bool) error {
 	if err := checkOTLPScope(o.Scope); err != nil {
 		return err
 	}
-	return validateOTLPLogs(&o.Logs, u)
+	if err := checkExporterInstance(&o.ExporterInstance, o.ResourceAttributes, options); err != nil {
+		return err
+	}
+	if err := validateOTLPLogs(&o.Logs, u); err != nil {
+		return err
+	}
+	return validateOTLPTraces(&o.Traces, u)
+}
+
+// hostname is os.Hostname; a variable for the tests.
+var hostname = os.Hostname
+
+// checkExporterInstance checks otlp.exporter_instance, of an otlp block
+// switched on, and fills in its defaults: the attribute
+// model.DefaultOTLPExporterInstanceAttribute, and the value the name
+// WithExporterInstanceName gave, the --allocator.member name in allocator
+// mode, or else the host name, read once here, at each load: a pod's host
+// name is its name, and a replica's is what tells it from the others. Without
+// it there is nothing to name the replica with, and the configuration is
+// refused rather than the attribute left out, which would join the replicas'
+// data under one resource without a word. The target allocator reads the
+// configuration it serves without the named files, and is not the replica
+// whose name the value is: it leaves the value as written.
+//
+// The attribute is one more of every resource's (exporter/otlp.go), so it
+// may not be service.name, which otlp.service_name sets, or a key of
+// otlp.resource_attributes, written "" or not: the resource would carry the
+// key twice, or one of the two would quietly win. A static target's resource
+// is checked against it where the targets are (checkTargetResourceKeys).
+func checkExporterInstance(e *model.OTLPExporterInstanceConfig, attributes map[string]string, options loadOptions) error {
+	if !e.Enabled {
+		return nil
+	}
+	switch {
+	case e.Attribute == "":
+		e.Attribute = model.DefaultOTLPExporterInstanceAttribute
+	case strings.TrimSpace(e.Attribute) == "":
+		return errors.New("otlp.exporter_instance.attribute is blanks alone; name an attribute, or leave it out for the default, " + model.DefaultOTLPExporterInstanceAttribute)
+	}
+	for _, key := range []struct{ name, value string }{{"attribute", e.Attribute}, {"value", e.Value}} {
+		for _, r := range key.value {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("otlp.exporter_instance.%s has the control character %q in it", key.name, r)
+			}
+		}
+	}
+	if e.Attribute == otlpServiceNameAttribute {
+		return fmt.Errorf("otlp.exporter_instance.attribute is %s, which otlp.service_name sets; name another attribute, or leave it out for the default, %s", otlpServiceNameAttribute, model.DefaultOTLPExporterInstanceAttribute)
+	}
+	if _, twice := attributes[e.Attribute]; twice {
+		return fmt.Errorf("otlp.exporter_instance.attribute is %s, which otlp.resource_attributes sets too; leave one of the two out", e.Attribute)
+	}
+	if e.Value != "" || options.namedFilesUnread {
+		return nil
+	}
+	if options.exporterInstance != "" {
+		e.Value = options.exporterInstance
+		return nil
+	}
+	host, err := hostname()
+	if err == nil && host == "" {
+		err = errors.New("it is empty")
+	}
+	if err != nil {
+		return fmt.Errorf("otlp.exporter_instance.value is left out and the host name, its default, cannot be read (%w); set the value, such as ${POD_NAME} with --config.expand-env", err)
+	}
+	e.Value = host
+	return nil
 }
 
 // checkOTLPScope checks otlp.scope, when it is written: a scope is known by
@@ -1154,6 +1226,51 @@ func validateOTLPLogs(l *model.OTLPLogsConfig, metrics *url.URL) error {
 	return nil
 }
 
+// validateOTLPTraces checks otlp.traces, of a block switched on whose
+// endpoint is metrics, and fills in its defaults. The traces go where the
+// logs do: to the collector the metrics go to, at its standard path for
+// traces, unless the block names another endpoint, which it must where
+// otlp.endpoint does not end in /v1/metrics.
+func validateOTLPTraces(t *model.OTLPTracesConfig, metrics *url.URL) error {
+	if !t.Enabled {
+		return nil
+	}
+	switch {
+	case strings.TrimSpace(t.Endpoint) != "":
+		if _, ok := otlpEndpointURL(t.Endpoint); !ok {
+			return errors.New("otlp.traces.endpoint must be an http or https URL")
+		}
+	case strings.HasSuffix(metrics.Path, otlpMetricsPath):
+		derived := *metrics
+		derived.Path = strings.TrimSuffix(metrics.Path, otlpMetricsPath) + otlpTracesPath
+		derived.RawPath = ""
+		t.Endpoint = derived.String()
+	default:
+		return fmt.Errorf("otlp.traces.endpoint is required when otlp.endpoint does not end in %s, which would be made %s for the traces", otlpMetricsPath, otlpTracesPath)
+	}
+	// A threshold under a millisecond would export the trace of nearly
+	// every probe, which is no longer the slow ones.
+	switch {
+	case t.Threshold == 0:
+		t.Threshold = model.Duration(model.DefaultOTLPTracesThreshold)
+	case t.Threshold < model.Duration(model.MinOTLPTracesThreshold):
+		return fmt.Errorf("otlp.traces.threshold %s is under the least, 1ms; leave it out for the default, %s", time.Duration(t.Threshold), model.DefaultOTLPTracesThreshold)
+	}
+	switch {
+	case t.Interval == 0:
+		t.Interval = model.Duration(model.DefaultOTLPTracesInterval)
+	case t.Interval < model.Duration(time.Second):
+		return fmt.Errorf("otlp.traces.interval %s is under the least, 1s; leave it out for the default, %s", time.Duration(t.Interval), model.DefaultOTLPTracesInterval)
+	}
+	switch {
+	case t.MaxPendingSpans < 0:
+		return errors.New("otlp.traces.max_pending_spans must not be negative")
+	case t.MaxPendingSpans == 0:
+		t.MaxPendingSpans = model.DefaultOTLPTracesMaxPendingSpans
+	}
+	return nil
+}
+
 // otlpEndpointURL reads an OTLP/HTTP endpoint, which is an http or https
 // URL with a host.
 func otlpEndpointURL(endpoint string) (*url.URL, bool) {
@@ -1161,10 +1278,11 @@ func otlpEndpointURL(endpoint string) (*url.URL, bool) {
 	return u, err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// The standard paths of OTLP/HTTP's metrics and logs.
+// The standard paths of OTLP/HTTP's metrics, logs and traces.
 const (
 	otlpMetricsPath = "/v1/metrics"
 	otlpLogsPath    = "/v1/logs"
+	otlpTracesPath  = "/v1/traces"
 )
 
 // LoadOption adjusts how a configuration document is read. Options are
@@ -1179,6 +1297,8 @@ type loadOptions struct {
 	flag string
 	// namedFilesUnread is WithoutNamedFiles.
 	namedFilesUnread bool
+	// exporterInstance is WithExporterInstanceName.
+	exporterInstance string
 }
 
 // Each document has its own flag for expansion: the configuration and its
@@ -1217,6 +1337,14 @@ func WithStaticTargetsEnvExpansion() LoadOption {
 // always.
 func WithoutNamedFiles() LoadOption {
 	return func(o *loadOptions) { o.namedFilesUnread = true }
+}
+
+// WithExporterInstanceName is the value otlp.exporter_instance takes when
+// it is left out, in place of the host name: the --allocator.member name of
+// an exporter in allocator mode, which is the name the allocator knows the
+// replica by. "" is the host name.
+func WithExporterInstanceName(name string) LoadOption {
+	return func(o *loadOptions) { o.exporterInstance = name }
 }
 
 // readDocument reads a configuration file, a collector file or a static
@@ -1321,11 +1449,11 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 			c.Collectors = slices.DeleteFunc(c.Collectors, func(x model.Collector) bool { return c.CollectorSources[x.Name] == path })
 		}
 		if len(c.Collectors) > 0 {
-			err = model.JoinProblems(err, validate(&c, options.namedFilesUnread))
+			err = model.JoinProblems(err, validate(&c, options))
 		}
 		return nil, err
 	}
-	if err = validate(&c, options.namedFilesUnread); err != nil {
+	if err = validate(&c, options); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -1386,6 +1514,9 @@ type Manager struct {
 	expandEnv       bool
 	// expandStaticTargetsEnv is expandEnv for the static target file.
 	expandStaticTargetsEnv bool
+	// exporterInstance is the name the configuration was first read with
+	// for otlp.exporter_instance (WithExporterInstanceName).
+	exporterInstance string
 	// targetsRetryFiles and targetsRetryStamp are retryFiles and retryStamp
 	// for the static target file: the files that checking the file last
 	// read against the configuration opens (targetsNamedFiles) and, with
@@ -1650,15 +1781,24 @@ func (m *Manager) WatchInterval() time.Duration { return m.watchInterval }
 // references.
 func (m *Manager) SetEnvExpansion(expand bool) { m.expandEnv = expand }
 
+// SetExporterInstanceName records the name the configuration was read with
+// for otlp.exporter_instance (WithExporterInstanceName), so every reload, and
+// in allocator mode every bundle, names the replica alike.
+func (m *Manager) SetExporterInstanceName(name string) { m.exporterInstance = name }
+
 // SetStaticTargetsEnvExpansion is SetEnvExpansion for the static target file.
 func (m *Manager) SetStaticTargetsEnvExpansion(expand bool) { m.expandStaticTargetsEnv = expand }
 
 // loadOptions returns the options the configuration was first read with.
 func (m *Manager) loadOptions() []LoadOption {
+	var options []LoadOption
 	if m.expandEnv {
-		return []LoadOption{WithEnvExpansion()}
+		options = append(options, WithEnvExpansion())
 	}
-	return nil
+	if m.exporterInstance != "" {
+		options = append(options, WithExporterInstanceName(m.exporterInstance))
+	}
+	return options
 }
 
 // staticTargetsLoadOptions returns the options the static target file was

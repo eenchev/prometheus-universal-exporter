@@ -126,6 +126,10 @@ own checks:
 - Python scripts are not run by the allocator; each replica checks its
   collectors' scripts when it loads the bundle, and reports a bundle it
   refuses in its heartbeats, which the allocator logs once.
+- [`otlp.exporter_instance`](OTLP.md#the-exporter-instance), which names the
+  replica on every OTLP resource it sends, takes its value, when the
+  configuration writes none, on each replica: its `--allocator.member` name,
+  the id it heartbeats with. The allocator leaves it as written.
 
 ### Static targets
 
@@ -538,6 +542,11 @@ gap; then the old owner gives it up. That holds whether the member list
 changed or a reload of the input files moved the target, by a changed
 `shard_key` say. A target whose old owner left has nobody to drain it, and
 one the reload removed is in no share at once.
+
+Exported over OTLP with
+[`otlp.exporter_instance`](OTLP.md#the-exporter-instance), a static target's
+data goes on, after a move, under the new owner's name: a new resource to a
+backend that keys series on resource attributes.
 
 A probe target moves when Prometheus next refreshes the job, and keeps its
 series, since its `instance` is its target. A probe is routed among the

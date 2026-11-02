@@ -291,6 +291,9 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_otlp_log_exports_total":                     "OTLP exports of the exporter's own log (otlp.logs), each a delivery of the log records waiting with its retries, by result: success or failure.",
 	"http_exporter_otlp_log_records_sent_total":                "Log records of the exporter's own log the OTLP endpoint accepted.",
 	"http_exporter_otlp_log_records_dropped_total":             "Log records of the exporter's own log given up on: a line that found otlp.logs.max_pending_records waiting, records refused by the OTLP endpoint with a status that is not retried or rejected by an export it accepted (partialSuccess), or those of the last export before exiting when it failed.",
+	"http_exporter_otlp_trace_exports_total":                   "Exports of the traces of slow and failed probes and static target scrapes over OTLP (otlp.traces), by result: success or failure. A retried export that got through is one success. Present while the trace export is on.",
+	"http_exporter_otlp_spans_sent_total":                      "Spans the OTLP endpoint accepted of the trace export.",
+	"http_exporter_otlp_spans_dropped_total":                   "Spans of the trace export given up on: those of a trace that found no room under otlp.traces.max_pending_spans, spans refused by the OTLP endpoint with a status that is not retried or rejected by an export it accepted (partialSuccess), or those of the last export before exiting when it failed.",
 	"http_exporter_allocator_generation_info":                  "1, with the generation of the bundle from the target allocator whose configuration is in force as a label; absent before the first.",
 	"http_exporter_allocator_last_sync_timestamp_seconds":      "Unix time the exporter last heard from the target allocator which bundle is its own, unchanged or new; 0 before the first.",
 	"http_exporter_allocator_sync_errors_total":                "Failed exchanges with the target allocator, by stage: heartbeat, fetch (of the bundle) or write (into the cache directory).",
@@ -536,6 +539,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, countingSince(s.otlpLogStatusMetrics(), started)...)
+	out = append(out, countingSince(s.otlpTraceStatusMetrics(), started)...)
 	out = append(out, countingSince(s.allocatorStatusMetrics(), started)...)
 	out = append(out, countingSince(s.debugRunMetrics(), started)...)
 	out = append(out, requestFamilies...)

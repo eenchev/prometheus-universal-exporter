@@ -65,12 +65,37 @@ var otlpKeys = map[string]struct {
 		},
 		noValue: []string{"x", "[a]", "{level: debug}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, interval: soon}", "{enabled: true, max_pending_records: many}"},
 	},
+	// The traces block is checked as the logs block is: once it is
+	// switched on itself, in a block switched on; its threshold at least
+	// 1ms, by both where it is one part and by the exporter alone where it
+	// is several.
+	"traces": {
+		checked: []otlpValue{
+			{"{enabled: true, threshold: 500us}", ""}, {"{enabled: true, threshold: -1s}", ""}, {"{enabled: true, interval: 500ms}", ""},
+			{"{enabled: true, max_pending_spans: -1}", ""}, {"{enabled: true, endpoint: not-a-url}", "otlp.traces.endpoint must be an http or https URL"},
+			{"{enabled: true, threshold: 400us400us}", "otlp.traces.threshold 800µs is under the least, 1ms"},
+			{"{enabled: true, interval: 400ms400ms}", "otlp.traces.interval 800ms is under the least, 1s"},
+		},
+		noValue: []string{"x", "[a]", "{threshold: 1s}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, threshold: soon}", "{enabled: true, errors: maybe}", "{enabled: true, max_pending_spans: many}"},
+	},
 	"metric_names": {checked: []otlpValue{{"OTel", ""}, {"openmetrics", ""}, {"5", ""}}, noValue: []string{"[otel]", "{a: b}"}},
 	// A scope written is held to a name, without a control character in
 	// it or in its version.
 	"scope": {
 		checked: []otlpValue{{"{}", ""}, {`{version: "1"}`, ""}, {`{name: ""}`, ""}, {`{name: "a\tb"}`, ""}, {`{name: x, version: "1\n"}`, ""}},
 		noValue: []string{"x", "[a]", "{unknown: 1}", "{name: [a]}"},
+	},
+	// The exporter_instance block is checked once it is switched on
+	// itself, in a block switched on: an attribute that is service.name,
+	// blanks alone or holds a control character, and a value that holds
+	// one, by both. A key of otlp.resource_attributes is the exporter's
+	// alone to refuse (TestTheExporterAloneRefusesAnExporterInstanceAttributeOfTheResource).
+	"exporter_instance": {
+		checked: []otlpValue{
+			{"{enabled: true, attribute: service.name}", ""}, {`{enabled: true, attribute: " "}`, ""}, {`{enabled: true, attribute: "a\tb"}`, ""},
+			{`{enabled: true, value: "pod\n0"}`, ""},
+		},
+		noValue: []string{"x", "[a]", "{attribute: a}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, attribute: [a]}", "{enabled: false, value: {a: b}}"},
 	},
 	// A size written as text is held to the least by both, as one
 	// written as a number is.
@@ -144,7 +169,10 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 	// Values in order, off and on.
 	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB",
 		"metric_names: otel", "metric_names: prometheus", `metric_names: ""`, "scope: {name: my-scope}", `scope: {name: my-scope, version: "1.2.3"}`, `scope: {name: "1"}`,
-		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`} {
+		"traces: {enabled: true}", "traces: {enabled: false, threshold: 1us, interval: -1s}", "traces: {enabled: true, threshold: 1ms, errors: true, interval: 1s, max_pending_spans: 0, endpoint: \"http://traces.invalid/v1/traces\"}",
+		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`,
+		"exporter_instance: {enabled: true}", `exporter_instance: {enabled: true, attribute: host.name, value: pod-0}`, `exporter_instance: {enabled: true, attribute: "", value: ""}`,
+		"exporter_instance: {enabled: false, attribute: service.name}", "exporter_instance: {enabled: true, attribute: service.instance.id}"} {
 		key, value, _ := strings.Cut(setting, ": ")
 		agree(t, schema, "otlp."+setting+", switched off", block(false, key, value), true)
 		agree(t, schema, "otlp."+setting+", switched on", block(true, key, value), true)
@@ -153,4 +181,20 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 	// the block is not one that is switched off.
 	agree(t, schema, `otlp with enabled: "false"`, "otlp: {enabled: \"false\", compression: zstd}\n"+testutil.MinimalConfig, false)
 	agree(t, schema, "otlp without enabled", "otlp: {compression: zstd}\n"+testutil.MinimalConfig, false)
+}
+
+// otlp.exporter_instance.attribute is refused for a key of
+// otlp.resource_attributes, written "" or not, which a schema cannot compare
+// it with: the exporter alone refuses it, in a block switched on, and both
+// take it in a block, or an exporter_instance block, switched off.
+func TestTheExporterAloneRefusesAnExporterInstanceAttributeOfTheResource(t *testing.T) {
+	schema := loadSchema(t)
+	document := func(enabled, instance bool, value string) string {
+		return fmt.Sprintf("otlp:\n  enabled: %v\n  endpoint: http://collector.invalid:4318/v1/metrics\n  resource_attributes: {host.name: %s}\n  exporter_instance: {enabled: %v, attribute: host.name}\n", enabled, value, instance) + testutil.MinimalConfig
+	}
+	for _, value := range []string{"a", `""`} {
+		loadersAlone(t, schema, "host.name of resource_attributes, "+value, document(true, true, value), "otlp.exporter_instance.attribute is host.name, which otlp.resource_attributes sets too")
+		agree(t, schema, "host.name of resource_attributes, "+value+", otlp switched off", document(false, true, value), true)
+		agree(t, schema, "host.name of resource_attributes, "+value+", exporter_instance switched off", document(true, false, value), true)
+	}
 }

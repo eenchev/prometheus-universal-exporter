@@ -311,16 +311,16 @@ func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector st
 		case <-ctx.Done():
 			c.abandon(entry, src, done)
 			err = fmt.Errorf("reading %s: %w", shown, ctx.Err())
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 			return err
 		}
 		if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
 			c.drop(entry, "lost")
-			traceOutcome(ctx, "the connection was lost: "+err.Error())
+			traceFailedOutcome(ctx, "the connection was lost: "+err.Error())
 			continue
 		}
 		if err != nil {
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 		} else {
 			traceOutcome(ctx, "read")
 		}
@@ -351,12 +351,12 @@ func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector 
 			c.release(entry)
 			if err != nil && attempt == 0 && ctx.Err() == nil && entry.lost(err) {
 				c.drop(entry, "lost")
-				traceOutcome(ctx, "the connection was lost: "+err.Error())
+				traceFailedOutcome(ctx, "the connection was lost: "+err.Error())
 				continue
 			}
 		}
 		if err != nil {
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 			return err
 		}
 		traceOutcome(ctx, fmt.Sprintf("read %d files", len(result.Files)))

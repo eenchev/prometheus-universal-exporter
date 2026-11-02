@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -280,6 +281,33 @@ func checkTargetResourceKeys(t *model.StaticTarget, o model.OTLPConfig) error {
 		if source := from(otlpServiceInstanceIDAttribute); source != "" {
 			return fmt.Errorf("target %q sets otlp.instance_id, which makes the target's name its resource's %s, and its resource has that attribute already, from %s; leave one of the two out", t.Name, otlpServiceInstanceIDAttribute, source)
 		}
+	}
+	return checkTargetExporterInstance(t, o)
+}
+
+// checkTargetExporterInstance refuses a target whose resource would have the
+// attribute of otlp.exporter_instance already: from its own
+// otlp.resource_attributes, written "" or not, as the exporter-wide ones are
+// held to it (checkExporterInstance), from its otlp.labels_as_resource, or,
+// with otlp.instance_id, as service.instance.id. Either would replace the
+// replica's name on the target's resource, or the replica's name it.
+func checkTargetExporterInstance(t *model.StaticTarget, o model.OTLPConfig) error {
+	e := o.ExporterInstance
+	if !e.Enabled {
+		return nil
+	}
+	attribute := e.Attribute
+	if attribute == "" {
+		attribute = model.DefaultOTLPExporterInstanceAttribute
+	}
+	if _, has := t.OTLP.ResourceAttributes[attribute]; has {
+		return fmt.Errorf("target %q otlp.resource_attributes sets %s, which otlp.exporter_instance gives every resource the exporter sends; name the target's attribute something else, or name the exporter's with otlp.exporter_instance.attribute", t.Name, attribute)
+	}
+	if slices.Contains(t.OTLP.LabelsAsResource, attribute) {
+		return fmt.Errorf("target %q otlp.labels_as_resource names %q, which otlp.exporter_instance gives every resource the exporter sends; rename the label, or name the exporter's attribute with otlp.exporter_instance.attribute", t.Name, attribute)
+	}
+	if t.OTLP.InstanceID && attribute == otlpServiceInstanceIDAttribute {
+		return fmt.Errorf("target %q sets otlp.instance_id, which makes the target's name its resource's %s, and otlp.exporter_instance.attribute is %s too; leave one of the two out", t.Name, otlpServiceInstanceIDAttribute, otlpServiceInstanceIDAttribute)
 	}
 	return nil
 }

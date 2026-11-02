@@ -5,16 +5,19 @@ package repository
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // The chart README's OTLP export example renders, and the exporter loads the
 // configuration it renders as the pod reads it, with --config.expand-env and
 // the token from the Secret in the environment: the export of the
-// exporter's own log is on, to the metrics' collector at /v1/logs, with the
-// header both exports send.
+// exporter's own log is on, to the metrics' collector at /v1/logs, and the
+// export of slow requests' traces, at /v1/traces, with the header every
+// export sends.
 func TestChartReadmeOTLPLogExportExampleRendersAndLoads(t *testing.T) {
 	helm := requireHelm(t)
 	_, section, found := strings.Cut(readChartFile(t, "README.md"), "### OTLP export\n")
@@ -59,7 +62,8 @@ func TestChartReadmeOTLPLogExportExampleRendersAndLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the exporter does not load the rendered configuration: %v\n%s", err, configYAML)
 	}
-	if !cfg.OTLP.Enabled || !cfg.OTLP.Logs.Enabled || cfg.OTLP.Logs.Endpoint != "http://otel-collector.observability:4318/v1/logs" || cfg.OTLP.Headers["Authorization"] != "Bearer s3cret" {
+	if !cfg.OTLP.Enabled || !cfg.OTLP.Logs.Enabled || cfg.OTLP.Logs.Endpoint != "http://otel-collector.observability:4318/v1/logs" || cfg.OTLP.Headers["Authorization"] != "Bearer s3cret" ||
+		!cfg.OTLP.Traces.Enabled || cfg.OTLP.Traces.Endpoint != "http://otel-collector.observability:4318/v1/traces" || cfg.OTLP.Traces.Threshold != model.Duration(2*time.Second) {
 		t.Errorf("the rendered configuration exports %+v", cfg.OTLP)
 	}
 }

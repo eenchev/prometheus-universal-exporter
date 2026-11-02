@@ -679,6 +679,10 @@ type OTLPConfig struct {
 	// with the block's headers, TLS, compression and timeout
 	// (exporter/otlplogs.go).
 	Logs OTLPLogsConfig `yaml:"logs"`
+	// Traces exports a trace of each probe and static target scrape that
+	// took otlp.traces.threshold or longer, or with errors one that failed,
+	// to the same collector (exporter/otlptraces.go).
+	Traces OTLPTracesConfig `yaml:"traces"`
 	// MetricNames is how the export names metrics: prometheus, the
 	// default, as the exposition writes them, or otel, as OpenTelemetry
 	// names them, a counter without _total and a unit suffix moved into
@@ -688,7 +692,36 @@ type OTLPConfig struct {
 	// records are sent under; nil is DefaultOTLPScopeName without a
 	// version.
 	Scope *OTLPScopeConfig `yaml:"scope"`
+	// ExporterInstance names the replica that sends the export on every
+	// resource it sends, metrics and log records alike, so the data of
+	// replicas that share a service name stays apart (exporter/otlp.go).
+	ExporterInstance OTLPExporterInstanceConfig `yaml:"exporter_instance"`
 }
+
+// OTLPExporterInstanceConfig is otlp.exporter_instance: whether every
+// resource the export sends carries an attribute naming this replica, under
+// which key, and with which value. The configuration's check fills in the
+// value left out (config.validateOTLP): the --allocator.member name in
+// allocator mode, else the host name.
+type OTLPExporterInstanceConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Attribute string `yaml:"attribute"`
+	Value     string `yaml:"value"`
+}
+
+// UnmarshalYAML reads otlp.exporter_instance, refusing settings that enabled
+// does not switch on or off (decodeSwitchedBlock).
+func (o *OTLPExporterInstanceConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain OTLPExporterInstanceConfig
+	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPExporterInstanceConfig", "otlp.exporter_instance")
+}
+
+// DefaultOTLPExporterInstanceAttribute is otlp.exporter_instance.attribute
+// when left out. It is not service.instance.id, which Prometheus' OTLP
+// receiver makes the instance label of every series, in place of the
+// target's, and which a static target's otlp.instance_id sets to the
+// target's name.
+const DefaultOTLPExporterInstanceAttribute = "pue.exporter.instance"
 
 // OTLPScopeConfig is otlp.scope: the name and version of the
 // instrumentation scope of the export.
@@ -736,6 +769,44 @@ func (o *OTLPLogsConfig) UnmarshalYAML(n *yaml.Node) error {
 const (
 	DefaultOTLPLogsInterval          = 5 * time.Second
 	DefaultOTLPLogsMaxPendingRecords = 10000
+)
+
+// OTLPTracesConfig is otlp.traces: whether a trace is exported of each probe
+// and static target scrape that took Threshold or longer, and with Errors of
+// each that failed, where to, and how many spans may wait.
+type OTLPTracesConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the OTLP/HTTP traces endpoint; left out, otlp.endpoint
+	// with its /v1/metrics made /v1/traces.
+	Endpoint string `yaml:"endpoint"`
+	// Threshold is the least duration of a probe or a scrape whose trace is
+	// exported.
+	Threshold Duration `yaml:"threshold"`
+	// Errors exports the trace of every probe or scrape that failed too,
+	// however long it took.
+	Errors   bool     `yaml:"errors"`
+	Interval Duration `yaml:"interval"`
+	// MaxPendingSpans bounds the spans waiting for export; a trace that
+	// finds no room for all of its spans is dropped whole rather than
+	// waited for.
+	MaxPendingSpans int `yaml:"max_pending_spans"`
+}
+
+// UnmarshalYAML reads otlp.traces, refusing settings that enabled does not
+// switch on or off (decodeSwitchedBlock).
+func (o *OTLPTracesConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain OTLPTracesConfig
+	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPTracesConfig", "otlp.traces")
+}
+
+// The defaults of otlp.traces: a probe that takes a second is slow next to
+// the milliseconds most take, and a trace is wanted soon after the probe, as
+// a log line is.
+const (
+	DefaultOTLPTracesThreshold       = time.Second
+	MinOTLPTracesThreshold           = time.Millisecond
+	DefaultOTLPTracesInterval        = 5 * time.Second
+	DefaultOTLPTracesMaxPendingSpans = 10000
 )
 
 // LogLevel reads a log level as --log.level and otlp.logs.level take it:

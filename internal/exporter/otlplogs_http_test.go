@@ -418,10 +418,10 @@ func TestOTLPLogsRefusedAndRejectedAreDropped(t *testing.T) {
 	if got := otlpDetails(t, server).Logs.DroppedBy.Refused; got != 1 {
 		t.Errorf("%d records counted refused, want 1", got)
 	}
-	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"too old"}}`), "application/json", true); got.rejected != 2 || got.message != "too old" {
+	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"too old"}}`), "application/json", otlpSignalLogs); got.rejected != 2 || got.message != "too old" {
 		t.Errorf("a log export's partial success reads as %+v", got)
 	}
-	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedDataPoints":"2"}}`), "application/json", true); got.rejected != 0 {
+	if got := partialSuccessOf([]byte(`{"partialSuccess":{"rejectedDataPoints":"2"}}`), "application/json", otlpSignalLogs); got.rejected != 0 {
 		t.Errorf("a log export's partial success reads rejected data points: %+v", got)
 	}
 }
@@ -562,4 +562,39 @@ func TestTheLogExportsLastRecordsAreMutedUnderItsResult(t *testing.T) {
 	logger.Info("one")
 	exportLogsNow(server)
 	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="good">success</span><br><span class="muted">1 log record</span>`)
+}
+
+// The line that a debug probe or a debug scrape was served goes to stderr
+// alone: a debug run is not exported over OTLP, its log line among it.
+func TestTheLogExportTakesNoDebugProbesLine(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("value=1"))
+	}))
+	defer target.Close()
+	receiver := newLogReceiver(t)
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(receiver.server.URL + "/v1/metrics")}
+	cfg.OTLP.Compression = model.OTLPCompressionNone
+	cfg.OTLP.Logs.Enabled = true
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "eu", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
+	stderr := &lockedBuffer{}
+	logs := NewOTLPLogs(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	server.SetOTLPLogs(logs)
+	server.logger = slog.New(logs.Handler())
+	server.SetDebug(DebugFull)
+	for _, path := range []string{"/probe?collector=text&debug=true&target=" + target.URL, "/static-targets?debug=eu"} {
+		if answer := getPath(server, http.MethodGet, path); answer.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", path, answer.Code, answer.Body)
+		}
+	}
+	server.logger.Info("a line the export takes")
+	exportLogsNow(server)
+	var exported []string
+	for _, r := range receiver.logRecords(t) {
+		exported = append(exported, text(r.Body))
+	}
+	if strings.Contains(strings.Join(exported, "\n"), "debug report served") || !slices.Contains(exported, "a line the export takes") {
+		t.Errorf("the log export took %q", exported)
+	}
+	requireContains(t, stderr.String(), `"msg":"probe debug report served"`, `"msg":"static target debug report served"`)
 }

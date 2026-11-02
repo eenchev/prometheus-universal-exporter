@@ -409,10 +409,11 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	traceRequest(ctx, tcpMethod(c, overrides), label, traced, "", false)
 	x, err := tcpExchange(ctx, address, cfg, send, c)
 	if err != nil {
-		traceOutcome(ctx, x.begun()+"error: "+err.Error())
+		traceFailedOutcome(ctx, x.begun()+"error: "+err.Error())
 		return nil, err
 	}
 	traceOutcome(ctx, x.outcome())
+	traceFacts(ctx, x.facts()...)
 	headers, body := x.headers(), x.body
 	if tcpRequest(c).Document {
 		if body, err = x.document(address, responseLimit(c)); err != nil {
@@ -569,6 +570,28 @@ func (x *tcpExchanged) outcome() string {
 		return fmt.Sprintf("%s; read %d bytes, %s", greeted, len(x.body), x.how)
 	}
 	return greeted + "; nothing sent, the greeting is the answer"
+}
+
+// facts are what a span tells of the exchange (TracedRequest.Facts): the
+// sizes of the greeting and of the answer, and that request.greeting
+// matched, never what the server sent, which the outcome quotes.
+func (x *tcpExchanged) facts() []TraceFact {
+	var facts []TraceFact
+	if x.greeting != nil {
+		facts = append(facts, intFact("tcp.greeting.bytes", len(x.before)+len(x.greeting)))
+		if x.matched {
+			facts = append(facts, boolFact("tcp.greeting.matched", true))
+		}
+	}
+	if x.greeting == nil || x.answered {
+		facts = append(facts, intFact("tcp.answer.bytes", len(x.body)))
+	}
+	return facts
+}
+
+// boolFact makes a TraceFact of a yes or a no, which tcp alone tells.
+func boolFact(key string, value bool) TraceFact {
+	return TraceFact{Key: key, Bool: value, IsBool: true}
 }
 
 // greeted is how a debug report tells the greeting, and the request for TLS

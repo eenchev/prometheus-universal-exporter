@@ -320,7 +320,7 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			ctx := req.Context()
 			if req.Response != nil {
-				traceOutcome(ctx, req.Response.Status)
+				traceHTTPOutcome(ctx, req.Response)
 			}
 			hop := settleRedirect(ctx, req, via)
 			traceRequest(ctx, req.Method, req.URL.String(), req.Header, req.Host, true)

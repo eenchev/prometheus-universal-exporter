@@ -8,7 +8,11 @@ and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
 `otlp` exports probe results, the exporter's own metrics and, with
-`otlp.logs`, its own log over [OTLP](OTLP.md).
+`otlp.logs`, its own log over [OTLP](OTLP.md), with
+[`otlp.traces`](OTLP.md#traces-of-slow-requests) a trace of each slow probe
+and static target scrape, and with
+[`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
+that sends them on every resource.
 
 The top-level keys are `collectors`, `collector_files`,
 [`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
@@ -5425,8 +5429,13 @@ in its place, read-only, since it runs as configured:
   `redis` command's argument, a `sql` statement — is shown `<redacted>`
   whole when something in it reads as a credential, by the rule an error's
   text is masked by (`"password": "…"`, `token=…`, `Bearer …`, a URL's
-  userinfo), or when one of its lines logs in to a text protocol (`AUTH …`,
-  `PASS …`, `APOP …`); a folded block among them is then shown on one line.
+  userinfo, `<password>…</password>`, JSON written as a string in JSON,
+  `\"password\":\"…\"`), or when it logs in to a text protocol: `AUTH …`,
+  `PASS …` or `APOP …` at the start of a line or after a `;`, IMAP's
+  `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, or `AUTH` framed as
+  RESP (`*2\r\n$4\r\nAUTH\r\n$7\r\n…`); a word that only begins like
+  one, such as `author`, is not. A folded block among them is then shown on
+  one line.
   A Python script is shown as written, but for what reads as a
   credential in it, which is masked as an error's text is; keep a script's
   credentials in a file it reads.
@@ -5470,6 +5479,28 @@ the marks go with the next edit. In the playground Tab indents by two
 spaces, or indents the lines selected, and Shift+Tab outdents them; to leave
 the editor with the keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on
 a Mac, runs from anywhere on the page, as *Run* does.
+
+The YAML is coloured as it is typed: keys, strings, numbers, booleans and
+`null`, comments, a list's dashes, punctuation, a block scalar's indicator
+(`|`, `>-`) and its lines, anchors and aliases (`&a`, `*a`), tags (`!!str`),
+and the exporter's own `{{param_<name>}}` placeholders and `${NAME}`
+references, each in a colour of its own in either theme; a value the page
+withholds, `<redacted>`, is shown muted. The colouring is a layer behind the
+text, which stays the browser's own: undo, Tab, input methods and paste work
+as in any text box. A block — a key with lines indented under it, a list
+item with more of it below, a block scalar — folds behind the ▾ button
+beside its number, its first line then ending in how many lines it hides,
+`… 12 lines`, which unfolds it when clicked; the other lines keep their
+numbers, so the gutter skips the hidden ones, and a line an error names
+that is folded away is marked on the line of its fold. Tab reaches one of
+the buttons, the one last used or else the first, and the arrow keys, Home
+and End go to the others; Enter or Space folds or unfolds. *Expand all* and
+*Collapse all* above the editor unfold every block or fold them all. A configured collector's YAML folds as it is read. The playground
+cannot be edited while a block of it is folded — a text box cannot hide
+lines of its own — so folding it shows it as a configured collector's is
+shown, read-only; a click on its text, Enter, or *Expand all* unfolds it
+and puts the caret where it was clicked. *Run*, *Copy as*, *Edit a copy*
+and the lines an error names always take the whole YAML, folded or not.
 
 It reads one of three responses:
 
@@ -5648,6 +5679,92 @@ metric's `# TYPE`:
 What a target sent is put in the table as text, never as HTML. On a narrow
 screen the table scrolls sideways in its own box.
 
+With [OTLP](OTLP.md) enabled, a third tab, *OTLP*, shows what the next
+export would send of the run's series, for every kind of run: a pasted
+response, a fetched target or a static target's scrape, of a configured
+collector or of the playground. It is made by the export's own code, so it
+is what the export does, not a description of it:
+
+- **Resource and scope**: a probe's points are under the exporter-wide
+  resource, `otlp.service_name` and `otlp.resource_attributes`, with the
+  `collector` and `target` attributes of `otlp.probe_attributes`; the
+  playground's as a probe of it would be. A static target's scrape is under
+  the target's own resource, its `otlp.labels_as_resource` moved to it and
+  its name its `service.instance.id` with `otlp.instance_id`, also when it
+  does not set `export_via_otlp`, which the tab then says. With
+  `otlp.exporter_instance` on, every resource carries its attribute too,
+  with the value in force, and a note says what it is. The scope is
+  `otlp.scope`'s name and version.
+- **Data points**: a row for each, with its Prometheus name and its OTLP
+  name, which differ under `otlp.metric_names: otel`, its kind — `gauge`,
+  `sum (cumulative, monotonic)`, `histogram (cumulative)` or `summary` — its
+  unit, its attributes and its value: a histogram's count, sum and each
+  bucket's own count, a summary's count, sum and quantiles. A row the
+  export changed has a badge that opens to why: a family exported as
+  gauges because its bucket counts fall or a counter is NaN, `_total` taken
+  off, the unit `s` from `_seconds`, a label moved to the resource, an
+  attribute added. The table sorts by a column's header and keeps the rows
+  that hold the filter's text.
+- **Left out**: points the export would leave out, a name exported as two
+  kinds or, under `otel` naming, for two Prometheus names, with the warning
+  the export logs of them. Only the run's own points are checked against
+  one another: those of other probes and static targets in the same export,
+  and the exporter's own series, are not the run's.
+- **Request body**: the `ExportMetricsServiceRequest`, folded away, its
+  points at the run's time in whole milliseconds, as an export's are; it is
+  sent on one line, gzipped unless `otlp.compression: none`. It is shown as
+  a tree: each object and array folds behind a ▸/▾ button, which the
+  keyboard reaches too, and shows, folded, how many keys or items it has
+  and the value of its `name` or `key`, `{…} 2 keys · pue-playground`; a
+  folded attribute shows its key and value, `{…} service.name =
+  "pue-playground"`, so the resource's and each point's attributes read
+  without unfolding them. Keys, strings, numbers, booleans and `null` have
+  colours of their own in either theme. It opens four levels below the top, down to
+  each resource's attributes and the scope's metrics; *Expand all* and
+  *Collapse all* open every node or fold all but the top. A node's
+  contents are made when it is first opened, so a body of thousands of
+  points shows at once and *Expand all* goes a level at a time without
+  holding up the page. *Copy* copies the body as indented JSON, which the
+  tree is made from. A cumulative point starts at its own time, as at a
+  series' first export: the export remembers when each series started,
+  which a run neither reads nor changes.
+- **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on:
+  each line the run logged as the record the log export makes of it — its
+  time, severity, body and attributes — those below `otlp.logs.level`
+  marked as not exported, and the `ExportLogsServiceRequest` of the rest,
+  shown as the metrics' body is, a tree for each request when the records
+  are more than one holds. A
+  probe logs a failure as `probe failed`, where a run says `debug run
+  failed`, and a repeated one once and then every five minutes.
+- **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on: the
+  spans the trace export would make of the run, by the export's own code —
+  the probe's or the scrape's, each stage's and each request's — as a tree
+  with each span's start, duration, a bar of its time within the run's, its
+  status and its attributes, the `ExportTraceServiceRequest` they would be
+  sent in, shown as the metrics' body is, and whether a probe or a scrape
+  that took as long and ended as the run did would be exported, by
+  `otlp.traces.threshold` and `otlp.traces.errors`. The run's own trace is
+  never exported.
+
+Nothing of a run reaches the export: nothing is queued, no start time is
+remembered, the export's self-metrics and status are unchanged, and
+nothing is sent. At `full` the tab also offers *Test the metrics
+endpoint*, with `otlp.logs` *Test the logs endpoint* and with
+`otlp.traces` *Test the traces endpoint*: one empty export,
+`{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or `{"resourceSpans":[]}`,
+sent to the
+endpoint the configuration names, with `otlp.headers`, `otlp.tls`,
+`otlp.compression` and `otlp.timeout`, once, never retried. The page shows
+the status, how long it took, the error of the connection, of TLS or of a
+timeout in full, the headers sent — each of `otlp.headers` by its name
+alone, its value `<redacted>` whatever the header is called, and the
+`Content-Type` and `Content-Encoding` the export sets as sent — the answer's
+headers and body, its `partialSuccess`, and what an export would make of
+the answer — a success, a retry or a refusal. It counts in none of the
+export's self-metrics and changes nothing the status page shows. One test
+runs at a time; another asked meanwhile is answered `429`. At `edit` the
+buttons are disabled.
+
 The playground may do nothing past the response, since what it is given
 runs on the server, unless [`--web.debug.dangerous`](#dangerous-debug-mode)
 lifts these:
@@ -5677,7 +5794,8 @@ result and the response it would
 [revalidate](#revalidating-expired-responses)), counts in no
 collector's self-metrics but the [Python worker
 series](SELF-METRICS.md#python-workers) of a configured collector's script,
-and logs one `debug run served` line at `info`. The page is behind
+and logs one `debug run served` line at `info`, which the OTLP log export
+does not take. The page is behind
 `web.basic_auth` when that is configured;
 [Debugging](AUTHENTICATION.md#debugging-collectors) says how a run is kept
 from being sent by another site.
@@ -5721,9 +5839,26 @@ suffix), `metric` (the metric's name, as a lint finding names it), `type`,
 `labels` and `value` (as the text writes it, so `NaN` and `+Inf` are
 strings), `requests`, `response`, `stages`, `notes`, `lint`, the
 [metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
-`metric` and `message`, and `report`, the text report. A collector refused is answered `422` with `error`, a
+`metric` and `message`, `report`, the text report, and, with OTLP enabled
+alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
+(each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
+`prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
+`left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
+`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`), and with
+`otlp.traces`, `traces` (`threshold`, `errors`, `took`, `failed`,
+`exported`, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
+`duration_ms`, `status` and `attributes`, `notes` and `body`). A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
+
+The endpoint test is `POST /debug/otlp-test` with `X-Debug-Run` and a
+JSON body `{"signal": "metrics"}`, `{"signal": "logs"}` or
+`{"signal": "traces"}`, answered with
+`ok`, `signal`, `endpoint`, `sent`, `body`, `status`, `took`, `failure`,
+`outcome`, `partial_success`, `headers`, `response` and `notes`; below
+`full` it is answered `403`, with the export off, or `logs` with
+`otlp.logs` off or `traces` with `otlp.traces` off, `409`, and while
+another test runs `429`, each with `error`.
 
 ### Dangerous debug mode
 
@@ -5944,7 +6079,9 @@ counted all the same: a Python script it runs is run by the collector's
 workers, and the [Python worker series](SELF-METRICS.md#python-workers)
 count what the workers did, a debug probe's runs among them. Its
 failures go to its report, not to the exporter's log, which records only one
-`probe debug report served` line at `info`. The target's
+`probe debug report served` line at `info` (a debug scrape's `static target
+debug report served`), on stderr alone: the [log export](OTLP.md#the-exporters-own-log)
+does not take it. The target's
 [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
 [`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
 and [the probe's deadline](#probe-deadlines) apply as they do to any probe.
@@ -5996,7 +6133,8 @@ when the exporter should be sent probes, and `503` when it should not, with one
   is off by default, since an exporter whose exports fail still answers
   probes, and at most 1000. It counts the metrics' exports alone: failing
   exports of the exporter's own log ([`otlp.logs`](OTLP.md#the-exporters-own-log))
-  never make the exporter unready.
+  and of traces ([`otlp.traces`](OTLP.md#traces-of-slow-requests)) never make
+  the exporter unready.
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.
@@ -6077,8 +6215,10 @@ Then it stops accepting connections, cuts short the
 [static target](STATIC-TARGETS.md) scrapes in flight, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
-followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
-export of its own log within the same `otlp.timeout`,
+followed, with [`otlp.traces`](OTLP.md#traces-of-slow-requests), by the
+last export of the spans waiting and, with
+[`otlp.logs`](OTLP.md#the-exporters-own-log), by the last export of its own
+log within the same `otlp.timeout`,
 and exits `0`. The static target scrapes are not waited for: their results are
 served by this exporter alone, which is stopping, so a target that does not
 answer would only hold the shutdown up. A scrape cut short publishes nothing
@@ -6318,7 +6458,7 @@ The report lists one entry per startup step, in the order startup runs them:
 
 | `check` | Present | What it validates |
 | --- | --- | --- |
-| `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
+| `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. With [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, `details.otlp_exporter_instance` has its `attribute` and its `value` as startup resolves it: the host name, or in allocator mode the `--allocator.member` name, when the file writes none. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`, which names the [collector file](#collector-files) of a collector defined in one. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | Reports `--config.watch-interval` under `details.interval`. A non-positive interval is a command-line error (exit 2) before the check, so this entry does not fail. |
 | `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |

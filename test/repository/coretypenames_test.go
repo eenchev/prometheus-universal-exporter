@@ -44,6 +44,7 @@ var coreTypeNameAllowed = []struct {
 	{"internal/decode/decoders.go", "sql", 1, "decode.KindRows, the format rows are shown as"},
 	{"internal/decode/graphite.go", "graphite", 2, "the graphite decoder's name"},
 	{"internal/exporter/lifecycle.go", "tcp", 1, "the network a port is looked up for"},
+	{"internal/exporter/otlptraces.go", "http", 2, "a URL's scheme, which makes a request's span an HTTP client's, and its default port"},
 	{"internal/transform/inputs.go", "graphite", 2, "the graphite decoder, whose document jq and yq read"},
 }
 

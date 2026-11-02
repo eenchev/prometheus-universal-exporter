@@ -294,7 +294,9 @@ logged failure SHOULD carry the start of the body, at most 256 bytes on one
 line, and the probe's answer MUST NOT. What in it reads as a credential — a
 `Bearer` or `Basic` credential, a JSON Web Token, and the value of a field or
 parameter whose name reads as a credential's by the one rule for a name
-(§ 42.17) — MUST be masked before it is logged, including one the 256-byte
+(§ 42.17), a JSON field's written as a string in JSON, its quotes escaped,
+among them, and the text or CDATA content of an XML element whose local
+name reads as one — MUST be masked before it is logged, including one the 256-byte
 cut runs through.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
@@ -7680,6 +7682,22 @@ after a failed export, because the endpoint refused its request or rejected
 it, or because the last log export at shutdown failed, MUST be counted as
 dropped; records kept for the next export MUST NOT be.
 
+While the export of traces is on as well (`otlp.traces`, § 42.1c), and only
+then, the exporter MUST publish:
+
+```text
+http_exporter_otlp_trace_exports_total{result}   counter
+http_exporter_otlp_spans_sent_total              counter
+http_exporter_otlp_spans_dropped_total           counter
+```
+
+counted as the log export's are: a span of a trace that found no room for
+all of its spans under `otlp.traces.max_pending_spans`, those of the oldest
+traces dropped whole past it after a failed export or a reload that lowers
+it, those of a request the endpoint refused or rejected,
+and those of a failed last trace export at shutdown MUST be counted as
+dropped; spans kept for the next export MUST NOT be.
+
 ### 22.0d Build information
 
 The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
@@ -8127,8 +8145,9 @@ Recommended behavior:
   followed: a target cleared since the link was last followed MUST NOT be
   carried; no form MUST ask `/probe` for a debug report.
 - `/debug`, with `--web.debug` at `edit` or `full` only, `/debug/run`,
-  which its runs post to, and `/debug/collector`, which shows it a
-  configured collector: § 42.17. With the flag, `/` and `/collectors` MUST
+  which its runs post to, `/debug/collector`, which shows it a
+  configured collector, and `/debug/otlp-test`, its OTLP endpoint test:
+  § 42.17. With the flag, `/` and `/collectors` MUST
   link the page; without it, neither path is served (`404`) and neither page
   links it.
 - Both pages, and the debug page, MUST be protected like `/probe` when the exporter's Basic
@@ -29737,6 +29756,103 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   as on stderr, a `String` that panics is `!PANIC: no text`, a non-nil error
   its text, and logging the line neither panics nor loses the record.
 
+## 34.251 OTLP on the debug page
+
+- `TestTheOTLPTabShowsEachKindUnderEitherNaming`: a pasted gauge, counter, histogram, summary and a histogram whose bucket counts fall are, under `prometheus`, `job_duration_seconds` gauge `1.5`, `requests_total` sum (cumulative, monotonic) `7`, `latency_seconds` histogram `count 3, sum 1.25; buckets ≤0.1: 1, ≤1: 2, >1: 0`, `rpc_seconds` summary `count 40, sum 7; quantiles 0.5: 0.1, 0.9: 0.3`, without notes, and `broken_bucket`/`broken_count` gauges noted `its bucket counts fall`; under `otel`, `job_duration` of unit `s`, `requests` noted `_total taken off`, `latency` and `rpc` of unit `s` noted with the suffix; the notes say how start times are made and the body is the indented request.
+- `TestTheOTLPTabIsThereWithOTLPAlone`: without OTLP a run has no `otlp` and the page no tab or test button; with it the tab is there, the test button disabled at `edit` with its note, no log records without `otlp.logs`, and with them the logs part and both buttons at `full`.
+- `TestTheOTLPTabShowsTheResourceOfTheRun`: with `probe_attributes` and a scope `acme.pue` `1.2`, a fetched probe is under the exporter-wide resource, its points with `collector` and `target` noted as added; the playground's is the same resource, noted as a probe of it and without a target; a static target's is `service.name, city=berlin, deployment.environment, service.instance.id=berlin`, its points without `city`, noted moved; nothing is queued and no start time remembered.
+- `TestTheOTLPTabListsWhatTheExportLeavesOut`: under `otel` the counters `x_seconds` and `x_seconds_total`, and the gauge `jobs` and counter `jobs_total`, leave out `x_seconds` and `jobs` with the export's messages, the clash lines as the export logs them, and the body without their points.
+- `TestTheOTLPTabsBodyIsWhatTheExportSends`: a probe of a target and a static target's scrape, exported to a receiver, are the run's body to the byte but for the points' times and the exporter's own and the Go runtime's series; the test fails when the run's series are not in the drained queue's order.
+- `TestTheOTLPTabShowsTheRunsLogRecords`: a failing run's `debug run failed` is a record of severity 17 `ERROR` with its time, `collector` and `error` attributes, exported at `info` and in the logs body; the log export then gets no line of the run nor `debug run served` (the test fails when that line is logged through the tee); at `error` a `log` rule's warning is shown not exported, `not exported: below otlp.logs.level error`.
+- `TestTheOTLPEndpointTest`: an endpoint answering `200` with a `partialSuccess` message is `ok` with it, its `Authorization` sent and shown withheld and the empty body sent; a `429` is one request and an outcome that would retry; a `401` refused; a slow endpoint past `otlp.timeout` a client timeout; an HTTPS endpoint with an unknown CA a certificate error; none of them changes the export's counts or history.
+- `TestTheOTLPEndpointTestOfTheLogsEndpoint`: `signal: logs` sends `{"resourceLogs":[]}` to `/v1/logs` alone.
+- `TestTheOTLPTabsBodiesAreAJSONViewer`: both bodies are a `json-view` box, not a `<pre>`, with *Copy*, *Expand all* and *Collapse all* in one row, the buttons naming the box by `aria-controls`; the box scrolls past 520px and wraps anywhere; the light theme's rule and both dark rules give each of `--json-key`, `--json-string`, `--json-number`, `--json-boolean`, `--json-null` and `--json-punct` a colour, the dark ones the same in both and different from the light; the script has the viewer (the reviver keeping a number's source, the split of several requests, the button toggle with `aria-expanded`, the folded summary and its `name`/`key` hint, the opening depth of 4, children made on first opening, *Expand all* in 30 ms slices, one a frame, the not-JSON fallback), Copy copies the text the box was given, and the script writes no HTML and evaluates no code.
+- `TestTheOTLPTabsFoldedNodesReadAsText`: a folded node's comma is appended after its summary, never between `…}` and it; an object of exactly a `key` string and a `value` object of one field named `*Value` is folded as `key = value`, an `intValue` as a number, an `arrayValue` or `kvlistValue` as how many values it holds, the rest as the leaf it is, all with `textContent`.
+- `TestTheDebugPageEditorHighlightsTheYAML`: `/debug` and `/debug?collector=rooms` have the layer `collector-view` between the bands and the textarea, laid out as the textarea (font, size, `--editor-line`, padding, tab size, `white-space: pre`, no padding at the end of a line while editing) and a scroller with transparent scrollbars, the textarea's text transparent with `caret-color` and `::selection` set, and hidden in the read-only and folded views; a class for each token, keys, strings, numbers, booleans, null and punctuation in the JSON viewer's `--json-*` colours and the rest in `--yaml-*` ones; the script's tokenizer (placeholders, `${NAME}`, `<redacted>`, booleans, null, numbers, a block scalar's indicator and lines, a quoted scalar and a flow collection going on to the next line, dashes, keys, anchors and tags, a line read in a `try`), the lines read as before reused, only the rows that changed drawn again, the layer scrolled to the textarea's `scrollTop` and `scrollLeft`, the drawing once a frame, and no HTML written or code evaluated; the light rule and both dark rules give each of those colours and `--editor-selection` a value, the dark ones the same and different from the light, each at 4.5:1 or more on the editor's backgrounds, the error band and its tint.
+- `TestTheDebugPageEditorFoldsBlocks`: *Expand all* and *Collapse all* stand with *Edit a copy*, naming the editor by `aria-controls`; the script ends a block at the first line not more indented (blank lines within, a block scalar's or a flow collection's lines in, a list at a bare key's indentation in), ends a folded block's first line in how many lines it hides, which unfolds it when clicked, numbers each row with its line's own number (`aria-hidden`) and a button on a line that opens a block, with `aria-expanded` and a label of the lines it folds, one button a Tab stop and the arrow keys, Home and End going to the others without scrolling the gutter, the gutter itself not `aria-hidden`, marks a hidden line on its fold's row, folds every block or none, shows the folded playground read-only with its note, edits it again on a click at the column clicked, Enter, or a link to a line, sends the textarea's whole text when run, and unfolds when the editor is given a new text.
+- `TestTheOTLPEndpointTestIsGuarded`: `403` at `edit`, without `X-Debug-Run` and from another site, `409` for logs with the log export off and with OTLP off, `400` for another signal, `405` for `GET`, `429` while a test is in progress, and no request sent by any of them.
+
+## 34.252 The exporter instance on every OTLP resource, otlp.exporter_instance
+
+- `TestEveryOTLPResourceNamesTheExporterInstance`: with `exporter_instance` on and the value `replica-1`, an export of a probe's series, a static target without an `otlp` block, one with its own `service_name` and the exporter's own metrics has every point under a resource carrying `pue.exporter.instance="replica-1"`, the target with its own service name under a resource of its own, and `k8s.pod.name` when the block names it; switched off, no resource carries an attribute of the block.
+- `TestTheExportersLogRecordsNameTheExporterInstance`: a log export's resource is `service.name`, `deployment.environment` and `pue.exporter.instance=replica-1`.
+- `TestTheOTLPTabShowsTheExporterInstance`: a debug run's OTLP tab has the attribute in its resource, a note `pue.exporter.instance names this exporter replica, on every resource it sends (otlp.exporter_instance).`, and the attribute in the metrics body and in the logs body.
+- `TestTheStatusPageShowsTheExporterInstance`: the status page's OTLP section has the row `Exporter instance` with `k8s.pod.name` = `replica-1`, and its JSON `exporter_instance` `{"attribute":"k8s.pod.name","value":"replica-1"}`; with the block off neither.
+- `TestTheExporterInstanceIsTheHostNameOrTheAllocatorMember`: `{enabled: true}` loads as `pue.exporter.instance` and the host name; with `WithExporterInstanceName("pod-3")`, as the member name, also for `value: ""`; a value written and an attribute written are kept over both; `${PUE_TEST_POD}` is expanded with `--config.expand-env`; `service.instance.id` is taken; a Manager given the name keeps it across a reload.
+- `TestAnExporterInstanceWithoutAHostNameIsRefused`: a host name that cannot be read, or is empty, refuses `{enabled: true}` saying to set the value, such as `${POD_NAME}`; a written value loads; the allocator's reading (`WithoutNamedFiles`) leaves the value empty; switched off, or in an `otlp` block switched off, nothing is filled in.
+- `TestAnExporterInstanceAttributeOfTheResourceIsRefused`: `service.name`, a key of `otlp.resource_attributes` (also written `""`), blanks alone, a tab in the attribute and a newline in the value are refused with their messages, and so are a block that sets `attribute` without `enabled` and an unknown key.
+- `TestAStaticTargetWithTheExporterInstanceAttributeIsRefused`: a target exported over OTLP whose `resource_attributes` set the attribute (also `""`), whose `labels_as_resource` name it, or with `instance_id` while the attribute is `service.instance.id`, is refused naming the target; switched off, none is; the default beside `instance_id`, `service.instance.id` beside a target without it, and another label moved to the resource are taken.
+- `TestTheExporterInstanceIsTheHostName`: an exporter process exports under `pue.exporter.instance` with the host name, and its `starting exporter` line carries `otlp_exporter_instance_attribute` and `otlp_exporter_instance`.
+- `TestTheExporterInstanceIsTheAllocatorMember`: an exporter in allocator mode with `--allocator.member=pod-7` puts a bundle with the block in force with the value `pod-7`, as its status page's JSON says.
+- `TestTheCheckReportsTheExporterInstance`: `--dry-run`'s `config` check lists `otlp_exporter_instance` with the default attribute and the member name it was given, and nothing without the block.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`, `TestSchemaAndExporterAgreeOnEnabled`: `exporter_instance` is a row of the switched-off `otlp` block's table: `service.name`, blanks, a tab in the attribute and a newline in the value are refused by both in a block switched on and taken in one switched off; text, a list, a key without `enabled`, `enabled: maybe`, an unknown key and a list or a mapping as a value are refused by both, off and on; `{enabled: true}`, a written attribute and value, `""` for both and `service.instance.id` are taken by both.
+- `TestTheExporterAloneRefusesAnExporterInstanceAttributeOfTheResource`: an attribute that is a key of `otlp.resource_attributes`, of the value `a` or `""`, is refused by the exporter alone in a block switched on, and taken by both with `otlp` or `exporter_instance` switched off.
+- `TestChartReadmeExporterInstanceExampleNamesThePod`: the chart README's `exporter_instance` example renders with the allocator, its replicas given `--allocator.member=$(POD_NAME)` with `POD_NAME` from `metadata.name`; the allocator loads the rendered configuration with the value left empty, and a replica given a pod's name with that name as the value.
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` still passes unchanged: with the block left out the export is the JSON it was, byte for byte.
+
+## 34.253 Traces of slow requests, otlp.traces
+
+- `TestTheTraceOfASlowProbeIsExported`: with the threshold `40ms`, a probe of a target answering after `60ms` is exported and one of a target answering at once is not: the spans are `probe text` (SERVER, no parent, no status), `http`, `decode`, `transform` and `validation` (INTERNAL, under it, `stage.outcome` `ok`) and `GET` (CLIENT, under `http`), all of one trace, ids of 32 and 16 lowercase hex digits, times of decimal nanoseconds within the probe's, under the exporter-wide resource and the default scope; the probe's span has `http.request.method` `GET`, `url.path` `/probe`, `http.response.status_code` `200`, `collector`, `target` as the log shows it (`tenant=a` kept, the token masked), `request.type` `http`, `series` `1`, `response.bytes` `8`, `cache.hit` `false`; the request's `server.address`, `server.port` and status, and a `url.full` of `user:hunter2@…/metrics?token=s3cret&tenant=a` with neither the password, the token nor `tenant=a`; no credential is anywhere in the export.
+- `TestTheTraceOfAFailedProbeIsExportedWithErrors`: under an hour's threshold, a probe of a target answering `500` is not exported without `errors`, and with it its span is ERROR with the failure, `error.type` and `http.response.status_code` `502`, and the request's ERROR with `500` as its status and `error.type`.
+- `TestEveryAttemptAndPageIsASpan`: `request.retry` of 2 attempts on `503` against a target answering `503` twice is three CLIENT spans, `503`, `503 retry.attempt=1 http.request.resend_count=1`, `200 retry.attempt=2 http.request.resend_count=2`; `request.pagination` over 3 pages is a CLIENT span of `pagination.page` 1, 2 and 3.
+- `TestAStaticTargetsTraceIsUnderItsOwnResource`: a slow static target with `otlp.service_name: legacy` and `instance_id` is the INTERNAL span `scrape own` with `static_target=own` under `service.name=legacy`, `deployment.environment=test`, `pue.exporter.instance=replica-1`, `service.instance.id=own`; one without an `otlp` block `scrape plain` under the exporter-wide resource with the exporter instance; every span is of the scope `traces-scope` `2`.
+- `TestAProbeContinuesItsCallersTrace`: a probe with the `traceparent` `00-4bf9…-00f0…-01` is of that trace with `00f067aa0ba902b7` its parent, one with an uppercase trace id begins its own; a version 01 with more fields is read, `ff`, a zero trace id, a version 00 with more fields, a span id that is no hex and an empty header are not.
+- `TestATraceOverThePendingBoundIsDropped`: under `max_pending_spans: 8` a second probe's spans do not fit beside the first's and are dropped whole: the queue keeps the first's, `http_exporter_otlp_spans_dropped_total` and the status page's `spans_dropped` and `over_max_pending_spans` count them, and the probe is answered `200`; after an export `http_exporter_otlp_trace_exports_total{result="success"} 1`, `{result="failure"} 0` and `http_exporter_otlp_spans_sent_total`, and the page's *Trace export* part, `exported every 5s` and the spans sent.
+- `TestTheTraceExportLogsToStderrAloneAndFlushesAtShutdown`: with the log export on at `debug`, a trace export the endpoint refuses `400` is logged to stderr and no log record of the trace export reaches the endpoint; `FlushOTLP` sends the spans waiting, and none waits after it.
+- `TestAReloadSwitchesTheOTLPTraceExport`: a reload switching `otlp.traces` off drops the spans waiting and a probe queues none, the status page says `Trace export is off.` and no `http_exporter_otlp_trace_` or `http_exporter_otlp_spans_` family is served; switched on again, the export sends the one probe's trace since.
+- `TestTheTraceCostsAProbeNothingWhileOff`: with the traces block off, beginning a probe's trace and recording a stage, the bytes fetched and a cache step allocate nothing (the test fails when the record is made while off); with it on the probe's context carries the recorder.
+- `TestTheOTLPTabShowsTheRunsSpans`: with `otlp.traces` on the page has the Spans part, the traces test button and the ExportTraceServiceRequest body; a run of a target answering after `20ms` under a `5ms` threshold says it would be exported, `at least otlp.traces.threshold 5ms`, lists `probe text SERVER`, `http`, `GET CLIENT` under it, `decode`, `transform`, `validation`, its body is the spans' request; nothing is queued and an export sends nothing of it; *Test the traces endpoint* sends `{"resourceSpans":[]}` to `/v1/traces` and counts as no export.
+- `TestTheOTLPEndpointTestIsGuarded`: also `409` for the traces with the trace export off, `400` for a signal OTLP has not (`spans`).
+- `TestTheStatusPagesOTLPJSON`: the `otlp` object has `traces`, `{"enabled": false}` while `otlp.traces` is off.
+- `TestOTLPTracesSettingsAreCheckedAndFilledIn`: `{enabled: true}` loads as `/otel/v1/traces?tenant=a` of the metrics' endpoint, threshold `1s`, interval `5s`, `max_pending_spans` 10000; written values are kept; no endpoint beside one without `/v1/metrics`, an endpoint that is no URL, a threshold of `500µs` or `-1s`, an interval of `500ms` and a negative bound are refused with the block on, and unchecked off or in an `otlp` block off.
+- `TestOTLPTracesBlockMustSayEnabled`: `traces: {threshold: 1s}` is refused, `otlp.traces sets threshold but not enabled`.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`, `TestSchemaAndExporterAgreeOnEnabled`, `TestSchemaAndExporterAgreeOnKeysWrittenEmpty`, `TestEveryDurationKeyTakesTextOrTheNumberZero`: `traces` is a row of the switched-off `otlp` block's table — a threshold of `500us` or `-1s`, an interval of `500ms`, a negative bound unchecked off and refused by both on, an endpoint that is no URL and `400us400us` by the exporter alone, `soon`, `maybe` and an unknown key refused by both — `otlp.traces.threshold` takes `1ms` and refuses `999us` once on, and its threshold and interval are signed durations of the otlp block.
+- `TestChartReadmeOTLPLogExportExampleRendersAndLoads`: the chart README's example also switches `traces` on with `threshold: 2s`, to the collector's `/v1/traces`.
+- `TestCorePackagesNameNoRequestType`: `internal/exporter/otlptraces.go` holds `"http"` twice, a URL's scheme.
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` and the log export's tests still pass unchanged: with `traces` left out the metrics' and the logs' exports are what they were, byte for byte.
+
+## 34.254 A recovered last error on the status page
+
+- `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted`: a static target that failed and then succeeded keeps its error with `last_error_recovered` true, and its row shows it under the label "Earlier failure, recovered since", the error in a muted block and `at <time> (<age> ago)` under it; a target whose last scrape failed has `last_error_recovered` false and its error shown as before, unlabelled, with `at <time>` alone. `TestTheStatusPagesOTLPJSON` and `TestTheRecentProbesJSONShape` still pass unchanged: without a last error the field is left out.
+- `TestTheRecentProbesShowARecoveredErrorMuted`: of the recent probes, a collector and target whose latest probe succeeded after a failed one has its error shown as recovered and `last_error_recovered` true; one whose latest probe failed has it shown as before and false.
+- `TestTheOTLPExportsRecoveredErrorIsShownMuted`: the OTLP export's Last error is shown as before while the last export failed, `last_error_recovered` false, and as recovered, with the JSON's `otlp.last_error_recovered` true, once an export got through after it.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m0s ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
+
+## 34.255 Fixes from the 2026-11-02 audit: what spans carry, whole traces, export intervals, and the debug page's credentials and times
+
+- `TestAFailedRequestsSpanSaysWhatTheLogSays`: under `request.retry` with `statuses: [503]`, a probe whose first attempt gets no answer, second `503 SECRET-REASON-of-the-target` and third `200` has CLIENT spans `error.type` `request_failed` with no message, `503` with `received HTTP status 503`, and `200` with no status; a probe answered `503` then twice no answer has `received HTTP status 503`, then `request_failed` with no message, then `request_failed` with the error of the log's one line, as its message; no span's attribute or message has the status line's reason.
+- `TestATCPRequestsSpanCarriesNoGreeting`: a tcp probe greeted with `SSH-2.0-OpenSSH_9.6 internal-host-db7.corp secret-build-4711` has one CLIENT span with `tcp.greeting.bytes` of the greeting's length and `tcp.greeting.matched` `true`, no status, and no span has the greeting's text.
+- `TestAnSSHExecRunsSpanCarriesNoStderr`: an sshexec probe whose command exits 3, of `success_exit_codes`, writing `NRestarts=4` and a line of stderr has one CLIENT span with `process.exit.code` `3`, `sshexec.stdout.bytes` `12` and `sshexec.stderr.bytes` of the line's length, no status, and no span has the stderr's text.
+- `TestAFailedExportPutsBackWholeTraces`: under `max_pending_spans: 10`, an export failing `503` while another probe's trace is queued puts its spans back, which with that trace's do not fit: the next export sends one whole trace, no span without its parent, and the spans dropped over the bound are the older trace's.
+- `TestALowerPendingBoundDropsTheOldestWholeTraces`: three traces of 4 spans and a bound lowered to 6 keep the newest trace whole, the two older dropped and their 8 spans counted.
+- `TestARequeueDropsTheOldestWholeTraces`: three traces of 3 spans drained, the first and the start of the second delivered, put back before a trace of 3 queued since under a bound of 5 keep the newer trace alone, the second's 2 spans left and the third's 3 dropped and counted; under a bound of 6 nothing is dropped and the second's rest is a trace of 2.
+- `TestASlowReaderMakesNoProbeSlow`: a fast probe whose caller takes 300ms to read its answer, under a 200ms threshold, queues no span.
+- `TestTheFirstBundlesOTLPIntervalsAreFollowedAtOnce`: an exporter in allocator mode running its metrics', logs' and traces' export loops and given a bundle with intervals of `1s` 50ms after starting sends to `/v1/metrics`, `/v1/logs` and `/v1/traces` within 2.5s.
+- `TestAReloadShorteningTheOTLPIntervalsIsFollowedAtOnce`: intervals of `45s` reloaded to `1s` 50ms after the loops start send to the three endpoints within 2.5s.
+- `TestAReloadLengtheningTheOTLPIntervalsExportsNothingEarly`: intervals of `1s` reloaded to `1h` at once send nothing within 2s.
+- The OTLP endpoint test shows every `otlp.headers` value as `<redacted>`,
+  `Authorization` and `x-honeycomb-team` alike, and the `Content-Type` and
+  `Content-Encoding` the export sets as sent, while it sends the values
+  (TestTheOTLPEndpointTest).
+- `fetch.RedactText` masks the text and the CDATA of an XML element whose
+  local name reads as a credential's, under a namespace prefix and with
+  attributes, and not an element closed by another name or one empty; and a
+  field of JSON written as a string in JSON, `\"password\":\"…\"`, up to
+  its escaped closing quote (TestRedactText).
+- The debug page's configured view and Edit a copy withhold an `http` body
+  writing a password as an XML element, as CDATA in one, and as escaped JSON
+  in a JSON string (TestTheDebugPageWithholdsFreeTextHoldingACredential).
+- A `tcp` send of `PING; AUTH …`, IMAP's `a1 LOGIN user …`, Redis's
+  `HELLO 3 AUTH default …` and RESP-framed `AUTH` is withheld whole, and one
+  of `author Bob` and `GET /authors` is shown
+  (TestTheDebugPageWithholdsATCPSendHoldingACredential).
+- The *OTLP* tab's body is the export's of the same series also in its
+  points' times' precision, whole milliseconds, and in whether a point
+  starts at its time (TestTheOTLPTabsBodyIsWhatTheExportSends).
+- With `otlp.logs`, the lines that a debug probe and a debug scrape were
+  served are on stderr and not in the log export, which takes a line logged
+  after them (TestTheLogExportTakesNoDebugProbesLine).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30047,7 +30163,7 @@ with no alias. A deployment that wants the conventional `/metrics` sets
 `--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
 segments — no query, fragment, trailing slash or pattern syntax — and a path
 another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
-`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`) MUST be a command-line error (exit 2, before `--dry-run` or
+`/-/reload`, `/debug`, `/debug/run`, `/debug/collector`, `/debug/otlp-test`) MUST be a command-line error (exit 2, before `--dry-run` or
 startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
@@ -30081,7 +30197,12 @@ unless the block sets it itself: an `enabled` the block leaves empty is the
 one read, whatever a merged mapping says.
 
 `otlp.interval` MUST control the export cadence and SHOULD default to 30
-seconds. The exporter MUST buffer the latest general metric value for each
+seconds. The interval MUST be that of the configuration in force: when a
+reload, or an allocator's bundle (§ 42.14d), puts one in force, the next export
+of the metrics, of the log records (`otlp.logs.interval`, § 42.1b) and of
+the spans (`otlp.traces.interval`, § 42.1c) MUST be an interval of the new
+configuration after the last export of each ended, and at once when that is
+past, not when a wait armed with the interval before runs out. The exporter MUST buffer the latest general metric value for each
 metric/label set between exports and include an exporter self-health snapshot
 in each interval export. `otlp.timeout` MUST bound each export request and
 SHOULD default to 5 seconds.
@@ -30296,6 +30417,44 @@ NOT hold a control character; it MUST be refused otherwise when the
 configuration loads, in a block that is switched on, by the exporter and the
 schema alike. A static target MUST NOT set a scope of its own.
 
+`otlp.exporter_instance` MAY name the exporter replica that sends the
+export. It is a block `enabled` switches, as `otlp.logs` is (§ 42.1b): one
+that sets another key without it MUST be refused, and one switched off, or
+in an `otlp` block switched off, MUST be kept unchecked and MUST leave the
+export what it was without the block, byte for byte. Switched on:
+
+- Every resource the replica sends MUST carry the attribute
+  `otlp.exporter_instance.attribute`, `pue.exporter.instance` when left out
+  or written `""`, with its value: the exporter-wide resource of the probes'
+  series and the exporter's own metrics, the resource of every static target
+  exported over OTLP, with an `otlp` block of its own or without one, and
+  the resource of the log records (§ 42.1b). It MUST be part of the
+  resource's identity as every attribute is, and the rule of the writers of
+  one resource MUST be unchanged.
+- The value MUST be `otlp.exporter_instance.value` as written, `${NAME}`
+  expanded with `--config.expand-env`; left out or `""`, the
+  `--allocator.member` name in allocator mode, at each bundle and reload as
+  at the start, and otherwise the host name. It MUST be resolved when the
+  configuration loads, at the start and at each reload; a host name that
+  cannot be read, or is empty, with no value written MUST refuse the
+  configuration, saying to set the value. The target allocator, which is no
+  replica, MUST leave the value as written.
+- The attribute MUST NOT be blanks alone, `service.name` or a key of
+  `otlp.resource_attributes`, written `""` or not, and neither the attribute
+  nor the value MUST hold a control character; the configuration MUST be
+  refused otherwise, by the exporter and, but for the keys of
+  `otlp.resource_attributes`, the schema alike. A static target exported
+  over OTLP whose own `otlp.resource_attributes`, written `""` or not, or
+  `otlp.labels_as_resource` name the attribute, or that sets
+  `otlp.instance_id` while the attribute is `service.instance.id`, MUST be
+  refused naming the target. `service.instance.id` MUST otherwise be taken.
+- The start's `starting exporter` line MUST carry
+  `otlp_exporter_instance_attribute` and `otlp_exporter_instance` when the
+  configuration it starts with has the block on, `--dry-run` MUST list them
+  under `details.otlp_exporter_instance` of the `config` check, resolved as
+  startup resolves them, and the status page's OTLP section (§ 42.14a) MUST
+  show them.
+
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
 replaces an earlier one's. With `otlp.probe_attributes: true`, every point a
@@ -30409,7 +30568,8 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   the rules of § 42.1a, and be split by `otlp.batch_max_size` records and
   `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
 - Each record MUST be under the resource the exporter's own metrics are
-  under (`otlp.service_name` and `otlp.resource_attributes`), and the scope
+  under (`otlp.service_name`, `otlp.resource_attributes` and, switched on,
+  `otlp.exporter_instance`, § 42.1), and the scope
   they are under (`otlp.scope`, § 42.1), and carry the
   line's time, the time it was taken as its observed time, the OTLP severity
   number of its slog level — DEBUG 5, INFO 9, WARN 13, ERROR 17, a level
@@ -30448,6 +30608,110 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   dropped and counted. No line logged after it is exported.
 - The log export MUST NOT change readiness (§ 23), and its state MUST be on
   the status page (§ 42.14a).
+
+### 42.1c Traces of slow requests
+
+With `otlp.traces.enabled` true in an `otlp` block switched on, the exporter
+MUST export a trace of each `/probe` request and each scheduled static
+target scrape that took `otlp.traces.threshold` or longer, and with
+`otlp.traces.errors` of each that failed whatever it took, and MUST NOT add a
+dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
+`otlp.logs` is (§ 42.1b).
+
+- The spans MUST be sent as OTLP/HTTP JSON `ExportTraceServiceRequest`s to
+  `otlp.traces.endpoint`, which left out MUST be `otlp.endpoint` with its
+  trailing `/v1/metrics` made `/v1/traces`; an `otlp.endpoint` without that
+  path and no `otlp.traces.endpoint` MUST be refused when the configuration
+  loads. The requests MUST carry the `otlp` block's headers, TLS and
+  compression, be bounded by its timeout, be retried, refused and dropped by
+  the rules of § 42.1a, a `partialSuccess`'s `rejectedSpans` dropped and
+  counted, and be split by `otlp.batch_max_size` spans and
+  `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
+- `otlp.traces.threshold` MUST be 1 second by default and at least 1
+  millisecond; `otlp.traces.errors` MUST be off by default. A probe MUST be
+  timed, and its span MUST end, when its answer is ready, before it is
+  written, as its duration in the self-metrics is: the time its caller takes
+  to read the answer MUST NOT count. A failed probe
+  is one answered with an error, with a stale result, or turned away by the
+  concurrency limit; a failed scrape one that left its target `up` 0.
+- Which trace to export MUST be decided at the probe's or the scrape's end,
+  from stages and requests recorded in memory as it went, by the code that
+  times a debug run's stages (§ 34.251): each stage once, for both. A trace
+  not exported MUST be forgotten, its spans never made. While the export is
+  off, a probe MUST record nothing and allocate nothing for it.
+- A trace MUST be a span for the probe — SERVER, named `probe <collector>`,
+  with `http.request.method`, `url.path`, `http.response.status_code` — or
+  for the scrape — INTERNAL, named `scrape <static target>` — with
+  `collector`, `target` as the log shows it, `static_target`,
+  `request.type`, `series`, `response.bytes`, `cache.hit` and, when it
+  failed, `error.type` and the status ERROR with its failure; under it an
+  INTERNAL span for each stage the debug report names (the fetch, `files`,
+  `decode`, `transform`, `validation`), for the cache's answer, the wait for
+  a slot, an identical probe's shared trip and a stale answer, a `python`
+  span within the transform of the scripts' time, and under the fetch's a
+  CLIENT span, named by its method, for each request sent — each attempt of
+  `request.retry`, each redirect, each page of `request.pagination`,
+  `request.login`'s login — with `http.request.method`, `url.full`,
+  `server.address`, `server.port`, `http.response.status_code`,
+  `http.request.resend_count`, `retry.attempt`, `pagination.page`,
+  `redirect` and `login`, ERROR for a request that got no answer, or an
+  answer its request type takes for a failure, or an HTTP answer of 400 or
+  more, and a `rate_limit` span before a request that waited for its
+  turn. Trace and span ids MUST come from `crypto/rand` and be written in
+  lowercase hex; times MUST be decimal nanoseconds.
+- A probe whose request carries a readable W3C `traceparent` MUST continue
+  its trace: its span of the header's trace id, the header's span its
+  parent; the threshold and `errors` MUST decide its export all the same.
+  The exporter MUST NOT send a `traceparent` to its targets.
+- A request's `url.full` MUST withhold its userinfo, every query value and
+  its fragment, as an error in the log quotes a URL, and `target` the values
+  of query parameters named like credentials, as the log shows a target; a
+  span MUST carry no header and no body.
+- A span MUST carry nothing the log does not. Of a request, a stage or a
+  probe that went through it MUST carry no text the target sent — a tcp
+  greeting, a command's stderr, an HTTP status line's reason, a request's
+  outcome as a debug report tells it — but only numbers and yes-or-no
+  answers its request type works out of the answer: for tcp
+  `tcp.greeting.bytes`, `tcp.greeting.matched` and `tcp.answer.bytes`, for
+  sshexec `process.exit.code`, `sshexec.stdout.bytes` and
+  `sshexec.stderr.bytes`. Of a failure it MUST carry what the log line of
+  that failure has: a failed stage's message, and that of the last request
+  sent within a fetch stage that failed, MUST be the error the log line of
+  the stage's failure has; an HTTP answer of 400 or more MUST say
+  `received HTTP status <code>`; a request that failed and was sent again,
+  or was followed by one that went through, MUST have no message, only its
+  `error.type`.
+- A probe's trace MUST be under the exporter-wide resource, a static
+  target's under its own (`targetResource`, § 42.1), each with
+  `otlp.exporter_instance` when it is on, and under `otlp.scope`, by the code
+  that makes the metrics' resources and scope.
+- A debug run MUST NOT be exported; with the export on, the debug page's
+  OTLP tab MUST show the spans the export would make of a run, by the
+  export's own code, and whether a probe or a scrape like it would be
+  exported, and its endpoint test MUST offer the traces endpoint, sent
+  `{"resourceSpans":[]}`.
+- A probe MUST NOT wait for the export: the spans waiting MUST be bounded
+  by `otlp.traces.max_pending_spans`, 10000 by default, a negative value
+  refused, and a trace that finds no room for all of its spans MUST be
+  dropped whole and counted (§ 22.0c). They MUST be sent every
+  `otlp.traces.interval`, 5 seconds by default and at least 1 second, in the
+  background; what an export could not deliver for a reason worth retrying
+  MUST wait for the next export, before the spans queued since. The queue
+  MUST be kept as whole traces and MUST NOT be cut inside one: past the
+  bound, after a failed export or a reload that lowers it, the oldest
+  traces MUST be dropped whole and counted, the rest of a trace an export
+  delivered the start of being a trace of its own.
+- What the trace export logs of itself MUST be written to stderr alone, as
+  the log export's lines are (§ 42.1b), as a repeated failure (§ 25).
+- A reload that switches `otlp.traces` off MUST drop the spans waiting and
+  stop the recording; one that switches it on MUST record the probes and
+  scrapes from then on.
+- At shutdown, after the metrics' last export (§ 42.1a) and before the log
+  records' (§ 42.1b), the spans waiting MUST be sent within what is left of
+  the same `otlp.timeout`, and at least a second; when it fails they MUST be
+  dropped and counted.
+- The trace export MUST NOT change readiness (§ 23), and its state MUST be
+  on the status page (§ 42.14a).
 
 ## 42.2 CSV transformation
 
@@ -32094,6 +32358,18 @@ then one of the OTLP export. Of the static targets:
   (§ 25); nothing else of a target's answer MAY be shown. A scrape that
   panicked MUST be shown with a fixed error saying so; the panic's text MUST
   NOT be shown, only logged.
+- An error kept through a later success MUST NOT be shown as a failing
+  one's: while the target's last scrape succeeded, the page MUST show it
+  muted, under a label saying it is an earlier failure recovered since, with
+  when its scrape began and how long ago, in the page's age format, and the
+  long text's preview and whole text as any other's; an error of a target
+  whose last scrape did not succeed MUST be shown as before. The JSON MUST
+  say which with `last_error_recovered` beside `last_error`, `true` for the
+  first and `false` otherwise, and leave it out with `last_error`. The same rule MUST hold for the recent
+  probes' error, recovered while the latest probe succeeded (`success` or
+  `cached`), and for the OTLP, log and trace exports' last error, recovered
+  while the last export got through, each with its own
+  `last_error_recovered`.
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.
@@ -32266,6 +32542,10 @@ Of the OTLP export:
   export is failing, with the failed exports in a row and whether the
   exporter is unready.
 - In allocator mode the section MUST say the exports are this replica's.
+- With `otlp.exporter_instance` on, the section MUST show its attribute and
+  the value in force (§ 42.1), and the JSON MUST have them as the `otlp`
+  object's `exporter_instance`, `{"attribute": ..., "value": ...}`, left out
+  while the block is off.
 - With `otlp.logs` on, the section MUST show the log export (§ 42.1b): its
   endpoint with its credentials withheld as `otlp.endpoint`'s are, its level
   and interval, when the last log export began with its result and the
@@ -32279,6 +32559,16 @@ Of the OTLP export:
   `logs`, `{"enabled": false}` alone while `otlp.logs` is off, as the
   section MUST then say in one line. A reload that changes
   `otlp.logs.endpoint` MUST start its record again.
+- With `otlp.traces` on, the section MUST show the trace export (§ 42.1c)
+  as it shows the log export: its endpoint with its credentials withheld,
+  its threshold, whether `errors` is on and its interval, its last export
+  with its result and the spans it carried, the last that got through, the
+  failed trace exports in a row, the last failure's error, the spans
+  waiting and `otlp.traces.max_pending_spans`, and since the start the spans
+  dropped, in all and by why, the spans sent and the trace exports that
+  succeeded and failed; nothing of readiness. In the JSON it MUST be the
+  `otlp` object's `traces`, `{"enabled": false}` alone while `otlp.traces`
+  is off, as the section MUST then say in one line.
 - Every value MUST be HTML-escaped, and `?format=json` MUST give the section
   as `otlp`.
 
@@ -32336,7 +32626,9 @@ target's `labels`, a name given twice, a name that is an attribute of the
 resource already — from the target's `otlp.resource_attributes` or the
 exporter-wide ones, an attribute written `""` being none — and
 `instance_id` beside a `service.instance.id` attribute; the static target
-schema MUST refuse a name given twice. With neither key the export MUST be
+schema MUST refuse a name given twice. With `otlp.exporter_instance` on, the
+target's resource MUST carry its attribute too, and the file MUST be refused
+naming the target where the target's resource would have it already (§ 42.1). With neither key the export MUST be
 what it was without them, byte for byte.
 
 ### 42.14c Static target self-metrics
@@ -32643,7 +32935,9 @@ default to the host name, and `--allocator.advertise` to the
 `--web.listen-address` host when it is one address that is neither loopback
 nor unspecified, else to the host's first address that is neither loopback
 nor link-local, IPv4 before IPv6, with the listen port; an
-`--allocator.advertise` that is not `host:port` MUST be refused.
+`--allocator.advertise` that is not `host:port` MUST be refused. The
+`--allocator.member` name MUST be the value of `otlp.exporter_instance` that
+the bundle's configuration leaves out (§ 42.1).
 
 The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
 at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
@@ -33400,6 +33694,8 @@ have answered with, and for the response a probe would revalidate, which it
 MUST revalidate with the same conditional request and MUST NOT refresh in the
 cache (§ 42.13.2). Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
+The one `info` line that a debug probe or a debug scrape was served MUST
+be written to stderr alone, and MUST NOT be taken by the log export.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
 exception, for a debug probe and a debug scrape alike: they count what the
@@ -33612,8 +33908,10 @@ string of the request block — a header's or a query parameter's value, an
 `http` body, a `grpc` message, a `tcp` send, a `redis` command's argument,
 a `sql` statement or argument — in which text reads as a credential, by the
 rule that masks text the exporter did not write, or that writes a text
-protocol's login command (`AUTH`, `PASS` or `APOP` at the start of a line,
-in any case), MUST be shown as `<redacted>` whole, in the copy too, a folded
+protocol's login command, in any case (`AUTH`, `PASS` or `APOP` at the
+start of a line or after a `;`, IMAP's tagged `LOGIN` with a user and a
+password, Redis's `HELLO` with `AUTH`, and `AUTH` framed as a RESP bulk
+string followed by another), MUST be shown as `<redacted>` whole, in the copy too, a folded
 block scalar among them then on one line; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
@@ -33652,7 +33950,32 @@ at a run that is not refused and at a change of collector. In the
 playground Tab MUST put in two spaces, or indent the lines selected by two,
 and Shift+Tab MUST take up to two spaces from the start of each line the
 selection is on; Esc, then Tab, MUST leave the editor, and a read-only
-editor MUST take Tab as any field does. Ctrl+Enter and Cmd+Enter MUST run
+editor MUST take Tab as any field does. The editor MUST colour the YAML, as
+it is typed, by a reading of its lines that never fails whatever they hold:
+keys, strings, numbers, booleans and null, comments, a list's dashes,
+punctuation, a block scalar's indicator and its lines (those indented past
+its key, or its dash), anchors and aliases, tags, `{{param_<name>}}`
+placeholders and `${NAME}` references each distinctly, and a withheld value
+(`<redacted>`) muted; each colour MUST read at 4.5:1 or more on the
+editor's backgrounds in either theme. The playground MUST stay a textarea,
+its text transparent over the coloured layer, with its caret and selection
+drawn, the layer laid out and scrolled as the textarea's text is, down and
+sideways, to the device pixel, so that undo, Tab, input methods and paste
+are the browser's own; the layer MUST follow an edit before the next frame
+is drawn and MUST be made with text alone, never HTML. A line that opens a
+block — a key with more indented lines after it, a list item with more of
+it below, a block scalar — MUST have a fold button in the gutter, which
+says whether it is expanded (`aria-expanded`) and which lines it folds, a
+single one of them reached by Tab and the arrow keys, Home and End going to
+the others; a folded block's first line MUST end in how many lines it
+hides, said outside its text and unfolding the block when clicked, and the
+gutter MUST number every line shown with its own number, a line an error
+names that is folded away marked on the line of its fold. *Expand all* and *Collapse all* MUST unfold every block or fold them
+all. While a block of the playground is folded the playground MUST be shown
+read-only and MUST say so, and a click on its text, Enter or *Expand all*
+MUST unfold it, the caret where it was clicked; *Run*, *Copy as*, *Edit a
+copy*, the request type the page follows and the lines an error names MUST
+take the whole text, whatever is folded. Ctrl+Enter and Cmd+Enter MUST run
 from anywhere on the page, the editors and fields included, as *Run* does,
 which MUST say so in its title, its `aria-keyshortcuts` and a hint beside
 it, centred level with *Run* and the timeout's box; Enter with either in a parameter's value MUST NOT add a row.
@@ -33865,9 +34188,102 @@ click or keyboard, not by hover alone; one about a metric no row is of MUST
 be listed above the table. On a narrow screen the table MUST scroll in its
 own box and the page not.
 
+With `otlp.enabled` and an endpoint, and only then, every answer of a run
+that ran MUST carry `otlp`, what the next OTLP export would send of the
+run's series, and the page MUST offer an *OTLP* tab beside *Table* and
+*Text*, at `edit` as at `full`, for every kind of run — a pasted response,
+a target fetched, a static target's scrape, of a configured collector or
+of the playground. It MUST be made by the export's own code, not by a copy
+of it: the series a probe would answer, with `otlp.probe_attributes`'
+attributes, under the exporter-wide resource, the playground's as a probe
+of it would be; a static target's scrape's under the target's resource,
+its `otlp.labels_as_resource` moved to it and `otlp.instance_id` set,
+whether or not it sets `export_via_otlp`, which the tab MUST then say;
+either resource with `otlp.exporter_instance`'s attribute and value, with
+a note saying what the attribute is;
+each series once and in the order a drained queue has them, the later of
+two alike kept; named under `otlp.metric_names`; and checked against one
+another as an export checks a resource's points, and against no other
+point: not the other probes' or static targets', and not the exporter's
+own series. A cumulative point's start time MUST be its own time, as at a
+series' first export, which the tab MUST say. Making it MUST NOT queue
+anything, ask for or remember a series' start time, count in the
+export's self-metrics or status, or send anything. `otlp` MUST be an object
+of `metric_names`; `resource`, the resource's attributes, each a `key` and
+a `value`, `service.name` first, and `resource_notes`, where they come
+from; `scope`, its `name` and `version`; `points`, each with `prometheus`,
+the name the exposition writes it under, `name`, `kind` (`gauge`, `sum
+(cumulative, monotonic)`, `histogram (cumulative)` or `summary`), `unit`,
+`attributes`, `value` (a histogram's count, sum and each bucket's own
+count, a summary's count, sum and quantiles) and `notes`, one for each
+change the export made of its series — a family exported as gauges and
+why, `_total` taken off, a unit from a suffix, an attribute added by
+`otlp.probe_attributes`, a label moved to the resource, a series' own
+timestamp, a sum or count OTLP cannot leave out; `left_out`, each point
+the export would leave out, with its `reason` in the words the export
+logs it; `clashes`, the lines the export would log of them; `notes`; and
+`body`, the `ExportMetricsServiceRequest` the export would send of them,
+its points at the run's time in whole milliseconds as the export's queue
+keeps a point's,
+indented, `{"resourceMetrics": []}` for none. The tab MUST show the
+resource, the scope, the points as a table that sorts by a column's
+header and keeps the rows that hold a filter's text, a badge on a row with
+notes that opens to them by click or keyboard, the points left out, and
+the body folded away with a *Copy* button, every text put in as text,
+never as HTML. The page MUST show a body, the metrics' and the logs', as a
+tree when it is JSON — a tree for each of several requests, one blank line
+between them — and as text, saying it is not JSON, when it is not: each
+object and array a node that folds behind a button reached by click or
+keyboard that says whether it is open (`aria-expanded`), showing when
+folded how many keys or items it has and its `name` or `key` where it has
+one of them as a string; keys, strings, numbers, booleans, `null` and
+punctuation each in a colour of the theme, readable in light and in dark;
+a number as the body writes it; nodes open down to four levels below the
+top and folded below; a folded node's comma, where another follows it,
+after what it says of the node; a folded object of a `key` string and a
+`value` object of one `*Value` field, as OTLP writes an attribute, saying
+`<key> = <value>`; *Expand all* and *Collapse all* beside *Copy*, the
+latter folding every node but the top. A node's children MUST be made
+when it is first opened, and *Expand all* MUST make them in slices that
+leave the page responsive. *Copy* MUST copy the body's indented text, as
+the answer has it. A long string MUST wrap within the panel, which keeps
+its height and scrolls. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
+log lines as the records the log export makes of them, by the log
+export's own conversion — `time`, `severity_number`, `severity_text`,
+`body`, `attributes`, flattened and each key once, and `exported`, false
+with a `note` for a line below `otlp.logs.level` — with its `level`,
+`notes` and `body`, the `ExportLogsServiceRequest` of those exported, and
+the tab MUST show them as *Log records*. None of them MUST be queued for
+the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
+MUST NOT offer the tab.
+
+With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, with
+`otlp.logs` on *Test the logs endpoint*, and with `otlp.traces` on *Test
+the traces endpoint*, which `POST` to
+`/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left
+out), `logs` or `traces`, with the `X-Debug-Run` header, refused as a run is
+without it, from another site, with another content type or method, and
+behind Basic Auth. Below `full` the buttons MUST be disabled with a note,
+and the test MUST be answered `403`; with the export off, `logs` with
+the log export off, or `traces` with the trace export off, `409`; another `signal` `400`; and while a test is in
+progress, the server's whole, `429`, sending nothing. A test MUST send
+one request, an empty `{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or
+`{"resourceSpans":[]}`,
+to the endpoint the configuration in force names and no other, with the
+export's headers, TLS, compression and timeout, and MUST NOT retry it,
+whatever it answers. It MUST answer `200` with `ok`, `signal`,
+`endpoint`, its credentials withheld, `sent`, the headers sent, every
+`otlp.headers` value `<redacted>` whatever its name and the `Content-Type`
+and `Content-Encoding` the export sets as sent, `body`, `status`, `took`, `failure`, the
+connection's, TLS's or the timeout's error or the refusal in full,
+`outcome`, what an export would make of the answer, `partial_success`,
+`headers` and `response`, the start of the answer's body, and `notes`. It
+MUST NOT count in the export's self-metrics, change what the status page
+shows of the exports or readiness, or be taken by the log export.
+
 The collector MUST NOT be put in force. A run MUST NOT be answered from or
 fill the response cache, reading it only as a debug probe does, share a trip, reach the failure log or the exporter's log
-but for one `info` line per run, be queued for OTLP, or be counted in any
+but for one `info` line per run, which the log export MUST NOT take, be queued for OTLP, or be counted in any
 collector's self-metrics, but a configured collector's Python worker series,
 or in `http_exporter_probes_seconds_total`. A run that panics MUST be
 reported as a debug probe that panics is, and logged with its stack, and a fetch MUST give back its trip slot however it ends.

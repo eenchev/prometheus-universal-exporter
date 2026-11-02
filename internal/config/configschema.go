@@ -757,6 +757,17 @@ func collectorSchemaRules() map[string]map[string]any {
 		"otlp.logs.level":                           {"description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info."},
 		"otlp.logs.interval":                        {"pattern": signedDurationPattern, "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
 		"otlp.logs.max_pending_records":             {"minimum": nil, "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000."},
+		"otlp.traces":                               enabledSwitchRule(reflect.TypeOf(model.OTLPTracesConfig{}), "Export over OTLP/HTTP of a trace of each probe and static target scrape that took otlp.traces.threshold or longer, and with errors of each that failed: a span for the probe or scrape and one for each of its stages and requests. With the block's headers, tls, compression, timeout, batch bounds, scope and resource. Only while the otlp block is switched on too. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#traces-of-slow-requests."),
+		"otlp.traces.enabled":                       {"description": "Turn the trace export on. false keeps the block's settings without using them."},
+		"otlp.traces.endpoint":                      {"description": "OTLP/HTTP traces endpoint, such as http://otel-collector:4318/v1/traces. Left out, otlp.endpoint with its /v1/metrics made /v1/traces; required when otlp.endpoint does not end in /v1/metrics."},
+		"otlp.traces.threshold":                     {"pattern": signedDurationPattern, "description": "The least duration of a probe or a static target scrape whose trace is exported. At least 1ms once the block is switched on; defaults to 1s."},
+		"otlp.traces.errors":                        {"description": "Also export the trace of every probe and scrape that failed, however long it took. Defaults to false: only the slow ones."},
+		"otlp.traces.interval":                      {"pattern": signedDurationPattern, "description": "How often the spans waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
+		"otlp.traces.max_pending_spans":             {"minimum": nil, "description": "The most spans kept waiting for export; a trace that finds no room for all of its spans is dropped whole and counted rather than waited for, and a failed export's spans past it drop the oldest. Defaults to 10000."},
+		"otlp.exporter_instance":                    enabledSwitchRule(reflect.TypeOf(model.OTLPExporterInstanceConfig{}), "An attribute naming the exporter replica that sends the export, on every resource it sends: the probes', the static targets', the exporter's own metrics' and its log records'. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporter-instance."),
+		"otlp.exporter_instance.enabled":            {"description": "Turn the attribute on. false keeps the block's settings without using them."},
+		"otlp.exporter_instance.attribute":          {"description": "The attribute's key, without a control character and not blanks alone once the block is switched on. Not service.name, a key of otlp.resource_attributes, or, on a static target's resource, a key of its own otlp.resource_attributes or otlp.labels_as_resource, or service.instance.id where the target sets otlp.instance_id. Defaults to pue.exporter.instance."},
+		"otlp.exporter_instance.value":              {"description": "The attribute's value, without a control character once the block is switched on; ${NAME} with --config.expand-env, as every value. Left out, the --allocator.member name in allocator mode, else the host name, read at each load; a host name that cannot be read is refused."},
 		"otlp.probe_attributes":                     {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":      {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
@@ -862,13 +873,33 @@ func otlpSchemaRule() map[string]any {
 		"headers":                map[string]any{"propertyNames": headerNames()},
 		"tls":                    clientCertificatePair(),
 		"logs":                   otlpLogsOnRule(),
+		"traces":                 otlpTracesOnRule(),
 		"metric_names":           map[string]any{"enum": optionalEnum([]string{model.OTLPMetricNamesPrometheus, model.OTLPMetricNamesOTel})},
 		"scope": map[string]any{"required": []string{"name"}, "properties": map[string]any{
 			"name":    map[string]any{"minLength": 1, "pattern": noControlCharacters},
 			"version": map[string]any{"pattern": noControlCharacters},
 		}},
+		"exporter_instance": otlpExporterInstanceOnRule(),
 	}}
 	return rule
+}
+
+// otlpExporterInstanceOnRule is what otlp.exporter_instance is held to in an
+// otlp block switched on, once it is switched on itself, as
+// checkExporterInstance holds it: its attribute, "" being the default, is
+// not blanks alone and not service.name, and neither it nor the value holds
+// a control character. That the attribute is no key of
+// otlp.resource_attributes, or of a static target's resource, is the
+// exporter's alone to refuse: a schema cannot compare a value with the keys
+// of another setting, or of another document.
+func otlpExporterInstanceOnRule() map[string]any {
+	return map[string]any{
+		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
+		"then": map[string]any{"properties": map[string]any{
+			"attribute": map[string]any{"pattern": noControlCharacters, "not": map[string]any{"anyOf": []any{onlyBlanks(), map[string]any{"const": otlpServiceNameAttribute}}}},
+			"value":     map[string]any{"pattern": noControlCharacters},
+		}},
+	}
 }
 
 // noControlCharacters is text without a control character of ASCII, which
@@ -895,6 +926,22 @@ func otlpLogsOnRule() map[string]any {
 			"level":               map[string]any{"type": "string", "pattern": "^(|" + strings.Join(levels, "|") + ")$"},
 			"interval":            map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
 			"max_pending_records": map[string]any{"minimum": 0},
+		}},
+	}
+}
+
+// otlpTracesOnRule is what otlp.traces is held to in an otlp block switched
+// on, once it is switched on itself, as validateOTLPTraces holds it: its
+// threshold at least 1ms, its interval at least 1s, and its
+// max_pending_spans not negative. Switched off, it is unchecked, and so is
+// the whole of it in an otlp block switched off.
+func otlpTracesOnRule() map[string]any {
+	return map[string]any{
+		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
+		"then": map[string]any{"properties": map[string]any{
+			"threshold":         map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(model.MinOTLPTracesThreshold, true)},
+			"interval":          map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
+			"max_pending_spans": map[string]any{"minimum": 0},
 		}},
 	}
 }

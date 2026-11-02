@@ -131,8 +131,27 @@ func TestRedactText(t *testing.T) {
 			t.Errorf("RedactText(%q) = %q, want %q", text, got, want)
 		}
 	}
+	// An XML element named like a credential has its content masked, text
+	// or CDATA, under a namespace prefix and with attributes; the element
+	// and the rest stay. So does JSON written as a string in JSON, its
+	// quotes escaped.
+	for text, want := range map[string]string{
+		`<login><user>u</user><password>hunter2</password></login>`: `<login><user>u</user><password>` + Redacted + `</password></login>`,
+		`<s:Body><ns:apiKey type="x">hunter2</ns:apiKey></s:Body>`:  `<s:Body><ns:apiKey type="x">` + Redacted + `</ns:apiKey></s:Body>`,
+		"<Password><![CDATA[hunter2 & <more>]]></Password>":         "<Password>" + Redacted + "</Password>",
+		`<password>hunter2</passwordx>`:                             `<password>hunter2</passwordx>`,
+		`<author>Bob</author><title>x</title>`:                      `<author>` + Redacted + `</author><title>x</title>`,
+		`{"data":"{\"password\":\"hun\\\\ter2\",\"user\":\"u\"}"}`:  `{"data":"{\"password\":\"` + Redacted + `\",\"user\":\"u\"}"}`,
+		`{"data":"{\"token\": \"hunter2\"}"}`:                       `{"data":"{\"token\": \"` + Redacted + `\"}"}`,
+	} {
+		if got := RedactText(text); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", text, got, want)
+		}
+	}
 	for _, text := range []string{
 		"502 Bad Gateway: the upstream did not answer",
+		"<error><code>401</code><message>denied</message></error>",
+		"<password/><user>u</user>",
 		`{"status":"down","since":"2026-09-25T10:00:00Z"}`,
 		"<html><body>Service Unavailable</body></html>",
 		"bypass=on signal: 3 design=flat",

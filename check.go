@@ -49,6 +49,9 @@ type checkInputs struct {
 	PythonPath       string
 	ExpandEnv        bool
 	ExpandTargetsEnv bool
+	// ExporterInstance is the --allocator.member name in allocator mode,
+	// the value otlp.exporter_instance takes when it is left out.
+	ExporterInstance string
 	Watch            bool
 	WatchInterval    time.Duration
 }
@@ -119,6 +122,9 @@ func checkStartup(in checkInputs) checkReport {
 	var options []config.LoadOption
 	if in.ExpandEnv {
 		options = append(options, config.WithEnvExpansion())
+	}
+	if in.ExporterInstance != "" {
+		options = append(options, config.WithExporterInstanceName(in.ExporterInstance))
 	}
 	var results []checkResult
 
@@ -324,6 +330,11 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	}
 	if len(conf.LoadedCollectorFiles) > 0 {
 		details["collector_files"] = conf.LoadedCollectorFiles
+	}
+	// The value is resolved as startup resolves it, from the host name or
+	// the --allocator.member name, which the file does not say.
+	if e := conf.OTLP.ExporterInstance; conf.OTLP.Enabled && e.Enabled {
+		details["otlp_exporter_instance"] = map[string]string{"attribute": e.Attribute, "value": e.Value}
 	}
 	if policies := requestPolicies(conf); len(policies) > 0 {
 		details["request_policies"] = policies

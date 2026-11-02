@@ -298,6 +298,10 @@ func httpSchemaKeys() []schemaKey {
 		{key: "otlp.logs.interval", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: true\n    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "otlp.logs.interval", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: true\n    interval: %s\n", valid: "1s", invalid: "999ms", absent: true},
 		{key: "otlp.logs.interval", of: "switched off", document: switchedOnOTLP, at: "  # otlp\n", setting: "  logs:\n    enabled: false\n    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.traces.threshold", document: switchedOnOTLP, at: "  # otlp\n", setting: "  traces:\n    enabled: true\n    threshold: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.traces.threshold", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  traces:\n    enabled: true\n    threshold: %s\n", valid: "1ms", invalid: "999us", absent: true},
+		{key: "otlp.traces.threshold", of: "switched off", document: switchedOnOTLP, at: "  # otlp\n", setting: "  traces:\n    enabled: false\n    threshold: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "otlp.traces.interval", of: "under its least", document: switchedOnOTLP, at: "  # otlp\n", setting: "  traces:\n    enabled: true\n    interval: %s\n", valid: "1s", invalid: "999ms", absent: true},
 
 		// The target file. A target's name left out is made of its
 		// collector and its place; its collector is required.

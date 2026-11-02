@@ -343,14 +343,14 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		if !errors.Is(err, ErrTargetRefused) {
 			err = fmt.Errorf("connecting to %s: %w", address.hostPort, err)
 		}
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, err
 	}
 	began := ""
 	if c.Request.StartTLS != "" {
 		if began, err = tlsCertStartTLS(ctx, conn, address, c); err != nil {
 			_ = conn.Close()
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 			return nil, err
 		}
 	}
@@ -360,7 +360,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		err = fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err)
 		// After STARTTLS the report tells the dialogue that led to the
 		// handshake, as it does before a handshake that succeeds.
-		traceOutcome(ctx, began+"error: "+err.Error())
+		traceFailedOutcome(ctx, began+"error: "+err.Error())
 		return nil, err
 	}
 	state := tlsConn.ConnectionState()

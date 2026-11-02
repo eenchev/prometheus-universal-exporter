@@ -32,13 +32,25 @@ otlp:
   # logs:
   #   enabled: true
   #   level: info
+  # traces:
+  #   enabled: true
+  #   threshold: 1s
+  #   errors: false
+  # exporter_instance:
+  #   enabled: true
+  #   attribute: pue.exporter.instance
+  #   value: ""
 ```
 
 `logs` forwards the exporter's own log too; see
-[The exporter's own log](#the-exporters-own-log). `metric_names` is how
-metrics are named ([Metric names](#metric-names)), and `scope` the
+[The exporter's own log](#the-exporters-own-log). `traces` exports a trace
+of each slow probe and static target scrape; see
+[Traces of slow requests](#traces-of-slow-requests). `metric_names` is how
+metrics are named ([Metric names](#metric-names)), `scope` the
 instrumentation scope they are sent under
-([Instrumentation scope](#instrumentation-scope)).
+([Instrumentation scope](#instrumentation-scope)), and `exporter_instance`
+names the replica on every resource it sends
+([The exporter instance](#the-exporter-instance)).
 
 `enabled` is the switch, and a block that sets anything must say it: `true`
 exports, `false` keeps the settings without using or checking them: a block
@@ -93,8 +105,20 @@ through the proxy the environment names, if any. Self-health metrics are
 included in every export interval even when no Prometheus self-metrics scrape
 is running.
 
+An interval is that of the configuration in force, not of the one in force
+when the wait for the next export began: a reload, or in allocator mode a
+bundle, that changes `otlp.interval`, `otlp.logs.interval` or
+`otlp.traces.interval` has the next export of that signal an interval of the
+new configuration after the last one ended, and at once when that is past.
+Shortening an interval from `45s` to `1s` has the next export a second after
+the last rather than 45 seconds; lengthening it from `1s` to `1h` makes none
+when the second runs out; and an exporter in allocator mode, which begins
+with no configuration and so with the default intervals, follows its first
+bundle's from when it comes.
+
 Each data point carries the time it was scraped, or the timestamp the target
-gave it, not the time of the export that sends it, so a point that waited for
+gave it, in whole milliseconds as a Prometheus sample's timestamp is, not
+the time of the export that sends it, so a point that waited for
 the next export, or through an outage, is not taken for a newer one. An answer
 from a collector's [cache](CONFIGURATION.md#response-caching) is exported as
 of the scrape that filled the entry, not as of the answer: a cached result
@@ -393,6 +417,16 @@ is such a series, so that a name is one kind of metric in an export, and its
 points carry no start time, as no gauge does. A family whose values its type
 allows always keeps the type.
 
+## Seeing what is exported
+
+With `--web.debug`, the debug page's *OTLP* tab shows what the next export
+would send of a run's series — the resource, the scope, each data point
+with what was made of it, the points left out and why, and the request's
+JSON — and, with `otlp.logs`, the run's log lines as log records, and with
+`otlp.traces` the run's spans ([below](#traces-of-slow-requests)); at
+`full` it tests each endpoint with one empty export. Nothing of a run is
+exported. See [The debug page](CONFIGURATION.md#the-debug-page).
+
 ## Metric names
 
 `otlp.metric_names` is how the export names metrics. `prometheus`, the
@@ -452,8 +486,9 @@ exported, and the other is left out and logged.
 
 Every metric of the export is under the instrumentation scope
 `prometheus-universal-exporter`, without a version, and every log record of
-[`otlp.logs`](#the-exporters-own-log) too. `otlp.scope` names another, with a
-version if wanted, for both:
+[`otlp.logs`](#the-exporters-own-log) and span of
+[`otlp.traces`](#traces-of-slow-requests) too. `otlp.scope` names another,
+with a version if wanted, for all three:
 
 ```yaml
 otlp:
@@ -468,6 +503,84 @@ A `scope` written has a `name`, which is not empty, and neither the name nor
 the version holds a control character; a block switched on is refused
 otherwise when the configuration loads. The scope is the export's: a static
 target sets its own resource, not its own scope.
+
+## The exporter instance
+
+Every replica of the exporter sends its export under the same
+`service_name` and `resource_attributes`, so a backend cannot tell from a
+resource which replica a point or a log record came from. With
+`otlp.exporter_instance` switched on, every resource the replica sends
+carries one more attribute naming it: the exporter-wide resource of the
+probes' series and of the exporter's own metrics, the resource of each
+[static target](#static-targets), with or without an `otlp` block of its
+own, and the resources of the [log records](#the-exporters-own-log) and of
+the [traces](#traces-of-slow-requests):
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  exporter_instance:
+    enabled: true
+    # attribute: pue.exporter.instance
+    # value: ""
+```
+
+- `enabled` switches the block, as `logs` is switched: a block that sets
+  anything must say it, and `enabled: false`, the default, keeps its settings
+  unchecked and the export as it was, byte for byte.
+- `attribute` is the attribute's key, `pue.exporter.instance` by default. It
+  is not blanks alone and holds no control character.
+- `value` is the attribute's value, as written, `${NAME}` expanded with
+  [`--config.expand-env`](CONFIGURATION.md#environment-variables), as every
+  value is. Left out, or written `""`, it is the
+  [`--allocator.member`](ALLOCATOR.md) name in allocator mode, which is the
+  name the allocator knows the replica by, and otherwise the host name, a
+  pod's name in Kubernetes. It holds no control character.
+
+The value is resolved when the configuration loads, at startup and at each
+reload, and in allocator mode at each bundle; the start's `starting exporter`
+line says it as `otlp_exporter_instance_attribute` and
+`otlp_exporter_instance`, the [status page](ENDPOINTS.md#otlp-export) shows
+the attribute and the value in force, and
+[`--dry-run`](CONFIGURATION.md#dry-run) reports them under
+`otlp_exporter_instance`. A host name that cannot be read, with no value
+written, is refused when the configuration loads, rather than the attribute
+left out without a word: `otlp.exporter_instance.value is left out and the
+host name, its default, cannot be read (...); set the value, such as
+${POD_NAME} with --config.expand-env`.
+
+The attribute is part of each resource's identity, as every attribute is
+([above](#static-targets)): static targets with different identities are
+still exported apart, and the [two writers](#two-writers-of-one-series-or-one-name)
+of one resource are the same writers. Since the resource would otherwise
+carry the key twice, or one value would quietly replace the other, the
+configuration is refused when the attribute is:
+
+- `service.name`, which `service_name` sets;
+- a key of `otlp.resource_attributes`, written `""` or not;
+- on a static target exported over OTLP, a key of its own
+  `otlp.resource_attributes`, a label of its `otlp.labels_as_resource`, or
+  `service.instance.id` where the target sets `otlp.instance_id`; the message
+  names the target.
+
+The default is not `service.instance.id`, OpenTelemetry's attribute for the
+instance of a service, for two reasons. Prometheus' OTLP receiver makes
+`service.instance.id` the `instance` label of every series it ingests, in
+place of the target the exporter scraped, which is what `instance` says of a
+probe; and a static target's [`otlp.instance_id`](#static-target-labels-as-resource-attributes)
+sets it to the target's name. `attribute: service.instance.id` is taken where
+no static target sets `instance_id`, for a backend that wants it.
+
+With the [allocator](ALLOCATOR.md), a static target is scraped by one replica
+at a time, and moves when replicas come and go. After a move its data goes on
+under the other replica's name: a new resource, and so new series, in a
+backend that keys series on resource attributes. Prometheus keys them on
+`job` and `instance` alone, from `service.name` and `service.instance.id`, and
+keeps the other resource attributes on `target_info`, so there the move shows
+as a new `target_info` series, unless the attribute is promoted to a label of
+every series (`otlp.promote_resource_attributes`), which makes it one more
+label that changes on a move.
 
 ## Static targets
 
@@ -548,7 +661,9 @@ refused:
   carry the key twice. A label's name has no dot, so it is never
   `service.name`;
 - either key on a target without `export_via_otlp`, as every key of its
-  `otlp` block is.
+  `otlp` block is;
+- a label that is the [`otlp.exporter_instance`](#the-exporter-instance)
+  attribute, and `instance_id` where that attribute is `service.instance.id`.
 
 ## The exporter's own log
 
@@ -641,6 +756,12 @@ The lines the metrics' export logs are the exporter's like any other, and are
 exported: a warning that a metrics export failed reaches the backend with the
 next log export that gets through.
 
+Nothing of debugging is exported either: the one line a debug probe, a
+debug scrape, a run of the debug page or its endpoint test logs that it was
+served (`probe debug report served`, `static target debug report served`,
+`debug run served`, `debug OTLP endpoint test served`) is written to stderr
+alone, as a debug run is not exported.
+
 Failing log exports never make the exporter unready, whatever
 `otlp.unready_after_failures` says: that counts the metrics' exports alone. The
 log export's state is in the [self-metrics](SELF-METRICS.md#otlp-export-status)
@@ -658,3 +779,177 @@ At shutdown, the records waiting are sent after the metrics'
 within the same `otlp.timeout`: the log export has what the metrics' leaves of
 it, and at least a second. If it fails, its records are dropped and counted.
 Nothing logged after it is exported.
+
+## Traces of slow requests
+
+With `otlp.traces`, a probe or a static target's scrape that took
+`threshold` or longer is exported as a trace, to the collector the metrics
+go to: a span for the probe or the scrape, and under it a span for each
+stage of its trip and each request it sent, which shows where its time went.
+A fast one is not exported, and neither is a failed one unless `errors` says
+so:
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  traces:
+    enabled: true
+    # endpoint: http://otel-collector:4318/v1/traces
+    # threshold: 1s
+    # errors: false
+    # interval: 5s
+    # max_pending_spans: 10000
+```
+
+`traces` is switched by its own `enabled`, as `logs` is: a block that sets
+anything must say it, and one with `enabled: false` keeps its settings
+unchecked. It is used only while the `otlp` block is switched on, and takes
+that block's `headers`, `tls`, `compression`, `timeout`, `batch_max_size`,
+`batch_max_bytes`, [`scope`](#instrumentation-scope) and resources. Its own
+keys:
+
+- `endpoint` is the OTLP/HTTP traces endpoint. Left out, it is
+  `otlp.endpoint` with its `/v1/metrics` made `/v1/traces`, its query kept;
+  an `otlp.endpoint` that does not end in `/v1/metrics` needs one written,
+  and its absence is refused when the configuration loads. The export is
+  OTLP/HTTP with a JSON body, as the metrics' is.
+- `threshold` is the least duration of a probe or a scrape whose trace is
+  exported, `1s` by default and at least `1ms`. A probe is timed from when
+  it arrived to when its answer was ready, before it is written, as its
+  duration in the self-metrics is, and its span ends then: a caller slow to
+  read the answer makes no probe slow. A scrape is timed from its turn to its
+  result.
+- `errors: true` exports the trace of every probe and scrape that failed
+  too, however long it took: one answered with an error, one answered with a
+  [stale result](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)
+  in place of a fresh one, one the concurrency limit turned away, and a
+  scrape that left its target `up` 0. Off, the default, only slow ones are
+  exported, failed or not; a failure is in the log and the self-metrics
+  already.
+- `interval` is how often the spans waiting are sent, `5s` by default and at
+  least `1s`.
+- `max_pending_spans` bounds the spans waiting, `10000` by default.
+
+What is a trace: each `/probe` request, with or without its caller's
+`traceparent`, and each scheduled scrape of a static target. A probe that
+shares an identical probe's trip ([shared](CONFIGURATION.md#identical-probes-share-one-request))
+is a trace of its own whose `shared_trip` span is the wait; the trip's
+stages are in the trace of the probe that made it. A debug run, of the debug
+page, a debug probe or a debug scrape, is never exported, as nothing of a
+run is; the debug page shows the spans the export would make of it
+([below](#seeing-a-runs-spans)).
+
+The spans, by OpenTelemetry's conventions where one applies:
+
+| Span | Kind | Parent | Attributes |
+| --- | --- | --- | --- |
+| `probe <collector>` | SERVER | the caller's span, when its `traceparent` names one | `http.request.method`, `url.path` (`/probe`), `http.response.status_code`, `collector`, `target` as the log shows it, `request.type`, `series` answered, `response.bytes` fetched, `cache.hit`, `error.type` when it failed |
+| `scrape <static target>` | INTERNAL | none | `collector`, `target`, `static_target`, `request.type`, `series`, `response.bytes`, `cache.hit`, `error.type` (`scrape_failed`) when it failed |
+| `cache` | INTERNAL | the probe or scrape | `stage.outcome`: `hit` or `miss`, for a collector with a `cache.ttl` |
+| `slot` | INTERNAL | the probe or scrape | the wait for one of the collector's `max_concurrent_probes`: a scrape's wait, or a probe turned away |
+| `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip |
+| `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
+| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes` |
+| `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
+| `files`, `decode`, `transform`, `validation` | INTERNAL | the probe or scrape | the stages after the fetch, as the debug report names them |
+| `python` | INTERNAL | `transform` | the time the collector's Python scripts took, added up, from the transform's start |
+| `stale` | INTERNAL | the probe | the last good result answered in place of a failed trip |
+
+A span that failed has the status `ERROR` and says why: the probe's or the
+scrape's failure as the status page shows it, a stage's error as the log
+line of its failure has it, and a request that got no answer, or an answer
+its request type takes for a failure, or an HTTP answer of `400` or more, as
+below. A span that did not fail has no
+status, which is `UNSET`. Ids are random, from `crypto/rand`, and written in
+hex, as OTLP/JSON writes them; times are nanoseconds since the epoch.
+
+A probe whose caller sends a W3C `traceparent` header, as Prometheus does
+not but a caller of its own may, continues the caller's trace: its span is
+of the caller's trace id, with the caller's span as its parent. The
+threshold and `errors` decide whether it is exported all the same, whatever
+the header's sampled flag says. The exporter sends no `traceparent` to its
+targets.
+
+A trace is under the resource its series are exported under: a probe's
+under the exporter-wide resource, a static target's under
+[its own](#static-targets), its `otlp.service_name`,
+`otlp.resource_attributes`, `otlp.labels_as_resource` and
+`otlp.instance_id` included, which a target without `export_via_otlp` has
+not; [`otlp.exporter_instance`](#the-exporter-instance) is on both. The
+attributes are the spans', so `otlp.probe_attributes` is not used.
+
+A span carries nothing the log does not, since a trace leaves the exporter
+as a log line does. A request's `url.full` is its URL as an error in the log
+quotes one, the userinfo withheld, every query value masked and no fragment,
+and a probe's `target` is the target as the log shows it, the values of
+query parameters named like credentials masked. No header, request body or
+response body is in a span.
+
+Nor is any text the target sent of a request, a stage or a probe that went
+through, which the log says nothing of: no greeting of a tcp server, no
+stderr of an sshexec command, no reason of an HTTP status line, no outcome
+as a debug report tells it. Such a span has, besides the attributes above,
+only the numbers and yes-or-no answers its request type works out of the
+answer, as the table says: sizes, an exit status, whether a greeting
+matched. A stage that went through has its `stage.note`, which the exporter
+writes of counts, sizes, statuses, times and the directory read alone.
+
+Of a failure, a span says what the log line of that failure says, and
+nothing the log does not:
+
+- a stage that failed has the error the log line of its failure has, the
+  one the probe's `probe failed` line or the scrape's has, as its message,
+  and the probe's or the scrape's span its failure as the status page shows
+  it;
+- the request the fetch failed on, the last it sent, has the fetch stage's
+  error as its message, the same text;
+- an HTTP answer of `400` or more has `received HTTP status <code>` as its
+  message, as the log says it, never its status line's reason;
+- a request that failed and was sent again, under `request.retry`, or that
+  a request that went through followed, is in no line of the log: its span
+  has the status `ERROR` and its `error.type`, `request_failed` or the
+  status, and no message.
+
+What it costs. While `traces` is off, a probe records nothing and allocates
+nothing more for it. While it is on, every probe and scrape records its
+stages and requests in memory, without their headers, as it goes — about a
+dozen allocations and a kilobyte of a probe's own — and only one exported
+has its spans
+made and encoded: the decision is made at its end, when its duration is
+known. The spans wait in a queue bounded by their count,
+`max_pending_spans`: a trace that finds no room for all of its spans is
+dropped whole and counted in `http_exporter_otlp_spans_dropped_total` rather
+than waited for or cut, and a probe never waits for the export. An export
+sends everything waiting, in requests of at most `otlp.batch_max_size` spans
+and `otlp.batch_max_bytes` of JSON before compression, retried as the log
+export's are ([above](#the-exporters-own-log)); what was not delivered waits
+for the next export, before the traces queued since, the oldest traces
+dropped whole past `max_pending_spans` and counted, and spans
+the endpoint refuses, or rejects in a `partialSuccess` (its `rejectedSpans`),
+are dropped and counted.
+
+The trace export's own lines go to stderr alone, as the log export's do, and
+say `this line is not exported`. Failing trace exports never make the
+exporter unready. The export's state is in the
+[self-metrics](SELF-METRICS.md#otlp-export-status), while it is on, and on
+the [status page](ENDPOINTS.md#otlp-export). A reload that switches it off
+drops the spans waiting, uncounted, and probes stop recording; one that
+switches it on records the probes from then on; one that lowers
+`max_pending_spans` below the spans waiting drops the oldest traces whole,
+and counts them. The queue is never cut inside a trace, which would leave
+spans whose parent is gone. At shutdown, the spans
+waiting are sent after the metrics' [last export](#shutting-down), within
+the same `otlp.timeout`, and before the log records'.
+
+### Seeing a run's spans
+
+The debug page's *OTLP* tab shows, with `otlp.traces` on, the spans the
+export would make of a run: a tree of them, each with its start, its
+duration, a bar of its time within the run's, its status and its
+attributes, and the ExportTraceServiceRequest they would be sent in, in the
+JSON viewer. Above them it says whether a probe or a scrape that took as
+long and ended as the run did would be exported, by `threshold` and
+`errors`. The run itself is never exported. At `--web.debug=full`, *Test the
+traces endpoint* sends `{"resourceSpans":[]}` to the traces endpoint, once,
+as *Test the metrics endpoint* does.

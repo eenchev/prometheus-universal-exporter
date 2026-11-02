@@ -4,7 +4,8 @@ package exporter
 // an editor, or one chosen from the configuration in force, the response it
 // is run on — pasted, or at --web.debug=full a target fetched through a
 // configured collector or a static target's scrape — and what the run gave:
-// the series a probe would answer, as a table and as text, the requests, the response, the stages,
+// the series a probe would answer, as a table and as text, and with OTLP on
+// what the next export would send of them, the requests, the response, the stages,
 // the metric lint's advice, what was logged and the whole debug report. It
 // runs when Run is pressed, and only then; a run cancels the one before it.
 // The collectors page links each collector here as ?collector=<name>, with
@@ -47,6 +48,10 @@ type debugPage struct {
 	// Dangerous is --web.debug.dangerous: the playground runs Python, names
 	// the server's files and probes a target with its own request.
 	Dangerous bool
+	// OTLP offers the OTLP tab, with otlp.enabled, OTLPLogs its log
+	// records, with otlp.logs on too, and OTLPTraces its spans, with
+	// otlp.traces on (debugotlp.go).
+	OTLP, OTLPLogs, OTLPTraces bool
 }
 
 // debugForms are the forms of the playground, of a playground of each
@@ -117,6 +122,57 @@ textarea[readonly] { background: var(--code); }
 .editor .bands .band { position: absolute; left: 0; right: 0; height: var(--editor-line); background: var(--danger-bg); box-shadow: inset 3px 0 0 var(--bad); }
 .editor textarea { position: relative; display: block; min-height: 360px; padding: var(--editor-pad) 8px; border: 0; border-radius: 0; background: transparent; line-height: var(--editor-line); white-space: pre; overflow-wrap: normal; overflow: auto; }
 .editor textarea:focus { outline: none; }
+/* The YAML highlighted (yamlLines): a layer behind the textarea, its text
+   laid out as the textarea's is — the font, size, line box, padding and tab
+   size the same, no wrapping — and moved by the textarea's scroll, down and
+   sideways, while the textarea's own text is transparent over it, its caret
+   and selection drawn. A configured collector's YAML, and the playground's
+   while a block is folded, are the layer alone, which scrolls itself. */
+.editor .yaml-view { position: absolute; inset: 0; overflow: auto; scrollbar-color: transparent transparent; pointer-events: none; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: normal; line-height: var(--editor-line); tab-size: 2; white-space: pre; overflow-wrap: normal; }
+.editor .yaml-lines { width: max-content; min-width: 100%; padding: var(--editor-pad) 8px; }
+/* Behind the textarea the layer is a scroller as the textarea is, with
+   the same scrollbars, hidden under the textarea's, and the same room to
+   scroll, the textarea's padding at the end of a line not being any: so it
+   scrolls as far, and the browser places the text of both alike to the
+   device pixel at any zoom. */
+.editor:not(.readonly):not(.folded) .yaml-lines { padding-right: 0; }
+.editor .yaml-lines > div { height: var(--editor-line); }
+.editor textarea { color: transparent; caret-color: var(--fg); }
+.editor textarea::selection { color: transparent; background: var(--editor-selection); }
+.editor .yaml-view ::selection { background: var(--editor-selection); }
+.editor.readonly textarea, .editor.folded textarea { display: none; }
+.editor.readonly .yaml-view, .editor.folded .yaml-view { position: relative; inset: auto; height: 360px; min-height: 120px; scrollbar-color: auto; resize: vertical; pointer-events: auto; }
+.editor .yaml-view:focus { outline: none; }
+/* What a folded block hides, said at the end of the line that opens it;
+   not part of the text, so a copy of the view leaves it out. */
+.editor .yaml-more { margin-left: 1ch; padding: 0 6px; border: 1px dashed var(--line); border-radius: 3px; color: var(--muted); cursor: pointer; user-select: none; }
+.editor .yaml-more:hover { color: var(--accent); border-color: var(--accent); }
+.y-key { color: var(--json-key); }
+.y-string { color: var(--json-string); }
+.y-number { color: var(--json-number); }
+.y-boolean { color: var(--json-boolean); }
+.y-null { color: var(--json-null); }
+.y-comment { color: var(--yaml-comment); }
+.y-dash { color: var(--yaml-dash); }
+.y-punct { color: var(--json-punct); }
+.y-indicator { color: var(--yaml-indicator); }
+.y-block { color: var(--yaml-block); }
+.y-anchor { color: var(--yaml-anchor); }
+.y-tag { color: var(--yaml-tag); }
+.y-param { color: var(--yaml-param); background: var(--yaml-param-bg); border-radius: 3px; }
+.y-env { color: var(--yaml-env); background: var(--yaml-env-bg); border-radius: 3px; }
+.y-withheld { color: var(--yaml-withheld); background: var(--yaml-withheld-bg); border-radius: 3px; }
+/* A fold's toggle, a button on the line that opens a block, left of its
+   number. Only one of them is reached by Tab, the arrow keys going on to
+   the others, so that the editor is not hundreds of stops away. */
+.editor .gutter-lines div { position: relative; }
+.editor .gutter-lines button.fold { position: absolute; left: 0; top: 0; width: 14px; height: var(--editor-line); min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font: inherit; line-height: var(--editor-line); text-align: center; cursor: pointer; }
+.editor .gutter-lines button.fold:hover { color: var(--accent); }
+.editor .gutter-lines button.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.editor .gutter-lines div.marked button.fold { color: var(--on-accent); }
+.editor-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin: 6px 0 4px; }
+.editor-tools button { margin: 0; }
+.editor-tools button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-hint { margin: 4px 0 0; }
 /* Level with Run and the timeout's box, at the foot of the row, and not
    with the row's middle, which the timeout's label above its box lowers. */
@@ -166,6 +222,43 @@ table.series td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 table.series td.value { text-align: right; white-space: nowrap; }
 table.series td.type { color: var(--muted); font-family: inherit; }
 table.series td.lint { font-family: inherit; min-width: 9em; }
+table.series td.otlp-notes { font-family: inherit; min-width: 12em; }
+ul.otlp-notes { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; color: var(--muted); }
+#otlp-resource th { position: static; width: 1%; }
+table.series td.span-name, table.series td.span-time { white-space: nowrap; }
+table.series td.span-bar { min-width: 10em; width: 30%; }
+.span-track { position: relative; height: 12px; border-radius: 3px; background: var(--code); }
+.span-track span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 3px; background: var(--accent); }
+.span-track span.failed { background: var(--bad); }
+table.series td.span-failed { color: var(--bad); }
+p.span-verdict.exported { color: var(--good); }
+.otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.otlp-test button { margin: 0; }
+.otlp-test button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The JSON viewer (jsonView): a line for each key or item, indented by
+   its node, with the node's fold button in the gutter before it, so keys
+   and items line up whether they fold or not. A long string wraps within
+   the panel, which scrolls past its height. */
+.json-view { margin-top: 8px; padding: 10px 10px 10px 4px; max-height: 520px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.json-view .jv-line { position: relative; padding-left: 1.6em; }
+.json-view .jv-kids { margin-left: 2ch; }
+.json-view .jv-kids > .jv-node { content-visibility: auto; contain-intrinsic-size: auto 18px; }
+.json-view button.jv-toggle { position: absolute; left: 0; top: 0; width: 1.5em; height: 1.5em; padding: 0; margin: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font: inherit; line-height: 1.5; cursor: pointer; }
+.json-view button.jv-toggle:hover { color: var(--accent); }
+.json-view button.jv-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.json-view .jv-closed > .jv-kids, .json-view .jv-closed > .jv-tail { display: none; }
+.json-view .jv-node:not(.jv-closed) > .jv-line > .jv-fold { display: none; }
+.json-view .jv-fold { cursor: pointer; }
+.json-view .jv-key { color: var(--json-key); }
+.json-view .jv-string { color: var(--json-string); }
+.json-view .jv-number { color: var(--json-number); }
+.json-view .jv-boolean { color: var(--json-boolean); }
+.json-view .jv-null { color: var(--json-null); }
+.json-view .jv-punct, .json-view .jv-summary { color: var(--json-punct); }
+.json-view .jv-hint { color: var(--fg); }
+.json-view .jv-doc + .jv-doc { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.json-view pre.jv-plain { padding: 0 0 0 6px; max-height: none; border: 0; overflow: visible; }
+.json-view p.note { margin: 0 0 6px 6px; }
 table.series details { margin: 0; }
 table.series summary, .lint-unplaced summary { font-size: 12px; font-weight: 600; color: var(--accent); }
 .lint-advice { margin: 4px 0 0; font-size: 12px; white-space: normal; }
@@ -221,18 +314,23 @@ p.danger strong { color: var(--bad); }
 </select>
 <div class="collector-head">
 <label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}Playground: the YAML of a collector, which runs{{end}}</label>
+<div class="editor-tools">
+<button type="button" class="secondary" data-yaml-all="open" aria-controls="collector-editor">Expand all</button><button type="button" class="secondary" data-yaml-all="close" aria-controls="collector-editor">Collapse all</button>
 <button type="button" class="secondary" id="edit-copy"{{if not .Chosen}} hidden{{end}}>Edit a copy</button>
 <button type="button" class="secondary" id="back-to-example" hidden>Back to the example</button>
+</div>
 </div>
 <p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> makes the playground a copy of it, which runs in its place and fetches a target through it.</p>
 <p class="note" id="copy-note" role="status" hidden></p>
 <div class="editor{{if .Chosen}} readonly{{end}}" id="collector-editor">
-<div class="gutter" aria-hidden="true"><div class="gutter-lines" id="collector-gutter"></div></div>
+<div class="gutter"><div class="gutter-lines" id="collector-gutter"></div></div>
 <div class="text"><div class="bands" id="collector-bands" aria-hidden="true"></div>
+<div class="yaml-view" id="collector-view" aria-hidden="true"><div class="yaml-lines" id="collector-lines"></div></div>
 <textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}" data-copy="{{.ChosenCopy}}" data-copy-note="{{.ChosenCopyNote}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
 </div>
 </div>
 <p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor.</p>
+<p class="note editor-hint" id="fold-note" role="status" hidden>A block of the playground is folded, and the playground cannot be edited while one is: click the text, press Enter, or <em>Expand all</em> to edit it. Run, Copy as and the line marks read the whole YAML.</p>
 </section>
 <section class="panel">
 <h2>Response</h2>
@@ -329,6 +427,9 @@ p.danger strong { color: var(--bad); }
 <div class="views" id="views" role="tablist" aria-labelledby="series-heading">
 <button type="button" role="tab" id="view-table" data-view="table" aria-controls="series-table-part" aria-selected="true">Table</button>
 <button type="button" role="tab" id="view-text" data-view="text" aria-controls="series-text-part" aria-selected="false">Text</button>
+{{- if .OTLP}}
+<button type="button" role="tab" id="view-otlp" data-view="otlp" aria-controls="series-otlp-part" aria-selected="false">OTLP</button>
+{{- end}}
 </div>
 </div>
 <div id="series-table-part" role="tabpanel" aria-labelledby="view-table">
@@ -346,6 +447,77 @@ p.danger strong { color: var(--bad); }
 <div id="series-text-part" role="tabpanel" aria-labelledby="view-text" hidden>
 <pre id="series"></pre>
 </div>
+{{- if .OTLP}}
+<div id="series-otlp-part" role="tabpanel" aria-labelledby="view-otlp" hidden>
+<p class="note" id="otlp-none">Not run yet. Once a collector has run, this shows what the next OTLP export would send of its series, made by the export's own code; nothing of a run is queued or sent.</p>
+<div id="otlp-shown" hidden>
+<ul class="otlp-notes" id="otlp-notes"></ul>
+<h3>Resource</h3>
+<div class="table-box"><table class="series" id="otlp-resource"><tbody id="otlp-resource-rows"></tbody></table></div>
+<ul class="otlp-notes" id="otlp-resource-notes"></ul>
+<p class="note" id="otlp-scope"></p>
+<h3>Data points</h3>
+<div class="row series-filters">
+<div><label for="otlp-filter">Filter: name, attribute, value or note</label>
+<input id="otlp-filter" type="search" autocomplete="off" spellcheck="false"></div>
+</div>
+<p class="note" id="otlp-count"></p>
+<div class="table-box" id="otlp-box" hidden><table class="series" id="otlp-table"><thead><tr id="otlp-columns"></tr></thead><tbody id="otlp-rows"></tbody></table></div>
+<div id="otlp-left-part" hidden>
+<h3>Left out</h3>
+<ul class="lint-unplaced" id="otlp-left"></ul>
+<pre id="otlp-clashes" hidden></pre>
+</div>
+<details id="otlp-body-part">
+<summary>Request body (ExportMetricsServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-body-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-body">Collapse all</button><span class="copy-done" id="otlp-body-copied"></span></div>
+<div class="json-view" id="otlp-body"></div>
+</details>
+{{- if .OTLPLogs}}
+<div id="otlp-logs-part" hidden>
+<h3>Log records</h3>
+<ul class="otlp-notes" id="otlp-logs-notes"></ul>
+<p class="note" id="otlp-logs-count"></p>
+<div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
+<details id="otlp-logs-body-part">
+<summary>Request body (ExportLogsServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-logs-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-logs-body">Collapse all</button><span class="copy-done" id="otlp-logs-copied"></span></div>
+<div class="json-view" id="otlp-logs-body"></div>
+</details>
+</div>
+{{- end}}
+{{- if .OTLPTraces}}
+<div id="otlp-traces-part" hidden>
+<h3>Spans</h3>
+<p class="note span-verdict" id="otlp-traces-verdict"></p>
+<ul class="otlp-notes" id="otlp-traces-notes"></ul>
+<div class="table-box" id="otlp-traces-box" hidden><table class="series" id="otlp-traces-table"><thead><tr><th scope="col">span</th><th scope="col">kind</th><th scope="col">start</th><th scope="col">duration</th><th scope="col">timeline</th><th scope="col">status</th><th scope="col">attributes</th></tr></thead><tbody id="otlp-traces-rows"></tbody></table></div>
+<details id="otlp-traces-body-part">
+<summary>Request body (ExportTraceServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-traces-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-traces-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-traces-body">Collapse all</button><span class="copy-done" id="otlp-traces-copied"></span></div>
+<div class="json-view" id="otlp-traces-body"></div>
+</details>
+</div>
+{{- end}}
+</div>
+<h3>Test the endpoint</h3>
+<div class="otlp-test">
+<button type="button" class="secondary" id="otlp-test-metrics" data-signal="metrics"{{if not .Full}} disabled{{end}}>Test the metrics endpoint</button>
+{{- if .OTLPLogs}}
+<button type="button" class="secondary" id="otlp-test-logs" data-signal="logs"{{if not .Full}} disabled{{end}}>Test the logs endpoint</button>
+{{- end}}
+{{- if .OTLPTraces}}
+<button type="button" class="secondary" id="otlp-test-traces" data-signal="traces"{{if not .Full}} disabled{{end}}>Test the traces endpoint</button>
+{{- end}}
+</div>
+{{- if .Full}}
+<p class="note">Sends one empty export to the endpoint otlp configures, with its headers, TLS, compression and timeout, once, without retrying. It counts in none of the export's self-metrics and changes nothing the status page shows.</p>
+{{- else}}
+<p class="note" id="otlp-test-unavailable">Testing the endpoint sends it a request and shows what it answers, so it needs <code>--web.debug=full</code>.</p>
+{{- end}}
+<pre id="otlp-test-result" hidden></pre>
+</div>
+{{- end}}
 <h3>Stages</h3>
 <ul class="stages" id="stages"></ul>
 <div id="lint-part" hidden>
@@ -747,55 +919,583 @@ function fitBody() {
 // are laid out by, so both follow its scroll, sideways scrolling leaving
 // them where they are. The marks go with the next edit, which moves the
 // lines they were of.
+//
+// The YAML is highlighted by a layer behind the textarea (yamlView), whose
+// lines are laid out as the textarea's are and moved by its scroll, down
+// and sideways, while the textarea's own text is transparent over it: the
+// caret, the selection, undo, Tab, the input methods and paste stay the
+// textarea's own. A block — a key with lines indented under it, a list item
+// with more of it below, a block scalar — folds behind a button in the
+// gutter, its first line saying how many lines it hides, and the gutter
+// keeps each line's own number. A textarea cannot hide lines of its own, and
+// taking them out of its text would make undo, Run, Copy as, Edit a copy
+// and the lines an error names each have to put them back: so while a block
+// is folded the playground is shown by the layer alone, read-only, as a
+// configured collector's YAML always is, and a click on its text, Enter or
+// Expand all unfolds it and puts the caret where it was asked for. What
+// runs and is copied is the textarea's text, which a fold never changes.
 const editorArea = $("collector"), gutterLines = $("collector-gutter"), bandLayer = document.createElement("div");
+const editorBox = $("collector-editor"), yamlView = $("collector-view"), yamlRows = $("collector-lines");
 bandLayer.className = "band-layer";
 $("collector-bands").append(bandLayer);
 editorArea.setAttribute("aria-describedby", "editor-hint");
 let marked = [];
 const editorLine = () => parseFloat(getComputedStyle(editorArea).lineHeight) || 20;
 const editorPad = () => parseFloat(getComputedStyle(editorArea).paddingTop) || 0;
-function followScroll() {
-  const shift = "translateY(" + -editorArea.scrollTop + "px)";
-  gutterLines.style.transform = shift;
-  bandLayer.style.transform = shift;
+// yamlLines reads text a line at a time, as it is typed, so it is tolerant:
+// it never throws, whatever the text, and needs no line but those before
+// it. Each line is its tokens, [class, text] with a null class for plain
+// space, its kind ("node", "blank", "comment", or "scalar" for a line of a
+// block scalar, of a quoted scalar or of a flow collection that goes on
+// from an earlier line), its indentation, whether it is a list item, and
+// whether it is a key with nothing after it, under which a list may start
+// at the key's own indentation. What a line carries on to the next is the
+// state: the column a block scalar's lines are indented past, the quote a
+// quoted scalar is still open with, the depth of a flow collection.
+const yamlSpecial = /(\{\{[^{}\n]*\}\}|\$\{[A-Za-z_][A-Za-z0-9_]*\}|<redacted>)/;
+const yamlBoolean = /^(?:true|false|yes|no|on|off)$/i, yamlNull = /^(?:null|~)$/i;
+const yamlNumber = /^[-+]?(?:(?:\d[\d_]*)?\.?\d[\d_]*(?:[eE][-+]?\d+)?|0x[\da-fA-F_]+|0o[0-7_]+|\.(?:inf|Inf|INF))$|^\.(?:nan|NaN|NAN)$/;
+const yamlSpace = (ch) => ch === " " || ch === "\t";
+// yamlPush adds text as cls, the placeholders of probe parameters, the
+// ${NAME} references and a value the page withholds as tokens of their own.
+function yamlPush(out, cls, text) {
+  if (text === "") return;
+  const parts = text.split(yamlSpecial);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === "") continue;
+    out.push(i % 2 === 0 ? [cls, parts[i]] : [parts[i][0] === "{" ? "y-param" : parts[i][0] === "$" ? "y-env" : "y-withheld", parts[i]]);
+  }
 }
+function yamlScalar(out, word) {
+  yamlPush(out, yamlBoolean.test(word) ? "y-boolean" : yamlNull.test(word) ? "y-null" : yamlNumber.test(word) ? "y-number" : "y-string", word);
+}
+// yamlQuoteEnd is where a scalar quoted with q, open before from, ends,
+// past its quote, or -1 when it goes on past the line.
+function yamlQuoteEnd(line, from, q) {
+  for (let i = from; i < line.length; i++) {
+    if (q === '"' && line[i] === "\\") { i++; continue; }
+    if (line[i] !== q) continue;
+    if (q === "'" && line[i + 1] === "'") { i++; continue; }
+    return i + 1;
+  }
+  return -1;
+}
+function yamlSpaces(line, pos, out) {
+  let end = pos;
+  while (end < line.length && yamlSpace(line[end])) end++;
+  if (end > pos) out.push([null, line.slice(pos, end)]);
+  return end;
+}
+// yamlProperties reads anchors, aliases and tags.
+function yamlProperties(line, pos, out) {
+  while (line[pos] === "&" || line[pos] === "*" || line[pos] === "!") {
+    let end = pos + 1;
+    while (end < line.length && !yamlSpace(line[end]) && !",[]{}".includes(line[end])) end++;
+    out.push([line[pos] === "!" ? "y-tag" : "y-anchor", line.slice(pos, end)]);
+    pos = yamlSpaces(line, end, out);
+  }
+  return pos;
+}
+// yamlRest is what follows a value: a comment, or text YAML would refuse,
+// shown as a string.
+function yamlRest(line, pos, out) {
+  pos = yamlSpaces(line, pos, out);
+  if (pos >= line.length) return;
+  if (line[pos] === "#") out.push(["y-comment", line.slice(pos)]);
+  else yamlPush(out, "y-string", line.slice(pos));
+}
+// yamlKeyAt is the key at pos, its end and its colon's place, or null.
+function yamlKeyAt(line, pos) {
+  const ch = line[pos];
+  if (ch === undefined || "{[#|>".includes(ch)) return null;
+  const colonAt = (i) => line[i] === ":" && (i + 1 === line.length || yamlSpace(line[i + 1]));
+  if (ch === '"' || ch === "'") {
+    const end = yamlQuoteEnd(line, pos + 1, ch);
+    if (end < 0) return null;
+    let colon = end;
+    while (yamlSpace(line[colon] || "")) colon++;
+    return colonAt(colon) ? { end, colon } : null;
+  }
+  let colon = pos;
+  for (; colon < line.length && !colonAt(colon); colon++) {
+    if (line[colon] === "#" && colon > pos && yamlSpace(line[colon - 1])) return null;
+  }
+  if (colon >= line.length) return null;
+  let end = colon;
+  while (end > pos && yamlSpace(line[end - 1])) end--;
+  return end > pos ? { end, colon } : null;
+}
+// yamlFlow reads a flow collection, [a, b] or {k: v}, from pos, as deep as
+// state.flow says it is, up to where it closes or the line ends.
+function yamlFlow(line, pos, out, state) {
+  const indicator = (i) => i >= line.length || yamlSpace(line[i]) || ",[]{}".includes(line[i]);
+  while (pos < line.length) {
+    const ch = line[pos];
+    if (yamlSpace(ch)) { pos = yamlSpaces(line, pos, out); continue; }
+    if (ch === "#" && (pos === 0 || yamlSpace(line[pos - 1]))) { out.push(["y-comment", line.slice(pos)]); return line.length; }
+    if (ch === "{" || ch === "[") { state.flow++; out.push(["y-punct", ch]); pos++; continue; }
+    if (ch === "}" || ch === "]") {
+      state.flow = Math.max(0, state.flow - 1);
+      out.push(["y-punct", ch]);
+      pos++;
+      if (state.flow === 0) return pos;
+      continue;
+    }
+    if (ch === "," || (ch === ":" && indicator(pos + 1))) { out.push(["y-punct", ch]); pos++; continue; }
+    if (ch === "&" || ch === "*" || ch === "!") { pos = yamlProperties(line, pos, out); continue; }
+    let end;
+    if (ch === '"' || ch === "'") {
+      end = yamlQuoteEnd(line, pos + 1, ch);
+      if (end < 0) end = line.length;
+    } else {
+      end = pos;
+      while (end < line.length && !",[]{}".includes(line[end]) && !(line[end] === ":" && indicator(end + 1)) && !(line[end] === "#" && yamlSpace(line[end - 1]))) end++;
+      while (end > pos && yamlSpace(line[end - 1])) end--;
+    }
+    if (end <= pos) { out.push([null, ch]); pos++; continue; }
+    let after = end;
+    while (yamlSpace(line[after] || "")) after++;
+    const word = line.slice(pos, end);
+    if (line[after] === ":" && indicator(after + 1)) out.push(["y-key", word]);
+    else if (ch === '"' || ch === "'") yamlPush(out, "y-string", word);
+    else yamlScalar(out, word);
+    pos = end;
+  }
+  return pos;
+}
+// yamlValue reads a node's value from pos: properties, then a block
+// scalar's indicator, whose lines are indented past parent, a flow
+// collection, a quoted scalar or a plain one, then a comment.
+function yamlValue(line, pos, out, state, parent) {
+  pos = yamlProperties(line, yamlSpaces(line, pos, out), out);
+  if (pos >= line.length) return;
+  const ch = line[pos];
+  if (ch === "#") { out.push(["y-comment", line.slice(pos)]); return; }
+  const block = /^[|>][-+1-9]*(?=[ \t]|$)/.exec(line.slice(pos));
+  if (block) {
+    out.push(["y-indicator", block[0]]);
+    state.block = parent;
+    yamlRest(line, pos + block[0].length, out);
+    return;
+  }
+  if (ch === "{" || ch === "[") {
+    state.flow = 0;
+    yamlRest(line, yamlFlow(line, pos, out, state), out);
+    return;
+  }
+  if (ch === '"' || ch === "'") {
+    const end = yamlQuoteEnd(line, pos + 1, ch);
+    if (end < 0) { yamlPush(out, "y-string", line.slice(pos)); state.quote = ch; return; }
+    yamlPush(out, "y-string", line.slice(pos, end));
+    yamlRest(line, end, out);
+    return;
+  }
+  let end = pos;
+  while (end < line.length && !(line[end] === "#" && yamlSpace(line[end - 1]))) end++;
+  while (end > pos && yamlSpace(line[end - 1])) end--;
+  yamlScalar(out, line.slice(pos, end));
+  yamlRest(line, end, out);
+}
+function yamlLine(line, state) {
+  const out = [];
+  let pos = 0;
+  while (pos < line.length && yamlSpace(line[pos])) pos++;
+  const indent = pos;
+  const info = { tokens: out, kind: "node", indent, dash: false, open: false };
+  if (state.block >= 0) {
+    if (indent === line.length) { yamlPush(out, "y-block", line); info.kind = "blank"; return info; }
+    if (indent > state.block) { yamlPush(out, "y-block", line); info.kind = "scalar"; return info; }
+    state.block = -1;
+  }
+  if (state.quote !== "") {
+    info.kind = "scalar";
+    const end = yamlQuoteEnd(line, 0, state.quote);
+    if (end < 0) { yamlPush(out, "y-string", line); return info; }
+    state.quote = "";
+    yamlPush(out, "y-string", line.slice(0, end));
+    yamlRest(line, end, out);
+    return info;
+  }
+  if (state.flow > 0) {
+    info.kind = "scalar";
+    yamlRest(line, yamlFlow(line, 0, out, state), out);
+    return info;
+  }
+  if (indent > 0) out.push([null, line.slice(0, indent)]);
+  if (indent === line.length) { info.kind = "blank"; return info; }
+  if (line[pos] === "#" || (indent === 0 && line[0] === "%")) { out.push(["y-comment", line.slice(pos)]); info.kind = "comment"; return info; }
+  if (indent === 0 && /^(?:---|\.\.\.)(?=[ \t]|$)/.test(line)) {
+    out.push(["y-punct", line.slice(0, 3)]);
+    yamlValue(line, 3, out, state, -1);
+    return info;
+  }
+  // A list item's dashes, then perhaps the key of a mapping in it.
+  let parent = indent;
+  while (line[pos] === "-" && (pos + 1 === line.length || yamlSpace(line[pos + 1]))) {
+    info.dash = true;
+    parent = pos;
+    out.push(["y-dash", "-"]);
+    pos = yamlSpaces(line, pos + 1, out);
+  }
+  pos = yamlProperties(line, pos, out);
+  const key = yamlKeyAt(line, pos);
+  if (key) {
+    out.push(["y-key", line.slice(pos, key.end)]);
+    yamlSpaces(line, key.end, out);
+    out.push(["y-punct", ":"]);
+    parent = pos;
+    const before = out.length;
+    yamlValue(line, key.colon + 1, out, state, parent);
+    info.open = !info.dash && out.slice(before).every(([cls]) => cls === null || cls === "y-comment");
+    return info;
+  }
+  yamlValue(line, pos, out, state, parent);
+  return info;
+}
+// yamlLines is each line of text read as yamlLine reads it. A line read
+// from the same state as before is the same, and is not read again.
+let yamlKnown = new Map();
+function yamlLines(text) {
+  const state = { block: -1, quote: "", flow: 0 }, known = new Map(), lines = [];
+  for (const line of text.split("\n")) {
+    const sig = state.block + "\u0000" + state.quote + "\u0000" + state.flow + "\u0000" + line;
+    let read = yamlKnown.get(sig) || known.get(sig);
+    if (!read) {
+      try {
+        read = { info: yamlLine(line, state) };
+      } catch (error) {
+        // Never for any text, but a line the reader could not read is still
+        // shown, as it is.
+        read = { info: { tokens: [[null, line]], kind: "node", indent: 0, dash: false, open: false } };
+      }
+      read.info.sig = sig;
+      read.after = { block: state.block, quote: state.quote, flow: state.flow };
+    }
+    known.set(sig, read);
+    Object.assign(state, read.after);
+    lines.push(read.info);
+  }
+  yamlKnown = known;
+  return lines;
+}
+// yamlBlocks is, for each line, the last line of the block it opens, or -1:
+// the lines after a node's that are more indented, a block scalar's or a
+// flow collection's that go on from it, and, under a key with nothing after
+// it, a list at the key's own indentation; blank lines within, but not
+// after, the block; a comment less indented ends it.
+function yamlBlocks(lines) {
+  const ends = new Int32Array(lines.length).fill(-1);
+  for (let i = 0; i < lines.length; i++) {
+    const at = lines[i];
+    if (at.kind !== "node") continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = lines[j];
+      if (next.kind === "blank") continue;
+      if (next.kind === "scalar" || next.indent > at.indent || (at.open && next.dash && next.indent === at.indent)) { ends[i] = j; continue; }
+      break;
+    }
+  }
+  return ends;
+}
+// What the editor shows: viewRows, each a line shown, a folded block's
+// first line saying how many lines it hides; rowOf is each line's row,
+// that of the fold that hides it for a hidden one.
+let yamlText = null, yamlInfo = [], yamlEnds = new Int32Array(0), viewRows = [], rowOf = [], viewSigs = [], markedRows = [];
+const folds = new Set();
+let foldStop = 0;
+const viewing = () => editorBox.classList.contains("readonly") || editorBox.classList.contains("folded");
+const scroller = () => viewing() ? yamlView : editorArea;
+const hiddenText = (count) => "… " + count + (count === 1 ? " line" : " lines");
+function rowElement(row) {
+  const div = document.createElement("div");
+  for (const [cls, text] of yamlInfo[row.line].tokens) div.append(cls ? jsonSpan(cls, text) : text);
+  if (row.hidden) {
+    const more = jsonSpan("yaml-more", hiddenText(row.hidden));
+    more.title = "Unfold";
+    div.append(more);
+  }
+  return div;
+}
+// drawViewRows makes again the rows that changed alone: those between the
+// rows the start and the end of the YAML still have as they were, so a key
+// typed redraws its line.
+function drawViewRows() {
+  const sigs = viewRows.map((row) => row.hidden ? yamlInfo[row.line].sig + "\u0001" + row.hidden : yamlInfo[row.line].sig);
+  const same = Math.min(sigs.length, viewSigs.length);
+  let start = 0, tail = 0;
+  while (start < same && sigs[start] === viewSigs[start]) start++;
+  while (tail < same - start && sigs[sigs.length - 1 - tail] === viewSigs[viewSigs.length - 1 - tail]) tail++;
+  const old = yamlRows.children, before = old[viewSigs.length - tail] || null;
+  for (let k = viewSigs.length - tail - 1; k >= start; k--) old[k].remove();
+  const made = document.createDocumentFragment();
+  for (let k = start; k < sigs.length - tail; k++) made.append(rowElement(viewRows[k]));
+  yamlRows.insertBefore(made, before);
+  viewSigs = sigs;
+}
+// drawGutter numbers each row with its line's own number, and puts a fold
+// button on a line that opens a block. Each number keeps its button and
+// its text, which change where they must alone: a line put in changes the
+// buttons below it, not the numbers. One button is reached by Tab, that of
+// foldStop, the line whose button was last used, or else the first.
 function drawGutter() {
-  const count = editorArea.value.split("\n").length;
-  // Room for the widest number, and the gutter's padding.
-  gutterLines.parentElement.style.width = "calc(" + String(count).length + "ch + 12px)";
-  while (gutterLines.childElementCount > count) gutterLines.lastElementChild.remove();
-  for (let n = gutterLines.childElementCount + 1; n <= count; n++) {
-    const number = document.createElement("div");
-    number.textContent = String(n);
+  // Room for the widest number, the toggle and the gutter's padding.
+  gutterLines.parentElement.style.width = "calc(" + String(yamlInfo.length).length + "ch + 26px)";
+  while (gutterLines.childElementCount > viewRows.length) gutterLines.lastElementChild.remove();
+  while (gutterLines.childElementCount < viewRows.length) {
+    const number = document.createElement("div"), toggle = document.createElement("button"), text = jsonSpan("", "");
+    toggle.type = "button";
+    toggle.className = "fold";
+    toggle.hidden = true;
+    toggle.tabIndex = -1;
+    text.setAttribute("aria-hidden", "true");
+    number.append(toggle, text);
+    number.drawn = "";
     gutterLines.append(number);
   }
+  let stop = -1;
+  for (let k = 0; k < viewRows.length && stop < 0; k++) if (yamlEnds[viewRows[k].line] >= 0 && viewRows[k].line >= foldStop) stop = k;
+  for (let k = viewRows.length - 1; k >= 0 && stop < 0; k--) if (yamlEnds[viewRows[k].line] >= 0) stop = k;
+  for (let k = 0; k < viewRows.length; k++) {
+    const row = viewRows[k], number = gutterLines.children[k], toggle = number.firstChild;
+    const end = yamlEnds[row.line], open = !folds.has(row.line);
+    const drawn = row.line + " " + end + " " + open + " " + (k === stop);
+    if (number.drawn === drawn) continue;
+    number.drawn = drawn;
+    toggle.hidden = end < 0;
+    toggle.tabIndex = k === stop ? 0 : -1;
+    if (end >= 0) {
+      toggle.textContent = open ? "▾" : "▸";
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", "Lines " + (row.line + 2) + " to " + (end + 1) + ", under line " + (row.line + 1));
+      toggle.title = (open ? "Fold" : "Unfold") + " lines " + (row.line + 2) + " to " + (end + 1);
+    }
+    number.lastChild.textContent = String(row.line + 1);
+  }
+}
+// drawMarks marks the rows of the lines an error named, in the gutter and
+// with a band, a hidden line's on its fold's row.
+function drawMarks() {
+  for (const number of markedRows) number.classList.remove("marked");
+  const height = editorLine(), pad = editorPad();
+  const at = [...new Set(marked.filter((n) => n <= rowOf.length).map((n) => rowOf[n - 1]))];
+  markedRows = at.map((k) => gutterLines.children[k]);
+  bandLayer.replaceChildren(...at.map((k) => {
+    gutterLines.children[k].classList.add("marked");
+    const band = document.createElement("div");
+    band.className = "band";
+    band.style.top = pad + k * height + "px";
+    return band;
+  }));
+}
+function followScroll() {
+  const from = scroller();
+  const shift = "translateY(" + -from.scrollTop + "px)";
+  gutterLines.style.transform = shift;
+  bandLayer.style.transform = shift;
+  if (from === editorArea) {
+    yamlView.scrollTop = editorArea.scrollTop;
+    yamlView.scrollLeft = editorArea.scrollLeft;
+  }
+}
+let drawFrame = 0;
+function drawEditor() {
+  if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
+  const text = editorArea.value;
+  if (text !== yamlText) {
+    yamlText = text;
+    yamlInfo = yamlLines(text);
+    yamlEnds = yamlBlocks(yamlInfo);
+    for (const line of folds) if (!(yamlEnds[line] > line)) folds.delete(line);
+  }
+  viewRows = [];
+  rowOf = new Array(yamlInfo.length);
+  for (let i = 0; i < yamlInfo.length; i++) {
+    rowOf[i] = viewRows.length;
+    if (!folds.has(i)) { viewRows.push({ line: i }); continue; }
+    viewRows.push({ line: i, hidden: yamlEnds[i] - i });
+    for (let j = i + 1; j <= yamlEnds[i]; j++) rowOf[j] = viewRows.length - 1;
+    i = yamlEnds[i];
+  }
+  const folded = !editorArea.readOnly && folds.size > 0;
+  editorBox.classList.toggle("folded", folded);
+  $("fold-note").hidden = !folded;
+  // Shown alone, the layer is what is read; behind the textarea, the
+  // textarea is.
+  if (viewing()) {
+    yamlView.removeAttribute("aria-hidden");
+    yamlView.tabIndex = 0;
+    yamlView.setAttribute("role", "region");
+    yamlView.setAttribute("aria-labelledby", "collector-label");
+  } else {
+    // Out of the keyboard's way too, which reaches a scroller.
+    yamlView.setAttribute("aria-hidden", "true");
+    yamlView.tabIndex = -1;
+    yamlView.removeAttribute("role");
+    yamlView.removeAttribute("aria-labelledby");
+  }
+  for (const button of document.querySelectorAll("[data-yaml-all]")) {
+    button.disabled = button.dataset.yamlAll === "open" ? folds.size === 0 : !yamlEnds.some((end) => end >= 0);
+  }
+  drawViewRows();
+  drawGutter();
+  drawMarks();
   followScroll();
+}
+// The rows follow the text once a frame, before it is drawn, however fast
+// the keys come.
+function drawSoon() {
+  if (!drawFrame) drawFrame = requestAnimationFrame(() => { drawFrame = 0; drawEditor(); });
 }
 // markLines marks the lines numbered in lines, those the editor has.
 function markLines(lines) {
-  for (const n of marked) if (gutterLines.children[n - 1]) gutterLines.children[n - 1].classList.remove("marked");
-  marked = lines.filter((n) => n >= 1 && n <= gutterLines.childElementCount);
-  const height = editorLine(), pad = editorPad();
-  bandLayer.replaceChildren(...marked.map((n) => {
-    gutterLines.children[n - 1].classList.add("marked");
-    const band = document.createElement("div");
-    band.className = "band";
-    band.style.top = pad + (n - 1) * height + "px";
-    return band;
-  }));
+  const count = editorArea.value.split("\n").length;
+  marked = lines.filter((n) => n >= 1 && n <= count);
+  if (yamlText !== editorArea.value) drawEditor();
+  else drawMarks();
   followScroll();
 }
 function setEditor(text) {
   editorArea.value = text;
-  markLines([]);
-  drawGutter();
+  folds.clear();
+  foldStop = 0;
+  marked = [];
+  drawEditor();
+  yamlView.scrollTop = 0;
+  yamlView.scrollLeft = 0;
+  followScroll();
 }
 editorArea.addEventListener("scroll", followScroll);
+yamlView.addEventListener("scroll", followScroll);
+// The line of the row at the top of the view.
+const topLine = () => {
+  const k = Math.min(viewRows.length - 1, Math.max(0, Math.floor((scroller().scrollTop - editorPad()) / editorLine())));
+  return viewRows.length === 0 ? 0 : viewRows[k].line;
+};
+// refold changes the folds, keeping line where it was in the view: the
+// playground's textarea and its layer shown alone in turn have the same
+// height, and the same line at the same height in them.
+function refold(change, line) {
+  const height = editorLine(), pad = editorPad(), before = scroller();
+  const offset = pad + (rowOf[line] || 0) * height - before.scrollTop, left = before.scrollLeft, tall = before.offsetHeight;
+  change();
+  drawEditor();
+  const after = scroller();
+  if (after !== before && tall > 0) after.style.height = tall + "px";
+  after.scrollTop = Math.max(0, pad + (rowOf[line] || 0) * height - offset);
+  after.scrollLeft = left;
+  followScroll();
+}
+// editAt unfolds the playground and puts the caret at column of line.
+function editAt(line, column) {
+  refold(() => folds.clear(), line);
+  const lines = editorArea.value.split("\n");
+  let at = 0;
+  for (let i = 0; i < line && i < lines.length; i++) at += lines[i].length + 1;
+  at += Math.min(column, (lines[line] || "").length);
+  const top = editorArea.scrollTop, left = editorArea.scrollLeft;
+  editorArea.setSelectionRange(at, at);
+  editorArea.focus({ preventScroll: true });
+  editorArea.scrollTop = top;
+  editorArea.scrollLeft = left;
+  followScroll();
+}
+// The column of the text at x, y in the row, from the caret the browser
+// puts there.
+function columnAt(row, x, y) {
+  let node = null, offset = 0;
+  if (document.caretPositionFromPoint) {
+    const at = document.caretPositionFromPoint(x, y);
+    if (at) { node = at.offsetNode; offset = at.offset; }
+  } else if (document.caretRangeFromPoint) {
+    const at = document.caretRangeFromPoint(x, y);
+    if (at) { node = at.startContainer; offset = at.startOffset; }
+  }
+  if (!node || !row.contains(node)) return row.textContent.length;
+  let column = 0;
+  const walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  for (let text = walk.nextNode(); text; text = walk.nextNode()) {
+    if (text === node) return column + offset;
+    column += text.length;
+  }
+  return column;
+}
+const rowIndex = (parent, child) => Array.prototype.indexOf.call(parent.children, child);
+gutterLines.addEventListener("click", (event) => {
+  const toggle = event.target.closest("button.fold");
+  if (!toggle) return;
+  const row = viewRows[rowIndex(gutterLines, toggle.parentElement)];
+  if (!row) return;
+  foldStop = row.line;
+  refold(() => { if (folds.has(row.line)) folds.delete(row.line); else folds.add(row.line); }, row.line);
+});
+// The arrow keys, Home and End go from one fold button to another; the
+// view scrolls to the one focused, and the gutter, which follows the view,
+// is never scrolled by the focus itself.
+gutterLines.addEventListener("keydown", (event) => {
+  const toggle = event.target.closest("button.fold");
+  if (!toggle || event.ctrlKey || event.metaKey || event.altKey || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const buttons = [...gutterLines.querySelectorAll("button.fold:not([hidden])")];
+  const at = buttons.indexOf(toggle);
+  const to = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : at + (event.key === "ArrowUp" ? -1 : 1);
+  event.preventDefault();
+  if (to < 0 || to >= buttons.length || to === at) return;
+  toggle.tabIndex = -1;
+  buttons[to].tabIndex = 0;
+  foldStop = viewRows[rowIndex(gutterLines, buttons[to].parentElement)].line;
+  buttons[to].focus({ preventScroll: true });
+});
+gutterLines.addEventListener("focusin", (event) => {
+  const k = rowIndex(gutterLines, event.target.parentElement);
+  if (k < 0) return;
+  const gutter = gutterLines.parentElement;
+  gutter.scrollTop = 0;
+  gutter.scrollLeft = 0;
+  const from = scroller(), height = editorLine(), top = editorPad() + k * height;
+  if (top < from.scrollTop) from.scrollTop = top;
+  else if (top + height > from.scrollTop + from.clientHeight) from.scrollTop = top + height - from.clientHeight;
+  followScroll();
+});
+yamlView.addEventListener("click", (event) => {
+  const div = event.target.closest(".yaml-lines > div");
+  if (!div) return;
+  const row = viewRows[rowIndex(yamlRows, div)];
+  if (!row) return;
+  if (event.target.closest(".yaml-more")) { refold(() => folds.delete(row.line), row.line); return; }
+  // A click on the folded playground's text edits it there; a selection
+  // being made is left to be made.
+  if (editorArea.readOnly || folds.size === 0 || !document.getSelection().isCollapsed) return;
+  editAt(row.line, columnAt(div, event.clientX, event.clientY));
+});
+yamlView.addEventListener("keydown", (event) => {
+  // Select all selects the YAML, as it does in a textarea.
+  if (event.key === "a" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && viewing()) {
+    event.preventDefault();
+    const range = document.createRange();
+    range.selectNodeContents(yamlRows);
+    document.getSelection().removeAllRanges();
+    document.getSelection().addRange(range);
+    return;
+  }
+  if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || editorArea.readOnly || folds.size === 0) return;
+  event.preventDefault();
+  editAt(topLine(), 0);
+});
+for (const button of document.querySelectorAll("[data-yaml-all]")) {
+  button.addEventListener("click", () => {
+    const open = button.dataset.yamlAll === "open";
+    refold(() => {
+      folds.clear();
+      if (!open) for (let i = 0; i < yamlEnds.length; i++) if (yamlEnds[i] > i) folds.add(i);
+    }, topLine());
+    if (open && !editorArea.readOnly) editorArea.focus({ preventScroll: true });
+  });
+}
 // jumpTo selects the line numbered n in the editor and scrolls it into the
 // middle of the view.
 function jumpTo(n) {
   const lines = editorArea.value.split("\n");
   if (n < 1 || n > lines.length) return;
+  if (folds.size > 0) { folds.clear(); drawEditor(); }
   let start = 0;
   for (let i = 0; i < n - 1; i++) start += lines[i].length + 1;
   editorArea.focus();
@@ -1057,8 +1757,8 @@ if (staticCopy) $("static-target").addEventListener("change", staticCopy);
 let typeFrame = 0;
 $("collector").addEventListener("input", () => {
   // An edit moves the lines an error named: their marks go.
-  markLines([]);
-  drawGutter();
+  marked = [];
+  drawSoon();
   if ($("collector").readOnly) return;
   written = $("collector").value;
   if (typeFrame) return;
@@ -1097,7 +1797,7 @@ $("back-to-example").addEventListener("click", () => {
 for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", showMode);
 $("configured").addEventListener("change", showCollector);
 showMode();
-drawGutter();
+drawEditor();
 showCollector();
 // A list whose rows are wrong is not sent: the first wrong row is focused,
 // and the status says where to look.
@@ -1169,13 +1869,18 @@ async function run() {
 // answers, which stays whole whatever the table shows; the choice is kept
 // in this browser. A refused run's error is text, and shown as text.
 let view = "table", refused = false;
-try { if (store && store.getItem("debug.view") === "text") view = "text"; } catch (error) { /* the table, then */ }
+// The OTLP tab is there with otlp.enabled alone.
+try {
+  const kept = store && store.getItem("debug.view");
+  if (kept === "text" || (kept === "otlp" && $("view-otlp"))) view = kept;
+} catch (error) { /* the table, then */ }
 function showView() {
   const shown = refused ? "text" : view;
   $("views").hidden = refused;
   for (const tab of document.querySelectorAll("#views [data-view]")) tab.setAttribute("aria-selected", String(tab.dataset.view === shown));
   $("series-table-part").hidden = shown !== "table";
   $("series-text-part").hidden = shown !== "text";
+  if ($("series-otlp-part")) $("series-otlp-part").hidden = shown !== "otlp";
 }
 for (const tab of document.querySelectorAll("#views [data-view]")) {
   tab.addEventListener("click", () => {
@@ -1320,6 +2025,426 @@ function drawRows() {
 }
 $("series-filter").addEventListener("input", drawRows);
 $("series-metric").addEventListener("change", drawRows);
+// jsonView shows text, which is JSON, in box as a tree: each object and
+// array a node that folds behind a button in the gutter, which says whether
+// it is open (aria-expanded), and which shows, folded, how many keys or
+// items it has and the value of its "name" or "key", so a folded OTLP
+// attribute still says which it is. Keys, strings, numbers, booleans, null
+// and punctuation each have a class of their own, coloured by the theme.
+// Every value is put in with textContent alone: they are the target's data,
+// label values and log lines among them. A node's children are made when it
+// is first opened, so a body of thousands of points costs what is shown:
+// at first the nodes down to jsonOpenDepth below the top. A number is the
+// text the body has of it, where the browser hands the reviver its source,
+// so a large integer is not rounded to a double's. Several documents, one
+// blank line between them, as the log export's requests are, are a tree
+// each; text that is not JSON is shown as it is, and the box says so. Copy
+// copies the text the box was given (jsonTexts), not what the tree shows.
+const jsonOpenDepth = 4;
+const jsonTexts = new WeakMap(), jsonNodes = new WeakMap();
+class JSONNumber { constructor(text) { this.text = text; } }
+const parseJSON = (text) => JSON.parse(text, (key, value, context) =>
+  typeof value === "number" ? new JSONNumber(context && typeof context.source === "string" ? context.source : String(value)) : value);
+function jsonDocuments(text) {
+  try {
+    return [parseJSON(text)];
+  } catch (error) {
+    const parts = text.split(/\n\n(?=[[{])/);
+    if (parts.length < 2) throw error;
+    return parts.map(parseJSON);
+  }
+}
+function jsonSpan(className, text) {
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+function jsonLeaf(value) {
+  if (value instanceof JSONNumber) return jsonSpan("jv-number", value.text);
+  if (typeof value === "string") return jsonSpan("jv-string", JSON.stringify(value));
+  if (typeof value === "boolean") return jsonSpan("jv-boolean", String(value));
+  return jsonSpan("jv-null", "null");
+}
+// jsonAttribute is the key and the value's text of an OTLP attribute, an
+// object of a "key" string and a "value" object of one field named
+// *Value ({"key": "k", "value": {"stringValue": "v"}}), or null for any
+// other: a folded attribute says "k = v". An intValue, which OTLP's JSON
+// writes as a string, is shown as the number it is; an arrayValue or a
+// kvlistValue as how many values it holds.
+const jsonPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof JSONNumber);
+function jsonAttribute(value) {
+  if (!jsonPlain(value) || Object.keys(value).length !== 2 || typeof value.key !== "string" || !jsonPlain(value.value)) return null;
+  const fields = Object.keys(value.value);
+  if (fields.length !== 1 || !/^[a-z]+Value$/.test(fields[0])) return null;
+  const field = fields[0], inner = value.value[field];
+  let shown;
+  if (field === "intValue" && typeof inner === "string" && /^-?\d+$/.test(inner)) shown = jsonSpan("jv-number", inner);
+  else if ((field === "arrayValue" || field === "kvlistValue") && jsonPlain(inner)) {
+    const values = Array.isArray(inner.values) ? inner.values.length : 0;
+    shown = jsonSpan("jv-summary", (field === "arrayValue" ? "[…] " : "{…} ") + values + (values === 1 ? " value" : " values"));
+  } else if (inner === null || typeof inner !== "object" || inner instanceof JSONNumber) shown = jsonLeaf(inner);
+  else shown = jsonSpan("jv-summary", Array.isArray(inner) ? "[…]" : "{…}");
+  return { key: value.key, value: shown };
+}
+function jsonNode(key, value, depth, last) {
+  const head = document.createElement("div");
+  head.className = "jv-line";
+  if (key !== null) head.append(jsonSpan("jv-key", JSON.stringify(key)), jsonSpan("jv-punct", ": "));
+  const comma = () => last ? [] : [jsonSpan("jv-punct", ",")];
+  if (value === null || typeof value !== "object" || value instanceof JSONNumber) {
+    head.append(jsonLeaf(value), ...comma());
+    return head;
+  }
+  const array = Array.isArray(value);
+  const entries = array ? value.map((item) => [null, item]) : Object.entries(value);
+  const [open, close] = array ? ["[", "]"] : ["{", "}"];
+  if (entries.length === 0) {
+    head.append(jsonSpan("jv-punct", open + close), ...comma());
+    return head;
+  }
+  const node = document.createElement("div");
+  node.className = "jv-node";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "jv-toggle";
+  const named = array ? undefined : [value.name, value.key].find((v) => typeof v === "string");
+  const what = (key !== null ? key : array ? "array" : "object") + (named !== undefined ? " " + named : "");
+  toggle.setAttribute("aria-label", what);
+  // Folded, the node reads "{…} 2 keys · name," or, for an attribute,
+  // "{…} service.name = "pue",": the comma that parts it from the next
+  // comes last, after what is said of it.
+  const fold = jsonSpan("jv-fold", "");
+  fold.append(jsonSpan("jv-punct", "…" + close));
+  const attribute = jsonAttribute(value);
+  if (attribute) {
+    fold.append(jsonSpan("jv-summary", " "), jsonSpan("jv-hint", attribute.key), jsonSpan("jv-punct", " = "), attribute.value);
+  } else {
+    fold.append(jsonSpan("jv-summary", " " + entries.length + (array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys")) + (named !== undefined ? " · " : "")));
+    if (named !== undefined) fold.append(jsonSpan("jv-hint", named));
+  }
+  fold.append(...comma());
+  head.prepend(toggle);
+  head.append(jsonSpan("jv-punct", open), fold);
+  const kids = document.createElement("div");
+  kids.className = "jv-kids";
+  const tail = document.createElement("div");
+  tail.className = "jv-line jv-tail";
+  tail.append(jsonSpan("jv-punct", close), ...comma());
+  node.append(head, kids, tail);
+  jsonNodes.set(node, { entries, depth, kids, toggle, built: false });
+  jsonSet(node, depth <= jsonOpenDepth);
+  return node;
+}
+function jsonSet(node, open) {
+  const state = jsonNodes.get(node);
+  if (open && !state.built) {
+    state.built = true;
+    state.kids.append(...state.entries.map(([key, value], i) => jsonNode(key, value, state.depth + 1, i === state.entries.length - 1)));
+  }
+  node.classList.toggle("jv-closed", !open);
+  state.toggle.textContent = open ? "▾" : "▸";
+  state.toggle.setAttribute("aria-expanded", String(open));
+}
+// jsonAll opens every node of box, making each, or folds every node but the
+// top ones, which keep their keys in sight. Opening goes down a level at a
+// time, the top first, in slices of 30 ms, one a frame, between which the
+// page answers clicks and draws, as a body of thousands of points has tens
+// of thousands of nodes; a later jsonAll, a click on a node, or a new body
+// stops it (jsonRuns).
+const jsonRuns = new WeakMap();
+function jsonAll(box, open) {
+  const pass = {};
+  jsonRuns.set(box, pass);
+  if (!open) {
+    for (const node of box.querySelectorAll(".jv-node")) jsonSet(node, jsonNodes.get(node).depth === 0);
+    return;
+  }
+  const todo = [...box.querySelectorAll(".jv-doc > .jv-node")];
+  let next = 0;
+  const slice = () => {
+    if (jsonRuns.get(box) !== pass) return;
+    const until = performance.now() + 30;
+    while (next < todo.length && performance.now() < until) {
+      const node = todo[next++];
+      jsonSet(node, true);
+      for (const child of jsonNodes.get(node).kids.children) if (child.classList.contains("jv-node")) todo.push(child);
+    }
+    if (next < todo.length) requestAnimationFrame(slice);
+  };
+  slice();
+}
+function jsonView(box, text) {
+  if (!jsonTexts.has(box)) {
+    box.addEventListener("click", (event) => {
+      const at = event.target.closest(".jv-toggle, .jv-fold");
+      if (!at) return;
+      const node = at.closest(".jv-node");
+      jsonRuns.delete(box);
+      jsonSet(node, node.classList.contains("jv-closed"));
+    });
+  }
+  jsonTexts.set(box, text);
+  jsonRuns.delete(box);
+  const buttons = document.querySelectorAll('[data-json-all][aria-controls="' + box.id + '"]');
+  let documents;
+  try {
+    documents = jsonDocuments(text);
+  } catch (error) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "This is not JSON (" + error.message + "), so it is shown as text.";
+    const pre = document.createElement("pre");
+    pre.className = "jv-plain";
+    pre.textContent = text;
+    box.replaceChildren(note, pre);
+    for (const button of buttons) button.disabled = true;
+    return;
+  }
+  for (const button of buttons) button.disabled = false;
+  box.replaceChildren(...documents.map((value) => {
+    const doc = document.createElement("div");
+    doc.className = "jv-doc";
+    doc.append(jsonNode(null, value, 0, true));
+    return doc;
+  }));
+}
+for (const button of document.querySelectorAll("[data-json-all]")) {
+  button.addEventListener("click", () => jsonAll($(button.getAttribute("aria-controls")), button.dataset.jsonAll === "open"));
+}
+// The OTLP tab (debugotlp.go): what the next export would send of the
+// run's series, as the server made it with the export's own code. Every
+// value is put in with textContent alone. The table of data points sorts by
+// a column's header, a value as a number where both are one, and keeps the
+// rows whose cells hold the filter's text; a row with notes has a badge,
+// which opens to them, as a lint finding's does.
+const otlpColumns = ["prometheus", "name", "kind", "unit", "attributes", "value", "notes"];
+let otlpPoints = [], otlpSort = null, otlpDown = false;
+const attributeText = (attributes) => (attributes || []).map((a) => a.key + "=" + a.value).join(", ");
+function otlpCell(point, column) {
+  if (column === "attributes") return attributeText(point.attributes);
+  if (column === "notes") return (point.notes || []).join("\n");
+  return point[column] || "";
+}
+function otlpNotesOf(notes) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "\u24d8 " + notes.length + (notes.length === 1 ? " note" : " notes");
+  summary.title = notes.join("\n");
+  details.append(summary);
+  for (const note of notes) {
+    const p = document.createElement("p");
+    p.className = "lint-advice";
+    p.textContent = note;
+    details.append(p);
+  }
+  return details;
+}
+const listOf = (list, items) => {
+  list.replaceChildren(...items.map((text) => { const li = document.createElement("li"); li.textContent = text; return li; }));
+  list.hidden = items.length === 0;
+};
+function drawOTLPRows() {
+  const needle = $("otlp-filter").value.trim().toLowerCase();
+  let rows = otlpPoints.filter((point) => needle === "" || point.haystack.includes(needle));
+  if (otlpSort !== null) {
+    rows = rows.slice().sort((a, b) => {
+      const x = otlpCell(a, otlpSort), y = otlpCell(b, otlpSort);
+      const p = numberOf(x), q = numberOf(y);
+      const order = x !== "" && y !== "" && !Number.isNaN(p) && !Number.isNaN(q) ? (p < q ? -1 : p > q ? 1 : 0) : (x < y ? -1 : x > y ? 1 : 0);
+      return otlpDown ? -order : order;
+    });
+  }
+  for (const th of $("otlp-columns").children) th.setAttribute("aria-sort", th.dataset.column === otlpSort ? (otlpDown ? "descending" : "ascending") : "none");
+  $("otlp-rows").replaceChildren(...rows.slice(0, tableRows).map((point) => {
+    const tr = document.createElement("tr");
+    for (const column of otlpColumns) {
+      const td = document.createElement("td");
+      if (column === "value") td.className = "value";
+      if (column === "kind") td.className = "type";
+      if (column === "notes") {
+        td.className = "otlp-notes";
+        if ((point.notes || []).length > 0) td.append(otlpNotesOf(point.notes));
+      } else {
+        td.textContent = otlpCell(point, column);
+      }
+      tr.append(td);
+    }
+    return tr;
+  }));
+  $("otlp-box").hidden = otlpPoints.length === 0;
+  $("otlp-count").textContent = otlpPoints.length === 0 ? "(no data points)" : rows.length + " of " + otlpPoints.length + " data points" + (rows.length > tableRows ? "; showing the first " + tableRows + ", filter to narrow" : "");
+}
+if ($("series-otlp-part")) {
+  $("otlp-columns").replaceChildren(...otlpColumns.map((column) => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.dataset.column = column;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = column === "prometheus" ? "Prometheus name" : column === "name" ? "OTLP name" : column;
+    button.addEventListener("click", () => {
+      otlpDown = otlpSort === column ? !otlpDown : false;
+      otlpSort = column;
+      drawOTLPRows();
+    });
+    th.append(button);
+    return th;
+  }));
+  $("otlp-filter").addEventListener("input", drawOTLPRows);
+  const copyButton = (button, source, done) => button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(jsonTexts.get($(source)) || "");
+      $(done).textContent = "Copied.";
+    } catch (error) {
+      $(done).textContent = "The browser did not let the page copy it; select the text below.";
+    }
+  });
+  copyButton($("otlp-body-copy"), "otlp-body", "otlp-body-copied");
+  if ($("otlp-logs-copy")) copyButton($("otlp-logs-copy"), "otlp-logs-body", "otlp-logs-copied");
+  if ($("otlp-traces-copy")) copyButton($("otlp-traces-copy"), "otlp-traces-body", "otlp-traces-copied");
+}
+function showOTLP(otlp, ran) {
+  if (!$("series-otlp-part")) return;
+  $("otlp-shown").hidden = !otlp;
+  $("otlp-none").hidden = !!otlp;
+  if (!otlp) {
+    $("otlp-none").textContent = ran ? "The OTLP export is off (otlp.enabled), so a run shows nothing here." : "The run was refused: nothing would be exported.";
+    otlpPoints = [];
+    return;
+  }
+  listOf($("otlp-notes"), otlp.notes || []);
+  $("otlp-resource-rows").replaceChildren(...(otlp.resource || []).map((a) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = a.key;
+    const td = document.createElement("td");
+    td.textContent = a.value;
+    tr.append(th, td);
+    return tr;
+  }));
+  listOf($("otlp-resource-notes"), otlp.resource_notes || []);
+  $("otlp-scope").textContent = "Scope: " + otlp.scope.name + (otlp.scope.version ? " " + otlp.scope.version : " (no version)") + ". Metric names: " + otlp.metric_names + ".";
+  otlpPoints = (otlp.points || []).map((point) => ({ ...point, haystack: otlpColumns.map((column) => otlpCell(point, column)).join("\n").toLowerCase() }));
+  drawOTLPRows();
+  const left = otlp.left_out || [], clashes = otlp.clashes || [];
+  $("otlp-left-part").hidden = left.length === 0 && clashes.length === 0;
+  listOf($("otlp-left"), left.map((p) => "\u26a0 " + p.prometheus + " as " + p.name + " (" + p.kind + ")" + (p.attributes ? " {" + attributeText(p.attributes) + "}" : "") + ": " + p.reason));
+  $("otlp-clashes").hidden = clashes.length === 0;
+  $("otlp-clashes").textContent = clashes.join("\n");
+  jsonView($("otlp-body"), otlp.body);
+  if ($("otlp-logs-part")) {
+    const logs = otlp.logs;
+    $("otlp-logs-part").hidden = !logs;
+    if (logs) {
+      listOf($("otlp-logs-notes"), logs.notes || []);
+      const records = logs.records || [];
+      const exported = records.filter((r) => r.exported).length;
+      $("otlp-logs-count").textContent = records.length === 0 ? "The run logged nothing." : records.length + (records.length === 1 ? " line, " : " lines, ") + exported + " exported at otlp.logs.level " + logs.level;
+      $("otlp-logs-box").hidden = records.length === 0;
+      $("otlp-logs-rows").replaceChildren(...records.map((r) => {
+        const tr = document.createElement("tr");
+        for (const text of [r.time || "", r.severity_text + " (" + r.severity_number + ")", r.body, attributeText(r.attributes), r.exported ? "yes" : "no: " + (r.note || "")]) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.append(td);
+        }
+        return tr;
+      }));
+      jsonView($("otlp-logs-body"), logs.body);
+    }
+  }
+  if ($("otlp-traces-part")) showOTLPTraces(otlp.traces);
+}
+// The run's trace (debugotlptraces.go): its spans as a tree, indented by
+// depth, each with a bar of its time within the run's, and whether the
+// export would send a probe's or a scrape's trace like it.
+function showOTLPTraces(traces) {
+  $("otlp-traces-part").hidden = !traces;
+  if (!traces) return;
+  const verdict = $("otlp-traces-verdict");
+  verdict.textContent = (traces.exported ? "Would be exported: " : "Would not be exported: ") + traces.why + ". The run itself is never exported.";
+  verdict.classList.toggle("exported", traces.exported);
+  listOf($("otlp-traces-notes"), traces.notes || []);
+  const spans = traces.spans || [];
+  const total = spans.length > 0 ? Math.max(spans[0].duration_ms, 0.001) : 1;
+  const ms = (v) => (v < 1 ? v.toFixed(3) : v < 100 ? v.toFixed(2) : v.toFixed(0)) + " ms";
+  $("otlp-traces-box").hidden = spans.length === 0;
+  $("otlp-traces-rows").replaceChildren(...spans.map((span) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.className = "span-name";
+    name.textContent = "\u2003".repeat(span.depth) + (span.depth > 0 ? "\u2514 " : "") + span.name;
+    const bar = document.createElement("td");
+    bar.className = "span-bar";
+    const track = document.createElement("div");
+    track.className = "span-track";
+    const mark = document.createElement("span");
+    mark.style.left = Math.min(100, 100 * span.start_ms / total) + "%";
+    mark.style.width = Math.min(100, 100 * span.duration_ms / total) + "%";
+    if (span.status) mark.className = "failed";
+    track.append(mark);
+    bar.append(track);
+    const cells = [span.kind, ms(span.start_ms), ms(span.duration_ms)].map((text, i) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i > 0) td.className = "span-time";
+      return td;
+    });
+    const status = document.createElement("td");
+    status.textContent = span.status || "";
+    if (span.status) status.className = "span-failed";
+    const attributes = document.createElement("td");
+    attributes.textContent = attributeText(span.attributes);
+    tr.append(name, ...cells, bar, status, attributes);
+    return tr;
+  }));
+  jsonView($("otlp-traces-body"), traces.body);
+}
+// The endpoint test: one empty export to the endpoint otlp configures, at
+// --web.debug=full. One test at a time: the buttons are disabled while one
+// is in progress, and the server refuses a second.
+for (const button of document.querySelectorAll(".otlp-test button")) {
+  button.addEventListener("click", async () => {
+    const buttons = [...document.querySelectorAll(".otlp-test button")];
+    const result = $("otlp-test-result");
+    for (const b of buttons) b.disabled = true;
+    result.hidden = false;
+    result.className = "";
+    result.textContent = "Testing the " + button.dataset.signal + " endpoint…";
+    try {
+      const response = await fetch(new URL("debug/otlp-test", document.baseURI), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Run": "otlp-test" },
+        body: JSON.stringify({ signal: button.dataset.signal }),
+        cache: "no-store", credentials: "same-origin",
+      });
+      const t = await response.json();
+      const lines = [];
+      if (t.error) {
+        lines.push(response.status + ": " + t.error);
+      } else {
+        lines.push((t.ok ? "OK" : "Failed") + ": " + t.signal + " endpoint " + t.endpoint + (t.took ? " in " + t.took : ""));
+        if (t.status) lines.push("Status: " + t.status);
+        if (t.failure) lines.push("Error: " + t.failure);
+        if (t.outcome) lines.push("An export: " + t.outcome);
+        if (t.partial_success) lines.push("partialSuccess: " + t.partial_success.rejected + " rejected" + (t.partial_success.message ? ": " + t.partial_success.message : ""));
+        lines.push("", "Sent: " + t.body, ...(t.sent || []).map((h) => "  " + h));
+        if (t.headers) lines.push("", "Answered:", ...t.headers.map((h) => "  " + h));
+        if (t.response) lines.push("", t.response);
+        for (const note of t.notes || []) lines.push("", note);
+      }
+      result.className = t.ok ? "" : "error";
+      result.textContent = lines.join("\n");
+    } catch (error) {
+      result.className = "error";
+      result.textContent = "The test could not be sent: " + error.message;
+    } finally {
+      for (const b of buttons) b.disabled = false;
+    }
+  });
+}
 // sent is the playground's YAML the run sent, undefined for a configured
 // collector's run: the lines a refusal of it names are marked in the editor,
 // and link to it, while the editor still holds what was sent.
@@ -1338,6 +2463,7 @@ function show(answer, response, took, sent) {
     showError(series, answer.error, ours);
     markLines(ours ? linesNamed(answer.error) : []);
     fillTable({});
+    showOTLP(null, false);
     for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
@@ -1348,6 +2474,7 @@ function show(answer, response, took, sent) {
   series.className = "";
   series.textContent = answer.series === "" ? "(no series)" : answer.series;
   fillTable(answer);
+  showOTLP(answer.otlp, true);
   for (const stage of answer.stages || []) {
     const item = document.createElement("li");
     item.className = stage.outcome === "ok" ? "" : "failed";

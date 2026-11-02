@@ -17,24 +17,33 @@ import (
 // export would make of the run — by the code that makes a probe's or a
 // scrape's (buildSpans, queuedSpans, otlpTraceRequests), from the stages and
 // requests the run recorded as they do — and whether the export would send
-// them: the run's duration against otlp.traces.threshold, and whether it
-// failed against otlp.traces.errors. The run's own trace is never exported:
-// a run is never seen by the export.
+// them, by the sampling rules a probe's or a scrape's trace is decided by
+// (decideTrace): the run's duration against otlp.traces.threshold, whether
+// it failed against otlp.traces.errors, and its trace id against
+// otlp.traces.sample_ratio. The rate cap is not taken: what it would leave
+// depends on the traces exported before. The run's own trace is never
+// exported: a run is never seen by the export.
 
 // debugOTLPTraces is the run's trace as the trace export would make it.
 type debugOTLPTraces struct {
-	// Threshold is otlp.traces.threshold and Errors otlp.traces.errors.
-	Threshold string `json:"threshold"`
-	Errors    bool   `json:"errors"`
+	// Threshold is otlp.traces.threshold, Errors otlp.traces.errors and
+	// the rest the other rules in force.
+	Threshold    string  `json:"threshold"`
+	Errors       bool    `json:"errors"`
+	ParentBased  bool    `json:"parent_based"`
+	SampleRatio  float64 `json:"sample_ratio"`
+	MaxPerSecond int     `json:"max_per_second"`
 	// Took is how long the run took, Failed whether it failed as a probe or
 	// a scrape fails, and Exported whether the export would send a probe's
 	// or a scrape's trace that took as long and ended as it did, Why why.
-	Took     string          `json:"took"`
-	Failed   bool            `json:"failed"`
-	Exported bool            `json:"exported"`
-	Why      string          `json:"why"`
-	Spans    []debugOTLPSpan `json:"spans"`
-	Notes    []string        `json:"notes,omitempty"`
+	Took     string `json:"took"`
+	Failed   bool   `json:"failed"`
+	Exported bool   `json:"exported"`
+	// Reason is the rule that would keep it, as sampling.reason names it.
+	Reason string          `json:"reason,omitempty"`
+	Why    string          `json:"why"`
+	Spans  []debugOTLPSpan `json:"spans"`
+	Notes  []string        `json:"notes,omitempty"`
 	// Body is the ExportTraceServiceRequest of the spans.
 	Body string `json:"body"`
 }
@@ -81,9 +90,20 @@ func (s *Server) debugOTLPTracesOf(cfg model.OTLPConfig, report *debugReport) *d
 		root = probeSpanRoot(p.collector, p.logTarget, "GET", report.started, end, traceParent{}, e, fetched)
 		identity = defaultResourceIdentity(cfg)
 	}
+	// The run's trace is decided as a probe's or a scrape's would be, by
+	// the rules alone: a run has no caller's traceparent, and the rate cap,
+	// which goes by the traces exported before it, is not taken.
+	decision := decideTrace(cfg, report.took, report.failed, traceParent{})
+	sampledRoot(&root, cfg, decision, traceParent{})
 	made := buildSpans(root, stages, requests)
-	out := &debugOTLPTraces{Threshold: otlpTraceThreshold(cfg).String(), Errors: cfg.Traces.Errors, Took: shownScrapeDuration(report.took), Failed: report.failed}
-	out.Exported, out.Why = tracedTrip(cfg, report.took, report.failed)
+	t := cfg.Traces
+	out := &debugOTLPTraces{Threshold: otlpTraceThreshold(cfg).String(), Errors: t.Errors, ParentBased: t.ParentBased, SampleRatio: t.SampleRatio, MaxPerSecond: t.MaxPerSecond,
+		Took: shownScrapeDuration(report.took), Failed: report.failed}
+	out.Exported, out.Reason = decision.reason != keptNone, samplingReasonNames[decision.reason]
+	out.Why = decision.why(cfg, report.took, report.failed, traceParent{})
+	if out.Exported && t.MaxPerSecond > 0 {
+		out.Why += fmt.Sprintf(", unless otlp.traces.max_per_second %d is spent, which a run does not take part in", t.MaxPerSecond)
+	}
 	out.Spans = debugSpanTree(made)
 	out.Notes = []string{
 		"The run itself is never exported: a probe or a scrape that took as long and ended as the run did would be, or not, as said above.",

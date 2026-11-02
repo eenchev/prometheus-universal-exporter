@@ -104,6 +104,21 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Sampling rules for `otlp.traces`, tried after `threshold` and `errors`:
+  `parent_based: true` exports the trace of a probe whose caller's
+  `traceparent` is sampled, and `sample_ratio` a share, 0 to 1, of the rest,
+  decided from the trace id as OpenTelemetry's consistent probability
+  sampling decides it, the kept traces' spans carrying `ot=th:<threshold>`
+  in their `traceState` before the caller's `tracestate`.
+  `max_per_second` caps every trace kept, a token bucket in which traces
+  sampled by the caller or the ratio leave half the tokens to slow and
+  failed ones. The probe's span says why in `sampling.reason`; the traces
+  kept and dropped are counted by reason in
+  `http_exporter_otlp_traces_kept_total` and
+  `http_exporter_otlp_traces_dropped_total` and on the status page, and the
+  debug page's *OTLP* tab says which rule would keep a run's trace, or why
+  none would. A caller's `tracestate` is now carried on the spans of its
+  probe's trace. Without the new keys the export is as it was.
 - Traces of slow requests over OTLP: with `otlp.traces` switched on, each
   probe and static target scrape that took `otlp.traces.threshold` (1s by
   default) or longer, and with `otlp.traces.errors: true` each that failed,

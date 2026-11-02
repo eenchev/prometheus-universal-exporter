@@ -772,8 +772,10 @@ const (
 )
 
 // OTLPTracesConfig is otlp.traces: whether a trace is exported of each probe
-// and static target scrape that took Threshold or longer, and with Errors of
-// each that failed, where to, and how many spans may wait.
+// and static target scrape that took Threshold or longer, with Errors of
+// each that failed, with ParentBased of each its caller sampled, and of a
+// SampleRatio share of the rest, at most MaxPerSecond a second, where to,
+// and how many spans may wait.
 type OTLPTracesConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// Endpoint is the OTLP/HTTP traces endpoint; left out, otlp.endpoint
@@ -784,8 +786,19 @@ type OTLPTracesConfig struct {
 	Threshold Duration `yaml:"threshold"`
 	// Errors exports the trace of every probe or scrape that failed too,
 	// however long it took.
-	Errors   bool     `yaml:"errors"`
-	Interval Duration `yaml:"interval"`
+	Errors bool `yaml:"errors"`
+	// ParentBased exports the trace of a probe whose caller's traceparent
+	// has its sampled flag set, as the caller's tracer recorded its part.
+	ParentBased bool `yaml:"parent_based"`
+	// SampleRatio is the share, from 0 to 1, of the other traces exported,
+	// decided from the trace id as OpenTelemetry's consistent probability
+	// sampling decides it, so that every tracer that samples the same trace
+	// id at the same ratio decides alike.
+	SampleRatio float64 `yaml:"sample_ratio"`
+	// MaxPerSecond caps the traces exported a second, whatever kept them;
+	// 0 is no cap.
+	MaxPerSecond int      `yaml:"max_per_second"`
+	Interval     Duration `yaml:"interval"`
 	// MaxPendingSpans bounds the spans waiting for export; a trace that
 	// finds no room for all of its spans is dropped whole rather than
 	// waited for.

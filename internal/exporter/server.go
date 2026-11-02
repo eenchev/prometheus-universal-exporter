@@ -492,14 +492,14 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	rec.read = s.readAt(followed.generation)
 	rec.update(func(x *serverStats) { x.probes++ })
 	// With otlp.traces on, the probe records its trace, which is exported
-	// at its end when it was slow, or failed under otlp.traces.errors
-	// (otlptraces.go). A caller's traceparent makes it a span of the
-	// caller's trace.
+	// at its end when a sampling rule keeps it (otlptracesampling.go). A
+	// caller's traceparent makes it a span of the caller's trace, its
+	// sampled flag and tracestate read for the rules and the spans.
 	ctx, spans := beginTrace(r.Context(), cfg.OTLP)
 	var traced probeTraceEnd
 	var parent traceParent
 	if spans != nil {
-		parent = parseTraceparent(r.Header.Get("traceparent"))
+		parent = callerTrace(r.Header)
 	}
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no

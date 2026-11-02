@@ -105,7 +105,18 @@ type OTLPTracesStatusDetails struct {
 	Endpoint  string `json:"endpoint"`
 	Threshold string `json:"threshold"`
 	Errors    bool   `json:"errors"`
-	Interval  string `json:"interval"`
+	// ParentBased, SampleRatio and MaxPerSecond are the other sampling
+	// rules in force, SampleRatioText the ratio as the page writes it.
+	ParentBased     bool    `json:"parent_based"`
+	SampleRatio     float64 `json:"sample_ratio"`
+	SampleRatioText string  `json:"-"`
+	MaxPerSecond    int     `json:"max_per_second"`
+	Interval        string  `json:"interval"`
+	// TracesKept and TracesDropped are the whole traces kept and dropped
+	// since the start, by why, as http_exporter_otlp_traces_kept_total and
+	// http_exporter_otlp_traces_dropped_total count them.
+	TracesKept    otlpTracesKept    `json:"traces_kept_by_reason"`
+	TracesDropped otlpTracesDropped `json:"traces_dropped_by_reason"`
 	// LastExport is when the last export began, LastResult how it went
 	// and LastSpans the spans it carried.
 	LastExport  string `json:"last_export,omitempty"`
@@ -142,6 +153,21 @@ type otlpTraceDroppedKind struct {
 	Shutdown   int `json:"last_export_at_shutdown"`
 }
 
+// otlpTracesKept is the traces kept, by the rule that kept them.
+type otlpTracesKept struct {
+	Slow   int `json:"slow"`
+	Error  int `json:"error"`
+	Parent int `json:"parent"`
+	Ratio  int `json:"ratio"`
+}
+
+// otlpTracesDropped is the traces dropped whole, by why.
+type otlpTracesDropped struct {
+	NotSampled int `json:"not_sampled"`
+	Rate       int `json:"rate"`
+	Queue      int `json:"queue"`
+}
+
 // otlpTracesSectionFor is the trace export's part of the OTLP section with
 // cfg in force, as of now.
 func (s *Server) otlpTracesSectionFor(cfg model.OTLPConfig, now time.Time) otlpTracesSection {
@@ -152,8 +178,13 @@ func (s *Server) otlpTracesSectionFor(cfg model.OTLPConfig, now time.Time) otlpT
 	if interval <= 0 {
 		interval = model.DefaultOTLPTracesInterval
 	}
-	d := &OTLPTracesStatusDetails{Endpoint: redactedOTLPEndpoint(cfg.Traces.Endpoint), Threshold: otlpTraceThreshold(cfg).String(), Errors: cfg.Traces.Errors, Interval: interval.String(), MaxPending: otlpMaxPendingSpans(cfg)}
+	d := &OTLPTracesStatusDetails{Endpoint: redactedOTLPEndpoint(cfg.Traces.Endpoint), Threshold: otlpTraceThreshold(cfg).String(), Errors: cfg.Traces.Errors, Interval: interval.String(), MaxPending: otlpMaxPendingSpans(cfg),
+		ParentBased: cfg.Traces.ParentBased, SampleRatio: cfg.Traces.SampleRatio, SampleRatioText: ratioText(cfg.Traces.SampleRatio), MaxPerSecond: cfg.Traces.MaxPerSecond}
 	t := s.otlpTraces
+	kept := func(r samplingReason) int { return int(t.tally.kept[r].Load()) }
+	dropped := func(r traceDropReason) int { return int(t.tally.dropped[r].Load()) }
+	d.TracesKept = otlpTracesKept{Slow: kept(keptSlow), Error: kept(keptError), Parent: kept(keptParent), Ratio: kept(keptRatio)}
+	d.TracesDropped = otlpTracesDropped{NotSampled: dropped(traceDroppedNotSampled), Rate: dropped(traceDroppedRate), Queue: dropped(traceDroppedQueue)}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	d.Pending, d.Sent, d.Succeeded, d.FailedAll = len(t.queue), t.sent, t.successes, t.failures

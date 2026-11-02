@@ -3,6 +3,7 @@
 package config
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -90,12 +91,12 @@ func TestOTLPTracesSettingsAreCheckedAndFilledIn(t *testing.T) {
 		t.Errorf("otlp.traces is filled in as %+v, want %+v", got, want)
 	}
 	cfg = otlpSettings(func(o *model.OTLPConfig) {
-		o.Traces = model.OTLPTracesConfig{Enabled: true, Endpoint: "http://traces.invalid/ingest", Threshold: model.Duration(time.Millisecond), Errors: true, Interval: model.Duration(time.Second), MaxPendingSpans: 7}
+		o.Traces = model.OTLPTracesConfig{Enabled: true, Endpoint: "http://traces.invalid/ingest", Threshold: model.Duration(time.Millisecond), Errors: true, ParentBased: true, SampleRatio: 1, MaxPerSecond: 3, Interval: model.Duration(time.Second), MaxPendingSpans: 7}
 	})
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.OTLP.Traces; got.Endpoint != "http://traces.invalid/ingest" || got.Threshold != model.Duration(time.Millisecond) || !got.Errors || got.Interval != model.Duration(time.Second) || got.MaxPendingSpans != 7 {
+	if got := cfg.OTLP.Traces; got.Endpoint != "http://traces.invalid/ingest" || got.Threshold != model.Duration(time.Millisecond) || !got.Errors || got.Interval != model.Duration(time.Second) || got.MaxPendingSpans != 7 || !got.ParentBased || got.SampleRatio != 1 || got.MaxPerSecond != 3 {
 		t.Errorf("otlp.traces as written is kept as %+v", got)
 	}
 	for name, test := range map[string]struct {
@@ -108,6 +109,10 @@ func TestOTLPTracesSettingsAreCheckedAndFilledIn(t *testing.T) {
 		"a negative threshold":                       {func(o *model.OTLPConfig) { o.Traces.Threshold = model.Duration(-time.Second) }, "otlp.traces.threshold -1s is under the least, 1ms"},
 		"an interval under a second":                 {func(o *model.OTLPConfig) { o.Traces.Interval = model.Duration(500 * time.Millisecond) }, "otlp.traces.interval 500ms is under the least, 1s"},
 		"a negative bound":                           {func(o *model.OTLPConfig) { o.Traces.MaxPendingSpans = -1 }, "otlp.traces.max_pending_spans must not be negative"},
+		"a ratio over 1":                             {func(o *model.OTLPConfig) { o.Traces.SampleRatio = 1.5 }, "otlp.traces.sample_ratio 1.5 is not between 0 and 1"},
+		"a negative ratio":                           {func(o *model.OTLPConfig) { o.Traces.SampleRatio = -0.25 }, "otlp.traces.sample_ratio -0.25 is not between 0 and 1"},
+		"a ratio that is no number":                  {func(o *model.OTLPConfig) { o.Traces.SampleRatio = math.NaN() }, "otlp.traces.sample_ratio NaN is not between 0 and 1"},
+		"a negative rate":                            {func(o *model.OTLPConfig) { o.Traces.MaxPerSecond = -1 }, "otlp.traces.max_per_second must not be negative"},
 	} {
 		cfg := otlpSettings(func(o *model.OTLPConfig) { o.Traces.Enabled = true; test.change(o) })
 		if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), test.want) {

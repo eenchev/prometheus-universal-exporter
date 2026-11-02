@@ -104,12 +104,22 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The debug page's collector editor colours the YAML as it is typed — keys,
+  strings, numbers, booleans, comments, a list's dashes, block scalars,
+  anchors, tags, `{{param_<name>}}` placeholders and `${NAME}` references,
+  and a withheld value muted — in either theme, the text staying the
+  browser's own, with undo, Tab and paste. A block folds behind a button in
+  the gutter, which the keyboard reaches too, its first line saying how many
+  lines it hides and the gutter keeping each line's number, with *Expand
+  all* and *Collapse all*; the playground is read-only while a block of it
+  is folded, and a click on its text edits it there.
 - The debug page has an *OTLP* tab beside *Table* and *Text*, with
   `otlp.enabled`: what the next export would send of a run's series, made by
   the export's own code — the resource, the scope, each data point with its
   OTLP name, kind, unit, attributes, value and what was changed of it, the
   points left out and why, and the request's JSON as a tree that folds,
-  coloured, with *Expand all* and *Collapse all* — and with `otlp.logs` the
+  coloured, with *Expand all* and *Collapse all*, a folded attribute
+  reading `service.name = "…"` — and with `otlp.logs` the
   run's log lines as log records. Nothing of a run is exported. At
   `--web.debug=full` it tests the endpoint with one empty export, sent once
   with the export's headers, TLS, compression and timeout

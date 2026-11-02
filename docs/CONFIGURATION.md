@@ -5471,6 +5471,28 @@ spaces, or indents the lines selected, and Shift+Tab outdents them; to leave
 the editor with the keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on
 a Mac, runs from anywhere on the page, as *Run* does.
 
+The YAML is coloured as it is typed: keys, strings, numbers, booleans and
+`null`, comments, a list's dashes, punctuation, a block scalar's indicator
+(`|`, `>-`) and its lines, anchors and aliases (`&a`, `*a`), tags (`!!str`),
+and the exporter's own `{{param_<name>}}` placeholders and `${NAME}`
+references, each in a colour of its own in either theme; a value the page
+withholds, `<redacted>`, is shown muted. The colouring is a layer behind the
+text, which stays the browser's own: undo, Tab, input methods and paste work
+as in any text box. A block — a key with lines indented under it, a list
+item with more of it below, a block scalar — folds behind the ▾ button
+beside its number, its first line then ending in how many lines it hides,
+`… 12 lines`, which unfolds it when clicked; the other lines keep their
+numbers, so the gutter skips the hidden ones, and a line an error names
+that is folded away is marked on the line of its fold. Tab reaches one of
+the buttons, the one last used or else the first, and the arrow keys, Home
+and End go to the others; Enter or Space folds or unfolds. *Expand all* and
+*Collapse all* above the editor unfold every block or fold them all. A configured collector's YAML folds as it is read. The playground
+cannot be edited while a block of it is folded — a text box cannot hide
+lines of its own — so folding it shows it as a configured collector's is
+shown, read-only; a click on its text, Enter, or *Expand all* unfolds it
+and puts the caret where it was clicked. *Run*, *Copy as*, *Edit a copy*
+and the lines an error names always take the whole YAML, folded or not.
+
 It reads one of three responses:
 
 - **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
@@ -5681,9 +5703,11 @@ is what the export does, not a description of it:
   sent on one line, gzipped unless `otlp.compression: none`. It is shown as
   a tree: each object and array folds behind a ▸/▾ button, which the
   keyboard reaches too, and shows, folded, how many keys or items it has
-  and the value of its `name` or `key`, so a folded attribute still says
-  which it is. Keys, strings, numbers, booleans and `null` have colours of
-  their own in either theme. It opens four levels below the top, down to
+  and the value of its `name` or `key`, `{…} 2 keys · pue-playground`; a
+  folded attribute shows its key and value, `{…} service.name =
+  "pue-playground"`, so the resource's and each point's attributes read
+  without unfolding them. Keys, strings, numbers, booleans and `null` have
+  colours of their own in either theme. It opens four levels below the top, down to
   each resource's attributes and the scope's metrics; *Expand all* and
   *Collapse all* open every node or fold all but the top. A node's
   contents are made when it is first opened, so a body of thousands of

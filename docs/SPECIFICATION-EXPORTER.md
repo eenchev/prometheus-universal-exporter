@@ -29749,6 +29749,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheOTLPEndpointTest`: an endpoint answering `200` with a `partialSuccess` message is `ok` with it, its `Authorization` sent and shown withheld and the empty body sent; a `429` is one request and an outcome that would retry; a `401` refused; a slow endpoint past `otlp.timeout` a client timeout; an HTTPS endpoint with an unknown CA a certificate error; none of them changes the export's counts or history.
 - `TestTheOTLPEndpointTestOfTheLogsEndpoint`: `signal: logs` sends `{"resourceLogs":[]}` to `/v1/logs` alone.
 - `TestTheOTLPTabsBodiesAreAJSONViewer`: both bodies are a `json-view` box, not a `<pre>`, with *Copy*, *Expand all* and *Collapse all* in one row, the buttons naming the box by `aria-controls`; the box scrolls past 520px and wraps anywhere; the light theme's rule and both dark rules give each of `--json-key`, `--json-string`, `--json-number`, `--json-boolean`, `--json-null` and `--json-punct` a colour, the dark ones the same in both and different from the light; the script has the viewer (the reviver keeping a number's source, the split of several requests, the button toggle with `aria-expanded`, the folded summary and its `name`/`key` hint, the opening depth of 4, children made on first opening, *Expand all* in 30 ms slices, one a frame, the not-JSON fallback), Copy copies the text the box was given, and the script writes no HTML and evaluates no code.
+- `TestTheOTLPTabsFoldedNodesReadAsText`: a folded node's comma is appended after its summary, never between `…}` and it; an object of exactly a `key` string and a `value` object of one field named `*Value` is folded as `key = value`, an `intValue` as a number, an `arrayValue` or `kvlistValue` as how many values it holds, the rest as the leaf it is, all with `textContent`.
+- `TestTheDebugPageEditorHighlightsTheYAML`: `/debug` and `/debug?collector=rooms` have the layer `collector-view` between the bands and the textarea, laid out as the textarea (font, size, `--editor-line`, padding, tab size, `white-space: pre`, no padding at the end of a line while editing) and a scroller with transparent scrollbars, the textarea's text transparent with `caret-color` and `::selection` set, and hidden in the read-only and folded views; a class for each token, keys, strings, numbers, booleans, null and punctuation in the JSON viewer's `--json-*` colours and the rest in `--yaml-*` ones; the script's tokenizer (placeholders, `${NAME}`, `<redacted>`, booleans, null, numbers, a block scalar's indicator and lines, a quoted scalar and a flow collection going on to the next line, dashes, keys, anchors and tags, a line read in a `try`), the lines read as before reused, only the rows that changed drawn again, the layer scrolled to the textarea's `scrollTop` and `scrollLeft`, the drawing once a frame, and no HTML written or code evaluated; the light rule and both dark rules give each of those colours and `--editor-selection` a value, the dark ones the same and different from the light, each at 4.5:1 or more on the editor's backgrounds, the error band and its tint.
+- `TestTheDebugPageEditorFoldsBlocks`: *Expand all* and *Collapse all* stand with *Edit a copy*, naming the editor by `aria-controls`; the script ends a block at the first line not more indented (blank lines within, a block scalar's or a flow collection's lines in, a list at a bare key's indentation in), ends a folded block's first line in how many lines it hides, which unfolds it when clicked, numbers each row with its line's own number (`aria-hidden`) and a button on a line that opens a block, with `aria-expanded` and a label of the lines it folds, one button a Tab stop and the arrow keys, Home and End going to the others without scrolling the gutter, the gutter itself not `aria-hidden`, marks a hidden line on its fold's row, folds every block or none, shows the folded playground read-only with its note, edits it again on a click at the column clicked, Enter, or a link to a line, sends the textarea's whole text when run, and unfolds when the editor is given a new text.
 - `TestTheOTLPEndpointTestIsGuarded`: `403` at `edit`, without `X-Debug-Run` and from another site, `409` for logs with the log export off and with OTLP off, `400` for another signal, `405` for `GET`, `429` while a test is in progress, and no request sent by any of them.
 
 # 35. Documentation requirements
@@ -33666,7 +33669,32 @@ at a run that is not refused and at a change of collector. In the
 playground Tab MUST put in two spaces, or indent the lines selected by two,
 and Shift+Tab MUST take up to two spaces from the start of each line the
 selection is on; Esc, then Tab, MUST leave the editor, and a read-only
-editor MUST take Tab as any field does. Ctrl+Enter and Cmd+Enter MUST run
+editor MUST take Tab as any field does. The editor MUST colour the YAML, as
+it is typed, by a reading of its lines that never fails whatever they hold:
+keys, strings, numbers, booleans and null, comments, a list's dashes,
+punctuation, a block scalar's indicator and its lines (those indented past
+its key, or its dash), anchors and aliases, tags, `{{param_<name>}}`
+placeholders and `${NAME}` references each distinctly, and a withheld value
+(`<redacted>`) muted; each colour MUST read at 4.5:1 or more on the
+editor's backgrounds in either theme. The playground MUST stay a textarea,
+its text transparent over the coloured layer, with its caret and selection
+drawn, the layer laid out and scrolled as the textarea's text is, down and
+sideways, to the device pixel, so that undo, Tab, input methods and paste
+are the browser's own; the layer MUST follow an edit before the next frame
+is drawn and MUST be made with text alone, never HTML. A line that opens a
+block — a key with more indented lines after it, a list item with more of
+it below, a block scalar — MUST have a fold button in the gutter, which
+says whether it is expanded (`aria-expanded`) and which lines it folds, a
+single one of them reached by Tab and the arrow keys, Home and End going to
+the others; a folded block's first line MUST end in how many lines it
+hides, said outside its text and unfolding the block when clicked, and the
+gutter MUST number every line shown with its own number, a line an error
+names that is folded away marked on the line of its fold. *Expand all* and *Collapse all* MUST unfold every block or fold them
+all. While a block of the playground is folded the playground MUST be shown
+read-only and MUST say so, and a click on its text, Enter or *Expand all*
+MUST unfold it, the caret where it was clicked; *Run*, *Copy as*, *Edit a
+copy*, the request type the page follows and the lines an error names MUST
+take the whole text, whatever is folded. Ctrl+Enter and Cmd+Enter MUST run
 from anywhere on the page, the editors and fields included, as *Run* does,
 which MUST say so in its title, its `aria-keyshortcuts` and a hint beside
 it, centred level with *Run* and the timeout's box; Enter with either in a parameter's value MUST NOT add a row.
@@ -33926,7 +33954,10 @@ folded how many keys or items it has and its `name` or `key` where it has
 one of them as a string; keys, strings, numbers, booleans, `null` and
 punctuation each in a colour of the theme, readable in light and in dark;
 a number as the body writes it; nodes open down to four levels below the
-top and folded below; *Expand all* and *Collapse all* beside *Copy*, the
+top and folded below; a folded node's comma, where another follows it,
+after what it says of the node; a folded object of a `key` string and a
+`value` object of one `*Value` field, as OTLP writes an attribute, saying
+`<key> = <value>`; *Expand all* and *Collapse all* beside *Copy*, the
 latter folding every node but the top. A node's children MUST be made
 when it is first opened, and *Expand all* MUST make them in slices that
 leave the page responsive. *Copy* MUST copy the body's indented text, as

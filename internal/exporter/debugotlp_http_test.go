@@ -523,6 +523,27 @@ func TestTheOTLPTabsBodiesAreAJSONViewer(t *testing.T) {
 	}
 }
 
+// A folded node reads "{…} 2 keys · name," with the comma that parts it
+// from the next at its end, after what is said of it; a folded OTLP
+// attribute, an object of a "key" and a "value" of one *Value field, reads
+// "key = value", the value's text put in as text.
+func TestTheOTLPTabsFoldedNodesReadAsText(t *testing.T) {
+	server := otlpDebugServer(t, "http://127.0.0.1:1/v1/metrics", nil)
+	script := debugPageScript(getPage(t, server, "/debug"))
+	requireContains(t, script,
+		`fold.append(jsonSpan("jv-punct", "…" + close));`,
+		"  }\n  fold.append(...comma());\n",
+		`if (!jsonPlain(value) || Object.keys(value).length !== 2 || typeof value.key !== "string" || !jsonPlain(value.value)) return null;`,
+		`if (fields.length !== 1 || !/^[a-z]+Value$/.test(fields[0])) return null;`,
+		`if (field === "intValue" && typeof inner === "string" && /^-?\d+$/.test(inner)) shown = jsonSpan("jv-number", inner);`,
+		`shown = jsonSpan("jv-summary", (field === "arrayValue" ? "[…] " : "{…} ") + values + (values === 1 ? " value" : " values"));`,
+		`fold.append(jsonSpan("jv-summary", " "), jsonSpan("jv-hint", attribute.key), jsonSpan("jv-punct", " = "), attribute.value);`,
+	)
+	if strings.Contains(script, `fold.append(jsonSpan("jv-punct", "…" + close), ...comma(),`) {
+		t.Error("a folded node's comma comes before its summary")
+	}
+}
+
 // The endpoint test sends one empty export with the export's headers and
 // reports what the endpoint answered: its status, its partialSuccess, a TLS
 // error, a timeout and a 429, which it does not retry. It changes none of

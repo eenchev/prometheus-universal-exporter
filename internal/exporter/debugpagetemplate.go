@@ -121,6 +121,57 @@ textarea[readonly] { background: var(--code); }
 .editor .bands .band { position: absolute; left: 0; right: 0; height: var(--editor-line); background: var(--danger-bg); box-shadow: inset 3px 0 0 var(--bad); }
 .editor textarea { position: relative; display: block; min-height: 360px; padding: var(--editor-pad) 8px; border: 0; border-radius: 0; background: transparent; line-height: var(--editor-line); white-space: pre; overflow-wrap: normal; overflow: auto; }
 .editor textarea:focus { outline: none; }
+/* The YAML highlighted (yamlLines): a layer behind the textarea, its text
+   laid out as the textarea's is — the font, size, line box, padding and tab
+   size the same, no wrapping — and moved by the textarea's scroll, down and
+   sideways, while the textarea's own text is transparent over it, its caret
+   and selection drawn. A configured collector's YAML, and the playground's
+   while a block is folded, are the layer alone, which scrolls itself. */
+.editor .yaml-view { position: absolute; inset: 0; overflow: auto; scrollbar-color: transparent transparent; pointer-events: none; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: normal; line-height: var(--editor-line); tab-size: 2; white-space: pre; overflow-wrap: normal; }
+.editor .yaml-lines { width: max-content; min-width: 100%; padding: var(--editor-pad) 8px; }
+/* Behind the textarea the layer is a scroller as the textarea is, with
+   the same scrollbars, hidden under the textarea's, and the same room to
+   scroll, the textarea's padding at the end of a line not being any: so it
+   scrolls as far, and the browser places the text of both alike to the
+   device pixel at any zoom. */
+.editor:not(.readonly):not(.folded) .yaml-lines { padding-right: 0; }
+.editor .yaml-lines > div { height: var(--editor-line); }
+.editor textarea { color: transparent; caret-color: var(--fg); }
+.editor textarea::selection { color: transparent; background: var(--editor-selection); }
+.editor .yaml-view ::selection { background: var(--editor-selection); }
+.editor.readonly textarea, .editor.folded textarea { display: none; }
+.editor.readonly .yaml-view, .editor.folded .yaml-view { position: relative; inset: auto; height: 360px; min-height: 120px; scrollbar-color: auto; resize: vertical; pointer-events: auto; }
+.editor .yaml-view:focus { outline: none; }
+/* What a folded block hides, said at the end of the line that opens it;
+   not part of the text, so a copy of the view leaves it out. */
+.editor .yaml-more { margin-left: 1ch; padding: 0 6px; border: 1px dashed var(--line); border-radius: 3px; color: var(--muted); cursor: pointer; user-select: none; }
+.editor .yaml-more:hover { color: var(--accent); border-color: var(--accent); }
+.y-key { color: var(--json-key); }
+.y-string { color: var(--json-string); }
+.y-number { color: var(--json-number); }
+.y-boolean { color: var(--json-boolean); }
+.y-null { color: var(--json-null); }
+.y-comment { color: var(--yaml-comment); }
+.y-dash { color: var(--yaml-dash); }
+.y-punct { color: var(--json-punct); }
+.y-indicator { color: var(--yaml-indicator); }
+.y-block { color: var(--yaml-block); }
+.y-anchor { color: var(--yaml-anchor); }
+.y-tag { color: var(--yaml-tag); }
+.y-param { color: var(--yaml-param); background: var(--yaml-param-bg); border-radius: 3px; }
+.y-env { color: var(--yaml-env); background: var(--yaml-env-bg); border-radius: 3px; }
+.y-withheld { color: var(--yaml-withheld); background: var(--yaml-withheld-bg); border-radius: 3px; }
+/* A fold's toggle, a button on the line that opens a block, left of its
+   number. Only one of them is reached by Tab, the arrow keys going on to
+   the others, so that the editor is not hundreds of stops away. */
+.editor .gutter-lines div { position: relative; }
+.editor .gutter-lines button.fold { position: absolute; left: 0; top: 0; width: 14px; height: var(--editor-line); min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font: inherit; line-height: var(--editor-line); text-align: center; cursor: pointer; }
+.editor .gutter-lines button.fold:hover { color: var(--accent); }
+.editor .gutter-lines button.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.editor .gutter-lines div.marked button.fold { color: var(--on-accent); }
+.editor-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin: 6px 0 4px; }
+.editor-tools button { margin: 0; }
+.editor-tools button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-hint { margin: 4px 0 0; }
 /* Level with Run and the timeout's box, at the foot of the row, and not
    with the row's middle, which the timeout's label above its box lowers. */
@@ -255,18 +306,23 @@ p.danger strong { color: var(--bad); }
 </select>
 <div class="collector-head">
 <label for="collector" id="collector-label">{{if .Chosen}}The configuration of {{.Chosen}}, which runs as configured (read-only){{else}}Playground: the YAML of a collector, which runs{{end}}</label>
+<div class="editor-tools">
+<button type="button" class="secondary" data-yaml-all="open" aria-controls="collector-editor">Expand all</button><button type="button" class="secondary" data-yaml-all="close" aria-controls="collector-editor">Collapse all</button>
 <button type="button" class="secondary" id="edit-copy"{{if not .Chosen}} hidden{{end}}>Edit a copy</button>
 <button type="button" class="secondary" id="back-to-example" hidden>Back to the example</button>
+</div>
 </div>
 <p class="note" id="collector-note"{{if not .Chosen}} hidden{{end}}>As its file writes it: credentials and file paths withheld, the keys it takes from its file's defaults marked. <em>Edit a copy</em> makes the playground a copy of it, which runs in its place and fetches a target through it.</p>
 <p class="note" id="copy-note" role="status" hidden></p>
 <div class="editor{{if .Chosen}} readonly{{end}}" id="collector-editor">
-<div class="gutter" aria-hidden="true"><div class="gutter-lines" id="collector-gutter"></div></div>
+<div class="gutter"><div class="gutter-lines" id="collector-gutter"></div></div>
 <div class="text"><div class="bands" id="collector-bands" aria-hidden="true"></div>
+<div class="yaml-view" id="collector-view" aria-hidden="true"><div class="yaml-lines" id="collector-lines"></div></div>
 <textarea id="collector" spellcheck="false" autocomplete="off" wrap="off" data-example="{{.Example}}"{{if .Chosen}} readonly data-shown="{{.Chosen}}" data-copy="{{.ChosenCopy}}" data-copy-note="{{.ChosenCopyNote}}"{{end}}>{{if .Chosen}}{{.ChosenYAML}}{{else}}{{.Example}}{{end}}</textarea>
 </div>
 </div>
 <p class="note editor-hint" id="editor-hint">In the playground Tab indents by two spaces and Shift+Tab outdents; Esc, then Tab, leaves the editor.</p>
+<p class="note editor-hint" id="fold-note" role="status" hidden>A block of the playground is folded, and the playground cannot be edited while one is: click the text, press Enter, or <em>Expand all</em> to edit it. Run, Copy as and the line marks read the whole YAML.</p>
 </section>
 <section class="panel">
 <h2>Response</h2>
@@ -839,55 +895,583 @@ function fitBody() {
 // are laid out by, so both follow its scroll, sideways scrolling leaving
 // them where they are. The marks go with the next edit, which moves the
 // lines they were of.
+//
+// The YAML is highlighted by a layer behind the textarea (yamlView), whose
+// lines are laid out as the textarea's are and moved by its scroll, down
+// and sideways, while the textarea's own text is transparent over it: the
+// caret, the selection, undo, Tab, the input methods and paste stay the
+// textarea's own. A block — a key with lines indented under it, a list item
+// with more of it below, a block scalar — folds behind a button in the
+// gutter, its first line saying how many lines it hides, and the gutter
+// keeps each line's own number. A textarea cannot hide lines of its own, and
+// taking them out of its text would make undo, Run, Copy as, Edit a copy
+// and the lines an error names each have to put them back: so while a block
+// is folded the playground is shown by the layer alone, read-only, as a
+// configured collector's YAML always is, and a click on its text, Enter or
+// Expand all unfolds it and puts the caret where it was asked for. What
+// runs and is copied is the textarea's text, which a fold never changes.
 const editorArea = $("collector"), gutterLines = $("collector-gutter"), bandLayer = document.createElement("div");
+const editorBox = $("collector-editor"), yamlView = $("collector-view"), yamlRows = $("collector-lines");
 bandLayer.className = "band-layer";
 $("collector-bands").append(bandLayer);
 editorArea.setAttribute("aria-describedby", "editor-hint");
 let marked = [];
 const editorLine = () => parseFloat(getComputedStyle(editorArea).lineHeight) || 20;
 const editorPad = () => parseFloat(getComputedStyle(editorArea).paddingTop) || 0;
-function followScroll() {
-  const shift = "translateY(" + -editorArea.scrollTop + "px)";
-  gutterLines.style.transform = shift;
-  bandLayer.style.transform = shift;
+// yamlLines reads text a line at a time, as it is typed, so it is tolerant:
+// it never throws, whatever the text, and needs no line but those before
+// it. Each line is its tokens, [class, text] with a null class for plain
+// space, its kind ("node", "blank", "comment", or "scalar" for a line of a
+// block scalar, of a quoted scalar or of a flow collection that goes on
+// from an earlier line), its indentation, whether it is a list item, and
+// whether it is a key with nothing after it, under which a list may start
+// at the key's own indentation. What a line carries on to the next is the
+// state: the column a block scalar's lines are indented past, the quote a
+// quoted scalar is still open with, the depth of a flow collection.
+const yamlSpecial = /(\{\{[^{}\n]*\}\}|\$\{[A-Za-z_][A-Za-z0-9_]*\}|<redacted>)/;
+const yamlBoolean = /^(?:true|false|yes|no|on|off)$/i, yamlNull = /^(?:null|~)$/i;
+const yamlNumber = /^[-+]?(?:(?:\d[\d_]*)?\.?\d[\d_]*(?:[eE][-+]?\d+)?|0x[\da-fA-F_]+|0o[0-7_]+|\.(?:inf|Inf|INF))$|^\.(?:nan|NaN|NAN)$/;
+const yamlSpace = (ch) => ch === " " || ch === "\t";
+// yamlPush adds text as cls, the placeholders of probe parameters, the
+// ${NAME} references and a value the page withholds as tokens of their own.
+function yamlPush(out, cls, text) {
+  if (text === "") return;
+  const parts = text.split(yamlSpecial);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === "") continue;
+    out.push(i % 2 === 0 ? [cls, parts[i]] : [parts[i][0] === "{" ? "y-param" : parts[i][0] === "$" ? "y-env" : "y-withheld", parts[i]]);
+  }
 }
+function yamlScalar(out, word) {
+  yamlPush(out, yamlBoolean.test(word) ? "y-boolean" : yamlNull.test(word) ? "y-null" : yamlNumber.test(word) ? "y-number" : "y-string", word);
+}
+// yamlQuoteEnd is where a scalar quoted with q, open before from, ends,
+// past its quote, or -1 when it goes on past the line.
+function yamlQuoteEnd(line, from, q) {
+  for (let i = from; i < line.length; i++) {
+    if (q === '"' && line[i] === "\\") { i++; continue; }
+    if (line[i] !== q) continue;
+    if (q === "'" && line[i + 1] === "'") { i++; continue; }
+    return i + 1;
+  }
+  return -1;
+}
+function yamlSpaces(line, pos, out) {
+  let end = pos;
+  while (end < line.length && yamlSpace(line[end])) end++;
+  if (end > pos) out.push([null, line.slice(pos, end)]);
+  return end;
+}
+// yamlProperties reads anchors, aliases and tags.
+function yamlProperties(line, pos, out) {
+  while (line[pos] === "&" || line[pos] === "*" || line[pos] === "!") {
+    let end = pos + 1;
+    while (end < line.length && !yamlSpace(line[end]) && !",[]{}".includes(line[end])) end++;
+    out.push([line[pos] === "!" ? "y-tag" : "y-anchor", line.slice(pos, end)]);
+    pos = yamlSpaces(line, end, out);
+  }
+  return pos;
+}
+// yamlRest is what follows a value: a comment, or text YAML would refuse,
+// shown as a string.
+function yamlRest(line, pos, out) {
+  pos = yamlSpaces(line, pos, out);
+  if (pos >= line.length) return;
+  if (line[pos] === "#") out.push(["y-comment", line.slice(pos)]);
+  else yamlPush(out, "y-string", line.slice(pos));
+}
+// yamlKeyAt is the key at pos, its end and its colon's place, or null.
+function yamlKeyAt(line, pos) {
+  const ch = line[pos];
+  if (ch === undefined || "{[#|>".includes(ch)) return null;
+  const colonAt = (i) => line[i] === ":" && (i + 1 === line.length || yamlSpace(line[i + 1]));
+  if (ch === '"' || ch === "'") {
+    const end = yamlQuoteEnd(line, pos + 1, ch);
+    if (end < 0) return null;
+    let colon = end;
+    while (yamlSpace(line[colon] || "")) colon++;
+    return colonAt(colon) ? { end, colon } : null;
+  }
+  let colon = pos;
+  for (; colon < line.length && !colonAt(colon); colon++) {
+    if (line[colon] === "#" && colon > pos && yamlSpace(line[colon - 1])) return null;
+  }
+  if (colon >= line.length) return null;
+  let end = colon;
+  while (end > pos && yamlSpace(line[end - 1])) end--;
+  return end > pos ? { end, colon } : null;
+}
+// yamlFlow reads a flow collection, [a, b] or {k: v}, from pos, as deep as
+// state.flow says it is, up to where it closes or the line ends.
+function yamlFlow(line, pos, out, state) {
+  const indicator = (i) => i >= line.length || yamlSpace(line[i]) || ",[]{}".includes(line[i]);
+  while (pos < line.length) {
+    const ch = line[pos];
+    if (yamlSpace(ch)) { pos = yamlSpaces(line, pos, out); continue; }
+    if (ch === "#" && (pos === 0 || yamlSpace(line[pos - 1]))) { out.push(["y-comment", line.slice(pos)]); return line.length; }
+    if (ch === "{" || ch === "[") { state.flow++; out.push(["y-punct", ch]); pos++; continue; }
+    if (ch === "}" || ch === "]") {
+      state.flow = Math.max(0, state.flow - 1);
+      out.push(["y-punct", ch]);
+      pos++;
+      if (state.flow === 0) return pos;
+      continue;
+    }
+    if (ch === "," || (ch === ":" && indicator(pos + 1))) { out.push(["y-punct", ch]); pos++; continue; }
+    if (ch === "&" || ch === "*" || ch === "!") { pos = yamlProperties(line, pos, out); continue; }
+    let end;
+    if (ch === '"' || ch === "'") {
+      end = yamlQuoteEnd(line, pos + 1, ch);
+      if (end < 0) end = line.length;
+    } else {
+      end = pos;
+      while (end < line.length && !",[]{}".includes(line[end]) && !(line[end] === ":" && indicator(end + 1)) && !(line[end] === "#" && yamlSpace(line[end - 1]))) end++;
+      while (end > pos && yamlSpace(line[end - 1])) end--;
+    }
+    if (end <= pos) { out.push([null, ch]); pos++; continue; }
+    let after = end;
+    while (yamlSpace(line[after] || "")) after++;
+    const word = line.slice(pos, end);
+    if (line[after] === ":" && indicator(after + 1)) out.push(["y-key", word]);
+    else if (ch === '"' || ch === "'") yamlPush(out, "y-string", word);
+    else yamlScalar(out, word);
+    pos = end;
+  }
+  return pos;
+}
+// yamlValue reads a node's value from pos: properties, then a block
+// scalar's indicator, whose lines are indented past parent, a flow
+// collection, a quoted scalar or a plain one, then a comment.
+function yamlValue(line, pos, out, state, parent) {
+  pos = yamlProperties(line, yamlSpaces(line, pos, out), out);
+  if (pos >= line.length) return;
+  const ch = line[pos];
+  if (ch === "#") { out.push(["y-comment", line.slice(pos)]); return; }
+  const block = /^[|>][-+1-9]*(?=[ \t]|$)/.exec(line.slice(pos));
+  if (block) {
+    out.push(["y-indicator", block[0]]);
+    state.block = parent;
+    yamlRest(line, pos + block[0].length, out);
+    return;
+  }
+  if (ch === "{" || ch === "[") {
+    state.flow = 0;
+    yamlRest(line, yamlFlow(line, pos, out, state), out);
+    return;
+  }
+  if (ch === '"' || ch === "'") {
+    const end = yamlQuoteEnd(line, pos + 1, ch);
+    if (end < 0) { yamlPush(out, "y-string", line.slice(pos)); state.quote = ch; return; }
+    yamlPush(out, "y-string", line.slice(pos, end));
+    yamlRest(line, end, out);
+    return;
+  }
+  let end = pos;
+  while (end < line.length && !(line[end] === "#" && yamlSpace(line[end - 1]))) end++;
+  while (end > pos && yamlSpace(line[end - 1])) end--;
+  yamlScalar(out, line.slice(pos, end));
+  yamlRest(line, end, out);
+}
+function yamlLine(line, state) {
+  const out = [];
+  let pos = 0;
+  while (pos < line.length && yamlSpace(line[pos])) pos++;
+  const indent = pos;
+  const info = { tokens: out, kind: "node", indent, dash: false, open: false };
+  if (state.block >= 0) {
+    if (indent === line.length) { yamlPush(out, "y-block", line); info.kind = "blank"; return info; }
+    if (indent > state.block) { yamlPush(out, "y-block", line); info.kind = "scalar"; return info; }
+    state.block = -1;
+  }
+  if (state.quote !== "") {
+    info.kind = "scalar";
+    const end = yamlQuoteEnd(line, 0, state.quote);
+    if (end < 0) { yamlPush(out, "y-string", line); return info; }
+    state.quote = "";
+    yamlPush(out, "y-string", line.slice(0, end));
+    yamlRest(line, end, out);
+    return info;
+  }
+  if (state.flow > 0) {
+    info.kind = "scalar";
+    yamlRest(line, yamlFlow(line, 0, out, state), out);
+    return info;
+  }
+  if (indent > 0) out.push([null, line.slice(0, indent)]);
+  if (indent === line.length) { info.kind = "blank"; return info; }
+  if (line[pos] === "#" || (indent === 0 && line[0] === "%")) { out.push(["y-comment", line.slice(pos)]); info.kind = "comment"; return info; }
+  if (indent === 0 && /^(?:---|\.\.\.)(?=[ \t]|$)/.test(line)) {
+    out.push(["y-punct", line.slice(0, 3)]);
+    yamlValue(line, 3, out, state, -1);
+    return info;
+  }
+  // A list item's dashes, then perhaps the key of a mapping in it.
+  let parent = indent;
+  while (line[pos] === "-" && (pos + 1 === line.length || yamlSpace(line[pos + 1]))) {
+    info.dash = true;
+    parent = pos;
+    out.push(["y-dash", "-"]);
+    pos = yamlSpaces(line, pos + 1, out);
+  }
+  pos = yamlProperties(line, pos, out);
+  const key = yamlKeyAt(line, pos);
+  if (key) {
+    out.push(["y-key", line.slice(pos, key.end)]);
+    yamlSpaces(line, key.end, out);
+    out.push(["y-punct", ":"]);
+    parent = pos;
+    const before = out.length;
+    yamlValue(line, key.colon + 1, out, state, parent);
+    info.open = !info.dash && out.slice(before).every(([cls]) => cls === null || cls === "y-comment");
+    return info;
+  }
+  yamlValue(line, pos, out, state, parent);
+  return info;
+}
+// yamlLines is each line of text read as yamlLine reads it. A line read
+// from the same state as before is the same, and is not read again.
+let yamlKnown = new Map();
+function yamlLines(text) {
+  const state = { block: -1, quote: "", flow: 0 }, known = new Map(), lines = [];
+  for (const line of text.split("\n")) {
+    const sig = state.block + "\u0000" + state.quote + "\u0000" + state.flow + "\u0000" + line;
+    let read = yamlKnown.get(sig) || known.get(sig);
+    if (!read) {
+      try {
+        read = { info: yamlLine(line, state) };
+      } catch (error) {
+        // Never for any text, but a line the reader could not read is still
+        // shown, as it is.
+        read = { info: { tokens: [[null, line]], kind: "node", indent: 0, dash: false, open: false } };
+      }
+      read.info.sig = sig;
+      read.after = { block: state.block, quote: state.quote, flow: state.flow };
+    }
+    known.set(sig, read);
+    Object.assign(state, read.after);
+    lines.push(read.info);
+  }
+  yamlKnown = known;
+  return lines;
+}
+// yamlBlocks is, for each line, the last line of the block it opens, or -1:
+// the lines after a node's that are more indented, a block scalar's or a
+// flow collection's that go on from it, and, under a key with nothing after
+// it, a list at the key's own indentation; blank lines within, but not
+// after, the block; a comment less indented ends it.
+function yamlBlocks(lines) {
+  const ends = new Int32Array(lines.length).fill(-1);
+  for (let i = 0; i < lines.length; i++) {
+    const at = lines[i];
+    if (at.kind !== "node") continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = lines[j];
+      if (next.kind === "blank") continue;
+      if (next.kind === "scalar" || next.indent > at.indent || (at.open && next.dash && next.indent === at.indent)) { ends[i] = j; continue; }
+      break;
+    }
+  }
+  return ends;
+}
+// What the editor shows: viewRows, each a line shown, a folded block's
+// first line saying how many lines it hides; rowOf is each line's row,
+// that of the fold that hides it for a hidden one.
+let yamlText = null, yamlInfo = [], yamlEnds = new Int32Array(0), viewRows = [], rowOf = [], viewSigs = [], markedRows = [];
+const folds = new Set();
+let foldStop = 0;
+const viewing = () => editorBox.classList.contains("readonly") || editorBox.classList.contains("folded");
+const scroller = () => viewing() ? yamlView : editorArea;
+const hiddenText = (count) => "… " + count + (count === 1 ? " line" : " lines");
+function rowElement(row) {
+  const div = document.createElement("div");
+  for (const [cls, text] of yamlInfo[row.line].tokens) div.append(cls ? jsonSpan(cls, text) : text);
+  if (row.hidden) {
+    const more = jsonSpan("yaml-more", hiddenText(row.hidden));
+    more.title = "Unfold";
+    div.append(more);
+  }
+  return div;
+}
+// drawViewRows makes again the rows that changed alone: those between the
+// rows the start and the end of the YAML still have as they were, so a key
+// typed redraws its line.
+function drawViewRows() {
+  const sigs = viewRows.map((row) => row.hidden ? yamlInfo[row.line].sig + "\u0001" + row.hidden : yamlInfo[row.line].sig);
+  const same = Math.min(sigs.length, viewSigs.length);
+  let start = 0, tail = 0;
+  while (start < same && sigs[start] === viewSigs[start]) start++;
+  while (tail < same - start && sigs[sigs.length - 1 - tail] === viewSigs[viewSigs.length - 1 - tail]) tail++;
+  const old = yamlRows.children, before = old[viewSigs.length - tail] || null;
+  for (let k = viewSigs.length - tail - 1; k >= start; k--) old[k].remove();
+  const made = document.createDocumentFragment();
+  for (let k = start; k < sigs.length - tail; k++) made.append(rowElement(viewRows[k]));
+  yamlRows.insertBefore(made, before);
+  viewSigs = sigs;
+}
+// drawGutter numbers each row with its line's own number, and puts a fold
+// button on a line that opens a block. Each number keeps its button and
+// its text, which change where they must alone: a line put in changes the
+// buttons below it, not the numbers. One button is reached by Tab, that of
+// foldStop, the line whose button was last used, or else the first.
 function drawGutter() {
-  const count = editorArea.value.split("\n").length;
-  // Room for the widest number, and the gutter's padding.
-  gutterLines.parentElement.style.width = "calc(" + String(count).length + "ch + 12px)";
-  while (gutterLines.childElementCount > count) gutterLines.lastElementChild.remove();
-  for (let n = gutterLines.childElementCount + 1; n <= count; n++) {
-    const number = document.createElement("div");
-    number.textContent = String(n);
+  // Room for the widest number, the toggle and the gutter's padding.
+  gutterLines.parentElement.style.width = "calc(" + String(yamlInfo.length).length + "ch + 26px)";
+  while (gutterLines.childElementCount > viewRows.length) gutterLines.lastElementChild.remove();
+  while (gutterLines.childElementCount < viewRows.length) {
+    const number = document.createElement("div"), toggle = document.createElement("button"), text = jsonSpan("", "");
+    toggle.type = "button";
+    toggle.className = "fold";
+    toggle.hidden = true;
+    toggle.tabIndex = -1;
+    text.setAttribute("aria-hidden", "true");
+    number.append(toggle, text);
+    number.drawn = "";
     gutterLines.append(number);
   }
+  let stop = -1;
+  for (let k = 0; k < viewRows.length && stop < 0; k++) if (yamlEnds[viewRows[k].line] >= 0 && viewRows[k].line >= foldStop) stop = k;
+  for (let k = viewRows.length - 1; k >= 0 && stop < 0; k--) if (yamlEnds[viewRows[k].line] >= 0) stop = k;
+  for (let k = 0; k < viewRows.length; k++) {
+    const row = viewRows[k], number = gutterLines.children[k], toggle = number.firstChild;
+    const end = yamlEnds[row.line], open = !folds.has(row.line);
+    const drawn = row.line + " " + end + " " + open + " " + (k === stop);
+    if (number.drawn === drawn) continue;
+    number.drawn = drawn;
+    toggle.hidden = end < 0;
+    toggle.tabIndex = k === stop ? 0 : -1;
+    if (end >= 0) {
+      toggle.textContent = open ? "▾" : "▸";
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", "Lines " + (row.line + 2) + " to " + (end + 1) + ", under line " + (row.line + 1));
+      toggle.title = (open ? "Fold" : "Unfold") + " lines " + (row.line + 2) + " to " + (end + 1);
+    }
+    number.lastChild.textContent = String(row.line + 1);
+  }
+}
+// drawMarks marks the rows of the lines an error named, in the gutter and
+// with a band, a hidden line's on its fold's row.
+function drawMarks() {
+  for (const number of markedRows) number.classList.remove("marked");
+  const height = editorLine(), pad = editorPad();
+  const at = [...new Set(marked.filter((n) => n <= rowOf.length).map((n) => rowOf[n - 1]))];
+  markedRows = at.map((k) => gutterLines.children[k]);
+  bandLayer.replaceChildren(...at.map((k) => {
+    gutterLines.children[k].classList.add("marked");
+    const band = document.createElement("div");
+    band.className = "band";
+    band.style.top = pad + k * height + "px";
+    return band;
+  }));
+}
+function followScroll() {
+  const from = scroller();
+  const shift = "translateY(" + -from.scrollTop + "px)";
+  gutterLines.style.transform = shift;
+  bandLayer.style.transform = shift;
+  if (from === editorArea) {
+    yamlView.scrollTop = editorArea.scrollTop;
+    yamlView.scrollLeft = editorArea.scrollLeft;
+  }
+}
+let drawFrame = 0;
+function drawEditor() {
+  if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
+  const text = editorArea.value;
+  if (text !== yamlText) {
+    yamlText = text;
+    yamlInfo = yamlLines(text);
+    yamlEnds = yamlBlocks(yamlInfo);
+    for (const line of folds) if (!(yamlEnds[line] > line)) folds.delete(line);
+  }
+  viewRows = [];
+  rowOf = new Array(yamlInfo.length);
+  for (let i = 0; i < yamlInfo.length; i++) {
+    rowOf[i] = viewRows.length;
+    if (!folds.has(i)) { viewRows.push({ line: i }); continue; }
+    viewRows.push({ line: i, hidden: yamlEnds[i] - i });
+    for (let j = i + 1; j <= yamlEnds[i]; j++) rowOf[j] = viewRows.length - 1;
+    i = yamlEnds[i];
+  }
+  const folded = !editorArea.readOnly && folds.size > 0;
+  editorBox.classList.toggle("folded", folded);
+  $("fold-note").hidden = !folded;
+  // Shown alone, the layer is what is read; behind the textarea, the
+  // textarea is.
+  if (viewing()) {
+    yamlView.removeAttribute("aria-hidden");
+    yamlView.tabIndex = 0;
+    yamlView.setAttribute("role", "region");
+    yamlView.setAttribute("aria-labelledby", "collector-label");
+  } else {
+    // Out of the keyboard's way too, which reaches a scroller.
+    yamlView.setAttribute("aria-hidden", "true");
+    yamlView.tabIndex = -1;
+    yamlView.removeAttribute("role");
+    yamlView.removeAttribute("aria-labelledby");
+  }
+  for (const button of document.querySelectorAll("[data-yaml-all]")) {
+    button.disabled = button.dataset.yamlAll === "open" ? folds.size === 0 : !yamlEnds.some((end) => end >= 0);
+  }
+  drawViewRows();
+  drawGutter();
+  drawMarks();
   followScroll();
+}
+// The rows follow the text once a frame, before it is drawn, however fast
+// the keys come.
+function drawSoon() {
+  if (!drawFrame) drawFrame = requestAnimationFrame(() => { drawFrame = 0; drawEditor(); });
 }
 // markLines marks the lines numbered in lines, those the editor has.
 function markLines(lines) {
-  for (const n of marked) if (gutterLines.children[n - 1]) gutterLines.children[n - 1].classList.remove("marked");
-  marked = lines.filter((n) => n >= 1 && n <= gutterLines.childElementCount);
-  const height = editorLine(), pad = editorPad();
-  bandLayer.replaceChildren(...marked.map((n) => {
-    gutterLines.children[n - 1].classList.add("marked");
-    const band = document.createElement("div");
-    band.className = "band";
-    band.style.top = pad + (n - 1) * height + "px";
-    return band;
-  }));
+  const count = editorArea.value.split("\n").length;
+  marked = lines.filter((n) => n >= 1 && n <= count);
+  if (yamlText !== editorArea.value) drawEditor();
+  else drawMarks();
   followScroll();
 }
 function setEditor(text) {
   editorArea.value = text;
-  markLines([]);
-  drawGutter();
+  folds.clear();
+  foldStop = 0;
+  marked = [];
+  drawEditor();
+  yamlView.scrollTop = 0;
+  yamlView.scrollLeft = 0;
+  followScroll();
 }
 editorArea.addEventListener("scroll", followScroll);
+yamlView.addEventListener("scroll", followScroll);
+// The line of the row at the top of the view.
+const topLine = () => {
+  const k = Math.min(viewRows.length - 1, Math.max(0, Math.floor((scroller().scrollTop - editorPad()) / editorLine())));
+  return viewRows.length === 0 ? 0 : viewRows[k].line;
+};
+// refold changes the folds, keeping line where it was in the view: the
+// playground's textarea and its layer shown alone in turn have the same
+// height, and the same line at the same height in them.
+function refold(change, line) {
+  const height = editorLine(), pad = editorPad(), before = scroller();
+  const offset = pad + (rowOf[line] || 0) * height - before.scrollTop, left = before.scrollLeft, tall = before.offsetHeight;
+  change();
+  drawEditor();
+  const after = scroller();
+  if (after !== before && tall > 0) after.style.height = tall + "px";
+  after.scrollTop = Math.max(0, pad + (rowOf[line] || 0) * height - offset);
+  after.scrollLeft = left;
+  followScroll();
+}
+// editAt unfolds the playground and puts the caret at column of line.
+function editAt(line, column) {
+  refold(() => folds.clear(), line);
+  const lines = editorArea.value.split("\n");
+  let at = 0;
+  for (let i = 0; i < line && i < lines.length; i++) at += lines[i].length + 1;
+  at += Math.min(column, (lines[line] || "").length);
+  const top = editorArea.scrollTop, left = editorArea.scrollLeft;
+  editorArea.setSelectionRange(at, at);
+  editorArea.focus({ preventScroll: true });
+  editorArea.scrollTop = top;
+  editorArea.scrollLeft = left;
+  followScroll();
+}
+// The column of the text at x, y in the row, from the caret the browser
+// puts there.
+function columnAt(row, x, y) {
+  let node = null, offset = 0;
+  if (document.caretPositionFromPoint) {
+    const at = document.caretPositionFromPoint(x, y);
+    if (at) { node = at.offsetNode; offset = at.offset; }
+  } else if (document.caretRangeFromPoint) {
+    const at = document.caretRangeFromPoint(x, y);
+    if (at) { node = at.startContainer; offset = at.startOffset; }
+  }
+  if (!node || !row.contains(node)) return row.textContent.length;
+  let column = 0;
+  const walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  for (let text = walk.nextNode(); text; text = walk.nextNode()) {
+    if (text === node) return column + offset;
+    column += text.length;
+  }
+  return column;
+}
+const rowIndex = (parent, child) => Array.prototype.indexOf.call(parent.children, child);
+gutterLines.addEventListener("click", (event) => {
+  const toggle = event.target.closest("button.fold");
+  if (!toggle) return;
+  const row = viewRows[rowIndex(gutterLines, toggle.parentElement)];
+  if (!row) return;
+  foldStop = row.line;
+  refold(() => { if (folds.has(row.line)) folds.delete(row.line); else folds.add(row.line); }, row.line);
+});
+// The arrow keys, Home and End go from one fold button to another; the
+// view scrolls to the one focused, and the gutter, which follows the view,
+// is never scrolled by the focus itself.
+gutterLines.addEventListener("keydown", (event) => {
+  const toggle = event.target.closest("button.fold");
+  if (!toggle || event.ctrlKey || event.metaKey || event.altKey || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const buttons = [...gutterLines.querySelectorAll("button.fold:not([hidden])")];
+  const at = buttons.indexOf(toggle);
+  const to = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : at + (event.key === "ArrowUp" ? -1 : 1);
+  event.preventDefault();
+  if (to < 0 || to >= buttons.length || to === at) return;
+  toggle.tabIndex = -1;
+  buttons[to].tabIndex = 0;
+  foldStop = viewRows[rowIndex(gutterLines, buttons[to].parentElement)].line;
+  buttons[to].focus({ preventScroll: true });
+});
+gutterLines.addEventListener("focusin", (event) => {
+  const k = rowIndex(gutterLines, event.target.parentElement);
+  if (k < 0) return;
+  const gutter = gutterLines.parentElement;
+  gutter.scrollTop = 0;
+  gutter.scrollLeft = 0;
+  const from = scroller(), height = editorLine(), top = editorPad() + k * height;
+  if (top < from.scrollTop) from.scrollTop = top;
+  else if (top + height > from.scrollTop + from.clientHeight) from.scrollTop = top + height - from.clientHeight;
+  followScroll();
+});
+yamlView.addEventListener("click", (event) => {
+  const div = event.target.closest(".yaml-lines > div");
+  if (!div) return;
+  const row = viewRows[rowIndex(yamlRows, div)];
+  if (!row) return;
+  if (event.target.closest(".yaml-more")) { refold(() => folds.delete(row.line), row.line); return; }
+  // A click on the folded playground's text edits it there; a selection
+  // being made is left to be made.
+  if (editorArea.readOnly || folds.size === 0 || !document.getSelection().isCollapsed) return;
+  editAt(row.line, columnAt(div, event.clientX, event.clientY));
+});
+yamlView.addEventListener("keydown", (event) => {
+  // Select all selects the YAML, as it does in a textarea.
+  if (event.key === "a" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && viewing()) {
+    event.preventDefault();
+    const range = document.createRange();
+    range.selectNodeContents(yamlRows);
+    document.getSelection().removeAllRanges();
+    document.getSelection().addRange(range);
+    return;
+  }
+  if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || editorArea.readOnly || folds.size === 0) return;
+  event.preventDefault();
+  editAt(topLine(), 0);
+});
+for (const button of document.querySelectorAll("[data-yaml-all]")) {
+  button.addEventListener("click", () => {
+    const open = button.dataset.yamlAll === "open";
+    refold(() => {
+      folds.clear();
+      if (!open) for (let i = 0; i < yamlEnds.length; i++) if (yamlEnds[i] > i) folds.add(i);
+    }, topLine());
+    if (open && !editorArea.readOnly) editorArea.focus({ preventScroll: true });
+  });
+}
 // jumpTo selects the line numbered n in the editor and scrolls it into the
 // middle of the view.
 function jumpTo(n) {
   const lines = editorArea.value.split("\n");
   if (n < 1 || n > lines.length) return;
+  if (folds.size > 0) { folds.clear(); drawEditor(); }
   let start = 0;
   for (let i = 0; i < n - 1; i++) start += lines[i].length + 1;
   editorArea.focus();
@@ -1149,8 +1733,8 @@ if (staticCopy) $("static-target").addEventListener("change", staticCopy);
 let typeFrame = 0;
 $("collector").addEventListener("input", () => {
   // An edit moves the lines an error named: their marks go.
-  markLines([]);
-  drawGutter();
+  marked = [];
+  drawSoon();
   if ($("collector").readOnly) return;
   written = $("collector").value;
   if (typeFrame) return;
@@ -1189,7 +1773,7 @@ $("back-to-example").addEventListener("click", () => {
 for (const radio of document.querySelectorAll('input[name="mode"]')) radio.addEventListener("change", showMode);
 $("configured").addEventListener("change", showCollector);
 showMode();
-drawGutter();
+drawEditor();
 showCollector();
 // A list whose rows are wrong is not sent: the first wrong row is focused,
 // and the status says where to look.
@@ -1458,6 +2042,27 @@ function jsonLeaf(value) {
   if (typeof value === "boolean") return jsonSpan("jv-boolean", String(value));
   return jsonSpan("jv-null", "null");
 }
+// jsonAttribute is the key and the value's text of an OTLP attribute, an
+// object of a "key" string and a "value" object of one field named
+// *Value ({"key": "k", "value": {"stringValue": "v"}}), or null for any
+// other: a folded attribute says "k = v". An intValue, which OTLP's JSON
+// writes as a string, is shown as the number it is; an arrayValue or a
+// kvlistValue as how many values it holds.
+const jsonPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof JSONNumber);
+function jsonAttribute(value) {
+  if (!jsonPlain(value) || Object.keys(value).length !== 2 || typeof value.key !== "string" || !jsonPlain(value.value)) return null;
+  const fields = Object.keys(value.value);
+  if (fields.length !== 1 || !/^[a-z]+Value$/.test(fields[0])) return null;
+  const field = fields[0], inner = value.value[field];
+  let shown;
+  if (field === "intValue" && typeof inner === "string" && /^-?\d+$/.test(inner)) shown = jsonSpan("jv-number", inner);
+  else if ((field === "arrayValue" || field === "kvlistValue") && jsonPlain(inner)) {
+    const values = Array.isArray(inner.values) ? inner.values.length : 0;
+    shown = jsonSpan("jv-summary", (field === "arrayValue" ? "[…] " : "{…} ") + values + (values === 1 ? " value" : " values"));
+  } else if (inner === null || typeof inner !== "object" || inner instanceof JSONNumber) shown = jsonLeaf(inner);
+  else shown = jsonSpan("jv-summary", Array.isArray(inner) ? "[…]" : "{…}");
+  return { key: value.key, value: shown };
+}
 function jsonNode(key, value, depth, last) {
   const head = document.createElement("div");
   head.className = "jv-line";
@@ -1482,10 +2087,19 @@ function jsonNode(key, value, depth, last) {
   const named = array ? undefined : [value.name, value.key].find((v) => typeof v === "string");
   const what = (key !== null ? key : array ? "array" : "object") + (named !== undefined ? " " + named : "");
   toggle.setAttribute("aria-label", what);
+  // Folded, the node reads "{…} 2 keys · name," or, for an attribute,
+  // "{…} service.name = "pue",": the comma that parts it from the next
+  // comes last, after what is said of it.
   const fold = jsonSpan("jv-fold", "");
-  fold.append(jsonSpan("jv-punct", "…" + close), ...comma(),
-    jsonSpan("jv-summary", " " + entries.length + (array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys")) + (named !== undefined ? " · " : "")));
-  if (named !== undefined) fold.append(jsonSpan("jv-hint", named));
+  fold.append(jsonSpan("jv-punct", "…" + close));
+  const attribute = jsonAttribute(value);
+  if (attribute) {
+    fold.append(jsonSpan("jv-summary", " "), jsonSpan("jv-hint", attribute.key), jsonSpan("jv-punct", " = "), attribute.value);
+  } else {
+    fold.append(jsonSpan("jv-summary", " " + entries.length + (array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys")) + (named !== undefined ? " · " : "")));
+    if (named !== undefined) fold.append(jsonSpan("jv-hint", named));
+  }
+  fold.append(...comma());
   head.prepend(toggle);
   head.append(jsonSpan("jv-punct", open), fold);
   const kids = document.createElement("div");

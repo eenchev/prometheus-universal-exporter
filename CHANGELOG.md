@@ -237,6 +237,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- The status page no longer shows the last error of a static target whose
+  last scrape succeeded as if it still failed beside `success` and 0
+  failures: the error stays, muted, under *Earlier failure, recovered since*,
+  with when it was and how long ago. The recent probes and the OTLP, log and
+  trace exports' last error follow the same rule, and the JSON says it with
+  `last_error_recovered`.
 - The debug page no longer shows a credential written in free text of a
   configured collector's request, in its view or in *Edit a copy*: an `http`
   body, a `grpc` message, a `tcp` send (`AUTH …`, `PASS …`), a `redis`

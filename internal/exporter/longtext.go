@@ -44,7 +44,7 @@ func clipLong(kind, text string) longText {
 }
 
 // pageFuncs are the functions the pages' templates may call.
-var pageFuncs = template.FuncMap{"long": clipLong}
+var pageFuncs = template.FuncMap{"long": clipLong, "lastError": statusLastError}
 
 // longTemplate writes a cell's text, {{template "long" (long "error" .Err)}}.
 // The summary's label says what it does, since its text is only the start

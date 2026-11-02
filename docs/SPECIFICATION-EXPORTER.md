@@ -29808,6 +29808,13 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestCorePackagesNameNoRequestType`: `internal/exporter/otlptraces.go` holds `"http"` twice, a URL's scheme.
 - `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` and the log export's tests still pass unchanged: with `traces` left out the metrics' and the logs' exports are what they were, byte for byte.
 
+## 34.254 A recovered last error on the status page
+
+- `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted`: a static target that failed and then succeeded keeps its error with `last_error_recovered` true, and its row shows it under the label "Earlier failure, recovered since", the error in a muted block and `at <time> (<age> ago)` under it; a target whose last scrape failed has `last_error_recovered` false and its error shown as before, unlabelled, with `at <time>` alone. `TestTheStatusPagesOTLPJSON` and `TestTheRecentProbesJSONShape` still pass unchanged: without a last error the field is left out.
+- `TestTheRecentProbesShowARecoveredErrorMuted`: of the recent probes, a collector and target whose latest probe succeeded after a failed one has its error shown as recovered and `last_error_recovered` true; one whose latest probe failed has it shown as before and false.
+- `TestTheOTLPExportsRecoveredErrorIsShownMuted`: the OTLP export's Last error is shown as before while the last export failed, `last_error_recovered` false, and as recovered, with the JSON's `otlp.last_error_recovered` true, once an export got through after it.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m0s ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -32287,6 +32294,18 @@ then one of the OTLP export. Of the static targets:
   (§ 25); nothing else of a target's answer MAY be shown. A scrape that
   panicked MUST be shown with a fixed error saying so; the panic's text MUST
   NOT be shown, only logged.
+- An error kept through a later success MUST NOT be shown as a failing
+  one's: while the target's last scrape succeeded, the page MUST show it
+  muted, under a label saying it is an earlier failure recovered since, with
+  when its scrape began and how long ago, in the page's age format, and the
+  long text's preview and whole text as any other's; an error of a target
+  whose last scrape did not succeed MUST be shown as before. The JSON MUST
+  say which with `last_error_recovered` beside `last_error`, `true` for the
+  first and `false` otherwise, and leave it out with `last_error`. The same rule MUST hold for the recent
+  probes' error, recovered while the latest probe succeeded (`success` or
+  `cached`), and for the OTLP, log and trace exports' last error, recovered
+  while the last export got through, each with its own
+  `last_error_recovered`.
 - A summary line MUST give the number of targets, of those failing, and of
   those not yet scraped; the failing targets MUST come first, each part in
   name order.

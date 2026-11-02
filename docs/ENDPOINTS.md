@@ -75,6 +75,19 @@ way when the box opened is shown only when it closes. It refreshes when the
 box closes, at once if a refresh fell due meanwhile. Without JavaScript *Show
 all* opens the whole text in place. The JSON has every value whole.
 
+A last error stays shown after what failed succeeds again, so a failure in
+the night can be read in the morning. So that it does not contradict the
+result beside it, an error a later success put behind — of a static target
+whose last scrape succeeded, of a collector and target whose latest probe
+succeeded, or of the OTLP, log or trace export whose last export got
+through — is shown muted under the label *Earlier failure, recovered
+since*, with when it was and how long ago, as
+`at 2026-11-02T07:58:39Z (35m0s ago)`; its *Show all* works as any other's.
+An error of what is still failing is shown as before. In the JSON,
+`last_error_recovered` beside `last_error` says which: `true` for an error a
+later success put behind, `false` for one of what is still failing; it is left
+out with `last_error`.
+
 ### Refreshing
 
 The page refreshes as a Grafana dashboard does. Its Refresh button fetches
@@ -139,7 +152,8 @@ collector, target and parameters:
   cached, `✗` failed, refused or rejected, `~` stale result served, `…`
   backing off; each mark's title has the probe's time, result and status;
 - the error of the latest failed probe of the ten, and when that probe began,
-  shown as the static targets' errors are: the log's text, with every URL's
+  [shown as recovered](#status-page) when the latest probe succeeded, and
+  otherwise as the static targets' errors are: the log's text, with every URL's
   credentials withheld, its userinfo too where the text only quotes the URL,
   anything else that reads as a credential masked, and cut to 2000 bytes. A
   failure is shown as the probe's caller was answered it, without the values
@@ -190,7 +204,7 @@ array with an object per row and, in it, the row's probes, oldest first:
    "last_probe": "2026-10-24T08:59:45Z", "last_probe_age_seconds": 15.1, "duration_seconds": 0.212,
    "status": 502, "series": 0,
    "last_error": "fetch https://billing-eu.example/v1/usage/acme: received HTTP status 503",
-   "last_error_at": "2026-10-24T08:59:45Z",
+   "last_error_at": "2026-10-24T08:59:45Z", "last_error_recovered": false,
    "probes": [
     {"at": "2026-10-24T08:59:15Z", "duration_seconds": 0.198, "result": "success", "shared": false, "status": 200, "series": 41},
     {"at": "2026-10-24T08:59:45Z", "duration_seconds": 0.212, "result": "failed", "shared": false, "status": 502, "series": 0,
@@ -200,7 +214,8 @@ array with an object per row and, in it, the row's probes, oldest first:
  ]}
 ```
 
-`params`, `last_error` and a probe's `error` are left out when empty.
+`params`, `last_error` with `last_error_recovered`, and a probe's `error` are
+left out when empty.
 
 The page shows nothing the self-metrics, the series and the log do not: it is
 protected by `web.basic_auth` like every endpoint, answers `GET` and `HEAD`
@@ -241,7 +256,8 @@ With [OTLP export](OTLP.md) on, the section shows:
   when the failed exports made it so, since the end of the failed export
   that did (see [Readiness](CONFIGURATION.md#readiness));
 - the error of the last failed export and when that export began, kept
-  after exports get through again, as a static target's is: the log's text,
+  after exports get through again, and then [shown as
+  recovered](#status-page), as a static target's is: the log's text,
   with every URL's credentials withheld, anything else that reads as a
   credential masked — a URL an error quotes has every query value masked,
   as in the log — and cut to 2000 bytes. An export of which the endpoint
@@ -267,7 +283,8 @@ With [`otlp.logs`](OTLP.md#the-exporters-own-log) on, a part of the section,
 its credentials withheld as `otlp.endpoint`'s are, its level and interval; when
 the last log export began, its result and the records it carried; the last
 that got through; the failed log exports in a row; the last failure's error and
-when that export began; the records waiting and `otlp.logs.max_pending_records`;
+when that export began, shown as recovered once a log export got through after
+it; the records waiting and `otlp.logs.max_pending_records`;
 and since the start, the records dropped, by why — over the bound, refused or
 rejected by the endpoint, and of the last export at shutdown — the records
 sent, and the exports that succeeded and failed. It says nothing of readiness,
@@ -281,7 +298,8 @@ and scrapes as **Log export** shows the log's: its endpoint, with its
 credentials withheld, its threshold, whether `errors` exports failed ones
 too, and its interval; when the last trace export began, its result and the
 spans it carried; the last that got through; the failed trace exports in a
-row; the last failure's error and when that export began; the spans waiting
+row; the last failure's error and when that export began, shown as recovered
+once a trace export got through after it; the spans waiting
 and `otlp.traces.max_pending_spans`; and since the start, the spans dropped,
 by why, the spans sent, and the exports that succeeded and failed. It says
 nothing of readiness, which the trace export does not touch. A reload that
@@ -312,7 +330,7 @@ export is off, and otherwise:
  "consecutive_failures": 2,
  "unready_after_failures": 3, "readiness": "ready",
  "last_error": "Post \"https://redacted:redacted@otel.example/v1/metrics?token=<redacted>&tenant=<redacted>\": dial tcp 10.0.0.7:443: connect: connection refused",
- "last_error_at": "2026-10-24T08:59:30Z",
+ "last_error_at": "2026-10-24T08:59:30Z", "last_error_recovered": false,
  "pending_points": 812, "max_pending_points": 100000,
  "points_dropped": 0,
  "points_dropped_by_reason": {"refused": 0, "rejected": 0, "over_max_pending_points": 0, "last_export_at_shutdown": 0},

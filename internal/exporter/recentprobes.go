@@ -307,12 +307,17 @@ type probeStatusRow struct {
 	Series       int     `json:"series"`
 	// LastError is the error of the latest failed probe kept, which
 	// LastErrorAt began.
-	LastError   string             `json:"last_error,omitempty"`
-	LastErrorAt string             `json:"last_error_at,omitempty"`
-	Probes      []probeStatusProbe `json:"probes"`
-	// Age and DurationText are the latest probe's as the page writes them.
+	LastError   string `json:"last_error,omitempty"`
+	LastErrorAt string `json:"last_error_at,omitempty"`
+	// LastErrorRecovered, given with LastError alone, says the latest
+	// probe, after the one LastError is of, succeeded.
+	LastErrorRecovered *bool              `json:"last_error_recovered,omitempty"`
+	Probes             []probeStatusProbe `json:"probes"`
+	// Age and DurationText are the latest probe's as the page writes them,
+	// LastErrorAge LastErrorAt's age.
 	Age          string `json:"-"`
 	DurationText string `json:"-"`
+	LastErrorAge string `json:"-"`
 }
 
 // probeStatusProbe is one probe of a key, in the JSON and as a mark of the
@@ -378,8 +383,10 @@ func (s *Server) probeRowsAt(now time.Time) []probeStatusRow {
 			if p.failure != "" {
 				row.LastError = p.failure
 				row.LastErrorAt = p.at.UTC().Format(time.RFC3339)
+				row.LastErrorAge = shortDuration(max(now.Sub(p.at), 0))
 			}
 		}
+		row.LastErrorRecovered = errorRecovered(row.LastError, !row.Failing)
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {

@@ -72,9 +72,9 @@ type probeResult struct {
 	failure string
 }
 
-func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request) {
+func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request, utf8Names bool) {
 	if p.metrics != nil {
-		writeMetricSet(w, r, p.metrics)
+		writeMetricSet(w, r, p.metrics, utf8Names)
 		return
 	}
 	for key, values := range p.header {

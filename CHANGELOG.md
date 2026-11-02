@@ -16,7 +16,14 @@ lines it ships into its own section. Each section begins with
  what someone upgrading has to do or will notice,
 such as a renamed configuration key, a changed default, something removed or a
 changed metric, or "Nothing; you can upgrade without changes." when there is
-nothing. `### New` - Native and exponential histograms of the exporter's own scrape durations:
+nothing. `### New` - `metric_name_validation_scheme: utf8` on a collector, Prometheus 3's
+  setting: the collector keeps UTF-8 metric and label names such as
+  `http.server.duration` as they are, and each answer writes them as its
+  scraper's `Accept` asks — quoted (`{"http.server.duration"} 1`) for
+  `escaping=allow-utf-8`, escaped by `underscores` (the default), `dots` or
+  `values` otherwise — with the escaping in its `Content-Type`. The default,
+  `legacy`, is the classic names and `name_escaping` as before.
+- Native and exponential histograms of the exporter's own scrape durations:
   `http_exporter_collector_scrape_duration_seconds` keeps its durations in
   exponential buckets too, which follow the durations observed (scale 20
   down to whatever fits 160 buckets, as OpenTelemetry's SDKs do). The

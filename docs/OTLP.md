@@ -438,7 +438,11 @@ in a unit loses it to the metric's `unit` field, a
 [UCUM](https://ucum.org/ucum) code, so the counter `http_requests_total` is
 `http_requests`, the histogram `request_duration_seconds` is
 `request_duration` of unit `s`, and the counter `process_cpu_seconds_total` is
-`process_cpu` of unit `s`. The units are those the OpenTelemetry Collector's
+`process_cpu` of unit `s`. A UTF-8 name a collector keeps
+([`metric_name_validation_scheme: utf8`](CONFIGURATION.md#keeping-utf-8-names)),
+`http.server.duration_seconds`, is sent as it is under `prometheus` and as
+`http.server.duration` of unit `s` under `otel`, its labels' names as its
+attributes' keys, dots and all. The units are those the OpenTelemetry Collector's
 Prometheus translator writes as a name's suffix, read backwards:
 
 | Suffix | Unit | Suffix | Unit | Suffix | Unit |

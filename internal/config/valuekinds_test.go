@@ -215,7 +215,7 @@ func textOnlyKeys(t reflect.Type) map[string][]string {
 func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 	collector := []string{
 		"decoder.type", "derived[].by[]", "derived[].difference[]", "derived[].name", "derived[].ratio[]", "derived[].sum[]", "derived[].type", "error_handling.on_decode_error", "error_handling.on_fetch_error", "error_handling.on_transform_error",
-		"lint.ignore[]", "metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metrics_prefix", "name", "name_escaping",
+		"lint.ignore[]", "metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metric_name_validation_scheme", "metrics_prefix", "name", "name_escaping",
 		"request.accept_codes[]", "request.api_server", "request.commands[].name", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]", "request.group", "request.info_sections[]",
 		"request.login.auth_style", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type", "request.login.url",
 		"request.method", "request.namespaces[]", "request.pagination.type", "request.proxy_url", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.starttls", "request.transport", "request.type", "request.unix_socket", "request.version",

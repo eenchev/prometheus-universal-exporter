@@ -175,6 +175,12 @@ type Collector struct {
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
+	// MetricNameValidationScheme is Prometheus's setting of the name: legacy,
+	// the default, holds the names of what the collector exports to the
+	// classic characters, a name outside them being handled by
+	// NameEscaping; utf8 takes any UTF-8 name, as Prometheus 3 does, and
+	// each answer escapes it as its scraper asks (exporter/nameescaping.go).
+	MetricNameValidationScheme string `yaml:"metric_name_validation_scheme"`
 	// Lint says which rules of the metric lint (transform/lint.go) are not
 	// applied to the collector's series: advice --dry-run and the debug
 	// report give, which never fails anything.

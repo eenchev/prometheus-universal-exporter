@@ -18,7 +18,7 @@ func TestMetricValidationAndExpositionEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	writeMetricSet(w, nil, &m)
+	writeMetricSet(w, nil, &m, false)
 	if !strings.Contains(w.Body.String(), `text="a\n\\b\"c"`) {
 		t.Fatalf("unexpected exposition: %s", w.Body.String())
 	}

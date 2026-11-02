@@ -900,7 +900,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	// it is cut, which makes it no exposition: the section then says so
 	// before it. It is not written to the report to be cut there, which
 	// would hold every long line of it twice.
-	exposition := appendMetricSet(nil, answer)
+	exposition := debugExposition(answer)
 	long := longLines(exposition)
 	if long > 0 {
 		served := "a probe serves them whole"

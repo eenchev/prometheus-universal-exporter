@@ -422,53 +422,36 @@
           {
             "if": {
               "not": {
-                "properties": {
-                  "name_escaping": {
-                    "enum": [
-                      "underscores",
-                      "values"
+                "anyOf": [
+                  {
+                    "properties": {
+                      "name_escaping": {
+                        "enum": [
+                          "underscores",
+                          "values"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name_escaping"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "metric_name_validation_scheme": {
+                        "const": "utf8"
+                      }
+                    },
+                    "required": [
+                      "metric_name_validation_scheme"
                     ]
                   }
-                },
-                "required": [
-                  "name_escaping"
                 ]
               }
             },
             "then": {
               "properties": {
                 "metrics": {
-                  "items": {
-                    "properties": {
-                      "name": {
-                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
-                        "type": "string"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "not": {
-                "properties": {
-                  "name_escaping": {
-                    "enum": [
-                      "underscores",
-                      "values"
-                    ]
-                  }
-                },
-                "required": [
-                  "name_escaping"
-                ]
-              }
-            },
-            "then": {
-              "properties": {
-                "derived": {
                   "items": {
                     "properties": {
                       "name": {
@@ -496,6 +479,65 @@
                     },
                     "required": [
                       "name_escaping"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "metric_name_validation_scheme": {
+                        "const": "utf8"
+                      }
+                    },
+                    "required": [
+                      "metric_name_validation_scheme"
+                    ]
+                  }
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "derived": {
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "name_escaping": {
+                            "enum": [
+                              "underscores",
+                              "values"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name_escaping"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "metric_name_validation_scheme": {
+                            "const": "utf8"
+                          }
+                        },
+                        "required": [
+                          "metric_name_validation_scheme"
+                        ]
+                      }
                     ]
                   },
                   {
@@ -718,7 +760,7 @@
                   "type": "boolean"
                 },
                 "name": {
-                  "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values.",
+                  "description": "The derived metric's name, before metrics_prefix, which no rule of the collector and no other entry has. Letters, digits, _ and :, not starting with a digit, unless the collector's name_escaping is underscores or values or its metric_name_validation_scheme utf8.",
                   "not": {
                     "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                     "type": "string"
@@ -1058,6 +1100,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "metric_name_validation_scheme": {
+            "description": "Prometheus's setting of the name: legacy, the default, holds metric and label names to letters, digits, _ and, for metrics, :, a name outside them handled by name_escaping; utf8 takes any UTF-8 name, as Prometheus 3 does, and each answer writes it as its scraper's Accept asks, quoted for escaping=allow-utf-8 and escaped otherwise. See docs/CONFIGURATION.md#utf-8-names.",
+            "enum": [
+              "legacy",
+              "utf8",
+              ""
+            ],
+            "type": "string"
+          },
           "metrics": {
             "description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. Nor, under a prometheus transform, may the expression of one rule match the name another rule passes on the metric of, where the two give its series one name and the same labels: each would make every series of that metric. A rule with an expression whose type is histogram or summary and whose error_mode is not fail is about the metrics of that type alone, and may match such a name unless the rule of the name sets that type too. The exporter checks both when the configuration loads. A python collector's rules make no series and are not held to it.",
             "items": {
@@ -1213,7 +1264,7 @@
                         ]
                       },
                       "name": {
-                        "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. A name transform.rename_labels renames or transform.remove_labels removes is not exported, and may be any name. Text: a name YAML reads as a number or a boolean is written in quotes.",
+                        "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped; under its metric_name_validation_scheme utf8 any name too, written as each scraper asks. A name transform.rename_labels renames or transform.remove_labels removes is not exported, and may be any name. Text: a name YAML reads as a number or a boolean is written in quotes.",
                         "minLength": 1,
                         "not": {
                           "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
@@ -1272,7 +1323,7 @@
                   "type": "array"
                 },
                 "name": {
-                  "description": "The metric name, before metrics_prefix: letters, digits, _ and :, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as http.server.duration, and is exported escaped. Text: a name YAML reads as a number or a boolean, such as 404 or true, is written in quotes.",
+                  "description": "The metric name, before metrics_prefix: letters, digits, _ and :, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as http.server.duration, and is exported escaped; under its metric_name_validation_scheme utf8 any name too, written as each scraper asks. Text: a name YAML reads as a number or a boolean, such as 404 or true, is written in quotes.",
                   "not": {
                     "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                     "type": "string"

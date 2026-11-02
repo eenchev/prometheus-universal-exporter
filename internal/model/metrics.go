@@ -386,19 +386,49 @@ func MetricCountError(count, limit int) error {
 // the exposition format: valid names and types, no duplicate series, one type
 // per family. It stops at the first problem, which the error describes.
 func (s *MetricSet) Validate(l Limits) error {
+	return s.ValidateNames(l, false)
+}
+
+// ValidateNames is Validate for a collector whose
+// metric_name_validation_scheme is utf8 when utf8Names is true: a metric or
+// label name is then any UTF-8 that is not blanks alone (UTF8Name), as
+// Prometheus 3 takes, and is escaped, if at all, when the answer is written,
+// as the scraper asks (exporter/nameescaping.go).
+func (s *MetricSet) ValidateNames(l Limits, utf8Names bool) error {
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
 		return MetricCountError(len(s.Metrics), l.MaxMetrics)
 	}
-	return s.validate(l, newSeriesSet(s.Metrics))
+	return s.validate(l, newSeriesSet(s.Metrics), utf8Names)
 }
+
+// UTF8Name reports whether name is a name under metric_name_validation_scheme
+// utf8: valid UTF-8, not empty and not blanks alone, which no one means as a
+// name.
+func UTF8Name(name string) bool {
+	return utf8.ValidString(name) && strings.TrimSpace(name) != ""
+}
+
+// takesName reports whether a metric name (metric true) or a label name is
+// one a series may have: a classic name, or under utf8 any UTF8Name.
+func takesName(name string, metric, utf8Names bool) bool {
+	return classicName(name, metric) || utf8Names && UTF8Name(name)
+}
+
+// The values of a collector's metric_name_validation_scheme, Prometheus's
+// names for them: legacy, the default, holds metric and label names to the
+// classic characters, and utf8 takes any UTF-8.
+const (
+	NameValidationLegacy = "legacy"
+	NameValidationUTF8   = "utf8"
+)
 
 // validate is Validate past the count of series, with the set that tells
 // duplicate series, which a test makes itself to give it a weak hash.
-func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
+func (s *MetricSet) validate(l Limits, seen *seriesSet, utf8Names bool) error {
 	types := map[string]MetricType{}
 	for i := range s.Metrics {
 		m := &s.Metrics[i]
-		if !ValidMetricName(m.Name) {
+		if !takesName(m.Name, true, utf8Names) {
 			if m.Name != "" && utf8.ValidString(m.Name) {
 				return nameErrorf("metric name %q is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped", shownName(m.Name))
 			}
@@ -438,8 +468,8 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 		for k, v := range m.Labels {
 			// What labelFailure refuses, asked here without a call: a
 			// series that passes pays for the questions alone.
-			if !ValidLabelName(k) || ReservedLabelName(k) || k == seriesOwnLabel(m) || len(k) > l.MaxLabelNameLength && l.MaxLabelNameLength > 0 || l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
-				return firstLabelFailure(m, &l)
+			if !takesName(k, false, utf8Names) || ReservedLabelName(k) || k == seriesOwnLabel(m) || len(k) > l.MaxLabelNameLength && l.MaxLabelNameLength > 0 || l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
+				return firstLabelFailure(m, &l, utf8Names)
 			}
 			// The labels are gone through once, for these checks and for
 			// the duplicate check below alike (seriesSet).
@@ -882,8 +912,8 @@ func SanitizeUTF8(set *MetricSet) (uint64, string) {
 // its name, one over limits.max_label_name_length, or a value over
 // limits.max_label_value_length. A name is held to its length after it is
 // found to be a name, as a metric's is.
-func labelFailure(m *Metric, k, v string, l *Limits) error {
-	if !ValidLabelName(k) {
+func labelFailure(m *Metric, k, v string, l *Limits, utf8Names bool) error {
+	if !takesName(k, false, utf8Names) {
 		if k != "" && utf8.ValidString(k) {
 			return nameErrorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", shownName(m.Name), shownName(k))
 		}
@@ -924,14 +954,14 @@ func labelNameLengthError(m *Metric, k string, limit int) error {
 // named, another on the next scrape, and the log would take each for a new
 // failure (SameFailureText). So once a label fails the labels are gone
 // through again in order, which a series that passes never comes to.
-func firstLabelFailure(m *Metric, l *Limits) error {
+func firstLabelFailure(m *Metric, l *Limits, utf8Names bool) error {
 	names := make([]string, 0, len(m.Labels))
 	for k := range m.Labels {
 		names = append(names, k)
 	}
 	sort.Strings(names)
 	for _, k := range names {
-		if err := labelFailure(m, k, m.Labels[k], l); err != nil {
+		if err := labelFailure(m, k, m.Labels[k], l, utf8Names); err != nil {
 			return err
 		}
 	}

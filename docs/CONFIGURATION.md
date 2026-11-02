@@ -1163,6 +1163,64 @@ and `a_b` under `underscores`, load, since the load compares what is
 written, and fail each scrape that has both as the duplicate series, or the
 metric of two types, that two such names of a target are.
 
+#### Keeping UTF-8 names
+
+`name_escaping` escapes a name once, for every scraper. A Prometheus 3 can
+take the name as it is, and says so in its `Accept` header; an older one, or
+a dashboard written for escaped names, asks for an escaping. With
+`metric_name_validation_scheme: utf8`, Prometheus's setting of the same
+name, a collector keeps every name as it is and each answer writes it as its
+scraper asks:
+
+```yaml
+collectors:
+  - name: otel_app
+    metric_name_validation_scheme: utf8   # legacy (the default) or utf8
+    transform:
+      type: prometheus
+```
+
+| The scraper's `Accept` asks for | `{"http.server.duration", "service.name"="api"} 0.25` is answered as |
+| --- | --- |
+| `escaping=allow-utf-8`, as Prometheus 3 does | `{"http.server.duration","service.name"="api"} 0.25`, with `# HELP "http.server.duration" …` and `# TYPE "http.server.duration" gauge` |
+| `escaping=underscores`, no escaping, or one the exporter does not know | `http_server_duration{service_name="api"} 0.25` |
+| `escaping=dots` | `http_dot_server_dot_duration{service_dot_name="api"} 0.25` |
+| `escaping=values` | `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25` |
+
+These are Prometheus's own escaping schemes, as its Go client writes them:
+`underscores` and `values` as under `name_escaping`, and `dots` writing a dot
+as `_dot_`, an underscore as `__` and anything else a classic name may not
+have as `__`, so that the name can be read back. A classic name is written
+as it is under all four, `dots` too, and so is every label value. The quoted
+form is written in OpenMetrics as in the text format, and a histogram's
+`_bucket`, `_sum` and `_count` follow its family's name: `{"my.latency_bucket",le="0.1"}`
+quoted, `my_latency_bucket` under `underscores`. The answer's `Content-Type`
+ends with the escaping it was written with, such as
+`text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8`. An answer
+whose names are all classic — any answer of a `legacy` collector, and the
+self-metrics — is written and typed as it always was, without an escaping.
+
+Under `utf8` a rule's name, its labels' names, the keys of `transform.labels`
+and the names `rename` and `rename_labels` give load whatever their UTF-8,
+as under `name_escaping` `underscores` and `values`; a name of blanks alone,
+one beginning with `__` and the length limits are held to as ever.
+`name_escaping` still applies first: `underscores` or `values` escape a name
+for every scraper, which then finds nothing to escape, and `fail`, the
+default, fails nothing under `utf8`. The default is `legacy`, as before, so
+that a name never changes without someone having asked for it.
+
+A target that escapes its names unless asked, as Prometheus' Go client does,
+has to be asked: give the collector's request the header
+`Accept: text/plain;version=1.0.0;escaping=allow-utf-8`. Over
+[OTLP](OTLP.md) a name is sent as it is, since OTLP names are free text;
+`otlp.metric_names: otel` moves a unit suffix such as `_seconds` into the
+metric's unit as it does of a classic name. Two names that differ only in
+characters an escaping replaces, `a.b` and `a_b`, are one name to a scraper
+that asks for it: two such metrics reach it as a duplicate series, and two
+such labels of one series as one label, with the classic name's value, `a_b`'s
+(of two names escaped, the first in order). Keep such names apart, or escape
+them once with `name_escaping`, which refuses them.
+
 The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
 and the source names a `prometheus` transform passes through or renames. A

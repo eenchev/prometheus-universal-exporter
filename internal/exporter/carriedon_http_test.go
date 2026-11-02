@@ -617,7 +617,7 @@ func renderTrip(result *probeResult) renderedTrip {
 				request.Header.Set("Accept-Encoding", encoding)
 			}
 			recorder := httptest.NewRecorder()
-			newAnswerCompression(DefaultGzipLevel).wrap(&answerCounter{}, result.writeTo)(recorder, request)
+			newAnswerCompression(DefaultGzipLevel).wrap(&answerCounter{}, func(w http.ResponseWriter, r *http.Request) { result.writeTo(w, r, false) })(recorder, request)
 			out.answers[format.name+"/"+encoding] = scrapedAnswer{status: recorder.Code, header: recorder.Header(), body: recorder.Body.String()}
 		}
 	}

@@ -248,6 +248,10 @@ type staticTargetsView struct {
 	aged       []agedSeries
 	rendered   []byte
 	renderedOM []byte
+	// utf8Names says merged holds a name that is not classic, of a
+	// collector that keeps UTF-8 names: it is then written for each read as
+	// the reader asks (nameescaping.go), not rendered ahead.
+	utf8Names bool
 }
 
 // agedSeries is a series of the view whose value is its target's data's age.
@@ -278,7 +282,10 @@ func (s *Server) currentStaticView() *staticTargetsView {
 			v.aged = append(v.aged, agedSeries{index: i, target: m.Labels[config.StaticTargetLabel]})
 		}
 	}
-	if len(v.aged) == 0 {
+	// An answer with a name that is not classic is written as each
+	// reader's Accept asks (nameescaping.go), so it is not rendered ahead.
+	v.utf8Names = anyUTF8Names(s.manager.Get()) && hasUTF8Names(&v.merged)
+	if len(v.aged) == 0 && !v.utf8Names {
 		v.rendered = appendMetricSet(nil, &v.merged)
 		v.renderedOM = appendOpenMetrics(nil, &v.merged)
 	}
@@ -383,6 +390,7 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	view := s.currentStaticView()
 	if names == nil && view.rendered != nil {
 		format := negotiateFormat(r.Header.Get("Accept"))
+		format.escaping = ""
 		rendered := view.rendered
 		if format.openMetrics {
 			rendered = view.renderedOM
@@ -403,7 +411,7 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		merged.Metrics = kept
 	}
-	writeMetricSet(w, r, &merged)
+	writeMetricSet(w, r, &merged, view.utf8Names)
 }
 
 // staticTargetsParam is the query parameter that narrows the endpoint to some

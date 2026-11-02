@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // Server answers the exporter's HTTP endpoints — probes, its own metrics,
@@ -550,7 +551,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 				at: start, duration: time.Since(start), result: probeCached,
 				status: http.StatusOK, series: len(answer.Metrics),
 			})
-			writeMetricSet(w, r, &answer)
+			writeMetricSet(w, r, &answer, transform.UTF8Names(c))
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return
 		}
@@ -591,7 +592,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		if !result.abandoned {
 			s.noteProbe(rec.read, recentKey(), result.recentProbe(start, false))
 		}
-		result.writeTo(w, r)
+		result.writeTo(w, r, transform.UTF8Names(c))
 		return
 	}
 	// A shared trip is counted apart from the probe that happens to start it
@@ -627,7 +628,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	finish(result.ok, result.refused)
 	s.noteProbe(rec.read, recentKey(), result.recentProbe(start, shared))
-	result.writeTo(w, r)
+	result.writeTo(w, r, transform.UTF8Names(c))
 }
 
 // upstreamProbe is what one trip to the target needs.

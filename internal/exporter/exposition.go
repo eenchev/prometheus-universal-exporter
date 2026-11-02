@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // probeError is the body of a probe that failed because a metric rule with
@@ -56,10 +57,20 @@ const maxPooledExposition = 4 << 20
 // chose; it is served as plain text with nosniff, so a browser shows it as
 // text and never renders it as HTML. r may be nil, which answers in the text
 // format.
-func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet) {
+//
+// utf8Names says the set may hold a name that is not classic, coming from a
+// collector whose metric_name_validation_scheme is utf8: only then are its
+// names looked at, and such a name escaped as the scraper asks
+// (nameescaping.go). Any other set's names are classic, validated so.
+func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet, utf8Names bool) {
 	format := formatText
 	if r != nil {
 		format = negotiateFormat(r.Header.Get("Accept"))
+	}
+	if !utf8Names || !hasUTF8Names(s) {
+		// Classic names alone: no escaping applies, and the answer is
+		// written and typed as it always was (nameescaping.go).
+		format.escaping = ""
 	}
 	w.Header().Set("Content-Type", format.contentType())
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -92,6 +103,10 @@ func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet) 
 // costs only such a set anything.
 func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
+	return e.appendMetricSet(b, s)
+}
+
+func (e *expositionWriter) appendMetricSet(b []byte, s *model.MetricSet) []byte {
 	described := map[string]bool{}
 	start, last := len(b), ""
 	for _, m := range s.Metrics {
@@ -99,7 +114,7 @@ func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 			if described[m.Name] {
 				return e.appendGroupedMetricSet(b[:start], s)
 			}
-			b = appendFamilyLines(b, m)
+			b = e.appendFamilyLines(b, m)
 			described[m.Name] = true
 		}
 		last = m.Name
@@ -117,16 +132,16 @@ func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 
 // appendFamilyLines writes the HELP line, if the metric has help, and the
 // TYPE line of the metric m is the first series of.
-func appendFamilyLines(b []byte, m model.Metric) []byte {
+func (e *expositionWriter) appendFamilyLines(b []byte, m model.Metric) []byte {
 	if m.Help != "" {
 		b = append(b, "# HELP "...)
-		b = append(b, m.Name...)
+		b = e.appendName(b, m.Name)
 		b = append(b, ' ')
 		b = appendEscaped(b, m.Help, false)
 		b = append(b, '\n')
 	}
 	b = append(b, "# TYPE "...)
-	b = append(b, m.Name...)
+	b = e.appendName(b, m.Name)
 	b = append(b, ' ')
 	b = append(b, m.Type...)
 	return append(b, '\n')
@@ -142,7 +157,7 @@ func (e *expositionWriter) appendGroupedMetricSet(b []byte, s *model.MetricSet) 
 	for _, i := range seriesByFamily(s) {
 		m := s.Metrics[i]
 		if m.Name != last {
-			b = appendFamilyLines(b, m)
+			b = e.appendFamilyLines(b, m)
 		}
 		last = m.Name
 		switch {
@@ -192,6 +207,10 @@ func seriesByFamily(s *model.MetricSet) []int {
 
 // expositionWriter holds what rendering reuses from series to series.
 type expositionWriter struct {
+	// quoted writes a name that is not classic in Prometheus 3's quoted
+	// syntax, as a scraper asking for escaping=allow-utf-8 reads it
+	// (nameescaping.go); without it every name is written as it is.
+	quoted    bool
 	keys      []string
 	buckets   []model.Bucket
 	quantiles []model.Quantile
@@ -201,9 +220,7 @@ type expositionWriter struct {
 // extraName set to extraValue when extraName is not empty, the value and the
 // metric's timestamp.
 func (e *expositionWriter) appendSample(b []byte, name, suffix string, labels map[string]string, extraName, extraValue string, value float64, m model.Metric) []byte {
-	b = append(b, name...)
-	b = append(b, suffix...)
-	b = e.appendLabels(b, labels, extraName, extraValue)
+	b = e.appendHead(b, name, suffix, labels, extraName, extraValue)
 	b = append(b, ' ')
 	b = strconv.AppendFloat(b, value, 'g', -1, 64)
 	return appendTimestamp(b, m)
@@ -211,18 +228,50 @@ func (e *expositionWriter) appendSample(b []byte, name, suffix string, labels ma
 
 // appendCount is appendSample for a count, written as an integer.
 func (e *expositionWriter) appendCount(b []byte, name, suffix string, labels map[string]string, extraName, extraValue string, count uint64, m model.Metric) []byte {
-	b = append(b, name...)
-	b = append(b, suffix...)
-	b = e.appendLabels(b, labels, extraName, extraValue)
+	b = e.appendHead(b, name, suffix, labels, extraName, extraValue)
 	b = append(b, ' ')
 	b = strconv.AppendUint(b, count, 10)
 	return appendTimestamp(b, m)
+}
+
+// appendHead writes what a sample line has before its value: the name and
+// suffix, and the labels. A name that is not classic, written quoted, goes
+// inside the braces, first: {"http.server.duration_bucket",le="0.1"}.
+func (e *expositionWriter) appendHead(b []byte, name, suffix string, labels map[string]string, extraName, extraValue string) []byte {
+	if !e.quoted || model.ValidMetricName(name) {
+		b = append(b, name...)
+		b = append(b, suffix...)
+		return e.appendLabels(b, labels, extraName, extraValue)
+	}
+	b = append(b, '{', '"')
+	b = appendEscaped(b, name, true)
+	b = appendEscaped(b, suffix, true)
+	b = append(b, '"')
+	b = e.appendLabelsAfter(b, labels, extraName, extraValue, true)
+	return append(b, '}')
+}
+
+// appendName writes a family's name in a HELP or TYPE line: quoted when it
+// is not classic and the writer quotes.
+func (e *expositionWriter) appendName(b []byte, name string) []byte {
+	if !e.quoted || model.ValidMetricName(name) {
+		return append(b, name...)
+	}
+	b = append(b, '"')
+	b = appendEscaped(b, name, true)
+	return append(b, '"')
 }
 
 // appendLabels writes {name="value",...} in name order, with extraName, a
 // histogram's le or a summary's quantile, set to extraValue over any label
 // of that name, and nothing for no labels.
 func (e *expositionWriter) appendLabels(b []byte, labels map[string]string, extraName, extraValue string) []byte {
+	return e.appendLabelsAfter(b, labels, extraName, extraValue, false)
+}
+
+// appendLabelsAfter is appendLabels, or, after a quoted name inside the
+// braces, the labels each after a comma and without the braces.
+func (e *expositionWriter) appendLabelsAfter(b []byte, labels map[string]string, extraName, extraValue string, afterName bool) []byte {
 	keys := e.keys[:0]
 	for k := range labels {
 		if k != extraName {
@@ -237,19 +286,30 @@ func (e *expositionWriter) appendLabels(b []byte, labels map[string]string, extr
 		return b
 	}
 	slices.Sort(keys)
-	b = append(b, '{')
+	if !afterName {
+		b = append(b, '{')
+	}
 	for i, k := range keys {
-		if i > 0 {
+		if i > 0 || afterName {
 			b = append(b, ',')
 		}
 		value := labels[k]
 		if extraName != "" && k == extraName {
 			value = extraValue
 		}
-		b = append(b, k...)
+		if e.quoted && !model.ValidLabelName(k) {
+			b = append(b, '"')
+			b = appendEscaped(b, k, true)
+			b = append(b, '"')
+		} else {
+			b = append(b, k...)
+		}
 		b = append(b, '=', '"')
 		b = appendEscaped(b, value, true)
 		b = append(b, '"')
+	}
+	if afterName {
+		return b
 	}
 	return append(b, '}')
 }
@@ -436,6 +496,10 @@ type expositionFormat struct {
 	// version is the OpenMetrics version the client asked for.
 	openMetrics bool
 	version     string
+	// escaping is how a name that is not classic is written, as the scraper
+	// asked (nameescaping.go): allow-utf-8, underscores, dots or values; ""
+	// for an answer of classic names alone, which says none.
+	escaping string
 }
 
 var formatText = expositionFormat{}
@@ -445,17 +509,29 @@ var formatText = expositionFormat{}
 const openMetricsVersion = "1.0.0"
 
 func (f expositionFormat) contentType() string {
+	contentType := expositionContentType
 	if f.openMetrics {
-		return "application/openmetrics-text; version=" + f.version + "; charset=utf-8"
+		contentType = "application/openmetrics-text; version=" + f.version + "; charset=utf-8"
 	}
-	return expositionContentType
+	if f.escaping != "" {
+		contentType += "; escaping=" + f.escaping
+	}
+	return contentType
 }
 
 func (f expositionFormat) appendMetricSet(b []byte, s *model.MetricSet) []byte {
-	if f.openMetrics {
-		return appendOpenMetrics(b, s)
+	var e expositionWriter
+	switch f.escaping {
+	case "":
+	case transform.NameEscapingAllowUTF8:
+		e.quoted = true
+	default:
+		s = escapedSet(s, f.escaping)
 	}
-	return appendMetricSet(b, s)
+	if f.openMetrics {
+		return e.appendOpenMetrics(b, s)
+	}
+	return e.appendMetricSet(b, s)
 }
 
 // negotiateFormat chooses the format an Accept header prefers: OpenMetrics
@@ -465,18 +541,26 @@ func (f expositionFormat) appendMetricSet(b []byte, s *model.MetricSet) []byte {
 // the answer to anything else: no Accept, a browser's, a tie, or only types
 // the exporter does not write, such as Prometheus' protobuf format.
 func negotiateFormat(accept string) expositionFormat {
-	bestOM, bestText, omVersion := acceptQualities(accept)
-	if bestOM > bestText {
-		return expositionFormat{openMetrics: true, version: omVersion}
+	a := acceptQualities(accept)
+	if a.om > a.text {
+		return expositionFormat{openMetrics: true, version: a.omVersion, escaping: answerEscaping(a.omEscaping)}
 	}
-	return formatText
+	return expositionFormat{escaping: answerEscaping(a.textEscaping)}
 }
 
-// acceptQualities is the highest quality an Accept header gives OpenMetrics,
-// of a version the exporter writes, with the version it asked for, and the
-// highest it gives a type the text format answers; -1 where it gives none.
-func acceptQualities(accept string) (bestOM, bestText float64, omVersion string) {
-	bestOM, bestText = -1.0, -1.0
+// acceptance is what an Accept header asks of the text formats: the highest
+// quality it gives OpenMetrics, of a version the exporter writes, with the
+// version and the escaping that media range asks for, and the highest it
+// gives a type the text format answers, with that range's escaping; a
+// quality of -1 where it gives none.
+type acceptance struct {
+	om, text                            float64
+	omVersion, omEscaping, textEscaping string
+}
+
+// acceptQualities is an Accept header's acceptance.
+func acceptQualities(accept string) acceptance {
+	a := acceptance{om: -1, text: -1}
 	for entry := range strings.SplitSeq(accept, ",") {
 		mediaType, params := parseMediaRange(entry)
 		q, ok := acceptQuality(params)
@@ -492,14 +576,16 @@ func acceptQualities(accept string) (bestOM, bestText float64, omVersion string)
 			if version == "" {
 				version = openMetricsVersion
 			}
-			if q > bestOM || (q == bestOM && version == openMetricsVersion) {
-				bestOM, omVersion = q, version
+			if q > a.om || (q == a.om && version == openMetricsVersion) {
+				a.om, a.omVersion, a.omEscaping = q, version, params["escaping"]
 			}
 		case "text/plain", "text/*", "*/*":
-			bestText = max(bestText, q)
+			if q > a.text {
+				a.text, a.textEscaping = q, params["escaping"]
+			}
 		}
 	}
-	return bestOM, bestText, omVersion
+	return a
 }
 
 // acceptQuality is a media range's q parameter, 1 when it has none; false
@@ -563,15 +649,19 @@ func parseMediaRange(entry string) (string, map[string]string) {
 // known.
 func appendOpenMetrics(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
+	return e.appendOpenMetrics(b, s)
+}
+
+func (e *expositionWriter) appendOpenMetrics(b []byte, s *model.MetricSet) []byte {
 	for _, f := range planOpenMetrics(s) {
 		b = append(b, "# TYPE "...)
-		b = append(b, f.name...)
+		b = e.appendName(b, f.name)
 		b = append(b, ' ')
 		b = append(b, f.typ...)
 		b = append(b, '\n')
 		if f.help != "" {
 			b = append(b, "# HELP "...)
-			b = append(b, f.name...)
+			b = e.appendName(b, f.name)
 			b = append(b, ' ')
 			b = appendEscaped(b, f.help, true)
 			b = append(b, '\n')
@@ -883,16 +973,14 @@ func openMetricsType(t model.MetricType) string {
 }
 
 func (e *expositionWriter) appendOpenMetricsSample(b []byte, name string, labels map[string]string, extraName, extraValue string, value float64, m model.Metric) []byte {
-	b = append(b, name...)
-	b = e.appendLabels(b, labels, extraName, extraValue)
+	b = e.appendHead(b, name, "", labels, extraName, extraValue)
 	b = append(b, ' ')
 	b = strconv.AppendFloat(b, value, 'g', -1, 64)
 	return appendOpenMetricsTimestamp(b, m)
 }
 
 func (e *expositionWriter) appendOpenMetricsCount(b []byte, name string, labels map[string]string, extraName, extraValue string, count uint64, m model.Metric) []byte {
-	b = append(b, name...)
-	b = e.appendLabels(b, labels, extraName, extraValue)
+	b = e.appendHead(b, name, "", labels, extraName, extraValue)
 	b = append(b, ' ')
 	b = strconv.AppendUint(b, count, 10)
 	return appendOpenMetricsTimestamp(b, m)
@@ -962,9 +1050,7 @@ func (e *expositionWriter) appendOpenMetricsCreated(b []byte, f *omFamily, m mod
 	if own := model.SeriesOwnLabel(m); own != "" && hasLabel(m, own) {
 		return b
 	}
-	b = append(b, f.name...)
-	b = append(b, "_created"...)
-	b = e.appendLabels(b, m.Labels, "", "")
+	b = e.appendHead(b, f.name, "_created", m.Labels, "", "")
 	b = append(b, ' ')
 	b = strconv.AppendFloat(b, float64(m.Created)/1000, 'f', -1, 64)
 	return appendOpenMetricsTimestamp(b, m)

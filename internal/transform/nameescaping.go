@@ -35,16 +35,64 @@ import (
 // a values-escaped name still starts with U__. Two names that escape to the
 // same name are duplicates, and fail the scrape as duplicates do.
 
-// The values of name_escaping.
+// The values of name_escaping. NameEscapingDots and NameEscapingAllowUTF8
+// are no values of it: they are, with underscores and values, the escaping
+// schemes a scraper can ask an answer for (EscapeName), the first rewriting
+// every name with an underscore in it and the second none.
 const (
 	NameEscapingFail        = "fail"
 	NameEscapingUnderscores = "underscores"
 	NameEscapingValues      = "values"
+	NameEscapingDots        = "dots"
+	NameEscapingAllowUTF8   = "allow-utf-8"
 )
 
-// ValidateNameEscaping checks a collector's name_escaping and fills in the
-// default, fail.
+// UTF8Names reports whether the collector's metric_name_validation_scheme is
+// utf8: its names may be any UTF-8, kept as they are until an answer is
+// written.
+func UTF8Names(c *model.Collector) bool {
+	return c.MetricNameValidationScheme == model.NameValidationUTF8
+}
+
+// EscapeName escapes a metric name (metric true) or a label name that is not
+// classic as a scraper's escaping asks: underscores, dots or values, as
+// Prometheus's own model escapes them; a classic name, and any name under
+// allow-utf-8, is returned as it is. dots writes _dot_ for a dot, __ for an
+// underscore and for any other character a classic name may not have.
+func EscapeName(name, scheme string, metric bool) string {
+	if scheme != NameEscapingDots {
+		return escapeName(name, scheme, metric)
+	}
+	if name == "" || classicName(name, metric) {
+		return name
+	}
+	var b strings.Builder
+	for i, r := range name {
+		switch {
+		case r == '_':
+			b.WriteString("__")
+		case r == '.':
+			b.WriteString("_dot_")
+		case classicRune(r, i, metric):
+			b.WriteRune(r)
+		default:
+			b.WriteString("__")
+		}
+	}
+	return b.String()
+}
+
+// ValidateNameEscaping checks a collector's name_escaping and
+// metric_name_validation_scheme, and fills in their defaults, fail and
+// legacy.
 func ValidateNameEscaping(c *model.Collector) error {
+	switch c.MetricNameValidationScheme {
+	case "":
+		c.MetricNameValidationScheme = model.NameValidationLegacy
+	case model.NameValidationLegacy, model.NameValidationUTF8:
+	default:
+		return fmt.Errorf("collector %q metric_name_validation_scheme must be %s or %s, not %q", c.Name, model.NameValidationLegacy, model.NameValidationUTF8, c.MetricNameValidationScheme)
+	}
 	switch c.NameEscaping {
 	case "":
 		c.NameEscaping = NameEscapingFail

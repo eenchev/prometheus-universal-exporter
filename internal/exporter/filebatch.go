@@ -169,7 +169,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		set = &model.MetricSet{}
 	}
 	s.noteUTF8Repairs(ctx, repaired, rec, c, file.Name, keyTarget, file.Name)
-	if err := set.Validate(c.Limits); err != nil {
+	if err := set.ValidateNames(c.Limits, transform.UTF8Names(c)); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}
 	}

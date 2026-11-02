@@ -7388,6 +7388,45 @@ as written and are one name once escaped are not the same rule to the load
 (§ 18.1), which compares what is written: they MUST load, and a scrape that
 has both fails as it does of two such names of a target.
 
+#### 21.1a `metric_name_validation_scheme`
+
+A collector's `metric_name_validation_scheme` MUST be `legacy`, the default
+when it is left out or written `""`, or `utf8`, Prometheus's names; any other
+value MUST be refused when the configuration loads, naming the two. Under
+`legacy` everything above holds. Under `utf8`:
+
+- a metric or label name that is valid UTF-8 and not blanks alone MUST be
+  taken, at load and at every scrape, under `name_escaping` `fail` too,
+  which then fails nothing; `name_escaping` `underscores` and `values` MUST
+  still escape what they escape, in the one place above, before the answer
+  is written. The `__` prefix, the length limits and the blanks MUST be
+  held to as under `legacy`;
+- a name that is not classic MUST be kept as it is until an answer is
+  written, and every answer that has one — `/probe`, the static targets
+  endpoint — MUST write it as the media range it answers (§ 21) asks by its
+  `escaping` parameter: `allow-utf-8` in Prometheus 3's quoted syntax, a
+  metric's name first inside the braces as `{"name",…}`, a label's as
+  `"name"="value"`, and a family's in HELP and TYPE as `"name"`, with `\`,
+  `"` and newline escaped as in a label value, in the text format and in
+  OpenMetrics alike; `underscores` as `underscores` above; `values` as
+  `values` above; and `dots` with `.` as `_dot_`, `_` as `__` and every
+  other character a classic name may not have at its position as `__`. A
+  range without the parameter, or with another value, MUST be answered as
+  `underscores`, Prometheus's default. A classic name MUST NOT be escaped
+  under any of them, `dots` included, label values MUST NOT be, and a
+  histogram's or summary's family name MUST be escaped before its `_bucket`,
+  `_sum` and `_count` are joined, as Prometheus's Go client escapes a
+  family. Two labels of one series that one escaping makes one name MUST be
+  written as one label, the same in every answer: with the value of the one
+  whose name is classic, or, of two escaped, of the first in order;
+- such an answer's `Content-Type` MUST end with `; escaping=` and the
+  escaping it was written with. An answer of classic names alone MUST be
+  written, and typed, as under `legacy`, without the parameter.
+
+A debug report's text of an answer (§ 42.17) MUST write a name that is not
+classic quoted, as it is. The OTLP export (§ 42.1) MUST send such a name as
+it is, OTLP names being free text.
+
 ---
 
 # 22. Exporter self-metrics

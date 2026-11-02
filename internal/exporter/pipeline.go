@@ -470,7 +470,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		s.noteUTF8Repairs(ctx, repaired, rec, c, j.display, j.target, "")
 	}
 	mark = time.Now()
-	if err := set.Validate(c.Limits); err != nil {
+	if err := set.ValidateNames(c.Limits, transform.UTF8Names(c)); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return stageFailed("validation", err, model.ErrorPolicyFail)
 	}

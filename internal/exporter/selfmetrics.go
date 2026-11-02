@@ -353,7 +353,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		writeProtobufMetricSet(w, &set)
 		return
 	}
-	writeMetricSet(w, r, &set)
+	writeMetricSet(w, r, &set, false)
 }
 
 // collectorStats returns the counters of every configured collector, sorted

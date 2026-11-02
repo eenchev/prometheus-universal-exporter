@@ -330,8 +330,11 @@ func checkRulePattern(where, pattern string) error {
 // escapes reports whether the collector exports a name that is not classic
 // escaped, its name_escaping being underscores or values, where under fail,
 // or with the key left out, such a name fails the scrape.
+//
+// Under metric_name_validation_scheme utf8 such a name is exported too, as
+// it is, and each answer escapes it as its scraper asks.
 func escapes(x *model.Collector) bool {
-	return x.NameEscaping == NameEscapingUnderscores || x.NameEscaping == NameEscapingValues
+	return UTF8Names(x) || x.NameEscaping == NameEscapingUnderscores || x.NameEscaping == NameEscapingValues
 }
 
 // EscapingAdvice is what the load adds to its refusal of a name that is not
@@ -365,11 +368,16 @@ func TakesLabelName(x *model.Collector, name string) bool {
 // scrape measures.
 func CheckExportedLabelName(x *model.Collector, name string) error {
 	exported := escapeName(name, x.NameEscaping, false)
-	if exported == name {
+	switch {
+	case exported == name && UTF8Names(x) && !model.ValidLabelName(name):
+		if model.ReservedLabelName(name) {
+			return fmt.Errorf("label name %q starts with __, which Prometheus reserves for its own labels", name)
+		}
+	case exported == name:
 		if err := model.CheckLabelName(name); err != nil {
 			return err
 		}
-	} else if model.ReservedLabelName(exported) {
+	case model.ReservedLabelName(exported):
 		return fmt.Errorf("label name %q is exported as %q under name_escaping %s, which starts with __, which Prometheus reserves for its own labels", name, exported, x.NameEscaping)
 	}
 	return checkLabelNameLength(x, name, exported)

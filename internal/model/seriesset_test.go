@@ -138,7 +138,7 @@ func checkSeriesSetAgainstKeys(t *testing.T, metrics []Metric) int {
 			set.hash = hash
 		}
 		got := ""
-		if err := (&MetricSet{Metrics: metrics}).validate(Limits{}, set); err != nil {
+		if err := (&MetricSet{Metrics: metrics}).validate(Limits{}, set, false); err != nil {
 			got = err.Error()
 		}
 		if wantError := keyedValidateError(metrics); got != wantError && validSeriesNames(metrics) {

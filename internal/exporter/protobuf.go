@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"math"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -313,6 +312,6 @@ func prefersProtobuf(accept string) bool {
 	if best <= 0 {
 		return false
 	}
-	om, text, _ := acceptQualities(accept)
-	return best > slices.Max([]float64{om, text})
+	a := acceptQualities(accept)
+	return best > max(a.om, a.text)
 }

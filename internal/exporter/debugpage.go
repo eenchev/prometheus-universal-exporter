@@ -297,7 +297,7 @@ type debugShownResponse struct {
 func debugAnswerOf(report *debugReport) debugAnswer {
 	out := debugAnswer{OK: report.ok, Verdict: report.verdict, Lint: report.lint, Report: string(report.text())}
 	if report.answer != nil {
-		out.Series = string(appendMetricSet(nil, report.answer))
+		out.Series = string(debugExposition(report.answer))
 		out.Samples = debugSamples(report.answer)
 	}
 	t, p := report.trace, report.probe

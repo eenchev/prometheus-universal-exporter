@@ -177,6 +177,55 @@ func TestTheOTLPTabIsThereWithOTLPAlone(t *testing.T) {
 	requireContains(t, getPage(t, logs, "/debug"), `id="otlp-logs-part"`, `id="otlp-test-logs" data-signal="logs">`, `id="otlp-test-metrics" data-signal="metrics">`)
 }
 
+// The endpoint test is a panel of its own below Output, outside the OTLP
+// tab: testing the endpoint has nothing to do with a run, so it is there
+// before any, whichever tab is shown, with a button for each signal
+// exported.
+func TestTheOTLPEndpointTestIsAPanelOfItsOwn(t *testing.T) {
+	panelOf := func(t *testing.T, page string) (output, panel string) {
+		t.Helper()
+		start := strings.Index(page, "<h2>Output</h2>")
+		if start < 0 {
+			t.Fatal("the page has no Output panel")
+		}
+		end := start + strings.Index(page[start:], "</section>")
+		output = page[start:end]
+		at := strings.Index(page, `<section class="panel" style="margin-top:16px" id="otlp-test-panel" aria-labelledby="otlp-test-heading">`)
+		if at < end {
+			t.Fatalf("the endpoint test is not a panel below Output: %d, Output ends at %d", at, end)
+		}
+		panel = page[at : at+strings.Index(page[at:], "</section>")]
+		if main := strings.Index(page, "</main>"); main < at {
+			t.Fatal("the endpoint test panel is outside the page's main")
+		}
+		return output, panel
+	}
+	server := otlpDebugServer(t, "http://127.0.0.1:1/v1/metrics", nil)
+	output, panel := panelOf(t, getPage(t, server, "/debug"))
+	if strings.Contains(output, "otlp-test") || strings.Contains(output, "Test the") {
+		t.Errorf("the Output panel still has the endpoint test: %s", output)
+	}
+	requireContains(t, panel, `<h2 id="otlp-test-heading">OTLP endpoints</h2>`, `id="otlp-test-unavailable"`,
+		`id="otlp-test-metrics" data-signal="metrics" disabled>Test the metrics endpoint</button>`, `<pre id="otlp-test-result" aria-live="polite" hidden></pre>`)
+	if strings.Contains(panel, "otlp-test-logs") || strings.Contains(panel, "otlp-test-traces") {
+		t.Errorf("the panel offers logs or traces with neither on: %s", panel)
+	}
+	all := otlpDebugServer(t, "http://127.0.0.1:1/v1/metrics", func(c *model.OTLPConfig) {
+		c.Logs.Enabled = true
+		c.Traces.Enabled = true
+	})
+	all.SetDebug(DebugFull)
+	output, panel = panelOf(t, getPage(t, all, "/debug"))
+	if strings.Contains(output, "otlp-test") {
+		t.Errorf("the Output panel still has the endpoint test: %s", output)
+	}
+	requireContains(t, panel, `id="otlp-test-metrics" data-signal="metrics">`, `id="otlp-test-logs" data-signal="logs">`,
+		`id="otlp-test-traces" data-signal="traces">`, "Each button sends one empty export")
+	if strings.Contains(panel, "otlp-test-unavailable") || strings.Contains(panel, "disabled") {
+		t.Errorf("at full the panel's buttons are disabled: %s", panel)
+	}
+}
+
 // The resource and scope: a probe's run is under the exporter-wide resource
 // with otlp.probe_attributes' collector and target; the playground's too,
 // said to be a probe of it; a static target's under its own resource, its

@@ -5755,7 +5755,11 @@ is what the export does, not a description of it:
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and
-nothing is sent. At `full` the tab also offers *Test the metrics
+nothing is sent.
+
+With `otlp.enabled` the page has a panel of its own below *Output*, *OTLP
+endpoints*, there before anything has run, since testing the endpoint has
+nothing to do with a run. At `full` it offers *Test the metrics
 endpoint*, with `otlp.logs` *Test the logs endpoint* and with
 `otlp.traces` *Test the traces endpoint*: one empty export,
 `{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or `{"resourceSpans":[]}`,

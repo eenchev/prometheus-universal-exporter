@@ -29879,6 +29879,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestOTLPTracesSettingsAreCheckedAndFilledIn`: `parent_based`, `sample_ratio` 1 and `max_per_second` 3 are kept; a ratio of 1.5, -0.25 and NaN and a negative rate are refused with the block on and unchecked off.
 - `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: `traces` refuses `sample_ratio` 1.5 and -0.1 and `max_per_second` -1 by both once on, keeps them off; `parent_based: maybe`, `sample_ratio: half`, `sample_ratio: [1]` and `max_per_second: 1.5` are refused by both; `{parent_based: true, sample_ratio: 0.25, max_per_second: 10}`, `{sample_ratio: 1, max_per_second: 0}` and `{sample_ratio: 0}` are taken, and `{enabled: false, sample_ratio: 2, max_per_second: -1}` too.
 - The existing trace tests (§ 34.253, § 34.255) and `TestTheTraceCostsAProbeNothingWhileOff` pass unchanged.
+- `TestTheOTLPEndpointTestIsAPanelOfItsOwn`: with `otlp.enabled` the served page has, below the Output panel's `</section>` and inside `</main>`, a `section.panel` `otlp-test-panel` titled `OTLP endpoints`, not hidden, with the metrics button, disabled at `edit` with `otlp-test-unavailable`, and the result box; the Output panel has none of `otlp-test` or `Test the`; without `otlp.logs` and `otlp.traces` it has no logs or traces button, with both on and at `full` it has all three, none disabled, and the note `Each button sends one empty export`.
+- `TestEveryAttemptAndPageIsASpan` keeps both traces by `sample_ratio: 1` under an hour's threshold instead of a 1ms threshold a fast local probe did not always reach; it checks the same spans, and passes 50 of 50 runs and 20 under `-race`.
 
 # 35. Documentation requirements
 
@@ -34329,7 +34331,9 @@ the tab MUST show them as *Log records*. None of them MUST be queued for
 the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
 MUST NOT offer the tab.
 
-With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, with
+With `otlp.enabled`, the page MUST have a panel of its own, *OTLP
+endpoints*, below *Output* and outside the tab, shown whether or not
+anything has run, which MUST offer *Test the metrics endpoint*, with
 `otlp.logs` on *Test the logs endpoint*, and with `otlp.traces` on *Test
 the traces endpoint*, which `POST` to
 `/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left

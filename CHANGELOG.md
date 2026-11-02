@@ -97,6 +97,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   another collector fetches, through `request_from` or a static target,
   must now be of that collector's request type (`400` otherwise), where it
   had to be an `http` collector before.
+- The debug page's *Test the metrics endpoint*, *Test the logs endpoint* and
+  *Test the traces endpoint* are in a panel of their own below *Output*,
+  *OTLP endpoints*, there before anything has run, rather than at the
+  bottom of the *OTLP* tab.
 - The OTLP export writes `aggregationTemporality` as the number `2` where it
   wrote the name `AGGREGATION_TEMPORALITY_CUMULATIVE`: the OTLP/JSON encoding
   requires an enum's number, which every receiver accepts. A receiver or a

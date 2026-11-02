@@ -566,7 +566,7 @@ func TestTheOTLPTabsBodiesAreAJSONViewer(t *testing.T) {
 	}
 	script := debugPageScript(page)
 	requireContains(t, script,
-		`const jsonOpenDepth = 4;`,
+		`const jsonOpenDepth = 4, jsonChunk = 2000;`,
 		`typeof value === "number" ? new JSONNumber(context && typeof context.source === "string" ? context.source : String(value)) : value);`,
 		`const parts = text.split(/\n\n(?=[[{])/);`,
 		`span.textContent = text;`,
@@ -575,7 +575,7 @@ func TestTheOTLPTabsBodiesAreAJSONViewer(t *testing.T) {
 		`const named = array ? undefined : [value.name, value.key].find((v) => typeof v === "string");`,
 		`(array ? (entries.length === 1 ? " item" : " items") : (entries.length === 1 ? " key" : " keys"))`,
 		`jsonSet(node, depth <= jsonOpenDepth);`,
-		`if (open && !state.built) {`,
+		`if (open && !jsonMake(state)) jsonGrow(state);`,
 		`state.toggle.setAttribute("aria-expanded", String(open));`,
 		`const until = performance.now() + 30;`,
 		`if (next < todo.length) requestAnimationFrame(slice);`,
@@ -589,6 +589,45 @@ func TestTheOTLPTabsBodiesAreAJSONViewer(t *testing.T) {
 		if strings.Contains(script, never) {
 			t.Errorf("the script has %s", never)
 		}
+	}
+}
+
+// A node of any number of children opens: they are made jsonChunk at a
+// time, a chunk a frame after the first, and put in one fragment at a time,
+// never spread as the arguments of one call, which throws past some 100000
+// in Chromium and left an array of 200000 points empty for good. The node
+// counts as made only once every child is, Expand all waits for a node's
+// last chunk before opening its children, and a node or a body that fails
+// to be made says so, rather than staying empty or leaving the last body's
+// tree in the box. (Checked in headless Chromium with 200000 points, near
+// the top, deep and under Expand all.)
+func TestTheJSONViewerOpensANodeOfAnyNumberOfChildren(t *testing.T) {
+	server := otlpDebugServer(t, "http://127.0.0.1:1/v1/metrics", nil)
+	script := debugPageScript(getPage(t, server, "/debug"))
+	start, end := strings.Index(script, "const jsonOpenDepth"), strings.Index(script, "const otlpColumns")
+	if start < 0 || end < start {
+		t.Fatal("the JSON viewer's code is not where it was")
+	}
+	viewer := script[start:end]
+	for _, spread := range []*regexp.Regexp{regexp.MustCompile(`\.(append|prepend|replaceChildren|push)\(\.\.\.[A-Za-z.]*(entries|documents|todo|kids|children)\b`), regexp.MustCompile(`\.(append|replaceChildren)\(\.\.\.[^)]*\.map\(`)} {
+		if m := spread.FindString(viewer); m != "" {
+			t.Errorf("the JSON viewer spreads a list of any length as arguments: %s", m)
+		}
+	}
+	requireContains(t, script,
+		`const end = Math.min(n, state.made + jsonChunk);`,
+		`for (let i = state.made; i < end; i++) part.append(jsonNode(entries[i][0], entries[i][1], state.depth + 1, i === n - 1));`,
+		`state.kids.append(part);`,
+		`state.built = state.made === n;`,
+		`if (!jsonMake(state)) jsonGrow(state);`,
+		`if (state.built || state.node.classList.contains("jv-closed") || !state.node.isConnected) return;`,
+		`if (!state.built && !state.failed) continue;`,
+		`note.textContent = (n === 1 ? "This value" : "These " + n + " values") + " could not be shown: " + error.message;`,
+		`note.textContent = "This could not be shown as a tree (" + error.message + ").";`,
+		"    box.replaceChildren(note);\n    for (const button of buttons) button.disabled = true;\n    return;\n  }\n  box.replaceChildren(docs);\n",
+	)
+	if strings.Contains(viewer, "state.built = true;") {
+		t.Error("a node counts as made before its children are")
 	}
 }
 

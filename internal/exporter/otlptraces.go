@@ -89,17 +89,78 @@ type otlpSpanStatus struct {
 
 // tripSpans is what a probe or a scrape records for its trace: its stages,
 // with their times, and the requests its trip sent (requests). A trip shared
-// by several probes records into the recorder of the probe that started it,
-// which may end before the trip does: what the trip records after that is
-// nobody's, and done drops it.
+// by several probes records into a recorder of its own (probeFlight.spans),
+// not the one of the probe that started it, which may leave before the trip
+// ends; each probe that used the trip copies the trip's record into its own
+// (adopt), and so has the trip's spans in its trace under span ids of its
+// own. What a probe records after its record was closed is dropped (done).
 type tripSpans struct {
 	mu       sync.Mutex
 	stages   []spanStage
 	requests *fetch.RequestTrace
+	// adopted are the requests of a shared trip the probe used, copied
+	// from the trip's record.
+	adopted []fetch.TracedRequest
 	// bytes is the size of the response the trip fetched, -1 when it
 	// fetched none.
 	bytes int
 	done  bool
+}
+
+// unfinishedFact marks a request still unanswered when the probe whose
+// trace has it was given up by its caller (adopt).
+const unfinishedFact = "request.unfinished"
+
+// adopt copies into t, a probe's record, what trip, the record of a shared
+// trip the probe used, holds: its stages, under the stage named under where
+// that is set and a stage names no parent of its own, its requests and the
+// size of the response it fetched. A probe whose caller left before the trip
+// ended copies what the trip had recorded by then, at cut: the stages that
+// had ended, and its requests, of which one still unanswered is marked
+// unfinished (unfinishedFact) and failed, and ends at cut. A zero cut is a
+// trip that ended. t and trip may be nil.
+func (t *tripSpans) adopt(trip *tripSpans, under string, cut time.Time) {
+	if t == nil || trip == nil {
+		return
+	}
+	trip.mu.Lock()
+	stages, bytes := append([]spanStage(nil), trip.stages...), trip.bytes
+	trip.mu.Unlock()
+	requests := trip.requests.Requests()
+	for i := range stages {
+		if stages[i].parent == "" {
+			stages[i].parent = under
+		}
+	}
+	for i := range requests {
+		r := &requests[i]
+		if cut.IsZero() || r.Outcome != "" {
+			continue
+		}
+		r.Failed, r.Duration = true, max(cut.Sub(r.Start()), 0)
+		r.Facts = append(append([]fetch.TraceFact(nil), r.Facts...), fetch.TraceFact{Key: unfinishedFact, Bool: true, IsBool: true})
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return
+	}
+	t.stages = append(t.stages, stages...)
+	t.adopted = append(t.adopted, requests...)
+	if bytes >= 0 {
+		t.bytes = bytes
+	}
+}
+
+// requestUnfinished says whether r was still unanswered when its probe's
+// caller left (adopt).
+func requestUnfinished(r fetch.TracedRequest) bool {
+	for _, fact := range r.Facts {
+		if fact.Key == unfinishedFact && fact.IsBool && fact.Bool {
+			return true
+		}
+	}
+	return false
 }
 
 // spanStage is one stage of a trip: its name, as the debug report's stages
@@ -170,9 +231,9 @@ func (t *tripSpans) discard() {
 func (t *tripSpans) close() ([]spanStage, []fetch.TracedRequest, int) {
 	t.mu.Lock()
 	t.done = true
-	stages, bytes := t.stages, t.bytes
+	stages, bytes, adopted := t.stages, t.bytes, t.adopted
 	t.mu.Unlock()
-	return stages, t.requests.Requests(), bytes
+	return stages, append(t.requests.Requests(), adopted...), bytes
 }
 
 // tripStages are where a trip's stages are recorded: the debug report's
@@ -423,7 +484,13 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 		id := newSpanID()
 		span := otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: parent, Name: r.Method, Kind: otlpSpanKindClient,
 			StartTimeUnixNano: nanos(start), EndTimeUnixNano: nanos(start.Add(r.Duration)), Attributes: requestAttributes(r, resends)}
-		if requestFailed(r) {
+		switch {
+		case requestUnfinished(r):
+			// Its stage had not ended either, so it is under the stage
+			// that holds that one, or under the root.
+			span.Status = &otlpSpanStatus{Code: otlpStatusError, Message: "unfinished: the caller went away before it was answered"}
+			span.Attributes = append(span.Attributes, stringAttribute("error.type", "unfinished"))
+		case requestFailed(r):
 			note, failed := failedStage[parent]
 			span.Status = &otlpSpanStatus{Code: otlpStatusError, Message: requestFailure(r, failed && last[parent] == i, note)}
 			errorType := "request_failed"
@@ -648,11 +715,25 @@ func otlpMaxPendingSpans(cfg model.OTLPConfig) int {
 // add queues a trace's spans, or drops and counts them all when they do not
 // fit under limit.
 func (t *otlpTraces) add(spans []otlpQueuedSpan, limit int) {
+	t.addWhileOn(spans, limit, nil)
+}
+
+// addWhileOn is add, but that it drops the spans, counting them nowhere, when
+// on, asked under the queue's lock, says the configuration in force no
+// longer exports traces. A reload that switches the export off empties the
+// queue under the same lock (configure) once its configuration is in force,
+// so a trace is either queued before that and emptied with the rest, or
+// sees the export off and is never queued: none waits through the time the
+// export is off, to be sent if a later reload switches it on again.
+func (t *otlpTraces) addWhileOn(spans []otlpQueuedSpan, limit int, on func() bool) {
 	if len(spans) == 0 {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if on != nil && !on() {
+		return
+	}
 	if len(t.queue)+len(spans) > limit {
 		t.dropped[otlpTraceDropPendingCap] += len(spans)
 		t.tally.dropped[traceDroppedQueue].Add(1)
@@ -769,8 +850,19 @@ func beginTrace(ctx context.Context, cfg model.OTLPConfig) (context.Context, *tr
 // otlp.traces.max_per_second lets through has its span made by root, of the
 // size of the response fetched, and its spans queued under the resource
 // identity makes.
+//
+// cfg is the configuration the probe or the scrape began under, whose rules
+// decide of its trace. A reload since that switched the export off drops
+// the trace, counted nowhere, as a trace that began after it is never
+// recorded: no rule decided of it while the export was off, and nothing of
+// it waits for an export that is off (addWhileOn).
 func (s *Server) endTrace(cfg model.OTLPConfig, spans *tripSpans, start, end time.Time, failed bool, parent traceParent, root func(bytes int) spanRoot, identity func() otlpResourceIdentity) {
 	t := s.otlpTraces
+	inForce := func() bool { return otlpTracesOn(s.manager.Get().OTLP) }
+	if !inForce() {
+		spans.discard()
+		return
+	}
 	decision := decideTrace(cfg, end.Sub(start), failed, parent)
 	if decision.reason == keptNone {
 		t.tally.dropped[traceDroppedNotSampled].Add(1)
@@ -790,7 +882,9 @@ func (s *Server) endTrace(cfg model.OTLPConfig, spans *tripSpans, start, end tim
 	stages, requests, fetched := spans.close()
 	made := root(fetched)
 	sampledRoot(&made, cfg, decision, parent)
-	t.add(queuedSpans(identity(), buildSpans(made, stages, requests)), otlpMaxPendingSpans(cfg))
+	// The queue's bound is the one in force, which a reload since may have
+	// lowered (configure).
+	t.addWhileOn(queuedSpans(identity(), buildSpans(made, stages, requests)), otlpMaxPendingSpans(s.manager.Get().OTLP), inForce)
 }
 
 // sampledRoot gives root what the sampling decision says of its trace: the

@@ -2039,13 +2039,20 @@ $("series-metric").addEventListener("change", drawRows);
 // Every value is put in with textContent alone: they are the target's data,
 // label values and log lines among them. A node's children are made when it
 // is first opened, so a body of thousands of points costs what is shown:
-// at first the nodes down to jsonOpenDepth below the top. A number is the
+// at first the nodes down to jsonOpenDepth below the top. They are made
+// jsonChunk at a time, one chunk a frame after the first (jsonMake,
+// jsonGrow), and put in with append one fragment at a time, never as
+// arguments of one call, of which a browser takes some 100000 at most: an
+// array of 200000 points opens, the page answering between its chunks. A
+// node that fails to be made says so where its children go, and a body that
+// fails to be shown says so in place of the tree, never leaving the last
+// body's tree in sight as if it were this one's. A number is the
 // text the body has of it, where the browser hands the reviver its source,
 // so a large integer is not rounded to a double's. Several documents, one
 // blank line between them, as the log export's requests are, are a tree
 // each; text that is not JSON is shown as it is, and the box says so. Copy
 // copies the text the box was given (jsonTexts), not what the tree shows.
-const jsonOpenDepth = 4;
+const jsonOpenDepth = 4, jsonChunk = 2000;
 const jsonTexts = new WeakMap(), jsonNodes = new WeakMap();
 class JSONNumber { constructor(text) { this.text = text; } }
 const parseJSON = (text) => JSON.parse(text, (key, value, context) =>
@@ -2137,19 +2144,55 @@ function jsonNode(key, value, depth, last) {
   tail.className = "jv-line jv-tail";
   tail.append(jsonSpan("jv-punct", close), ...comma());
   node.append(head, kids, tail);
-  jsonNodes.set(node, { entries, depth, kids, toggle, built: false });
+  jsonNodes.set(node, { node, entries, depth, kids, toggle, made: 0, built: false, failed: false, growing: false });
   jsonSet(node, depth <= jsonOpenDepth);
   return node;
 }
+// jsonMake makes the next jsonChunk of a node's children, and says whether
+// all of them are made: built is set only then. A child that cannot be made
+// leaves, in place of the children, a line saying so, and the node is made
+// afresh the next time it is opened.
+function jsonMake(state) {
+  if (state.built) return true;
+  const entries = state.entries, n = entries.length, part = document.createDocumentFragment();
+  if (state.made === 0) {
+    state.kids.replaceChildren();
+    state.failed = false;
+  }
+  try {
+    const end = Math.min(n, state.made + jsonChunk);
+    for (let i = state.made; i < end; i++) part.append(jsonNode(entries[i][0], entries[i][1], state.depth + 1, i === n - 1));
+    state.made = end;
+  } catch (error) {
+    const note = document.createElement("div");
+    note.className = "note jv-error";
+    note.textContent = (n === 1 ? "This value" : "These " + n + " values") + " could not be shown: " + error.message;
+    state.made = 0;
+    state.failed = true;
+    state.kids.replaceChildren(note);
+    return true;
+  }
+  state.kids.append(part);
+  state.built = state.made === n;
+  return state.built;
+}
+// jsonGrow makes the rest of an open node's children, a chunk a frame, while
+// it stays open and in the page.
+function jsonGrow(state) {
+  if (state.built || state.growing) return;
+  state.growing = true;
+  requestAnimationFrame(() => {
+    state.growing = false;
+    if (state.built || state.node.classList.contains("jv-closed") || !state.node.isConnected) return;
+    if (!jsonMake(state)) jsonGrow(state);
+  });
+}
 function jsonSet(node, open) {
   const state = jsonNodes.get(node);
-  if (open && !state.built) {
-    state.built = true;
-    state.kids.append(...state.entries.map(([key, value], i) => jsonNode(key, value, state.depth + 1, i === state.entries.length - 1)));
-  }
   node.classList.toggle("jv-closed", !open);
   state.toggle.textContent = open ? "▾" : "▸";
   state.toggle.setAttribute("aria-expanded", String(open));
+  if (open && !jsonMake(state)) jsonGrow(state);
 }
 // jsonAll opens every node of box, making each, or folds every node but the
 // top ones, which keep their keys in sight. Opening goes down a level at a
@@ -2171,9 +2214,14 @@ function jsonAll(box, open) {
     if (jsonRuns.get(box) !== pass) return;
     const until = performance.now() + 30;
     while (next < todo.length && performance.now() < until) {
-      const node = todo[next++];
-      jsonSet(node, true);
-      for (const child of jsonNodes.get(node).kids.children) if (child.classList.contains("jv-node")) todo.push(child);
+      const node = todo[next], state = jsonNodes.get(node);
+      // A node of more than jsonChunk children is made a chunk at a time,
+      // and its children opened once all of them are.
+      if (node.classList.contains("jv-closed")) jsonSet(node, true);
+      else jsonMake(state);
+      if (!state.built && !state.failed) continue;
+      next++;
+      for (const child of state.kids.children) if (child.classList.contains("jv-node")) todo.push(child);
     }
     if (next < todo.length) requestAnimationFrame(slice);
   };
@@ -2207,12 +2255,23 @@ function jsonView(box, text) {
     return;
   }
   for (const button of buttons) button.disabled = false;
-  box.replaceChildren(...documents.map((value) => {
-    const doc = document.createElement("div");
-    doc.className = "jv-doc";
-    doc.append(jsonNode(null, value, 0, true));
-    return doc;
-  }));
+  const docs = document.createDocumentFragment();
+  try {
+    for (const value of documents) {
+      const doc = document.createElement("div");
+      doc.className = "jv-doc";
+      doc.append(jsonNode(null, value, 0, true));
+      docs.append(doc);
+    }
+  } catch (error) {
+    const note = document.createElement("p");
+    note.className = "note jv-error";
+    note.textContent = "This could not be shown as a tree (" + error.message + ").";
+    box.replaceChildren(note);
+    for (const button of buttons) button.disabled = true;
+    return;
+  }
+  box.replaceChildren(docs);
 }
 for (const button of document.querySelectorAll("[data-json-all]")) {
   button.addEventListener("click", () => jsonAll($(button.getAttribute("aria-controls")), button.dataset.jsonAll === "open"));

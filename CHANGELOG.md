@@ -256,6 +256,32 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- A field, header or query parameter named `author`, `authority`,
+  `keyboard` and the like is no longer masked as a credential: a name is now
+  read by its words, split at punctuation and at a change to upper case,
+  and an ordinary word that only holds `auth`, `key` or `token` (`author`,
+  `authors`, `authority`, `monkey`, `keyboard`, `keyword`, `tokenizer`, …)
+  no longer counts, so `author: Bob` and `<author>Bob</author>` are shown.
+  `Authorization`, `X-Auth-Token`, `apikey`, `authToken` and the rest are
+  masked as before.
+- The debug page's JSON viewer opens an array of any size: one of more
+  than some 100000 items, such as a body of 200000 points, threw
+  `RangeError` and stayed empty for good, and near the top of the body left
+  the last run's tree in the box. Items are now made a couple of thousand a
+  frame, and a node or a body that cannot be shown says so.
+- A trip shared by identical probes is in the trace of every probe that
+  used it: when the probe that started it was left by its caller, the
+  trip's spans were in no trace, the probes that joined it had only their
+  `shared_trip` span, and the one that left had a request span without a
+  status and the message that it waited for an identical probe's trip,
+  which it had started. Each probe now has a copy of the trip's spans; one
+  whose caller left has what the trip had done by then, a request still
+  unanswered marked `request.unfinished`, and a message that says whose
+  trip it was.
+- A probe or a scrape that ended after a reload switched `otlp.traces` off
+  is no longer queued, to be sent if a later reload switches the export on
+  again before the next export.
+
 - A trace's spans no longer carry text the target sent that the log never
   shows: the CLIENT span of a tcp or sshexec request that went through had
   the server's greeting, or the command's whole stderr, as `request.outcome`,

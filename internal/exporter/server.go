@@ -603,7 +603,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// under the collector's name as the probe that started it may.
 	trip := rec.forTrip()
 	mark := time.Now()
-	result, shared, err := s.flights.do(ctx, flightKey{probe: key, defined: followed.defined[name]}, func(ctx context.Context) *probeResult {
+	// The trip records its own trace, which the trace of every probe that
+	// uses it gets a copy of: the probe that started it may leave before it
+	// ends (probeFlights.doTraced).
+	result, shared, tripTrace, err := s.flights.doTraced(ctx, flightKey{probe: key, defined: followed.defined[name]}, spans != nil, func(ctx context.Context) *probeResult {
 		result := upstream(ctx, trip)
 		trip.commit(result.refused || result.abandoned)
 		return result
@@ -611,8 +614,20 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// This caller went away while it waited; there is nobody to answer,
 		// and no verdict of the target policy to go by. The probe starts no
-		// tracked request, whatever becomes of the trip.
-		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: "the caller went away while the probe waited for an identical probe's trip"}
+		// tracked request, whatever becomes of the trip. Its trace has what
+		// the trip had done by then, the requests still unanswered marked
+		// unfinished; the trip goes on for the probes still waiting for it,
+		// whose traces have the rest.
+		cut := time.Now()
+		failure := "the caller went away while the probe waited for an identical probe's trip"
+		if shared {
+			spans.step("shared_trip", "cancelled", mark, cut, "the caller went away before the trip of an identical probe ended")
+			spans.adopt(tripTrace, "shared_trip", cut)
+		} else {
+			failure = "the caller went away before the probe's trip ended"
+			spans.adopt(tripTrace, "", cut)
+		}
+		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: failure}
 		finish(false, true)
 		return
 	}
@@ -620,10 +635,14 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		traced = probeTraceEndOf(result)
 	}
 	if shared {
-		// The trip was another probe's, whose trace has its stages.
+		// The trip was another probe's: its stages and requests are under
+		// this probe's shared_trip span.
 		spans.step("shared_trip", "ok", mark, time.Now(), "answered by the trip of an identical probe in flight")
+		spans.adopt(tripTrace, "shared_trip", time.Time{})
 		rec.update(func(x *serverStats) { x.coalesced++ })
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
+	} else {
+		spans.adopt(tripTrace, "", time.Time{})
 	}
 	finish(result.ok, result.refused)
 	s.noteProbe(rec.read, recentKey(), result.recentProbe(start, shared))

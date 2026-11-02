@@ -30781,7 +30781,20 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   the log export's lines are (§ 42.1b), as a repeated failure (§ 25).
 - A reload that switches `otlp.traces` off MUST drop the spans waiting and
   stop the recording; one that switches it on MUST record the probes and
-  scrapes from then on.
+  scrapes from then on. A probe or a scrape that ends after a reload
+  switched the export off MUST NOT be queued, whatever the configuration it
+  began under said, and MUST be counted nowhere, so that a later reload
+  switching the export on again sends nothing of it.
+- A trip shared by identical probes MUST record its spans apart from any
+  one probe's: every probe that used it MUST have the trip's stages and
+  requests in its trace, with span ids of its own — the probe that started
+  it under its probe span, one that joined it under its `shared_trip` span.
+  A probe whose caller went away before the trip ended MUST end its trace
+  with the status ERROR, `error.type` `abandoned` and a message beginning
+  `the caller went away`, saying whether the probe started the trip or
+  waited for an identical probe's, and MUST have what the trip had recorded
+  by then, each request not yet answered ERROR, with `request.unfinished`
+  `true`, ending when the probe did.
 - At shutdown, after the metrics' last export (§ 42.1a) and before the log
   records' (§ 42.1b), the spans waiting MUST be sent within what is left of
   the same `otlp.timeout`, and at least a second; when it fails they MUST be
@@ -33802,10 +33815,11 @@ among it, withheld (`fetch.RedactText`), redacted before it is cut.
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names read as a credential's
-by the rule below: they contain, in any case, `auth`, `cookie`,
+by the rule below: in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
-`session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
-`pass` as a whole word. One exception: a request line MUST show the value
+`session`, `signature`, `credential` or `jwt` is in them once their ordinary
+words (`author`, `authority`, `monkey`, `keyboard`, …) are taken out, or
+they have `sig`, `pwd`, `pw` or `pass` as a whole word. One exception: a request line MUST show the value
 of a query pair that the configuration of the collector that made the
 request sets as its file writes it — a `request.query` value without a
 placeholder, a `graphite` collector's expressions without placeholders, its
@@ -33858,12 +33872,20 @@ alone (`token=SE;CRET` is shown as `token=<redacted>;<redacted>`). A pair's
 name MUST be compared with its escapes decoded, a malformed one left as it
 is (`%74oken` is `token`), and, where that differs from it, as it was
 written too; it MUST be shown as written. One rule MUST say whether a name — a header's,
-a query parameter's or a field's in logged text — reads as a credential's: it
-contains, in any case, `auth`, `cookie`, `token`, `secret`, `password`,
-`passwd`, `passphrase`, `passcode`, `key`, `session`, `signature`,
-`credential` or `jwt`, or has `sig`, `pwd`, `pw` or `pass` as a whole word,
-split at punctuation and at a change to upper case (`sig`, `db_pwd`,
-`userPass`, but not `design`, `signal` or `bypass`). A URL's fragment MUST NOT
+a query parameter's, a field's or an XML element's in logged or shown text —
+reads as a credential's. The name MUST be read as words, split at
+punctuation and at a change to upper case. It reads as a credential's when,
+in any case, `auth`, `cookie`, `token`, `secret`, `password`, `passwd`,
+`passphrase`, `passcode`, `key`, `session`, `signature`, `credential` or
+`jwt` is in it, within a word or across a change to upper case but not
+across punctuation, once each word that is an ordinary word only holding
+one of them (`author`, `authors`, `authority`, `monkey`, `keyboard`,
+`keyword`, `tokenizer` and the like, whole) is taken out — so `apikey`,
+`accesstoken`, `authToken`, `author_token` and `Authorization` read as a
+credential's and `author`, `cert-authority`, `keyboard-interactive` and
+`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw` or `pass` is a whole word
+of it (`sig`, `db_pwd`, `userPass`, but not `design`, `signal` or
+`bypass`). A URL's fragment MUST NOT
 be shown in any of these forms. An error that quotes a URL, as Go's HTTP client
 quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value
@@ -34329,7 +34351,13 @@ after what it says of the node; a folded object of a `key` string and a
 `<key> = <value>`; *Expand all* and *Collapse all* beside *Copy*, the
 latter folding every node but the top. A node's children MUST be made
 when it is first opened, and *Expand all* MUST make them in slices that
-leave the page responsive. *Copy* MUST copy the body's indented text, as
+leave the page responsive. A node of any number of children MUST open
+with all of them: they MUST be made in chunks, a chunk a frame, and MUST
+NOT be passed as the arguments of one call, which a browser limits to
+some 100000; a node MUST count as made only once its last child is. A
+node whose children cannot be made MUST say so in their place, and a body
+that cannot be shown MUST say so in place of the tree, never leaving the
+last body's tree shown. *Copy* MUST copy the body's indented text, as
 the answer has it. A long string MUST wrap within the panel, which keeps
 its height and scrolls. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
 log lines as the records the log export makes of them, by the log

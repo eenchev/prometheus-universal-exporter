@@ -1244,3 +1244,34 @@ func TestTheExporterReleasePublishesChecksums(t *testing.T) {
 		t.Error("release.yml does not publish the checksums file with the archives")
 	}
 }
+
+// The module proxy now and then breaks off a download ("stream error: ...
+// INTERNAL_ERROR"), which failed a CI job for nothing the change did. Every
+// step of the workflows that downloads the modules tries three times,
+// waiting between tries, and fails after the last.
+func TestEveryModuleDownloadOfTheWorkflowsIsTriedAgain(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(".github", "workflows", "*.yml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no workflows: %v", err)
+	}
+	downloads := 0
+	for _, file := range files {
+		for job, steps := range workflowSteps(t, file) {
+			for _, step := range steps {
+				script, _ := step["run"].(string)
+				if !strings.Contains(script, "go mod download") {
+					continue
+				}
+				downloads++
+				for _, want := range []string{"for attempt in 1 2 3; do", "if go mod download; then exit 0; fi", "sleep ", "exit 1"} {
+					if !strings.Contains(script, want) {
+						t.Errorf("%s job %s downloads the modules without trying again (no %q):\n%s", filepath.Base(file), job, want, script)
+					}
+				}
+			}
+		}
+	}
+	if downloads < 9 {
+		t.Errorf("only %d module downloads were found in the workflows; the reader has stopped finding them", downloads)
+	}
+}

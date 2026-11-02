@@ -270,7 +270,10 @@ func TestTheTraceOfAFailedProbeIsExportedWithErrors(t *testing.T) {
 // A request retried under request.retry is a CLIENT span for each attempt,
 // with retry.attempt and http.request.resend_count from the second; and
 // one of request.pagination a CLIENT span for each page, with its
-// pagination.page.
+// pagination.page. Both traces are kept by a sample_ratio of 1 under an
+// hour's threshold, whatever they took: under a threshold of 1ms a fast
+// local probe was sometimes not slow enough to be exported, and the test
+// failed now and then.
 func TestEveryAttemptAndPageIsASpan(t *testing.T) {
 	var calls atomic.Int32
 	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -283,7 +286,8 @@ func TestEveryAttemptAndPageIsASpan(t *testing.T) {
 	t.Cleanup(flaky.Close)
 	pages := reposTarget(t, 3, nil)
 	receiver := newLogReceiver(t)
-	server := tracesServer(t, receiver, time.Millisecond, func(c *model.Config) {
+	server := tracesServer(t, receiver, time.Hour, func(c *model.Config) {
+		c.OTLP.Traces.SampleRatio = 1
 		retried := testutil.Collector("retried", "text")
 		retried.Request.Retry = model.RetryConfig{Attempts: 2, Backoff: model.Duration(time.Millisecond)}
 		retried.Request.Retry.Statuses = []string{"503"}

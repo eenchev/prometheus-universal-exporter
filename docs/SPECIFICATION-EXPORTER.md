@@ -7689,6 +7689,8 @@ then, the exporter MUST publish:
 http_exporter_otlp_trace_exports_total{result}   counter
 http_exporter_otlp_spans_sent_total              counter
 http_exporter_otlp_spans_dropped_total           counter
+http_exporter_otlp_traces_kept_total{reason}     counter
+http_exporter_otlp_traces_dropped_total{reason}  counter
 ```
 
 counted as the log export's are: a span of a trace that found no room for
@@ -7696,7 +7698,14 @@ all of its spans under `otlp.traces.max_pending_spans`, those of the oldest
 traces dropped whole past it after a failed export or a reload that lowers
 it, those of a request the endpoint refused or rejected,
 and those of a failed last trace export at shutdown MUST be counted as
-dropped; spans kept for the next export MUST NOT be.
+dropped; spans kept for the next export MUST NOT be. The traces counters
+MUST count whole traces, not spans: `kept` each trace the sampling rules
+kept and the rate cap let through to the queue, by `reason` `slow`, `error`,
+`parent` or `ratio`; `dropped` each trace dropped whole, by `reason`
+`not_sampled` (kept by no rule), `rate` (over `otlp.traces.max_per_second`)
+or `queue` (kept, and with no room under `otlp.traces.max_pending_spans`
+when queued or put back by a failed export). Every reason MUST be served
+while the export is on, 0 until it counts one.
 
 ### 22.0d Build information
 
@@ -29853,6 +29862,30 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   served are on stderr and not in the log export, which takes a line logged
   after them (TestTheLogExportTakesNoDebugProbesLine).
 
+## 34.256 Sampling rules of otlp.traces: parent_based, sample_ratio and max_per_second
+
+- `TestRatioThresholdsAreOpenTelemetrys`: the rejection thresholds as `ot=th` writes them are `c` for 0.25, `8` for 0.5, `4` for 0.75, `fd70a3d70a3d71` for 0.01, `e6666666666666` for 0.1 and `0` for 1; a ratio of 0 is 2^56, which keeps nothing; the pages write 0.07 as `7%`, 0.125 as `12.5%` and 0.0001 as `0.01%`.
+- `TestTheRatioDecidesByTheTraceIDsRandomness`: at 0.25 the randomness `c0000000000000`, `c0000000000001` and `ffffffffffffff` are kept and `bfffffffffffff`, `0` and `12345678abcdef` not, the same each of three times; the eighth byte from the end of the id does not decide; a ratio of 1 keeps randomness 0; a ratio of 0 is not tried; a caller's `ot=rv:c0000000000000` keeps a trace whose id has none, and `ot=rv:00000000000001` drops one whose id is all ones; a trace without a caller's is given an id, which its spans are of.
+- `TestTheSamplingRulesAreTriedInOrder`: slow, failed, sampled and in the ratio is `slow`, at the threshold `slow`; failed, sampled and in the ratio `error`; failed without `errors` and sampled `parent`; sampled and in the ratio `parent`; not sampled and in the ratio `ratio`; out of it nothing; sampled without `parent_based` nothing; no caller's with `parent_based` nothing; failed without `errors` nothing.
+- `TestTheDecisionSaysWhy`: at 1% a trace of randomness `ffffffffffffff` says `it was sampled at 1% by otlp.traces.sample_ratio (trace id randomness 0xffffffffffffff ≥ threshold 0xfd70a3d70a3d71); it took 12ms, under otlp.traces.threshold 1s`; one of randomness `10` whose caller did not sample it says each reason, `under otlp.traces.threshold 1s; its caller's traceparent has no sampled flag; it was not sampled at 1% … < threshold …`; a sampled caller's says `parent_based` kept it; with `errors` a trace of no caller's says `it did not fail; it has no caller's traceparent`.
+- `TestTheTraceparentsSampledFlagIsRead`: flags `01` and `03` are sampled, `00` and `02` not, a version 01 with more fields is read, flags that are no hex are no traceparent.
+- `TestTheSpansTraceStateCarriesTheThreshold`: a caller's `congo=t61rcWkgMzE, ot=rv:abcdefabcdefab;th:8` and `rojo=00f067aa0ba902b7` in two headers is read as three members; kept by the ratio at 0.25 the spans carry `ot=th:c;rv:abcdefabcdefab,congo=…,rojo=…`, by the parent the state as it came, as slow or failed `ot=rv:abcdefabcdefab,congo=…,rojo=…`; with no caller's, the ratio at 0.01 `ot=th:fd70a3d70a3d71` and the others none; a slow trace whose `ot` was a threshold alone none, and one whose `ot` had no threshold as it came; 32 members with the threshold added are 32, `ot=th:0` first and the last dropped; an uppercase key, a key twice, a member without `=`, an empty key, a value with `=` or a control character, a key beginning with a digit and 33 members are no tracestate; a tenant's key is read and empty members skipped.
+- `TestTheRateCapIsATokenBucket`: a cap of 4 lets 4 slow traces of a burst through and not a fifth, none after 200ms and one after 250ms, and one an hour later; from a full bucket ratio, parent, ratio, slow, ratio, error, slow take, take, not, take, not, take, not; a bucket of 1 gives its token to a ratio trace; no cap takes 100; a lower cap holds the tokens to it, and a time gone back gives none.
+- `TestTracesKeptByTheCallerAndTheRatioSayWhy`: under an hour's threshold with `parent_based` and a ratio of 1, a probe with a sampled `traceparent` and two `tracestate` headers is of the caller's trace with `sampling.reason` `parent` and every span `rojo=00f067aa0ba902b7,congo=t61rcWkgMzE`, one without with `ratio` and every span `ot=th:0`; `http_exporter_otlp_traces_kept_total` counts `parent` 1, `ratio` 1, `slow` 0, and `not_sampled` 0; with `parent_based` alone a probe with flags `00` and one with no header are not exported and counted `not_sampled` 2.
+- `TestTheRateCapDropsKeptTracesOverIt`: a cap of 2 by a set clock exports two of three slow probes and one a second later, each `sampling.reason` `slow` with no `traceState` beside a ratio of 0.25; `kept{reason="slow"}` 3, `dropped{reason="rate"}` 1, `queue` 0; the status JSON has `parent_based`, `sample_ratio`, `max_per_second`, `traces_kept_by_reason` and `traces_dropped_by_reason`, and the page `25% of the others by their trace ids`, `at most 2 traces a second`, the Sampling rules, Traces kept and Traces dropped rows.
+- `TestATraceWithNoRoomIsCountedAsATrace`: under `max_pending_spans: 8` two slow probes are `kept{reason="slow"}` 2 and `dropped{reason="queue"}` 1.
+- `TestWithoutSamplingRulesTheTraceIsAsBefore`: without `parent_based` and `sample_ratio`, with no cap and a cap of 100, a probe with a sampled `traceparent` is exported with no `traceState` and no `sampling.reason` in the body.
+- `TestTheOTLPTabSaysWhichRuleWouldKeepTheRun`: with a ratio of 1 and a cap of 5 the tab says `exported`, reason `ratio`, `sampled at 100% … ≥ threshold 0x00000000000000`, and that `otlp.traces.max_per_second 5` may still drop it, its body `"traceState": "ot=th:0"`; with a ratio of 0 it is not exported and says it has no caller's traceparent for `parent_based`; neither run is counted by the export.
+- `TestOTLPTracesSettingsAreCheckedAndFilledIn`: `parent_based`, `sample_ratio` 1 and `max_per_second` 3 are kept; a ratio of 1.5, -0.25 and NaN and a negative rate are refused with the block on and unchecked off.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: `traces` refuses `sample_ratio` 1.5 and -0.1 and `max_per_second` -1 by both once on, keeps them off; `parent_based: maybe`, `sample_ratio: half`, `sample_ratio: [1]` and `max_per_second: 1.5` are refused by both; `{parent_based: true, sample_ratio: 0.25, max_per_second: 10}`, `{sample_ratio: 1, max_per_second: 0}` and `{sample_ratio: 0}` are taken, and `{enabled: false, sample_ratio: 2, max_per_second: -1}` too.
+- The existing trace tests (§ 34.253, § 34.255) and `TestTheTraceCostsAProbeNothingWhileOff` pass unchanged.
+- `TestTheOTLPEndpointTestIsAPanelOfItsOwn`: with `otlp.enabled` the served page has, below the Output panel's `</section>` and inside `</main>`, a `section.panel` `otlp-test-panel` titled `OTLP endpoints`, not hidden, with the metrics button, disabled at `edit` with `otlp-test-unavailable`, and the result box; the Output panel has none of `otlp-test` or `Test the`; without `otlp.logs` and `otlp.traces` it has no logs or traces button, with both on and at `full` it has all three, none disabled, and the note `Each button sends one empty export`.
+- `TestEveryAttemptAndPageIsASpan` keeps both traces by `sample_ratio: 1` under an hour's threshold instead of a 1ms threshold a fast local probe did not always reach; it checks the same spans, and passes 50 of 50 runs and 20 under `-race`.
+
+## 34.257 Module downloads in the workflows tried again
+
+- `TestEveryModuleDownloadOfTheWorkflowsIsTriedAgain`: every step of the workflows whose script runs `go mod download` runs it in a loop of three attempts that waits between them and fails after the last; a step running it once, as before, fails the test.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30613,9 +30646,12 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
 
 With `otlp.traces.enabled` true in an `otlp` block switched on, the exporter
 MUST export a trace of each `/probe` request and each scheduled static
-target scrape that took `otlp.traces.threshold` or longer, and with
-`otlp.traces.errors` of each that failed whatever it took, and MUST NOT add a
-dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
+target scrape that took `otlp.traces.threshold` or longer, with
+`otlp.traces.errors` of each that failed whatever it took, with
+`otlp.traces.parent_based` of each probe whose caller sampled it, and of an
+`otlp.traces.sample_ratio` share of the rest, at most
+`otlp.traces.max_per_second` a second, and MUST NOT add a dependency for
+it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
 `otlp.logs` is (§ 42.1b).
 
 - The spans MUST be sent as OTLP/HTTP JSON `ExportTraceServiceRequest`s to
@@ -30661,8 +30697,45 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   lowercase hex; times MUST be decimal nanoseconds.
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its
-  parent; the threshold and `errors` MUST decide its export all the same.
-  The exporter MUST NOT send a `traceparent` to its targets.
+  parent; its sampled flag MUST keep the trace only under `parent_based`,
+  and the other rules MUST decide it as any other. The exporter MUST NOT
+  send a `traceparent` to its targets.
+- A trace MUST be decided once, at its end, by these rules in this order,
+  the first that keeps it naming why, and MUST be dropped when none does:
+  `slow`, it took `otlp.traces.threshold` or longer; `error`, it failed,
+  under `otlp.traces.errors`; `parent`, under `otlp.traces.parent_based`
+  (off by default), the readable `traceparent` of its probe's caller has
+  the sampled flag (`01`) set; `ratio`, its randomness is at least the
+  rejection threshold `2^56 − round(sample_ratio × 2^56)`.
+  `otlp.traces.sample_ratio` MUST be 0 by default, which keeps nothing by
+  the ratio, and from 0 to 1, a value outside refused when the
+  configuration loads; 1 MUST keep every trace. A trace's randomness MUST
+  be the last 56 bits of its trace id — the caller's as it came, or the
+  exporter's own from `crypto/rand` — or the caller's explicit randomness,
+  `ot=rv` of 14 hex digits in its `tracestate`, where it sent one, so that
+  the same trace id MUST be decided alike every time and as OpenTelemetry's
+  consistent probability sampling decides it. There MUST be no
+  per-collector or per-target rule.
+- `otlp.traces.max_per_second`, 0 by default for no cap and refused when
+  negative, MUST cap every trace the rules kept, slow and failed ones too,
+  by a token bucket of as many tokens that fills at as many a second and
+  starts full; a trace that finds no token MUST be dropped and counted as
+  `rate`. A trace kept by `parent` or `ratio` MUST take a token only while
+  half the bucket, rounded down, is left after it. The bucket MUST go by
+  the exporter's clock and MUST NOT make a probe wait.
+- The spans of a trace the ratio kept MUST carry, in `traceState`, the
+  `ot` member with `th` the rejection threshold as 14 hex digits with the
+  trailing zeros removed (`0` for 1), before the caller's `tracestate`
+  members, the `ot` member's other fields kept and its `th` replaced, the
+  members past 32 dropped from the right; those of a trace kept by
+  `parent` MUST carry the caller's `tracestate` as it came; those of one
+  kept as `slow` or `error` MUST carry it without a `th`. A `tracestate`
+  that is not readable, or beside no readable `traceparent`, MUST NOT be
+  propagated. With `parent_based` or `sample_ratio` on, the probe's or the
+  scrape's span MUST carry `sampling.reason`, the rule that kept it; with
+  neither, the export of a trace MUST be what it was without these rules,
+  no `sampling.reason`, and no `traceState` without a caller's
+  `tracestate`.
 - A request's `url.full` MUST withhold its userinfo, every query value and
   its fragment, as an error in the log quotes a URL, and `target` the values
   of query parameters named like credentials, as the log shows a target; a
@@ -30685,10 +30758,13 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   target's under its own (`targetResource`, § 42.1), each with
   `otlp.exporter_instance` when it is on, and under `otlp.scope`, by the code
   that makes the metrics' resources and scope.
-- A debug run MUST NOT be exported; with the export on, the debug page's
-  OTLP tab MUST show the spans the export would make of a run, by the
-  export's own code, and whether a probe or a scrape like it would be
-  exported, and its endpoint test MUST offer the traces endpoint, sent
+- A debug run MUST NOT be exported, counted or take a token of the rate
+  cap; with the export on, the debug page's OTLP tab MUST show the spans
+  the export would make of a run, by the export's own code, and whether a
+  probe or a scrape like it would be exported, by which rule, or why no
+  rule would keep it, with the ratio's randomness and threshold when the
+  ratio was tried, and that the rate cap is not taken by a run; its
+  endpoint test MUST offer the traces endpoint, sent
   `{"resourceSpans":[]}`.
 - A probe MUST NOT wait for the export: the spans waiting MUST be bounded
   by `otlp.traces.max_pending_spans`, 10000 by default, a negative value
@@ -32561,7 +32637,9 @@ Of the OTLP export:
   `otlp.logs.endpoint` MUST start its record again.
 - With `otlp.traces` on, the section MUST show the trace export (§ 42.1c)
   as it shows the log export: its endpoint with its credentials withheld,
-  its threshold, whether `errors` is on and its interval, its last export
+  its threshold, whether `errors` is on, its `parent_based`,
+  `sample_ratio` and `max_per_second`, its interval, the traces kept by
+  reason and dropped by reason since the start (§ 22.0c), its last export
   with its result and the spans it carried, the last that got through, the
   failed trace exports in a row, the last failure's error, the spans
   waiting and `otlp.traces.max_pending_spans`, and since the start the spans
@@ -33534,6 +33612,12 @@ target the jobs run other than the installing ones, so that a clean local
 `make ci` means a clean CI run; every target of the Makefile MUST be
 `.PHONY`, since none makes a file of its name. A test MUST check both.
 
+Every workflow step that runs `go mod download` MUST try it up to three
+times, waiting between tries: the module proxy now and then breaks off a
+download (`stream error: … INTERNAL_ERROR`), which would otherwise fail a job
+for nothing the change did. A test MUST check every such step of the
+workflows.
+
 A dependency update can raise the go directive in a pull request that touches no
 workflow, which leaves every later build failing with `go.mod requires go >= X`
 and nothing nearby to explain it. A test MUST therefore verify that every Go
@@ -34257,7 +34341,9 @@ the tab MUST show them as *Log records*. None of them MUST be queued for
 the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
 MUST NOT offer the tab.
 
-With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, with
+With `otlp.enabled`, the page MUST have a panel of its own, *OTLP
+endpoints*, below *Output* and outside the tab, shown whether or not
+anything has run, which MUST offer *Test the metrics endpoint*, with
 `otlp.logs` on *Test the logs endpoint*, and with `otlp.traces` on *Test
 the traces endpoint*, which `POST` to
 `/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left

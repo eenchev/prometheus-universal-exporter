@@ -296,7 +296,16 @@ With [`otlp.traces`](OTLP.md#traces-of-slow-requests) on, another part,
 **Trace export**, shows the export of the traces of slow and failed probes
 and scrapes as **Log export** shows the log's: its endpoint, with its
 credentials withheld, its threshold, whether `errors` exports failed ones
-too, and its interval; when the last trace export began, its result and the
+too, whether `parent_based` exports those the caller sampled, its
+`sample_ratio` as a percentage and its `max_per_second`, `no cap` where it is
+`0`, both in the opening sentence and as **Sampling rules**, and its
+interval; since the start, the whole traces kept, by the rule that kept them
+(slow, failed, sampled by the caller, sampled by the ratio), and dropped, by
+why (not sampled, over the rate cap, with no room in the queue), as
+`http_exporter_otlp_traces_kept_total` and
+`http_exporter_otlp_traces_dropped_total` count them
+([Which traces are exported](OTLP.md#which-traces-are-exported)); when the
+last trace export began, its result and the
 spans it carried; the last that got through; the failed trace exports in a
 row; the last failure's error and when that export began, shown as recovered
 once a trace export got through after it; the spans waiting
@@ -347,7 +356,10 @@ export is off, and otherwise:
   "exports_succeeded": 512, "exports_failed": 0},
  "traces": {"enabled": true,
   "endpoint": "https://redacted:redacted@otel.example/v1/traces?token=<redacted>&tenant=acme",
-  "threshold": "1s", "errors": false, "interval": "5s",
+  "threshold": "1s", "errors": false,
+  "parent_based": true, "sample_ratio": 0.01, "max_per_second": 20, "interval": "5s",
+  "traces_kept_by_reason": {"slow": 52, "error": 0, "parent": 3, "ratio": 12},
+  "traces_dropped_by_reason": {"not_sampled": 11870, "rate": 0, "queue": 0},
   "last_export": "2026-10-24T08:59:55Z", "last_result": "success", "last_spans": 14,
   "last_success": "2026-10-24T08:59:55Z",
   "failing": false, "consecutive_failures": 0,

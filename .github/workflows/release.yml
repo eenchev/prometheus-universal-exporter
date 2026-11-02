@@ -131,7 +131,19 @@ jobs:
       # module be missing, where they would otherwise be skipped.
       - name: Install the Python modules only the tests use
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - run: go test ./...
       - run: go build ./...
 

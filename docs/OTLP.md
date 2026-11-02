@@ -787,7 +787,9 @@ With `otlp.traces`, a probe or a static target's scrape that took
 go to: a span for the probe or the scrape, and under it a span for each
 stage of its trip and each request it sent, which shows where its time went.
 A fast one is not exported, and neither is a failed one unless `errors` says
-so:
+so, nor one its caller sampled unless `parent_based` does, and a
+`sample_ratio` share of the rest is
+([Which traces are exported](#which-traces-are-exported)):
 
 ```yaml
 otlp:
@@ -798,6 +800,9 @@ otlp:
     # endpoint: http://otel-collector:4318/v1/traces
     # threshold: 1s
     # errors: false
+    # parent_based: false
+    # sample_ratio: 0
+    # max_per_second: 0
     # interval: 5s
     # max_pending_spans: 10000
 ```
@@ -827,6 +832,15 @@ keys:
   scrape that left its target `up` 0. Off, the default, only slow ones are
   exported, failed or not; a failure is in the log and the self-metrics
   already.
+- `parent_based: true` exports the trace of every probe whose caller sent a
+  `traceparent` with its sampled flag set, `01`, as the caller's tracer
+  keeps its own part of the trace. Off, the default, the flag is not read.
+- `sample_ratio` is the share, from `0` to `1`, of the other traces
+  exported, decided by the trace id; `0`, the default, exports none of
+  them, and `1` every one. A ratio outside `0` to `1` is refused when the
+  configuration loads.
+- `max_per_second` is the most traces exported a second, whatever kept
+  them; `0`, the default, is no cap. It may not be negative.
 - `interval` is how often the spans waiting are sent, `5s` by default and at
   least `1s`.
 - `max_pending_spans` bounds the spans waiting, `10000` by default.
@@ -866,10 +880,12 @@ hex, as OTLP/JSON writes them; times are nanoseconds since the epoch.
 
 A probe whose caller sends a W3C `traceparent` header, as Prometheus does
 not but a caller of its own may, continues the caller's trace: its span is
-of the caller's trace id, with the caller's span as its parent. The
-threshold and `errors` decide whether it is exported all the same, whatever
-the header's sampled flag says. The exporter sends no `traceparent` to its
-targets.
+of the caller's trace id, with the caller's span as its parent, and its
+spans carry the caller's `tracestate` header
+([below](#which-traces-are-exported)). Its sampled flag keeps the trace
+only under `parent_based`; the other rules decide it as any other. A
+`traceparent` that cannot be read is no parent, and the `tracestate` beside
+it is not read. The exporter sends no `traceparent` to its targets.
 
 A trace is under the resource its series are exported under: a probe's
 under the exporter-wide resource, a static target's under
@@ -929,6 +945,80 @@ dropped whole past `max_pending_spans` and counted, and spans
 the endpoint refuses, or rejects in a `partialSuccess` (its `rejectedSpans`),
 are dropped and counted.
 
+### Which traces are exported
+
+A trace is decided once, at the end of its probe or scrape, by the rules
+in this order; the first that keeps it says why, and one that none keeps is
+dropped:
+
+1. `slow`: it took `threshold` or longer;
+2. `error`: it failed, under `errors: true`;
+3. `parent`: its caller's `traceparent` has the sampled flag set, under
+   `parent_based: true`; a probe without a `traceparent`, or with one that
+   cannot be read, and a static target's scrape, have none;
+4. `ratio`: its trace id is in the `sample_ratio` share.
+
+The ratio is decided as OpenTelemetry's `TraceIdRatioBased` sampler and its
+consistent probability sampling decide it, so that the exporter and every
+tracer of the trace that samples at the same ratio keep the same traces: the
+trace's randomness, the last 56 bits of its trace id, which W3C trace
+context level 2 makes random, is compared with the rejection threshold
+`(1 - sample_ratio) × 2^56`, rounded as OpenTelemetry rounds it, and the
+trace is kept when its randomness is not under it. The same trace id is
+decided alike every time. The exporter's own trace ids are from
+`crypto/rand`; a caller's is used as it came, or, where the caller's
+`tracestate` gives the trace an explicit randomness, `ot=rv:<14 hex
+digits>`, that.
+
+The spans of a trace the ratio kept carry its threshold, `th`, in the `ot`
+member of their `tracestate`, OTLP's `traceState`, as OpenTelemetry's
+probability sampling in `tracestate` writes it: 14 hex digits with the
+trailing zeros left out, so `sample_ratio: 0.25` is `ot=th:c`, `0.5`
+`ot=th:8`, `0.01` `ot=th:fd70a3d70a3d71`, and `1`, which keeps every trace,
+`ot=th:0`. A backend counts by it how many traces each kept one stands for.
+The caller's `tracestate` is kept behind it: the `ot` member, its other
+fields such as `rv` kept and its `th` replaced, is put first, as the W3C
+asks of a member changed, and the members past 32 are dropped from the
+right. A trace its caller's flag kept carries the caller's `tracestate` as
+it came, its `th` being the probability the caller kept it by. A trace kept
+for being slow or failed carries the caller's `tracestate` without a `th`,
+the `ot` member moved first if it lost one: no probability kept it, and a
+backend counting by the threshold would count it too many times. A
+`tracestate` that cannot be read — a member that is no `key=value` of the
+W3C's characters, a key twice, more than 32 members — is not propagated.
+
+With `parent_based` or `sample_ratio` on, the probe's or the scrape's span
+says why its trace was kept, in `sampling.reason`: `slow`, `error`,
+`parent` or `ratio`. With neither, a trace is kept for being slow or failed
+alone, as its duration and status say, and its span has no
+`sampling.reason`; a trace of a probe without a caller's `tracestate` then
+has no `traceState` either, as before the rules.
+
+`max_per_second` is held to after the rules, by every trace they kept,
+slow and failed ones too: a token bucket of `max_per_second` tokens that
+fills at `max_per_second` a second, so a burst of as many traces goes at
+once, then as many a second. It starts full, and a reload that changes the
+cap keeps its tokens, within the new one. A trace kept takes a token, and
+one that finds none is dropped and counted as `rate`. So that the traces
+the export is there for are not crowded out by sampled ones, which are many
+at a high ratio, a trace kept by `parent` or `ratio` takes a token only
+while half the bucket, rounded down, is left after it: a slow or failed
+one may take the rest. A cap of `1` keeps nothing back, and at a steady
+rate the sampled traces still get every token the bucket fills with above
+that half. The bucket's lock is held for a few sums; a probe never waits
+for it.
+
+What became of the traces is counted, whole traces and not spans, in
+`http_exporter_otlp_traces_kept_total{reason}` by the rule that kept them,
+and in `http_exporter_otlp_traces_dropped_total{reason}`: `not_sampled` by
+no rule, `rate` over `max_per_second`, and `queue` kept and with no room
+under `max_pending_spans`, when queued or when a failed export put it back,
+which a trace kept is counted in too. The spans of the traces are counted as
+before, in `http_exporter_otlp_spans_dropped_total` and
+`http_exporter_otlp_spans_sent_total`
+([self-metrics](SELF-METRICS.md#otlp-export-status)). The status page shows
+the rules in force and the same counts.
+
 The trace export's own lines go to stderr alone, as the log export's do, and
 say `this line is not exported`. Failing trace exports never make the
 exporter unready. The export's state is in the
@@ -949,7 +1039,14 @@ export would make of a run: a tree of them, each with its start, its
 duration, a bar of its time within the run's, its status and its
 attributes, and the ExportTraceServiceRequest they would be sent in, in the
 JSON viewer. Above them it says whether a probe or a scrape that took as
-long and ended as the run did would be exported, by `threshold` and
-`errors`. The run itself is never exported. At `--web.debug=full`, *Test the
+long and ended as the run did would be exported, and by which rule, or why
+no rule would keep it: under `threshold`, failed or not under `errors`,
+with no caller's `traceparent` under `parent_based` — a run has none — and,
+under `sample_ratio`, the run's trace id's randomness against the
+threshold, as in *would be exported: it was sampled at 1% by
+otlp.traces.sample_ratio (trace id randomness 0xffd4… ≥ threshold
+0xfd70a3d70a3d71)*. `max_per_second` is not taken: what it would leave
+depends on the traces exported before, and the line says a trace kept may
+still be dropped by it. The run itself is never exported. At `--web.debug=full`, *Test the
 traces endpoint* sends `{"resourceSpans":[]}` to the traces endpoint, once,
 as *Test the metrics endpoint* does.

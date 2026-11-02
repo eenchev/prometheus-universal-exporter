@@ -1165,7 +1165,7 @@ env:
 
 ### OTLP export
 
-OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)), and its `traces` block a trace of each probe and static target scrape that took `threshold` or longer, at its `/v1/traces` path (see [Traces of slow requests](../../docs/OTLP.md#traces-of-slow-requests)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers every export sends:
+OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)), and its `traces` block a trace of each probe and static target scrape that took `threshold` or longer, and with `sample_ratio` a share of the rest, at most `max_per_second` a second, at its `/v1/traces` path (see [Traces of slow requests](../../docs/OTLP.md#traces-of-slow-requests) and [Which traces are exported](../../docs/OTLP.md#which-traces-are-exported)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers every export sends:
 
 ```yaml
 server:
@@ -1192,6 +1192,9 @@ config:
         traces:
           enabled: true
           threshold: 2s
+          # Also a share of the other traces, at most 20 a second in all:
+          # sample_ratio: 0.01
+          # max_per_second: 20
       collectors:
         - name: example
           request:

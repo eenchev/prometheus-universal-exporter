@@ -21,10 +21,10 @@ import (
 )
 
 // With otlp.traces, a probe or a static target's scrape that took
-// otlp.traces.threshold or longer, and with otlp.traces.errors one that
-// failed, is exported over OTLP as a trace: a span for the probe or the
-// scrape, and under it one for each stage of its trip and each request it
-// sent. The export is OTLP/HTTP with a JSON body, sent as the metrics and
+// otlp.traces.threshold or longer, with otlp.traces.errors one that failed,
+// and one the other sampling rules keep (otlptracesampling.go), is exported
+// over OTLP as a trace: a span for the probe or the scrape, and under it
+// one for each stage of its trip and each request it sent. The export is OTLP/HTTP with a JSON body, sent as the metrics and
 // the log records are (deliverOTLPOf), with the otlp block's headers, TLS,
 // compression, timeout, retries and batch bounds, under the scope and the
 // resource the metrics have.
@@ -65,8 +65,11 @@ const (
 // are hex, as OTLP/JSON writes them where protobuf's JSON mapping would
 // write base64, and its times decimal text, as every int64 is.
 type otlpSpan struct {
-	TraceID           string             `json:"traceId"`
-	SpanID            string             `json:"spanId"`
+	TraceID string `json:"traceId"`
+	SpanID  string `json:"spanId"`
+	// TraceState is the trace's W3C tracestate, its sampling threshold
+	// among it where the ratio kept it (spanTraceState).
+	TraceState        string             `json:"traceState,omitempty"`
 	ParentSpanID      string             `json:"parentSpanId,omitempty"`
 	Name              string             `json:"name"`
 	Kind              int                `json:"kind"`
@@ -221,14 +224,34 @@ type spanRoot struct {
 	// parent is the span of a caller that sent a traceparent, whose trace
 	// the probe's continues.
 	parent traceParent
+	// traceID is the trace's id where the sampling decision made one, which
+	// the spans are then of; zero has buildSpans make one. traceState is
+	// the spans' tracestate, and reason, when set, the root's
+	// sampling.reason.
+	traceID    [16]byte
+	traceState string
+	reason     string
 }
 
-// traceParent is a W3C traceparent's trace id and span id; ok says there
-// was one that could be read.
+// traceParent is a W3C traceparent's trace id and span id, and whether its
+// sampled flag is set; ok says there was one that could be read. state is
+// the tracestate sent with it, which is read only beside one that could be.
 type traceParent struct {
 	traceID [16]byte
 	spanID  [8]byte
+	sampled bool
 	ok      bool
+	state   traceState
+}
+
+// callerTrace is the trace a probe's caller sent, by its traceparent and
+// tracestate headers.
+func callerTrace(h http.Header) traceParent {
+	p := parseTraceparent(h.Get("traceparent"))
+	if p.ok {
+		p.state = parseTraceState(h.Values("tracestate"))
+	}
+	return p
 }
 
 // parseTraceparent reads a W3C traceparent header: version-traceid-
@@ -259,9 +282,11 @@ func parseTraceparent(header string) traceParent {
 	if _, err := hex.Decode(p.spanID[:], []byte(parts[2])); err != nil {
 		return traceParent{}
 	}
-	if _, err := hex.DecodeString(parts[0] + parts[3]); err != nil {
+	flags, err := hex.DecodeString(parts[0] + parts[3])
+	if err != nil {
 		return traceParent{}
 	}
+	p.sampled = flags[1]&1 == 1
 	if p.traceID == [16]byte{} || p.spanID == [8]byte{} {
 		return traceParent{}
 	}
@@ -304,14 +329,18 @@ func boolAttribute(key string, value bool) otlpAnyAttribute {
 // with an INTERNAL rate_limit span before it where it waited for its turn
 // under request.rate_limit.
 func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedRequest) []otlpSpan {
-	traceID := newTraceID()
-	if root.parent.ok {
+	traceID := root.traceID
+	switch {
+	case root.parent.ok:
 		traceID = root.parent.traceID
+	case traceID == [16]byte{}:
+		traceID = newTraceID()
 	}
 	trace := hex.EncodeToString(traceID[:])
+	state := root.traceState
 	rootID := newSpanID()
 	top := otlpSpan{
-		TraceID: trace, SpanID: hex.EncodeToString(rootID[:]), Name: root.name, Kind: root.kind,
+		TraceID: trace, SpanID: hex.EncodeToString(rootID[:]), TraceState: state, Name: root.name, Kind: root.kind,
 		StartTimeUnixNano: nanos(root.start), EndTimeUnixNano: nanos(root.end), Attributes: root.attributes,
 	}
 	if root.parent.ok {
@@ -319,6 +348,9 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 	}
 	if root.errorType != "" {
 		top.Attributes = append(top.Attributes, stringAttribute("error.type", root.errorType))
+	}
+	if root.reason != "" {
+		top.Attributes = append(top.Attributes, stringAttribute("sampling.reason", root.reason))
 	}
 	if root.failed {
 		top.Status = &otlpSpanStatus{Code: otlpStatusError, Message: root.message}
@@ -338,7 +370,7 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 				}
 			}
 		}
-		span := otlpSpan{TraceID: trace, SpanID: stageIDs[i], ParentSpanID: parent, Name: stage.name, Kind: otlpSpanKindInternal,
+		span := otlpSpan{TraceID: trace, SpanID: stageIDs[i], TraceState: state, ParentSpanID: parent, Name: stage.name, Kind: otlpSpanKindInternal,
 			StartTimeUnixNano: nanos(stage.start), EndTimeUnixNano: nanos(stage.end),
 			Attributes: []otlpAnyAttribute{stringAttribute("stage.outcome", stage.outcome)}}
 		if stage.outcome == "ok" || stage.outcome == "hit" || stage.outcome == "miss" {
@@ -384,12 +416,12 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 		parent := within(start)
 		if r.RateLimitWait > 0 {
 			id := newSpanID()
-			spans = append(spans, otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), ParentSpanID: parent, Name: "rate_limit", Kind: otlpSpanKindInternal,
+			spans = append(spans, otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: parent, Name: "rate_limit", Kind: otlpSpanKindInternal,
 				StartTimeUnixNano: nanos(start.Add(-r.RateLimitWait)), EndTimeUnixNano: nanos(start),
 				Attributes: []otlpAnyAttribute{stringAttribute("stage.note", r.Wait)}})
 		}
 		id := newSpanID()
-		span := otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), ParentSpanID: parent, Name: r.Method, Kind: otlpSpanKindClient,
+		span := otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: parent, Name: r.Method, Kind: otlpSpanKindClient,
 			StartTimeUnixNano: nanos(start), EndTimeUnixNano: nanos(start.Add(r.Duration)), Attributes: requestAttributes(r, resends)}
 		if requestFailed(r) {
 			note, failed := failedStage[parent]
@@ -536,21 +568,6 @@ func otlpTraceThreshold(cfg model.OTLPConfig) time.Duration {
 	return model.DefaultOTLPTracesThreshold
 }
 
-// tracedTrip says whether the trace of a trip that took elapsed and failed
-// as failed says is exported, and why or why not, as the debug page says it.
-func tracedTrip(cfg model.OTLPConfig, elapsed time.Duration, failed bool) (bool, string) {
-	threshold := otlpTraceThreshold(cfg)
-	switch {
-	case elapsed >= threshold:
-		return true, fmt.Sprintf("it took %s, at least otlp.traces.threshold %s", shownScrapeDuration(elapsed), threshold)
-	case failed && cfg.Traces.Errors:
-		return true, fmt.Sprintf("it failed, and otlp.traces.errors exports every failed trace; it took %s, under otlp.traces.threshold %s", shownScrapeDuration(elapsed), threshold)
-	case failed:
-		return false, fmt.Sprintf("it took %s, under otlp.traces.threshold %s, and failed, which without otlp.traces.errors exports nothing", shownScrapeDuration(elapsed), threshold)
-	}
-	return false, fmt.Sprintf("it took %s, under otlp.traces.threshold %s", shownScrapeDuration(elapsed), threshold)
-}
-
 // otlpTraces is the trace export's queue and its record.
 type otlpTraces struct {
 	mu sync.Mutex
@@ -570,6 +587,12 @@ type otlpTraces struct {
 	// again.
 	endpoint string
 	history  otlpLogsHistory
+	// rate is otlp.traces.max_per_second, and tally the traces decided of
+	// by why; now is the clock the rate goes by, time.Now unless a test
+	// sets its own.
+	rate  traceRate
+	tally otlpTraceTally
+	now   func() time.Time
 }
 
 // otlpQueuedSpan is a span waiting, as JSON, with its resource.
@@ -632,6 +655,7 @@ func (t *otlpTraces) add(spans []otlpQueuedSpan, limit int) {
 	defer t.mu.Unlock()
 	if len(t.queue)+len(spans) > limit {
 		t.dropped[otlpTraceDropPendingCap] += len(spans)
+		t.tally.dropped[traceDroppedQueue].Add(1)
 		return
 	}
 	t.queue = append(t.queue, spans...)
@@ -687,6 +711,7 @@ func (t *otlpTraces) capLocked(limit int) {
 	}
 	if cut > 0 {
 		t.dropped[otlpTraceDropPendingCap] += cut
+		t.tally.dropped[traceDroppedQueue].Add(int64(traces))
 		t.queue = append([]otlpQueuedSpan(nil), t.queue[cut:]...)
 		t.traces = append([]int(nil), t.traces[traces:]...)
 	}
@@ -738,17 +763,45 @@ func beginTrace(ctx context.Context, cfg model.OTLPConfig) (context.Context, *tr
 }
 
 // endTrace ends the record of a probe or a scrape that ran from start to
-// end and failed as failed says. Nearly every one is not exported, and is
-// forgotten: its record is dropped, and nothing more is made of it. One to
-// export has its span made by root, of the size of the response fetched,
-// and its spans queued under the resource identity makes.
-func (s *Server) endTrace(cfg model.OTLPConfig, spans *tripSpans, start, end time.Time, failed bool, root func(bytes int) spanRoot, identity func() otlpResourceIdentity) {
-	if export, _ := tracedTrip(cfg, end.Sub(start), failed); !export {
+// end, failed as failed says, and whose caller sent parent, if any. Nearly
+// every one is not exported, and is forgotten: its record is dropped, and
+// nothing more is made of it. One that a rule keeps (decideTrace) and
+// otlp.traces.max_per_second lets through has its span made by root, of the
+// size of the response fetched, and its spans queued under the resource
+// identity makes.
+func (s *Server) endTrace(cfg model.OTLPConfig, spans *tripSpans, start, end time.Time, failed bool, parent traceParent, root func(bytes int) spanRoot, identity func() otlpResourceIdentity) {
+	t := s.otlpTraces
+	decision := decideTrace(cfg, end.Sub(start), failed, parent)
+	if decision.reason == keptNone {
+		t.tally.dropped[traceDroppedNotSampled].Add(1)
 		spans.discard()
 		return
 	}
+	now := time.Now
+	if t.now != nil {
+		now = t.now
+	}
+	if !t.rate.take(cfg.Traces.MaxPerSecond, decision.reason, now()) {
+		t.tally.dropped[traceDroppedRate].Add(1)
+		spans.discard()
+		return
+	}
+	t.tally.kept[decision.reason].Add(1)
 	stages, requests, fetched := spans.close()
-	s.otlpTraces.add(queuedSpans(identity(), buildSpans(root(fetched), stages, requests)), otlpMaxPendingSpans(cfg))
+	made := root(fetched)
+	sampledRoot(&made, cfg, decision, parent)
+	t.add(queuedSpans(identity(), buildSpans(made, stages, requests)), otlpMaxPendingSpans(cfg))
+}
+
+// sampledRoot gives root what the sampling decision says of its trace: the
+// id the ratio's rule went by, the tracestate its spans carry, and, while a
+// rule beside the threshold and errors is on, why it was kept.
+func sampledRoot(root *spanRoot, cfg model.OTLPConfig, decision traceDecision, parent traceParent) {
+	root.traceID = decision.traceID
+	root.traceState = spanTraceState(decision.reason, cfg.Traces.SampleRatio, parent.state)
+	if otlpTraceSamplingOn(cfg) {
+		root.reason = samplingReasonNames[decision.reason]
+	}
 }
 
 // queuedSpans are spans as they wait for the export, under identity, which
@@ -816,7 +869,7 @@ func probeTraceEndOf(result *probeResult) probeTraceEnd {
 // answer was ready: what its caller takes to read the answer is not its
 // time, as it is not in the self-metrics' durations.
 func (s *Server) endProbeTrace(cfg model.OTLPConfig, spans *tripSpans, c *model.Collector, target, method string, start, finished time.Time, parent traceParent, end probeTraceEnd) {
-	s.endTrace(cfg, spans, start, finished, end.failed, func(bytes int) spanRoot {
+	s.endTrace(cfg, spans, start, finished, end.failed, parent, func(bytes int) spanRoot {
 		return probeSpanRoot(c, target, method, start, finished, parent, end, bytes)
 	}, func() otlpResourceIdentity { return defaultResourceIdentity(cfg) })
 }
@@ -835,7 +888,7 @@ func probeSpanRoot(c *model.Collector, target, method string, start, end time.Ti
 // own resource, as its series are exported (targetResource).
 func (s *Server) endScrapeTrace(cfg model.OTLPConfig, spans *tripSpans, target *model.StaticTarget, c *model.Collector, address string, start time.Time, series int, cached bool, failure error) {
 	finished := time.Now()
-	s.endTrace(cfg, spans, start, finished, failure != nil, func(bytes int) spanRoot {
+	s.endTrace(cfg, spans, start, finished, failure != nil, traceParent{}, func(bytes int) spanRoot {
 		return scrapeSpanRoot(target, c, address, start, finished, series, cached, failure, bytes)
 	}, func() otlpResourceIdentity { return targetResource(target, cfg) })
 }
@@ -1057,10 +1110,17 @@ func (s *Server) otlpTraceStatusMetrics() []model.Metric {
 	metric := func(name string, value int, labels map[string]string) model.Metric {
 		return model.Metric{Name: name, Help: exporterMetricHelp[name], Type: model.CounterMetricType, Value: float64(value), Labels: labels}
 	}
-	return []model.Metric{
+	metrics := []model.Metric{
 		metric("http_exporter_otlp_trace_exports_total", t.successes, map[string]string{"result": "success"}),
 		metric("http_exporter_otlp_trace_exports_total", t.failures, map[string]string{"result": "failure"}),
 		metric("http_exporter_otlp_spans_sent_total", t.sent, nil),
 		metric("http_exporter_otlp_spans_dropped_total", t.droppedLocked(), nil),
 	}
+	for reason := keptSlow; reason < samplingReasons; reason++ {
+		metrics = append(metrics, metric("http_exporter_otlp_traces_kept_total", int(t.tally.kept[reason].Load()), map[string]string{"reason": samplingReasonNames[reason]}))
+	}
+	for reason := range traceDropReasons {
+		metrics = append(metrics, metric("http_exporter_otlp_traces_dropped_total", int(t.tally.dropped[reason].Load()), map[string]string{"reason": traceDropReasonNames[reason]}))
+	}
+	return metrics
 }

@@ -50,10 +50,17 @@ otlp:
   # threshold or longer, and with errors of each that failed, to the same
   # collector, at /v1/traces unless endpoint says otherwise: a span for the
   # probe or the scrape, and one for each stage and request of its trip.
+  # parent_based exports those whose caller's traceparent is sampled too,
+  # sample_ratio a share (0 to 1) of the rest by their trace ids, as
+  # OpenTelemetry's consistent probability sampling decides it, and
+  # max_per_second caps all of them, 0 being no cap.
   # traces:
   #   enabled: true
   #   threshold: 1s
   #   errors: false
+  #   parent_based: false
+  #   sample_ratio: 0
+  #   max_per_second: 0
   #   endpoint: http://otel-collector:4318/v1/traces
 
 # Optional exporter endpoint protection. Do not enable this together with a

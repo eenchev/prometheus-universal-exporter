@@ -757,7 +757,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <h3 id="otlp-traces">Trace export</h3>
 {{- with .Traces}}
 {{- if .Enabled}}
-<p>The traces of the probes and static target scrapes that took {{.Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}, exported every {{.Interval}}. Failing trace exports do not make the exporter unready.</p>
+<p>The traces of the probes and static target scrapes that took {{.Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}{{if .ParentBased}}, and of every probe whose caller sampled it{{end}}{{if .SampleRatio}}, and {{.SampleRatioText}} of the others by their trace ids{{end}}, exported every {{.Interval}}{{if .MaxPerSecond}}, at most {{.MaxPerSecond}} trace{{if ne .MaxPerSecond 1}}s{{end}} a second{{end}}. Failing trace exports do not make the exporter unready.</p>
 <div class="scroll">
 <table class="facts">
 <tbody>
@@ -766,6 +766,9 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+<tr><th>Sampling rules</th><td>threshold {{.Threshold}}; errors {{.Errors}}; parent_based {{.ParentBased}}; sample_ratio {{.SampleRatioText}}; max_per_second {{if .MaxPerSecond}}{{.MaxPerSecond}}{{else}}no cap{{end}}</td></tr>
+<tr><th>Traces kept</th><td>{{.TracesKept.Slow}} slow, {{.TracesKept.Error}} failed, {{.TracesKept.Parent}} sampled by the caller, {{.TracesKept.Ratio}} sampled by the ratio</td></tr>
+<tr><th>Traces dropped</th><td>{{.TracesDropped.NotSampled}} not sampled, {{.TracesDropped.Rate}} over the rate cap, {{.TracesDropped.Queue}} with no room in the queue</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} span{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
 <tr><th>Dropped since start</th><td>{{.Dropped}} span{{if ne .Dropped 1}}s{{end}}{{if .Dropped}}<br><span class="muted">{{.DroppedBy.PendingCap}} over the pending bound, {{.DroppedBy.Refused}} refused or rejected, {{.DroppedBy.Shutdown}} of the last export at shutdown</span>{{end}}</td></tr>
 <tr><th>Since start</th><td>{{.Sent}} span{{if ne .Sent 1}}s{{end}} sent; {{.Succeeded}} export{{if ne .Succeeded 1}}s{{end}} succeeded, {{.FailedAll}} failed</td></tr>

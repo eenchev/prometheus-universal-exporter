@@ -10,7 +10,10 @@ deliberately not part of it: Prometheus supplies each one per scrape.
 `otlp` exports probe results, the exporter's own metrics and, with
 `otlp.logs`, its own log over [OTLP](OTLP.md), with
 [`otlp.traces`](OTLP.md#traces-of-slow-requests) a trace of each slow probe
-and static target scrape, and with
+and static target scrape — of each failed one too with `errors`, of each
+its caller sampled with `parent_based`, of a `sample_ratio` share of the
+rest, at most `max_per_second` a second
+([Which traces are exported](OTLP.md#which-traces-are-exported)) — and with
 [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
 that sends them on every resource.
 
@@ -5742,13 +5745,21 @@ is what the export does, not a description of it:
   with each span's start, duration, a bar of its time within the run's, its
   status and its attributes, the `ExportTraceServiceRequest` they would be
   sent in, shown as the metrics' body is, and whether a probe or a scrape
-  that took as long and ended as the run did would be exported, by
-  `otlp.traces.threshold` and `otlp.traces.errors`. The run's own trace is
+  that took as long and ended as the run did would be exported, and by
+  which rule, or why none would keep it: `otlp.traces.threshold`,
+  `otlp.traces.errors`, `otlp.traces.parent_based` (a run has no caller's
+  `traceparent`) and `otlp.traces.sample_ratio`, with the run's trace id's
+  randomness against the threshold. `otlp.traces.max_per_second` is not
+  taken, and the line says so of a trace kept. The run's own trace is
   never exported.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and
-nothing is sent. At `full` the tab also offers *Test the metrics
+nothing is sent.
+
+With `otlp.enabled` the page has a panel of its own below *Output*, *OTLP
+endpoints*, there before anything has run, since testing the endpoint has
+nothing to do with a run. At `full` it offers *Test the metrics
 endpoint*, with `otlp.logs` *Test the logs endpoint* and with
 `otlp.traces` *Test the traces endpoint*: one empty export,
 `{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or `{"resourceSpans":[]}`,
@@ -5845,8 +5856,9 @@ alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
 `prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
 `left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
 `otlp.logs`, `logs` (`level`, `records`, `notes` and `body`), and with
-`otlp.traces`, `traces` (`threshold`, `errors`, `took`, `failed`,
-`exported`, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
+`otlp.traces`, `traces` (`threshold`, `errors`, `parent_based`,
+`sample_ratio`, `max_per_second`, `took`, `failed`, `exported`, `reason`
+when it would be, as `sampling.reason` names it, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
 `duration_ms`, `status` and `attributes`, `notes` and `body`). A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.

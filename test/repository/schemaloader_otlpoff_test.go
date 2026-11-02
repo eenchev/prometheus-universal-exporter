@@ -68,15 +68,18 @@ var otlpKeys = map[string]struct {
 	// The traces block is checked as the logs block is: once it is
 	// switched on itself, in a block switched on; its threshold at least
 	// 1ms, by both where it is one part and by the exporter alone where it
-	// is several.
+	// is several; its sample_ratio from 0 to 1 and its max_per_second not
+	// negative, by both.
 	"traces": {
 		checked: []otlpValue{
 			{"{enabled: true, threshold: 500us}", ""}, {"{enabled: true, threshold: -1s}", ""}, {"{enabled: true, interval: 500ms}", ""},
 			{"{enabled: true, max_pending_spans: -1}", ""}, {"{enabled: true, endpoint: not-a-url}", "otlp.traces.endpoint must be an http or https URL"},
 			{"{enabled: true, threshold: 400us400us}", "otlp.traces.threshold 800µs is under the least, 1ms"},
 			{"{enabled: true, interval: 400ms400ms}", "otlp.traces.interval 800ms is under the least, 1s"},
+			{"{enabled: true, sample_ratio: 1.5}", ""}, {"{enabled: true, sample_ratio: -0.1}", ""}, {"{enabled: true, max_per_second: -1}", ""},
 		},
-		noValue: []string{"x", "[a]", "{threshold: 1s}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, threshold: soon}", "{enabled: true, errors: maybe}", "{enabled: true, max_pending_spans: many}"},
+		noValue: []string{"x", "[a]", "{threshold: 1s}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, threshold: soon}", "{enabled: true, errors: maybe}", "{enabled: true, max_pending_spans: many}",
+			"{enabled: true, parent_based: maybe}", "{enabled: true, sample_ratio: half}", "{enabled: true, sample_ratio: [1]}", "{enabled: true, max_per_second: 1.5}"},
 	},
 	"metric_names": {checked: []otlpValue{{"OTel", ""}, {"openmetrics", ""}, {"5", ""}}, noValue: []string{"[otel]", "{a: b}"}},
 	// A scope written is held to a name, without a control character in
@@ -170,6 +173,8 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 	for _, setting := range []string{"compression: none", "compression: gzip", `compression: ""`, "max_pending_points: 0", "max_pending_points: 5000", "unready_after_failures: 3", "unready_after_failures: 1000", "timeout: 10s", "interval: 1m", "batch_max_size: 0", "batch_max_size: 1", "batch_max_bytes: 0", "batch_max_bytes: 65536", "batch_max_bytes: 64KiB", "batch_max_bytes: 4MiB",
 		"metric_names: otel", "metric_names: prometheus", `metric_names: ""`, "scope: {name: my-scope}", `scope: {name: my-scope, version: "1.2.3"}`, `scope: {name: "1"}`,
 		"traces: {enabled: true}", "traces: {enabled: false, threshold: 1us, interval: -1s}", "traces: {enabled: true, threshold: 1ms, errors: true, interval: 1s, max_pending_spans: 0, endpoint: \"http://traces.invalid/v1/traces\"}",
+		"traces: {enabled: true, parent_based: true, sample_ratio: 0.25, max_per_second: 10}", "traces: {enabled: true, sample_ratio: 1, max_per_second: 0}", "traces: {enabled: true, sample_ratio: 0}",
+		"traces: {enabled: false, parent_based: true, sample_ratio: 2, max_per_second: -1}",
 		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`,
 		"exporter_instance: {enabled: true}", `exporter_instance: {enabled: true, attribute: host.name, value: pod-0}`, `exporter_instance: {enabled: true, attribute: "", value: ""}`,
 		"exporter_instance: {enabled: false, attribute: service.name}", "exporter_instance: {enabled: true, attribute: service.instance.id}"} {

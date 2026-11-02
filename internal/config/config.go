@@ -1262,6 +1262,14 @@ func validateOTLPTraces(t *model.OTLPTracesConfig, metrics *url.URL) error {
 	case t.Interval < model.Duration(time.Second):
 		return fmt.Errorf("otlp.traces.interval %s is under the least, 1s; leave it out for the default, %s", time.Duration(t.Interval), model.DefaultOTLPTracesInterval)
 	}
+	// A ratio outside 0 to 1 is no share of the traces; NaN is none either,
+	// and fails both comparisons.
+	if !(t.SampleRatio >= 0 && t.SampleRatio <= 1) {
+		return fmt.Errorf("otlp.traces.sample_ratio %v is not between 0 and 1", t.SampleRatio)
+	}
+	if t.MaxPerSecond < 0 {
+		return errors.New("otlp.traces.max_per_second must not be negative")
+	}
 	switch {
 	case t.MaxPendingSpans < 0:
 		return errors.New("otlp.traces.max_pending_spans must not be negative")

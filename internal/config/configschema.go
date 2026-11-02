@@ -762,6 +762,9 @@ func collectorSchemaRules() map[string]map[string]any {
 		"otlp.traces.endpoint":                      {"description": "OTLP/HTTP traces endpoint, such as http://otel-collector:4318/v1/traces. Left out, otlp.endpoint with its /v1/metrics made /v1/traces; required when otlp.endpoint does not end in /v1/metrics."},
 		"otlp.traces.threshold":                     {"pattern": signedDurationPattern, "description": "The least duration of a probe or a static target scrape whose trace is exported. At least 1ms once the block is switched on; defaults to 1s."},
 		"otlp.traces.errors":                        {"description": "Also export the trace of every probe and scrape that failed, however long it took. Defaults to false: only the slow ones."},
+		"otlp.traces.parent_based":                  {"description": "Also export the trace of every probe whose caller's W3C traceparent has the sampled flag set (01). Defaults to false. Tried after threshold and errors."},
+		"otlp.traces.sample_ratio":                  {"description": "The share, 0 to 1, of the other traces exported, decided from the trace id's last 56 bits as OpenTelemetry's consistent probability sampling decides it; a trace kept so carries its threshold, ot=th, in its tracestate. 1 keeps every trace. Defaults to 0: none. Tried after threshold, errors and parent_based."},
+		"otlp.traces.max_per_second":                {"minimum": nil, "description": "The most traces exported a second, whatever kept them: a token bucket of as many tokens that fills at as many a second. A trace kept by parent_based or sample_ratio needs half the bucket left over, so that slow and failed traces find room. Defaults to 0: no cap."},
 		"otlp.traces.interval":                      {"pattern": signedDurationPattern, "description": "How often the spans waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
 		"otlp.traces.max_pending_spans":             {"minimum": nil, "description": "The most spans kept waiting for export; a trace that finds no room for all of its spans is dropped whole and counted rather than waited for, and a failed export's spans past it drop the oldest. Defaults to 10000."},
 		"otlp.exporter_instance":                    enabledSwitchRule(reflect.TypeOf(model.OTLPExporterInstanceConfig{}), "An attribute naming the exporter replica that sends the export, on every resource it sends: the probes', the static targets', the exporter's own metrics' and its log records'. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporter-instance."),
@@ -932,9 +935,10 @@ func otlpLogsOnRule() map[string]any {
 
 // otlpTracesOnRule is what otlp.traces is held to in an otlp block switched
 // on, once it is switched on itself, as validateOTLPTraces holds it: its
-// threshold at least 1ms, its interval at least 1s, and its
-// max_pending_spans not negative. Switched off, it is unchecked, and so is
-// the whole of it in an otlp block switched off.
+// threshold at least 1ms, its interval at least 1s, its max_pending_spans
+// and max_per_second not negative, and its sample_ratio from 0 to 1.
+// Switched off, it is unchecked, and so is the whole of it in an otlp block
+// switched off.
 func otlpTracesOnRule() map[string]any {
 	return map[string]any{
 		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
@@ -942,6 +946,8 @@ func otlpTracesOnRule() map[string]any {
 			"threshold":         map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(model.MinOTLPTracesThreshold, true)},
 			"interval":          map[string]any{"pattern": durationPattern, "not": fetch.SchemaLeastDuration(time.Second, true)},
 			"max_pending_spans": map[string]any{"minimum": 0},
+			"sample_ratio":      map[string]any{"minimum": 0, "maximum": 1},
+			"max_per_second":    map[string]any{"minimum": 0},
 		}},
 	}
 }

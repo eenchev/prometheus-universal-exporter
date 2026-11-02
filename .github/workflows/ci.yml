@@ -208,8 +208,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       # The repository's own checks read the whole tree, so they run on
       # every change the go filter names. The exporter's packages run when
       # the exporter filter names a change, the allocator's in a job of their
@@ -806,8 +818,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -1040,8 +1064,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - run: go vet ./...
         if: steps.changes.outputs.go == 'true'
       - run: go build ./...
@@ -1436,8 +1472,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       # Twice, in a random order, so a test that depends on the order tests
       # run in, or on running only once, is caught. The limit is a package's:
       # go test's own ten minutes are for one run without the race detector,
@@ -1638,8 +1686,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - name: Test the rest of the exporter under the race detector
         run: |
           packages="$(sh tools/ci-packages.sh exporter-rest)"
@@ -1835,8 +1895,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - name: Run the request type scaffold on a copy of the tree
         run: go test -run '^TestANewRequestTypeIsWiredByTheScaffold$' ./test/repository/
         if: steps.changes.outputs.go == 'true'
@@ -2050,8 +2122,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       # A build can carry only some request types. Vet and build the type on
       # its own too, so code one type needs cannot quietly depend on another;
       # make build-request-types runs the same commands over every type.
@@ -2280,8 +2364,20 @@ jobs:
       - name: Install the Python modules only the tests use
         if: steps.changes.outputs.go == 'true'
         run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
-      - run: go mod download
+      - name: Download the modules, retried
         if: steps.changes.outputs.go == 'true'
+        # proxy.golang.org now and then breaks off a download ("stream error:
+        # INTERNAL_ERROR"), which fails the job for nothing the change did;
+        # three tries, 10 s and 20 s apart, ride that out.
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "go mod download failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
       - name: Test the target allocator
         run: |
           packages="$(sh tools/ci-packages.sh allocator)"

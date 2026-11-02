@@ -232,9 +232,10 @@ table.series td.span-bar { min-width: 10em; width: 30%; }
 .span-track span.failed { background: var(--bad); }
 table.series td.span-failed { color: var(--bad); }
 p.span-verdict.exported { color: var(--good); }
-.otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
 .otlp-test button { margin: 0; }
 .otlp-test button:disabled { opacity: 0.5; cursor: not-allowed; }
+#otlp-test-result { margin-top: 12px; }
 /* The JSON viewer (jsonView): a line for each key or item, indented by
    its node, with the node's fold button in the gutter before it, so keys
    and items line up whether they fold or not. A long string wraps within
@@ -500,22 +501,6 @@ p.danger strong { color: var(--bad); }
 </div>
 {{- end}}
 </div>
-<h3>Test the endpoint</h3>
-<div class="otlp-test">
-<button type="button" class="secondary" id="otlp-test-metrics" data-signal="metrics"{{if not .Full}} disabled{{end}}>Test the metrics endpoint</button>
-{{- if .OTLPLogs}}
-<button type="button" class="secondary" id="otlp-test-logs" data-signal="logs"{{if not .Full}} disabled{{end}}>Test the logs endpoint</button>
-{{- end}}
-{{- if .OTLPTraces}}
-<button type="button" class="secondary" id="otlp-test-traces" data-signal="traces"{{if not .Full}} disabled{{end}}>Test the traces endpoint</button>
-{{- end}}
-</div>
-{{- if .Full}}
-<p class="note">Sends one empty export to the endpoint otlp configures, with its headers, TLS, compression and timeout, once, without retrying. It counts in none of the export's self-metrics and changes nothing the status page shows.</p>
-{{- else}}
-<p class="note" id="otlp-test-unavailable">Testing the endpoint sends it a request and shows what it answers, so it needs <code>--web.debug=full</code>.</p>
-{{- end}}
-<pre id="otlp-test-result" hidden></pre>
 </div>
 {{- end}}
 <h3>Stages</h3>
@@ -541,6 +526,26 @@ p.danger strong { color: var(--bad); }
 <pre id="report"></pre>
 </details>
 </section>
+{{- if .OTLP}}
+<section class="panel" style="margin-top:16px" id="otlp-test-panel" aria-labelledby="otlp-test-heading">
+<h2 id="otlp-test-heading">OTLP endpoints</h2>
+{{- if .Full}}
+<p class="note">Each button sends one empty export to the endpoint otlp configures for its signal, with its headers, TLS, compression and timeout, once, without retrying. It counts in none of the export's self-metrics and changes nothing the status page shows.</p>
+{{- else}}
+<p class="note" id="otlp-test-unavailable">Testing the endpoint sends it a request and shows what it answers, so it needs <code>--web.debug=full</code>.</p>
+{{- end}}
+<div class="otlp-test">
+<button type="button" class="secondary" id="otlp-test-metrics" data-signal="metrics"{{if not .Full}} disabled{{end}}>Test the metrics endpoint</button>
+{{- if .OTLPLogs}}
+<button type="button" class="secondary" id="otlp-test-logs" data-signal="logs"{{if not .Full}} disabled{{end}}>Test the logs endpoint</button>
+{{- end}}
+{{- if .OTLPTraces}}
+<button type="button" class="secondary" id="otlp-test-traces" data-signal="traces"{{if not .Full}} disabled{{end}}>Test the traces endpoint</button>
+{{- end}}
+</div>
+<pre id="otlp-test-result" aria-live="polite" hidden></pre>
+</section>
+{{- end}}
 </main>
 <script type="application/json" id="forms">{{.Forms}}</script>
 <script>

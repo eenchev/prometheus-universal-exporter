@@ -7,36 +7,21 @@ A section's text is its GitHub Release's description.
 
 Every pull request adds its lines to `## Unreleased`; a release moves the
 lines it ships into its own section. Each section begins with
-`### What changed for you`:- A Prometheus that asks for its protobuf format first, as it does when it
-  scrapes native histograms, gets the self-metrics in protobuf, with
-  `http_exporter_collector_scrape_duration_seconds` carrying native buckets
-  beside its classic ones; it got OpenMetrics before. Every other scraper
-  gets what it got. `web.self_metrics.native_histograms: false` answers it in
-  OpenMetrics again.
- what someone upgrading has to do or will notice,
+`### What changed for you`: what someone upgrading has to do or will notice,
 such as a renamed configuration key, a changed default, something removed or a
 changed metric, or "Nothing; you can upgrade without changes." when there is
-nothing. `### New` - `metric_name_validation_scheme: utf8` on a collector, Prometheus 3's
-  setting: the collector keeps UTF-8 metric and label names such as
-  `http.server.duration` as they are, and each answer writes them as its
-  scraper's `Accept` asks — quoted (`{"http.server.duration"} 1`) for
-  `escaping=allow-utf-8`, escaped by `underscores` (the default), `dots` or
-  `values` otherwise — with the escaping in its `Content-Type`. The default,
-  `legacy`, is the classic names and `name_escaping` as before.
-- Native and exponential histograms of the exporter's own scrape durations:
-  `http_exporter_collector_scrape_duration_seconds` keeps its durations in
-  exponential buckets too, which follow the durations observed (scale 20
-  down to whatever fits 160 buckets, as OpenTelemetry's SDKs do). The
-  self-metrics write them as a native histogram, schema 3 at most, in
-  Prometheus's protobuf format (`web.self_metrics.native_histograms`, on by
-  default), and the OTLP export sends them as an exponential histogram with
-  `otlp.exponential_histograms: true`.
-and `### Fixed` follow when they have lines.
+nothing. `### New` and `### Fixed` follow when they have lines.
 
 ## Unreleased
 
 ### What changed for you
 
+- A Prometheus that asks for its protobuf format first, as it does when it
+  scrapes native histograms, gets the self-metrics in protobuf, with
+  `http_exporter_collector_scrape_duration_seconds` carrying native buckets
+  beside its classic ones; it got OpenMetrics before. Every other scraper
+  gets what it got. `web.self_metrics.native_histograms: false` answers it in
+  OpenMetrics again.
 - Fewer Python workers stay idle, for less long: after a burst of scrapes one
   worker of each collector's script stays idle, rather than four, and an idle
   worker stops after two minutes unused, rather than five. Each is a CPython
@@ -129,6 +114,21 @@ and `### Fixed` follow when they have lines.
 
 ### New
 
+- `metric_name_validation_scheme: utf8` on a collector, Prometheus 3's
+  setting: the collector keeps UTF-8 metric and label names such as
+  `http.server.duration` as they are, and each answer writes them as its
+  scraper's `Accept` asks — quoted (`{"http.server.duration"} 1`) for
+  `escaping=allow-utf-8`, escaped by `underscores` (the default), `dots` or
+  `values` otherwise — with the escaping in its `Content-Type`. The default,
+  `legacy`, is the classic names and `name_escaping` as before.
+- Native and exponential histograms of the exporter's own scrape durations:
+  `http_exporter_collector_scrape_duration_seconds` keeps its durations in
+  exponential buckets too, which follow the durations observed (scale 20
+  down to whatever fits 160 buckets, as OpenTelemetry's SDKs do). The
+  self-metrics write them as a native histogram, schema 3 at most, in
+  Prometheus's protobuf format (`web.self_metrics.native_histograms`, on by
+  default), and the OTLP export sends them as an exponential histogram with
+  `otlp.exponential_histograms: true`.
 - Metrics, logs and traces linked, with `otlp.traces` on
   ([Linking metrics, logs and traces](docs/OTLP.md#linking-metrics-logs-and-traces)).
   With `otlp.logs` too, a log record of a line a probe or a static target

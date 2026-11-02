@@ -40,7 +40,9 @@ import (
 // With otlp.logs on, the run's log lines are shown as the log records the
 // tee would make of them (otlpLogHandler), and those it would take, at
 // otlp.logs.level or above, as the request the log export would send. A run
-// logs to its answer alone, so none of them is queued either.
+// logs to its answer alone, so none of them is queued either. With
+// otlp.traces on, the run's trace is shown as the spans the trace export
+// would make of it (debugotlptraces.go), and never queued.
 
 // debugOTLP is the otlp field of a run's answer.
 type debugOTLP struct {
@@ -63,6 +65,9 @@ type debugOTLP struct {
 	Body string `json:"body"`
 	// Logs is the run's log as records, with otlp.logs on.
 	Logs *debugOTLPLogs `json:"logs,omitempty"`
+	// Traces is the run's trace as spans, with otlp.traces on
+	// (debugotlptraces.go).
+	Traces *debugOTLPTraces `json:"traces,omitempty"`
 }
 
 type debugOTLPAttribute struct {
@@ -232,6 +237,7 @@ func (s *Server) debugOTLPOf(report *debugReport, at time.Time) *debugOTLP {
 	if records := report.trace.otlpRecords; records != nil {
 		out.Logs = debugOTLPLogsOf(cfg, records)
 	}
+	out.Traces = s.debugOTLPTracesOf(cfg, report)
 	return out
 }
 

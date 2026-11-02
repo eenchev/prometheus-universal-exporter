@@ -417,6 +417,12 @@ type debugReport struct {
 	// lint is the metric lint's advice on the collector and the series
 	// the run made (transform.LintRun).
 	lint []transform.LintFinding
+	// started is when the run began, failed says it failed as a probe or a
+	// scrape fails, and spans is the record of its trace, for a run of the
+	// debug page while otlp.traces is on; nil otherwise (otlptraces.go).
+	started time.Time
+	failed  bool
+	spans   *tripSpans
 }
 
 // text is the report as plain text.
@@ -440,27 +446,41 @@ func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 		records = &debugLogRecords{}
 	}
 	ctx, trace := newProbeTraceOf(ctx, records)
+	// A run of the page records its trace as a probe or a scrape does, from
+	// the requests its report records, for the OTLP tab to show the spans
+	// the export would make of it; nothing of it is queued.
+	var spans *tripSpans
+	if p.kind == debugKindPage && otlpTracesOn(s.manager.Get().OTLP) {
+		ctx, spans = withTripSpans(ctx, trace.requests)
+	}
 	if p.budget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.budget)
 		defer cancel()
 	}
-	report := &debugReport{probe: p, trace: trace}
+	report := &debugReport{probe: p, trace: trace, started: start, spans: spans}
 	var full error
 	if slot := p.slotOf(); slot != nil {
 		if p.static != nil {
+			mark := time.Now()
 			full = s.trips.acquire(ctx, slot.Name, maxConcurrentProbes(slot))
+			if full != nil {
+				spans.step("slot", "failed", mark, time.Now(), full.Error())
+			} else {
+				spans.step("slot", "ok", mark, time.Now(), "")
+			}
 		} else if limited := s.trips.tryAcquire(slot.Name, maxConcurrentProbes(slot)); limited != nil {
 			full = errors.New(limited.message)
 		}
 	}
 	if full != nil {
+		report.failed = true
 		report.verdict = "503: " + full.Error() + "; this probe was not sent"
 		if p.static != nil {
 			report.verdict = "target up 0: " + full.Error() + "; the scrape was not sent"
 		}
 	} else {
-		report.verdict, report.answer, report.ok = s.debugTrip(ctx, trace, p)
+		report.verdict, report.answer, report.ok, report.failed = s.debugTrip(ctx, trace, p)
 	}
 	report.took = time.Since(start)
 	report.lint = s.runLint(p, report.answer, trace)
@@ -530,7 +550,7 @@ func debugLog(p debugProbe) collectLog {
 // max_concurrent_probes of them every probe of the collector would be
 // refused. The panic is recovered, as a probe's is (probeFlights.run), and
 // the report shows it.
-func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe) (verdict string, answer *model.MetricSet, ok bool) {
+func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe) (verdict string, answer *model.MetricSet, ok, failed bool) {
 	if slot := p.slotOf(); slot != nil {
 		defer s.trips.release(slot.Name)
 	}
@@ -544,7 +564,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 			// with what reads as a credential withheld.
 			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", redactedPanicText(recovered))
 			s.logger.Error("debug "+p.kind.String()+" panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", panicText(recovered), "stack", stack)
-			verdict, answer, ok = "500: probe failed: "+errScrapePanicked.Error(), nil, false
+			verdict, answer, ok, failed = "500: probe failed: "+errScrapePanicked.Error(), nil, false, true
 			if p.static != nil {
 				verdict = "target up 0: " + errScrapePanicked.Error()
 			}
@@ -570,7 +590,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	}
 	result := s.collect(ctx, job)
 	verdict, answer = s.debugVerdict(result, p)
-	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted
+	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted, result.failed() || result.aborted
 }
 
 // debugVerdict is what a probe would have answered, as probeTrip and

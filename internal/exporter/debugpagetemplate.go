@@ -48,9 +48,10 @@ type debugPage struct {
 	// Dangerous is --web.debug.dangerous: the playground runs Python, names
 	// the server's files and probes a target with its own request.
 	Dangerous bool
-	// OTLP offers the OTLP tab, with otlp.enabled, and OTLPLogs its log
-	// records, with otlp.logs on too (debugotlp.go).
-	OTLP, OTLPLogs bool
+	// OTLP offers the OTLP tab, with otlp.enabled, OTLPLogs its log
+	// records, with otlp.logs on too, and OTLPTraces its spans, with
+	// otlp.traces on (debugotlp.go).
+	OTLP, OTLPLogs, OTLPTraces bool
 }
 
 // debugForms are the forms of the playground, of a playground of each
@@ -224,6 +225,13 @@ table.series td.lint { font-family: inherit; min-width: 9em; }
 table.series td.otlp-notes { font-family: inherit; min-width: 12em; }
 ul.otlp-notes { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; color: var(--muted); }
 #otlp-resource th { position: static; width: 1%; }
+table.series td.span-name, table.series td.span-time { white-space: nowrap; }
+table.series td.span-bar { min-width: 10em; width: 30%; }
+.span-track { position: relative; height: 12px; border-radius: 3px; background: var(--code); }
+.span-track span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 3px; background: var(--accent); }
+.span-track span.failed { background: var(--bad); }
+table.series td.span-failed { color: var(--bad); }
+p.span-verdict.exported { color: var(--good); }
 .otlp-test { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .otlp-test button { margin: 0; }
 .otlp-test button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -478,12 +486,28 @@ p.danger strong { color: var(--bad); }
 </details>
 </div>
 {{- end}}
+{{- if .OTLPTraces}}
+<div id="otlp-traces-part" hidden>
+<h3>Spans</h3>
+<p class="note span-verdict" id="otlp-traces-verdict"></p>
+<ul class="otlp-notes" id="otlp-traces-notes"></ul>
+<div class="table-box" id="otlp-traces-box" hidden><table class="series" id="otlp-traces-table"><thead><tr><th scope="col">span</th><th scope="col">kind</th><th scope="col">start</th><th scope="col">duration</th><th scope="col">timeline</th><th scope="col">status</th><th scope="col">attributes</th></tr></thead><tbody id="otlp-traces-rows"></tbody></table></div>
+<details id="otlp-traces-body-part">
+<summary>Request body (ExportTraceServiceRequest)</summary>
+<div class="copy-row"><button type="button" class="secondary" id="otlp-traces-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-traces-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-traces-body">Collapse all</button><span class="copy-done" id="otlp-traces-copied"></span></div>
+<div class="json-view" id="otlp-traces-body"></div>
+</details>
+</div>
+{{- end}}
 </div>
 <h3>Test the endpoint</h3>
 <div class="otlp-test">
 <button type="button" class="secondary" id="otlp-test-metrics" data-signal="metrics"{{if not .Full}} disabled{{end}}>Test the metrics endpoint</button>
 {{- if .OTLPLogs}}
 <button type="button" class="secondary" id="otlp-test-logs" data-signal="logs"{{if not .Full}} disabled{{end}}>Test the logs endpoint</button>
+{{- end}}
+{{- if .OTLPTraces}}
+<button type="button" class="secondary" id="otlp-test-traces" data-signal="traces"{{if not .Full}} disabled{{end}}>Test the traces endpoint</button>
 {{- end}}
 </div>
 {{- if .Full}}
@@ -2278,6 +2302,7 @@ if ($("series-otlp-part")) {
   });
   copyButton($("otlp-body-copy"), "otlp-body", "otlp-body-copied");
   if ($("otlp-logs-copy")) copyButton($("otlp-logs-copy"), "otlp-logs-body", "otlp-logs-copied");
+  if ($("otlp-traces-copy")) copyButton($("otlp-traces-copy"), "otlp-traces-body", "otlp-traces-copied");
 }
 function showOTLP(otlp, ran) {
   if (!$("series-otlp-part")) return;
@@ -2330,6 +2355,52 @@ function showOTLP(otlp, ran) {
       jsonView($("otlp-logs-body"), logs.body);
     }
   }
+  if ($("otlp-traces-part")) showOTLPTraces(otlp.traces);
+}
+// The run's trace (debugotlptraces.go): its spans as a tree, indented by
+// depth, each with a bar of its time within the run's, and whether the
+// export would send a probe's or a scrape's trace like it.
+function showOTLPTraces(traces) {
+  $("otlp-traces-part").hidden = !traces;
+  if (!traces) return;
+  const verdict = $("otlp-traces-verdict");
+  verdict.textContent = (traces.exported ? "Would be exported: " : "Would not be exported: ") + traces.why + ". The run itself is never exported.";
+  verdict.classList.toggle("exported", traces.exported);
+  listOf($("otlp-traces-notes"), traces.notes || []);
+  const spans = traces.spans || [];
+  const total = spans.length > 0 ? Math.max(spans[0].duration_ms, 0.001) : 1;
+  const ms = (v) => (v < 1 ? v.toFixed(3) : v < 100 ? v.toFixed(2) : v.toFixed(0)) + " ms";
+  $("otlp-traces-box").hidden = spans.length === 0;
+  $("otlp-traces-rows").replaceChildren(...spans.map((span) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.className = "span-name";
+    name.textContent = "\u2003".repeat(span.depth) + (span.depth > 0 ? "\u2514 " : "") + span.name;
+    const bar = document.createElement("td");
+    bar.className = "span-bar";
+    const track = document.createElement("div");
+    track.className = "span-track";
+    const mark = document.createElement("span");
+    mark.style.left = Math.min(100, 100 * span.start_ms / total) + "%";
+    mark.style.width = Math.min(100, 100 * span.duration_ms / total) + "%";
+    if (span.status) mark.className = "failed";
+    track.append(mark);
+    bar.append(track);
+    const cells = [span.kind, ms(span.start_ms), ms(span.duration_ms)].map((text, i) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i > 0) td.className = "span-time";
+      return td;
+    });
+    const status = document.createElement("td");
+    status.textContent = span.status || "";
+    if (span.status) status.className = "span-failed";
+    const attributes = document.createElement("td");
+    attributes.textContent = attributeText(span.attributes);
+    tr.append(name, ...cells, bar, status, attributes);
+    return tr;
+  }));
+  jsonView($("otlp-traces-body"), traces.body);
 }
 // The endpoint test: one empty export to the endpoint otlp configures, at
 // --web.debug=full. One test at a time: the buttons are disabled while one

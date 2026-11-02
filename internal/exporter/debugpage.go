@@ -608,7 +608,7 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	page := debugPage{Chrome: s.chromeFor(debugPagePath), Full: s.debug == DebugFull, Dangerous: s.playgroundUnbound(), ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Example: debugExample, ExampleBody: debugExampleBody}
 	page.Forms = debugForms{Playground: playgroundForm(), Types: typeForms(), Collectors: map[string]debugForm{}}
 	if otlp := s.manager.Get().OTLP; otlp.Enabled && otlp.Endpoint != "" {
-		page.OTLP, page.OTLPLogs = true, otlpLogsOn(otlp)
+		page.OTLP, page.OTLPLogs, page.OTLPTraces = true, otlpLogsOn(otlp), otlpTracesOn(otlp)
 	}
 	// The collectors and the static targets in force, read together, as a
 	// run reads them (prepareDebugRun, staticDebugProbe).

@@ -334,7 +334,7 @@ func BenchmarkProbeTraced(b *testing.B) {
 					}
 					// What waits is the export's to send; the queue is
 					// emptied so that every probe's spans are queued.
-					_ = server.otlpTraces.drain()
+					_, _ = server.otlpTraces.drain()
 				}
 			})
 		}

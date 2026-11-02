@@ -237,6 +237,27 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- A trace's spans no longer carry text the target sent that the log never
+  shows: the CLIENT span of a tcp or sshexec request that went through had
+  the server's greeting, or the command's whole stderr, as `request.outcome`,
+  and a failed request the reason of its HTTP status line. A span now has,
+  of a request that went through, only numbers its request type works out
+  (`tcp.greeting.bytes`, `tcp.greeting.matched`, `tcp.answer.bytes`,
+  `process.exit.code`, `sshexec.stdout.bytes`, `sshexec.stderr.bytes`), and
+  of a failure what the log line of that failure says.
+- A failed trace export, or a reload lowering `otlp.traces.max_pending_spans`,
+  no longer cuts the oldest trace waiting span by span, which exported the
+  rest of it without its root or its stages: the oldest traces are dropped
+  whole.
+- A probe whose caller read its answer slowly is no longer taken for a slow
+  probe by `otlp.traces.threshold`: it is timed, and its span ends, when its
+  answer is ready, as its duration in the self-metrics is.
+- A new `otlp.interval`, `otlp.logs.interval` or `otlp.traces.interval` is
+  followed at once: a reload that shortened one waited out the old interval
+  first, turning the export on waited up to 30 seconds, and an exporter in
+  allocator mode made its first export about 30 seconds after its first
+  bundle, whatever its interval said. The next export is now an interval of
+  the new configuration after the last one.
 - The status page no longer shows the last error of a static target whose
   last scrape succeeded as if it still failed beside `success` and 0
   failures: the error stays, muted, under *Earlier failure, recovered since*,

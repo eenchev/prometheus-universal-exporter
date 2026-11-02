@@ -7690,8 +7690,9 @@ http_exporter_otlp_spans_dropped_total           counter
 ```
 
 counted as the log export's are: a span of a trace that found no room for
-all of its spans under `otlp.traces.max_pending_spans`, the oldest past it
-after a failed export, those of a request the endpoint refused or rejected,
+all of its spans under `otlp.traces.max_pending_spans`, those of the oldest
+traces dropped whole past it after a failed export or a reload that lowers
+it, those of a request the endpoint refused or rejected,
 and those of a failed last trace export at shutdown MUST be counted as
 dropped; spans kept for the next export MUST NOT be.
 
@@ -30159,7 +30160,12 @@ unless the block sets it itself: an `enabled` the block leaves empty is the
 one read, whatever a merged mapping says.
 
 `otlp.interval` MUST control the export cadence and SHOULD default to 30
-seconds. The exporter MUST buffer the latest general metric value for each
+seconds. The interval MUST be that of the configuration in force: when a
+reload, or an allocator's bundle (§ 42.14d), puts one in force, the next export
+of the metrics, of the log records (`otlp.logs.interval`, § 42.1b) and of
+the spans (`otlp.traces.interval`, § 42.1c) MUST be an interval of the new
+configuration after the last export of each ended, and at once when that is
+past, not when a wait armed with the interval before runs out. The exporter MUST buffer the latest general metric value for each
 metric/label set between exports and include an exporter self-health snapshot
 in each interval export. `otlp.timeout` MUST bound each export request and
 SHOULD default to 5 seconds.
@@ -30585,7 +30591,10 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   counted, and be split by `otlp.batch_max_size` spans and
   `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
 - `otlp.traces.threshold` MUST be 1 second by default and at least 1
-  millisecond; `otlp.traces.errors` MUST be off by default. A failed probe
+  millisecond; `otlp.traces.errors` MUST be off by default. A probe MUST be
+  timed, and its span MUST end, when its answer is ready, before it is
+  written, as its duration in the self-metrics is: the time its caller takes
+  to read the answer MUST NOT count. A failed probe
   is one answered with an error, with a stale result, or turned away by the
   concurrency limit; a failed scrape one that left its target `up` 0.
 - Which trace to export MUST be decided at the probe's or the scrape's end,
@@ -30608,8 +30617,9 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   `request.login`'s login — with `http.request.method`, `url.full`,
   `server.address`, `server.port`, `http.response.status_code`,
   `http.request.resend_count`, `retry.attempt`, `pagination.page`,
-  `redirect` and `login`, ERROR for a request that got no answer or one of
-  400 or more, and a `rate_limit` span before a request that waited for its
+  `redirect` and `login`, ERROR for a request that got no answer, or an
+  answer its request type takes for a failure, or an HTTP answer of 400 or
+  more, and a `rate_limit` span before a request that waited for its
   turn. Trace and span ids MUST come from `crypto/rand` and be written in
   lowercase hex; times MUST be decimal nanoseconds.
 - A probe whose request carries a readable W3C `traceparent` MUST continue
@@ -30620,6 +30630,20 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   its fragment, as an error in the log quotes a URL, and `target` the values
   of query parameters named like credentials, as the log shows a target; a
   span MUST carry no header and no body.
+- A span MUST carry nothing the log does not. Of a request, a stage or a
+  probe that went through it MUST carry no text the target sent — a tcp
+  greeting, a command's stderr, an HTTP status line's reason, a request's
+  outcome as a debug report tells it — but only numbers and yes-or-no
+  answers its request type works out of the answer: for tcp
+  `tcp.greeting.bytes`, `tcp.greeting.matched` and `tcp.answer.bytes`, for
+  sshexec `process.exit.code`, `sshexec.stdout.bytes` and
+  `sshexec.stderr.bytes`. Of a failure it MUST carry what the log line of
+  that failure has: a failed stage's message, and that of the last request
+  sent within a fetch stage that failed, MUST be the error the log line of
+  the stage's failure has; an HTTP answer of 400 or more MUST say
+  `received HTTP status <code>`; a request that failed and was sent again,
+  or was followed by one that went through, MUST have no message, only its
+  `error.type`.
 - A probe's trace MUST be under the exporter-wide resource, a static
   target's under its own (`targetResource`, § 42.1), each with
   `otlp.exporter_instance` when it is on, and under `otlp.scope`, by the code
@@ -30635,8 +30659,11 @@ dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   dropped whole and counted (§ 22.0c). They MUST be sent every
   `otlp.traces.interval`, 5 seconds by default and at least 1 second, in the
   background; what an export could not deliver for a reason worth retrying
-  MUST wait for the next export, before the spans queued since, the oldest
-  dropped past the bound.
+  MUST wait for the next export, before the spans queued since. The queue
+  MUST be kept as whole traces and MUST NOT be cut inside one: past the
+  bound, after a failed export or a reload that lowers it, the oldest
+  traces MUST be dropped whole and counted, the rest of a trace an export
+  delivered the start of being a trace of its own.
 - What the trace export logs of itself MUST be written to stderr alone, as
   the log export's lines are (§ 42.1b), as a repeated failure (§ 25).
 - A reload that switches `otlp.traces` off MUST drop the spans waiting and

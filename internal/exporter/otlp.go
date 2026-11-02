@@ -1960,28 +1960,80 @@ func appendToResource(resources []otlpResourceSet, identity otlpResourceIdentity
 // ends. It returns without a last export, which
 // is FlushOTLP's to make once the HTTP server has finished its probes.
 func (s *Server) OTLPExportLoop(ctx context.Context) {
-	for {
-		interval := time.Duration(s.manager.Get().OTLP.Interval)
-		if interval <= 0 {
-			interval = 30 * time.Second
+	s.otlpEvery(ctx, func(cfg model.OTLPConfig) time.Duration {
+		if interval := time.Duration(cfg.Interval); interval > 0 {
+			return interval
 		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		cfg := s.manager.Get().OTLP
+		return 30 * time.Second
+	}, func(cfg model.OTLPConfig, interval time.Duration) {
 		if !cfg.Enabled || cfg.Endpoint == "" {
 			_ = s.drainOTLP()
-			continue
+			return
 		}
 		// Static targets are scraped on their own intervals
 		// (StaticScrapeLoop); an export delivers what the probes and the
 		// targets with export_via_otlp queued since the last one. It may retry for up to an interval, so it
 		// never runs into the next one.
 		s.exportOTLP(ctx, interval)
+	})
+}
+
+// otlpEvery calls export with the otlp block in force and its interval, as
+// intervalOf reads it, an interval after the last call ended, until ctx
+// ends: the metrics', the log records' and the spans' export loops. The
+// interval is that of the configuration in force, not of the one in force
+// when the wait began: a reload, or the first bundle of an exporter in
+// allocator mode, that puts another in force wakes the wait, which is then
+// to an interval of the new configuration after the last export, and ends
+// at once when that is past. An exporter in allocator mode begins with no
+// configuration, whose interval is the default, and would otherwise make
+// its first export that long after its bundle came.
+func (s *Server) otlpEvery(ctx context.Context, intervalOf func(model.OTLPConfig) time.Duration, export func(model.OTLPConfig, time.Duration)) {
+	last := time.Now()
+	for {
+		// Asked for before the configuration is read: one put in force
+		// after the read wakes the wait.
+		installed := s.installs.next()
+		timer := time.NewTimer(time.Until(last.Add(intervalOf(s.manager.Get().OTLP))))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-installed:
+			timer.Stop()
+			continue
+		case <-timer.C:
+		}
+		cfg := s.manager.Get().OTLP
+		export(cfg, intervalOf(cfg))
+		last = time.Now()
+	}
+}
+
+// installSignal tells those waiting that a configuration was put in force:
+// the channel next returns is closed at the next install.
+type installSignal struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+// next is a channel closed when a configuration is next put in force.
+func (i *installSignal) next() <-chan struct{} {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.ch == nil {
+		i.ch = make(chan struct{})
+	}
+	return i.ch
+}
+
+// installed wakes those waiting on next.
+func (i *installSignal) installed() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.ch != nil {
+		close(i.ch)
+		i.ch = nil
 	}
 }
 

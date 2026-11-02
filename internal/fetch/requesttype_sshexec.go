@@ -443,6 +443,17 @@ func (r *sshExecRun) outcome() string {
 	return outcome
 }
 
+// facts are what a span tells of a run (TracedRequest.Facts): its exit
+// status, -1 for one a signal killed, and how many bytes it wrote to stdout
+// and to stderr, never what it wrote, which the outcome quotes.
+func (r *sshExecRun) facts() []TraceFact {
+	return []TraceFact{
+		intFact("process.exit.code", r.status),
+		intFact("sshexec.stdout.bytes", len(r.stdout)),
+		intFact("sshexec.stderr.bytes", len(r.stderr)),
+	}
+}
+
 // sshExecFailure is the error of a command whose exit status is not a
 // success: the status, or the signal, and the start of stderr, with what
 // reads as a credential in it masked, as in every text the exporter did not
@@ -496,19 +507,20 @@ func (c *sshConnCache) run(ctx context.Context, key sshConnKey, x *model.Collect
 		case <-ctx.Done():
 			c.abandonExec(entry, es, done)
 			err = fmt.Errorf("running the command on %s: %w", key.address, ctx.Err())
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 			return nil, err
 		}
 		if result.err != nil && !result.started && attempt == 0 && ctx.Err() == nil && entry.lostExec(result.err) {
 			c.drop(entry, "lost")
-			traceOutcome(ctx, "the connection was lost: "+result.err.Error())
+			traceFailedOutcome(ctx, "the connection was lost: "+result.err.Error())
 			continue
 		}
 		if result.err != nil {
-			traceOutcome(ctx, "error: "+result.err.Error())
+			traceFailedOutcome(ctx, "error: "+result.err.Error())
 			return nil, result.err
 		}
 		traceOutcome(ctx, result.run.outcome())
+		traceFacts(ctx, result.run.facts()...)
 		return result.run, nil
 	}
 }

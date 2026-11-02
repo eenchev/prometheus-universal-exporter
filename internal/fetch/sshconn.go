@@ -747,7 +747,7 @@ func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, 
 	}
 	traceRequest(ctx, method, shown, header, "", false)
 	if err != nil {
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 	}
 }
 

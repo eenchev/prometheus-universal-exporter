@@ -923,7 +923,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// of an answer that is no HTTP, its first line, which a
 			// probe's caller is not told (answerquoted.go).
 			err = withAnswerWithheld(RedactURLErrors(err))
-			traceOutcome(requestContext, "error: "+err.Error())
+			traceFailedOutcome(requestContext, "error: "+err.Error())
 			// Headers over the bound are over it on every attempt, and
 			// Go's own words for it name neither the limit's reason nor
 			// what to do about it.

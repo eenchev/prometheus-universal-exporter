@@ -345,7 +345,7 @@ func fetchS3File(ctx context.Context, target string, c *model.Collector, overrid
 		go func() { done <- readSourceDirectory(src, c, "", progress) }()
 		read, err := awaitDirectory(ctx, c.Request.Root, progress, done, func() {})
 		if err != nil {
-			traceOutcome(ctx, "error: "+err.Error())
+			traceFailedOutcome(ctx, "error: "+err.Error())
 			return nil, onBucket(err, bucket)
 		}
 		traceOutcome(ctx, fmt.Sprintf("read %d files", len(read.Files)))
@@ -359,7 +359,7 @@ func fetchS3File(ctx context.Context, target string, c *model.Collector, overrid
 	traceRequest(ctx, localFileMethod, s3URL(bucket, src.key(file)), nil, "", false)
 	body, info, err := readSourceFile(src, c.Request.Root, file, responseLimit(c))
 	if err != nil {
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, onBucket(err, bucket)
 	}
 	traceOutcome(ctx, "read")

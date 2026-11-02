@@ -400,14 +400,14 @@ func TestATraceOverThePendingBoundIsDropped(t *testing.T) {
 	server := tracesServer(t, receiver, time.Millisecond, func(c *model.Config) { c.OTLP.Traces.MaxPendingSpans = 8 }, nil)
 	probeURL := "/probe?collector=text&target=" + url.QueryEscape(slow.URL)
 	probeOnce(t, server, probeURL, nil)
-	queued := len(server.otlpTraces.queue)
+	queued := server.otlpTraces.pending()
 	if queued == 0 || queued > 8 {
 		t.Fatalf("%d spans wait after one probe", queued)
 	}
 	if answer := probeOnce(t, server, probeURL, nil); answer.Code != http.StatusOK {
 		t.Fatalf("the probe over the bound is answered %d", answer.Code)
 	}
-	if got := len(server.otlpTraces.queue); got != queued {
+	if got := server.otlpTraces.pending(); got != queued {
 		t.Errorf("%d spans wait after the second probe, want the first's %d alone", got, queued)
 	}
 	metrics := selfMetrics(t, server)
@@ -456,7 +456,7 @@ func TestTheTraceExportLogsToStderrAloneAndFlushesAtShutdown(t *testing.T) {
 			t.Errorf("a line of the trace export was exported as a log record: %s", text(record.Body))
 		}
 	}
-	if pending := len(server.otlpTraces.queue); pending != 0 {
+	if pending := server.otlpTraces.pending(); pending != 0 {
 		t.Errorf("%d spans wait after the last export", pending)
 	}
 }
@@ -475,7 +475,7 @@ func TestAReloadSwitchesTheOTLPTraceExport(t *testing.T) {
 	collector := r.manager.Get().Collectors[0].Name
 	probeURL := "/probe?collector=" + collector + "&target=" + url.QueryEscape(slow.URL)
 	probeOnce(t, r.server, probeURL, nil)
-	if len(r.server.otlpTraces.queue) == 0 {
+	if r.server.otlpTraces.pending() == 0 {
 		t.Fatal("no span waits while the trace export is on")
 	}
 	r.write(r.path, document("false"))
@@ -531,5 +531,95 @@ func TestTheTraceCostsAProbeNothingWhileOff(t *testing.T) {
 	on.Traces.Enabled = true
 	if ctx, spans := beginTrace(parent, on); spans == nil || tripSpansFrom(ctx) != spans {
 		t.Error("with the trace export on a probe records no trace")
+	}
+}
+
+// orphanSpans are the spans received whose parent is in none of the spans
+// received, by name, but for a trace's root.
+func orphanSpans(spans []receivedSpan) []string {
+	ids := map[string]bool{}
+	for _, span := range spans {
+		ids[span.SpanID] = true
+	}
+	var out []string
+	for _, span := range spans {
+		if span.ParentSpanID != "" && !ids[span.ParentSpanID] {
+			out = append(out, span.Name)
+		}
+	}
+	return out
+}
+
+// An export that fails while another probe's trace is queued puts its
+// spans back before that trace's, and the bound, which has no room for
+// both, drops the oldest trace whole: the trace exported next is whole,
+// with no span whose parent was dropped.
+func TestAFailedExportPutsBackWholeTraces(t *testing.T) {
+	slow := tracedTarget(t, 3*time.Millisecond, http.StatusOK)
+	var failing atomic.Bool
+	failing.Store(true)
+	var during func()
+	var once atomic.Bool
+	receiver := &logReceiver{status: http.StatusOK}
+	receiver.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body := readOTLPBody(t, req)
+		if failing.Load() {
+			if once.CompareAndSwap(false, true) {
+				during()
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		receiver.mu.Lock()
+		receiver.paths = append(receiver.paths, req.URL.Path)
+		receiver.bodies = append(receiver.bodies, body)
+		receiver.mu.Unlock()
+	}))
+	t.Cleanup(receiver.server.Close)
+	server := tracesServer(t, receiver, time.Millisecond, func(c *model.Config) { c.OTLP.Traces.MaxPendingSpans = 10 }, nil)
+	probe := "/probe?collector=text&target=" + url.QueryEscape(slow.URL)
+	during = func() { probeOnce(t, server, probe, nil) }
+	probeOnce(t, server, probe, nil)
+	first := server.otlpTraces.pending()
+	if first < 6 || first > 10 {
+		t.Fatalf("a probe's trace is %d spans; the test needs two not to fit under 10", first)
+	}
+	server.exportOTLPTraces(context.Background(), server.manager.Get().OTLP, 300*time.Millisecond, false)
+	failing.Store(false)
+	exportTracesNow(server)
+	spans := receiver.spans(t)
+	if orphans := orphanSpans(spans); len(orphans) > 0 {
+		t.Errorf("the spans %v were exported without their parents", orphans)
+	}
+	roots := 0
+	for _, span := range spans {
+		if span.ParentSpanID == "" {
+			roots++
+		}
+	}
+	if roots != 1 || server.otlpTraces.dropped[otlpTraceDropPendingCap] != first {
+		t.Errorf("%d traces exported and %d spans dropped, want the newer trace and the older's %d", roots, server.otlpTraces.dropped[otlpTraceDropPendingCap], first)
+	}
+}
+
+// slowReader is a caller that takes its time to read its answer.
+type slowReader struct{ *httptest.ResponseRecorder }
+
+func (w slowReader) Write(b []byte) (int, error) {
+	time.Sleep(300 * time.Millisecond)
+	return w.ResponseRecorder.Write(b)
+}
+
+// A probe is timed to when its answer was ready, not to when its caller
+// read it: a fast probe whose caller reads slowly is no slow probe, and
+// its trace is not exported.
+func TestASlowReaderMakesNoProbeSlow(t *testing.T) {
+	fast := tracedTarget(t, 0, http.StatusOK)
+	receiver := newLogReceiver(t)
+	server := tracesServer(t, receiver, 200*time.Millisecond, nil, nil)
+	request := httptest.NewRequest(http.MethodGet, "/probe?collector=text&target="+url.QueryEscape(fast.URL), nil)
+	server.Handler().ServeHTTP(slowReader{httptest.NewRecorder()}, request)
+	if pending := server.otlpTraces.pending(); pending != 0 {
+		t.Errorf("a fast probe whose caller read slowly queued %d spans", pending)
 	}
 }

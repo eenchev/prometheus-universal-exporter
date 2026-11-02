@@ -105,6 +105,17 @@ through the proxy the environment names, if any. Self-health metrics are
 included in every export interval even when no Prometheus self-metrics scrape
 is running.
 
+An interval is that of the configuration in force, not of the one in force
+when the wait for the next export began: a reload, or in allocator mode a
+bundle, that changes `otlp.interval`, `otlp.logs.interval` or
+`otlp.traces.interval` has the next export of that signal an interval of the
+new configuration after the last one ended, and at once when that is past.
+Shortening an interval from `45s` to `1s` has the next export a second after
+the last rather than 45 seconds; lengthening it from `1s` to `1h` makes none
+when the second runs out; and an exporter in allocator mode, which begins
+with no configuration and so with the default intervals, follows its first
+bundle's from when it comes.
+
 Each data point carries the time it was scraped, or the timestamp the target
 gave it, not the time of the export that sends it, so a point that waited for
 the next export, or through an outage, is not taken for a newer one. An answer
@@ -798,7 +809,9 @@ keys:
   OTLP/HTTP with a JSON body, as the metrics' is.
 - `threshold` is the least duration of a probe or a scrape whose trace is
   exported, `1s` by default and at least `1ms`. A probe is timed from when
-  it arrived to when its answer was ready, a scrape from its turn to its
+  it arrived to when its answer was ready, before it is written, as its
+  duration in the self-metrics is, and its span ends then: a caller slow to
+  read the answer makes no probe slow. A scrape is timed from its turn to its
   result.
 - `errors: true` exports the trace of every probe and scrape that failed
   too, however long it took: one answered with an error, one answered with a
@@ -830,15 +843,17 @@ The spans, by OpenTelemetry's conventions where one applies:
 | `slot` | INTERNAL | the probe or scrape | the wait for one of the collector's `max_concurrent_probes`: a scrape's wait, or a probe turned away |
 | `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip |
 | `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
-| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for another request type than http, `request.outcome` |
+| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes` |
 | `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
 | `files`, `decode`, `transform`, `validation` | INTERNAL | the probe or scrape | the stages after the fetch, as the debug report names them |
 | `python` | INTERNAL | `transform` | the time the collector's Python scripts took, added up, from the transform's start |
 | `stale` | INTERNAL | the probe | the last good result answered in place of a failed trip |
 
 A span that failed has the status `ERROR` and says why: the probe's or the
-scrape's failure as the status page shows it, a stage's error, a request
-that got no answer or one of `400` or more. A span that did not fail has no
+scrape's failure as the status page shows it, a stage's error as the log
+line of its failure has it, and a request that got no answer, or an answer
+its request type takes for a failure, or an HTTP answer of `400` or more, as
+below. A span that did not fail has no
 status, which is `UNSET`. Ids are random, from `crypto/rand`, and written in
 hex, as OTLP/JSON writes them; times are nanoseconds since the epoch.
 
@@ -857,12 +872,37 @@ under the exporter-wide resource, a static target's under
 not; [`otlp.exporter_instance`](#the-exporter-instance) is on both. The
 attributes are the spans', so `otlp.probe_attributes` is not used.
 
-What a span carries is withheld as the log withholds it, since a trace
-leaves the exporter as a log line does: a request's `url.full` is its URL as
-an error in the log quotes one, the userinfo withheld, every query value
-masked and no fragment, and a probe's `target` is the target as the log
-shows it, the values of query parameters named like credentials masked. No
-header, request body or response body is in a span.
+A span carries nothing the log does not, since a trace leaves the exporter
+as a log line does. A request's `url.full` is its URL as an error in the log
+quotes one, the userinfo withheld, every query value masked and no fragment,
+and a probe's `target` is the target as the log shows it, the values of
+query parameters named like credentials masked. No header, request body or
+response body is in a span.
+
+Nor is any text the target sent of a request, a stage or a probe that went
+through, which the log says nothing of: no greeting of a tcp server, no
+stderr of an sshexec command, no reason of an HTTP status line, no outcome
+as a debug report tells it. Such a span has, besides the attributes above,
+only the numbers and yes-or-no answers its request type works out of the
+answer, as the table says: sizes, an exit status, whether a greeting
+matched. A stage that went through has its `stage.note`, which the exporter
+writes of counts, sizes, statuses, times and the directory read alone.
+
+Of a failure, a span says what the log line of that failure says, and
+nothing the log does not:
+
+- a stage that failed has the error the log line of its failure has, the
+  one the probe's `probe failed` line or the scrape's has, as its message,
+  and the probe's or the scrape's span its failure as the status page shows
+  it;
+- the request the fetch failed on, the last it sent, has the fetch stage's
+  error as its message, the same text;
+- an HTTP answer of `400` or more has `received HTTP status <code>` as its
+  message, as the log says it, never its status line's reason;
+- a request that failed and was sent again, under `request.retry`, or that
+  a request that went through followed, is in no line of the log: its span
+  has the status `ERROR` and its `error.type`, `request_failed` or the
+  status, and no message.
 
 What it costs. While `traces` is off, a probe records nothing and allocates
 nothing more for it. While it is on, every probe and scrape records its
@@ -877,7 +917,8 @@ than waited for or cut, and a probe never waits for the export. An export
 sends everything waiting, in requests of at most `otlp.batch_max_size` spans
 and `otlp.batch_max_bytes` of JSON before compression, retried as the log
 export's are ([above](#the-exporters-own-log)); what was not delivered waits
-for the next export, the oldest dropped past `max_pending_spans`, and spans
+for the next export, before the traces queued since, the oldest traces
+dropped whole past `max_pending_spans` and counted, and spans
 the endpoint refuses, or rejects in a `partialSuccess` (its `rejectedSpans`),
 are dropped and counted.
 
@@ -887,7 +928,10 @@ exporter unready. The export's state is in the
 [self-metrics](SELF-METRICS.md#otlp-export-status), while it is on, and on
 the [status page](ENDPOINTS.md#otlp-export). A reload that switches it off
 drops the spans waiting, uncounted, and probes stop recording; one that
-switches it on records the probes from then on. At shutdown, the spans
+switches it on records the probes from then on; one that lowers
+`max_pending_spans` below the spans waiting drops the oldest traces whole,
+and counts them. The queue is never cut inside a trace, which would leave
+spans whose parent is gone. At shutdown, the spans
 waiting are sent after the metrics' [last export](#shutting-down), within
 the same `otlp.timeout`, and before the log records'.
 

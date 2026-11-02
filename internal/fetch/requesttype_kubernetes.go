@@ -445,7 +445,15 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 			Sent: func(req *http.Request) {
 				traceRequest(ctx, req.Method, req.URL.String(), req.Header, "", false)
 			},
-			Answered: func(outcome string) { traceOutcome(ctx, outcome) },
+			// kubeapi tells a request that got no answer by this
+			// beginning of its own.
+			Answered: func(outcome string) {
+				if strings.HasPrefix(outcome, "error: ") {
+					traceFailedOutcome(ctx, outcome)
+					return
+				}
+				traceOutcome(ctx, outcome)
+			},
 		}
 		err := listing.List(ctx, func(raw []byte) (string, error) {
 			var page kubernetesList

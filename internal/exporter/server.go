@@ -119,6 +119,9 @@ type Server struct {
 	otlpLogsLogger *slog.Logger
 	// otlpTraces is the trace export's queue (otlptraces.go).
 	otlpTraces *otlpTraces
+	// installs wakes the OTLP export loops when a configuration is put in
+	// force, so they wait by its intervals (otlpEvery).
+	installs installSignal
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
 	// scrapesCtx is what static target scrapes run under, until
@@ -189,6 +192,9 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	m.OnInstall(s.followReload)
 	// A reload that switches the trace export off drops what waits for it.
 	m.OnInstall(func() { s.otlpTraces.configure(s.manager.Get().OTLP) })
+	// The OTLP export loops wait by the intervals of the configuration in
+	// force, the one a reload put in force included.
+	m.OnInstall(s.installs.installed)
 	// What a reload changed, which it logs, is told by the same fingerprints
 	// (keptFingerprint).
 	m.SetFingerprint(s.keptFingerprint)
@@ -491,15 +497,22 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// caller's trace.
 	ctx, spans := beginTrace(r.Context(), cfg.OTLP)
 	var traced probeTraceEnd
+	var parent traceParent
 	if spans != nil {
-		parent := parseTraceparent(r.Header.Get("traceparent"))
-		defer func() { s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, parent, traced) }()
+		parent = parseTraceparent(r.Header.Get("traceparent"))
 	}
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no
-	// new request tracked.
+	// new request tracked. It is called once the answer is ready, before it
+	// is written, and ends the probe's trace then too, which traced says
+	// the end of: the time a caller takes to read the answer is neither the
+	// probe's duration nor its span's.
 	finish := func(ok, refused bool) {
-		duration := time.Since(start)
+		ready := time.Now()
+		duration := ready.Sub(start)
+		if spans != nil {
+			s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, ready, parent, traced)
+		}
 		s.load.addProbe(duration)
 		rec.update(func(x *serverStats) {
 			if ok {
@@ -599,8 +612,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// This caller went away while it waited; there is nobody to answer,
 		// and no verdict of the target policy to go by. The probe starts no
 		// tracked request, whatever becomes of the trip.
-		finish(false, true)
 		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: "the caller went away while the probe waited for an identical probe's trip"}
+		finish(false, true)
 		return
 	}
 	if spans != nil {

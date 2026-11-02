@@ -555,20 +555,14 @@ func (s *Server) OTLPLogExportLoop(ctx context.Context) {
 	if s.otlpLogs == nil {
 		return
 	}
-	for {
-		interval := time.Duration(s.manager.Get().OTLP.Logs.Interval)
-		if interval <= 0 {
-			interval = model.DefaultOTLPLogsInterval
+	s.otlpEvery(ctx, func(cfg model.OTLPConfig) time.Duration {
+		if interval := time.Duration(cfg.Logs.Interval); interval > 0 {
+			return interval
 		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		s.exportOTLPLogs(ctx, s.manager.Get().OTLP, interval, false)
-	}
+		return model.DefaultOTLPLogsInterval
+	}, func(cfg model.OTLPConfig, interval time.Duration) {
+		s.exportOTLPLogs(ctx, cfg, interval, false)
+	})
 }
 
 // flushOTLPLogs makes the last log export at shutdown, until deadline and

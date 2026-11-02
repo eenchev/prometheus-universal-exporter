@@ -52,8 +52,20 @@ type TracedRequest struct {
 	// and WithheldWhy says why the redirect was not trusted.
 	Withheld    []string
 	WithheldWhy string
-	// Outcome is how it ended: a status, a gRPC code, or the error.
+	// Outcome is how it ended: a status, a gRPC code, or the error, as a
+	// debug report shows it. It may quote what the target sent — a
+	// greeting, a command's stderr, a status line's reason — so a span,
+	// which leaves the exporter as a log line does, never carries it: a
+	// span has Failed and Facts instead.
 	Outcome string
+	// Failed says the request got no answer, or an answer its request type
+	// takes for a failure: an error, or a connection lost before it was
+	// answered. An HTTP answer's failure is its Status.
+	Failed bool
+	// Facts are what the request type tells of how the request ended, for
+	// its span: numbers and yes-or-no answers the exporter worked out of
+	// the answer, never text the target sent.
+	Facts []TraceFact
 	// Wait is, under request.retry.retry_after, how long the trip waited
 	// before retrying the request and why, or why it was not retried when
 	// a Retry-After asked for longer than its time left; and, under
@@ -71,6 +83,15 @@ type TracedRequest struct {
 	// from 0; a redirect, a login and a page each begin at 0.
 	Attempt int
 	started time.Time
+}
+
+// TraceFact is one fact of TracedRequest.Facts: an integer, or a boolean
+// when IsBool is set, under Key.
+type TraceFact struct {
+	Key    string
+	Int    int64
+	Bool   bool
+	IsBool bool
 }
 
 // Start is when the request was sent: after any wait for its turn under
@@ -203,6 +224,21 @@ func traceOutcome(ctx context.Context, outcome string) {
 		// shows no more of it than of any failure (model.MaxFailureBytes).
 		r.Outcome, r.Duration = model.CutTo(outcome, model.MaxFailureBytes, false), time.Since(r.started)
 	}
+}
+
+// traceFailedOutcome is traceOutcome of a request that failed: it got no
+// answer, or lost its connection before one (TracedRequest.Failed).
+func traceFailedOutcome(ctx context.Context, outcome string) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	if n := len(t.requests); n > 0 && t.requests[n-1].Outcome == "" {
+		t.requests[n-1].Failed = true
+	}
+	t.mu.Unlock()
+	traceOutcome(ctx, outcome)
 }
 
 // traceHTTPOutcome is traceOutcome of an HTTP answer, whose status it

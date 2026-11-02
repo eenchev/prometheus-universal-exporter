@@ -644,7 +644,7 @@ func (t loginTracer) RoundTrip(req *http.Request) (*http.Response, error) {
 	traceRateLimitWait(req.Context(), waited, false)
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
-		traceOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())
+		traceFailedOutcome(req.Context(), "error: "+RedactURLErrors(err).Error())
 		return nil, err
 	}
 	traceHTTPOutcome(req.Context(), resp)

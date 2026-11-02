@@ -44,7 +44,9 @@ import (
 //
 // The spans wait in a queue bounded by their count,
 // otlp.traces.max_pending_spans: a trace that finds no room for all of its
-// spans is dropped whole, and counted, rather than waited for or cut. A probe
+// spans is dropped whole, and counted, rather than waited for or cut, and
+// what a failed export puts back, or a lower bound a reload sets, drops the
+// oldest traces whole: the queue is never cut inside a trace. A probe
 // never waits for the export: the queue is taken under a lock held for no
 // more than appending to it, and is sent every otlp.traces.interval in the
 // background. The export logs what becomes of it to stderr alone, as the log
@@ -343,7 +345,7 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 			if stage.note != "" {
 				span.Attributes = append(span.Attributes, stringAttribute("stage.note", stage.note))
 			}
-		} else if stage.outcome != "cancelled" {
+		} else if stageFailed(stage.outcome) {
 			span.Status = &otlpSpanStatus{Code: otlpStatusError, Message: stage.note}
 		}
 		spans = append(spans, span)
@@ -359,8 +361,20 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 		}
 		return parent
 	}
+	// The last request sent within each stage: a stage that failed failed
+	// on it, and its span says why as the stage does (requestFailure).
+	last := map[string]int{}
+	for i, r := range requests {
+		last[within(r.Start())] = i
+	}
+	failedStage := map[string]string{}
+	for i, stage := range stages {
+		if stageFailed(stage.outcome) {
+			failedStage[stageIDs[i]] = stage.note
+		}
+	}
 	resends := 0
-	for _, r := range requests {
+	for i, r := range requests {
 		if r.Attempt == 0 && !r.Redirect {
 			resends = 0
 		} else {
@@ -377,8 +391,9 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 		id := newSpanID()
 		span := otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), ParentSpanID: parent, Name: r.Method, Kind: otlpSpanKindClient,
 			StartTimeUnixNano: nanos(start), EndTimeUnixNano: nanos(start.Add(r.Duration)), Attributes: requestAttributes(r, resends)}
-		if failed, why := requestFailed(r); failed {
-			span.Status = &otlpSpanStatus{Code: otlpStatusError, Message: why}
+		if requestFailed(r) {
+			note, failed := failedStage[parent]
+			span.Status = &otlpSpanStatus{Code: otlpStatusError, Message: requestFailure(r, failed && last[parent] == i, note)}
 			errorType := "request_failed"
 			if r.Status >= 400 {
 				errorType = strconv.Itoa(r.Status)
@@ -390,19 +405,32 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 	return spans
 }
 
+// stageFailed says whether a stage that ended as outcome failed: neither
+// went through nor was cancelled.
+func stageFailed(outcome string) bool {
+	switch outcome {
+	case "ok", "hit", "miss", "cancelled":
+		return false
+	}
+	return true
+}
+
 // requestAttributes are a request's span's attributes, by OpenTelemetry's
 // conventions for an HTTP client's where they apply: its method, its URL as
 // an error in the log quotes one — the userinfo withheld, every query value
 // masked, no fragment (fetch.MaskQueryValues) — the server's address and
 // port, the answer's status and how many times the request was sent again
 // before, for a retry or a redirect; and the exporter's own: the attempt
-// under request.retry, the page of request.pagination, and whether it
-// followed a redirect or made request.login's login.
+// under request.retry, the page of request.pagination, whether it followed
+// a redirect or made request.login's login, and the facts its request type
+// tells of how it ended (fetch.TracedRequest.Facts). How it ended as a
+// debug report tells it (fetch.TracedRequest.Outcome) is not among them: it
+// may quote what the target sent, a greeting or a command's stderr, which
+// the log never shows of a request that went through.
 func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 	var attrs []otlpAnyAttribute
 	u, err := url.Parse(r.URL)
-	web := err == nil && (u.Scheme == "http" || u.Scheme == "https")
-	if web {
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 		attrs = append(attrs, stringAttribute("http.request.method", r.Method))
 	}
 	attrs = append(attrs, stringAttribute("url.full", fetch.RedactURLString(r.URL, fetch.MaskQueryValues)))
@@ -422,8 +450,13 @@ func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 	}
 	if r.Status > 0 {
 		attrs = append(attrs, intAttribute("http.response.status_code", r.Status))
-	} else if r.Outcome != "" && !web {
-		attrs = append(attrs, stringAttribute("request.outcome", r.Outcome))
+	}
+	for _, fact := range r.Facts {
+		if fact.IsBool {
+			attrs = append(attrs, boolAttribute(fact.Key, fact.Bool))
+		} else {
+			attrs = append(attrs, otlpAnyAttribute{Key: fact.Key, Value: otlpAnyValue{IntValue: strconv.FormatInt(fact.Int, 10)}})
+		}
 	}
 	if resends > 0 {
 		attrs = append(attrs, intAttribute("http.request.resend_count", resends))
@@ -443,19 +476,31 @@ func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 	return attrs
 }
 
-// requestFailed says whether a request failed, and why: it got no answer,
-// or an HTTP answer of 400 or more, as OpenTelemetry's conventions make a
+// requestFailed says whether a request failed: it got no answer, or an
+// HTTP answer of 400 or more, as OpenTelemetry's conventions make a
 // client's span an error.
-func requestFailed(r fetch.TracedRequest) (bool, string) {
-	switch {
-	case r.Status >= 400:
-		return true, r.Outcome
-	case r.Status > 0:
-		return false, ""
-	case strings.HasPrefix(r.Outcome, "error") || strings.HasPrefix(r.Outcome, "the connection was lost") || strings.Contains(r.Outcome, "error:"):
-		return true, r.Outcome
+func requestFailed(r fetch.TracedRequest) bool {
+	if r.Status > 0 {
+		return r.Status >= 400
 	}
-	return false, ""
+	return r.Failed
+}
+
+// requestFailure is the message of a failed request's span: what the log
+// line of its failure says, and nothing the log does not. The request the
+// fetch failed on (failedFetch) is the failure of its stage, which the log
+// tells as the stage's note does (note); an HTTP answer of 400 or more is
+// its status, as the log tells one; and a request that failed and was sent
+// again, or was followed by one that went through, is in no line of the
+// log, and its span says no more than its error.type.
+func requestFailure(r fetch.TracedRequest, failedFetch bool, note string) string {
+	switch {
+	case failedFetch:
+		return note
+	case r.Status > 0:
+		return fmt.Sprintf("received HTTP status %d", r.Status)
+	}
+	return ""
 }
 
 // rootAttributes are the attributes of a probe's or a scrape's span: the
@@ -510,8 +555,11 @@ func tracedTrip(cfg model.OTLPConfig, elapsed time.Duration, failed bool) (bool,
 type otlpTraces struct {
 	mu sync.Mutex
 	// queue holds the spans waiting, the oldest first, each with its
-	// resource.
-	queue []otlpQueuedSpan
+	// resource, and traces how many of them each trace has, in the same
+	// order: the queue is cut by whole traces, never inside one, which
+	// would leave spans whose parent is gone.
+	queue  []otlpQueuedSpan
+	traces []int
 	// The counts since the start, the status page's and the
 	// self-metrics'.
 	sent                int
@@ -554,12 +602,12 @@ const (
 )
 
 // configure drops the spans waiting when cfg switches the trace export off,
-// and those past a lower bound, the oldest first.
+// and the oldest whole traces past a lower bound.
 func (t *otlpTraces) configure(cfg model.OTLPConfig) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !otlpTracesOn(cfg) {
-		t.queue = nil
+		t.queue, t.traces = nil, nil
 		return
 	}
 	t.capLocked(otlpMaxPendingSpans(cfg))
@@ -577,6 +625,9 @@ func otlpMaxPendingSpans(cfg model.OTLPConfig) int {
 // add queues a trace's spans, or drops and counts them all when they do not
 // fit under limit.
 func (t *otlpTraces) add(spans []otlpQueuedSpan, limit int) {
+	if len(spans) == 0 {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if len(t.queue)+len(spans) > limit {
@@ -584,32 +635,60 @@ func (t *otlpTraces) add(spans []otlpQueuedSpan, limit int) {
 		return
 	}
 	t.queue = append(t.queue, spans...)
+	t.traces = append(t.traces, len(spans))
 }
 
-func (t *otlpTraces) drain() []otlpQueuedSpan {
+// drain takes every span waiting, and how many of them each trace has.
+func (t *otlpTraces) drain() ([]otlpQueuedSpan, []int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	spans := t.queue
-	t.queue = nil
-	return spans
+	spans, traces := t.queue, t.traces
+	t.queue, t.traces = nil, nil
+	return spans, traces
 }
 
-// requeue puts spans an export could not deliver back before those queued
-// since, within limit, the oldest dropped first past it.
-func (t *otlpTraces) requeue(spans []otlpQueuedSpan, limit int) {
+// requeue puts the spans of drained an export could not deliver, those from
+// the from-th on, back before those queued since, within limit, the oldest
+// whole traces dropped past it. traces is how many spans each trace of
+// drained has; what is left of a trace an earlier request delivered the
+// start of is a trace of its own here.
+func (t *otlpTraces) requeue(drained []otlpQueuedSpan, traces []int, from, limit int) {
+	spans := drained[from:]
 	if len(spans) == 0 {
 		return
+	}
+	var counts []int
+	for _, n := range traces {
+		switch {
+		case from >= n:
+			from -= n
+		case from > 0:
+			counts = append(counts, n-from)
+			from = 0
+		default:
+			counts = append(counts, n)
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.queue = append(spans[:len(spans):len(spans)], t.queue...)
+	t.traces = append(counts, t.traces...)
 	t.capLocked(limit)
 }
 
+// capLocked drops the oldest whole traces until the spans waiting are
+// within limit.
 func (t *otlpTraces) capLocked(limit int) {
-	if over := len(t.queue) - limit; over > 0 {
-		t.dropped[otlpTraceDropPendingCap] += over
-		t.queue = append([]otlpQueuedSpan(nil), t.queue[over:]...)
+	over, cut, traces := len(t.queue)-limit, 0, 0
+	for over > 0 && traces < len(t.traces) {
+		over -= t.traces[traces]
+		cut += t.traces[traces]
+		traces++
+	}
+	if cut > 0 {
+		t.dropped[otlpTraceDropPendingCap] += cut
+		t.queue = append([]otlpQueuedSpan(nil), t.queue[cut:]...)
+		t.traces = append([]int(nil), t.traces[traces:]...)
 	}
 }
 
@@ -733,9 +812,10 @@ func probeTraceEndOf(result *probeResult) probeTraceEnd {
 }
 
 // endProbeTrace ends a probe's trace, under the exporter-wide resource, as
-// its series are exported.
-func (s *Server) endProbeTrace(cfg model.OTLPConfig, spans *tripSpans, c *model.Collector, target, method string, start time.Time, parent traceParent, end probeTraceEnd) {
-	finished := time.Now()
+// its series are exported. The probe ran from start to finished, when its
+// answer was ready: what its caller takes to read the answer is not its
+// time, as it is not in the self-metrics' durations.
+func (s *Server) endProbeTrace(cfg model.OTLPConfig, spans *tripSpans, c *model.Collector, target, method string, start, finished time.Time, parent traceParent, end probeTraceEnd) {
 	s.endTrace(cfg, spans, start, finished, end.failed, func(bytes int) spanRoot {
 		return probeSpanRoot(c, target, method, start, finished, parent, end, bytes)
 	}, func() otlpResourceIdentity { return defaultResourceIdentity(cfg) })
@@ -858,20 +938,14 @@ var otlpTracesKey = subjectKey{bytes: subjectBytes(traceExportSubject, "")}
 // until ctx ends. It returns without a last export, which FlushOTLP makes
 // after the metrics' last.
 func (s *Server) OTLPTraceExportLoop(ctx context.Context) {
-	for {
-		interval := time.Duration(s.manager.Get().OTLP.Traces.Interval)
-		if interval <= 0 {
-			interval = model.DefaultOTLPTracesInterval
+	s.otlpEvery(ctx, func(cfg model.OTLPConfig) time.Duration {
+		if interval := time.Duration(cfg.Traces.Interval); interval > 0 {
+			return interval
 		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		s.exportOTLPTraces(ctx, s.manager.Get().OTLP, interval, false)
-	}
+		return model.DefaultOTLPTracesInterval
+	}, func(cfg model.OTLPConfig, interval time.Duration) {
+		s.exportOTLPTraces(ctx, cfg, interval, false)
+	})
 }
 
 // flushOTLPTraces makes the last trace export at shutdown, until deadline
@@ -890,7 +964,7 @@ func (s *Server) flushOTLPTraces(cfg model.OTLPConfig, deadline time.Time) {
 // What becomes of it is logged to stderr alone (unexportedLogger).
 func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, budget time.Duration, last bool) {
 	t := s.otlpTraces
-	spans := t.drain()
+	spans, traces := t.drain()
 	if !otlpTracesOn(cfg) || len(spans) == 0 {
 		return
 	}
@@ -903,14 +977,16 @@ func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, bud
 	deadline := start.Add(budget)
 	requests, err := otlpTraceRequests(cfg, spans)
 	sent, retries := 0, 0
-	var rest []otlpQueuedSpan
+	// rest is where the spans not delivered begin, len(spans) when every
+	// one was.
+	rest := len(spans)
 	var failure error
 	var partial otlpPartialSuccess
 	for k := 0; err == nil && k < len(requests); k++ {
 		request := requests[k]
 		if k > 0 && time.Until(deadline) < otlpMinAttempt {
 			err = fmt.Errorf("the trace export ran out of time after %d of its %d requests", k, len(requests))
-			rest = spans[request.from:]
+			rest = request.from
 			break
 		}
 		var tries int
@@ -919,7 +995,7 @@ func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, bud
 		retries += tries
 		if err != nil && ctx.Err() != nil {
 			// Shutting down: the last export sends these.
-			t.requeue(spans[request.from:], limit)
+			t.requeue(spans, traces, request.from, limit)
 			return
 		}
 		count := request.to - request.from
@@ -939,7 +1015,7 @@ func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, bud
 			failure, err = err, nil
 			continue
 		}
-		rest = spans[request.from:]
+		rest = request.from
 	}
 	if err != nil {
 		failure = err
@@ -947,12 +1023,12 @@ func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, bud
 	t.record(target.Endpoint, start, len(spans), sent, failure)
 	attrs := []any{"endpoint", redactedOTLPEndpoint(target.Endpoint), "spans", len(spans), "retries", retries}
 	switch {
-	case failure != nil && len(rest) > 0 && last:
-		t.drop(len(rest), otlpTraceDropShutdown)
-		s.failures.failed(logger, slog.LevelWarn, otlpTracesKey, "the last OTLP trace export before exiting failed; its spans are dropped; this line is not exported", "export", failure, append(attrs, "dropped_spans", len(rest))...)
-	case failure != nil && len(rest) > 0:
-		t.requeue(rest, limit)
-		s.failures.failed(logger, slog.LevelWarn, otlpTracesKey, "OTLP trace export failed; its spans are kept for the next export; this line is not exported", "export", failure, append(attrs, "kept_spans", len(rest))...)
+	case failure != nil && rest < len(spans) && last:
+		t.drop(len(spans)-rest, otlpTraceDropShutdown)
+		s.failures.failed(logger, slog.LevelWarn, otlpTracesKey, "the last OTLP trace export before exiting failed; its spans are dropped; this line is not exported", "export", failure, append(attrs, "dropped_spans", len(spans)-rest)...)
+	case failure != nil && rest < len(spans):
+		t.requeue(spans, traces, rest, limit)
+		s.failures.failed(logger, slog.LevelWarn, otlpTracesKey, "OTLP trace export failed; its spans are kept for the next export; this line is not exported", "export", failure, append(attrs, "kept_spans", len(spans)-rest)...)
 	case failure != nil:
 		var refused *otlpRefusedError
 		if errors.As(failure, &refused) && refused.body != "" {

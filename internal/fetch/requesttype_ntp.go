@@ -266,7 +266,7 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 	traceRequest(ctx, ntpMethod, ntpURL(address), http.Header{"Ntp-Version": {strconv.Itoa(ntpVersion)}}, "", false)
 	doc, err := ntpExchange(ctx, address)
 	if err != nil {
-		traceOutcome(ctx, "error: "+err.Error())
+		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, err
 	}
 	doc.DurationSeconds = time.Since(start).Seconds()

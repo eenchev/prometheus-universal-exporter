@@ -8,7 +8,9 @@ and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
 `otlp` exports probe results, the exporter's own metrics and, with
-`otlp.logs`, its own log over [OTLP](OTLP.md), and with
+`otlp.logs`, its own log over [OTLP](OTLP.md), with
+[`otlp.traces`](OTLP.md#traces-of-slow-requests) a trace of each slow probe
+and static target scrape, and with
 [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
 that sends them on every resource.
 
@@ -5728,12 +5730,23 @@ is what the export does, not a description of it:
   are more than one holds. A
   probe logs a failure as `probe failed`, where a run says `debug run
   failed`, and a repeated one once and then every five minutes.
+- **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on: the
+  spans the trace export would make of the run, by the export's own code —
+  the probe's or the scrape's, each stage's and each request's — as a tree
+  with each span's start, duration, a bar of its time within the run's, its
+  status and its attributes, the `ExportTraceServiceRequest` they would be
+  sent in, shown as the metrics' body is, and whether a probe or a scrape
+  that took as long and ended as the run did would be exported, by
+  `otlp.traces.threshold` and `otlp.traces.errors`. The run's own trace is
+  never exported.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and
 nothing is sent. At `full` the tab also offers *Test the metrics
-endpoint*, and with `otlp.logs` *Test the logs endpoint*: one empty
-export, `{"resourceMetrics":[]}` or `{"resourceLogs":[]}`, sent to the
+endpoint*, with `otlp.logs` *Test the logs endpoint* and with
+`otlp.traces` *Test the traces endpoint*: one empty export,
+`{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or `{"resourceSpans":[]}`,
+sent to the
 endpoint the configuration names, with `otlp.headers`, `otlp.tls`,
 `otlp.compression` and `otlp.timeout`, once, never retried. The page shows
 the status, how long it took, the error of the connection, of TLS or of a
@@ -5823,7 +5836,10 @@ alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
 (each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
 `prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
 `left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
-`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`). A collector refused is answered `422` with `error`, a
+`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`), and with
+`otlp.traces`, `traces` (`threshold`, `errors`, `took`, `failed`,
+`exported`, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
+`duration_ms`, `status` and `attributes`, `notes` and `body`). A collector refused is answered `422` with `error`, a
 malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
 
@@ -6105,7 +6121,8 @@ when the exporter should be sent probes, and `503` when it should not, with one
   is off by default, since an exporter whose exports fail still answers
   probes, and at most 1000. It counts the metrics' exports alone: failing
   exports of the exporter's own log ([`otlp.logs`](OTLP.md#the-exporters-own-log))
-  never make the exporter unready.
+  and of traces ([`otlp.traces`](OTLP.md#traces-of-slow-requests)) never make
+  the exporter unready.
 - The exporter received `SIGTERM` or `SIGINT` and is waiting out
   `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
   It never becomes ready again.
@@ -6186,8 +6203,10 @@ Then it stops accepting connections, cuts short the
 [static target](STATIC-TARGETS.md) scrapes in flight, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
 default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
-followed, with [`otlp.logs`](OTLP.md#the-exporters-own-log), by the last
-export of its own log within the same `otlp.timeout`,
+followed, with [`otlp.traces`](OTLP.md#traces-of-slow-requests), by the
+last export of the spans waiting and, with
+[`otlp.logs`](OTLP.md#the-exporters-own-log), by the last export of its own
+log within the same `otlp.timeout`,
 and exits `0`. The static target scrapes are not waited for: their results are
 served by this exporter alone, which is stopping, so a target that does not
 answer would only hold the shutdown up. A scrape cut short publishes nothing

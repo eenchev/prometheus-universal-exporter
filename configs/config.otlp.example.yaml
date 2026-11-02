@@ -34,8 +34,8 @@ otlp:
   # suffix such as _seconds moved into the metric's unit (s). prometheus, the
   # default, keeps the names the exposition writes.
   # metric_names: otel
-  # The instrumentation scope of the metrics and log records; left out, the
-  # name prometheus-universal-exporter without a version.
+  # The instrumentation scope of the metrics, log records and spans; left
+  # out, the name prometheus-universal-exporter without a version.
   # scope:
   #   name: acme.example/edge-exporter
   #   version: "2.4.0"
@@ -46,6 +46,15 @@ otlp:
   #   enabled: true
   #   level: info
   #   endpoint: http://otel-collector:4318/v1/logs
+  # Also send a trace of each probe and static target scrape that took
+  # threshold or longer, and with errors of each that failed, to the same
+  # collector, at /v1/traces unless endpoint says otherwise: a span for the
+  # probe or the scrape, and one for each stage and request of its trip.
+  # traces:
+  #   enabled: true
+  #   threshold: 1s
+  #   errors: false
+  #   endpoint: http://otel-collector:4318/v1/traces
 
 # Optional exporter endpoint protection. Do not enable this together with a
 # collector using request.forward_authorization; both use the incoming

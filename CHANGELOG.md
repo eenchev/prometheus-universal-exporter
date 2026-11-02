@@ -104,6 +104,26 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Traces of slow requests over OTLP: with `otlp.traces` switched on, each
+  probe and static target scrape that took `otlp.traces.threshold` (1s by
+  default) or longer, and with `otlp.traces.errors: true` each that failed,
+  is exported as a trace to the collector's `/v1/traces`: a span for the
+  probe or the scrape, and under it one for each stage of its trip — the
+  cache, the wait for a slot, the fetch, the decode, the Python scripts, the
+  transform, the validation — and one for each request it sent, every retry,
+  redirect, page and login, by OpenTelemetry's conventions, credentials and
+  query values withheld. A caller's `traceparent` is continued. The traces
+  go under the probes' and the static targets' resources with
+  `otlp.exporter_instance` and `otlp.scope`, wait in a queue bounded by
+  `otlp.traces.max_pending_spans`, cost a probe nothing while the block is
+  off, and are counted in `http_exporter_otlp_trace_exports_total`,
+  `http_exporter_otlp_spans_sent_total` and
+  `http_exporter_otlp_spans_dropped_total` and on the status page's *Trace
+  export* part. The debug page's *OTLP* tab shows a run's spans as a tree
+  with their times and whether the export would send them, and tests the
+  traces endpoint; a run is never exported. See
+  [Traces of slow requests](docs/OTLP.md#traces-of-slow-requests).
+
 - `otlp.exporter_instance` names the exporter replica that sends the OTLP
   export, as one more attribute of every resource it sends: the probes',
   the exporter's own metrics', every static target's and the log records'.

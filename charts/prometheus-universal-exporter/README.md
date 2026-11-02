@@ -1165,7 +1165,7 @@ env:
 
 ### OTLP export
 
-OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers both exports send:
+OTLP export is part of the configuration, not of the values: set the `otlp` block inside `config.data.config.yaml` (see [OTLP export](../../docs/OTLP.md)). Its `logs` block forwards the exporter's own log too, to the same collector at its `/v1/logs` path, besides the pod's stdout and stderr that `kubectl logs` reads (see [The exporter's own log](../../docs/OTLP.md#the-exporters-own-log)), and its `traces` block a trace of each probe and static target scrape that took `threshold` or longer, at its `/v1/traces` path (see [Traces of slow requests](../../docs/OTLP.md#traces-of-slow-requests)). A collector's token belongs in a Secret, which `env` and `server.expandEnv` put in the headers every export sends:
 
 ```yaml
 server:
@@ -1189,6 +1189,9 @@ config:
         logs:
           enabled: true
           level: info
+        traces:
+          enabled: true
+          threshold: 2s
       collectors:
         - name: example
           request:
@@ -1200,7 +1203,7 @@ config:
               expression: 'value=(\d+)'
 ```
 
-A failing log export never makes the pod unready; the exporter's [status page](../../docs/ENDPOINTS.md#otlp-export) and the `http_exporter_otlp_log_*` [self-metrics](../../docs/SELF-METRICS.md#otlp-export-status) say how it is going. Keep the collector's name in `NO_PROXY` behind an egress proxy, as [above](#environment-variables-in-the-configuration).
+A failing log or trace export never makes the pod unready; the exporter's [status page](../../docs/ENDPOINTS.md#otlp-export) and the `http_exporter_otlp_log_*`, `http_exporter_otlp_trace_exports_total` and `http_exporter_otlp_spans_*` [self-metrics](../../docs/SELF-METRICS.md#otlp-export-status) say how it is going. Keep the collector's name in `NO_PROXY` behind an egress proxy, as [above](#environment-variables-in-the-configuration).
 
 Every replica exports under the same `service.name`, so a backend cannot tell from the resource which pod sent a point or a log line. The `exporter_instance` block adds an attribute naming the replica, `pue.exporter.instance` by default, to every resource the export sends (see [The exporter instance](../../docs/OTLP.md#the-exporter-instance)). Its value defaults to the pod's name: the pod's host name, and, with the [allocator](#target-allocator), the `--allocator.member` name the chart passes, `$(POD_NAME)`, which is the same name:
 

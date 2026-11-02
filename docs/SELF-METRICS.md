@@ -207,6 +207,21 @@ off:
 rate(http_exporter_otlp_log_records_dropped_total[15m]) > 0
 ```
 
+With [`otlp.traces`](OTLP.md#traces-of-slow-requests) on as well, these say
+how the export of the traces of slow and failed probes and scrapes is going;
+they are absent while it is off:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_otlp_trace_exports_total{result}` | counter | Trace exports, by `result`: `success` or `failure`. An export is one delivery of the spans waiting, however many requests it is sent in; an interval with no span waiting makes none. One of which the endpoint refused a request, or that ran out of retries, is a failure. |
+| `http_exporter_otlp_spans_sent_total` | counter | Spans the endpoint accepted: those of the requests it took, less those it rejected in a `partialSuccess`. |
+| `http_exporter_otlp_spans_dropped_total` | counter | Spans given up on: those of a trace that found no room for all of its spans under `otlp.traces.max_pending_spans`, dropped whole, or the oldest past it after a failed export; spans of a request the endpoint refused with an answer that is not retried, or rejected in a `partialSuccess`; and those of the last export before exiting when it failed. Spans of an export that ran out of retries are kept for the next and not counted until then. |
+
+```promql
+# Traces of slow probes are being lost.
+rate(http_exporter_otlp_spans_dropped_total[15m]) > 0
+```
+
 ## Target allocator
 
 An exporter in [allocator mode](CONFIGURATION.md#configuration-from-the-target-allocator)

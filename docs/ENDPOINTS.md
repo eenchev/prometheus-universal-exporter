@@ -275,6 +275,19 @@ which the log export does not touch. A reload that changes
 `otlp.logs.endpoint` starts its record again, as for `otlp.endpoint`. With
 `otlp.logs` off it is a line saying so.
 
+With [`otlp.traces`](OTLP.md#traces-of-slow-requests) on, another part,
+**Trace export**, shows the export of the traces of slow and failed probes
+and scrapes as **Log export** shows the log's: its endpoint, with its
+credentials withheld, its threshold, whether `errors` exports failed ones
+too, and its interval; when the last trace export began, its result and the
+spans it carried; the last that got through; the failed trace exports in a
+row; the last failure's error and when that export began; the spans waiting
+and `otlp.traces.max_pending_spans`; and since the start, the spans dropped,
+by why, the spans sent, and the exports that succeeded and failed. It says
+nothing of readiness, which the trace export does not touch. A reload that
+changes `otlp.traces.endpoint` starts its record again. With `otlp.traces`
+off it is a line saying so.
+
 A reload that changes `otlp.endpoint` shows the new endpoint at once, and
 starts that record again: no last export, last success, failures or error
 until the new endpoint's first export, as the failures that make the
@@ -313,13 +326,25 @@ export is off, and otherwise:
   "pending_records": 0, "max_pending_records": 10000, "records_sent": 4210,
   "records_dropped": 0,
   "records_dropped_by_reason": {"over_max_pending_records": 0, "refused": 0, "last_export_at_shutdown": 0},
-  "exports_succeeded": 512, "exports_failed": 0}}
+  "exports_succeeded": 512, "exports_failed": 0},
+ "traces": {"enabled": true,
+  "endpoint": "https://redacted:redacted@otel.example/v1/traces?token=<redacted>&tenant=acme",
+  "threshold": "1s", "errors": false, "interval": "5s",
+  "last_export": "2026-10-24T08:59:55Z", "last_result": "success", "last_spans": 14,
+  "last_success": "2026-10-24T08:59:55Z",
+  "failing": false, "consecutive_failures": 0,
+  "pending_spans": 0, "max_pending_spans": 10000, "spans_sent": 931,
+  "spans_dropped": 0,
+  "spans_dropped_by_reason": {"over_max_pending_spans": 0, "refused": 0, "last_export_at_shutdown": 0},
+  "exports_succeeded": 67, "exports_failed": 0}}
 ```
 
 `exporter_instance` is left out while `otlp.exporter_instance` is off.
 `logs` is `{"enabled": false}` alone while `otlp.logs` is off. Its
 `last_export`, `last_result`, `last_records`, `last_success`, `last_error` and
-`last_error_at` are left out when there is nothing to say.
+`last_error_at` are left out when there is nothing to say. So is `traces` while
+`otlp.traces` is off, and its `last_export`, `last_result`, `last_spans`,
+`last_success`, `last_error` and `last_error_at` are left out alike.
 
 `failing` says the last export failed. `last_export`, `last_success`,
 `last_error`, `last_error_at`, `unready_after_failures`, `readiness`,

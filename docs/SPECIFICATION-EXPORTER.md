@@ -7680,6 +7680,21 @@ after a failed export, because the endpoint refused its request or rejected
 it, or because the last log export at shutdown failed, MUST be counted as
 dropped; records kept for the next export MUST NOT be.
 
+While the export of traces is on as well (`otlp.traces`, § 42.1c), and only
+then, the exporter MUST publish:
+
+```text
+http_exporter_otlp_trace_exports_total{result}   counter
+http_exporter_otlp_spans_sent_total              counter
+http_exporter_otlp_spans_dropped_total           counter
+```
+
+counted as the log export's are: a span of a trace that found no room for
+all of its spans under `otlp.traces.max_pending_spans`, the oldest past it
+after a failed export, those of a request the endpoint refused or rejected,
+and those of a failed last trace export at shutdown MUST be counted as
+dropped; spans kept for the next export MUST NOT be.
+
 ### 22.0d Build information
 
 The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
@@ -29772,6 +29787,27 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestChartReadmeExporterInstanceExampleNamesThePod`: the chart README's `exporter_instance` example renders with the allocator, its replicas given `--allocator.member=$(POD_NAME)` with `POD_NAME` from `metadata.name`; the allocator loads the rendered configuration with the value left empty, and a replica given a pod's name with that name as the value.
 - `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` still passes unchanged: with the block left out the export is the JSON it was, byte for byte.
 
+## 34.253 Traces of slow requests, otlp.traces
+
+- `TestTheTraceOfASlowProbeIsExported`: with the threshold `40ms`, a probe of a target answering after `60ms` is exported and one of a target answering at once is not: the spans are `probe text` (SERVER, no parent, no status), `http`, `decode`, `transform` and `validation` (INTERNAL, under it, `stage.outcome` `ok`) and `GET` (CLIENT, under `http`), all of one trace, ids of 32 and 16 lowercase hex digits, times of decimal nanoseconds within the probe's, under the exporter-wide resource and the default scope; the probe's span has `http.request.method` `GET`, `url.path` `/probe`, `http.response.status_code` `200`, `collector`, `target` as the log shows it (`tenant=a` kept, the token masked), `request.type` `http`, `series` `1`, `response.bytes` `8`, `cache.hit` `false`; the request's `server.address`, `server.port` and status, and a `url.full` of `user:hunter2@…/metrics?token=s3cret&tenant=a` with neither the password, the token nor `tenant=a`; no credential is anywhere in the export.
+- `TestTheTraceOfAFailedProbeIsExportedWithErrors`: under an hour's threshold, a probe of a target answering `500` is not exported without `errors`, and with it its span is ERROR with the failure, `error.type` and `http.response.status_code` `502`, and the request's ERROR with `500` as its status and `error.type`.
+- `TestEveryAttemptAndPageIsASpan`: `request.retry` of 2 attempts on `503` against a target answering `503` twice is three CLIENT spans, `503`, `503 retry.attempt=1 http.request.resend_count=1`, `200 retry.attempt=2 http.request.resend_count=2`; `request.pagination` over 3 pages is a CLIENT span of `pagination.page` 1, 2 and 3.
+- `TestAStaticTargetsTraceIsUnderItsOwnResource`: a slow static target with `otlp.service_name: legacy` and `instance_id` is the INTERNAL span `scrape own` with `static_target=own` under `service.name=legacy`, `deployment.environment=test`, `pue.exporter.instance=replica-1`, `service.instance.id=own`; one without an `otlp` block `scrape plain` under the exporter-wide resource with the exporter instance; every span is of the scope `traces-scope` `2`.
+- `TestAProbeContinuesItsCallersTrace`: a probe with the `traceparent` `00-4bf9…-00f0…-01` is of that trace with `00f067aa0ba902b7` its parent, one with an uppercase trace id begins its own; a version 01 with more fields is read, `ff`, a zero trace id, a version 00 with more fields, a span id that is no hex and an empty header are not.
+- `TestATraceOverThePendingBoundIsDropped`: under `max_pending_spans: 8` a second probe's spans do not fit beside the first's and are dropped whole: the queue keeps the first's, `http_exporter_otlp_spans_dropped_total` and the status page's `spans_dropped` and `over_max_pending_spans` count them, and the probe is answered `200`; after an export `http_exporter_otlp_trace_exports_total{result="success"} 1`, `{result="failure"} 0` and `http_exporter_otlp_spans_sent_total`, and the page's *Trace export* part, `exported every 5s` and the spans sent.
+- `TestTheTraceExportLogsToStderrAloneAndFlushesAtShutdown`: with the log export on at `debug`, a trace export the endpoint refuses `400` is logged to stderr and no log record of the trace export reaches the endpoint; `FlushOTLP` sends the spans waiting, and none waits after it.
+- `TestAReloadSwitchesTheOTLPTraceExport`: a reload switching `otlp.traces` off drops the spans waiting and a probe queues none, the status page says `Trace export is off.` and no `http_exporter_otlp_trace_` or `http_exporter_otlp_spans_` family is served; switched on again, the export sends the one probe's trace since.
+- `TestTheTraceCostsAProbeNothingWhileOff`: with the traces block off, beginning a probe's trace and recording a stage, the bytes fetched and a cache step allocate nothing (the test fails when the record is made while off); with it on the probe's context carries the recorder.
+- `TestTheOTLPTabShowsTheRunsSpans`: with `otlp.traces` on the page has the Spans part, the traces test button and the ExportTraceServiceRequest body; a run of a target answering after `20ms` under a `5ms` threshold says it would be exported, `at least otlp.traces.threshold 5ms`, lists `probe text SERVER`, `http`, `GET CLIENT` under it, `decode`, `transform`, `validation`, its body is the spans' request; nothing is queued and an export sends nothing of it; *Test the traces endpoint* sends `{"resourceSpans":[]}` to `/v1/traces` and counts as no export.
+- `TestTheOTLPEndpointTestIsGuarded`: also `409` for the traces with the trace export off, `400` for a signal OTLP has not (`spans`).
+- `TestTheStatusPagesOTLPJSON`: the `otlp` object has `traces`, `{"enabled": false}` while `otlp.traces` is off.
+- `TestOTLPTracesSettingsAreCheckedAndFilledIn`: `{enabled: true}` loads as `/otel/v1/traces?tenant=a` of the metrics' endpoint, threshold `1s`, interval `5s`, `max_pending_spans` 10000; written values are kept; no endpoint beside one without `/v1/metrics`, an endpoint that is no URL, a threshold of `500µs` or `-1s`, an interval of `500ms` and a negative bound are refused with the block on, and unchecked off or in an `otlp` block off.
+- `TestOTLPTracesBlockMustSayEnabled`: `traces: {threshold: 1s}` is refused, `otlp.traces sets threshold but not enabled`.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`, `TestSchemaAndExporterAgreeOnEnabled`, `TestSchemaAndExporterAgreeOnKeysWrittenEmpty`, `TestEveryDurationKeyTakesTextOrTheNumberZero`: `traces` is a row of the switched-off `otlp` block's table — a threshold of `500us` or `-1s`, an interval of `500ms`, a negative bound unchecked off and refused by both on, an endpoint that is no URL and `400us400us` by the exporter alone, `soon`, `maybe` and an unknown key refused by both — `otlp.traces.threshold` takes `1ms` and refuses `999us` once on, and its threshold and interval are signed durations of the otlp block.
+- `TestChartReadmeOTLPLogExportExampleRendersAndLoads`: the chart README's example also switches `traces` on with `threshold: 2s`, to the collector's `/v1/traces`.
+- `TestCorePackagesNameNoRequestType`: `internal/exporter/otlptraces.go` holds `"http"` twice, a URL's scheme.
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` and the log export's tests still pass unchanged: with `traces` left out the metrics' and the logs' exports are what they were, byte for byte.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30522,6 +30558,89 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   dropped and counted. No line logged after it is exported.
 - The log export MUST NOT change readiness (§ 23), and its state MUST be on
   the status page (§ 42.14a).
+
+### 42.1c Traces of slow requests
+
+With `otlp.traces.enabled` true in an `otlp` block switched on, the exporter
+MUST export a trace of each `/probe` request and each scheduled static
+target scrape that took `otlp.traces.threshold` or longer, and with
+`otlp.traces.errors` of each that failed whatever it took, and MUST NOT add a
+dependency for it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
+`otlp.logs` is (§ 42.1b).
+
+- The spans MUST be sent as OTLP/HTTP JSON `ExportTraceServiceRequest`s to
+  `otlp.traces.endpoint`, which left out MUST be `otlp.endpoint` with its
+  trailing `/v1/metrics` made `/v1/traces`; an `otlp.endpoint` without that
+  path and no `otlp.traces.endpoint` MUST be refused when the configuration
+  loads. The requests MUST carry the `otlp` block's headers, TLS and
+  compression, be bounded by its timeout, be retried, refused and dropped by
+  the rules of § 42.1a, a `partialSuccess`'s `rejectedSpans` dropped and
+  counted, and be split by `otlp.batch_max_size` spans and
+  `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
+- `otlp.traces.threshold` MUST be 1 second by default and at least 1
+  millisecond; `otlp.traces.errors` MUST be off by default. A failed probe
+  is one answered with an error, with a stale result, or turned away by the
+  concurrency limit; a failed scrape one that left its target `up` 0.
+- Which trace to export MUST be decided at the probe's or the scrape's end,
+  from stages and requests recorded in memory as it went, by the code that
+  times a debug run's stages (§ 34.251): each stage once, for both. A trace
+  not exported MUST be forgotten, its spans never made. While the export is
+  off, a probe MUST record nothing and allocate nothing for it.
+- A trace MUST be a span for the probe — SERVER, named `probe <collector>`,
+  with `http.request.method`, `url.path`, `http.response.status_code` — or
+  for the scrape — INTERNAL, named `scrape <static target>` — with
+  `collector`, `target` as the log shows it, `static_target`,
+  `request.type`, `series`, `response.bytes`, `cache.hit` and, when it
+  failed, `error.type` and the status ERROR with its failure; under it an
+  INTERNAL span for each stage the debug report names (the fetch, `files`,
+  `decode`, `transform`, `validation`), for the cache's answer, the wait for
+  a slot, an identical probe's shared trip and a stale answer, a `python`
+  span within the transform of the scripts' time, and under the fetch's a
+  CLIENT span, named by its method, for each request sent — each attempt of
+  `request.retry`, each redirect, each page of `request.pagination`,
+  `request.login`'s login — with `http.request.method`, `url.full`,
+  `server.address`, `server.port`, `http.response.status_code`,
+  `http.request.resend_count`, `retry.attempt`, `pagination.page`,
+  `redirect` and `login`, ERROR for a request that got no answer or one of
+  400 or more, and a `rate_limit` span before a request that waited for its
+  turn. Trace and span ids MUST come from `crypto/rand` and be written in
+  lowercase hex; times MUST be decimal nanoseconds.
+- A probe whose request carries a readable W3C `traceparent` MUST continue
+  its trace: its span of the header's trace id, the header's span its
+  parent; the threshold and `errors` MUST decide its export all the same.
+  The exporter MUST NOT send a `traceparent` to its targets.
+- A request's `url.full` MUST withhold its userinfo, every query value and
+  its fragment, as an error in the log quotes a URL, and `target` the values
+  of query parameters named like credentials, as the log shows a target; a
+  span MUST carry no header and no body.
+- A probe's trace MUST be under the exporter-wide resource, a static
+  target's under its own (`targetResource`, § 42.1), each with
+  `otlp.exporter_instance` when it is on, and under `otlp.scope`, by the code
+  that makes the metrics' resources and scope.
+- A debug run MUST NOT be exported; with the export on, the debug page's
+  OTLP tab MUST show the spans the export would make of a run, by the
+  export's own code, and whether a probe or a scrape like it would be
+  exported, and its endpoint test MUST offer the traces endpoint, sent
+  `{"resourceSpans":[]}`.
+- A probe MUST NOT wait for the export: the spans waiting MUST be bounded
+  by `otlp.traces.max_pending_spans`, 10000 by default, a negative value
+  refused, and a trace that finds no room for all of its spans MUST be
+  dropped whole and counted (§ 22.0c). They MUST be sent every
+  `otlp.traces.interval`, 5 seconds by default and at least 1 second, in the
+  background; what an export could not deliver for a reason worth retrying
+  MUST wait for the next export, before the spans queued since, the oldest
+  dropped past the bound.
+- What the trace export logs of itself MUST be written to stderr alone, as
+  the log export's lines are (§ 42.1b), as a repeated failure (§ 25).
+- A reload that switches `otlp.traces` off MUST drop the spans waiting and
+  stop the recording; one that switches it on MUST record the probes and
+  scrapes from then on.
+- At shutdown, after the metrics' last export (§ 42.1a) and before the log
+  records' (§ 42.1b), the spans waiting MUST be sent within what is left of
+  the same `otlp.timeout`, and at least a second; when it fails they MUST be
+  dropped and counted.
+- The trace export MUST NOT change readiness (§ 23), and its state MUST be
+  on the status page (§ 42.14a).
 
 ## 42.2 CSV transformation
 
@@ -32357,6 +32476,16 @@ Of the OTLP export:
   `logs`, `{"enabled": false}` alone while `otlp.logs` is off, as the
   section MUST then say in one line. A reload that changes
   `otlp.logs.endpoint` MUST start its record again.
+- With `otlp.traces` on, the section MUST show the trace export (§ 42.1c)
+  as it shows the log export: its endpoint with its credentials withheld,
+  its threshold, whether `errors` is on and its interval, its last export
+  with its result and the spans it carried, the last that got through, the
+  failed trace exports in a row, the last failure's error, the spans
+  waiting and `otlp.traces.max_pending_spans`, and since the start the spans
+  dropped, in all and by why, the spans sent and the trace exports that
+  succeeded and failed; nothing of readiness. In the JSON it MUST be the
+  `otlp` object's `traces`, `{"enabled": false}` alone while `otlp.traces`
+  is off, as the section MUST then say in one line.
 - Every value MUST be HTML-escaped, and `?format=json` MUST give the section
   as `otlp`.
 

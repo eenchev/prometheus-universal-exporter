@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -166,10 +167,16 @@ func (s *Server) testOTLPEndpoint(ctx context.Context, cfg model.OTLPConfig, sig
 	if cfg.Compression != model.OTLPCompressionNone {
 		sent.Set("Content-Encoding", "gzip")
 	}
+	// otlp.headers carry the endpoint's API key under whatever name the
+	// vendor gave it — x-honeycomb-team, uptrace-dsn — which no rule for a
+	// credential's name can tell, so each is shown by its name alone; what
+	// the export sets itself is shown as sent.
+	shown := sent.Clone()
 	for k, v := range cfg.Headers {
 		sent.Set(k, v)
+		shown.Set(k, fetch.Redacted)
 	}
-	answer.Sent = headerLines(sent)
+	answer.Sent = headerLines(shown)
 	body, err := compressOTLP([]byte(raw), cfg.Compression)
 	if err != nil {
 		answer.Failure = err.Error()

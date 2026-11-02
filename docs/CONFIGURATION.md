@@ -5429,8 +5429,13 @@ in its place, read-only, since it runs as configured:
   `redis` command's argument, a `sql` statement — is shown `<redacted>`
   whole when something in it reads as a credential, by the rule an error's
   text is masked by (`"password": "…"`, `token=…`, `Bearer …`, a URL's
-  userinfo), or when one of its lines logs in to a text protocol (`AUTH …`,
-  `PASS …`, `APOP …`); a folded block among them is then shown on one line.
+  userinfo, `<password>…</password>`, JSON written as a string in JSON,
+  `\"password\":\"…\"`), or when it logs in to a text protocol: `AUTH …`,
+  `PASS …` or `APOP …` at the start of a line or after a `;`, IMAP's
+  `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, or `AUTH` framed as
+  RESP (`*2\r\n$4\r\nAUTH\r\n$7\r\n…`); a word that only begins like
+  one, such as `author`, is not. A folded block among them is then shown on
+  one line.
   A Python script is shown as written, but for what reads as a
   credential in it, which is masked as an error's text is; keep a script's
   credentials in a file it reads.
@@ -5705,7 +5710,8 @@ is what the export does, not a description of it:
   the export logs of them. Only the run's own points are checked against
   one another: those of other probes and static targets in the same export,
   and the exporter's own series, are not the run's.
-- **Request body**: the `ExportMetricsServiceRequest`, folded away; it is
+- **Request body**: the `ExportMetricsServiceRequest`, folded away, its
+  points at the run's time in whole milliseconds, as an export's are; it is
   sent on one line, gzipped unless `otlp.compression: none`. It is shown as
   a tree: each object and array folds behind a ▸/▾ button, which the
   keyboard reaches too, and shows, folded, how many keys or items it has
@@ -5750,7 +5756,9 @@ sent to the
 endpoint the configuration names, with `otlp.headers`, `otlp.tls`,
 `otlp.compression` and `otlp.timeout`, once, never retried. The page shows
 the status, how long it took, the error of the connection, of TLS or of a
-timeout in full, the headers sent with credentials withheld, the answer's
+timeout in full, the headers sent — each of `otlp.headers` by its name
+alone, its value `<redacted>` whatever the header is called, and the
+`Content-Type` and `Content-Encoding` the export sets as sent — the answer's
 headers and body, its `partialSuccess`, and what an export would make of
 the answer — a success, a retry or a refusal. It counts in none of the
 export's self-metrics and changes nothing the status page shows. One test
@@ -5844,11 +5852,13 @@ malformed run `400`, one too large `413`, a fetch or a scrape below `full`
 `403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
 
 The endpoint test is `POST /debug/otlp-test` with `X-Debug-Run` and a
-JSON body `{"signal": "metrics"}` or `{"signal": "logs"}`, answered with
+JSON body `{"signal": "metrics"}`, `{"signal": "logs"}` or
+`{"signal": "traces"}`, answered with
 `ok`, `signal`, `endpoint`, `sent`, `body`, `status`, `took`, `failure`,
 `outcome`, `partial_success`, `headers`, `response` and `notes`; below
-`full` it is answered `403`, with the export (or the log export) off `409`,
-and while another test runs `429`, each with `error`.
+`full` it is answered `403`, with the export off, or `logs` with
+`otlp.logs` off or `traces` with `otlp.traces` off, `409`, and while
+another test runs `429`, each with `error`.
 
 ### Dangerous debug mode
 
@@ -6069,7 +6079,9 @@ counted all the same: a Python script it runs is run by the collector's
 workers, and the [Python worker series](SELF-METRICS.md#python-workers)
 count what the workers did, a debug probe's runs among them. Its
 failures go to its report, not to the exporter's log, which records only one
-`probe debug report served` line at `info`. The target's
+`probe debug report served` line at `info` (a debug scrape's `static target
+debug report served`), on stderr alone: the [log export](OTLP.md#the-exporters-own-log)
+does not take it. The target's
 [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
 [`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
 and [the probe's deadline](#probe-deadlines) apply as they do to any probe.

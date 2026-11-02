@@ -235,7 +235,9 @@ body, at most 256 bytes, on one line. It is logged only, never put in the
 probe's answer. An error page can echo what it was sent, so what reads as a
 credential in it is masked as `<redacted>` first: a `Bearer` or `Basic`
 credential, a JSON Web Token, and the value of a field or parameter whose name
-reads as a credential's, by the rule below for a target's query. The masking
+reads as a credential's, by the rule below for a target's query, a JSON
+field's written as a string in JSON (`\"password\":\"…\"`) and an XML
+element's, its text or its CDATA (`<password>…</password>`), among them. The masking
 errs towards hiding: an ordinary word after such a name may be masked too.
 
 A request that fails quotes the URL it was sending, as Go reports it:

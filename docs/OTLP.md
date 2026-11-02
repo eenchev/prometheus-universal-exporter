@@ -106,7 +106,8 @@ included in every export interval even when no Prometheus self-metrics scrape
 is running.
 
 Each data point carries the time it was scraped, or the timestamp the target
-gave it, not the time of the export that sends it, so a point that waited for
+gave it, in whole milliseconds as a Prometheus sample's timestamp is, not
+the time of the export that sends it, so a point that waited for
 the next export, or through an outage, is not taken for a newer one. An answer
 from a collector's [cache](CONFIGURATION.md#response-caching) is exported as
 of the scrape that filled the entry, not as of the answer: a cached result
@@ -743,6 +744,12 @@ once and then every five minutes while it goes on:
 The lines the metrics' export logs are the exporter's like any other, and are
 exported: a warning that a metrics export failed reaches the backend with the
 next log export that gets through.
+
+Nothing of debugging is exported either: the one line a debug probe, a
+debug scrape, a run of the debug page or its endpoint test logs that it was
+served (`probe debug report served`, `static target debug report served`,
+`debug run served`, `debug OTLP endpoint test served`) is written to stderr
+alone, as a debug run is not exported.
 
 Failing log exports never make the exporter unready, whatever
 `otlp.unready_after_failures` says: that counts the metrics' exports alone. The

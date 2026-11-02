@@ -294,7 +294,9 @@ logged failure SHOULD carry the start of the body, at most 256 bytes on one
 line, and the probe's answer MUST NOT. What in it reads as a credential — a
 `Bearer` or `Basic` credential, a JSON Web Token, and the value of a field or
 parameter whose name reads as a credential's by the one rule for a name
-(§ 42.17) — MUST be masked before it is logged, including one the 256-byte
+(§ 42.17), a JSON field's written as a string in JSON, its quotes escaped,
+among them, and the text or CDATA content of an XML element whose local
+name reads as one — MUST be masked before it is logged, including one the 256-byte
 cut runs through.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
@@ -33630,6 +33632,8 @@ have answered with, and for the response a probe would revalidate, which it
 MUST revalidate with the same conditional request and MUST NOT refresh in the
 cache (§ 42.13.2). Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
+The one `info` line that a debug probe or a debug scrape was served MUST
+be written to stderr alone, and MUST NOT be taken by the log export.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
 exception, for a debug probe and a debug scrape alike: they count what the
@@ -33842,8 +33846,10 @@ string of the request block — a header's or a query parameter's value, an
 `http` body, a `grpc` message, a `tcp` send, a `redis` command's argument,
 a `sql` statement or argument — in which text reads as a credential, by the
 rule that masks text the exporter did not write, or that writes a text
-protocol's login command (`AUTH`, `PASS` or `APOP` at the start of a line,
-in any case), MUST be shown as `<redacted>` whole, in the copy too, a folded
+protocol's login command, in any case (`AUTH`, `PASS` or `APOP` at the
+start of a line or after a `;`, IMAP's tagged `LOGIN` with a user and a
+password, Redis's `HELLO` with `AUTH`, and `AUTH` framed as a RESP bulk
+string followed by another), MUST be shown as `<redacted>` whole, in the copy too, a folded
 block scalar among them then on one line; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
@@ -34155,6 +34161,8 @@ timestamp, a sum or count OTLP cannot leave out; `left_out`, each point
 the export would leave out, with its `reason` in the words the export
 logs it; `clashes`, the lines the export would log of them; `notes`; and
 `body`, the `ExportMetricsServiceRequest` the export would send of them,
+its points at the run's time in whole milliseconds as the export's queue
+keeps a point's,
 indented, `{"resourceMetrics": []}` for none. The tab MUST show the
 resource, the scope, the points as a table that sorts by a column's
 header and keeps the rows that hold a filter's text, a badge on a row with
@@ -34187,21 +34195,24 @@ the tab MUST show them as *Log records*. None of them MUST be queued for
 the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
 MUST NOT offer the tab.
 
-With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, and
-with `otlp.logs` on *Test the logs endpoint*, which `POST` to
+With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, with
+`otlp.logs` on *Test the logs endpoint*, and with `otlp.traces` on *Test
+the traces endpoint*, which `POST` to
 `/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left
-out) or `logs`, with the `X-Debug-Run` header, refused as a run is
+out), `logs` or `traces`, with the `X-Debug-Run` header, refused as a run is
 without it, from another site, with another content type or method, and
 behind Basic Auth. Below `full` the buttons MUST be disabled with a note,
-and the test MUST be answered `403`; with the export off, or `logs` with
-the log export off, `409`; another `signal` `400`; and while a test is in
+and the test MUST be answered `403`; with the export off, `logs` with
+the log export off, or `traces` with the trace export off, `409`; another `signal` `400`; and while a test is in
 progress, the server's whole, `429`, sending nothing. A test MUST send
-one request, an empty `{"resourceMetrics":[]}` or `{"resourceLogs":[]}`,
+one request, an empty `{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or
+`{"resourceSpans":[]}`,
 to the endpoint the configuration in force names and no other, with the
 export's headers, TLS, compression and timeout, and MUST NOT retry it,
 whatever it answers. It MUST answer `200` with `ok`, `signal`,
-`endpoint`, its credentials withheld, `sent`, the headers sent, a
-credential's value withheld, `body`, `status`, `took`, `failure`, the
+`endpoint`, its credentials withheld, `sent`, the headers sent, every
+`otlp.headers` value `<redacted>` whatever its name and the `Content-Type`
+and `Content-Encoding` the export sets as sent, `body`, `status`, `took`, `failure`, the
 connection's, TLS's or the timeout's error or the refusal in full,
 `outcome`, what an export would make of the answer, `partial_success`,
 `headers` and `response`, the start of the answer's body, and `notes`. It

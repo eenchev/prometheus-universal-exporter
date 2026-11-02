@@ -49,12 +49,20 @@ var notCredentials = map[string]bool{
 // urlValue is a value written as an absolute URL.
 var urlValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 
-// commandCredential is a line of a text protocol that logs in, which a tcp
-// collector's send may write: AUTH of Redis, Memcached's SASL and SMTP,
-// PASS and APOP of POP3 and FTP. What follows the command is a credential
-// whatever it looks like, which fetch.RedactText, reading names and values,
-// cannot tell.
-var commandCredential = regexp.MustCompile(`(?im)^[ \t]*(?:auth|pass|apop)[ \t]+\S`)
+// commandCredential is a command of a text protocol that logs in, which a
+// tcp collector's send may write: AUTH of Redis, Memcached's SASL and SMTP,
+// PASS and APOP of POP3 and FTP, at the start of a line or after a ; that
+// puts several commands on one; IMAP's tagged LOGIN with its user and
+// password; Redis's HELLO with AUTH; and AUTH framed as RESP, an array's
+// bulk string AUTH followed by the next one's length, as a HELLO's AUTH is
+// framed too. What follows the command is a credential whatever it looks
+// like, which fetch.RedactText, reading names and values, cannot tell. A
+// word that only begins with one, such as author, is no command.
+var commandCredential = regexp.MustCompile(`(?im)` +
+	`(?:^|;)[ \t]*(?:auth|pass|apop)[ \t]+\S` +
+	`|^[ \t]*[A-Za-z0-9.]+[ \t]+login[ \t]+\S+[ \t]+\S` +
+	`|^[ \t]*hello\b[^\r\n]*[ \t]auth[ \t]+\S` +
+	`|^[ \t]*auth[ \t]*\r?\n[ \t]*\$[0-9]+[ \t]*\r?\n`)
 
 // debugCollectorAnswer is what debugCollectorPath answers: the collector's
 // name and YAML, and the keys it took from its file's defaults; or Error.

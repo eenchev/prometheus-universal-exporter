@@ -510,9 +510,9 @@ func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debug
 	report := s.runDebug(r.Context(), p)
 	s.countDebugRun(p.kind, report.result())
 	if p.static != nil {
-		s.logger.Info("static target debug report served", "static_target", p.static.Name, "collector", p.collector.Name)
+		s.unexportedLogger().Info("static target debug report served", "static_target", p.static.Name, "collector", p.collector.Name)
 	} else {
-		s.logger.Info("probe debug report served", "collector", p.collector.Name, "target", p.logTarget)
+		s.unexportedLogger().Info("probe debug report served", "collector", p.collector.Name, "target", p.logTarget)
 	}
 	// The report holds what the target sent, its body included: a browser
 	// must show it as text and never sniff it for HTML.

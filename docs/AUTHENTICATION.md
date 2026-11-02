@@ -507,8 +507,9 @@ is kept from reaching further than that:
   shows, at `full`, what the endpoint answered — its status, headers and
   the start of its body — and the error of a failed connection or TLS
   handshake in full, which can name the endpoint's host, address and
-  certificate; the headers it sent are shown with a credential's value
-  withheld, as the endpoint's URL is with its userinfo. One test runs at a
+  certificate; the headers it sent are shown with every `otlp.headers`
+  value withheld, whatever the header is called, since an endpoint's API
+  key may go by any name, as the endpoint's URL is with its userinfo. One test runs at a
   time. The *OTLP* tab shows what a run would export, at `edit` too, made
   of what the run already shows.
 - **Code.** The playground never runs Python, at either

@@ -274,8 +274,10 @@ func TestTheDebugCollectorPathIsReserved(t *testing.T) {
 // A credential in a request value that is free text, whatever its key is
 // named, withholds the value whole, in the configured view and in Edit a
 // copy: a body, one written as a folded block over several lines, which is
-// then no longer shown over them, and a query parameter's value; a body
-// that holds none is shown as written.
+// then no longer shown over them, a query parameter's value, an XML body's
+// element named like one, its text or its CDATA, and JSON written as a
+// string in a body, its quotes escaped; a body that holds none is shown as
+// written.
 func TestTheDebugPageWithholdsFreeTextHoldingACredential(t *testing.T) {
 	requireFreeTextWithheld(t, `  - name: body
     request:
@@ -298,6 +300,27 @@ func TestTheDebugPageWithholdsFreeTextHoldingACredential(t *testing.T) {
       type: http
       query:
         q: 'Bearer s3cret-query'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: xml
+    request:
+      type: http
+      method: POST
+      body: '<login><user>u</user><password>s3cret-xml</password></login>'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: cdata
+    request:
+      type: http
+      method: POST
+      body: '<s:Body><ns:Password><![CDATA[s3cret-cdata]]></ns:Password></s:Body>'
+    transform: {type: jq}
+    metrics: [{name: up, expression: .up}]
+  - name: escaped
+    request:
+      type: http
+      method: POST
+      body: '{"data":"{\"password\":\"s3cret-escaped\"}"}'
     transform: {type: jq}
     metrics: [{name: up, expression: .up}]
 `)

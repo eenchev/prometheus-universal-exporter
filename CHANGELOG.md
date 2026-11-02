@@ -258,6 +258,21 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   allocator mode made its first export about 30 seconds after its first
   bundle, whatever its interval said. The next export is now an interval of
   the new configuration after the last one.
+- The debug page's OTLP endpoint test shows every `otlp.headers` value as
+  `<redacted>`, by its name alone: a vendor's API key under a name that
+  does not read as a credential's, `x-honeycomb-team` or `uptrace-dsn`, was
+  shown as sent.
+- The debug page's configured view and *Edit a copy* withhold a request
+  body that writes a credential as an XML element, `<password>…</password>`,
+  its text or its CDATA, or as JSON written as a string in JSON
+  (`\"password\":\"…\"`); the log masks both in a target's error body too.
+- The debug page withholds a `tcp` send that logs in with IMAP's
+  `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, `AUTH` framed as RESP,
+  or `AUTH …` after a `;`.
+- The debug page's *OTLP* tab writes a run's points at whole milliseconds,
+  as the export does, not in nanoseconds.
+- The line that a debug probe or a debug scrape was served is written to
+  stderr alone and no longer reaches the OTLP log export.
 - The status page no longer shows the last error of a static target whose
   last scrape succeeded as if it still failed beside `success` and 0
   failures: the error stays, muted, under *Earlier failure, recovered since*,

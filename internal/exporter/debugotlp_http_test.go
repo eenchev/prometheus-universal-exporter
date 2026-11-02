@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -271,12 +273,29 @@ func TestTheOTLPTabListsWhatTheExportLeavesOut(t *testing.T) {
 
 // otlpWithoutTimes is a payload without its points' times and the
 // exporter's own series and the Go runtime's, which an export has and a run
-// does not.
+// does not. A time is replaced by what an export and a run of the same
+// series share of it: its nanoseconds past the whole millisecond, none, as
+// the queue keeps a time to the millisecond; and a start time by whether it
+// is the point's time.
 func otlpWithoutTimes(t *testing.T, raw []byte) otlpPayload {
 	t.Helper()
 	var payload otlpPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("%v: %s", err, raw)
+	}
+	times := func(at, start *string) {
+		nanos, err := strconv.ParseInt(*at, 10, 64)
+		if err != nil {
+			t.Fatalf("a point's time %q: %v", *at, err)
+		}
+		switch *start {
+		case "":
+		case *at:
+			*start = "the point's time"
+		default:
+			*start = "another time"
+		}
+		*at = "+" + strconv.FormatInt(nanos%int64(time.Millisecond), 10) + "ns"
 	}
 	var out otlpPayload
 	for _, rm := range payload.ResourceMetrics {
@@ -288,19 +307,19 @@ func otlpWithoutTimes(t *testing.T, raw []byte) otlpPayload {
 			switch {
 			case m.Gauge != nil:
 				for i := range m.Gauge.DataPoints {
-					m.Gauge.DataPoints[i].TimeUnixNano, m.Gauge.DataPoints[i].StartTimeUnixNano = "", ""
+					times(&m.Gauge.DataPoints[i].TimeUnixNano, &m.Gauge.DataPoints[i].StartTimeUnixNano)
 				}
 			case m.Sum != nil:
 				for i := range m.Sum.DataPoints {
-					m.Sum.DataPoints[i].TimeUnixNano, m.Sum.DataPoints[i].StartTimeUnixNano = "", ""
+					times(&m.Sum.DataPoints[i].TimeUnixNano, &m.Sum.DataPoints[i].StartTimeUnixNano)
 				}
 			case m.Histogram != nil:
 				for i := range m.Histogram.DataPoints {
-					m.Histogram.DataPoints[i].TimeUnixNano, m.Histogram.DataPoints[i].StartTimeUnixNano = "", ""
+					times(&m.Histogram.DataPoints[i].TimeUnixNano, &m.Histogram.DataPoints[i].StartTimeUnixNano)
 				}
 			case m.Summary != nil:
 				for i := range m.Summary.DataPoints {
-					m.Summary.DataPoints[i].TimeUnixNano, m.Summary.DataPoints[i].StartTimeUnixNano = "", ""
+					times(&m.Summary.DataPoints[i].TimeUnixNano, &m.Summary.DataPoints[i].StartTimeUnixNano)
 				}
 			}
 			metrics = append(metrics, m)
@@ -316,7 +335,8 @@ func otlpWithoutTimes(t *testing.T, raw []byte) otlpPayload {
 // The body the tab shows is what a real export sends of the same series:
 // a probe of a target, exported to a receiver, and a static target's
 // scrape, each compared with the run of the same, but for the points'
-// times and the exporter's own series.
+// times, of which the precision, whole milliseconds, and whether a point
+// starts at its time are compared, and the exporter's own series.
 func TestTheOTLPTabsBodyIsWhatTheExportSends(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -556,7 +576,7 @@ func TestTheOTLPEndpointTest(t *testing.T) {
 	status.Store(http.StatusOK)
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		auth.Store(r.Header.Get("Authorization"))
+		auth.Store(r.Header.Get("Authorization") + " " + r.Header.Get("X-Honeycomb-Team"))
 		body.Store(string(readOTLPBody(t, r)))
 		if slow.Load() {
 			time.Sleep(500 * time.Millisecond)
@@ -567,7 +587,7 @@ func TestTheOTLPEndpointTest(t *testing.T) {
 	}))
 	defer endpoint.Close()
 	server := otlpDebugServer(t, endpoint.URL+"/v1/metrics", func(c *model.OTLPConfig) {
-		c.Headers = map[string]string{"Authorization": "Bearer s3cret"}
+		c.Headers = map[string]string{"Authorization": "Bearer s3cret", "x-honeycomb-team": "s3cret-team"}
 		c.Timeout = model.Duration(200 * time.Millisecond)
 	})
 	server.SetDebug(DebugFull)
@@ -575,11 +595,13 @@ func TestTheOTLPEndpointTest(t *testing.T) {
 	if !answer.OK || answer.Status != "200 OK" || answer.Took == "" || answer.PartialSuccess == nil || answer.PartialSuccess.Message != "tenant over quota" {
 		t.Errorf("answer %+v", answer)
 	}
-	if auth.Load() != "Bearer s3cret" || body.Load() != debugOTLPEmptyMetrics {
-		t.Errorf("sent Authorization %q and %q", auth.Load(), body.Load())
+	if auth.Load() != "Bearer s3cret s3cret-team" || body.Load() != debugOTLPEmptyMetrics {
+		t.Errorf("sent Authorization and X-Honeycomb-Team %q and %q", auth.Load(), body.Load())
 	}
-	if strings.Contains(strings.Join(answer.Sent, "\n"), "s3cret") || !strings.Contains(strings.Join(answer.Sent, "\n"), "Authorization: ") {
-		t.Errorf("the headers sent are shown as %q", answer.Sent)
+	// Every otlp.headers value is withheld, whatever its name, and what the
+	// export sets itself is shown.
+	if want := []string{"Authorization: " + fetch.Redacted, "Content-Encoding: gzip", "Content-Type: application/json", "X-Honeycomb-Team: " + fetch.Redacted}; !reflect.DeepEqual(answer.Sent, want) {
+		t.Errorf("the headers sent are shown as %q, want %q", answer.Sent, want)
 	}
 	status.Store(http.StatusTooManyRequests)
 	before := requests.Load()

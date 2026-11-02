@@ -294,7 +294,9 @@ logged failure SHOULD carry the start of the body, at most 256 bytes on one
 line, and the probe's answer MUST NOT. What in it reads as a credential — a
 `Bearer` or `Basic` credential, a JSON Web Token, and the value of a field or
 parameter whose name reads as a credential's by the one rule for a name
-(§ 42.17) — MUST be masked before it is logged, including one the 256-byte
+(§ 42.17), a JSON field's written as a string in JSON, its quotes escaped,
+among them, and the text or CDATA content of an XML element whose local
+name reads as one — MUST be masked before it is logged, including one the 256-byte
 cut runs through.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
@@ -29816,6 +29818,41 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheOTLPExportsRecoveredErrorIsShownMuted`: the OTLP export's Last error is shown as before while the last export failed, `last_error_recovered` false, and as recovered, with the JSON's `otlp.last_error_recovered` true, once an export got through after it.
 - `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m0s ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
 
+## 34.255 Fixes from the 2026-11-02 audit: what spans carry, whole traces, export intervals, and the debug page's credentials and times
+
+- `TestAFailedRequestsSpanSaysWhatTheLogSays`: under `request.retry` with `statuses: [503]`, a probe whose first attempt gets no answer, second `503 SECRET-REASON-of-the-target` and third `200` has CLIENT spans `error.type` `request_failed` with no message, `503` with `received HTTP status 503`, and `200` with no status; a probe answered `503` then twice no answer has `received HTTP status 503`, then `request_failed` with no message, then `request_failed` with the error of the log's one line, as its message; no span's attribute or message has the status line's reason.
+- `TestATCPRequestsSpanCarriesNoGreeting`: a tcp probe greeted with `SSH-2.0-OpenSSH_9.6 internal-host-db7.corp secret-build-4711` has one CLIENT span with `tcp.greeting.bytes` of the greeting's length and `tcp.greeting.matched` `true`, no status, and no span has the greeting's text.
+- `TestAnSSHExecRunsSpanCarriesNoStderr`: an sshexec probe whose command exits 3, of `success_exit_codes`, writing `NRestarts=4` and a line of stderr has one CLIENT span with `process.exit.code` `3`, `sshexec.stdout.bytes` `12` and `sshexec.stderr.bytes` of the line's length, no status, and no span has the stderr's text.
+- `TestAFailedExportPutsBackWholeTraces`: under `max_pending_spans: 10`, an export failing `503` while another probe's trace is queued puts its spans back, which with that trace's do not fit: the next export sends one whole trace, no span without its parent, and the spans dropped over the bound are the older trace's.
+- `TestALowerPendingBoundDropsTheOldestWholeTraces`: three traces of 4 spans and a bound lowered to 6 keep the newest trace whole, the two older dropped and their 8 spans counted.
+- `TestARequeueDropsTheOldestWholeTraces`: three traces of 3 spans drained, the first and the start of the second delivered, put back before a trace of 3 queued since under a bound of 5 keep the newer trace alone, the second's 2 spans left and the third's 3 dropped and counted; under a bound of 6 nothing is dropped and the second's rest is a trace of 2.
+- `TestASlowReaderMakesNoProbeSlow`: a fast probe whose caller takes 300ms to read its answer, under a 200ms threshold, queues no span.
+- `TestTheFirstBundlesOTLPIntervalsAreFollowedAtOnce`: an exporter in allocator mode running its metrics', logs' and traces' export loops and given a bundle with intervals of `1s` 50ms after starting sends to `/v1/metrics`, `/v1/logs` and `/v1/traces` within 2.5s.
+- `TestAReloadShorteningTheOTLPIntervalsIsFollowedAtOnce`: intervals of `45s` reloaded to `1s` 50ms after the loops start send to the three endpoints within 2.5s.
+- `TestAReloadLengtheningTheOTLPIntervalsExportsNothingEarly`: intervals of `1s` reloaded to `1h` at once send nothing within 2s.
+- The OTLP endpoint test shows every `otlp.headers` value as `<redacted>`,
+  `Authorization` and `x-honeycomb-team` alike, and the `Content-Type` and
+  `Content-Encoding` the export sets as sent, while it sends the values
+  (TestTheOTLPEndpointTest).
+- `fetch.RedactText` masks the text and the CDATA of an XML element whose
+  local name reads as a credential's, under a namespace prefix and with
+  attributes, and not an element closed by another name or one empty; and a
+  field of JSON written as a string in JSON, `\"password\":\"…\"`, up to
+  its escaped closing quote (TestRedactText).
+- The debug page's configured view and Edit a copy withhold an `http` body
+  writing a password as an XML element, as CDATA in one, and as escaped JSON
+  in a JSON string (TestTheDebugPageWithholdsFreeTextHoldingACredential).
+- A `tcp` send of `PING; AUTH …`, IMAP's `a1 LOGIN user …`, Redis's
+  `HELLO 3 AUTH default …` and RESP-framed `AUTH` is withheld whole, and one
+  of `author Bob` and `GET /authors` is shown
+  (TestTheDebugPageWithholdsATCPSendHoldingACredential).
+- The *OTLP* tab's body is the export's of the same series also in its
+  points' times' precision, whole milliseconds, and in whether a point
+  starts at its time (TestTheOTLPTabsBodyIsWhatTheExportSends).
+- With `otlp.logs`, the lines that a debug probe and a debug scrape were
+  served are on stderr and not in the log export, which takes a line logged
+  after them (TestTheLogExportTakesNoDebugProbesLine).
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33657,6 +33694,8 @@ have answered with, and for the response a probe would revalidate, which it
 MUST revalidate with the same conditional request and MUST NOT refresh in the
 cache (§ 42.13.2). Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
+The one `info` line that a debug probe or a debug scrape was served MUST
+be written to stderr alone, and MUST NOT be taken by the log export.
 
 The Python worker series (§ 22.1a), per collector and of the pool, are the
 exception, for a debug probe and a debug scrape alike: they count what the
@@ -33869,8 +33908,10 @@ string of the request block — a header's or a query parameter's value, an
 `http` body, a `grpc` message, a `tcp` send, a `redis` command's argument,
 a `sql` statement or argument — in which text reads as a credential, by the
 rule that masks text the exporter did not write, or that writes a text
-protocol's login command (`AUTH`, `PASS` or `APOP` at the start of a line,
-in any case), MUST be shown as `<redacted>` whole, in the copy too, a folded
+protocol's login command, in any case (`AUTH`, `PASS` or `APOP` at the
+start of a line or after a `;`, IMAP's tagged `LOGIN` with a user and a
+password, Redis's `HELLO` with `AUTH`, and `AUTH` framed as a RESP bulk
+string followed by another), MUST be shown as `<redacted>` whole, in the copy too, a folded
 block scalar among them then on one line; a Python script MUST be shown
 with what reads as a credential in it masked, as text the exporter did not
 write is. The page MUST offer *Edit a copy*, which makes the playground a
@@ -34182,6 +34223,8 @@ timestamp, a sum or count OTLP cannot leave out; `left_out`, each point
 the export would leave out, with its `reason` in the words the export
 logs it; `clashes`, the lines the export would log of them; `notes`; and
 `body`, the `ExportMetricsServiceRequest` the export would send of them,
+its points at the run's time in whole milliseconds as the export's queue
+keeps a point's,
 indented, `{"resourceMetrics": []}` for none. The tab MUST show the
 resource, the scope, the points as a table that sorts by a column's
 header and keeps the rows that hold a filter's text, a badge on a row with
@@ -34214,21 +34257,24 @@ the tab MUST show them as *Log records*. None of them MUST be queued for
 the log export. Without OTLP, a run MUST NOT carry `otlp` and the page
 MUST NOT offer the tab.
 
-With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, and
-with `otlp.logs` on *Test the logs endpoint*, which `POST` to
+With `otlp.enabled`, the tab MUST offer *Test the metrics endpoint*, with
+`otlp.logs` on *Test the logs endpoint*, and with `otlp.traces` on *Test
+the traces endpoint*, which `POST` to
 `/debug/otlp-test` a JSON object with `signal`, `metrics` (also when left
-out) or `logs`, with the `X-Debug-Run` header, refused as a run is
+out), `logs` or `traces`, with the `X-Debug-Run` header, refused as a run is
 without it, from another site, with another content type or method, and
 behind Basic Auth. Below `full` the buttons MUST be disabled with a note,
-and the test MUST be answered `403`; with the export off, or `logs` with
-the log export off, `409`; another `signal` `400`; and while a test is in
+and the test MUST be answered `403`; with the export off, `logs` with
+the log export off, or `traces` with the trace export off, `409`; another `signal` `400`; and while a test is in
 progress, the server's whole, `429`, sending nothing. A test MUST send
-one request, an empty `{"resourceMetrics":[]}` or `{"resourceLogs":[]}`,
+one request, an empty `{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or
+`{"resourceSpans":[]}`,
 to the endpoint the configuration in force names and no other, with the
 export's headers, TLS, compression and timeout, and MUST NOT retry it,
 whatever it answers. It MUST answer `200` with `ok`, `signal`,
-`endpoint`, its credentials withheld, `sent`, the headers sent, a
-credential's value withheld, `body`, `status`, `took`, `failure`, the
+`endpoint`, its credentials withheld, `sent`, the headers sent, every
+`otlp.headers` value `<redacted>` whatever its name and the `Content-Type`
+and `Content-Encoding` the export sets as sent, `body`, `status`, `took`, `failure`, the
 connection's, TLS's or the timeout's error or the refusal in full,
 `outcome`, what an export would make of the answer, `partial_success`,
 `headers` and `response`, the start of the answer's body, and `notes`. It

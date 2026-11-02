@@ -947,7 +947,7 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 		}
 		at := now
 		if m.Timestamp != nil {
-			at = strconv.FormatInt(*m.Timestamp*int64(time.Millisecond), 10)
+			at = otlpPointTime(*m.Timestamp)
 		}
 		attributes := otlpAttributesForLabels(m.Labels)
 		// gaugeOf adds a gauge's point, which the exposition writes under
@@ -1841,6 +1841,14 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 		s.putPendingLocked(batch, otlpPendingKey(&point), pendingMetric{metric: point, seq: s.otlpSeq})
 	}
 	s.capPendingLocked(cfg.MaxPendingPoints)
+}
+
+// otlpPointTime is a point's time as an export writes it, in nanoseconds,
+// of ms, the milliseconds since the epoch the queue keeps of it
+// (queueOTLPResource) — the precision of a Prometheus sample's timestamp —
+// so an export's times are whole milliseconds.
+func otlpPointTime(ms int64) string {
+	return strconv.FormatInt(ms*int64(time.Millisecond), 10)
 }
 
 func (s *Server) pendingBatchLocked(identity otlpResourceIdentity) *otlpBatch {

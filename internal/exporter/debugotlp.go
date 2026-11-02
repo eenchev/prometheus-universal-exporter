@@ -170,7 +170,9 @@ func (s *Server) debugOTLPOf(report *debugReport, at time.Time) *debugOTLP {
 	for _, a := range identity.attributes() {
 		out.Resource = append(out.Resource, debugOTLPAttribute{Key: a.Key, Value: a.Value.StringValue})
 	}
-	now := strconv.FormatInt(at.UnixNano(), 10)
+	// The run's points are at its time, as the queue keeps it, in whole
+	// milliseconds.
+	now := otlpPointTime(at.UnixMilli())
 	// The series as an export drains them, each written as it was queued,
 	// one after another; places says where each is in the run's answer.
 	places := otlpQueueOrder(set)

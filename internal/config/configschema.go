@@ -757,6 +757,10 @@ func collectorSchemaRules() map[string]map[string]any {
 		"otlp.logs.level":                           {"description": "The least level of a line exported: debug, info, warn or error, in any case, whatever --log.level writes to stderr. Defaults to info."},
 		"otlp.logs.interval":                        {"pattern": signedDurationPattern, "description": "How often the log records waiting are exported. At least 1s once the block is switched on; defaults to 5s."},
 		"otlp.logs.max_pending_records":             {"minimum": nil, "description": "The most log records kept waiting for export; a line that finds this many waiting is dropped and counted rather than waited for, and a failed export's records past it drop the oldest. Defaults to 10000."},
+		"otlp.exporter_instance":                    enabledSwitchRule(reflect.TypeOf(model.OTLPExporterInstanceConfig{}), "An attribute naming the exporter replica that sends the export, on every resource it sends: the probes', the static targets', the exporter's own metrics' and its log records'. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporter-instance."),
+		"otlp.exporter_instance.enabled":            {"description": "Turn the attribute on. false keeps the block's settings without using them."},
+		"otlp.exporter_instance.attribute":          {"description": "The attribute's key, without a control character and not blanks alone once the block is switched on. Not service.name, a key of otlp.resource_attributes, or, on a static target's resource, a key of its own otlp.resource_attributes or otlp.labels_as_resource, or service.instance.id where the target sets otlp.instance_id. Defaults to pue.exporter.instance."},
+		"otlp.exporter_instance.value":              {"description": "The attribute's value, without a control character once the block is switched on; ${NAME} with --config.expand-env, as every value. Left out, the --allocator.member name in allocator mode, else the host name, read at each load; a host name that cannot be read is refused."},
 		"otlp.probe_attributes":                     {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":      {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		// A disabled block is unchecked, so compression takes any text there
@@ -867,8 +871,27 @@ func otlpSchemaRule() map[string]any {
 			"name":    map[string]any{"minLength": 1, "pattern": noControlCharacters},
 			"version": map[string]any{"pattern": noControlCharacters},
 		}},
+		"exporter_instance": otlpExporterInstanceOnRule(),
 	}}
 	return rule
+}
+
+// otlpExporterInstanceOnRule is what otlp.exporter_instance is held to in an
+// otlp block switched on, once it is switched on itself, as
+// checkExporterInstance holds it: its attribute, "" being the default, is
+// not blanks alone and not service.name, and neither it nor the value holds
+// a control character. That the attribute is no key of
+// otlp.resource_attributes, or of a static target's resource, is the
+// exporter's alone to refuse: a schema cannot compare a value with the keys
+// of another setting, or of another document.
+func otlpExporterInstanceOnRule() map[string]any {
+	return map[string]any{
+		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
+		"then": map[string]any{"properties": map[string]any{
+			"attribute": map[string]any{"pattern": noControlCharacters, "not": map[string]any{"anyOf": []any{onlyBlanks(), map[string]any{"const": otlpServiceNameAttribute}}}},
+			"value":     map[string]any{"pattern": noControlCharacters},
+		}},
+	}
 }
 
 // noControlCharacters is text without a control character of ASCII, which

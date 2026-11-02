@@ -758,7 +758,13 @@ Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
 refused on any other. `resource_attributes` may not set `service.name`, which
 `service_name` sets: the resource would carry it twice, so the file is
-refused pointing at `service_name`. Over OTLP every series carries `static_target`, as on
+refused pointing at `service_name`. With
+[`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, the resource
+also carries the attribute naming the exporter replica that scraped the
+target, whether the target has an `otlp` block or not; a target whose
+`resource_attributes` or `labels_as_resource` name that attribute, or whose
+`instance_id` would set it where it is `service.instance.id`, is refused,
+the message naming the target. Over OTLP every series carries `static_target`, as on
 the endpoint: targets often share a resource — the same collector, the
 exporter-wide identity — and the label is what keeps their series apart.
 

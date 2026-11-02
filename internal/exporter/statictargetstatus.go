@@ -676,6 +676,9 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
+{{- with .ExporterInstance}}
+<tr><th>Exporter instance</th><td><code>{{.Attribute}}</code> = {{.Value}}<br><span class="muted">on every resource the export sends</span></td></tr>
+{{- end}}
 <tr><th>Last export</th><td>{{with .LastExport}}{{.Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>

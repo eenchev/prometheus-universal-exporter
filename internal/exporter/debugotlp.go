@@ -157,6 +157,11 @@ func (s *Server) debugOTLPOf(report *debugReport, at time.Time) *debugOTLP {
 		set = otlpProbeSet(cfg, answer, p.collector, p.logTarget)
 		out.ResourceNotes = probeResourceNotes(p, cfg)
 	}
+	// The replica's name is on every resource; where it comes from is not
+	// in the configuration when the host name is its value.
+	if e := cfg.ExporterInstance; e.Enabled && e.Attribute != "" && e.Value != "" {
+		out.ResourceNotes = append(out.ResourceNotes, e.Attribute+" names this exporter replica, on every resource it sends (otlp.exporter_instance).")
+	}
 	for _, a := range identity.attributes() {
 		out.Resource = append(out.Resource, debugOTLPAttribute{Key: a.Key, Value: a.Value.StringValue})
 	}

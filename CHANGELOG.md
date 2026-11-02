@@ -104,6 +104,19 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `otlp.exporter_instance` names the exporter replica that sends the OTLP
+  export, as one more attribute of every resource it sends: the probes',
+  the exporter's own metrics', every static target's and the log records'.
+  The attribute is `pue.exporter.instance` unless `attribute` names another,
+  and the value is `value`, or, left out, the `--allocator.member` name in
+  allocator mode and the host name, a pod's name, otherwise. An attribute
+  the resource has already — `service.name`, a key of
+  `otlp.resource_attributes`, a static target's own attribute, a label it
+  moves to the resource, or `service.instance.id` beside its `instance_id` —
+  is refused. The status page's OTLP section, the debug page's OTLP tab,
+  `--dry-run` and the start's line show it; off, the default, the export is
+  as before. See
+  [The exporter instance](docs/OTLP.md#the-exporter-instance).
 - The debug page's collector editor colours the YAML as it is typed — keys,
   strings, numbers, booleans, comments, a list's dashes, block scalars,
   anchors, tags, `{{param_<name>}}` placeholders and `${NAME}` references,

@@ -32,13 +32,19 @@ otlp:
   # logs:
   #   enabled: true
   #   level: info
+  # exporter_instance:
+  #   enabled: true
+  #   attribute: pue.exporter.instance
+  #   value: ""
 ```
 
 `logs` forwards the exporter's own log too; see
 [The exporter's own log](#the-exporters-own-log). `metric_names` is how
-metrics are named ([Metric names](#metric-names)), and `scope` the
+metrics are named ([Metric names](#metric-names)), `scope` the
 instrumentation scope they are sent under
-([Instrumentation scope](#instrumentation-scope)).
+([Instrumentation scope](#instrumentation-scope)), and `exporter_instance`
+names the replica on every resource it sends
+([The exporter instance](#the-exporter-instance)).
 
 `enabled` is the switch, and a block that sets anything must say it: `true`
 exports, `false` keeps the settings without using or checking them: a block
@@ -478,6 +484,83 @@ the version holds a control character; a block switched on is refused
 otherwise when the configuration loads. The scope is the export's: a static
 target sets its own resource, not its own scope.
 
+## The exporter instance
+
+Every replica of the exporter sends its export under the same
+`service_name` and `resource_attributes`, so a backend cannot tell from a
+resource which replica a point or a log record came from. With
+`otlp.exporter_instance` switched on, every resource the replica sends
+carries one more attribute naming it: the exporter-wide resource of the
+probes' series and of the exporter's own metrics, the resource of each
+[static target](#static-targets), with or without an `otlp` block of its
+own, and the resource of the [log records](#the-exporters-own-log):
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  exporter_instance:
+    enabled: true
+    # attribute: pue.exporter.instance
+    # value: ""
+```
+
+- `enabled` switches the block, as `logs` is switched: a block that sets
+  anything must say it, and `enabled: false`, the default, keeps its settings
+  unchecked and the export as it was, byte for byte.
+- `attribute` is the attribute's key, `pue.exporter.instance` by default. It
+  is not blanks alone and holds no control character.
+- `value` is the attribute's value, as written, `${NAME}` expanded with
+  [`--config.expand-env`](CONFIGURATION.md#environment-variables), as every
+  value is. Left out, or written `""`, it is the
+  [`--allocator.member`](ALLOCATOR.md) name in allocator mode, which is the
+  name the allocator knows the replica by, and otherwise the host name, a
+  pod's name in Kubernetes. It holds no control character.
+
+The value is resolved when the configuration loads, at startup and at each
+reload, and in allocator mode at each bundle; the start's `starting exporter`
+line says it as `otlp_exporter_instance_attribute` and
+`otlp_exporter_instance`, the [status page](ENDPOINTS.md#otlp-export) shows
+the attribute and the value in force, and
+[`--dry-run`](CONFIGURATION.md#dry-run) reports them under
+`otlp_exporter_instance`. A host name that cannot be read, with no value
+written, is refused when the configuration loads, rather than the attribute
+left out without a word: `otlp.exporter_instance.value is left out and the
+host name, its default, cannot be read (...); set the value, such as
+${POD_NAME} with --config.expand-env`.
+
+The attribute is part of each resource's identity, as every attribute is
+([above](#static-targets)): static targets with different identities are
+still exported apart, and the [two writers](#two-writers-of-one-series-or-one-name)
+of one resource are the same writers. Since the resource would otherwise
+carry the key twice, or one value would quietly replace the other, the
+configuration is refused when the attribute is:
+
+- `service.name`, which `service_name` sets;
+- a key of `otlp.resource_attributes`, written `""` or not;
+- on a static target exported over OTLP, a key of its own
+  `otlp.resource_attributes`, a label of its `otlp.labels_as_resource`, or
+  `service.instance.id` where the target sets `otlp.instance_id`; the message
+  names the target.
+
+The default is not `service.instance.id`, OpenTelemetry's attribute for the
+instance of a service, for two reasons. Prometheus' OTLP receiver makes
+`service.instance.id` the `instance` label of every series it ingests, in
+place of the target the exporter scraped, which is what `instance` says of a
+probe; and a static target's [`otlp.instance_id`](#static-target-labels-as-resource-attributes)
+sets it to the target's name. `attribute: service.instance.id` is taken where
+no static target sets `instance_id`, for a backend that wants it.
+
+With the [allocator](ALLOCATOR.md), a static target is scraped by one replica
+at a time, and moves when replicas come and go. After a move its data goes on
+under the other replica's name: a new resource, and so new series, in a
+backend that keys series on resource attributes. Prometheus keys them on
+`job` and `instance` alone, from `service.name` and `service.instance.id`, and
+keeps the other resource attributes on `target_info`, so there the move shows
+as a new `target_info` series, unless the attribute is promoted to a label of
+every series (`otlp.promote_resource_attributes`), which makes it one more
+label that changes on a move.
+
 ## Static targets
 
 [Static targets](STATIC-TARGETS.md) are scraped by the exporter itself and
@@ -557,7 +640,9 @@ refused:
   carry the key twice. A label's name has no dot, so it is never
   `service.name`;
 - either key on a target without `export_via_otlp`, as every key of its
-  `otlp` block is.
+  `otlp` block is;
+- a label that is the [`otlp.exporter_instance`](#the-exporter-instance)
+  attribute, and `instance_id` where that attribute is `service.instance.id`.
 
 ## The exporter's own log
 

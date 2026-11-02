@@ -8,7 +8,9 @@ and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
 limits per host that every collector's requests share. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
 `otlp` exports probe results, the exporter's own metrics and, with
-`otlp.logs`, its own log over [OTLP](OTLP.md).
+`otlp.logs`, its own log over [OTLP](OTLP.md), and with
+[`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
+that sends them on every resource.
 
 The top-level keys are `collectors`, `collector_files`,
 [`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
@@ -5682,7 +5684,9 @@ is what the export does, not a description of it:
   playground's as a probe of it would be. A static target's scrape is under
   the target's own resource, its `otlp.labels_as_resource` moved to it and
   its name its `service.instance.id` with `otlp.instance_id`, also when it
-  does not set `export_via_otlp`, which the tab then says. The scope is
+  does not set `export_via_otlp`, which the tab then says. With
+  `otlp.exporter_instance` on, every resource carries its attribute too,
+  with the value in force, and a note says what it is. The scope is
   `otlp.scope`'s name and version.
 - **Data points**: a row for each, with its Prometheus name and its OTLP
   name, which differ under `otlp.metric_names: otel`, its kind — `gauge`,
@@ -6423,7 +6427,7 @@ The report lists one entry per startup step, in the order startup runs them:
 
 | `check` | Present | What it validates |
 | --- | --- | --- |
-| `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
+| `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. With [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, `details.otlp_exporter_instance` has its `attribute` and its `value` as startup resolves it: the host name, or in allocator mode the `--allocator.member` name, when the file writes none. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`, which names the [collector file](#collector-files) of a collector defined in one. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | Reports `--config.watch-interval` under `details.interval`. A non-positive interval is a command-line error (exit 2) before the check, so this entry does not fail. |
 | `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |

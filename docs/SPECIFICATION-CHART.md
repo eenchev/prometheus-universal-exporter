@@ -2305,3 +2305,10 @@ README MUST show an `otlp` block with `logs` switched on whose collector
 token comes from a Secret through `env` and `server.expandEnv`, and a test
 MUST render that example and load the configuration it renders, with the
 token in the environment, as the exporter does.
+The chart README MUST also show `otlp.exporter_instance` switched on with the
+allocator (SPECIFICATION-EXPORTER.md § 42.1), saying that its value defaults
+to the pod's name, and a test MUST render that example and check that the
+replicas are given `--allocator.member=$(POD_NAME)` with `POD_NAME` from
+`metadata.name`, that the allocator loads the configuration rendered with the
+value left as written, and that a replica, given the pod's name as that flag
+says, loads it with the pod's name as the value.

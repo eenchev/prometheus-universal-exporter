@@ -223,6 +223,10 @@ With [OTLP export](OTLP.md) on, the section shows:
 - what the exports carry: the probes' results, the static targets with
   `export_via_otlp` (how many), and the exporter's own metrics, which go
   with every export;
+- with [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, the
+  attribute every resource the replica sends carries and its value in force,
+  the host name or the `--allocator.member` name when the configuration
+  writes none;
 - the last export: when it began, how long ago, how long it took with its
   retries, its result — `success`, `failed`, or `partial success` when the
   endpoint took it but rejected some of its data points in its
@@ -286,7 +290,9 @@ export is off, and otherwise:
  "endpoint": "https://redacted:redacted@otel.example/v1/metrics?token=<redacted>&tenant=acme",
  "protocol": "http/json", "interval": "30s",
  "exported": {"probes": true, "static_targets": 2, "self_metrics": true},
- "allocator_mode": false, "failing": true,
+ "allocator_mode": false,
+ "exporter_instance": {"attribute": "pue.exporter.instance", "value": "exporter-7d9c5b6f4-x2kqp"},
+ "failing": true,
  "last_export": {"started": "2026-10-24T08:59:30Z", "age_seconds": 30.2, "duration_seconds": 29.6,
   "result": "failed", "requests": 1, "data_points": 812, "rejected_points": 0, "retries": 4},
  "last_success": "2026-10-24T08:58:31Z",
@@ -310,6 +316,7 @@ export is off, and otherwise:
   "exports_succeeded": 512, "exports_failed": 0}}
 ```
 
+`exporter_instance` is left out while `otlp.exporter_instance` is off.
 `logs` is `{"enabled": false}` alone while `otlp.logs` is off. Its
 `last_export`, `last_result`, `last_records`, `last_success`, `last_error` and
 `last_error_at` are left out when there is nothing to say.

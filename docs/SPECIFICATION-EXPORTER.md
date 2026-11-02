@@ -29754,6 +29754,24 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugPageEditorFoldsBlocks`: *Expand all* and *Collapse all* stand with *Edit a copy*, naming the editor by `aria-controls`; the script ends a block at the first line not more indented (blank lines within, a block scalar's or a flow collection's lines in, a list at a bare key's indentation in), ends a folded block's first line in how many lines it hides, which unfolds it when clicked, numbers each row with its line's own number (`aria-hidden`) and a button on a line that opens a block, with `aria-expanded` and a label of the lines it folds, one button a Tab stop and the arrow keys, Home and End going to the others without scrolling the gutter, the gutter itself not `aria-hidden`, marks a hidden line on its fold's row, folds every block or none, shows the folded playground read-only with its note, edits it again on a click at the column clicked, Enter, or a link to a line, sends the textarea's whole text when run, and unfolds when the editor is given a new text.
 - `TestTheOTLPEndpointTestIsGuarded`: `403` at `edit`, without `X-Debug-Run` and from another site, `409` for logs with the log export off and with OTLP off, `400` for another signal, `405` for `GET`, `429` while a test is in progress, and no request sent by any of them.
 
+## 34.252 The exporter instance on every OTLP resource, otlp.exporter_instance
+
+- `TestEveryOTLPResourceNamesTheExporterInstance`: with `exporter_instance` on and the value `replica-1`, an export of a probe's series, a static target without an `otlp` block, one with its own `service_name` and the exporter's own metrics has every point under a resource carrying `pue.exporter.instance="replica-1"`, the target with its own service name under a resource of its own, and `k8s.pod.name` when the block names it; switched off, no resource carries an attribute of the block.
+- `TestTheExportersLogRecordsNameTheExporterInstance`: a log export's resource is `service.name`, `deployment.environment` and `pue.exporter.instance=replica-1`.
+- `TestTheOTLPTabShowsTheExporterInstance`: a debug run's OTLP tab has the attribute in its resource, a note `pue.exporter.instance names this exporter replica, on every resource it sends (otlp.exporter_instance).`, and the attribute in the metrics body and in the logs body.
+- `TestTheStatusPageShowsTheExporterInstance`: the status page's OTLP section has the row `Exporter instance` with `k8s.pod.name` = `replica-1`, and its JSON `exporter_instance` `{"attribute":"k8s.pod.name","value":"replica-1"}`; with the block off neither.
+- `TestTheExporterInstanceIsTheHostNameOrTheAllocatorMember`: `{enabled: true}` loads as `pue.exporter.instance` and the host name; with `WithExporterInstanceName("pod-3")`, as the member name, also for `value: ""`; a value written and an attribute written are kept over both; `${PUE_TEST_POD}` is expanded with `--config.expand-env`; `service.instance.id` is taken; a Manager given the name keeps it across a reload.
+- `TestAnExporterInstanceWithoutAHostNameIsRefused`: a host name that cannot be read, or is empty, refuses `{enabled: true}` saying to set the value, such as `${POD_NAME}`; a written value loads; the allocator's reading (`WithoutNamedFiles`) leaves the value empty; switched off, or in an `otlp` block switched off, nothing is filled in.
+- `TestAnExporterInstanceAttributeOfTheResourceIsRefused`: `service.name`, a key of `otlp.resource_attributes` (also written `""`), blanks alone, a tab in the attribute and a newline in the value are refused with their messages, and so are a block that sets `attribute` without `enabled` and an unknown key.
+- `TestAStaticTargetWithTheExporterInstanceAttributeIsRefused`: a target exported over OTLP whose `resource_attributes` set the attribute (also `""`), whose `labels_as_resource` name it, or with `instance_id` while the attribute is `service.instance.id`, is refused naming the target; switched off, none is; the default beside `instance_id`, `service.instance.id` beside a target without it, and another label moved to the resource are taken.
+- `TestTheExporterInstanceIsTheHostName`: an exporter process exports under `pue.exporter.instance` with the host name, and its `starting exporter` line carries `otlp_exporter_instance_attribute` and `otlp_exporter_instance`.
+- `TestTheExporterInstanceIsTheAllocatorMember`: an exporter in allocator mode with `--allocator.member=pod-7` puts a bundle with the block in force with the value `pod-7`, as its status page's JSON says.
+- `TestTheCheckReportsTheExporterInstance`: `--dry-run`'s `config` check lists `otlp_exporter_instance` with the default attribute and the member name it was given, and nothing without the block.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`, `TestSchemaAndExporterAgreeOnEnabled`: `exporter_instance` is a row of the switched-off `otlp` block's table: `service.name`, blanks, a tab in the attribute and a newline in the value are refused by both in a block switched on and taken in one switched off; text, a list, a key without `enabled`, `enabled: maybe`, an unknown key and a list or a mapping as a value are refused by both, off and on; `{enabled: true}`, a written attribute and value, `""` for both and `service.instance.id` are taken by both.
+- `TestTheExporterAloneRefusesAnExporterInstanceAttributeOfTheResource`: an attribute that is a key of `otlp.resource_attributes`, of the value `a` or `""`, is refused by the exporter alone in a block switched on, and taken by both with `otlp` or `exporter_instance` switched off.
+- `TestChartReadmeExporterInstanceExampleNamesThePod`: the chart README's `exporter_instance` example renders with the allocator, its replicas given `--allocator.member=$(POD_NAME)` with `POD_NAME` from `metadata.name`; the allocator loads the rendered configuration with the value left empty, and a replica given a pod's name with that name as the value.
+- `TestOTLPExportIsUnchangedWithoutTheNamingAndScopeSettings` still passes unchanged: with the block left out the export is the JSON it was, byte for byte.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30313,6 +30331,44 @@ NOT hold a control character; it MUST be refused otherwise when the
 configuration loads, in a block that is switched on, by the exporter and the
 schema alike. A static target MUST NOT set a scope of its own.
 
+`otlp.exporter_instance` MAY name the exporter replica that sends the
+export. It is a block `enabled` switches, as `otlp.logs` is (§ 42.1b): one
+that sets another key without it MUST be refused, and one switched off, or
+in an `otlp` block switched off, MUST be kept unchecked and MUST leave the
+export what it was without the block, byte for byte. Switched on:
+
+- Every resource the replica sends MUST carry the attribute
+  `otlp.exporter_instance.attribute`, `pue.exporter.instance` when left out
+  or written `""`, with its value: the exporter-wide resource of the probes'
+  series and the exporter's own metrics, the resource of every static target
+  exported over OTLP, with an `otlp` block of its own or without one, and
+  the resource of the log records (§ 42.1b). It MUST be part of the
+  resource's identity as every attribute is, and the rule of the writers of
+  one resource MUST be unchanged.
+- The value MUST be `otlp.exporter_instance.value` as written, `${NAME}`
+  expanded with `--config.expand-env`; left out or `""`, the
+  `--allocator.member` name in allocator mode, at each bundle and reload as
+  at the start, and otherwise the host name. It MUST be resolved when the
+  configuration loads, at the start and at each reload; a host name that
+  cannot be read, or is empty, with no value written MUST refuse the
+  configuration, saying to set the value. The target allocator, which is no
+  replica, MUST leave the value as written.
+- The attribute MUST NOT be blanks alone, `service.name` or a key of
+  `otlp.resource_attributes`, written `""` or not, and neither the attribute
+  nor the value MUST hold a control character; the configuration MUST be
+  refused otherwise, by the exporter and, but for the keys of
+  `otlp.resource_attributes`, the schema alike. A static target exported
+  over OTLP whose own `otlp.resource_attributes`, written `""` or not, or
+  `otlp.labels_as_resource` name the attribute, or that sets
+  `otlp.instance_id` while the attribute is `service.instance.id`, MUST be
+  refused naming the target. `service.instance.id` MUST otherwise be taken.
+- The start's `starting exporter` line MUST carry
+  `otlp_exporter_instance_attribute` and `otlp_exporter_instance` when the
+  configuration it starts with has the block on, `--dry-run` MUST list them
+  under `details.otlp_exporter_instance` of the `config` check, resolved as
+  startup resolves them, and the status page's OTLP section (§ 42.14a) MUST
+  show them.
+
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
 replaces an earlier one's. With `otlp.probe_attributes: true`, every point a
@@ -30426,7 +30482,8 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   the rules of § 42.1a, and be split by `otlp.batch_max_size` records and
   `otlp.batch_max_bytes` of JSON. A redirect MUST NOT be followed.
 - Each record MUST be under the resource the exporter's own metrics are
-  under (`otlp.service_name` and `otlp.resource_attributes`), and the scope
+  under (`otlp.service_name`, `otlp.resource_attributes` and, switched on,
+  `otlp.exporter_instance`, § 42.1), and the scope
   they are under (`otlp.scope`, § 42.1), and carry the
   line's time, the time it was taken as its observed time, the OTLP severity
   number of its slog level — DEBUG 5, INFO 9, WARN 13, ERROR 17, a level
@@ -32283,6 +32340,10 @@ Of the OTLP export:
   export is failing, with the failed exports in a row and whether the
   exporter is unready.
 - In allocator mode the section MUST say the exports are this replica's.
+- With `otlp.exporter_instance` on, the section MUST show its attribute and
+  the value in force (§ 42.1), and the JSON MUST have them as the `otlp`
+  object's `exporter_instance`, `{"attribute": ..., "value": ...}`, left out
+  while the block is off.
 - With `otlp.logs` on, the section MUST show the log export (§ 42.1b): its
   endpoint with its credentials withheld as `otlp.endpoint`'s are, its level
   and interval, when the last log export began with its result and the
@@ -32353,7 +32414,9 @@ target's `labels`, a name given twice, a name that is an attribute of the
 resource already — from the target's `otlp.resource_attributes` or the
 exporter-wide ones, an attribute written `""` being none — and
 `instance_id` beside a `service.instance.id` attribute; the static target
-schema MUST refuse a name given twice. With neither key the export MUST be
+schema MUST refuse a name given twice. With `otlp.exporter_instance` on, the
+target's resource MUST carry its attribute too, and the file MUST be refused
+naming the target where the target's resource would have it already (§ 42.1). With neither key the export MUST be
 what it was without them, byte for byte.
 
 ### 42.14c Static target self-metrics
@@ -32660,7 +32723,9 @@ default to the host name, and `--allocator.advertise` to the
 `--web.listen-address` host when it is one address that is neither loopback
 nor unspecified, else to the host's first address that is neither loopback
 nor link-local, IPv4 before IPv6, with the listen port; an
-`--allocator.advertise` that is not `host:port` MUST be refused.
+`--allocator.advertise` that is not `host:port` MUST be refused. The
+`--allocator.member` name MUST be the value of `otlp.exporter_instance` that
+the bundle's configuration leaves out (§ 42.1).
 
 The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
 at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
@@ -33918,6 +33983,8 @@ attributes, under the exporter-wide resource, the playground's as a probe
 of it would be; a static target's scrape's under the target's resource,
 its `otlp.labels_as_resource` moved to it and `otlp.instance_id` set,
 whether or not it sets `export_via_otlp`, which the tab MUST then say;
+either resource with `otlp.exporter_instance`'s attribute and value, with
+a note saying what the attribute is;
 each series once and in the order a drained queue has them, the later of
 two alike kept; named under `otlp.metric_names`; and checked against one
 another as an export checks a resource's points, and against no other

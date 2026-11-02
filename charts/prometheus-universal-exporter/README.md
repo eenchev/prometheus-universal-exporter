@@ -1202,6 +1202,33 @@ config:
 
 A failing log export never makes the pod unready; the exporter's [status page](../../docs/ENDPOINTS.md#otlp-export) and the `http_exporter_otlp_log_*` [self-metrics](../../docs/SELF-METRICS.md#otlp-export-status) say how it is going. Keep the collector's name in `NO_PROXY` behind an egress proxy, as [above](#environment-variables-in-the-configuration).
 
+Every replica exports under the same `service.name`, so a backend cannot tell from the resource which pod sent a point or a log line. The `exporter_instance` block adds an attribute naming the replica, `pue.exporter.instance` by default, to every resource the export sends (see [The exporter instance](../../docs/OTLP.md#the-exporter-instance)). Its value defaults to the pod's name: the pod's host name, and, with the [allocator](#target-allocator), the `--allocator.member` name the chart passes, `$(POD_NAME)`, which is the same name:
+
+```yaml
+allocator:
+  enabled: true
+
+config:
+  data:
+    config.yaml: |
+      otlp:
+        enabled: true
+        endpoint: http://otel-collector.observability:4318/v1/metrics
+        exporter_instance:
+          enabled: true
+      collectors:
+        - name: example
+          request:
+            type: http
+          transform:
+            type: regex
+          metrics:
+            - name: example_value
+              expression: 'value=(\d+)'
+```
+
+With the allocator, a static target that moves to another replica goes on under the other pod's name, as a new resource; see the caveat in [The exporter instance](../../docs/OTLP.md#the-exporter-instance).
+
 ### Exporter resource metrics
 
 The exporter publishes the standard `go_` and `process_` series describing its own CPU and memory, under the names an existing Go dashboard already uses. They are on by default; set `web.self_metrics.resource_metrics_enabled: false` inside `config.data.config.yaml` to leave them out:

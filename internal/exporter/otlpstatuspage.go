@@ -47,6 +47,9 @@ type OTLPStatusDetails struct {
 	Exported otlpExportedKind `json:"exported"`
 	// Allocator says the exports are this replica's.
 	Allocator bool `json:"allocator_mode"`
+	// ExporterInstance is the attribute otlp.exporter_instance gives every
+	// resource the replica sends, and its value; nil while it is off.
+	ExporterInstance *otlpExporterInstanceStatus `json:"exporter_instance,omitempty"`
 	// Failing says the last export to the endpoint failed.
 	Failing     bool            `json:"failing"`
 	LastExport  *otlpLastExport `json:"last_export,omitempty"`
@@ -167,6 +170,14 @@ func (s *Server) otlpLogsSectionFor(cfg model.OTLPConfig) otlpLogsSection {
 	return otlpLogsSection{Enabled: true, OTLPLogsStatusDetails: d}
 }
 
+// otlpExporterInstanceStatus is the attribute naming the replica on every
+// resource it sends, with the value in force, as the configuration's check
+// resolved it.
+type otlpExporterInstanceStatus struct {
+	Attribute string `json:"attribute"`
+	Value     string `json:"value"`
+}
+
 // otlpExportedKind is what the exports carry.
 type otlpExportedKind struct {
 	Probes        bool `json:"probes"`
@@ -229,6 +240,9 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 		MaxPending:   maxPending,
 		UnreadyAfter: max(cfg.UnreadyAfterFailures, 0),
 		Logs:         s.otlpLogsSectionFor(cfg),
+	}
+	if e := cfg.ExporterInstance; e.Enabled && e.Attribute != "" && e.Value != "" {
+		d.ExporterInstance = &otlpExporterInstanceStatus{Attribute: e.Attribute, Value: e.Value}
 	}
 	s.otlpMu.Lock()
 	d.Pending = s.otlpPoints

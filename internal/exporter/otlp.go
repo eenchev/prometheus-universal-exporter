@@ -209,12 +209,23 @@ func (r otlpResourceIdentity) attributes() []otlpAttribute {
 // and self-health metrics. A resource attribute written "" is the attribute
 // left out, as a transform.labels value written "" is the label left out:
 // the resource carries no attribute that says nothing.
+//
+// With otlp.exporter_instance on, it carries the replica's name too, and so
+// does every resource made from it: a static target's (targetResource), the
+// log records' (otlplogs.go) and the debug page's (debugotlp.go). It is part
+// of the resource's identity (key) like any attribute. The configuration's
+// check filled in its value and refused an attribute of its name elsewhere
+// on the resource (config.checkExporterInstance); an exporter whose host
+// name could not be read never got here.
 func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 	identity := otlpResourceIdentity{ServiceName: cfg.ServiceName, Attributes: map[string]string{}}
 	for key, value := range cfg.ResourceAttributes {
 		if value != "" {
 			identity.Attributes[key] = value
 		}
+	}
+	if e := cfg.ExporterInstance; e.Enabled && e.Attribute != "" && e.Value != "" {
+		identity.Attributes[e.Attribute] = e.Value
 	}
 	return identity
 }

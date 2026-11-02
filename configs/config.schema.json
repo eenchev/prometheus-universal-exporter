@@ -4672,6 +4672,9 @@
         "endpoint": [
           "enabled"
         ],
+        "exporter_instance": [
+          "enabled"
+        ],
         "headers": [
           "enabled"
         ],
@@ -4753,6 +4756,41 @@
             "number",
             "boolean"
           ]
+        },
+        "exporter_instance": {
+          "additionalProperties": false,
+          "dependentRequired": {
+            "attribute": [
+              "enabled"
+            ],
+            "value": [
+              "enabled"
+            ]
+          },
+          "description": "An attribute naming the exporter replica that sends the export, on every resource it sends: the probes', the static targets', the exporter's own metrics' and its log records'. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md#the-exporter-instance.",
+          "properties": {
+            "attribute": {
+              "description": "The attribute's key, without a control character and not blanks alone once the block is switched on. Not service.name, a key of otlp.resource_attributes, or, on a static target's resource, a key of its own otlp.resource_attributes or otlp.labels_as_resource, or service.instance.id where the target sets otlp.instance_id. Defaults to pue.exporter.instance.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "enabled": {
+              "description": "Turn the attribute on. false keeps the block's settings without using them.",
+              "type": "boolean"
+            },
+            "value": {
+              "description": "The attribute's value, without a control character once the block is switched on; ${NAME} with --config.expand-env, as every value. Left out, the --allocator.member name in allocator mode, else the host name, read at each load; a host name that cannot be read is refused.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "type": "object"
         },
         "headers": {
           "additionalProperties": {
@@ -4966,6 +5004,39 @@
               "none",
               ""
             ]
+          },
+          "exporter_instance": {
+            "if": {
+              "properties": {
+                "enabled": {
+                  "const": true
+                }
+              },
+              "required": [
+                "enabled"
+              ]
+            },
+            "then": {
+              "properties": {
+                "attribute": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                        "type": "string"
+                      },
+                      {
+                        "const": "service.name"
+                      }
+                    ]
+                  },
+                  "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+                },
+                "value": {
+                  "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+                }
+              }
+            }
           },
           "headers": {
             "propertyNames": {

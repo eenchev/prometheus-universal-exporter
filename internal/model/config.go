@@ -688,7 +688,36 @@ type OTLPConfig struct {
 	// records are sent under; nil is DefaultOTLPScopeName without a
 	// version.
 	Scope *OTLPScopeConfig `yaml:"scope"`
+	// ExporterInstance names the replica that sends the export on every
+	// resource it sends, metrics and log records alike, so the data of
+	// replicas that share a service name stays apart (exporter/otlp.go).
+	ExporterInstance OTLPExporterInstanceConfig `yaml:"exporter_instance"`
 }
+
+// OTLPExporterInstanceConfig is otlp.exporter_instance: whether every
+// resource the export sends carries an attribute naming this replica, under
+// which key, and with which value. The configuration's check fills in the
+// value left out (config.validateOTLP): the --allocator.member name in
+// allocator mode, else the host name.
+type OTLPExporterInstanceConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Attribute string `yaml:"attribute"`
+	Value     string `yaml:"value"`
+}
+
+// UnmarshalYAML reads otlp.exporter_instance, refusing settings that enabled
+// does not switch on or off (decodeSwitchedBlock).
+func (o *OTLPExporterInstanceConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain OTLPExporterInstanceConfig
+	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPExporterInstanceConfig", "otlp.exporter_instance")
+}
+
+// DefaultOTLPExporterInstanceAttribute is otlp.exporter_instance.attribute
+// when left out. It is not service.instance.id, which Prometheus' OTLP
+// receiver makes the instance label of every series, in place of the
+// target's, and which a static target's otlp.instance_id sets to the
+// target's name.
+const DefaultOTLPExporterInstanceAttribute = "pue.exporter.instance"
 
 // OTLPScopeConfig is otlp.scope: the name and version of the
 // instrumentation scope of the export.

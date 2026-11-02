@@ -627,6 +627,8 @@ func TestSchemaAndExporterAgreeOnEnabled(t *testing.T) {
 			return "{enabled: true}"
 		case field.Type == reflect.TypeOf(&model.OTLPScopeConfig{}):
 			return "{name: x}"
+		case field.Type == reflect.TypeOf(model.OTLPExporterInstanceConfig{}):
+			return "{enabled: true}"
 		case field.Type.Kind() == reflect.Struct:
 			return "{insecure_skip_verify: true}"
 		}

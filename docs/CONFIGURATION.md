@@ -5791,7 +5791,9 @@ is what the export does, not a description of it:
   *Collapse all* open every node or fold all but the top. A node's
   contents are made when it is first opened, so a body of thousands of
   points shows at once and *Expand all* goes a level at a time without
-  holding up the page. *Copy* copies the body as indented JSON, which the
+  holding up the page. A node of many items, an array of 200000 points,
+  fills in a couple of thousand items a frame, the page answering
+  meanwhile; one that cannot be shown says so. *Copy* copies the body as indented JSON, which the
   tree is made from. A cumulative point starts at its own time, as at a
   series' first export: the export remembers when each series started,
   which a run neither reads nor changes.
@@ -6188,11 +6190,13 @@ same credentials as a probe. The report, and the page's JSON alike, redacts:
   ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
-  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): any
-  name containing, in any case, `auth`, `cookie`, `token`, `secret`,
-  `password`, `passwd`, `passphrase`, `passcode`, `key`, `session`,
-  `signature`, `credential` or `jwt`, or with `sig`, `pwd`, `pw` or `pass` as
-  a whole word of it, as in `X-Sig` or `X-Db-Pwd`.
+  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): a
+  name one of whose words contains, in any case, `auth`, `cookie`, `token`,
+  `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
+  `session`, `signature`, `credential` or `jwt`, unless the word is an
+  ordinary one that only holds it, such as `author`, `authority`, `monkey`,
+  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw` or `pass` as a whole
+  word of it, as in `X-Sig` or `X-Db-Pwd`.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it.

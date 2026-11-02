@@ -112,6 +112,11 @@ type probeFlight struct {
 	result  *probeResult
 	waiters int
 	cancel  context.CancelFunc
+	// spans is the trip's own record for the traces of the probes that use
+	// it (otlptraces.go), nil when the probe that started it records no
+	// trace. It is the trip's rather than the starting probe's, which may
+	// leave while the trip goes on for the others.
+	spans *tripSpans
 }
 
 // flightKey is what probes share a trip by: probe, the key the response
@@ -139,6 +144,16 @@ func newProbeFlights() *probeFlights {
 // caller's own context ending while it waited; the work's failures are in the
 // result.
 func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.Context) *probeResult) (result *probeResult, shared bool, err error) {
+	result, shared, _, err = f.doTraced(ctx, key, false, work)
+	return result, shared, err
+}
+
+// doTraced is do, but that a run it starts with traced set records its
+// stages and requests in a recorder of its own, which it returns to every
+// caller of the run, the one that started it included, and to one that
+// leaves before it ends too: each copies what it needs into its own trace.
+// A run joined returns the recorder its starter asked for, or nil.
+func (f *probeFlights) doTraced(ctx context.Context, key flightKey, traced bool, work func(context.Context) *probeResult) (result *probeResult, shared bool, spans *tripSpans, err error) {
 	f.mu.Lock()
 	flight, joining := f.flights[key]
 	if joining {
@@ -146,6 +161,11 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 	} else {
 		workCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		flight = &probeFlight{done: make(chan struct{}), waiters: 1, cancel: cancel}
+		if traced {
+			// The trip's context is the starter's, values and all, so its
+			// recorder takes the place of the starter's there.
+			workCtx, flight.spans = withTripSpans(workCtx, nil)
+		}
 		f.flights[key] = flight
 		go f.run(workCtx, key, flight, work)
 	}
@@ -153,7 +173,7 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 
 	select {
 	case <-flight.done:
-		return flight.result, joining, nil
+		return flight.result, joining, flight.spans, nil
 	case <-ctx.Done():
 		f.mu.Lock()
 		flight.waiters--
@@ -166,7 +186,7 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 			}
 		}
 		f.mu.Unlock()
-		return nil, joining, ctx.Err()
+		return nil, joining, flight.spans, ctx.Err()
 	}
 }
 

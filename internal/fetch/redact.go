@@ -274,9 +274,10 @@ func queryName(raw string) string {
 	return b.String()
 }
 
-// credentialWords are what the name of a header, a query parameter or a
-// field holding a credential reads like, anywhere in it: Authorization,
-// X-Api-Key, access_token, client_secret, X-Amz-Signature.
+// credentialWords are what a word of the name of a header, a query parameter
+// or a field holding a credential reads like, anywhere in the word:
+// Authorization, X-Api-Key, access_token, client_secret, X-Amz-Signature,
+// and apikey, accesstoken and sessionid too, whose words are run together.
 var credentialWords = []string{"auth", "cookie", "token", "secret", "password", "passwd", "passphrase", "passcode", "key", "session", "signature", "credential", "jwt"}
 
 // credentialParts are what a credential's name reads like only as a whole
@@ -286,22 +287,55 @@ var credentialWords = []string{"auth", "cookie", "token", "secret", "password", 
 // not bypass or compass.
 var credentialParts = []string{"sig", "pwd", "pw", "pass"}
 
+// ordinaryWords are words that hold a credential word without being about a
+// credential, so a name's word that is one of them, whole, does not read as
+// a credential's: an author: field of a feed or <author>Bob</author> is not
+// masked, while Authorization, authToken and author_token still are, their
+// words not being one of these whole. A word is matched whole so that a
+// credential word run together with one of them (authorkey) still reads as
+// a credential's.
+var ordinaryWords = map[string]bool{
+	"author": true, "authors": true, "authored": true, "authoring": true, "authorship": true, "coauthor": true, "coauthors": true,
+	"authority": true, "authorities": true, "authoritative": true,
+	"monkey": true, "donkey": true, "turkey": true, "hockey": true, "jockey": true, "whiskey": true,
+	"keyboard": true, "keyboards": true, "keyword": true, "keywords": true, "keynote": true, "keystroke": true, "keystrokes": true,
+	"tokenizer": true, "tokenizers": true, "tokenize": true, "tokenized": true, "tokenization": true,
+}
+
 // CredentialName reports whether a name — a header's, a query parameter's,
 // or a field's in text — reads as a credential's, in any case:
-// Authorization, Cookie, X-Api-Key, X-Auth-Token, sig, db_pwd, userPass and
-// the like.
+// Authorization, Cookie, X-Api-Key, X-Auth-Token, apikey, sig, db_pwd,
+// userPass and the like. The name is read word by word (nameParts): it reads
+// as a credential's when one of credentialParts is a word of it, whole, or
+// when a credential word is anywhere in it once its ordinary words
+// (ordinaryWords) are taken out. A credential word is looked for across a
+// change to upper case too, since toKen is still token to a reader, but not
+// across punctuation or an ordinary word. A name not split into words where
+// it should be errs towards masking: authortoken holds token.
 func CredentialName(name string) bool {
-	lower := strings.ToLower(name)
-	for _, word := range credentialWords {
-		if strings.Contains(lower, word) {
-			return true
-		}
-	}
-	for _, part := range nameParts(name) {
-		for _, credential := range credentialParts {
-			if strings.EqualFold(part, credential) {
-				return true
+	// rest is the name in lower case with its punctuation and its ordinary
+	// words each a NUL, which no credential word holds.
+	var rest strings.Builder
+	chunks := strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	for _, chunk := range chunks {
+		for _, part := range nameParts(chunk) {
+			lower := strings.ToLower(part)
+			for _, credential := range credentialParts {
+				if lower == credential {
+					return true
+				}
 			}
+			if ordinaryWords[lower] {
+				lower = "\x00"
+			}
+			rest.WriteString(lower)
+		}
+		rest.WriteByte(0)
+	}
+	text := rest.String()
+	for _, word := range credentialWords {
+		if strings.Contains(text, word) {
+			return true
 		}
 	}
 	return false

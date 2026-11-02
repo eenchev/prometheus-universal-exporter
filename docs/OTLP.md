@@ -882,8 +882,21 @@ keys:
 What is a trace: each `/probe` request, with or without its caller's
 `traceparent`, and each scheduled scrape of a static target. A probe that
 shares an identical probe's trip ([shared](CONFIGURATION.md#identical-probes-share-one-request))
-is a trace of its own whose `shared_trip` span is the wait; the trip's
-stages are in the trace of the probe that made it. A debug run, of the debug
+is a trace of its own whose `shared_trip` span is the wait, and under it is
+a copy of the trip's spans, its stages and its requests, with span ids of
+the probe's own: the trip's spans are in the trace of every probe that used
+it, as they are, under the probe's span, in the trace of the probe that
+started it. They keep the trip's times, so those of a probe that joined
+the trip late begin before its `shared_trip` span does. The trip is no
+probe's own: one whose caller goes away before the trip ends, the probe that
+started it as much as one that joined it, has the status `ERROR`, the
+`error.type` `abandoned` and the message `the caller went away before the
+probe's trip ended`, or `… while the probe waited for an identical probe's
+trip`, its `shared_trip` span `cancelled`; under it is what the trip had
+done by then, a request still unanswered `ERROR` with `request.unfinished`
+`true` and ending as the probe did. The stage it was in, not ended, has no
+span. The trip goes on for the probes still waiting, whose traces have it
+whole. A debug run, of the debug
 page, a debug probe or a debug scrape, is never exported, as nothing of a
 run is; the debug page shows the spans the export would make of it
 ([below](#seeing-a-runs-spans)).
@@ -896,7 +909,7 @@ The spans, by OpenTelemetry's conventions where one applies:
 | `scrape <static target>` | INTERNAL | none | `collector`, `target`, `static_target`, `request.type`, `series`, `response.bytes`, `cache.hit`, `error.type` (`scrape_failed`) when it failed |
 | `cache` | INTERNAL | the probe or scrape | `stage.outcome`: `hit` or `miss`, for a collector with a `cache.ttl` |
 | `slot` | INTERNAL | the probe or scrape | the wait for one of the collector's `max_concurrent_probes`: a scrape's wait, or a probe turned away |
-| `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip |
+| `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip, a copy of the trip's spans under it; `cancelled` when the probe's caller left first |
 | `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
 | `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes` |
 | `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
@@ -1058,7 +1071,10 @@ say `this line is not exported`. Failing trace exports never make the
 exporter unready. The export's state is in the
 [self-metrics](SELF-METRICS.md#otlp-export-status), while it is on, and on
 the [status page](ENDPOINTS.md#otlp-export). A reload that switches it off
-drops the spans waiting, uncounted, and probes stop recording; one that
+drops the spans waiting, uncounted, and probes stop recording; a probe or a
+scrape already under way when it did is not exported either, and counted
+nowhere, so nothing of it is sent if a later reload switches the export on
+again; one that
 switches it on records the probes from then on; one that lowers
 `max_pending_spans` below the spans waiting drops the oldest traces whole,
 and counts them. The queue is never cut inside a trace, which would leave

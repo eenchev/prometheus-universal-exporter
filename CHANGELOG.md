@@ -117,6 +117,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `otlp.traces.propagate: true` sends a kubernetes collector's requests to
+  the API server the `traceparent` and `tracestate` an HTTP target's
+  request carries, so an API server traced with `APIServerTracing` makes
+  its spans of the listing children of the exporter's.
 - `http_exporter_probe_duration_seconds`, a histogram of every collector's
   probe durations (`kind="probe"`) and static target scrape durations
   (`kind="static"`, for a collector a static target names), as

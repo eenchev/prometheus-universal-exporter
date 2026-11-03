@@ -4,6 +4,7 @@ package fetch
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -521,5 +522,50 @@ func TestADebugReportShowsAKubernetesListingsOwnQuery(t *testing.T) {
 	}
 	if got := RedactRequestURL(strings.Replace(raw, "app%3Dshop", "app%3Dother", 1), ConfiguredQuery(c)); !strings.Contains(got, "labelSelector=<redacted>") {
 		t.Errorf("a selector the collector does not write is shown: %s", got)
+	}
+}
+
+// With otlp.traces.propagate, each page's request to the API server
+// carries the trip's traceparent, under the span id recorded with the
+// request, and its tracestate, as an HTTP target's request does; the
+// caller's context, with the trace export off, arrives as it came; and
+// without propagation nothing is sent.
+func TestAKubernetesListingCarriesItsTraceparent(t *testing.T) {
+	s := kubeAPI(t)
+	s.Serve("/apis/apps/v1/namespaces/monitoring/deployments", kubetest.List{Kind: "DeploymentList", APIVersion: "apps/v1", Items: deployments("monitoring", 150)})
+	c := kubernetesCollector(t, "apps", "deployments")
+	trip := [16]byte{0x0a, 0xf7, 0x65, 0x19, 0x16, 0xcd, 0x43, 0xdd, 0x84, 0x48, 0xeb, 0x21, 0x1c, 0x80, 0x31, 0x9c}
+	ctx, trace := WithSpanTrace(WithTracePropagation(context.Background(), TracePropagation{TraceID: trip, Sampled: true, State: "ot=th:0"}))
+	if _, err := FetchCollector(ctx, "", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	sent, recorded := s.Requests(), trace.Requests()
+	if len(sent) != 2 || len(recorded) != 2 {
+		t.Fatalf("%d requests sent and %d recorded, want the two pages", len(sent), len(recorded))
+	}
+	for i := range sent {
+		span := recorded[i].SpanID
+		want := "00-0af7651916cd43dd8448eb211c80319c-" + hex.EncodeToString(span[:]) + "-01"
+		if span == [8]byte{} || sent[i].Traceparent != want || sent[i].Tracestate != "ot=th:0" {
+			t.Errorf("page %d carries %q and %q, want %s and ot=th:0", i+1, sent[i].Traceparent, sent[i].Tracestate, want)
+		}
+	}
+	if recorded[0].SpanID == recorded[1].SpanID {
+		t.Error("the two pages were sent under one span id")
+	}
+
+	caller := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00"
+	passed := WithTracePropagation(context.Background(), TracePropagation{Parent: caller, ParentState: "vendor=x"})
+	if _, err := FetchCollector(passed, "", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Requests()[2]; got.Traceparent != caller || got.Tracestate != "vendor=x" {
+		t.Errorf("the caller's context arrives as %q and %q", got.Traceparent, got.Tracestate)
+	}
+	if _, err := FetchCollector(context.Background(), "", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Requests()[4]; got.Traceparent != "" || got.Tracestate != "" {
+		t.Errorf("without propagation the request carries %q and %q", got.Traceparent, got.Tracestate)
 	}
 }

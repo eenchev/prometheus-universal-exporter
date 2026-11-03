@@ -110,6 +110,12 @@ again, takes at most the probe's timeout; a listing
 with no deadline of its own, as a static target's without one, gives up
 after 30 seconds.
 
+With [`otlp.traces.propagate`](OTLP.md#propagation-to-the-targets), each
+page's request carries the probe's or the scrape's W3C `traceparent` and
+`tracestate`, as an HTTP target's request does, under a span id of its own,
+which its span then has: an API server traced with `APIServerTracing` makes
+its spans of the listing children of the exporter's.
+
 The request goes through the proxy the environment names, as every request
 of the exporter does ([Proxies](REQUESTS.md#proxies)). Where the pod has
 `HTTPS_PROXY` set, put the API server in `NO_PROXY`: `kubernetes.default.svc`

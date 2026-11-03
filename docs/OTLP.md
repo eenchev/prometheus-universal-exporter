@@ -940,7 +940,8 @@ spans carry the caller's `tracestate` header
 ([below](#which-traces-are-exported)). Its sampled flag keeps the trace
 only under `parent_based`; the other rules decide it as any other. A
 `traceparent` that cannot be read is no parent, and the `tracestate` beside
-it is not read. The exporter sends no `traceparent` to its targets.
+it is not read. Without [`propagate`](#propagation-to-the-targets), the
+exporter sends no `traceparent` to its targets.
 
 A trace is under the resource its series are exported under: a probe's
 under the exporter-wide resource, a static target's under
@@ -1177,7 +1178,8 @@ which OpenMetrics gives no exemplars; a target's series have none.
 ### Propagation to the targets
 
 With `propagate: true`, each HTTP request of a probe or a scrape, a
-graphite one's too, and each gRPC call, as its metadata, carries a
+graphite one's and a kubernetes collector's to the API server too, and each
+gRPC call, as its metadata, carries a
 `traceparent` of the trace, with a span id of the request's own, which its
 `CLIENT` span is then made with, so that the target's span is a child of it,
 and a redirect followed has one of its own. A `tracestate` goes with it:
@@ -1205,7 +1207,9 @@ passed on, as the W3C asks; a scrape has no caller, and sends none.
 
 A `traceparent` the request sets itself, in `request.headers`,
 `request.metadata` or a forwarded header (`forward_headers`), is the
-operator's and is sent as it is, with no `tracestate` of the exporter's.
+operator's and is sent as it is, with no `tracestate` of the exporter's. A
+kubernetes collector's requests have no header of the operator's, and
+always carry the exporter's.
 A login's request (`request.login`) carries none: it goes to an identity
 provider, often no part of the target, and the token it fetches serves
 later probes, of other traces. Probes that share a trip

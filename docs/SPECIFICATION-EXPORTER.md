@@ -30037,6 +30037,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestStaticScrapesAreObservedApartFromProbes`: a static target scrape is one observation in its collector's `kind="static"` series and none in `kind="probe"`; a collector no static target names has no `kind="static"` series.
 - `TestTheProbeDurationHistogramHasNativeAndExponentialBuckets`: after one probe, the protobuf answer's probe histogram has count 1, the 13 classic buckets, schema 3 and one span; with `otlp.exponential_histograms` the OTLP export sends it as an exponential histogram alone.
 - `TestAnExportedProbeIsItsProbeDurationBucketsExemplar`: of a fast probe whose trace was dropped and a slow one whose trace was exported, only the slow one is an exemplar in OpenMetrics, of the exported root span's trace and span ids, on a bucket of 0.05 or above.
+- `TestAKubernetesListingCarriesItsTraceparent` (fetch): with propagation, each page of a two-page listing carries `00-<trace>-<span>-01` under the span id recorded with its request, a different one each, and the `tracestate`; with the trace export off the caller's `traceparent` and `tracestate` arrive as they came; without propagation the API server gets none.
 
 # 35. Documentation requirements
 
@@ -30879,7 +30880,8 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   parent; its sampled flag MUST keep the trace only under `parent_based`,
   and the other rules MUST decide it as any other.
 - With `otlp.traces.propagate`, false by default, each HTTP request (a
-  graphite one's too) and each gRPC call, as metadata, of a probe or a
+  graphite one's, and each page's request of a kubernetes listing to the
+  API server, too) and each gRPC call, as metadata, of a probe or a
   scrape MUST carry a W3C `traceparent` of its trace with a span id of the
   request's own, which its CLIENT span MUST then have, a redirect followed
   one of its own, and the `tracestate` its spans would carry if kept by the

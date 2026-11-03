@@ -55,6 +55,8 @@ type Request struct {
 	Path          string
 	Query         url.Values
 	Authorization string
+	// Traceparent and Tracestate are the W3C trace context it carried.
+	Traceparent, Tracestate string
 }
 
 // New starts a server, with a service account directory whose token is
@@ -144,7 +146,7 @@ func (s *Server) Requests() []Request {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	s.requests = append(s.requests, Request{Path: r.URL.Path, Query: r.URL.Query(), Authorization: r.Header.Get("Authorization")})
+	s.requests = append(s.requests, Request{Path: r.URL.Path, Query: r.URL.Query(), Authorization: r.Header.Get("Authorization"), Traceparent: r.Header.Get("Traceparent"), Tracestate: r.Header.Get("Tracestate")})
 	list, listed := s.lists[r.URL.Path]
 	forbidden := s.forbid[r.URL.Path]
 	raw, answered := s.raw[r.URL.Path]

@@ -2566,6 +2566,7 @@ function show(answer, response, took, sent) {
   if (shown) {
     const parts = [];
     if (shown.status) parts.push(shown.status);
+    for (const v of shown.variables || []) parts.push(v);
     for (const h of shown.headers || []) parts.push(h);
     for (const f of shown.files || []) parts.push(f.trim());
     if (!shown.files) {

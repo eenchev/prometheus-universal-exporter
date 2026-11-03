@@ -3,6 +3,7 @@ package exporter
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -596,8 +597,12 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	} else if runsPython(p.collector) {
 		job.python = transform.PythonWorkers().Departed()
 	}
+	start := time.Now()
 	result := s.collect(ctx, job)
 	verdict, answer = s.debugVerdict(result, p)
+	if p.static == nil {
+		verdict, answer = reportedVerdict(p.collector, result, verdict, answer, time.Since(start))
+	}
 	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted, result.failed() || result.aborted
 }
 
@@ -609,6 +614,9 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 		return s.staticDebugVerdict(result, p)
 	}
 	var verdict string
+	// failed is what the probe answers when no stale result stands in for
+	// it: nothing but the verdict, but for a probe carrying on.
+	var failed *model.MetricSet
 	switch {
 	case result.aborted:
 		return "503: probe cancelled: the caller went away", nil
@@ -619,15 +627,21 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	case result.failed():
 		verdict = fmt.Sprintf("502: collector %s %s failed: %v", name, result.stage, result.err)
 	case result.carriedOn:
-		// What probeTrip answers: nothing of the collector's.
+		// What probeTrip answers: nothing of the collector's. Under
+		// report_failures the probe is a failure, which a stale result
+		// answers for, as probeUpstream has it.
 		answer := carriedOnAnswer(p.collector)
-		return "200 with no series of the collector's: a stage failed and error_handling carried on", &answer
+		verdict = "200 with no series of the collector's: a stage failed and error_handling carried on"
+		if !p.collector.ReportFailures {
+			return verdict, &answer
+		}
+		failed = &answer
 	default:
 		answer := result.answer
 		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer
 	}
 	if result.unauthorized {
-		return verdict + " (no stale result: the target refused the credential)", nil
+		return verdict + " (no stale result: the target refused the credential)", failed
 	}
 	if result.refused {
 		return verdict + " (no stale result: the target policy refused the target)", nil
@@ -641,7 +655,7 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 			}
 		}
 	}
-	return verdict, nil
+	return verdict, failed
 }
 
 // staticDebugVerdict is what a static target's scrape would have published,
@@ -858,7 +872,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	b.WriteString("\nResponse\n")
 	if t.response == nil {
 		b.WriteString("  none\n")
-	} else if writeResponse(&b, t.response) {
+	} else if writeResponse(&b, t.response, configured) {
 		// The body is shown as it is, up to its own bound.
 		cutLongLines(&b, uncut)
 		writeBody(&b, t.response.Body, t.convertedFrom)
@@ -1023,13 +1037,16 @@ func shownHead[T ~string | ~[]byte](text T, limit int) int {
 // writeResponse renders the response as the target sent it: its status and
 // headers, and a directory's files. It reports whether the response has a
 // body for writeBody to render after them, which a directory has not.
-func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
+func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, configured func(name, value string) bool) (body bool) {
 	switch {
 	case r.GRPCCode != nil:
 		fmt.Fprintf(b, "  gRPC status %d\n", *r.GRPCCode)
 	case r.NoStatus:
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
+	}
+	for _, line := range tripLines(r, configured) {
+		fmt.Fprintf(b, "  %s\n", line)
 	}
 	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
 		b.WriteString(pagesLine(p))
@@ -1043,6 +1060,32 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 		return false
 	}
 	return true
+}
+
+// tripLines are the jq variables that say what the request was besides its
+// answer, each as its name and its value as JSON, for the request of an
+// http or graphite collector (fetch.HTTPTrip): what the rules read of it
+// beside the status, which a report shows. $url is shown as the report
+// shows a request's URL, its query values masked but for those configured
+// says the configuration set, and cut as a request line is.
+func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) []string {
+	if r.Trip == nil {
+		return nil
+	}
+	var lines []string
+	for _, v := range []struct {
+		name  string
+		value any
+	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.URL, configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
+		// As written, not escaped for HTML: the <redacted> of a masked
+		// query value reads as it is.
+		var value bytes.Buffer
+		encoder := json.NewEncoder(&value)
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(v.value)
+		lines = append(lines, v.name+" "+strings.TrimSuffix(value.String(), "\n"))
+	}
+	return lines
 }
 
 // writeDirectory renders a directory read as its files.

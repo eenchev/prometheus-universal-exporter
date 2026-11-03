@@ -70,6 +70,14 @@ type probeResult struct {
 	// or backing off; failure is the error, as they show it.
 	outcome string
 	failure string
+	// stage is the stage of the trip that failed, of a failed or stale
+	// result and of one that carried on past it: what report_failures
+	// answers (probereport.go).
+	stage string
+	// carriedOn says the probe failed in stage and error_handling carried
+	// on past it, of a collector with report_failures, to which the probe
+	// is a failure: answered as a probe carrying on is, with ok false.
+	carriedOn bool
 }
 
 func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request, utf8Names bool) {

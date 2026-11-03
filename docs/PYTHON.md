@@ -19,6 +19,16 @@ them: `response.headers["X-Mode"]` is `["a", "b"]` for a header sent twice.
 the values joined by `, `, `"a, b"`, whatever the name's case, or `None`
 without the header, or a default, `response.header("x-mode", "")`.
 
+An `http` or `graphite` collector's script also has what the request was
+besides its answer, as jq and yq rules have it ([Timings, TLS and the final
+URL](REQUESTS.md#timings-tls-and-the-final-url)): `response.timings`, a dict
+of the request's phases in seconds, `None` for a phase it did not have,
+`response.timings["first_byte"]`; `response.tls`, a dict of the TLS
+connection and the target's certificate, `response.tls["not_after"]`, `None`
+over plain HTTP; `response.url`, where the request went after its redirects,
+with its credentials withheld; and `response.redirects`, how many it
+followed. All four are `None` for every other request type.
+
 `target` is the target exactly as the probe or the static target gave it,
 credentials included: `https://user:password@host/api?token=abc` reaches the
 script as written, not redacted as the exporter's logs show it. Do not print
@@ -130,6 +140,7 @@ for row in data:
 | `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
 | `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. A histogram or summary the target wrote without a `_sum` or a `_count` has no `sum` or `count` key: read one with `series.get("sum")`. A histogram's `count` and the `count` of its `+Inf` bucket are each what the target wrote, and [may differ](CONFIGURATION.md#character-encodings) for a target scraped between two of its updates. A `count`, the series' or a bucket's, must stay a whole number from 0: `2.5` fails the scrape. |
 | `text`, `html`, `xml` | The body as a string; parse HTML and XML with [lxml](#parsing-html-with-lxml). |
+| `none` | `None`; `response.body` and `response.text` are the body as the target sent it, not converted from its encoding ([No decoder](CONFIGURATION.md#no-decoder)). |
 
 `NaN` and the infinities arrive as the floats `float("nan")` and
 `float("inf")`, and may be given back the same way, in `data` from a

@@ -88,13 +88,13 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
 | `xpath` | `xml`, `html` |
 | `prometheus` | `prometheus` |
-| `python` | every decoder |
+| `python` | every decoder, `none` among them |
 
 A `decoder.type` that names a decoder the collector's transform does not read
 could never work, so it is refused when the configuration loads, naming both
@@ -128,8 +128,8 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` and
-`auto`. The `graphite` decoder reads
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none`
+and `auto`; `none` reads no body (see [No decoder](#no-decoder)). The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
 see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
 Lines, key=value log lines, TOML and INI files into a document jq, yq and
@@ -226,6 +226,42 @@ log and in a debug report alike ([Logging](LOGGING.md#repeated-failures)): a
 jq rule that raises `error(.message)`, a script that raises an exception with
 its data, a redirect to a URL of a megabyte and a gRPC status message of ten
 fail in 2,000 bytes at most, where the error was as long as what it quoted.
+
+### No decoder
+
+`decoder.type: none` reads no body. A collector whose rules say what the
+status and the headers are, such as an uptime check, has nothing to decode,
+and a body that is empty, HTML or any other text fails nothing:
+
+```yaml
+request:
+  type: http
+  method: HEAD           # no body is sent back
+  accept_status: [any]   # every status from 100 to 599 is the answer
+decoder:
+  type: none
+transform:
+  type: jq
+metrics:
+  - name: site_up
+    expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
+  - name: site_status_code
+    expression: $status
+```
+
+jq and yq rules read `null` as the document, with `$status` and `$headers`
+as for any decoder ([Accepting other
+statuses](REQUESTS.md#accepting-other-statuses)); a rule that reads the
+document, `.x`, reads `null` and is a missing value. A Python script's `data`
+is `None`, and `response.body` and `response.text` are the body as the target
+sent it, which nothing converted: `response.charset` is refused beside
+`none`, since no decoder reads the body in it. A `regex`, `csv`, `css`,
+`xpath` or `prometheus` transform reads a body, so `none` is refused with it
+when the configuration loads, as any decoder a transform cannot read is. The
+body is still read, up to `max_response_bytes`, so `method: HEAD` is what
+spares the target sending it. A request type whose answer is JSON, `grpc`,
+`dns` and the others, and a paginated collector keep `json`, and refuse
+`none` as any other decoder.
 
 ### NDJSON, logfmt, TOML and INI
 
@@ -1313,7 +1349,12 @@ required, and produces nothing when it is not. `$root` works without `items`
 too, where it is the same document as `.`. Every jq and yq expression also
 has `$status`, the response's HTTP status, and `$headers`, its headers by
 lower-case name, for a target whose status or headers say something the body
-does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses)).
+does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses));
+`$timings`, how long the phases of an `http` or `graphite` collector's
+request took, `$tls`, the TLS connection it was sent on, `$url`, where its
+redirects led, and `$redirects`, how many there were, each `null` for other
+types (see [Timings, TLS and the final
+URL](REQUESTS.md#timings-tls-and-the-final-url)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
@@ -2581,6 +2622,9 @@ certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
 `ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
 `kubernetes` lists Kubernetes objects — see [Kubernetes
 objects](KUBERNETES.md).
+An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
+prober makes, is an `http` collector — see [Uptime
+probes](REQUESTS.md#uptime-probes).
 A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
@@ -2608,7 +2652,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
-| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
+| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`, or `[any]` alone for every status from 100 to 599; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
@@ -3013,8 +3057,8 @@ error_handling:
 | Policy | The probe | Logged |
 | --- | --- | --- |
 | `fail` (default) | fails with `502 Bad Gateway` | yes, at error level |
-| `log` | carries on without that stage's output | yes, at warning level |
-| `ignore` | carries on without that stage's output | only at debug level |
+| `log` | carries on without that stage's output, and counts as a success without [`report_failures`](#reporting-failed-probes-as-metrics) | yes, at warning level |
+| `ignore` | carries on without that stage's output, and counts as a success without `report_failures` | only at debug level |
 
 A probe that carries on is answered `200` with an empty exposition in the
 format the scrape asked for, exactly what a probe whose rules produced no
@@ -3023,11 +3067,15 @@ its closing `# EOF`, compressed when the scrape accepts gzip. An exposition is
 identified by its `Content-Type`, so the answer says what it is though it
 holds nothing of the collector's, and the scrape succeeds, which is what
 carrying on is for. The failure is still counted in the collector's
-[self-metrics](SELF-METRICS.md), and the probe counts as a success. Nothing
+[self-metrics](SELF-METRICS.md), and the probe counts as a success, unless
+the collector sets
+[`report_failures`](#reporting-failed-probes-as-metrics), which makes it a
+failed probe that is answered `http_exporter_probe_success 0`. Nothing
 is kept in the [response cache](#response-caching) or exported over OTLP.
 Carrying on is not a failure, so with
 [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
-the last good result does not stand in for it: the answer holds the two
+the last good result does not stand in for it, again unless the collector
+sets `report_failures`: the answer holds the two
 freshness series every answer of such a collector has, with
 `http_exporter_result_stale 0`, and nothing else.
 
@@ -3095,6 +3143,133 @@ report and, with `--web.debug=full`, the
 [status page](ENDPOINTS.md#status-page) show each error whole; the
 self-metrics count failures by stage, as before.
 
+### Reporting failed probes as metrics
+
+A failed probe is answered `502`, so Prometheus marks the scrape down and
+keeps no sample of it: an uptime check has `up` to alert on and nothing else.
+With `report_failures: true` on the collector, a probe is always answered
+`200` with an exposition, as [blackbox_exporter](https://github.com/prometheus/blackbox_exporter)
+answers, and a failure is a value:
+
+```yaml
+collectors:
+  - name: uptime
+    report_failures: true
+    request:
+      type: http
+      method: HEAD
+      accept_status: [any]   # every status is the answer
+    decoder:
+      type: none             # no body is read
+    transform:
+      type: jq
+    metrics:
+      - name: site_status_code
+        expression: $status
+```
+
+A probe that succeeds is answered the collector's series, and after them:
+
+```text
+site_status_code 200
+http_exporter_probe_success 1
+http_exporter_probe_elapsed_seconds 0.012
+```
+
+A target that is down, refuses the connection, cannot be named, answers a
+status the collector does not accept, or anything else that fails a stage,
+is answered:
+
+```text
+http_exporter_probe_success 0
+http_exporter_probe_elapsed_seconds 0.003
+http_exporter_probe_failed_stage{stage="http"} 1
+```
+
+`http_exporter_probe_success` is `1` or `0`.
+`http_exporter_probe_elapsed_seconds` is how long this probe took, from its
+request to its answer: the duration its
+[`http_exporter_probe_duration_seconds`](SELF-METRICS.md) histogram, on
+`/metrics`, observes, which is another series.
+`http_exporter_probe_failed_stage` names the stage that failed, the one
+the log and the self-metrics name: `http` for whatever failed in reaching an
+`http` target, its name, its connection or its TLS handshake;
+`http_status`; `decode`; `transform`; `validation`; `metric` for a rule with
+`error_mode: fail`; or another request type's own fetch stage, `dns`, `tls`,
+`file`, `grpc` and the others ([Request types](#request-types)). Nothing of
+the error is answered, as nothing of the target's answer is
+([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)):
+the log has the error, as it always did, and so do a
+[debug probe](#debug-probes)'s report and the
+[status page](ENDPOINTS.md#status-page). The key works alike for every
+request type. The three series carry no label of the collector's
+(`transform.labels` and `metrics_prefix` are the collector's series');
+Prometheus adds the target's. [Uptime probes](REQUESTS.md#uptime-probes)
+puts the key together with the rest of an uptime check of HTTP sites.
+
+What else becomes of a probe:
+
+- **`error_handling` `log` or `ignore`** carries on past a failed stage as
+  before ([When a stage of the probe fails](#when-a-stage-of-the-probe-fails)),
+  and the probe is a failure: the answer says the stage failed,
+  `http_exporter_probe_success 0` with the stage, and so does everything
+  else that counts probes, so that none of them disagrees with the answer.
+  The self-metrics count no success for it, the status page shows it
+  failed with its error, the last good result stands in for it under
+  `cache.stale_if_error`, and its trace is a failed one. It is logged as
+  its policy says, at warning level under `log` and debug under `ignore`,
+  and it is not cached, as before. Without `report_failures` such a probe
+  is a success, as it always was.
+- **A rule with `error_mode: fail`** fails the probe in the `metric` stage;
+  a rule under `log` or `ignore` that drops its series fails no stage, and
+  the probe is a success.
+- **[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)**
+  answers the last good result in place of a failed trip, a trip carried on
+  past a failed stage included, with
+  `http_exporter_result_stale 1`, and `http_exporter_probe_success 0` and
+  the stage beside them: the series stand in, while the target is failing.
+- **[Response caching](#response-caching)**: a cached answer is a success.
+  The cache keeps the collector's series alone; each answer has its own
+  elapsed time.
+- **[Shared probes](#identical-probes-share-one-request)**: probes sharing a trip each
+  answer their own elapsed time.
+- **[`failure_backoff`](#backing-off-from-failing-targets)**: a probe kept from
+  the target fails in its fetch stage.
+- **A probe refused by the target policy** (`403`), **turned away by
+  `max_concurrent_probes`** (`503`), one whose caller went away and a
+  caller's mistake (`400`) are answered as without the key: the target was
+  not asked, and they say nothing of it.
+- **The self-metrics** count a failure as one, in
+  `http_exporter_scrapes_total` against `http_exporter_scrape_success_total`
+  and the other counters, and in the probe duration histogram; it is
+  [logged](LOGGING.md) as before.
+- **The [OTLP export](OTLP.md)** exports the collector's series, as before:
+  nothing of a failed probe, one carried on past a failed stage included,
+  and not the three series; a stale result standing in is exported as it
+  is without the key. The trace of a failed probe is a failed one, which
+  the `errors` sampling keeps; the `error.type` of one carried on past a
+  failed stage is that stage, since it was answered `200` either way.
+- **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
+  with its error, answered `200` with its series.
+- **A [debug probe](#debug-probes)** says that a probe would have answered
+  `200` with `http_exporter_probe_success 0` in place of the failure, and
+  shows the series.
+- **[Static targets](STATIC-TARGETS.md)** are not changed by the key: a
+  static target's scrape has `http_exporter_target_up` and its own
+  self-metrics, and a collector both probed and named by static targets
+  serves each as it does.
+
+While `report_failures` is set, the collector's rules may not make a series
+of one of the three names: a rule or a derived family exported under one,
+after `metrics_prefix`, is refused when the configuration loads,
+
+```text
+collector "uptime" metric "http_exporter_probe_success" is exported as http_exporter_probe_success, which is reserved for the series report_failures adds to every probe's answer; rename the metric, or leave report_failures out
+```
+
+and a series a [Python](PYTHON.md) script or a `prometheus` transform makes
+under one fails the probe in the `validation` stage.
+
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at
@@ -3124,6 +3299,10 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   histogram's or a summary's family name, not its `_bucket`, `_sum` or
   `_count`, and so does the load, and a `prometheus` rule without a `name`
   has nothing to measure;
+- a rule of a collector with [`report_failures`](#reporting-failed-probes-as-metrics)
+  is not exported as `http_exporter_probe_success`,
+  `http_exporter_probe_elapsed_seconds` or `http_exporter_probe_failed_stage`,
+  nor is a derived family that is not hidden;
 - every expression must compile in its transform's language — jq and yq
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a
@@ -3603,8 +3782,9 @@ server, start a configuration with
 
 and the editor completes keys, shows what each one does, and flags unknown keys
 and values that are not allowed as you type. The example configurations in
-`configs/`, `config.example.yaml` and `config.otlp.example.yaml`, start with
-it; the ones under `examples/` do not.
+`configs/`, `config.example.yaml`, `config.otlp.example.yaml` and
+`config.uptime.example.yaml`, start with it; the ones under `examples/` do
+not.
 
 The [static target file](STATIC-TARGETS.md) has a schema of its own,
 [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
@@ -4492,7 +4672,8 @@ A 304 is never a failed status: it stands for the kept response, whose
 status the collector accepted. A 304 to a request that was not conditional
 on a kept response has nothing to stand for, and fails the probe as
 `received HTTP status 304 Not Modified to a request that was not conditional
-on a cached response`, unless `request.accept_status` names `304`. A request
+on a cached response`, unless `request.accept_status` accepts `304`, as
+`[304]`, `["3xx"]` and `[any]` do. A request
 the collector makes conditional itself, with `If-None-Match` or
 `If-Modified-Since` in `request.headers` or forwarded, is sent as configured,
 and its answer is not taken for a revalidation.

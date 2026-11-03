@@ -63,6 +63,7 @@ func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
 	for _, path := range append([]string{
 		"configs/config.example.yaml",
 		"configs/config.otlp.example.yaml",
+		"configs/config.uptime.example.yaml",
 	}, tree.configs...) {
 		t.Run(path, func(t *testing.T) {
 			if missing := exampleTypesNotBuilt(t, tree, path); len(missing) > 0 {

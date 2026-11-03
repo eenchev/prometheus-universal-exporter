@@ -1712,8 +1712,11 @@ tokenize._builtin_open=code_only(io.open)
 builtins.open=tz_only(io.open); io.FileIO=tz_only(_io.FileIO); _io.open=code_only(_io.open); io.open=builtins.open; _io.FileIO=io.FileIO
 del _io, _name, code_only, tz_only, tz_roots
 class Response:
-    # The body is sent once: text is the same string.
-    def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=self.text=x['body']
+    # The body is sent once: text is the same string. timings, tls, url and
+    # redirects are jq's $timings, $tls, $url and $redirects, or None.
+    def __init__(self,x):
+        self.status_code=x['status_code']; self.headers=x['headers']; self.body=self.text=x['body']
+        self.timings=x.get('timings'); self.tls=x.get('tls'); self.url=x.get('url'); self.redirects=x.get('redirects')
     def header(self,name,default=None):
         # One header's values joined by ", ", as jq's $headers has them, the
         # name in any case; default when the response has none.

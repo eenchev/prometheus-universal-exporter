@@ -11,7 +11,7 @@ import (
 func runJQ(t *testing.T, program *JQProgram, input any) ([]any, error) {
 	t.Helper()
 	var values []any
-	iterator := program.Code.Run(input, input, nil, nil)
+	iterator := program.Code.Run(input, JQBindings{}.Values(input)...)
 	for {
 		value, ok := iterator.Next()
 		if !ok {

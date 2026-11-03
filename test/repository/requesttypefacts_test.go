@@ -190,7 +190,9 @@ func TestDecoderListsNameEveryDecoder(t *testing.T) {
 			continue
 		}
 		for _, decoder := range model.DecoderTypes {
-			if decoder == "auto" {
+			// Neither is a format: auto chooses one, and none reads
+			// no body.
+			if decoder == "auto" || decoder == model.DecoderNone {
 				continue
 			}
 			name, ok := decoderNames[decoder]

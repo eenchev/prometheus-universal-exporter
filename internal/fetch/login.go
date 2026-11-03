@@ -872,7 +872,7 @@ func jqOne(expression string, page any, resp *http.Response) (value any, kind st
 	if err != nil {
 		return nil, "", err
 	}
-	iterator := code.Run(page, page, resp.StatusCode, jqHeaders(resp.Header))
+	iterator := code.Run(page, expr.JQBindings{Status: resp.StatusCode, Headers: jqHeaders(resp.Header)}.Values(page)...)
 	count := 0
 	for {
 		v, ok := iterator.Next()

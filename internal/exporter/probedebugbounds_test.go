@@ -139,7 +139,7 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 	if t.response == nil {
 		b.WriteString("  none\n")
 	} else {
-		oldWriteResponse(&b, t.response, t.convertedFrom)
+		oldWriteResponse(&b, t.response, t.convertedFrom, fetch.ConfiguredQuery(p.slotOf()))
 	}
 
 	b.WriteString("\nStages\n")
@@ -186,13 +186,18 @@ func oldReport(t *probeTrace, p debugProbe, verdict string, answer *model.Metric
 	return b.Bytes()
 }
 
-func oldWriteResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom string) {
+func oldWriteResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom string, configured func(name, value string) bool) {
 	switch {
 	case r.GRPCCode != nil:
 		fmt.Fprintf(b, "  gRPC status %d\n", *r.GRPCCode)
 	case r.NoStatus:
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
+	}
+	// What the request was besides its answer, short lines the bounds do
+	// not touch, which came after the oracle was written.
+	for _, line := range tripLines(r, configured) {
+		fmt.Fprintf(b, "  %s\n", line)
 	}
 	if len(r.Headers) > 0 {
 		b.WriteString("  Headers\n")

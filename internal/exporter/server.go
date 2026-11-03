@@ -510,8 +510,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// new request tracked. It is called once the answer is ready, before it
 	// is written, and ends the probe's trace then too, which traced says
 	// the end of: the time a caller takes to read the answer is neither the
-	// probe's duration nor its span's.
-	finish := func(ok, refused bool) {
+	// probe's duration nor its span's. It returns the probe's duration,
+	// which report_failures answers (probereport.go).
+	finish := func(ok, refused bool) time.Duration {
 		ready := time.Now()
 		duration := ready.Sub(start)
 		if spans != nil {
@@ -528,6 +529,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			x.lastDuration = duration.Seconds()
 		})
 		rec.commit(refused)
+		return duration
 	}
 	forwarded := forwardedHeaders(r, c.Request)
 	keyQuery := probeKeyQuery(name, target, overrides)
@@ -548,16 +550,21 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+			hit := &probeResult{status: http.StatusOK, metrics: &answer, ok: true, outcome: probeCached}
+			series := len(answer.Metrics)
+			if reportsProbe(c, hit) {
+				series = reportedSeries(hit)
+			}
 			if spans != nil {
 				spans.step("cache", "hit", mark, time.Now(), "answered from the response cache, fetched "+fetched.UTC().Format(time.RFC3339))
-				traced = probeTraceEnd{status: http.StatusOK, series: len(answer.Metrics), cached: true}
+				traced = probeTraceEnd{status: http.StatusOK, series: series, cached: true}
 			}
-			finish(true, false)
+			elapsed := finish(true, false)
 			s.noteProbe(rec.read, recentKey(), recentProbe{
 				at: start, duration: time.Since(start), result: probeCached,
-				status: http.StatusOK, series: len(answer.Metrics),
+				status: http.StatusOK, series: series,
 			})
-			writeMetricSet(w, r, &answer, transform.UTF8Names(c))
+			writeProbeAnswer(w, r, c, hit, elapsed, transform.UTF8Names(c))
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return
 		}
@@ -590,15 +597,16 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		result := upstream(ctx, rec)
 		if spans != nil {
 			traced = probeTraceEndOf(result)
+			reportedTrace(c, result, &traced)
 		}
 		// A trip its caller abandoned ends without the target policy's
 		// verdict, as a shared one every caller left does below: counted on
 		// the collector, and no new request tracked.
-		finish(result.ok, result.refused || result.abandoned)
+		elapsed := finish(result.ok, result.refused || result.abandoned)
 		if !result.abandoned {
-			s.noteProbe(rec.read, recentKey(), result.recentProbe(start, false))
+			s.noteProbe(rec.read, recentKey(), reportedRecent(c, result, result.recentProbe(start, false)))
 		}
-		result.writeTo(w, r, transform.UTF8Names(c))
+		writeProbeAnswer(w, r, c, result, elapsed, transform.UTF8Names(c))
 		return
 	}
 	// A shared trip is counted apart from the probe that happens to start it
@@ -640,6 +648,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if spans != nil {
 		traced = probeTraceEndOf(result)
+		reportedTrace(c, result, &traced)
 	}
 	if shared {
 		// The trip was another probe's: its stages and requests are under
@@ -651,9 +660,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		spans.adopt(tripTrace, "", time.Time{})
 	}
-	finish(result.ok, result.refused)
-	s.noteProbe(rec.read, recentKey(), result.recentProbe(start, shared))
-	result.writeTo(w, r, transform.UTF8Names(c))
+	elapsed := finish(result.ok, result.refused)
+	s.noteProbe(rec.read, recentKey(), reportedRecent(c, result, result.recentProbe(start, shared)))
+	writeProbeAnswer(w, r, c, result, elapsed, transform.UTF8Names(c))
 }
 
 // upstreamProbe is what one trip to the target needs.
@@ -751,7 +760,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	}
 	// A stale answer is not a success: the trip failed.
 	stale := out.result(false)
-	stale.outcome, stale.failure = probeStale, result.failure
+	stale.outcome, stale.failure, stale.stage = probeStale, result.failure, result.stage
 	return stale
 }
 
@@ -850,7 +859,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Error: model.CallerText(result.err),
 		})
 		failure := out.result(false)
-		failure.failure = s.shownStatusError(result.err)
+		failure.failure, failure.stage = s.shownStatusError(result.err), result.stage
 		return failure
 	case result.refused:
 		// The caller asked for a target the collector may not reach.
@@ -866,7 +875,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %s", name, result.stage, model.CallerText(result.err)), http.StatusBadGateway)
 		failure := out.result(false)
 		failure.unauthorized = result.unauthorized
-		failure.failure = s.shownStatusError(result.err)
+		failure.failure, failure.stage = s.shownStatusError(result.err), result.stage
 		if job.backingOff != nil {
 			failure.outcome = probeBackoff
 		}
@@ -878,9 +887,26 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		// OpenMetrics one ends in # EOF: an answer with neither is in no
 		// format a scraper could read, which carrying on is there to
 		// prevent.
+		//
+		// Under report_failures the probe is a failure, as its answer says
+		// (probereport.go): counted as one, shown failed with its error on
+		// the status page, answered with the last good result under
+		// cache.stale_if_error (probeUpstream) and exported as a failed
+		// trace, so that nothing the exporter says of the probe disagrees
+		// with its http_exporter_probe_success 0. It is logged as its
+		// policy says, still.
 		answer := carriedOnAnswer(c)
 		out.metrics = &answer
-		return out.result(true)
+		carried := out.result(!c.ReportFailures)
+		carried.stage = result.stage
+		if c.ReportFailures {
+			carried.carriedOn, carried.unauthorized = true, result.unauthorized
+			carried.failure = s.shownStatusError(result.carriedErr)
+			if job.backingOff != nil {
+				carried.outcome = probeBackoff
+			}
+		}
+		return carried
 	}
 	out.metrics = &result.answer
 	s.queueProbeOTLP(result.answer, c, logTarget, result.fetched)

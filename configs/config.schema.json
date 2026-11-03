@@ -650,7 +650,7 @@
             "additionalProperties": false,
             "properties": {
               "type": {
-                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None.",
                 "enum": [
                   "auto",
                   "json",
@@ -665,6 +665,7 @@
                   "logfmt",
                   "toml",
                   "ini",
+                  "none",
                   ""
                 ],
                 "type": "string"
@@ -1409,6 +1410,10 @@
             ],
             "type": "string"
           },
+          "report_failures": {
+            "description": "Answer a failed probe 200 with series saying so instead of 502: http_exporter_probe_success 0, http_exporter_probe_elapsed_seconds and http_exporter_probe_failed_stage{stage} 1, and a successful one with its series, http_exporter_probe_success 1 and http_exporter_probe_elapsed_seconds. The collector's rules may not produce those names. Static targets are not changed by it. Defaults to false. See docs/CONFIGURATION.md#reporting-failed-probes-as-metrics.",
+            "type": "boolean"
+          },
           "request": {
             "additionalProperties": false,
             "allOf": [
@@ -2026,11 +2031,23 @@
                 "type": "array"
               },
               "accept_status": {
-                "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
+                "anyOf": [
+                  {
+                    "maxItems": 1
+                  },
+                  {
+                    "items": {
+                      "not": {
+                        "const": "any"
+                      }
+                    }
+                  }
+                ],
+                "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503], or [any] alone for every status from 100 to 599; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
                 "items": {
                   "maximum": 599,
                   "minimum": 100,
-                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^any$",
                   "type": [
                     "integer",
                     "string"

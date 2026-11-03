@@ -769,7 +769,7 @@ func TestTheShippedFilesMatchTheSchemasAsTheyDid(t *testing.T) {
 		now, before           map[string]any
 		builtNow, builtBefore map[string]any
 	}{
-		{append([]string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}, examples.configs...), schemas.configuration, schemas.configurationWas, built.configuration, built.configurationWas},
+		{append([]string{"configs/config.example.yaml", "configs/config.otlp.example.yaml", "configs/config.uptime.example.yaml"}, examples.configs...), schemas.configuration, schemas.configurationWas, built.configuration, built.configurationWas},
 		{append([]string{"configs/static-targets.example.yaml"}, examples.staticTargets...), schemas.targetFile, schemas.targetFileWas, built.targetFile, built.targetFileWas},
 	} {
 		for _, file := range kind.files {

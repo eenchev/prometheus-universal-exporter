@@ -339,7 +339,7 @@ func postgresEnvironment(t *testing.T) map[string]string {
 	return map[string]string{
 		"PGHOST": "elsewhere,another", "PGPORT": "notaport", "PGDATABASE": "envdb", "PGUSER": "envuser", "PGPASSWORD": "env",
 		"PGPASSFILE": passfile, "PGAPPNAME": "env", "PGCONNECT_TIMEOUT": "soon", "PGSSLMODE": "verify-full",
-		"PGSSLKEY": "/nonexistent/key", "PGSSLCERT": "/nonexistent/cert", "PGSSLSNI": "0", "PGSSLROOTCERT": "/nonexistent/root",
+		"PGSSLKEY": "/nonexistent/key", "PGSSLCERT": "/nonexistent/cert", "PGSSLCERTMODE": "require", "PGSSLSNI": "0", "PGSSLROOTCERT": "/nonexistent/root",
 		"PGSSLPASSWORD": "x", "PGSSLNEGOTIATION": "direct", "PGTARGETSESSIONATTRS": "read-write", "PGSERVICEFILE": "/nonexistent/services",
 		"PGTZ": "Mars/Olympus", "PGOPTIONS": "-c search_path=evil", "PGMINPROTOCOLVERSION": "3.2", "PGMAXPROTOCOLVERSION": "latest",
 		"PGCHANNELBINDING": "require", "PGREQUIREAUTH": "md5",
@@ -413,8 +413,13 @@ func TestNoPGVariableChangesThePostgresConfiguration(t *testing.T) {
 // before every variable was pinned: the function as it was is the oracle,
 // over ports, TLS and options.
 func TestThePostgresConfigurationIsWhatItWasWithoutTheVariables(t *testing.T) {
+	// Unset rather than empty: pgx refuses an empty PGSSLCERTMODE, as
+	// libpq does, and the oracle, which pins nothing, would fail on it.
 	for name := range postgresEnvironment(t) {
 		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PGSERVICE", "")
 	before := func(spec *sqlConnectSpec) (*pgx.ConnConfig, error) {
@@ -476,7 +481,7 @@ func TestEveryFieldOfThePgxConfigurationIsLookedAt(t *testing.T) {
 		"Host", "Port", "Database", "User", "Password", "TLSConfig", "ConnectTimeout", "DialFunc", "LookupFunc", "RuntimeParams",
 		"KerberosSrvName", "KerberosSpn", "Fallbacks", "SSLNegotiation", "ValidateConnect", "AfterConnect",
 		// Pinned by postgresPinned.
-		"MinProtocolVersion", "MaxProtocolVersion", "ChannelBinding", "RequireAuth",
+		"MinProtocolVersion", "MaxProtocolVersion", "ChannelBinding", "RequireAuth", "SSLCertMode",
 		// Set by no variable: pgx's own defaults.
 		"BuildFrontend", "MaxProtocolMessageBodyLen", "BuildContextWatcherHandler", "AfterNetConnect", "OnNotice", "OnNotification",
 		"OnPgError", "OAuthTokenProvider",

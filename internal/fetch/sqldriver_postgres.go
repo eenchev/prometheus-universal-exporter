@@ -109,7 +109,7 @@ func postgresServerError(err error) (string, bool) {
 // system's account for it. A variable pgx comes to read later is caught by
 // the test of the configuration's fields.
 const postgresPinned = "host=localhost port=5432 dbname='' user=exporter password='' passfile='' application_name='' connect_timeout=0 " +
-	"sslmode=disable sslkey='' sslcert='' sslsni=1 sslrootcert='' sslpassword='' sslnegotiation='' target_session_attrs=any " +
+	"sslmode=disable sslkey='' sslcert='' sslcertmode=allow sslsni=1 sslrootcert='' sslpassword='' sslnegotiation='' target_session_attrs=any " +
 	"servicefile='' timezone='' options='' min_protocol_version=3.0 max_protocol_version=3.0 channel_binding=prefer require_auth=''"
 
 // postgresConfig is the pgx configuration of a connection made with spec.

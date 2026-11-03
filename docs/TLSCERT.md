@@ -18,6 +18,13 @@ verifies. Use it to know before a certificate expires:
 Nothing is sent over TLS: the handshake is the scrape, and the connection
 is closed when it is over.
 
+An `http` collector that already asks a web server something has the
+server's own certificate without a `tlscert` collector beside it: its rules
+read it as [`$tls`](REQUESTS.md#timings-tls-and-the-final-url), with
+`not_after`, `subject_cn` and `issuer_cn` named as here. What only this type
+reads is the rest of the chain, the verification's reason, and a server
+that speaks no HTTP.
+
 ## A collector
 
 ```yaml

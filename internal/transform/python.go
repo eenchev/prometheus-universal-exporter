@@ -38,6 +38,13 @@ type pythonResponse struct {
 	StatusCode any                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers"`
 	Body       string              `json:"body"`
+	// Timings, TLS, URL and Redirects are response.timings,
+	// response.tls, response.url and response.redirects, jq's $timings,
+	// $tls, $url and $redirects (fetch.HTTPTrip).
+	Timings   any `json:"timings"`
+	TLS       any `json:"tls"`
+	URL       any `json:"url"`
+	Redirects any `json:"redirects"`
 }
 
 // pythonOutput is one answer from a worker: the metrics a transform emitted or

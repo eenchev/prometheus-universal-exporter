@@ -22,6 +22,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/itchyny/gojq"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -1058,8 +1059,7 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 	// gave instead of running the program again (jqSharing).
 	items := sharing.items(ctx, rule.Items, later)
 	if items.kept == nil {
-		vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
-		items.running = code.RunWithContext(ctx, data, data, vars.status, vars.headers)
+		items.running = runWithVariables(ctx, code, data, data)
 	}
 	// The rule's series are those of out from start on. Room is made for
 	// them at once where the number of items is known beforehand, and for
@@ -1171,8 +1171,7 @@ func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any,
 	if value, ok := program.Lookup(input); ok {
 		return []any{value}, nil
 	}
-	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
-	iterator := program.Code.RunWithContext(ctx, input, root, vars.status, vars.headers)
+	iterator := runWithVariables(ctx, program.Code, input, root)
 	values := []any{}
 	for {
 		value, ok := iterator.Next()
@@ -1210,8 +1209,7 @@ func runJQ(ctx context.Context, input, root any, expression string) (*jqValues, 
 	if value, ok := program.Lookup(input); ok {
 		return &jqValues{looked: value, hasLooked: true}, nil
 	}
-	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
-	return &jqValues{program: program.Code.RunWithContext(ctx, input, root, vars.status, vars.headers)}, nil
+	return &jqValues{program: runWithVariables(ctx, program.Code, input, root)}, nil
 }
 
 // next takes the program's next value; ok is false when there is none. An
@@ -1251,31 +1249,35 @@ func (v *jqValues) rest() int {
 	}
 }
 
-// responseVariables are $status and $headers, as jq sees them: the
-// response's status as a number and its headers as an object of lower-case
-// names, each with its values joined by ", ", as HTTP allows; null when the
-// response has none.
-type responseVariables struct {
-	status  any
-	headers any
-}
-
+// responseVariablesKey holds the values of the jq variables after $root for
+// a response (expr.JQVariables): $status and $headers, the response's status as a
+// number and its headers as an object of lower-case names, each with its
+// values joined by ", ", as HTTP allows, null when the response has none;
+// and $timings, $tls, $url and $redirects, null but for the request of an
+// http or graphite collector (fetch.HTTPTrip).
 type responseVariablesKey struct{}
 
-// withResponseVariables puts $status and $headers for r into ctx.
+// withResponseVariables puts the jq variables for r into ctx.
 func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
 	if r == nil {
 		return ctx
 	}
-	vars := responseVariables{status: r.Status()}
+	vars := expr.JQBindings{Status: r.Status(), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects()}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {
 			headers[strings.ToLower(name)] = strings.Join(values, ", ")
 		}
-		vars.headers = headers
+		vars.Headers = headers
 	}
 	return context.WithValue(ctx, responseVariablesKey{}, vars)
+}
+
+// runWithVariables runs code on input with the jq variables of ctx's
+// response, root as $root.
+func runWithVariables(ctx context.Context, code *gojq.Code, input, root any) gojq.Iter {
+	vars, _ := ctx.Value(responseVariablesKey{}).(expr.JQBindings)
+	return code.RunWithContext(ctx, input, vars.Values(root)...)
 }
 
 // evaluateJQOne runs a program that must produce at most one value; no value
@@ -1291,8 +1293,7 @@ func evaluateJQOne(ctx context.Context, input, root any, expression string) (any
 	if value, ok := program.Lookup(input); ok {
 		return value, nil
 	}
-	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
-	iterator := program.Code.RunWithContext(ctx, input, root, vars.status, vars.headers)
+	iterator := runWithVariables(ctx, program.Code, input, root)
 	var first any
 	count := 0
 	for {

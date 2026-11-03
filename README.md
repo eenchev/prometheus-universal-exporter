@@ -147,7 +147,8 @@ which `--help` prints too.
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.
 - [Endpoints](docs/ENDPOINTS.md) and [command-line flags](docs/FLAGS.md) — what each endpoint takes and answers, and every flag of the exporter.
-- [Target requests](docs/REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, pagination, restricting targets, TLS, proxies, per-scrape overrides.
+- [Target requests](docs/REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, a request's timings, TLS connection and final URL, pagination, restricting targets, TLS, proxies, per-scrape overrides.
+- [Uptime probes](docs/REQUESTS.md#uptime-probes) — whether HTTP and HTTPS sites are up, their status, the phases of the request, the redirects and the certificate's expiry, as blackbox_exporter's `http` prober reports them, from one collector, [`configs/config.uptime.example.yaml`](configs/config.uptime.example.yaml).
 - [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
 - [Graphite](docs/GRAPHITE.md) — the `graphite` request type: Graphite series from a render API, or carbon lines from a file, as Prometheus metrics.
 - [gRPC](docs/GRPC.md) — the `grpc` request type: a unary gRPC method called with a JSON message, its answer mapped as JSON, with message types from server reflection, a descriptor set or `.proto` files.

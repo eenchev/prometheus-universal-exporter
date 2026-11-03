@@ -523,7 +523,10 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
   `target` label, where it used to have `target=""`.
 - `http_exporter_target_up` and `http_exporter_target_scrape_duration_seconds`
   report each target's last scrape, so a failing target is visible rather
-  than simply absent.
+  than simply absent. They are what
+  [`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
+  gives a probe, so the key changes nothing here: a target of a collector
+  that sets it is served as any other.
 - `http_exporter_target_last_success_timestamp_seconds` is when the target was
   last scraped successfully, 0 until it has been, and is kept through later
   failures. Alert on its age to find a target that has given nothing new for

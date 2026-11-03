@@ -42,10 +42,10 @@ func NormalizeTargetRequest(t *model.StaticTarget) {
 	}
 }
 
-// checkAcceptStatus is normalizeAcceptStatus for a list that must not be
-// written, a static target's: a copy is normalized and checked.
+// checkAcceptStatus is normalizeAcceptedStatuses for a list that must not
+// be written, a static target's: a copy is normalized and checked.
 func checkAcceptStatus(entries []string) error {
-	return normalizeAcceptStatus(slices.Clone(entries))
+	return normalizeAcceptedStatuses(slices.Clone(entries))
 }
 
 // checkTargetRetryStatuses checks a static target's request.retry.statuses
@@ -73,7 +73,7 @@ func checkTargetRetryStatuses(t *model.StaticTarget, c *model.Collector) error {
 		accepted = slices.Clone(t.Request.AcceptStatus)
 		// CheckTargetRequest refuses an entry that is no status before
 		// this is asked, in these words.
-		if err := normalizeAcceptStatus(accepted); err != nil {
+		if err := normalizeAcceptedStatuses(accepted); err != nil {
 			return fmt.Errorf("request.accept_status %w", err)
 		}
 	}

@@ -53,7 +53,7 @@ func TestValueHelpersInJQMatchTheSharedVectors(t *testing.T) {
 			t.Fatalf("%s does not compile: %v", helper, err)
 		}
 		for _, v := range vectors {
-			got, ok := code.Run(v.Input, nil, nil, nil).Next()
+			got, ok := code.Run(v.Input, JQBindings{}.Values(nil)...).Next()
 			if !ok {
 				t.Errorf("%s(%#v) gave no value", helper, v.Input)
 				continue
@@ -121,7 +121,7 @@ func TestValueHelpersShadowNoBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := code.Run(map[string]any{"a": "1.00M", "b": "1h2m", "c": "1970-01-01T00:01:00Z", "d": "55.12%"}, nil, nil, nil).Next()
+	got, _ := code.Run(map[string]any{"a": "1.00M", "b": "1h2m", "c": "1970-01-01T00:01:00Z", "d": "55.12%"}, JQBindings{}.Values(nil)...).Next()
 	if want := []any{1048576.0, 3720.0, 60.0, 0.5512}; !slices.Equal(got.([]any), want) {
 		t.Fatalf("got %#v, want %#v", got, want)
 	}

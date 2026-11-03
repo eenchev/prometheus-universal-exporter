@@ -29,7 +29,8 @@ const KindRows = "sql"
 // values of NDJSON, logfmt, TOML and INI (ndjson.go, logfmt.go, toml.go,
 // ini.go), CSV rows, an
 // *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
-// Graphite series document (graphite.go), or the body as a string. Raw is the body the decoder read.
+// Graphite series document (graphite.go), the body as a string, or nil for
+// decoder none. Raw is the body the decoder read.
 type Decoded struct {
 	// Kind is the decoder's name, or KindRows for the rows a driver read.
 	Kind string
@@ -190,6 +191,12 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// (fetch.RequestType.Rows).
 	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
 		return &Decoded{Kind: KindRows, Data: r.Rows, Raw: r.Body, Columns: r.Columns}, nil
+	}
+	// decoder none reads no body, so it converts none either, and a body
+	// in an encoding the exporter does not know fails nothing: the rules
+	// read null, and a Python script the body as it was sent.
+	if c.Decoder.Type == model.DecoderNone {
+		return &Decoded{Kind: model.DecoderNone, Raw: r.Body}, nil
 	}
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)

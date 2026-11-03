@@ -117,6 +117,58 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- jq and yq rules of `http` and `graphite` collectors read `$timings`, how
+  long the request's phases took in seconds — `dns`, `connect`, `tls`,
+  `first_byte` and `total` — measured on the request that was answered,
+  with `null` for a phase it did not have, such as the handshake over plain
+  HTTP or the connection a kept one spared; a Python script has the same as
+  `response.timings`, and a debug probe's report shows it under the status.
+  Every jq and yq program has the variable, `null` for other request types
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- jq and yq rules of `http` and `graphite` collectors read `$tls`, the TLS
+  connection the answer came on — `tls_version`, `cipher_suite`, `server_name`,
+  `verified`, and the target certificate's `not_before`, `not_after`,
+  `subject_cn` and `issuer_cn` — so an uptime check alerts on the
+  certificate's expiry without a `tlscert` collector beside it; `null` over
+  plain HTTP. A Python script has it as `response.tls`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- [Uptime probes](docs/REQUESTS.md#uptime-probes) puts an uptime check of
+  HTTP and HTTPS sites together, as blackbox_exporter's `http` prober makes
+  it: one collector, shipped as `configs/config.uptime.example.yaml`, the
+  Prometheus job, what each series means, and a table of blackbox_exporter's
+  series with what answers each here.
+- jq and yq rules of `http` and `graphite` collectors read `$url`, where the
+  request went after its redirects, without its userinfo and with credential
+  query values `<redacted>` as a target in a log line, and `$redirects`, how
+  many redirects were followed; a Python script has them as `response.url`
+  and `response.redirects`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- `report_failures: true` on a collector answers every probe of it `200`
+  with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
+  `http_exporter_probe_elapsed_seconds`, and on a failure
+  `http_exporter_probe_failed_stage{stage}` naming the stage, with nothing
+  of the error. With `method: HEAD`, `accept_status: [any]` and
+  `decoder.type: none` it is an uptime check that alerts on a value, as
+  blackbox_exporter's `probe_success`. Failures are logged and counted in
+  the self-metrics as before, and a probe `error_handling` carried on past
+  a failed stage is one: counted no success, shown failed on the status
+  page, answered by `cache.stale_if_error`'s last good result and traced
+  as failed, where without the key it is a success; static targets, which have
+  `http_exporter_target_up`, are not changed
+  ([Reporting failed probes as metrics](docs/CONFIGURATION.md#reporting-failed-probes-as-metrics)).
+- `decoder.type: none` reads no body: jq and yq rules read `null` with
+  `$status` and `$headers`, and a Python script's `data` is `None`, so an
+  uptime check with `method: HEAD` no longer reads an empty or HTML body as
+  YAML to get at the status, and a body that is no document fails nothing.
+  A `regex`, `csv`, `css`, `xpath` or `prometheus` transform, and
+  `response.charset`, are refused beside it
+  ([No decoder](docs/CONFIGURATION.md#no-decoder)).
+- `request.accept_status: [any]` accepts every status from 100 to 599, so
+  an uptime check decodes whatever the target answers and its rules compare
+  `$status`, instead of listing `["1xx", "2xx", "3xx", "4xx", "5xx"]`; it is
+  written alone, and `retry.statuses` with entries is refused beside it,
+  since an accepted status is not retried
+  ([Accepting other statuses](docs/REQUESTS.md#accepting-other-statuses)).
 - With `otlp.traces`, the request spans of dns, sql, grpc, ntp, ldap,
   tlscert, redis, sshfile and s3file collectors tell how the request ended
   in attributes the exporter works out of the answer, never the target's

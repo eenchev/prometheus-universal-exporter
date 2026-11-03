@@ -1584,7 +1584,12 @@ are skipped and the text checks of the templates still run:
    check; and build the parent chart `testdata/chart/parent` with
    `helm dependency build`, render it with
    `prometheus-universal-exporter.enabled=true`, and find the dependency's
-   Deployment and the replica count the parent's values give it. The parent
+   Deployment and the replica count the parent's values give it; render a
+   `probes` entry of static targets with `targetLabels` and find the `Probe`,
+   its name, its prober's address and `/probe`, the `collector` parameter,
+   the target and the label, and no `module`, and pass the render to the
+   manifest check, and one of an `ingress` selector and find `ingress:`,
+   the selector and no `staticConfig`. The parent
    MUST be built in a temporary copy of the two charts, so that neither the
    `charts` directory nor the `Chart.lock` helm writes reaches the working
    tree, and the build MUST need no network. Each of the two MUST fail when
@@ -1595,8 +1600,8 @@ are skipped and the text checks of the templates still run:
    the configuration directory written with a trailing slash, an
    `extraVolumeMounts` entry there written with one, `goGC.percent` `off` as
    a string with `goMemLimit.enabled=false`, `goGC.percent=0`,
-   `goGC.percent=200` beside a `GOGC` entry in `env`, or a `replicaCount` of
-   2147483648. A check of what a render
+   `goGC.percent=200` beside a `GOGC` entry in `env`, a `replicaCount` of
+   2147483648, or a `probes` entry's `targetLabels` beside its `ingress`. A check of what a render
    holds MUST keep the render before reading it, so that helm failing fails
    the check rather than handing the reader nothing. A test MUST fail when
    either list lacks one of these checks. A test MUST also find no check in

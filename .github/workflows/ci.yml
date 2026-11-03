@@ -392,6 +392,38 @@ jobs:
           echo "$out" | grep -q 'port: "grpc"'
           echo "$out" | grep -q 'namespaceSelector:'
           echo "$out" | grep -q '^    - a$'
+      - name: Render Prometheus Operator Probes, and reject targetLabels beside an ingress
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # One of static targets, with their labels, and one of the
+          # Ingresses a selector picks; targetLabels beside an ingress,
+          # which a Probe would drop, is rejected.
+          out="$(helm template test charts/prometheus-universal-exporter --set-json 'probes=[{"name":"sites","collector":"example","targets":["https://www.example.com"],"targetLabels":{"team":"web"}}]')"
+          echo "$out" | grep -q 'kind: Probe'
+          echo "$out" | grep -q 'name: test-prometheus-universal-exporter-sites$'
+          echo "$out" | grep -q 'url: "test-prometheus-universal-exporter.default.svc:8080"'
+          echo "$out" | grep -q 'path: /probe'
+          echo "$out" | grep -q 'values: \["example"\]'
+          echo "$out" | grep -q '^        - https://www.example.com$'
+          echo "$out" | grep -q '^        team: web$'
+          if echo "$out" | grep -q 'module:'; then
+            echo "a Probe rendered spec.module" >&2
+            exit 1
+          fi
+          echo "$out" | python3 tools/check-manifests.py
+          out="$(helm template test charts/prometheus-universal-exporter --set-json 'probes=[{"name":"ingresses","collector":"example","ingress":{"selector":{"matchLabels":{"probe":"true"}}}}]')"
+          echo "$out" | grep -q 'kind: Probe'
+          echo "$out" | grep -q '^    ingress:$'
+          echo "$out" | grep -q 'probe: "true"'
+          if echo "$out" | grep -q 'staticConfig:'; then
+            echo "a Probe of Ingresses rendered a static config" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set-json 'probes=[{"name":"ingresses","collector":"example","ingress":{"selector":{}},"targetLabels":{"team":"web"}}]' >/dev/null 2>&1; then
+            echo "helm template accepted targetLabels beside a probes entry's ingress" >&2
+            exit 1
+          fi
       - name: Render the target allocator, and reject what the allocator cannot run with
         if: steps.changes.outputs.chart == 'true'
         run: |

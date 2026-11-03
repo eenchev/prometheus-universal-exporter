@@ -328,7 +328,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 		case r.StatusCode != 0:
 			shown.Status = fmt.Sprintf("%d %s", r.StatusCode, http.StatusText(r.StatusCode))
 		}
-		shown.Variables = tripLines(r)
+		shown.Variables = tripLines(r, configured)
 		if d := r.Directory; d != nil {
 			var b strings.Builder
 			writeDirectory(&b, d)

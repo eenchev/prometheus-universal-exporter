@@ -132,6 +132,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   certificate's expiry without a `tlscert` collector beside it; `null` over
   plain HTTP. A Python script has it as `response.tls`
   ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- jq and yq rules of `http` and `graphite` collectors read `$url`, where the
+  request went after its redirects, without its userinfo and with credential
+  query values `<redacted>` as a target in a log line, and `$redirects`, how
+  many redirects were followed; a Python script has them as `response.url`
+  and `response.redirects`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
 - `report_failures: true` on a collector answers every probe of it `200`
   with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
   `http_exporter_probe_elapsed_seconds`, and on a failure

@@ -12,8 +12,8 @@ import (
 
 // HTTPTrip is what an http or graphite collector's answer says of the
 // request that brought it, beside its status, headers and body: how long
-// each phase of that request took, and the TLS connection it was sent on.
-// It is of the request whose status the
+// each phase of that request took, the TLS connection it was sent on, its
+// URL and the redirects that led to it. It is of the request whose status the
 // answer has: the last attempt of a retried trip, the request a redirect
 // led to, a 304 that revalidated a cached response, and of a paginated
 // trip the first page, or the page whose status failed it.
@@ -33,6 +33,51 @@ type HTTPTrip struct {
 	// TLSConnection is the TLS connection the request was sent on, nil
 	// over plain HTTP.
 	TLSConnection *TLSConnection
+	// URL is the request's URL, where the redirects led, with its
+	// userinfo and fragment left out and the values of the query
+	// parameters whose names read as credentials masked, as a target is
+	// shown in a log line (MaskCredentialQueryValues).
+	URL string
+	// Redirects is how many redirects were followed to it, 0 for none.
+	Redirects int
+}
+
+// JQURL is the URL as jq's $url and Python's response.url have it, null for
+// no trip.
+func (t *HTTPTrip) JQURL() any {
+	if t == nil {
+		return nil
+	}
+	return t.URL
+}
+
+// JQRedirects is the number of redirects as jq's $redirects and Python's
+// response.redirects have it, null for no trip.
+func (t *HTTPTrip) JQRedirects() any {
+	if t == nil {
+		return nil
+	}
+	return t.Redirects
+}
+
+// shownURL is u as $url has it: without userinfo, which a label would keep,
+// rather than the redacted:redacted a log line shows in its place, and
+// otherwise as a target is shown in one.
+func shownURL(u *url.URL) string {
+	shown := *u
+	shown.User = nil
+	return RedactURL(&shown, MaskCredentialQueryValues)
+}
+
+// redirectsTo counts the redirects that led to req: each request a redirect
+// made carries the answer that asked for it, which carries the request
+// before.
+func redirectsTo(req *http.Request) int {
+	n := 0
+	for ; req.Response != nil && req.Response.Request != nil; req = req.Response.Request {
+		n++
+	}
+	return n
 }
 
 // TLSConnection is what the exporter knows of a TLS connection to a target
@@ -224,6 +269,7 @@ func (t *tripTrace) trip(resp *http.Response, end time.Time) *HTTPTrip {
 	trip := &HTTPTrip{DNS: t.dns, Connect: t.connect, TLS: t.tls, FirstByte: t.firstByte, Total: end.Sub(t.start)}
 	if resp.Request != nil {
 		trip.TLSConnection = tlsConnectionOf(resp.Request.URL, resp.TLS)
+		trip.URL, trip.Redirects = shownURL(resp.Request.URL), redirectsTo(resp.Request)
 	}
 	return trip
 }

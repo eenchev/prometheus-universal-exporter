@@ -1253,8 +1253,8 @@ func (v *jqValues) rest() int {
 // a response (expr.JQVariables): $status and $headers, the response's status as a
 // number and its headers as an object of lower-case names, each with its
 // values joined by ", ", as HTTP allows, null when the response has none;
-// and $timings and $tls, null but for the request of an http or graphite
-// collector (fetch.HTTPTrip).
+// and $timings, $tls, $url and $redirects, null but for the request of an
+// http or graphite collector (fetch.HTTPTrip).
 type responseVariablesKey struct{}
 
 // withResponseVariables puts the jq variables for r into ctx.
@@ -1262,7 +1262,7 @@ func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.C
 	if r == nil {
 		return ctx
 	}
-	vars := expr.JQBindings{Status: r.Status(), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS()}
+	vars := expr.JQBindings{Status: r.Status(), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects()}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {

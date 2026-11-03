@@ -205,7 +205,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 // for data the encoder does not write itself: a value of a type no decoder
 // makes.
 func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS()}}
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects()}}
 	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
 		input.DataIsBody = true
 	} else {
@@ -531,14 +531,18 @@ func appendPythonString[Text []byte | string](dst []byte, text Text, nul *bool) 
 }
 
 // appendPythonTrip writes what a script's response has of the request
-// besides its answer, as jq has it (fetch.HTTPTrip): response.timings and
-// response.tls. Their values are numbers, booleans, text and null, which
-// json.Marshal writes as the worker reads them, and which cannot fail.
+// besides its answer, as jq has it (fetch.HTTPTrip): response.timings,
+// response.tls, response.url and response.redirects. Their values are
+// numbers, booleans, text and null, which json.Marshal writes as the worker
+// reads them, and which cannot fail.
 func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip) []byte {
-	timings, _ := json.Marshal(trip.JQTimings())
-	dst = append(dst, `,"timings":`...)
-	dst = append(dst, timings...)
-	connection, _ := json.Marshal(trip.JQTLS())
-	dst = append(dst, `,"tls":`...)
-	return append(dst, connection...)
+	for _, field := range []struct {
+		key   string
+		value any
+	}{{`,"timings":`, trip.JQTimings()}, {`,"tls":`, trip.JQTLS()}, {`,"url":`, trip.JQURL()}, {`,"redirects":`, trip.JQRedirects()}} {
+		value, _ := json.Marshal(field.value)
+		dst = append(dst, field.key...)
+		dst = append(dst, value...)
+	}
+	return dst
 }

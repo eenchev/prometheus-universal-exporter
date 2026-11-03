@@ -139,3 +139,41 @@ metric(name='verified', value=response.tls['verified'])
 		t.Errorf("python over plain HTTP: %s", got)
 	}
 }
+
+// $url and $redirects are where the request went and how many redirects led
+// there, as jq, yq and Python read them, and null for an answer no HTTP
+// request brought.
+func TestURLAndRedirectsAreBoundInEveryProgram(t *testing.T) {
+	redirected := tripResponse()
+	redirected.Trip.URL, redirected.Trip.Redirects = "https://www.example.com/health?token=<redacted>", 2
+	rules := []model.MetricRule{
+		{Name: "redirects", Expression: "$redirects"},
+		{Name: "final", Expression: "1", Labels: []model.LabelRule{{Name: "url", Expression: "$url"}}},
+	}
+	want := "redirects 2\nfinal url=https://www.example.com/health?token=<redacted> 1\n"
+	absent := []model.MetricRule{{Name: "absent", Expression: "if $url == null and $redirects == null then 1 else 0 end"}}
+	for _, kind := range []string{"jq", "yq"} {
+		c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: kind}, Metrics: rules}
+		if got := tripSeries(t, c, redirected); got != want {
+			t.Errorf("%s:\n%s\nwant\n%s", kind, got, want)
+		}
+		c.Metrics = absent
+		bare := tripResponse()
+		bare.Trip = nil
+		if got := tripSeries(t, c, bare); got != "absent 1\n" {
+			t.Errorf("%s without a trip: %s", kind, got)
+		}
+	}
+
+	requirePython(t)
+	c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: "python", Script: "metric(name='redirects', value=response.redirects, labels={'url': response.url})\n"}}
+	if got := tripSeries(t, c, redirected); got != "redirects url=https://www.example.com/health?token=<redacted> 2\n" {
+		t.Errorf("python: %s", got)
+	}
+	c.Transform.Script = "metric(name='absent', value=1 if response.url is None and response.redirects is None else 0)\n"
+	bare := tripResponse()
+	bare.Trip = nil
+	if got := tripSeries(t, c, bare); got != "absent 1\n" {
+		t.Errorf("python without a trip: %s", got)
+	}
+}

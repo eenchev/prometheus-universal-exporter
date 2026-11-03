@@ -1396,6 +1396,8 @@ has the same on its `response`:
 | --- | --- | --- |
 | `$timings` | `response.timings` | How long the request's phases took, in seconds |
 | `$tls` | `response.tls` | The TLS connection the request was sent on, and the target's certificate |
+| `$url` | `response.url` | Where the request went, after the redirects it followed |
+| `$redirects` | `response.redirects` | How many redirects it followed, `0` for none |
 
 ```yaml
 transform:
@@ -1461,13 +1463,27 @@ intermediates and roots, and a certificate on a port that speaks no HTTP,
 are the `tlscert` type's. Through an `https://` proxy, a plain HTTP request
 has no `$tls`: the connection it came on is the proxy's.
 
-`$timings` and `$tls` are `null` for every other request type, and on a
-response pasted on the [debug page](CONFIGURATION.md#the-debug-page); every
-jq and yq program has the variables, so a rule that reads them loads
-whatever the collector's type. A pagination's `next` and a login's `token`
+`$url` is the URL of the same request: the target's, or with
+[`follow_redirects`](#redirects-and-http2) where the redirects led, and
+`$redirects` how many were followed to get there, `0` without
+`follow_redirects` or when the target answered at once. `$url` is shown as
+a target is in a log line: its userinfo and its fragment are left out, and
+the value of a query parameter whose name reads as a credential's —
+`token`, `api_key`, `password`, `sig` and the like — is `<redacted>`. Every
+other parameter is kept as it was sent, so a label of `$url` is safe to the
+extent that rule is: a session ID, a tenant or an e-mail address in a
+parameter of another name is kept, and a URL that carries one a redirect
+chose, such as a login page's `?next=`, makes a series of every value. Keep
+the URL's start alone where that matters, `$url | split("?")[0]`.
+
+`$timings`, `$tls`, `$url` and `$redirects` are `null` for every other
+request type, and on a response pasted on the [debug
+page](CONFIGURATION.md#the-debug-page); every jq and yq program has the
+variables, so a rule that reads them loads whatever the collector's type. A pagination's `next` and a login's `token`
 expression read them as `null` too. A [debug
 probe](CONFIGURATION.md#debug-probes)'s report and the debug page show
-their values under the response's status.
+their values under the response's status, `$url` with the values of the
+query masked as the report's request lines mask them.
 
 ## Pagination
 

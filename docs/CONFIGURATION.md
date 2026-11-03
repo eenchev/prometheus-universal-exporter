@@ -1351,8 +1351,9 @@ has `$status`, the response's HTTP status, and `$headers`, its headers by
 lower-case name, for a target whose status or headers say something the body
 does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses));
 `$timings`, how long the phases of an `http` or `graphite` collector's
-request took, and `$tls`, the TLS connection it was sent on, `null` for
-other types (see [Timings, TLS and the final
+request took, `$tls`, the TLS connection it was sent on, `$url`, where its
+redirects led, and `$redirects`, how many there were, each `null` for other
+types (see [Timings, TLS and the final
 URL](REQUESTS.md#timings-tls-and-the-final-url)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`

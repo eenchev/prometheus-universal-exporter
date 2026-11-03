@@ -54,7 +54,7 @@ func TestTheDecodeLeavesTheReportsCopyOfTheResponseAlone(t *testing.T) {
 		t.Fatalf("converted from %q", from)
 	}
 	var b bytes.Buffer
-	if !writeResponse(&b, sent) {
+	if !writeResponse(&b, sent, fetch.ConfiguredQuery(nil)) {
 		t.Fatal("the copy has no body to show")
 	}
 	writeBody(&b, sent.Body, "windows-1251")

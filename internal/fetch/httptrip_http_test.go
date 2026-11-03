@@ -168,3 +168,46 @@ func TestTheTLSConnectionIsTheTargets(t *testing.T) {
 		t.Errorf("a plain HTTP request through an https:// proxy has the connection %+v", *response.Trip.TLSConnection)
 	}
 }
+
+// The URL an answer carries is where the redirects led, without the
+// userinfo and with the values of credential query parameters masked, as a
+// target is shown in a log line, and the redirects are counted.
+func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			http.Redirect(w, r, "/hop", http.StatusFound)
+		case "/hop":
+			http.Redirect(w, r, "/end?token=t1&tenant=a", http.StatusMovedPermanently)
+		default:
+			_, _ = w.Write([]byte("ok"))
+		}
+	}))
+	defer server.Close()
+	tripOf := func(target string, follow bool) *HTTPTrip {
+		t.Helper()
+		c := httpCollector(t, func(c *model.Collector) {
+			c.Request.FollowRedirects = follow
+			c.Request.AcceptStatus = []string{"any"}
+		})
+		response, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.Trip
+	}
+	if trip := tripOf(server.URL, true); trip.URL != server.URL+"/end?token=<redacted>&tenant=a" || trip.Redirects != 2 {
+		t.Errorf("after two redirects: %q, %d", trip.URL, trip.Redirects)
+	}
+	if trip := tripOf(server.URL, false); trip.URL != server.URL || trip.Redirects != 0 {
+		t.Errorf("a redirect not followed: %q, %d", trip.URL, trip.Redirects)
+	}
+	withUser := strings.Replace(server.URL, "http://", "http://scraper:s3cret@", 1) + "/end?api_key=k&tenant=b#part"
+	if trip := tripOf(withUser, true); trip.URL != server.URL+"/end?api_key=<redacted>&tenant=b" || trip.Redirects != 0 {
+		t.Errorf("a URL with userinfo, a credential and a fragment: %q, %d", trip.URL, trip.Redirects)
+	}
+	trip := &HTTPTrip{URL: "http://x/", Redirects: 1}
+	if trip.JQURL() != "http://x/" || trip.JQRedirects() != 1 || (*HTTPTrip)(nil).JQURL() != nil || (*HTTPTrip)(nil).JQRedirects() != nil {
+		t.Error("$url and $redirects")
+	}
+}

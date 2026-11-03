@@ -23,9 +23,11 @@ An `http` or `graphite` collector's script also has what the request was
 besides its answer, as jq and yq rules have it ([Timings, TLS and the final
 URL](REQUESTS.md#timings-tls-and-the-final-url)): `response.timings`, a dict
 of the request's phases in seconds, `None` for a phase it did not have,
-`response.timings["first_byte"]`; and `response.tls`, a dict of the TLS
+`response.timings["first_byte"]`; `response.tls`, a dict of the TLS
 connection and the target's certificate, `response.tls["not_after"]`, `None`
-over plain HTTP. Both are `None` for every other request type.
+over plain HTTP; `response.url`, where the request went after its redirects,
+with its credentials withheld; and `response.redirects`, how many it
+followed. All four are `None` for every other request type.
 
 `target` is the target exactly as the probe or the static target gave it,
 credentials included: `https://user:password@host/api?token=abc` reaches the

@@ -863,7 +863,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	b.WriteString("\nResponse\n")
 	if t.response == nil {
 		b.WriteString("  none\n")
-	} else if writeResponse(&b, t.response) {
+	} else if writeResponse(&b, t.response, configured) {
 		// The body is shown as it is, up to its own bound.
 		cutLongLines(&b, uncut)
 		writeBody(&b, t.response.Body, t.convertedFrom)
@@ -1028,7 +1028,7 @@ func shownHead[T ~string | ~[]byte](text T, limit int) int {
 // writeResponse renders the response as the target sent it: its status and
 // headers, and a directory's files. It reports whether the response has a
 // body for writeBody to render after them, which a directory has not.
-func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
+func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, configured func(name, value string) bool) (body bool) {
 	switch {
 	case r.GRPCCode != nil:
 		fmt.Fprintf(b, "  gRPC status %d\n", *r.GRPCCode)
@@ -1036,7 +1036,7 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 	}
-	for _, line := range tripLines(r) {
+	for _, line := range tripLines(r, configured) {
 		fmt.Fprintf(b, "  %s\n", line)
 	}
 	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
@@ -1056,14 +1056,27 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 // tripLines are the jq variables that say what the request was besides its
 // answer, each as its name and its value as JSON, for the request of an
 // http or graphite collector (fetch.HTTPTrip): what the rules read of it
-// beside the status, which a report shows.
-func tripLines(r *fetch.HTTPResponse) []string {
+// beside the status, which a report shows. $url is shown as the report
+// shows a request's URL, its query values masked but for those configured
+// says the configuration set, and cut as a request line is.
+func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) []string {
 	if r.Trip == nil {
 		return nil
 	}
-	timings, _ := json.Marshal(r.Trip.JQTimings())
-	connection, _ := json.Marshal(r.Trip.JQTLS())
-	return []string{"$timings " + string(timings), "$tls " + string(connection)}
+	var lines []string
+	for _, v := range []struct {
+		name  string
+		value any
+	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.URL, configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
+		// As written, not escaped for HTML: the <redacted> of a masked
+		// query value reads as it is.
+		var value bytes.Buffer
+		encoder := json.NewEncoder(&value)
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(v.value)
+		lines = append(lines, v.name+" "+strings.TrimSuffix(value.String(), "\n"))
+	}
+	return lines
 }
 
 // writeDirectory renders a directory read as its files.

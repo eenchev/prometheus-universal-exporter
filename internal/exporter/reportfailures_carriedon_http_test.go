@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,5 +249,42 @@ func TestTheTraceOfAFailedProbeUnderReportFailuresNamesItsStage(t *testing.T) {
 				t.Errorf("the probe's span: %+v; want error.type %q", root.otlpSpan, tc.stage)
 			}
 		})
+	}
+}
+
+// A debug probe of a collector with report_failures says that a probe whose
+// decode stage failed and was carried on past, with the last good result
+// standing in for it, is answered that result, marked stale, with success
+// 0 and the stage, as the probe is; not the failure's own answer.
+func TestADebugProbeSaysAStaleResultStandsInUnderReportFailures(t *testing.T) {
+	testutil.CaptureLogs(t)
+	var body atomic.Value
+	body.Store(`{"v": 3}`)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	t.Cleanup(target.Close)
+	c := staleCollector(time.Millisecond, time.Hour)
+	c.Decoder.Type, c.Transform.Type = "json", "jq"
+	c.Metrics = []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: ".v"}}
+	c.ErrorHandling.OnDecodeError = model.ErrorPolicyLog
+	c.ReportFailures = true
+	server := modeServer(t, c)
+	if got := probeOnce(t, server, probeOf("flaky", target.URL), nil); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "demo_value 3\n") {
+		t.Fatalf("the first probe: %d %s", got.Code, got.Body)
+	}
+	ageEntries(server, 5*time.Second)
+	body.Store("not json")
+	server.SetDebug(DebugFull)
+	report := probeOnce(t, server, probeOf("flaky", target.URL)+"&debug=true", nil).Body.String()
+	want := "A probe would have answered 200 with the last good result, 5s old, marked stale (cache.stale_if_error), with http_exporter_probe_success 0 and the decode stage failed (report_failures)."
+	if !strings.Contains(report, want) {
+		t.Errorf("the debug report lacks %q:\n%s", want, report)
+	}
+	for _, series := range []string{"demo_value 3", "http_exporter_result_stale 1", "http_exporter_probe_success 0", `http_exporter_probe_failed_stage{stage="decode"} 1`} {
+		if !strings.Contains(report, series) {
+			t.Errorf("the debug report lacks the series %s:\n%s", series, report)
+		}
 	}
 }

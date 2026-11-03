@@ -7073,7 +7073,10 @@ The response cache MUST keep, and the OTLP export (§ 42.1) MUST export, the
 collector's series alone, never the probe series; probes sharing a trip (§
 42.13a) MUST each answer their own duration from the one result, which MUST
 NOT be changed. A debug probe (§ 42.17) MUST say that a probe would have
-answered `200` with the probe series, and show them. Static targets MUST NOT be changed by
+answered `200` with the probe series, and show them; where the last good
+result stands in for the failure, it MUST say that the probe would have
+answered that result, its age and its being stale, with success `0` and the
+stage, not the failure's own answer. Static targets MUST NOT be changed by
 the key: a static target's scrape has `http_exporter_target_up` (§ 42.14).
 
 A rule, or a derived family that is not hidden (§ 18.1), of a collector with
@@ -30243,6 +30246,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 - `TestReportFailuresAnswersAPanickedProbeAFailure`: a probe of a `report_failures` collector whose request type panics is answered `200` with `http_exporter_probe_success 0` and `http_exporter_probe_failed_stage{stage="panic"} 1`, counted in `http_exporter_scrapes_total` and not in `http_exporter_scrape_success_total`; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the panic stage failed (report_failures), in place of 500: probe failed: …` and shows the stage series. Without the change the probe was answered success 1 with no stage.
 - `TestTheTraceOfAFailedProbeUnderReportFailuresNamesItsStage`: under `errors` and an hour's threshold, the trace of a `report_failures` probe of a 503 target under `on_fetch_error: fail` has `error.type` `http_status`, and that of a probe whose request type panics `panic`, each with `http.response.status_code` `200` and the status ERROR; without the change they had `502` and `500`.
+- `TestADebugProbeSaysAStaleResultStandsInUnderReportFailures`: a debug probe of a `report_failures` collector under `on_decode_error: log` and `cache.stale_if_error`, whose target answered `{"v": 3}` and then a body that is no JSON, says `A probe would have answered 200 with the last good result, 5s old, marked stale (cache.stale_if_error), with http_exporter_probe_success 0 and the decode stage failed (report_failures).` and shows `demo_value 3`, `http_exporter_result_stale 1`, success `0` and the `decode` stage; without the change it said `200 with http_exporter_probe_success 0 and the decode stage failed (report_failures), in place of 200 with the last good result, …`.
 
 # 35. Documentation requirements
 

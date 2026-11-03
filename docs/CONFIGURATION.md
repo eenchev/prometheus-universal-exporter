@@ -3258,8 +3258,10 @@ What else becomes of a probe:
 - **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
   with its error, answered `200` with its series.
 - **A [debug probe](#debug-probes)** says that a probe would have answered
-  `200` with `http_exporter_probe_success 0` in place of the failure, and
-  shows the series.
+  `200` with `http_exporter_probe_success 0` in place of the failure, or,
+  where a stale result stands in, `200 with the last good result, 5s old,
+  marked stale (cache.stale_if_error), with http_exporter_probe_success 0
+  and the decode stage failed (report_failures)`, and shows the series.
 - **[Static targets](STATIC-TARGETS.md)** are not changed by the key: a
   static target's scrape has `http_exporter_target_up` and its own
   self-metrics, and a collector both probed and named by static targets

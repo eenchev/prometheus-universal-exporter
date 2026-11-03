@@ -139,16 +139,22 @@ func reportedRecent(c *model.Collector, result *probeResult, recent recentProbe)
 // reportedVerdict is what a debug run says a probe of c would have
 // answered, verdict and answer as debugVerdict says them, with
 // report_failures: the same answer with the probe's series, 200 in place of
-// a failure. elapsed is the run's trip, which stands for the probe's
-// duration.
-func reportedVerdict(c *model.Collector, result collected, verdict string, answer *model.MetricSet, elapsed time.Duration) (string, *model.MetricSet) {
+// a failure. staleAge is the age of the last good result standing in for
+// the failure, which the answer is then, empty when none does. elapsed is
+// the run's trip, which stands for the probe's duration.
+func reportedVerdict(c *model.Collector, result collected, verdict string, answer *model.MetricSet, staleAge string, elapsed time.Duration) (string, *model.MetricSet) {
 	if !c.ReportFailures || result.aborted || result.refused {
 		return verdict, answer
 	}
 	success := !result.failed() && !result.carriedOn
 	reported := reportedAnswer(answer, success, result.stage, elapsed)
-	if success {
+	switch {
+	case success:
 		return fmt.Sprintf("200 with %d series, %s 1 among them (report_failures)", len(reported.Metrics), model.ProbeSuccessMetric), &reported
+	case staleAge != "":
+		// The failure's own answer is not what the probe answers: the
+		// last good result is, with the probe's series beside it.
+		return fmt.Sprintf("200 with the last good result, %s old, marked stale (cache.stale_if_error), with %s 0 and the %s stage failed (report_failures)", staleAge, model.ProbeSuccessMetric, result.stage), &reported
 	}
 	return fmt.Sprintf("200 with %s 0 and the %s stage failed (report_failures), in place of %s", model.ProbeSuccessMetric, result.stage, verdict), &reported
 }

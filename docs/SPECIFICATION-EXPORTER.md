@@ -30062,6 +30062,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames`: a static target's result scraped under `metric_name_validation_scheme: utf8` and kept through a reload to `legacy` is answered by `/static-targets`, filtered or not and without `Accept`, escaped by `underscores` with `escaping=underscores` in its `Content-Type`; it was written raw in the classic text format.
 - `TestTheProtobufAnswerWritesTheInfBucketWithItsExemplar`: a 90 s trip whose trace was dropped writes no `+Inf` classic bucket in protobuf; a 95 s trip whose trace was exported adds one, last, with `upper_bound` `+Inf`, `cumulative_count` 2 and the exemplar of its trace and span ids and 95; no other bucket has one. Without the fix the `+Inf` exemplar was in no classic bucket.
 - `TestADebugRunPropagatesItsTraceUnsampled`: with `propagate` and `sample_ratio` 1 a probe's request carries a `traceparent` ending `-01` and `ot=th:0`, and a debug page run's to the same target `00-<trace>-<span>-00` and no `tracestate`; it carried `-01` and `ot=th:0`.
+- `TestAGRPCCallDropsTheOperatorsLoneTracestateBesideTheExportersTraceparent` (fetch): a `tracestate` of `request.metadata` without a `traceparent` is not sent beside the exporter's `traceparent` with no `tracestate` or with `vendor=x`, nor beside a caller's passed on with none or with `vendor=y`, which are sent alone, as an HTTP request's header is; with nothing to propagate it is sent as it is. It was kept beside a traceparent with no `tracestate`.
 
 # 35. Documentation requirements
 
@@ -30917,8 +30918,10 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   readable `traceparent`, and its readable `tracestate`, MUST be passed on
   as they came, no id made. A `traceparent` the request sets itself, in
   `request.headers`, `request.metadata` or a forwarded header, MUST be
-  sent as it is, with no `tracestate` added; a login's request MUST carry
-  none. A trip shared by identical probes MUST be sent under the trace of
+  sent as it is, with no `tracestate` added; a `tracestate` it sets
+  without a `traceparent` MUST be dropped, on an HTTP request and a gRPC
+  call alike, wherever the exporter sends a `traceparent` of its own or of
+  its caller's; a login's request MUST carry none. A trip shared by identical probes MUST be sent under the trace of
   the probe that started it, and only that probe's span of a request MAY
   have the id it was sent under. Without `propagate`, the exporter MUST
   NOT send a `traceparent` to its targets.

@@ -517,6 +517,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   whose trace id `sample_ratio` keeps sent `01` and `ot=th:…`, so a target
   that samples by its parent recorded its part of a trace that is never
   exported.
+- With `otlp.traces.propagate: true` a gRPC call no longer sends a
+  `tracestate` set in `request.metadata` without a `traceparent` beside the
+  exporter's `traceparent`, which it was not written for; an HTTP request
+  already dropped such a header.
 
 ## exporter 1.8.0
 

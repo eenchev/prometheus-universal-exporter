@@ -321,7 +321,9 @@ func grpcTraceScheme(secure bool) string {
 // propagateGRPC sets the trace context of ctx, under otlp.traces.propagate,
 // in md, a call's metadata, whose names are lower case, and returns the span
 // id the call is sent under, zero for none of the exporter's own
-// (tracepropagation.go).
+// (tracepropagation.go). A tracestate the operator set without a
+// traceparent is dropped, as an HTTP request's is: it was not written for
+// the exporter's trace, and a tracestate goes with its traceparent.
 func propagateGRPC(ctx context.Context, md metadata.MD) [8]byte {
 	p := tracePropagationFrom(ctx)
 	if p == nil {
@@ -331,6 +333,7 @@ func propagateGRPC(ctx context.Context, md metadata.MD) [8]byte {
 	if !ok {
 		return span
 	}
+	md.Delete("tracestate")
 	md.Set("traceparent", parent)
 	if state != "" {
 		md.Set("tracestate", state)

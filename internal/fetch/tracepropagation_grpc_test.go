@@ -5,6 +5,7 @@ package fetch
 import (
 	"context"
 	"encoding/hex"
+	"slices"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
@@ -40,5 +41,41 @@ func TestAGRPCCallCarriesItsTraceparent(t *testing.T) {
 	md = server.Calls()[1].Metadata
 	if len(md.Get("traceparent")) != 1 || md.Get("traceparent")[0] != configured || len(md.Get("tracestate")) != 0 {
 		t.Errorf("request.metadata's traceparent arrives as %v", md)
+	}
+}
+
+// A tracestate request.metadata sets without a traceparent is dropped when
+// the exporter sends a traceparent of its own or its caller's, as an HTTP
+// request's header is, so that it never travels beside a traceparent it was
+// not written for: the exporter's tracestate, or none, goes in its place.
+// With nothing to propagate the operator's is sent as it is.
+func TestAGRPCCallDropsTheOperatorsLoneTracestateBesideTheExportersTraceparent(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
+	c := grpcCollector()
+	editGRPC(&c, func(r *GRPCConfig) {
+		r.Message = `{"queue": "orders"}`
+		r.Metadata = map[string]string{"tracestate": "operator=1"}
+	})
+	checked := validGRPC(t, c)
+	caller := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	for i, tc := range []struct {
+		propagation TracePropagation
+		parent      bool
+		state       []string
+	}{
+		{TracePropagation{TraceID: [16]byte{1}}, true, nil},
+		{TracePropagation{TraceID: [16]byte{1}, State: "vendor=x"}, true, []string{"vendor=x"}},
+		{TracePropagation{Parent: caller}, true, nil},
+		{TracePropagation{Parent: caller, ParentState: "vendor=y"}, true, []string{"vendor=y"}},
+		{TracePropagation{}, false, []string{"operator=1"}},
+	} {
+		ctx := WithTracePropagation(context.Background(), tc.propagation)
+		if _, err := FetchCollector(ctx, server.Addr, checked, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		md := server.Calls()[i].Metadata
+		if (len(md.Get("traceparent")) == 1) != tc.parent || !slices.Equal(md.Get("tracestate"), tc.state) {
+			t.Errorf("%+v: the call's metadata is %v, want tracestate %v", tc.propagation, md, tc.state)
+		}
 	}
 }

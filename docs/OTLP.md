@@ -1212,7 +1212,11 @@ passed on, as the W3C asks; a scrape has no caller, and sends none.
 
 A `traceparent` the request sets itself, in `request.headers`,
 `request.metadata` or a forwarded header (`forward_headers`), is the
-operator's and is sent as it is, with no `tracestate` of the exporter's. A
+operator's and is sent as it is, with no `tracestate` of the exporter's.
+A `tracestate` set there without a `traceparent` is dropped, on an HTTP
+request and a gRPC call alike, whenever the exporter sends a `traceparent`
+of its own or of its caller's: it was not written for that trace, and the
+exporter's `tracestate`, if any, goes in its place. A
 kubernetes collector's requests have no header of the operator's, and
 always carry the exporter's.
 A login's request (`request.login`) carries none: it goes to an identity

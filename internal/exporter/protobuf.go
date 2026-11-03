@@ -225,28 +225,29 @@ func appendProtoSummary(b []byte, m model.Metric) []byte {
 	return appendProtoCreated(b, 4, m.Created)
 }
 
-// appendProtoHistogram appends a histogram's classic buckets, without the
-// +Inf one, which sample_count is, and its native buckets when it has
-// exponential ones.
+// appendProtoHistogram appends a histogram's classic buckets and its native
+// buckets when it has exponential ones. The +Inf bucket is sample_count, and
+// is written only when it has an exemplar, as client_golang writes it: the
+// format has no other place for that bucket's exemplar, and a Prometheus that
+// keeps the classic histogram reads exemplars from the classic buckets alone.
 func appendProtoHistogram(b []byte, m model.Metric) []byte {
 	h := m.Histogram
 	count, _ := h.InfBucket()
 	b = appendProtoUint(b, 1, count)
 	b = appendProtoDouble(b, 2, h.Sum)
 	var e expositionWriter
+	infExemplar := h.InfExemplar
 	for _, bucket := range e.ascendingBuckets(h.Buckets) {
 		if math.IsInf(bucket.UpperBound, 1) {
+			if bucket.Exemplar != nil {
+				infExemplar = bucket.Exemplar
+			}
 			continue
 		}
-		var classic []byte
-		classic = appendProtoUint(classic, 1, bucket.CumulativeCount)
-		classic = appendProtoDouble(classic, 2, bucket.UpperBound)
-		if bucket.Exemplar != nil {
-			classic = appendProtoTag(classic, 3, wireBytes)
-			classic = appendProtoBytes(classic, appendProtoExemplar(nil, bucket.Exemplar))
-		}
-		b = appendProtoTag(b, 3, wireBytes)
-		b = appendProtoBytes(b, classic)
+		b = appendProtoBucket(b, bucket.CumulativeCount, bucket.UpperBound, bucket.Exemplar)
+	}
+	if infExemplar != nil {
+		b = appendProtoBucket(b, count, math.Inf(1), infExemplar)
 	}
 	if h.Exponential != nil {
 		b = appendNativeBuckets(b, h.Exponential.AtMostScale(nativeHistogramSchema))
@@ -260,6 +261,20 @@ func appendProtoHistogram(b []byte, m model.Metric) []byte {
 		}
 	}
 	return appendProtoCreated(b, 15, m.Created)
+}
+
+// appendProtoBucket appends a classic Bucket: its cumulative_count,
+// upper_bound and exemplar, when it has one.
+func appendProtoBucket(b []byte, cumulative uint64, upper float64, x *model.Exemplar) []byte {
+	var classic []byte
+	classic = appendProtoUint(classic, 1, cumulative)
+	classic = appendProtoDouble(classic, 2, upper)
+	if x != nil {
+		classic = appendProtoTag(classic, 3, wireBytes)
+		classic = appendProtoBytes(classic, appendProtoExemplar(nil, x))
+	}
+	b = appendProtoTag(b, 3, wireBytes)
+	return appendProtoBytes(b, classic)
 }
 
 // histogramExemplars are a histogram's exemplars, its buckets' in ascending

@@ -1171,8 +1171,8 @@ dropped has none.
 The exemplars are written where a format carries them
 ([self-metrics](SELF-METRICS.md#exemplars)): in OpenMetrics, after the
 bucket's count, `# {trace_id="…",span_id="…"} 0.067 1793646517.204`; in
-protobuf, on the classic bucket and among the native histogram's
-exemplars; and over OTLP, on the histogram's and the exponential
+protobuf, on the classic bucket, the `+Inf` one's on a `+Inf` bucket
+written for it, and among the native histogram's exemplars; and over OTLP, on the histogram's and the exponential
 histogram's points, as `exemplars` with `traceId`, `spanId`, `asDouble` and
 `timeUnixNano`. The Prometheus text format has no exemplars. The series
 that measure one probe, `http_exporter_scrape_duration_seconds` and a

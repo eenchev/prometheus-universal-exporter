@@ -8039,7 +8039,10 @@ name, help, type and every series, labels in order of their names; a series'
 timestamp in `timestamp_ms`; and, with `web.self_metrics.created_timestamps`
 and only then, a counter's, histogram's or summary's creation time in its
 `created_timestamp`. A histogram MUST carry its classic buckets without the
-`+Inf` one, its `sample_count` and `sample_sum`, and, for the scrape-time
+`+Inf` one, which `sample_count` is, unless that bucket has an exemplar:
+it MUST then be written last, as Prometheus's Go client writes it, with
+`upper_bound` `+Inf`, `cumulative_count` the `sample_count` and the
+exemplar. It MUST carry its `sample_count` and `sample_sum`, and, for the scrape-time
 histogram and `http_exporter_probe_duration_seconds` (§ 22), its native
 buckets too: `schema` the recorder's scale lowered to
 at most 3 by merging buckets, `zero_threshold` 2^-128, `zero_count`, and
@@ -8057,7 +8060,8 @@ observed; a trace exported after a later trip's MUST NOT replace it. A
 trip shared by identical probes MUST be of the trace of the probe that
 started it. OpenMetrics MUST write a bucket's exemplar after its count, as
 `# {trace_id="…",span_id="…"} <value> <timestamp in seconds>`; protobuf in
-the classic bucket's `exemplar` and, the same ones in the order of their
+the classic bucket's `exemplar`, the `+Inf` one's on a `+Inf` bucket
+written for it, and, the same ones in the order of their
 values, in the histogram's `exemplars`; the OTLP export on the histogram's
 and the exponential histogram's points, as `exemplars` with `traceId`,
 `spanId`, `asDouble` and `timeUnixNano`. The Prometheus text format MUST
@@ -30056,6 +30060,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 ## 34.261 Fixes from the review of 2026-11-03: stored UTF-8 names, the +Inf bucket's exemplar, a run's propagation, gRPC tracestate and a Python test's time
 
 - `TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames`: a static target's result scraped under `metric_name_validation_scheme: utf8` and kept through a reload to `legacy` is answered by `/static-targets`, filtered or not and without `Accept`, escaped by `underscores` with `escaping=underscores` in its `Content-Type`; it was written raw in the classic text format.
+- `TestTheProtobufAnswerWritesTheInfBucketWithItsExemplar`: a 90 s trip whose trace was dropped writes no `+Inf` classic bucket in protobuf; a 95 s trip whose trace was exported adds one, last, with `upper_bound` `+Inf`, `cumulative_count` 2 and the exemplar of its trace and span ids and 95; no other bucket has one. Without the fix the `+Inf` exemplar was in no classic bucket.
 
 # 35. Documentation requirements
 

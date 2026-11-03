@@ -507,6 +507,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `metric_name_validation_scheme: utf8` back to `legacy`: a target's result
   scraped before the reload keeps its names until it is scraped again, and
   is now written as the scraper asks meanwhile, as it was before the reload.
+- The self-metrics' protobuf answer keeps the exemplar of a histogram's
+  `+Inf` bucket, of a probe or a trip longer than the last bound, on a
+  `+Inf` classic bucket written for it, as Prometheus' Go client does: it
+  was only among the native histogram's exemplars, so a Prometheus keeping
+  the classic histogram never saw it.
 
 ## exporter 1.8.0
 

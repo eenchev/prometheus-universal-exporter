@@ -980,3 +980,19 @@ func TestASQLLabelEscapesTheDatabase(t *testing.T) {
 		t.Errorf("label %q, %v", label, err)
 	}
 }
+
+// A statement's span tells how many rows and columns it returned, by
+// OpenTelemetry's db.response.returned_rows, and whether its connection
+// was kept from an earlier scrape; never a column's name or a value.
+func TestASQLStatementsSpanTellsItsFacts(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["q"] = sqltest.Result{Columns: []string{"state", "n"}, Rows: [][]driver.Value{{"open", int64(3)}, {"closed", int64(4)}}}
+	c := f.collector(t, "db", SQLDriverPostgres, "q")
+	for _, reused := range []string{"false", "true"} {
+		ctx, trace := WithSpanTrace(context.Background())
+		if _, err := FetchCollector(ctx, "db.example", c, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		requireFacts(t, "the statement", factsOf(t, trace.Requests()[0]), map[string]string{"db.response.returned_rows": "2", "sql.columns": "2", "sql.connection.reused": reused})
+	}
+}

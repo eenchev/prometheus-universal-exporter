@@ -759,3 +759,26 @@ func TestAnSSHFileLabelIsAnEscapedURL(t *testing.T) {
 		t.Errorf("traced %+v, want one read of %s", requests, want)
 	}
 }
+
+// A read's span tells how many files it read and how many bytes they were,
+// a file's and a directory's alike; never a file's name, which the
+// directory's url.full does not have either.
+func TestAnSSHFileReadsSpanTellsItsFacts(t *testing.T) {
+	f := newSSHFixture(t)
+	testutil.WriteIn(t, f.root, "a.prom", sshPromFile)
+	testutil.WriteIn(t, f.root, "b.prom", sshPromFile+"# more\n")
+	for _, tc := range []struct {
+		c    *model.Collector
+		want map[string]string
+	}{
+		{f.collector(t, "file", "a.prom"), map[string]string{"sshfile.files": "1", "sshfile.bytes": strconv.Itoa(len(sshPromFile))}},
+		{f.collector(t, "dir", "", func(r *model.RequestConfig) { r.Files = []string{"*.prom"} }), map[string]string{"sshfile.files": "2", "sshfile.bytes": strconv.Itoa(2*len(sshPromFile) + len("# more\n"))}},
+	} {
+		ctx, trace := WithSpanTrace(context.Background())
+		if _, err := FetchCollector(ctx, f.server.Addr, tc.c, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		requests := trace.Requests()
+		requireFacts(t, tc.c.Name, factsOf(t, requests[len(requests)-1]), tc.want)
+	}
+}

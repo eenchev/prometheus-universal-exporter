@@ -117,6 +117,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- With `otlp.traces`, the request spans of dns, sql, grpc, ntp, ldap,
+  tlscert, redis, sshfile and s3file collectors tell how the request ended
+  in attributes the exporter works out of the answer, never the target's
+  text: the record type and the records' count, the rows and columns
+  returned (`db.response.returned_rows`) and whether the connection was
+  kept, `rpc.grpc.status_code`, the stratum, offset and delay, the LDAP
+  result code and a page's entries, the TLS version, cipher and leaf's
+  expiry (`tls.protocol.version`, `tls.cipher`, `tls.server.not_after`)
+  with the certificates' count and whether they verified, a Redis reply's
+  type and size, and the files or objects read and their bytes
+  ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).
 - `otlp.traces.propagate: true` sends a kubernetes collector's requests to
   the API server the `traceparent` and `tracestate` an HTTP target's
   request carries, so an API server traced with `APIServerTracing` makes

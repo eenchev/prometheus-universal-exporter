@@ -1078,3 +1078,23 @@ func TestGRPCProbeParameters(t *testing.T) {
 		t.Fatalf("%+v %v", overrides, err)
 	}
 }
+
+// A call's span tells its status code as OpenTelemetry's conventions have
+// it, rpc.grpc.status_code, a number: 0 for OK and 5 for NOT_FOUND; never
+// the status message, which is the server's text.
+func TestAGRPCCallsSpanTellsItsStatusCode(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: func(_ context.Context, _, request string) (string, error) {
+		if strings.Contains(request, "missing") {
+			return "", status.Error(codes.NotFound, "no such queue secret-queue-name")
+		}
+		return statsAnswer(context.Background(), "", request)
+	}})
+	for queue, want := range map[string]string{"orders": "0", "missing": "5"} {
+		c := grpcCollector()
+		editGRPC(&c, func(r *GRPCConfig) { r.Message = `{"queue": "` + queue + `"}` })
+		ctx, trace := WithSpanTrace(context.Background())
+		_, _ = FetchCollector(ctx, server.Addr, validGRPC(t, c), RequestOverrides{}, nil)
+		requests := trace.Requests()
+		requireFacts(t, queue, factsOf(t, requests[len(requests)-1]), map[string]string{"rpc.grpc.status_code": want})
+	}
+}

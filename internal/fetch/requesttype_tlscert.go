@@ -404,6 +404,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		outcome = doc.TLSVersion + ", " + presented + ", not verified: " + doc.VerifyError
 	}
 	traceOutcome(ctx, began+outcome)
+	traceFacts(ctx, tlsCertFacts(&doc, state)...)
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
 		NoStatus:   true,
@@ -537,4 +538,28 @@ func checkTLSCertFiles(c *model.Collector, t *model.StaticTarget) []string {
 // verify is reported and never refused.
 func tlsCertSchemaRule() map[string]any {
 	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
+}
+
+// tlsCertFacts are what a handshake's span tells (TracedRequest.Facts): by
+// OpenTelemetry's conventions the protocol's version and the cipher, by
+// the names Go and the IANA registry give them, and when the first
+// certificate expires; and how many certificates the server presented,
+// whether the chain verified, and the days the first has left, a fraction
+// of a day included. Never a certificate's subject or issuer, which the
+// server wrote, nor why the chain did not verify.
+func tlsCertFacts(doc *tlsCertDocument, state tls.ConnectionState) []TraceFact {
+	facts := []TraceFact{
+		nameFact("tls.protocol.name", "tls"),
+		nameFact("tls.protocol.version", strings.TrimPrefix(doc.TLSVersion, "TLS ")),
+		nameFact("tls.cipher", tls.CipherSuiteName(state.CipherSuite)),
+		intFact("tlscert.certificates", len(doc.Certificates)),
+		boolFact("tlscert.verified", doc.Verified),
+	}
+	if len(doc.Certificates) > 0 {
+		facts = append(facts,
+			nameFact("tls.server.not_after", time.Unix(doc.NotAfter, 0).UTC().Format(time.RFC3339)),
+			doubleFact("tlscert.leaf.days_until_expiry", float64(doc.SecondsUntilExpiry)/86400),
+		)
+	}
+	return facts
 }

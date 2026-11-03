@@ -157,7 +157,7 @@ func (t *tripSpans) adopt(trip *tripSpans, under string, cut time.Time) {
 			continue
 		}
 		r.Failed, r.Duration = true, max(cut.Sub(r.Start()), 0)
-		r.Facts = append(append([]fetch.TraceFact(nil), r.Facts...), fetch.TraceFact{Key: unfinishedFact, Bool: true, IsBool: true})
+		r.Facts = append(append([]fetch.TraceFact(nil), r.Facts...), fetch.TraceFact{Key: unfinishedFact, Kind: fetch.TraceFactBool, Bool: true})
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -175,7 +175,7 @@ func (t *tripSpans) adopt(trip *tripSpans, under string, cut time.Time) {
 // caller left (adopt).
 func requestUnfinished(r fetch.TracedRequest) bool {
 	for _, fact := range r.Facts {
-		if fact.Key == unfinishedFact && fact.IsBool && fact.Bool {
+		if fact.Key == unfinishedFact && fact.Kind == fetch.TraceFactBool && fact.Bool {
 			return true
 		}
 	}
@@ -405,6 +405,21 @@ func boolAttribute(key string, value bool) otlpAnyAttribute {
 	return otlpAnyAttribute{Key: key, Value: otlpAnyValue{BoolValue: &value}}
 }
 
+// factAttribute is a request's fact (fetch.TracedRequest.Facts) as an
+// attribute of the value its kind is.
+func factAttribute(fact fetch.TraceFact) otlpAnyAttribute {
+	switch fact.Kind {
+	case fetch.TraceFactBool:
+		return boolAttribute(fact.Key, fact.Bool)
+	case fetch.TraceFactDouble:
+		value := fact.Double
+		return otlpAnyAttribute{Key: fact.Key, Value: otlpAnyValue{DoubleValue: &value}}
+	case fetch.TraceFactName:
+		return stringAttribute(fact.Key, fact.Name)
+	}
+	return otlpAnyAttribute{Key: fact.Key, Value: otlpAnyValue{IntValue: strconv.FormatInt(fact.Int, 10)}}
+}
+
 // buildSpans makes the spans of a trip: root's, and under it one INTERNAL
 // span for each stage, under the stage it ran within where it names one,
 // and one CLIENT span for each request, under the stage it was sent in,
@@ -580,11 +595,7 @@ func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 		attrs = append(attrs, intAttribute("http.response.status_code", r.Status))
 	}
 	for _, fact := range r.Facts {
-		if fact.IsBool {
-			attrs = append(attrs, boolAttribute(fact.Key, fact.Bool))
-		} else {
-			attrs = append(attrs, otlpAnyAttribute{Key: fact.Key, Value: otlpAnyValue{IntValue: strconv.FormatInt(fact.Int, 10)}})
-		}
+		attrs = append(attrs, factAttribute(fact))
 	}
 	if resends > 0 {
 		attrs = append(attrs, intAttribute("http.request.resend_count", resends))

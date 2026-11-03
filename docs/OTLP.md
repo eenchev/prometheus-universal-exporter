@@ -919,7 +919,7 @@ The spans, by OpenTelemetry's conventions where one applies:
 | `slot` | INTERNAL | the probe or scrape | the wait for one of the collector's `max_concurrent_probes`: a scrape's wait, or a probe turned away |
 | `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip, a copy of the trip's spans under it; `cancelled` when the probe's caller left first |
 | `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
-| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes` |
+| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for dns, `dns.question.type` (the record type), `dns.answer.count` and `dns.response.not_found` when the name was not found; for sql, `db.response.returned_rows`, `sql.columns` and `sql.connection.reused`; for grpc, `rpc.grpc.status_code`, the code's number; for ntp, `ntp.stratum`, `ntp.offset_seconds` and `ntp.delay_seconds`; for ldap, `ldap.result_code` and, of a `SEARCH` page, `ldap.search.entries`; for tlscert, `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`, `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and `tlscert.leaf.days_until_expiry`; for redis, `redis.reply.type` (`integer`, `simple_string`, `bulk_string`, `array`, `nil` or `error`) and `redis.reply.bytes` or `redis.reply.elements`; for sshfile and s3file, `sshfile.files` and `sshfile.bytes`, `s3file.objects` and `s3file.bytes`, of the files read; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes`. A localfile collector's reads are no request and have no span |
 | `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
 | `files`, `decode`, `transform`, `validation` | INTERNAL | the probe or scrape | the stages after the fetch, as the debug report names them |
 | `python` | INTERNAL | `transform` | the time the collector's Python scripts took, added up, from the transform's start |
@@ -962,9 +962,13 @@ Nor is any text the target sent of a request, a stage or a probe that went
 through, which the log says nothing of: no greeting of a tcp server, no
 stderr of an sshexec command, no reason of an HTTP status line, no outcome
 as a debug report tells it. Such a span has, besides the attributes above,
-only the numbers and yes-or-no answers its request type works out of the
-answer, as the table says: sizes, an exit status, whether a greeting
-matched. A stage that went through has its `stage.note`, which the exporter
+only the numbers, yes-or-no answers and names of the exporter's own
+vocabulary that its request type works out of the answer, as the table
+says: sizes, counts, an exit status, a result code, whether a greeting
+matched, a TLS version and cipher by their registered names, a reply's
+type. A gRPC status message, an LDAP diagnostic, a certificate's subject,
+a column's name and a record's data are the target's text, and none of a
+span's. A stage that went through has its `stage.note`, which the exporter
 writes of counts, sizes, statuses, times and the directory read alone.
 
 Of a failure, a span says what the log line of that failure says, and

@@ -30038,6 +30038,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheProbeDurationHistogramHasNativeAndExponentialBuckets`: after one probe, the protobuf answer's probe histogram has count 1, the 13 classic buckets, schema 3 and one span; with `otlp.exponential_histograms` the OTLP export sends it as an exponential histogram alone.
 - `TestAnExportedProbeIsItsProbeDurationBucketsExemplar`: of a fast probe whose trace was dropped and a slow one whose trace was exported, only the slow one is an exemplar in OpenMetrics, of the exported root span's trace and span ids, on a bucket of 0.05 or above.
 - `TestAKubernetesListingCarriesItsTraceparent` (fetch): with propagation, each page of a two-page listing carries `00-<trace>-<span>-01` under the span id recorded with its request, a different one each, and the `tracestate`; with the trace export off the caller's `traceparent` and `tracestate` arrive as they came; without propagation the API server gets none.
+- `TestADNSLookupsSpanTellsItsFacts` (fetch): a lookup of a name with two A records tells `dns.question.type` `A` and `dns.answer.count` `2`; of a missing name `dns.answer.count` `0` and `dns.response.not_found` `true`.
+- `TestASQLStatementsSpanTellsItsFacts` (fetch): a statement returning two rows of two columns tells `db.response.returned_rows` `2`, `sql.columns` `2`, and `sql.connection.reused` `false` at the first scrape and `true` at the second.
+- `TestAGRPCCallsSpanTellsItsStatusCode` (fetch): a call answered OK tells `rpc.grpc.status_code` `0`, one answered NOT_FOUND `5`, and nothing else.
+- `TestAnNTPExchangesSpanTellsItsFacts` (fetch): an exchange with a stratum 2 server tells `ntp.stratum` `2` and the document's offset and delay as `ntp.offset_seconds` and `ntp.delay_seconds`.
+- `TestAnLDAPOperationsSpanTellsItsFacts` (fetch, opt-in): STARTTLS, BIND and two SEARCH pages each tell `ldap.result_code` `0`, the pages `ldap.search.entries` `500` and `100`; a search refused with 50 tells `ldap.result_code` `50` and not the diagnostic.
+- `TestATLSCertHandshakesSpanTellsItsFacts` (fetch): a TLS 1.3 handshake presenting two certificates tells `tls.protocol.name` `tls`, `tls.protocol.version` `1.3`, `tls.cipher` `TLS_AES_128_GCM_SHA256`, the leaf's `tls.server.not_after` in RFC 3339, `tlscert.certificates` `2`, about 10 `tlscert.leaf.days_until_expiry`, and `tlscert.verified` `true` with the root, `false` without.
+- `TestARedisCommandsSpanTellsItsReply` (fetch, opt-in): an integer, a bulk string of 6 bytes, an array of 2 and a nil reply tell `redis.reply.type` `integer`, `bulk_string` with `redis.reply.bytes` `6`, `array` with `redis.reply.elements` `2`, and `nil`.
+- `TestAnSSHFileReadsSpanTellsItsFacts` (fetch): a file's read tells `sshfile.files` `1` and its size in `sshfile.bytes`, a directory's of two files `2` and their sizes added up.
+- `TestAnS3FileReadsSpanTellsItsFacts` (fetch, opt-in): an object's read tells `s3file.objects` `1` and `s3file.bytes` `4`, a prefix's of two objects `2` and `9`.
+- `TestARequestsFactsAreAttributesOfTheirKind`: a request's integer, boolean, floating-point and name facts are its span's `intValue`, `boolValue`, `doubleValue` and `stringValue` attributes.
 
 # 35. Documentation requirements
 
@@ -30940,8 +30950,23 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
 - A span MUST carry nothing the log does not. Of a request, a stage or a
   probe that went through it MUST carry no text the target sent — a tcp
   greeting, a command's stderr, an HTTP status line's reason, a request's
-  outcome as a debug report tells it — but only numbers and yes-or-no
-  answers its request type works out of the answer: for tcp
+  outcome as a debug report tells it — but only numbers, yes-or-no
+  answers and names of a set of the exporter's own that its request type
+  works out of the answer, each attribute of its value's type (int,
+  bool, double or string): for dns `dns.question.type`,
+  `dns.answer.count` and, for a name not found, `dns.response.not_found`;
+  for sql `db.response.returned_rows`, `sql.columns` and
+  `sql.connection.reused`; for grpc `rpc.grpc.status_code`, the code's
+  number; for ntp `ntp.stratum`, `ntp.offset_seconds` and
+  `ntp.delay_seconds`; for ldap `ldap.result_code` of each operation the
+  server answered and `ldap.search.entries` of each `SEARCH` page; for
+  tlscert `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`,
+  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and
+  `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
+  bulk string's `redis.reply.bytes` or an array's `redis.reply.elements`,
+  never a reply's value; for sshfile `sshfile.files` and `sshfile.bytes`
+  and for s3file `s3file.objects` and `s3file.bytes`, of the read that
+  went through; for tcp
   `tcp.greeting.bytes`, `tcp.greeting.matched` and `tcp.answer.bytes`, for
   sshexec `process.exit.code`, `sshexec.stdout.bytes` and
   `sshexec.stderr.bytes`. Of a failure it MUST carry what the log line of

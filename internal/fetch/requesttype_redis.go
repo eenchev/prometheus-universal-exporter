@@ -738,10 +738,32 @@ func redisSend(ctx context.Context, session *redisConn, label string, args []str
 	if failed, ok := reply.(*redisError); ok {
 		err := fmt.Errorf("%s: %w", shown, failed)
 		traceFailedOutcome(ctx, "error: "+err.Error())
+		traceFacts(ctx, nameFact("redis.reply.type", "error"))
 		return nil, err
 	}
 	traceOutcome(ctx, redisKind(reply))
+	traceFacts(ctx, redisReplyFacts(reply)...)
 	return reply, nil
+}
+
+// redisReplyFacts are what a command's span tells of its reply
+// (TracedRequest.Facts): its type, and a bulk string's bytes or an array's
+// elements; never what it holds, not even an integer's value, which is the
+// server's data.
+func redisReplyFacts(reply any) []TraceFact {
+	switch v := reply.(type) {
+	case nil:
+		return []TraceFact{nameFact("redis.reply.type", "nil")}
+	case int64:
+		return []TraceFact{nameFact("redis.reply.type", "integer")}
+	case redisSimple:
+		return []TraceFact{nameFact("redis.reply.type", "simple_string")}
+	case []byte:
+		return []TraceFact{nameFact("redis.reply.type", "bulk_string"), intFact("redis.reply.bytes", len(v))}
+	case []any:
+		return []TraceFact{nameFact("redis.reply.type", "array"), intFact("redis.reply.elements", len(v))}
+	}
+	return nil
 }
 
 // redisFailure is the failure of a read or a write, or a handshake: the

@@ -385,3 +385,20 @@ func TestTheSystemsNameserversAreReadForACNAMELookup(t *testing.T) {
 		t.Errorf("servers of an empty file %q", got)
 	}
 }
+
+// A lookup's span tells the record type asked for and how many records
+// came, and that the name was not found when it was not; never a record,
+// nor the name, which its url.full has.
+func TestADNSLookupsSpanTellsItsFacts(t *testing.T) {
+	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"), recA("www.example.test", "192.0.2.2"))
+	for target, want := range map[string]map[string]string{
+		"www.example.test":     {"dns.question.type": "A", "dns.answer.count": "2"},
+		"missing.example.test": {"dns.question.type": "A", "dns.answer.count": "0", "dns.response.not_found": "true"},
+	} {
+		ctx, trace := WithSpanTrace(context.Background())
+		if _, err := FetchCollector(ctx, target, dnsCollector(t, s.Addr, "A"), RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		requireFacts(t, target, factsOf(t, trace.Requests()[0]), want)
+	}
+}

@@ -239,9 +239,14 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		if codec.over != nil {
 			// The call was answered OK; the answer is over the limit.
 			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
+			traceFacts(ctx, intFact("rpc.grpc.status_code", int(codes.OK)))
 			return nil, &CallAnswerError{Err: codec.over}
 		}
 		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
+		// The code as OpenTelemetry's conventions have it, a number; its
+		// name is the stage's, and the message, the server's text, is
+		// none of the span's.
+		traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
 		if err == nil {
 			body, err := renderAnswer(out, m.types)
 			if err != nil {

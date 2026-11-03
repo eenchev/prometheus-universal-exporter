@@ -866,3 +866,48 @@ func TestAnLDAPServerThatNeverAnswersFailsAtTheDeadline(t *testing.T) {
 func TestTheOptInRequestKeysAreLDAPsOwn(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeLDAP)
 }
+
+// Each operation's span tells its LDAP result code, a SEARCH page's how
+// many entries it gave, and a page the server refused its code; never a
+// DN, an attribute or the server's diagnostic text.
+func TestAnLDAPOperationsSpanTellsItsFacts(t *testing.T) {
+	server := ldaptest.New(t)
+	ldapMany(server, 600)
+	server.AddAccount("cn=exporter,dc=example,dc=org", "s3cret")
+	passwordFile := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(passwordFile, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := ldapCollector(t, func(c *model.Collector) {
+		c.Request.PasswordFile = passwordFile
+		editLDAP(c, func(r *LDAPConfig) { r.BindDN = "cn=exporter,dc=example,dc=org" })
+		c.Request.TLS.CAFile = server.CAFile
+		editLDAP(c, func(r *LDAPConfig) { r.StartTLS = true })
+		ldapRequest(c).Searches[0].Attributes, ldapRequest(c).Searches[0].CountOnly = nil, true
+	})
+	ctx, trace := WithSpanTrace(context.Background())
+	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	requests := trace.Requests()
+	want := []map[string]string{
+		{"ldap.result_code": "0"},
+		{"ldap.result_code": "0"},
+		{"ldap.result_code": "0", "ldap.search.entries": "500"},
+		{"ldap.result_code": "0", "ldap.search.entries": "100"},
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("%d requests traced, want %d", len(requests), len(want))
+	}
+	for i := range want {
+		requireFacts(t, requests[i].Method, factsOf(t, requests[i]), want[i])
+	}
+
+	server.FailSearches(50, "insufficient access to secret-subtree")
+	ctx, trace = WithSpanTrace(context.Background())
+	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err == nil {
+		t.Fatal("a refused search succeeded")
+	}
+	requests = trace.Requests()
+	requireFacts(t, "the refused search", factsOf(t, requests[len(requests)-1]), map[string]string{"ldap.result_code": "50"})
+}

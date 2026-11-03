@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -560,4 +561,34 @@ func certPoolOf(certs ...*x509.Certificate) *x509.CertPool {
 		pool.AddCert(c)
 	}
 	return pool
+}
+
+// A handshake's span tells, by OpenTelemetry's conventions, the protocol,
+// its version and the cipher, and when the leaf expires, and how many
+// certificates were presented, whether the chain verified and the days the
+// leaf has left; never a subject, an issuer or why a chain did not verify.
+func TestATLSCertHandshakesSpanTellsItsFacts(t *testing.T) {
+	pki := newTestPKI(t)
+	leaf := makeCert(t, certSpec{cn: "www", dns: []string{"www.example.test"}, notBefore: pki.now.Add(-time.Hour), notAfter: pki.now.Add(10 * 24 * time.Hour), serial: 6}, pki.intermediate)
+	addr, _ := tlsServer(t, []*testCert{leaf, pki.intermediate}, nil, true)
+	for _, tc := range []struct {
+		roots    string
+		verified string
+	}{{pki.rootFile, "true"}, {"", "false"}} {
+		ctx, trace := WithSpanTrace(context.Background())
+		if _, err := FetchCollector(ctx, addr, tlsCertCollector(t, model.TLSConfig{CAFile: tc.roots, ServerName: "www.example.test"}), RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		facts := factsOf(t, trace.Requests()[0])
+		days, err := strconv.ParseFloat(facts["tlscert.leaf.days_until_expiry"], 64)
+		if err != nil || days < 9.9 || days > 10 {
+			t.Errorf("the leaf has %q days left, want about 10", facts["tlscert.leaf.days_until_expiry"])
+		}
+		delete(facts, "tlscert.leaf.days_until_expiry")
+		requireFacts(t, "the handshake", facts, map[string]string{
+			"tls.protocol.name": "tls", "tls.protocol.version": "1.3", "tls.cipher": "TLS_AES_128_GCM_SHA256",
+			"tls.server.not_after": leaf.cert.NotAfter.UTC().Format(time.RFC3339),
+			"tlscert.certificates": "2", "tlscert.verified": tc.verified,
+		})
+	}
 }

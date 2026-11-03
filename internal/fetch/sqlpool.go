@@ -842,6 +842,9 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		return nil, finish, err
 	}
 	traceOutcome(ctx, fmt.Sprintf("returned %d rows of the columns %s", len(result.rows), strings.Join(result.columns, ", ")))
+	// The counts alone: the columns' names are the statement's, and the
+	// rows the database's.
+	traceFacts(ctx, intFact("db.response.returned_rows", len(result.rows)), intFact("sql.columns", len(result.columns)))
 	return result, finish, nil
 }
 
@@ -1088,7 +1091,9 @@ func traceSQL(ctx context.Context, key sqlPoolKey, args int, reused bool, err er
 	traceRequest(ctx, sqlMethod, pathURL(key.base.driver, key.address.hostPort, "/"+database), header, "", false)
 	if err != nil {
 		traceFailedOutcome(ctx, "error: "+err.Error())
+		return
 	}
+	traceFacts(ctx, boolFact("sql.connection.reused", reused))
 }
 
 // follow closes the pools whose collector the configuration in force no

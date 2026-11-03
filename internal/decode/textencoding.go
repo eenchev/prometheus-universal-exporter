@@ -274,6 +274,9 @@ func convertFromDocument(r *fetch.HTTPResponse, kind string) error {
 // UTF-8 already. sent is the response as the target sent it, before Decode
 // replaced its body.
 func ConvertedFrom(sent *fetch.HTTPResponse, c *model.Collector, kind string) string {
+	if kind == model.DecoderNone {
+		return ""
+	}
 	name, _ := bomOf(sent)
 	if name == "" {
 		name = namedCharset(sent, c)

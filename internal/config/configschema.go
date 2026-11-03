@@ -673,7 +673,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		},
 		"collectors[].decoder.type": {
 			"enum":        optionalEnum(model.DecoderTypes),
-			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
+			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None.",
 		},
 		"collectors[].transform.type": {
 			"enum":        model.TransformTypes,

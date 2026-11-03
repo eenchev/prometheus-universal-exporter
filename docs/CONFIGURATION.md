@@ -88,13 +88,13 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
 | `xpath` | `xml`, `html` |
 | `prometheus` | `prometheus` |
-| `python` | every decoder |
+| `python` | every decoder, `none` among them |
 
 A `decoder.type` that names a decoder the collector's transform does not read
 could never work, so it is refused when the configuration loads, naming both
@@ -128,8 +128,8 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini` and
-`auto`. The `graphite` decoder reads
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none`
+and `auto`; `none` reads no body (see [No decoder](#no-decoder)). The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
 see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
 Lines, key=value log lines, TOML and INI files into a document jq, yq and
@@ -226,6 +226,42 @@ log and in a debug report alike ([Logging](LOGGING.md#repeated-failures)): a
 jq rule that raises `error(.message)`, a script that raises an exception with
 its data, a redirect to a URL of a megabyte and a gRPC status message of ten
 fail in 2,000 bytes at most, where the error was as long as what it quoted.
+
+### No decoder
+
+`decoder.type: none` reads no body. A collector whose rules say what the
+status and the headers are, such as an uptime check, has nothing to decode,
+and a body that is empty, HTML or any other text fails nothing:
+
+```yaml
+request:
+  type: http
+  method: HEAD           # no body is sent back
+  accept_status: [any]   # every status from 100 to 599 is the answer
+decoder:
+  type: none
+transform:
+  type: jq
+metrics:
+  - name: uptime_up
+    expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
+  - name: uptime_status_code
+    expression: $status
+```
+
+jq and yq rules read `null` as the document, with `$status` and `$headers`
+as for any decoder ([Accepting other
+statuses](REQUESTS.md#accepting-other-statuses)); a rule that reads the
+document, `.x`, reads `null` and is a missing value. A Python script's `data`
+is `None`, and `response.body` and `response.text` are the body as the target
+sent it, which nothing converted: `response.charset` is refused beside
+`none`, since no decoder reads the body in it. A `regex`, `csv`, `css`,
+`xpath` or `prometheus` transform reads a body, so `none` is refused with it
+when the configuration loads, as any decoder a transform cannot read is. The
+body is still read, up to `max_response_bytes`, so `method: HEAD` is what
+spares the target sending it. A request type whose answer is JSON, `grpc`,
+`dns` and the others, and a paginated collector keep `json`, and refuse
+`none` as any other decoder.
 
 ### NDJSON, logfmt, TOML and INI
 

@@ -130,6 +130,7 @@ for row in data:
 | `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
 | `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. A histogram or summary the target wrote without a `_sum` or a `_count` has no `sum` or `count` key: read one with `series.get("sum")`. A histogram's `count` and the `count` of its `+Inf` bucket are each what the target wrote, and [may differ](CONFIGURATION.md#character-encodings) for a target scraped between two of its updates. A `count`, the series' or a bucket's, must stay a whole number from 0: `2.5` fails the scrape. |
 | `text`, `html`, `xml` | The body as a string; parse HTML and XML with [lxml](#parsing-html-with-lxml). |
+| `none` | `None`; `response.body` and `response.text` are the body as the target sent it, not converted from its encoding ([No decoder](CONFIGURATION.md#no-decoder)). |
 
 `NaN` and the infinities arrive as the floats `float("nan")` and
 `float("inf")`, and may be given back the same way, in `data` from a

@@ -25,6 +25,7 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"logfmt":     "a=1 b=2\n",
 		"toml":       "a = 1\n",
 		"ini":        "[s]\na = 1\n",
+		"none":       "anything at all",
 	}
 	for _, decoder := range model.DecoderTypes {
 		if decoder == "auto" {

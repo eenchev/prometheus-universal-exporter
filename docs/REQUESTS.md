@@ -1373,7 +1373,9 @@ request:
   accept_status: [any]   # every status from 100 to 599 is decoded
 ```
 
-`any` is written alone and in lower case: beside another entry, `[any,
+With [`decoder.type: none`](CONFIGURATION.md#no-decoder) beside it, no body
+is decoded either, so an empty or HTML answer fails nothing. `any` is
+written alone and in lower case: beside another entry, `[any,
 503]`, or as `ANY`, it is refused when the configuration loads, as the
 schema refuses it. A status past 599, which some servers send, still fails
 in the `http_status` stage. Since an accepted status is not retried,

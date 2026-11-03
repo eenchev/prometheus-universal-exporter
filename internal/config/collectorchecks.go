@@ -242,6 +242,11 @@ func checkSettingsApply(x *model.Collector) error {
 	if (csv.Header != nil || csv.Delimiter != "" || csv.TrimSpace) && x.Decoder.Type != "csv" && x.Decoder.Type != "auto" {
 		return fmt.Errorf("collector %q sets response.csv, which applies to the csv decoder, but its decoder is %s", x.Name, x.Decoder.Type)
 	}
+	// decoder none converts no body (decode.Decode), so a charset would
+	// be ignored.
+	if x.Response.Charset != "" && x.Decoder.Type == model.DecoderNone {
+		return fmt.Errorf("collector %q sets response.charset, which names the encoding a decoder reads the body in, but its decoder is none, which reads no body", x.Name)
+	}
 	if len(x.Response.Namespaces) > 0 && t.Type != "xpath" {
 		return fmt.Errorf("collector %q sets response.namespaces, which name the prefixes of an xpath transform's expressions, but its transform is %s", x.Name, t.Type)
 	}

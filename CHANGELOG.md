@@ -117,6 +117,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `decoder.type: none` reads no body: jq and yq rules read `null` with
+  `$status` and `$headers`, and a Python script's `data` is `None`, so an
+  uptime check with `method: HEAD` no longer reads an empty or HTML body as
+  YAML to get at the status, and a body that is no document fails nothing.
+  A `regex`, `csv`, `css`, `xpath` or `prometheus` transform, and
+  `response.charset`, are refused beside it
+  ([No decoder](docs/CONFIGURATION.md#no-decoder)).
 - `request.accept_status: [any]` accepts every status from 100 to 599, so
   an uptime check decodes whatever the target answers and its rules compare
   `$status`, instead of listing `["1xx", "2xx", "3xx", "4xx", "5xx"]`; it is

@@ -3183,10 +3183,21 @@ ndjson
 logfmt
 toml
 ini
+none
 auto
 ```
 
 `auto` is optional but strongly recommended.
+
+`none` MUST read no body: the document MUST be null — jq and yq rules read
+`null`, with `$status` and `$headers` as for any decoder, and a Python
+script's `data` MUST be `None` while `response.body` and `response.text`
+are the body — and the decode MUST NOT fail, whatever the body holds, empty,
+HTML, broken JSON or in an encoding the exporter does not know. The body
+MUST NOT be converted to UTF-8 (§ 6.1a), so a debug report MUST name no
+encoding it was converted from, and `response.charset` beside `none` MUST be
+refused at load, naming the collector, the key and the decoder. `auto` MUST
+never choose `none`.
 
 Python is a transform, not a decoder. Supported transform types MUST include
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
@@ -3237,7 +3248,7 @@ ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
 by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
-`graphite`, `ndjson`, `logfmt`, `toml` and `ini`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+`graphite`, `ndjson`, `logfmt`, `toml`, `ini` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -4998,7 +5009,7 @@ exposes them.
 any case, joined by `, `, as jq's `$headers` has them, and `default` when the
 response has none.
 
-`data` MUST be the decoded response: the document for JSON, YAML,
+`data` MUST be the decoded response: `None` for `none`; the document for JSON, YAML,
 graphite, NDJSON, logfmt, TOML and INI; the rows for CSV, dicts by header or lists without one; the body as
 a string for text, HTML and XML; and, for Prometheus exposition,
 `{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
@@ -30073,6 +30084,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAcceptStatusAnyIsReadAloneInEveryFile` (config): `[any]` is read as `any` in the configuration, a collector file and the static target file, and `[any, 2xx]`, `[503, any]`, `[ANY]` and `["Any"]` are refused in each, naming the entry; a static target's `ANY` was written in lower case when its file was loaded and taken.
 - `TestAProbeOfAcceptStatusAnyDecodesEveryStatus`: a collector of `accept_status: [any]` and `follow_redirects: false` answers a 200, a 302, a 404 and a 503 with `uptime_status_code` of each, from `$status`; one without `accept_status` fails each but the 200 in the `http_status` stage with 502.
 - `TestTheSchemasAndTheLoaderAgreeOnAcceptStatusAny` (repository): the configuration, collector file, static target and allocator static target schemas and the exporter take `accept_status: [any]` and `['any']` and refuse `[any, 2xx]`, `[503, any]`, `[ANY]`, `[any, any]` and `retry.statuses: [any]`; `retry.statuses: [500]` beside `[any]` is the exporter's alone to refuse.
+- `TestDecoderNoneReadsNoBody` (decode): `decoder.type: none` decodes an empty body, an HTML page, broken JSON, a body whose Content-Type names a charset the exporter does not know and one with a UTF-16 byte order mark, each without an error, as `none` with no document and the body as it was sent, and names no encoding it was converted from.
+- `TestDecoderNoneIsTakenByTheTransformsThatReadNull` (config): `none` loads with `jq`, `yq` and `python`, and is refused with `regex`, `css`, `xpath`, `csv` and `prometheus`, naming the decoders each reads and `jq, yq or python` as the transforms that read `none`; `response.charset` beside it is refused; an unknown decoder's error lists `none`.
+- `TestDecoderNoneReadsTheStatusAndHeadersOfAnyAnswer`: a HEAD collector of `accept_status: [any]` and `decoder.type: none` answers an empty 204, an HTML 200 and a 503 with a broken JSON body, all with an unknown charset, with `uptime_up`, `uptime_status_code` from `$status`, `. == null` and `$headers["x-version"]`, sending HEAD; a `yq` GET of a broken document is answered; a Python script's `data` is `None`, `response.body` the body and `response.status_code` the status.
+- `TestEveryListedDecoderIsHandled` has a sample of `none`, and `TestDecoderListsNameEveryDecoder` leaves `none`, which is no format, out of the lists of formats, as it leaves `auto`.
 
 # 35. Documentation requirements
 

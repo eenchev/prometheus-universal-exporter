@@ -7421,7 +7421,11 @@ value MUST be refused when the configuration loads, naming the two. Under
   whose name is classic, or, of two escaped, of the first in order;
 - such an answer's `Content-Type` MUST end with `; escaping=` and the
   escaping it was written with. An answer of classic names alone MUST be
-  written, and typed, as under `legacy`, without the parameter.
+  written, and typed, as under `legacy`, without the parameter. The static
+  targets endpoint MUST tell the two apart by the names its stored results
+  hold, not by the configuration in force: a result scraped under `utf8`
+  and kept through a reload that takes its collector to `legacy` MUST be
+  written as the scraper asks until the target is scraped again.
 
 A debug report's text of an answer (§ 42.17) MUST write a name that is not
 classic quoted, as it is. The OTLP export (§ 42.1) MUST send such a name as
@@ -30048,6 +30052,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnSSHFileReadsSpanTellsItsFacts` (fetch): a file's read tells `sshfile.files` `1` and its size in `sshfile.bytes`, a directory's of two files `2` and their sizes added up.
 - `TestAnS3FileReadsSpanTellsItsFacts` (fetch, opt-in): an object's read tells `s3file.objects` `1` and `s3file.bytes` `4`, a prefix's of two objects `2` and `9`.
 - `TestARequestsFactsAreAttributesOfTheirKind`: a request's integer, boolean, floating-point and name facts are its span's `intValue`, `boolValue`, `doubleValue` and `stringValue` attributes.
+
+## 34.261 Fixes from the review of 2026-11-03: stored UTF-8 names, the +Inf bucket's exemplar, a run's propagation, gRPC tracestate and a Python test's time
+
+- `TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames`: a static target's result scraped under `metric_name_validation_scheme: utf8` and kept through a reload to `legacy` is answered by `/static-targets`, filtered or not and without `Accept`, escaped by `underscores` with `escaping=underscores` in its `Content-Type`; it was written raw in the classic text format.
 
 # 35. Documentation requirements
 

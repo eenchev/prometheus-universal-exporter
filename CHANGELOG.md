@@ -502,6 +502,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   attributes `a`; and a value whose `Error` or `String` panics, as a nil
   error's may, is `<nil>` or `!PANIC: …`, as on stderr, where it took the
   exporter down.
+- `/static-targets` no longer writes UTF-8 names raw in the classic text
+  format after a reload takes their collector from
+  `metric_name_validation_scheme: utf8` back to `legacy`: a target's result
+  scraped before the reload keeps its names until it is scraped again, and
+  is now written as the scraper asks meanwhile, as it was before the reload.
 
 ## exporter 1.8.0
 

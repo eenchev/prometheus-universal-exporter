@@ -117,6 +117,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `report_failures: true` on a collector answers every probe of it `200`
+  with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
+  `http_exporter_probe_elapsed_seconds`, and on a failure
+  `http_exporter_probe_failed_stage{stage}` naming the stage, with nothing
+  of the error. With `method: HEAD`, `accept_status: [any]` and
+  `decoder.type: none` it is an uptime check that alerts on a value, as
+  blackbox_exporter's `probe_success`. Failures are logged and counted in
+  the self-metrics as before; static targets, which have
+  `http_exporter_target_up`, are not changed
+  ([Reporting failed probes as metrics](docs/CONFIGURATION.md#reporting-failed-probes-as-metrics)).
 - `decoder.type: none` reads no body: jq and yq rules read `null` with
   `$status` and `$headers`, and a Python script's `data` is `None`, so an
   uptime check with `method: HEAD` no longer reads an empty or HTML body as

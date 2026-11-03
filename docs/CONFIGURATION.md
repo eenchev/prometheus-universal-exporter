@@ -3131,6 +3131,120 @@ report and, with `--web.debug=full`, the
 [status page](ENDPOINTS.md#status-page) show each error whole; the
 self-metrics count failures by stage, as before.
 
+### Reporting failed probes as metrics
+
+A failed probe is answered `502`, so Prometheus marks the scrape down and
+keeps no sample of it: an uptime check has `up` to alert on and nothing else.
+With `report_failures: true` on the collector, a probe is always answered
+`200` with an exposition, as [blackbox_exporter](https://github.com/prometheus/blackbox_exporter)
+answers, and a failure is a value:
+
+```yaml
+collectors:
+  - name: uptime
+    report_failures: true
+    request:
+      type: http
+      method: HEAD
+      accept_status: [any]   # every status is the answer
+    decoder:
+      type: none             # no body is read
+    transform:
+      type: jq
+    metrics:
+      - name: uptime_status_code
+        expression: $status
+```
+
+A probe that succeeds is answered the collector's series, and after them:
+
+```text
+uptime_status_code 200
+http_exporter_probe_success 1
+http_exporter_probe_elapsed_seconds 0.012
+```
+
+A target that is down, refuses the connection, cannot be named, answers a
+status the collector does not accept, or anything else that fails a stage,
+is answered:
+
+```text
+http_exporter_probe_success 0
+http_exporter_probe_elapsed_seconds 0.003
+http_exporter_probe_failed_stage{stage="http"} 1
+```
+
+`http_exporter_probe_success` is `1` or `0`.
+`http_exporter_probe_elapsed_seconds` is how long this probe took, from its
+request to its answer: the duration its
+[`http_exporter_probe_duration_seconds`](SELF-METRICS.md) histogram, on
+`/metrics`, observes, which is another series.
+`http_exporter_probe_failed_stage` names the stage that failed, the one
+the log and the self-metrics name: `http` for whatever failed in reaching an
+`http` target, its name, its connection or its TLS handshake;
+`http_status`; `decode`; `transform`; `validation`; `metric` for a rule with
+`error_mode: fail`; or another request type's own fetch stage, `dns`, `tls`,
+`file`, `grpc` and the others ([Request types](#request-types)). Nothing of
+the error is answered, as nothing of the target's answer is
+([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)):
+the log has the error, as it always did, and so do a
+[debug probe](#debug-probes)'s report and the
+[status page](ENDPOINTS.md#status-page). The key works alike for every
+request type. The three series carry no label of the collector's
+(`transform.labels` and `metrics_prefix` are the collector's series');
+Prometheus adds the target's.
+
+What else becomes of a probe:
+
+- **`error_handling` `log` or `ignore`** carries on past a failed stage as
+  before ([When a stage of the probe fails](#when-a-stage-of-the-probe-fails)),
+  and the answer says the stage failed: `http_exporter_probe_success 0` with
+  the stage. The self-metrics still count the probe a success, as they count
+  every probe that carried on.
+- **A rule with `error_mode: fail`** fails the probe in the `metric` stage;
+  a rule under `log` or `ignore` that drops its series does not fail it.
+- **[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)**
+  answers the last good result in place of a failed trip, with
+  `http_exporter_result_stale 1`, and `http_exporter_probe_success 0` and
+  the stage beside them: the series stand in, while the target is failing.
+- **[Response caching](#response-caching)**: a cached answer is a success.
+  The cache keeps the collector's series alone; each answer has its own
+  elapsed time.
+- **[Shared probes](#identical-probes-share-one-request)**: probes sharing a trip each
+  answer their own elapsed time.
+- **[`failure_backoff`](#backing-off-from-failing-targets)**: a probe kept from
+  the target fails in its fetch stage.
+- **A probe refused by the target policy** (`403`), **turned away by
+  `max_concurrent_probes`** (`503`), one whose caller went away and a
+  caller's mistake (`400`) are answered as without the key: the target was
+  not asked, and they say nothing of it.
+- **The self-metrics** count a failure as one, in
+  `http_exporter_scrapes_total` against `http_exporter_scrape_success_total`
+  and the other counters, and in the probe duration histogram; it is
+  [logged](LOGGING.md) as before.
+- **The [OTLP export](OTLP.md)** exports the collector's series, as before:
+  nothing of a failed probe, and not the three series.
+- **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
+  with its error, answered `200` with its series.
+- **A [debug probe](#debug-probes)** says that a probe would have answered
+  `200` with `http_exporter_probe_success 0` in place of the failure, and
+  shows the series.
+- **[Static targets](STATIC-TARGETS.md)** are not changed by the key: a
+  static target's scrape has `http_exporter_target_up` and its own
+  self-metrics, and a collector both probed and named by static targets
+  serves each as it does.
+
+While `report_failures` is set, the collector's rules may not make a series
+of one of the three names: a rule or a derived family exported under one,
+after `metrics_prefix`, is refused when the configuration loads,
+
+```text
+collector "uptime" metric "http_exporter_probe_success" is exported as http_exporter_probe_success, which is reserved for the series report_failures adds to every probe's answer; rename the metric, or leave report_failures out
+```
+
+and a series a [Python](PYTHON.md) script or a `prometheus` transform makes
+under one fails the probe in the `validation` stage.
+
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at
@@ -3160,6 +3274,10 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   histogram's or a summary's family name, not its `_bucket`, `_sum` or
   `_count`, and so does the load, and a `prometheus` rule without a `name`
   has nothing to measure;
+- a rule of a collector with [`report_failures`](#reporting-failed-probes-as-metrics)
+  is not exported as `http_exporter_probe_success`,
+  `http_exporter_probe_elapsed_seconds` or `http_exporter_probe_failed_stage`,
+  nor is a derived family that is not hidden;
 - every expression must compile in its transform's language — jq and yq
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a

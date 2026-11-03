@@ -70,6 +70,10 @@ type probeResult struct {
 	// or backing off; failure is the error, as they show it.
 	outcome string
 	failure string
+	// stage is the stage of the trip that failed, of a failed or stale
+	// result and of one that carried on past it: what report_failures
+	// answers (probereport.go).
+	stage string
 }
 
 func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request, utf8Names bool) {

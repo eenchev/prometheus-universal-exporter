@@ -106,7 +106,12 @@ A probe is observed as the gauge measures it: from its arrival to its
 answer being ready, before the answer is written, every probe of
 `http_exporter_scrapes_total` that was not a static target's — those
 answered from the response cache, or by
-[sharing another probe's request](#shared-probes), included. So the
+[sharing another probe's request](#shared-probes), included. A probe of a
+collector with
+[`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
+answers the same duration as `http_exporter_probe_elapsed_seconds`, a gauge
+of its own answer, not of this endpoint; its failure is counted here as any
+probe's is. So the
 histogram says how long the exporter took to answer, which is what a
 `scrape_timeout` is set against:
 

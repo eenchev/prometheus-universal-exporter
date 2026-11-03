@@ -1380,6 +1380,10 @@
             ],
             "type": "string"
           },
+          "report_failures": {
+            "description": "Answer a failed probe 200 with series saying so instead of 502: http_exporter_probe_success 0, http_exporter_probe_elapsed_seconds and http_exporter_probe_failed_stage{stage} 1, and a successful one with its series, http_exporter_probe_success 1 and http_exporter_probe_elapsed_seconds. The collector's rules may not produce those names. Static targets are not changed by it. Defaults to false. See docs/CONFIGURATION.md#reporting-failed-probes-as-metrics.",
+            "type": "boolean"
+          },
           "request": {
             "additionalProperties": false,
             "allOf": [

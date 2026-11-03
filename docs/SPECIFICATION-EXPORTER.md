@@ -6964,6 +6964,62 @@ the wrapped error's caller text rewritten alike (`model.TextRewriter`).
 The exporter's log, a debug probe's report and, with `--web.debug=full`,
 the status page MUST show each failure whole.
 
+### 19.5 Failed probes reported as series
+
+A collector MAY set `report_failures: true`, a key of the collector beside
+`error_handling`, `cache` and `failure_backoff`, `false` when left out. Every
+probe of such a collector that its target was asked for, or answered for from
+the response cache, MUST be answered `200` with an exposition, in the format
+the request asks for (§ 21), and never `502`. Its answer MUST hold, after the
+collector's own series, the gauges `http_exporter_probe_success`, `1` when the
+probe succeeded and `0` when it failed, and
+`http_exporter_probe_elapsed_seconds`, the probe's own duration, from its
+request to its answer being ready, the duration its
+`http_exporter_probe_duration_seconds{kind="probe"}` observation is; and, on
+a failure alone, `http_exporter_probe_failed_stage{stage}` `1`, naming the
+stage the failure is counted and logged in: `http` (whatever failed in reaching
+an `http` target, its name, its connection or its TLS handshake),
+`http_status`, `decode`, `transform`, `validation`, `metric` (a rule with
+`error_mode: fail`), or a request type's own fetch stage (`dns`, `tls`,
+`file`, `grpc` and the others, § 5.1). The probe series MUST carry no label but
+`stage`, and nothing of the failure's text: what a failed probe's caller is
+told (§ 19.4) MUST NOT be answered at all. A failed probe MUST answer no
+series of the collector's and no freshness gauges (§ 42.13.1).
+
+A probe MUST be a failure to the series exactly when it is one of these:
+
+- a stage under `fail` failed, a rule under `error_mode: fail` failed, or
+  `failure_backoff` kept the trip from the target (its fetch stage);
+- a stage failed and `error_handling` carried on past it (`log`,
+  `ignore`): the answer MUST hold what a probe carrying on holds (§ 19) and
+  success `0` with the stage, while the self-metrics MUST count the probe a
+  success as before;
+- `cache.stale_if_error` answered the last good result in place of a failed
+  trip: the stale series and freshness gauges MUST be answered with success
+  `0` and the stage of the trip's failure.
+
+A probe answered from the response cache MUST be a success. A probe the
+target policy refused (`403`), one the concurrency limit turned away (`503`),
+one whose caller went away and a mistake of the caller's (`400`) MUST be
+answered as without the key. A failure MUST be
+logged, counted in the self-metrics, kept from the response cache and from
+the OTLP export, and recorded on the status page as without the key; the
+status page MUST give its status as `200` and its series as those answered.
+The response cache MUST keep, and the OTLP export (§ 42.1) MUST export, the
+collector's series alone, never the probe series; probes sharing a trip (§
+42.13a) MUST each answer their own duration from the one result, which MUST
+NOT be changed. A debug probe (§ 42.17) MUST say that a probe would have
+answered `200` with the probe series, and show them. Static targets MUST NOT be changed by
+the key: a static target's scrape has `http_exporter_target_up` (§ 42.14).
+
+A rule, or a derived family that is not hidden (§ 18.1), of a collector with
+`report_failures` exported under one of the three names, after
+`metrics_prefix` and `name_escaping`, MUST be refused at load, naming the
+collector, the metric and the name; a series of one of the names a Python
+script or a `prometheus` transform makes on the scrape MUST fail the
+`validation` stage, as a freshness gauge's name does (§ 42.13.1). A collector
+without the key MUST take such names as before.
+
 ---
 
 # 20. Resource and cardinality limits
@@ -30080,6 +30136,16 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.262 Uptime probes: reported failures, accept_status any and decoder none
 
+- `TestReportFailuresAnswersAFailedProbeWithSeries`: a collector with `report_failures` answers a success 200 with `demo_value` first and `http_exporter_probe_success 1` and `http_exporter_probe_elapsed_seconds` after it; a closed port, a 503 with a body, a broken JSON body and a page without the value of a rule under `error_mode: fail` each 200 with success 0, an elapsed time above 0 and `http_exporter_probe_failed_stage` of `http`, `http_status`, `decode` and `metric`, and nothing of `secret`, `503`, `refused`, `127.0.0.1`, `demo_value` or `error`; a collector without it answers 502; the failures are logged as `probe failed` with the stage and the body, and the self-metrics count three probes, one success, the last status 503, a parse error and three observations of the probe duration histogram.
+- `TestReportFailuresLeavesARefusedOrRejectedProbeAsItWas`: a target the target policy refuses is answered 403 and a probe over `max_concurrent_probes` 503, without the probe series.
+- `TestReportFailuresWithCarryingOnCachingAndStaleResults`: under `on_fetch_error: log` a closed port is answered success 0 with the `http` stage while the self-metrics count it a success; two probes of a caching collector answer `demo_value 7` and success 1, and the cache holds no probe series; with `stale_if_error` a 503 after a success answers `demo_value 3`, `http_exporter_result_stale 1`, success 0 and the `http_status` stage.
+- `TestReportFailuresAnswersEveryFormat`: a failure asked for in OpenMetrics is answered in it with the stage and `# EOF`; a HEAD probe is answered 200 in the text format.
+- `TestReportedAnswersLeaveTheSharedResultAsItWas`: three answers written from one result with spare capacity each have their own elapsed time and one success series, and the result keeps its one series, nothing written past it.
+- `TestReportFailuresOnTheStatusPageAndInADebugProbe`: the status page's row of a failed probe is `failed`, status 200, 3 series, with its error; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the http stage failed (report_failures), in place of 502: …` and shows the stage series.
+- `TestAProbeSeriesNameMadeOnTheScrapeFailsValidation`: a `prometheus` pass-through of a target that writes `http_exporter_probe_success` is answered success 0 with the `validation` stage and none of the target's series under `report_failures`, and passes it through without.
+- `TestReportFailuresLeavesTheOTLPExportAndStaticTargetsAsTheyWere`: a success queues `demo_value` alone for OTLP, a failure nothing; a failing static target of the collector is served `http_exporter_target_up` 0 and no probe series.
+- `TestReportFailuresOfALocalFileCollector`: a `localfile` collector with `report_failures` answers a missing file with success 0 and the `file` stage, a broken file with the `decode` stage, and a file it reads with its series and success 1.
+- `TestReportFailuresReservesTheProbeSeriesNames` (config): with `report_failures` a rule named each of the three names, one that `metrics_prefix: http` makes `http_exporter_probe_success`, and a derived family of that name are refused at load, naming the collector, the metric and the name; without it each loads; `report_failures: true` is read.
 - `TestAcceptStatusAnyAcceptsEveryStatus` (fetch): `accept_status: [any]` accepts 100, 101, 200, 302, 404, 503 and 599 and not 99, 600 or 999; a static target's `[any]` replaces the collector's list and its `[2xx]` the collector's `[any]`; `[any, 2xx]`, `[503, any]` and `[any, any]` are refused as `entry "any" accepts every status from 100 to 599 and is written alone, without …`, `ANY` and `Any` as no status, `retry.statuses: [any]` as no status, and `retry.statuses: [503]` or `[1xx]` beside `[any]` as never retried, while `retry.statuses: []` is taken; a 503 under `[any]` with two retry attempts is sent once; a static target's `[any, 5xx]` is refused, its `[any]` taken, and refused beside its own `retry.statuses: [404]` and under a collector whose `retry.statuses` is `[503]`.
 - `TestAcceptStatusAnyIsReadAloneInEveryFile` (config): `[any]` is read as `any` in the configuration, a collector file and the static target file, and `[any, 2xx]`, `[503, any]`, `[ANY]` and `["Any"]` are refused in each, naming the entry; a static target's `ANY` was written in lower case when its file was loaded and taken.
 - `TestAProbeOfAcceptStatusAnyDecodesEveryStatus`: a collector of `accept_status: [any]` and `follow_redirects: false` answers a 200, a 302, a 404 and a 503 with `uptime_status_code` of each, from `$status`; one without `accept_status` fails each but the 200 in the `http_status` stage with 502.

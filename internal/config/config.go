@@ -187,6 +187,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := transform.ValidateMetricsPrefix(x); err != nil {
 		return err
 	}
+	if err := checkProbeSeriesNames(x); err != nil {
+		return err
+	}
 	for _, lib := range append(x.Transform.Libraries, x.Transform.RequiredLibs...) {
 		if err := checkPythonLibrary(x.Name, lib); err != nil {
 			return err

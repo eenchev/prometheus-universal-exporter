@@ -274,3 +274,36 @@ func checkCSVDelimiter(x *model.Collector) error {
 	}
 	return fmt.Errorf(`collector %q response.csv.delimiter %s must be one character, and not a double quote or a line break; for a tab, write delimiter: "\t" in double quotes, where YAML reads \t as the tab character`, x.Name, written)
 }
+
+// checkProbeSeriesNames refuses, on a collector with report_failures, a
+// rule or a derived family that is not hidden exported under a name of the series the exporter
+// adds to its probes' answers (model.ProbeSeriesNames), after its
+// metrics_prefix and name_escaping: the answer would hold two families of
+// one name, or a family of the collector's that says something else under
+// the exporter's name. A name a Python script or a prometheus transform
+// makes on the scrape is refused there, in the validation stage
+// (exporter/probereport.go).
+func checkProbeSeriesNames(x *model.Collector) error {
+	if !x.ReportFailures {
+		return nil
+	}
+	names := make([]string, 0, len(x.Metrics)+len(x.Derived))
+	for _, rule := range x.Metrics {
+		names = append(names, rule.Name)
+	}
+	for _, rule := range x.Derived {
+		// A hidden family is read by later entries, and not exported.
+		if !rule.Hidden {
+			names = append(names, rule.Name)
+		}
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if exported := transform.ExportedMetricName(x, name); slices.Contains(model.ProbeSeriesNames, exported) {
+			return fmt.Errorf("collector %q metric %q is exported as %s, which is reserved for the series report_failures adds to every probe's answer; rename the metric, or leave report_failures out", x.Name, name, exported)
+		}
+	}
+	return nil
+}

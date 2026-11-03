@@ -596,8 +596,12 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	} else if runsPython(p.collector) {
 		job.python = transform.PythonWorkers().Departed()
 	}
+	start := time.Now()
 	result := s.collect(ctx, job)
 	verdict, answer = s.debugVerdict(result, p)
+	if p.static == nil {
+		verdict, answer = reportedVerdict(p.collector, result, verdict, answer, time.Since(start))
+	}
 	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted, result.failed() || result.aborted
 }
 

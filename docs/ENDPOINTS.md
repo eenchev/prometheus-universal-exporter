@@ -12,7 +12,7 @@ the [command-line flags](FLAGS.md).
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/otlp-test` | With `--web.debug=full` and `otlp.enabled`: the debug page's endpoint test, `POST` with a JSON body and `X-Debug-Run`: one empty export sent to the configured OTLP endpoint, answered with what it answered as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
 | `/debug/collector` | With `--web.debug`: a configured collector as the debug page shows it, `?name=<name>`, with `GET`: its YAML as its file writes it, credentials and file paths withheld, and at `full` the static targets scraped through it, as JSON. See [The debug page](CONFIGURATION.md#the-debug-page). |
-| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). |
+| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.debug=full`, `&debug=true` answers with a report of the trip instead; see [Debug probes](CONFIGURATION.md#debug-probes). A failed probe is answered its stage and its error without what the target answered; see [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told). A collector with `report_failures` answers it `200` with `http_exporter_probe_success 0` and the stage instead; see [Reporting failed probes as metrics](CONFIGURATION.md#reporting-failed-probes-as-metrics). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`, with `GET` or `HEAD`; any other method is answered `405`. See [Self-metrics](SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named; with `--web.debug=full`, `?debug=<name>` [reports one scrape](STATIC-TARGETS.md#debugging-a-static-target). |
 | `/static-targets/status` | The status page: each static target's last scrape — when, how long, its result (success, failed, stale result served, skipped by backoff, not yet scraped), the last error and whether it is backing off — the recent probes of each collector and target, and how the OTLP export is going, as an HTML page that refreshes itself every `?refresh=` interval or `--web.status-refresh`, or as JSON with `?format=json`, with `GET` or `HEAD`; `?format=fragment` is the page's content section alone. Always the static targets path followed by `/status`; served with or without static targets. See [Status page](#status-page). |
@@ -147,7 +147,9 @@ collector, target and parameters:
   `--probe.max-concurrent` turned it away, `503`), `stale result served`
   (failed, and the last good result served under `cache.stale_if_error`) or
   `backing off` (`failure_backoff` kept it from the target); whether it was
-  shared; the HTTP status the exporter answered and the series it gave;
+  shared; the HTTP status the exporter answered and the series it gave,
+  `200` and the series of `report_failures` for a failed probe of a
+  collector that sets it;
 - the results of its last 10 probes as a strip, oldest first: `✓` success or
   cached, `✗` failed, refused or rejected, `~` stale result served, `…`
   backing off; each mark's title has the probe's time, result and status;

@@ -887,10 +887,25 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		// OpenMetrics one ends in # EOF: an answer with neither is in no
 		// format a scraper could read, which carrying on is there to
 		// prevent.
+		//
+		// Under report_failures the probe is a failure, as its answer says
+		// (probereport.go): counted as one, shown failed with its error on
+		// the status page, answered with the last good result under
+		// cache.stale_if_error (probeUpstream) and exported as a failed
+		// trace, so that nothing the exporter says of the probe disagrees
+		// with its http_exporter_probe_success 0. It is logged as its
+		// policy says, still.
 		answer := carriedOnAnswer(c)
 		out.metrics = &answer
-		carried := out.result(true)
+		carried := out.result(!c.ReportFailures)
 		carried.stage = result.stage
+		if c.ReportFailures {
+			carried.carriedOn, carried.unauthorized = true, result.unauthorized
+			carried.failure = s.shownStatusError(result.carriedErr)
+			if job.backingOff != nil {
+				carried.outcome = probeBackoff
+			}
+		}
 		return carried
 	}
 	out.metrics = &result.answer

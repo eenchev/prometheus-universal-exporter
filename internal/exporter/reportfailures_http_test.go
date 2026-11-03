@@ -145,9 +145,9 @@ func TestReportFailuresLeavesARefusedOrRejectedProbeAsItWas(t *testing.T) {
 	}
 }
 
-// error_handling log carries on past a failed stage as before, counted a
-// success in the self-metrics, and report_failures says the stage failed:
-// success 0 and the stage. A response cache answers a hit with success 1,
+// error_handling log carries on past a failed stage as before, and
+// report_failures says the stage failed, success 0 and the stage, and
+// counts the probe a failure in the self-metrics. A response cache answers a hit with success 1,
 // and keeps the collector's series alone. cache.stale_if_error answers a
 // failed trip with the last good result, marked stale, and success 0 with
 // the stage that failed. Each probe answers its own elapsed time, the one
@@ -168,8 +168,8 @@ func TestReportFailuresWithCarryingOnCachingAndStaleResults(t *testing.T) {
 	if body := got.Body.String(); got.Code != http.StatusOK || !strings.Contains(body, "http_exporter_probe_success 0\n") || !strings.Contains(body, `http_exporter_probe_failed_stage{stage="http"} 1`) {
 		t.Errorf("carried on: %d %s", got.Code, body)
 	}
-	if self := selfMetrics(t, server); !strings.Contains(self, `http_exporter_scrape_success_total{collector="carrying"} 1`) {
-		t.Errorf("a probe that carried on is no longer counted a success")
+	if self := selfMetrics(t, server); !strings.Contains(self, `http_exporter_scrape_success_total{collector="carrying"} 0`) {
+		t.Errorf("a probe that carried on under report_failures is counted a success")
 	}
 
 	up := textTarget(t, "value=7\n")

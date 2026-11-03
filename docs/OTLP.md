@@ -865,8 +865,11 @@ keys:
 - `errors: true` exports the trace of every probe and scrape that failed
   too, however long it took: one answered with an error, one answered with a
   [stale result](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)
-  in place of a fresh one, one the concurrency limit turned away, and a
-  scrape that left its target `up` 0. Off, the default, only slow ones are
+  in place of a fresh one, one the concurrency limit turned away, one of a
+  collector with
+  [`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
+  that carried on past a failed stage, whose `error.type` is that stage, and
+  a scrape that left its target `up` 0. Off, the default, only slow ones are
   exported, failed or not; a failure is in the log and the self-metrics
   already.
 - `parent_based: true` exports the trace of every probe whose caller sent a

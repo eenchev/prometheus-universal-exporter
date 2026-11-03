@@ -26,8 +26,10 @@ import (
 // A failed probe is answered 200 with them alone; a stale result standing in
 // for a failed trip (cache.stale_if_error) keeps its series beside them and
 // is a failure, as it is to the self-metrics. A stage error_handling carried
-// on past failed too: the answer says so, while the self-metrics count the
-// probe a success, as they count every probe that carried on. Nothing of the
+// on past failed too: the answer says so, and so does everything else that
+// counts the probe, the self-metrics, the status page, a stale result
+// standing in and the trace export (probeTrip), where without the key such a
+// probe is a success. Nothing of the
 // error's text is answered, so nothing of the target's answer is: the stage
 // names where it failed, and the log has the rest as before.
 //
@@ -39,7 +41,7 @@ import (
 // The series are added to each probe's answer as it is written: the
 // response cache and the OTLP export keep the collector's own series, the
 // probes sharing a trip each answer their own duration, and the self-metrics
-// count a failure as one, as they did. Static targets have
+// count a failure as one. Static targets have
 // http_exporter_target_up and are not changed by it.
 
 // probeSeriesHelp is the help of each series of report_failures.

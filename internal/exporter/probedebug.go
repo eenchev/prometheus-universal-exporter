@@ -614,6 +614,9 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 		return s.staticDebugVerdict(result, p)
 	}
 	var verdict string
+	// failed is what the probe answers when no stale result stands in for
+	// it: nothing but the verdict, but for a probe carrying on.
+	var failed *model.MetricSet
 	switch {
 	case result.aborted:
 		return "503: probe cancelled: the caller went away", nil
@@ -624,15 +627,21 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	case result.failed():
 		verdict = fmt.Sprintf("502: collector %s %s failed: %v", name, result.stage, result.err)
 	case result.carriedOn:
-		// What probeTrip answers: nothing of the collector's.
+		// What probeTrip answers: nothing of the collector's. Under
+		// report_failures the probe is a failure, which a stale result
+		// answers for, as probeUpstream has it.
 		answer := carriedOnAnswer(p.collector)
-		return "200 with no series of the collector's: a stage failed and error_handling carried on", &answer
+		verdict = "200 with no series of the collector's: a stage failed and error_handling carried on"
+		if !p.collector.ReportFailures {
+			return verdict, &answer
+		}
+		failed = &answer
 	default:
 		answer := result.answer
 		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer
 	}
 	if result.unauthorized {
-		return verdict + " (no stale result: the target refused the credential)", nil
+		return verdict + " (no stale result: the target refused the credential)", failed
 	}
 	if result.refused {
 		return verdict + " (no stale result: the target policy refused the target)", nil
@@ -646,7 +655,7 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 			}
 		}
 	}
-	return verdict, nil
+	return verdict, failed
 }
 
 // staticDebugVerdict is what a static target's scrape would have published,

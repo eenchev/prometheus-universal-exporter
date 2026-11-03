@@ -6856,7 +6856,9 @@ nothing else. A trip that carried on is no result: it MUST NOT be stored in
 the response cache, where an earlier result MUST stay as it was, and MUST NOT
 be queued for OTLP; and it is no failure: it MUST NOT be answered with a
 stale result, the failed stage MUST be counted in the self-metrics as under
-`fail`, and the probe MUST count in `http_exporter_scrape_success_total`. A
+`fail`, and the probe MUST count in `http_exporter_scrape_success_total`,
+unless the collector sets `report_failures`, which makes such a probe a
+failure (§ 19.5). A
 debug probe (§ 42.17) MUST report the stage as failed and carried on past,
 and that a probe would have been answered `200` with no series of the
 collector's. A
@@ -7037,8 +7039,16 @@ A probe MUST be a failure to the series exactly when it is one of these:
   `failure_backoff` kept the trip from the target (its fetch stage);
 - a stage failed and `error_handling` carried on past it (`log`,
   `ignore`): the answer MUST hold what a probe carrying on holds (§ 19) and
-  success `0` with the stage, while the self-metrics MUST count the probe a
-  success as before;
+  success `0` with the stage, and the probe MUST be a failure wherever the
+  exporter counts or records it, as any failure below is: no count in
+  `http_exporter_scrape_success_total`, `failed` with its error on the
+  status page, answered with the last good result under
+  `cache.stale_if_error`, and a failed probe's trace (§ 42.1c), whose
+  `error.type` MUST be the stage, under the `errors` sampling. It MUST be
+  logged as its policy says, at warning level under `log` and not above
+  debug under `ignore`, and MUST NOT be cached or queued for OTLP. A rule
+  under `error_mode` `log` or `ignore` that misses its value fails no stage,
+  and the probe MUST stay a success;
 - `cache.stale_if_error` answered the last good result in place of a failed
   trip: the stale series and freshness gauges MUST be answered with success
   `0` and the stage of the trip's failure.
@@ -30183,7 +30193,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 - `TestReportFailuresAnswersAFailedProbeWithSeries`: a collector with `report_failures` answers a success 200 with `demo_value` first and `http_exporter_probe_success 1` and `http_exporter_probe_elapsed_seconds` after it; a closed port, a 503 with a body, a broken JSON body and a page without the value of a rule under `error_mode: fail` each 200 with success 0, an elapsed time above 0 and `http_exporter_probe_failed_stage` of `http`, `http_status`, `decode` and `metric`, and nothing of `secret`, `503`, `refused`, `127.0.0.1`, `demo_value` or `error`; a collector without it answers 502; the failures are logged as `probe failed` with the stage and the body, and the self-metrics count three probes, one success, the last status 503, a parse error and three observations of the probe duration histogram.
 - `TestReportFailuresLeavesARefusedOrRejectedProbeAsItWas`: a target the target policy refuses is answered 403 and a probe over `max_concurrent_probes` 503, without the probe series.
-- `TestReportFailuresWithCarryingOnCachingAndStaleResults`: under `on_fetch_error: log` a closed port is answered success 0 with the `http` stage while the self-metrics count it a success; two probes of a caching collector answer `demo_value 7` and success 1, and the cache holds no probe series; with `stale_if_error` a 503 after a success answers `demo_value 3`, `http_exporter_result_stale 1`, success 0 and the `http_status` stage.
+- `TestReportFailuresWithCarryingOnCachingAndStaleResults`: under `on_fetch_error: log` a closed port is answered success 0 with the `http` stage and the self-metrics count it no success; two probes of a caching collector answer `demo_value 7` and success 1, and the cache holds no probe series; with `stale_if_error` a 503 after a success answers `demo_value 3`, `http_exporter_result_stale 1`, success 0 and the `http_status` stage.
 - `TestReportFailuresAnswersEveryFormat`: a failure asked for in OpenMetrics is answered in it with the stage and `# EOF`; a HEAD probe is answered 200 in the text format.
 - `TestReportedAnswersLeaveTheSharedResultAsItWas`: three answers written from one result with spare capacity each have their own elapsed time and one success series, and the result keeps its one series, nothing written past it.
 - `TestReportFailuresOnTheStatusPageAndInADebugProbe`: the status page's row of a failed probe is `failed`, status 200, 3 series, with its error; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the http stage failed (report_failures), in place of 502: …` and shows the stage series.
@@ -30191,6 +30201,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestReportFailuresLeavesTheOTLPExportAndStaticTargetsAsTheyWere`: a success queues `demo_value` alone for OTLP, a failure nothing; a failing static target of the collector is served `http_exporter_target_up` 0 and no probe series.
 - `TestReportFailuresOfALocalFileCollector`: a `localfile` collector with `report_failures` answers a missing file with success 0 and the `file` stage, a broken file with the `decode` stage, and a file it reads with its series and success 1.
 - `TestReportFailuresReservesTheProbeSeriesNames` (config): with `report_failures` a rule named each of the three names, one that `metrics_prefix: http` makes `http_exporter_probe_success`, and a derived family of that name are refused at load, naming the collector, the metric and the name; without it each loads; `report_failures: true` is read.
+- `TestReportFailuresCountsACarriedOnProbeAFailure`: probes of a 503 target by collectors with `report_failures` and `on_fetch_error` `log` and `ignore` are each answered success 0 with the `http_status` stage, counted one probe, no success, the status 503 and one duration observation, and shown on the status page `failed`, failing, status 200, 3 series and an error naming 503; the `log` one is logged at warning as `probe stage failed; continuing`, and the `ignore` one, and `probe failed`, not at all at info level. Without the change both were counted a success and shown `success`.
+- `TestACarriedOnProbeWithoutReportFailuresStaysASuccess`: without `report_failures` an `on_fetch_error: log` probe of a 503 target is answered 200 with no series of the collector's and no probe series, counted a success and shown `success` with no error.
+- `TestARuleCarryingOnIsNoFailureUnderReportFailures`: a rule under `error_mode: log` that finds no value, of a collector with `report_failures`, answers success 1 with no stage and no `demo_value`, counts a success and one rule failure, and is shown `success`.
+- `TestAStaleResultStandsInForACarriedOnFailureUnderReportFailures`: after a success, a 503 carried on under `on_fetch_error: log` by a `stale_if_error` collector with `report_failures` is answered `demo_value 3`, `http_exporter_result_stale 1`, success 0 and the `http_status` stage, shown `stale result served`, and a debug probe says `200 with the last good result` with `demo_value 3`; the same collector without the key answers `http_exporter_result_stale 0` and no `demo_value`; stale results served are 1 and 0, and no cache entry is added. Without the change no stale result stood in.
+- `TestTheTraceOfACarriedOnProbeUnderReportFailuresIsAFailure`: under `errors` and an hour's threshold, the fast trace of an `on_fetch_error: log` probe of a 503 target by a collector with `report_failures` is exported, its span ERROR with the failure naming 503, `error.type` `http_status` and `http.response.status_code` `200`; without the change it was not exported. `TestReportFailuresWithCarryingOnCachingAndStaleResults` now has the carried-on probe counted no success.
 - `TestAcceptStatusAnyAcceptsEveryStatus` (fetch): `accept_status: [any]` accepts 100, 101, 200, 302, 404, 503 and 599 and not 99, 600 or 999; a static target's `[any]` replaces the collector's list and its `[2xx]` the collector's `[any]`; `[any, 2xx]`, `[503, any]` and `[any, any]` are refused as `entry "any" accepts every status from 100 to 599 and is written alone, without …`, `ANY` and `Any` as no status, `retry.statuses: [any]` as no status, and `retry.statuses: [503]` or `[1xx]` beside `[any]` as never retried, while `retry.statuses: []` is taken; a 503 under `[any]` with two retry attempts is sent once; a static target's `[any, 5xx]` is refused, its `[any]` taken, and refused beside its own `retry.statuses: [404]` and under a collector whose `retry.statuses` is `[503]`.
 - `TestAcceptStatusAnyIsReadAloneInEveryFile` (config): `[any]` is read as `any` in the configuration, a collector file and the static target file, and `[any, 2xx]`, `[503, any]`, `[ANY]` and `["Any"]` are refused in each, naming the entry; a static target's `ANY` was written in lower case when its file was loaded and taken.
 - `TestAProbeOfAcceptStatusAnyDecodesEveryStatus`: a collector of `accept_status: [any]` and `follow_redirects: false` answers a 200, a 302, a 404 and a 503 with `uptime_status_code` of each, from `$status`; one without `accept_status` fails each but the 200 in the `http_status` stage with 502.
@@ -31038,7 +31053,9 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   written, as its duration in the self-metrics is: the time its caller takes
   to read the answer MUST NOT count. A failed probe
   is one answered with an error, with a stale result, or turned away by the
-  concurrency limit; a failed scrape one that left its target `up` 0.
+  concurrency limit, or one of a collector with `report_failures` that
+  `error_handling` carried on past a failed stage (§ 19.5); a failed scrape
+  one that left its target `up` 0.
 - Which trace to export MUST be decided at the probe's or the scrape's end,
   from stages and requests recorded in memory as it went, by the code that
   times a debug run's stages (§ 34.251): each stage once, for both. A trace

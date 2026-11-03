@@ -150,7 +150,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   of the error. With `method: HEAD`, `accept_status: [any]` and
   `decoder.type: none` it is an uptime check that alerts on a value, as
   blackbox_exporter's `probe_success`. Failures are logged and counted in
-  the self-metrics as before; static targets, which have
+  the self-metrics as before, and a probe `error_handling` carried on past
+  a failed stage is one: counted no success, shown failed on the status
+  page, answered by `cache.stale_if_error`'s last good result and traced
+  as failed, where without the key it is a success; static targets, which have
   `http_exporter_target_up`, are not changed
   ([Reporting failed probes as metrics](docs/CONFIGURATION.md#reporting-failed-probes-as-metrics)).
 - `decoder.type: none` reads no body: jq and yq rules read `null` with

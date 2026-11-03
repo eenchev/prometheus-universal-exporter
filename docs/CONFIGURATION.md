@@ -3057,8 +3057,8 @@ error_handling:
 | Policy | The probe | Logged |
 | --- | --- | --- |
 | `fail` (default) | fails with `502 Bad Gateway` | yes, at error level |
-| `log` | carries on without that stage's output | yes, at warning level |
-| `ignore` | carries on without that stage's output | only at debug level |
+| `log` | carries on without that stage's output, and counts as a success without [`report_failures`](#reporting-failed-probes-as-metrics) | yes, at warning level |
+| `ignore` | carries on without that stage's output, and counts as a success without `report_failures` | only at debug level |
 
 A probe that carries on is answered `200` with an empty exposition in the
 format the scrape asked for, exactly what a probe whose rules produced no
@@ -3067,11 +3067,15 @@ its closing `# EOF`, compressed when the scrape accepts gzip. An exposition is
 identified by its `Content-Type`, so the answer says what it is though it
 holds nothing of the collector's, and the scrape succeeds, which is what
 carrying on is for. The failure is still counted in the collector's
-[self-metrics](SELF-METRICS.md), and the probe counts as a success. Nothing
+[self-metrics](SELF-METRICS.md), and the probe counts as a success, unless
+the collector sets
+[`report_failures`](#reporting-failed-probes-as-metrics), which makes it a
+failed probe that is answered `http_exporter_probe_success 0`. Nothing
 is kept in the [response cache](#response-caching) or exported over OTLP.
 Carrying on is not a failure, so with
 [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
-the last good result does not stand in for it: the answer holds the two
+the last good result does not stand in for it, again unless the collector
+sets `report_failures`: the answer holds the two
 freshness series every answer of such a collector has, with
 `http_exporter_result_stale 0`, and nothing else.
 
@@ -3207,13 +3211,21 @@ What else becomes of a probe:
 
 - **`error_handling` `log` or `ignore`** carries on past a failed stage as
   before ([When a stage of the probe fails](#when-a-stage-of-the-probe-fails)),
-  and the answer says the stage failed: `http_exporter_probe_success 0` with
-  the stage. The self-metrics still count the probe a success, as they count
-  every probe that carried on.
+  and the probe is a failure: the answer says the stage failed,
+  `http_exporter_probe_success 0` with the stage, and so does everything
+  else that counts probes, so that none of them disagrees with the answer.
+  The self-metrics count no success for it, the status page shows it
+  failed with its error, the last good result stands in for it under
+  `cache.stale_if_error`, and its trace is a failed one. It is logged as
+  its policy says, at warning level under `log` and debug under `ignore`,
+  and it is not cached, as before. Without `report_failures` such a probe
+  is a success, as it always was.
 - **A rule with `error_mode: fail`** fails the probe in the `metric` stage;
-  a rule under `log` or `ignore` that drops its series does not fail it.
+  a rule under `log` or `ignore` that drops its series fails no stage, and
+  the probe is a success.
 - **[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)**
-  answers the last good result in place of a failed trip, with
+  answers the last good result in place of a failed trip, a trip carried on
+  past a failed stage included, with
   `http_exporter_result_stale 1`, and `http_exporter_probe_success 0` and
   the stage beside them: the series stand in, while the target is failing.
 - **[Response caching](#response-caching)**: a cached answer is a success.
@@ -3232,7 +3244,11 @@ What else becomes of a probe:
   and the other counters, and in the probe duration histogram; it is
   [logged](LOGGING.md) as before.
 - **The [OTLP export](OTLP.md)** exports the collector's series, as before:
-  nothing of a failed probe, and not the three series.
+  nothing of a failed probe, one carried on past a failed stage included,
+  and not the three series; a stale result standing in is exported as it
+  is without the key. The trace of a failed probe is a failed one, which
+  the `errors` sampling keeps; the `error.type` of one carried on past a
+  failed stage is that stage, since it was answered `200` either way.
 - **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
   with its error, answered `200` with its series.
 - **A [debug probe](#debug-probes)** says that a probe would have answered

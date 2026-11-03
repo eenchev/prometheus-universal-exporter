@@ -125,9 +125,13 @@ type collected struct {
 	answer  model.MetricSet
 	fetched time.Time
 	// carriedOn is set when a stage failed under error_handling log or
-	// ignore: the trip counts as a success with nothing to export. stage
-	// names that stage, for report_failures, and err is nil.
-	carriedOn bool
+	// ignore: the trip has nothing to export, and counts as a success
+	// unless the collector has report_failures, which makes it a failure
+	// (probeTrip). stage names that stage and carriedErr its error, which
+	// the log has had; err is nil, so that nothing that reads a failure in
+	// err takes the trip for one.
+	carriedOn  bool
+	carriedErr error
 	// stage and err say why the trip failed, when it did; metric names the
 	// metric rule with error_mode fail that failed it. The failure is
 	// already logged.
@@ -241,11 +245,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		case model.ErrorPolicyLog:
 			s.tripFailed(ctx, rec.read, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
 			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
-			return collected{carriedOn: true, stage: stage}
+			return collected{carriedOn: true, stage: stage, carriedErr: err}
 		case model.ErrorPolicyIgnore:
 			s.tripDebug(ctx, j.log.continuing, append(attrs, "error", err)...)
 			stages.step(stage, "failed", mark, err.Error()+"; carried on, error_handling "+policy)
-			return collected{carriedOn: true, stage: stage}
+			return collected{carriedOn: true, stage: stage, carriedErr: err}
 		}
 		s.logTripFailure(ctx, rec.read, j.log, stage, err, extra...)
 		stages.step(stage, "failed", mark, err.Error())

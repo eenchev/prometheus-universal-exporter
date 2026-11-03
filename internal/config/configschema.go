@@ -415,6 +415,21 @@ func positiveDuration() map[string]any {
 	return fetch.SchemaLeastDuration(time.Nanosecond, false)
 }
 
+// acceptStatusSchema describes request.accept_status, a collector's or a
+// static target's: statuses from 100 to 599 and classes such as 2xx, written
+// as numbers or text, or fetch.AcceptAnyStatus as the only entry, which the
+// load refuses beside another (normalizeAcceptedStatuses). retry.statuses
+// keeps the statuses and classes alone: "any" retried would retry what
+// accept_status accepts.
+func acceptStatusSchema(description string) map[string]any {
+	return map[string]any{
+		"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^" + fetch.AcceptAnyStatus + "$"},
+		// "any" alone, or a list without it.
+		"anyOf":       []any{map[string]any{"maxItems": 1}, map[string]any{"items": map[string]any{"not": map[string]any{"const": fetch.AcceptAnyStatus}}}},
+		"description": description,
+	}
+}
+
 // clientCertificatePair is the rule of a tls block that the exporter holds
 // to a client certificate with its key or neither (fetch.CheckClientTLSKeys
 // and the request types' checks): cert_file and key_file are both written
@@ -693,7 +708,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].request.rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
 		"collectors[].request.proxy_url":                      {"pattern": fetch.ProxyURLPattern, "description": "http and graphite: the proxy every request of the collector goes through, its login's, redirects' and pages' included, in place of the one HTTP_PROXY, HTTPS_PROXY and NO_PROXY name: http://host:port, https://host:port, over TLS to the proxy, or socks5://host:port, without credentials, which go in proxy_basic_auth_file. direct reaches the targets without a proxy. Left out, the environment's proxy applies. allowed_targets and denied_targets apply to the target, not to the proxy. No probe parameter or static target sets it. See docs/REQUESTS.md#a-collectors-own-proxy."},
 		"collectors[].request.proxy_basic_auth_file":          {"required": []string{"username", "password"}, "description": "http and graphite, with proxy_url: the files the username and the password sent to the proxy are read from, at every request, such as a mounted Secret."},
-		"collectors[].request.accept_status":                  {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."},
+		"collectors[].request.accept_status":                  acceptStatusSchema("The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503], or [any] alone for every status from 100 to 599; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."),
 		"collectors[].request.allowed_targets":                {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite, grpc, sshfile, sql, tlscert, redis, tcp and ldap; dns matches its names by name alone, and a PTR target by address; for s3file, whose target is a bucket, the buckets it may read, by name or glob, and no address."},
 		"collectors[].request.denied_targets":                 {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is."},
 		"collectors[].metrics[].labels[].value_map":           {"propertyNames": valueMapKeys(), "description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept."},
@@ -1186,7 +1201,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.rate_limit":                      {"required": []string{"requests_per_second"}, "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting."},
 		"targets[].request.rate_limit.requests_per_second":  {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0."},
 		"targets[].request.rate_limit.burst":                {"minimum": 1, "description": "How many requests may be sent at once after a pause. 1 when left out."},
-		"targets[].request.accept_status":                   {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "http and graphite: replaces the collector's request.accept_status for this target."},
+		"targets[].request.accept_status":                   acceptStatusSchema("http and graphite: replaces the collector's request.accept_status for this target; [any] alone accepts every status from 100 to 599."),
 		"targets[].request.accept_codes":                    {"items": map[string]any{"type": "string", "pattern": grpcCodePattern}, "description": "grpc: replaces the collector's request.accept_codes for this target."},
 		"targets[].request.retry.attempts":                  {"maximum": fetch.MaxRetryAttempts, "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10."},
 		"targets[].request.retry.codes":                     {"items": map[string]any{"type": "string", "pattern": grpcCodePattern}, "description": "grpc: replaces the collector's request.retry.codes for this target."},

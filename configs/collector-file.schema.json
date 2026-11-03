@@ -1996,11 +1996,23 @@
                 "type": "array"
               },
               "accept_status": {
-                "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
+                "anyOf": [
+                  {
+                    "maxItems": 1
+                  },
+                  {
+                    "items": {
+                      "not": {
+                        "const": "any"
+                      }
+                    }
+                  }
+                ],
+                "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503], or [any] alone for every status from 100 to 599; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
                 "items": {
                   "maximum": 599,
                   "minimum": 100,
-                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^any$",
                   "type": [
                     "integer",
                     "string"

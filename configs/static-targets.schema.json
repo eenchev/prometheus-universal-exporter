@@ -252,11 +252,23 @@
                 "type": "array"
               },
               "accept_status": {
-                "description": "http and graphite: replaces the collector's request.accept_status for this target.",
+                "anyOf": [
+                  {
+                    "maxItems": 1
+                  },
+                  {
+                    "items": {
+                      "not": {
+                        "const": "any"
+                      }
+                    }
+                  }
+                ],
+                "description": "http and graphite: replaces the collector's request.accept_status for this target; [any] alone accepts every status from 100 to 599.",
                 "items": {
                   "maximum": 599,
                   "minimum": 100,
-                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^any$",
                   "type": [
                     "integer",
                     "string"

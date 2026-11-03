@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1345,7 +1346,7 @@ func normalizeTarget(raw string) string {
 
 // validateAcceptStatus checks request.accept_status at load.
 func validateAcceptStatus(c *model.Collector) error {
-	if err := normalizeAcceptStatus(c.Request.AcceptStatus); err != nil {
+	if err := normalizeAcceptedStatuses(c.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("collector %q request.accept_status %w", c.Name, err)
 	}
 	return nil
@@ -1374,11 +1375,38 @@ func normalizeAcceptStatus(entries []string) error {
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
+// AcceptAnyStatus is the entry of request.accept_status that accepts every
+// status from 100 to 599, for a collector that reports whatever the target
+// answered, such as an uptime check, without listing the five classes. It
+// says all there is to say, so it is written alone; retry.statuses, which
+// lists what is not accepted, does not take it.
+const AcceptAnyStatus = "any"
+
+// normalizeAcceptedStatuses is normalizeAcceptStatus for request.accept_status,
+// which takes AcceptAnyStatus too, in lower case as the schemas take it, as
+// its only entry: another entry beside it would say nothing, or would read
+// as narrowing it, which it does not.
+func normalizeAcceptedStatuses(entries []string) error {
+	if i := slices.Index(entries, AcceptAnyStatus); i >= 0 {
+		if len(entries) > 1 {
+			return fmt.Errorf("entry %q accepts every status from 100 to 599 and is written alone, without %q; take the other entries out", AcceptAnyStatus, entries[(i+1)%len(entries)])
+		}
+		return nil
+	}
+	return normalizeAcceptStatus(entries)
+}
+
 // canonicalStatus is an entry of request.accept_status as AcceptedStatus
 // compares it with a status: a class in lower case, 5xx for 5XX, which the
-// schemas take in either case. Any other entry is left as it is, for the
-// load to take or refuse.
+// schemas take in either case. Any other entry is written in lower case too,
+// for the load to take or refuse, but for AcceptAnyStatus in another case,
+// "ANY": the schemas take any in lower case alone, and a static target's
+// entries are written so before they are checked, so it is kept as it is
+// written for the load to refuse.
 func canonicalStatus(raw string) string {
+	if strings.EqualFold(raw, AcceptAnyStatus) {
+		return raw
+	}
 	return strings.ToLower(raw)
 }
 
@@ -1390,8 +1418,19 @@ func AcceptedStatus(c *model.Collector, overrides RequestOverrides, status int) 
 	if overrides.AcceptStatus != nil {
 		accepted = overrides.AcceptStatus
 	}
-	if len(accepted) == 0 {
+	return acceptsStatus(accepted, status)
+}
+
+// acceptsStatus says whether accepted, a normalized request.accept_status,
+// accepts status: every 2xx when it is empty, every status from 100 to 599
+// when it is AcceptAnyStatus, and its entries otherwise. A status past 599,
+// which no HTTP status class holds, is never accepted.
+func acceptsStatus(accepted []string, status int) bool {
+	switch {
+	case len(accepted) == 0:
 		return status >= 200 && status < 300
+	case len(accepted) == 1 && accepted[0] == AcceptAnyStatus:
+		return status >= 100 && status <= 599
 	}
 	return statusListed(accepted, status)
 }
@@ -1425,13 +1464,7 @@ func validateRetryStatuses(c *model.Collector) error {
 // answer and is never retried, so the entry could never take effect. A class
 // only some of whose statuses are accepted is kept: the others are retried.
 func checkRetryStatuses(retried, accepted []string) error {
-	// accepts is AcceptedStatus of these lists.
-	accepts := func(status int) bool {
-		if len(accepted) == 0 {
-			return status >= 200 && status < 300
-		}
-		return statusListed(accepted, status)
-	}
+	accepts := func(status int) bool { return acceptsStatus(accepted, status) }
 	for _, entry := range retried {
 		var least, most int
 		if code, err := strconv.Atoi(entry); err == nil {

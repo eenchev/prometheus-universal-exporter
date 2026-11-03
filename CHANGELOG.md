@@ -117,6 +117,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `request.accept_status: [any]` accepts every status from 100 to 599, so
+  an uptime check decodes whatever the target answers and its rules compare
+  `$status`, instead of listing `["1xx", "2xx", "3xx", "4xx", "5xx"]`; it is
+  written alone, and `retry.statuses` with entries is refused beside it,
+  since an accepted status is not retried
+  ([Accepting other statuses](docs/REQUESTS.md#accepting-other-statuses)).
 - With `otlp.traces`, the request spans of dns, sql, grpc, ntp, ldap,
   tlscert, redis, sshfile and s3file collectors tell how the request ended
   in attributes the exporter works out of the answer, never the target's

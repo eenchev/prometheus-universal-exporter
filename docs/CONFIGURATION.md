@@ -2608,7 +2608,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
-| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
+| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`, or `[any]` alone for every status from 100 to 599; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `pagination` | none | Fetch the further pages of a paginated answer — by the `Link` header, a next URL or cursor read from the page, or a page number or offset — and merge their items into one JSON document; at most `max_pages`, 10 by default. The decoder is `json`. See [Pagination](REQUESTS.md#pagination). |
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
@@ -4492,7 +4492,8 @@ A 304 is never a failed status: it stands for the kept response, whose
 status the collector accepted. A 304 to a request that was not conditional
 on a kept response has nothing to stand for, and fails the probe as
 `received HTTP status 304 Not Modified to a request that was not conditional
-on a cached response`, unless `request.accept_status` names `304`. A request
+on a cached response`, unless `request.accept_status` accepts `304`, as
+`[304]`, `["3xx"]` and `[any]` do. A request
 the collector makes conditional itself, with `If-None-Match` or
 `If-Modified-Since` in `request.headers` or forwarded, is sent as configured,
 and its answer is not taken for a revalidation.

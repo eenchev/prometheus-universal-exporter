@@ -1362,6 +1362,28 @@ joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the
 code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
 `localfile` or `sshfile` collector, which has no status, it is `null`.
 
+`accept_status: [any]` accepts every status from 100 to 599, for a
+collector that reports whatever the target answers rather than failing on
+some of it, such as an uptime check whose rules compare `$status`:
+
+```yaml
+request:
+  type: http
+  method: HEAD
+  accept_status: [any]   # every status from 100 to 599 is decoded
+```
+
+`any` is written alone and in lower case: beside another entry, `[any,
+503]`, or as `ANY`, it is refused when the configuration loads, as the
+schema refuses it. A status past 599, which some servers send, still fails
+in the `http_status` stage. Since an accepted status is not retried,
+`retry.statuses` with entries is refused beside `[any]` (an empty list is
+taken), and a retry is made on a failed connection alone; `retry.statuses`
+itself takes no `any`. A redirect that `follow_redirects` follows is
+followed as before, and the status of the answer it leads to is the one
+accepted. A [static target](STATIC-TARGETS.md) may set its own `[any]`, or
+replace the collector's `[any]` with a list.
+
 ## Pagination
 
 An API that pages its answer gives one request only the first page. With

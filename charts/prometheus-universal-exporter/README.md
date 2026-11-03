@@ -1465,7 +1465,9 @@ read. `params` adds other `/probe` parameters, each a list, such as
 rendering. `relabelings` is rendered as the targets' `relabelingConfigs`,
 `metricRelabelings` as the Probe's, and `labels` and `annotations` on the
 Probe itself, for a Prometheus `probeSelector`; `targetLabels` labels the
-series of the static targets. `interval` and `scrapeTimeout` are Prometheus
+series of the static targets, and is refused beside `ingress`, whose
+targets take no labels in a Probe: label those with `relabelings`
+(`action: replace`, `targetLabel` and `replacement`). `interval` and `scrapeTimeout` are Prometheus
 durations, the timeout no longer than the interval, and left out when unset,
 so Prometheus's defaults apply. `jobName` sets the `job` label, which is
 `probe/<namespace>/<Probe name>` without it.
@@ -1815,7 +1817,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
 | `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
-| `probes` | array | `[]` | Prometheus Operator `Probe` resources, one per entry, whose prober is the exporter's Service at `/probe`: `name` a unique DNS-1123 label, `collector` (required, and one `config.data` defines), `targets` (URLs) or `ingress` (`selector`, `namespaceSelector`) but not both, `targetLabels`, `interval` and `scrapeTimeout`, `jobName`, `labels`, `annotations`, `relabelings`, `metricRelabelings`, `params` without `collector` or `target`, and `auth` as a monitor's; see [Uptime probes](#uptime-probes). |
+| `probes` | array | `[]` | Prometheus Operator `Probe` resources, one per entry, whose prober is the exporter's Service at `/probe`: `name` a unique DNS-1123 label, `collector` (required, and one `config.data` defines), `targets` (URLs) or `ingress` (`selector`, `namespaceSelector`) but not both, `targetLabels` (with `targets` only), `interval` and `scrapeTimeout`, `jobName`, `labels`, `annotations`, `relabelings`, `metricRelabelings`, `params` without `collector` or `target`, and `auth` as a monitor's; see [Uptime probes](#uptime-probes). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |

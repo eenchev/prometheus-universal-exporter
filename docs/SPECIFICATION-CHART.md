@@ -534,7 +534,10 @@ out when unset.
 An entry MUST have one of `targets` and `ingress`, not both: the Prometheus
 Operator takes the static targets over the Ingresses, so the second would be
 ignored without a word, and with neither the `Probe` probes nothing. An
-`ingress` MUST give a `selector`, `{}` to select every Ingress. The name MUST
+`ingress` MUST give a `selector`, `{}` to select every Ingress. An entry
+MUST NOT give `targetLabels` without `targets`: the `Probe`'s
+`targets.ingress` has no labels, so the Prometheus Operator would drop them
+without a word, and the message MUST point to `relabelings`. The name MUST
 be a DNS-1123 label unique among the entries; `collector` MUST be given and,
 when the chart holds the configuration, be a collector `config.data` defines,
 as a monitor's (§ 42.7); `params` MUST NOT set `collector` or `target`; a
@@ -1990,7 +1993,8 @@ are skipped and the text checks of the templates still run:
      `auth` that alone; without `webAuth`, none
      (`TestChartProbesPresentTheExporterCredential`).
    - Rendering fails for an entry with neither `targets` nor `ingress`, an
-     empty `ingress`, both, an `ingress` without `selector`, no collector, a
+     empty `ingress`, both, an `ingress` without `selector`, `targetLabels`
+     beside `ingress` (the message pointing to `relabelings`), no collector, a
      collector `config.data` does not define, no name, a name in upper case
      or with `_`, two entries of one name, `params.collector`,
      `params.target`, a `scrapeTimeout` over the `interval`, an `auth`

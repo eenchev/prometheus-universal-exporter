@@ -264,6 +264,7 @@ func TestChartRefusesInvalidProbes(t *testing.T) {
 		"an empty ingress":            {[]string{`probes=[{"name":"s","collector":"example","ingress":{}}]`}, `probes entry "s" has neither targets nor ingress`, true},
 		"both targets and ingress":    {[]string{`probes=[{"name":"s","collector":"example","targets":["a"],"ingress":{"selector":{}}}]`}, `probes entry "s" has both targets and ingress`, true},
 		"an ingress without selector": {[]string{`probes=[{"name":"s","collector":"example","ingress":{"namespaceSelector":{"any":true}}}]`}, `probes entry "s" has ingress without a selector`, true},
+		"targetLabels with ingress":   {[]string{`probes=[{"name":"s","collector":"example","ingress":{"selector":{}},"targetLabels":{"team":"web"}}]`}, `probes entry "s" has targetLabels without targets; the Probe's ingress targets take no labels, so the Prometheus Operator would drop them: add the labels with relabelings`, true},
 		"no collector":                {[]string{`probes=[{"name":"s","targets":["a"]}]`}, `probes entry "s" names no collector`, true},
 		"an undefined collector":      {[]string{`probes=[{"name":"s","collector":"site","targets":["a"]}]`}, `probes entry "s" names collector "site", which config.data does not define`, false},
 		"no name":                     {[]string{`probes=[{"collector":"example","targets":["a"]}]`}, `probes entry #0 has the name ""`, true},

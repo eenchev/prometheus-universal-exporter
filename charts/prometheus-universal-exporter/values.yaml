@@ -497,7 +497,8 @@ probes: []
 #     targets:
 #       - https://www.example.com
 #       - https://shop.example.com/health
-#     # ...with these labels on every series of them.
+#     # ...with these labels on every series of them (static targets only:
+#     # label Ingress targets with relabelings).
 #     targetLabels:
 #       team: web
 #     # ...or the Ingresses to probe, by label, in the namespaces given (the

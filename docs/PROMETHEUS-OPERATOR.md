@@ -102,7 +102,7 @@ spec:
         - https://shop.example.com/health
 ```
 
-The Prometheus Operator moves each target into `__param_target` and `instance` and the address to the prober itself, so a Probe needs none of the relabeling above. The collector is a parameter of `spec.params`: `spec.module` would send `module=`, which the exporter does not read. An entry's `ingress`, a `selector` and a `namespaceSelector`, probes Ingresses in place of the listed `targets`, never beside them, since the Prometheus Operator ignores the Ingresses of a Probe that lists targets. With `probes` empty, the default, no Probe is rendered and the cluster needs no Probe CRD. The chart README's [Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes) has every value.
+The Prometheus Operator moves each target into `__param_target` and `instance` and the address to the prober itself, so a Probe needs none of the relabeling above. The collector is a parameter of `spec.params`: `spec.module` would send `module=`, which the exporter does not read. An entry's `ingress`, a `selector` and a `namespaceSelector`, probes Ingresses in place of the listed `targets`, never beside them, since the Prometheus Operator ignores the Ingresses of a Probe that lists targets. `targetLabels` labels the listed targets alone, and is refused beside `ingress`, whose targets take no labels in a Probe: label those with `relabelings`. With `probes` empty, the default, no Probe is rendered and the cluster needs no Probe CRD. The chart README's [Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes) has every value.
 
 ## Related pages
 

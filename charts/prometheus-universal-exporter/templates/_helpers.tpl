@@ -879,6 +879,11 @@ true
 {{- if not (or $probe.targets $probe.ingress) -}}
 {{- fail (printf "probes entry %q has neither targets nor ingress; list the URLs to probe in targets, or select Ingresses with ingress.selector" $name) -}}
 {{- end -}}
+{{- /* The Probe's Ingress targets have no labels field, so labels given
+       for them would be dropped without a word: relabelings can add them. */ -}}
+{{- if and $probe.targetLabels (not $probe.targets) -}}
+{{- fail (printf "probes entry %q has targetLabels without targets; the Probe's ingress targets take no labels, so the Prometheus Operator would drop them: add the labels with relabelings (action: replace, targetLabel and replacement) instead" $name) -}}
+{{- end -}}
 {{- if and $probe.ingress (not (hasKey $probe.ingress "selector")) -}}
 {{- fail (printf "probes entry %q has ingress without a selector; an empty selector would probe every Ingress, so give ingress.selector, {} to mean every one" $name) -}}
 {{- end -}}

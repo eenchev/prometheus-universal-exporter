@@ -404,7 +404,7 @@
             "minItems": 1,
             "items": {"type": "string", "minLength": 1}
           },
-          "targetLabels": {"$ref": "#/$defs/stringMap", "description": "Labels added to every series of the static targets."},
+          "targetLabels": {"$ref": "#/$defs/stringMap", "description": "Labels added to every series of the static targets; only with targets, since the Probe's Ingress targets take no labels: label those with relabelings."},
           "ingress": {
             "type": "object",
             "additionalProperties": false,
@@ -449,6 +449,7 @@
           }
         },
         "required": ["name", "collector"],
+        "dependentRequired": {"targetLabels": ["targets"]},
         "oneOf": [
           {"required": ["targets"], "not": {"required": ["ingress"]}},
           {"required": ["ingress"], "not": {"required": ["targets"]}}

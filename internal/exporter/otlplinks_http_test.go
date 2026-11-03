@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // Metrics, logs and traces linked (otlptraceslink.go): a log record carries
@@ -283,6 +285,52 @@ func TestTheProtobufAnswerCarriesTheHistogramsExemplars(t *testing.T) {
 	check("the native exemplars", histogram[16][0].([]byte))
 }
 
+// The +Inf bucket's exemplar, of an observation past the last bound, is
+// written in protobuf on an explicit +Inf classic bucket, of the count, as
+// client_golang writes it, since the classic buckets are where a Prometheus
+// that keeps the classic histogram reads exemplars. Without that exemplar no
+// +Inf bucket is written, sample_count being it.
+func TestTheProtobufAnswerWritesTheInfBucketWithItsExemplar(t *testing.T) {
+	server, stats := exemplarServer(t)
+	classic := func() []map[protowire.Number][]any {
+		families := protoFamilies(t, selfMetricsAccepting(t, server, prometheusProtobufAccept).Body.Bytes())
+		metric := protoFields(t, families["http_exporter_collector_scrape_duration_seconds"][4][0].([]byte))
+		histogram := protoFields(t, metric[7][0].([]byte))
+		var out []map[protowire.Number][]any
+		for _, raw := range histogram[3] {
+			out = append(out, protoFields(t, raw.([]byte)))
+		}
+		return out
+	}
+	dropped := newTraceLink(traceParent{})
+	server.observeTargetScrape(stats, 90*time.Second, dropped)
+	dropped.settle(false, nil, nil)
+	without := classic()
+	if last := without[len(without)-1]; math.IsInf(protoDouble(last[2][0]), 1) {
+		t.Fatalf("a +Inf bucket is written without an exemplar: %v", last)
+	}
+	exported := newTraceLink(traceParent{})
+	server.observeTargetScrape(stats, 95*time.Second, exported)
+	exported.settle(true, nil, nil)
+	buckets := classic()
+	if len(buckets) != len(without)+1 {
+		t.Fatalf("%d classic buckets with the +Inf exemplar, %d without; want one more", len(buckets), len(without))
+	}
+	last := buckets[len(buckets)-1]
+	if !math.IsInf(protoDouble(last[2][0]), 1) || last[1][0].(uint64) != 2 || len(last[3]) != 1 {
+		t.Fatalf("the last classic bucket is %v; want le +Inf, a count of 2 and an exemplar", last)
+	}
+	trace, span := exported.ids()
+	if labels, value, _ := protoExemplar(t, last[3][0].([]byte)); labels["trace_id"] != trace || labels["span_id"] != span || value != 95 {
+		t.Errorf("the +Inf bucket's exemplar has %v, %v; want trace %s span %s, 95", labels, value, trace, span)
+	}
+	for _, b := range buckets[:len(buckets)-1] {
+		if len(b[3]) != 0 {
+			t.Errorf("bucket le %v has an exemplar", protoDouble(b[2][0]))
+		}
+	}
+}
+
 // The OTLP export's histogram and exponential histogram points carry the
 // exemplars, with the trace and span ids in hex, the value and the time in
 // nanoseconds.
@@ -510,6 +558,29 @@ func TestTheDebugPageShowsTheTraceparentSentAndTheLinks(t *testing.T) {
 	}
 	if !strings.Contains(answer.OTLP.Traces.Body, `"traceId": "`+record.TraceID+`"`) || !strings.Contains(answer.OTLP.Traces.Body, `"spanId": "`+record.SpanID+`"`) {
 		t.Errorf("the record's trace %s and span %s are not the tab's spans':\n%s", record.TraceID, record.SpanID, answer.OTLP.Traces.Body)
+	}
+}
+
+// A debug run's trace is never exported, so with otlp.traces.propagate its
+// requests carry its traceparent unsampled, flag 00, and no ratio's
+// threshold in their tracestate, even where sample_ratio keeps every trace
+// and a probe's request is sent sampled with ot=th:0: a target's tracer
+// that samples by its parent must not record its part of a trace that no
+// backend will get.
+func TestADebugRunPropagatesItsTraceUnsampled(t *testing.T) {
+	target := newHeaderTarget(t, 0)
+	receiver := newLogReceiver(t)
+	server, _ := linkedServer(t, receiver, time.Hour, func(c *model.Config) {
+		c.OTLP.Traces.Propagate, c.OTLP.Traces.SampleRatio = true, 1
+	})
+	server.SetDebug(DebugFull)
+	probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(target.URL), nil)
+	if sent, state := target.last(); !strings.HasSuffix(sent, "-01") || state != "ot=th:0" {
+		t.Fatalf("a probe kept by sample_ratio 1 sends %q and %q, want the flag 01 and ot=th:0", sent, state)
+	}
+	postRun(t, server, map[string]any{"configured": "text", "target": target.URL}, http.StatusOK)
+	if sent, state := target.last(); !regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-00$`).MatchString(sent) || state != "" {
+		t.Errorf("the run sends %q and %q, want the flag 00 and no tracestate", sent, state)
 	}
 }
 

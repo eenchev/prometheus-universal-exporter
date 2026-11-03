@@ -168,10 +168,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   native) and OTLP. `otlp.traces.propagate: true` sends each HTTP, graphite
   and gRPC request to a target a W3C `traceparent` under its span's id, the
   sampled flag set where `parent_based` or `sample_ratio` has already kept
-  the trace, and with the trace export off passes a probe's caller's
-  `traceparent` and `tracestate` on as they came; a `traceparent` in
-  `request.headers` or forwarded is sent as it is, and a login carries none.
-
+  the trace (never for a debug page run, whose trace is not exported), and
+  with the trace export off passes a probe's caller's `traceparent` and
+  `tracestate` on as they came; a `traceparent` in `request.headers`,
+  `request.metadata` or forwarded is sent as it is, a `tracestate` set there
+  without one is dropped, and a login carries none.
 - Sampling rules for `otlp.traces`, tried after `threshold` and `errors`:
   `parent_based: true` exports the trace of a probe whose caller's
   `traceparent` is sampled, and `sample_ratio` a share, 0 to 1, of the rest,

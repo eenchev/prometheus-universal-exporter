@@ -7421,7 +7421,11 @@ value MUST be refused when the configuration loads, naming the two. Under
   whose name is classic, or, of two escaped, of the first in order;
 - such an answer's `Content-Type` MUST end with `; escaping=` and the
   escaping it was written with. An answer of classic names alone MUST be
-  written, and typed, as under `legacy`, without the parameter.
+  written, and typed, as under `legacy`, without the parameter. The static
+  targets endpoint MUST tell the two apart by the names its stored results
+  hold, not by the configuration in force: a result scraped under `utf8`
+  and kept through a reload that takes its collector to `legacy` MUST be
+  written as the scraper asks until the target is scraped again.
 
 A debug report's text of an answer (§ 42.17) MUST write a name that is not
 classic quoted, as it is. The OTLP export (§ 42.1) MUST send such a name as
@@ -8035,7 +8039,10 @@ name, help, type and every series, labels in order of their names; a series'
 timestamp in `timestamp_ms`; and, with `web.self_metrics.created_timestamps`
 and only then, a counter's, histogram's or summary's creation time in its
 `created_timestamp`. A histogram MUST carry its classic buckets without the
-`+Inf` one, its `sample_count` and `sample_sum`, and, for the scrape-time
+`+Inf` one, which `sample_count` is, unless that bucket has an exemplar:
+it MUST then be written last, as Prometheus's Go client writes it, with
+`upper_bound` `+Inf`, `cumulative_count` the `sample_count` and the
+exemplar. It MUST carry its `sample_count` and `sample_sum`, and, for the scrape-time
 histogram and `http_exporter_probe_duration_seconds` (§ 22), its native
 buckets too: `schema` the recorder's scale lowered to
 at most 3 by merging buckets, `zero_threshold` 2^-128, `zero_count`, and
@@ -8053,7 +8060,8 @@ observed; a trace exported after a later trip's MUST NOT replace it. A
 trip shared by identical probes MUST be of the trace of the probe that
 started it. OpenMetrics MUST write a bucket's exemplar after its count, as
 `# {trace_id="…",span_id="…"} <value> <timestamp in seconds>`; protobuf in
-the classic bucket's `exemplar` and, the same ones in the order of their
+the classic bucket's `exemplar`, the `+Inf` one's on a `+Inf` bucket
+written for it, and, the same ones in the order of their
 values, in the histogram's `exemplars`; the OTLP export on the histogram's
 and the exponential histogram's points, as `exemplars` with `traceId`,
 `spanId`, `asDouble` and `timeUnixNano`. The Prometheus text format MUST
@@ -30049,6 +30057,15 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnS3FileReadsSpanTellsItsFacts` (fetch, opt-in): an object's read tells `s3file.objects` `1` and `s3file.bytes` `4`, a prefix's of two objects `2` and `9`.
 - `TestARequestsFactsAreAttributesOfTheirKind`: a request's integer, boolean, floating-point and name facts are its span's `intValue`, `boolValue`, `doubleValue` and `stringValue` attributes.
 
+## 34.261 Fixes from the review of 2026-11-03: stored UTF-8 names, the +Inf bucket's exemplar, a run's propagation, gRPC tracestate, a Python test's time and the OTLP tab's body headings
+
+- `TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames`: a static target's result scraped under `metric_name_validation_scheme: utf8` and kept through a reload to `legacy` is answered by `/static-targets`, filtered or not and without `Accept`, escaped by `underscores` with `escaping=underscores` in its `Content-Type`; it was written raw in the classic text format.
+- `TestTheProtobufAnswerWritesTheInfBucketWithItsExemplar`: a 90 s trip whose trace was dropped writes no `+Inf` classic bucket in protobuf; a 95 s trip whose trace was exported adds one, last, with `upper_bound` `+Inf`, `cumulative_count` 2 and the exemplar of its trace and span ids and 95; no other bucket has one. Without the fix the `+Inf` exemplar was in no classic bucket.
+- `TestADebugRunPropagatesItsTraceUnsampled`: with `propagate` and `sample_ratio` 1 a probe's request carries a `traceparent` ending `-01` and `ot=th:0`, and a debug page run's to the same target `00-<trace>-<span>-00` and no `tracestate`; it carried `-01` and `ot=th:0`.
+- `TestAGRPCCallDropsTheOperatorsLoneTracestateBesideTheExportersTraceparent` (fetch): a `tracestate` of `request.metadata` without a `traceparent` is not sent beside the exporter's `traceparent` with no `tracestate` or with `vendor=x`, nor beside a caller's passed on with none or with `vendor=y`, which are sent alone, as an HTTP request's header is; with nothing to propagate it is sent as it is. It was kept beside a traceparent with no `tracestate`.
+- `TestAPreScriptSeriesOfAnotherKindFailsTheProbeAsAScriptFailure` gives its probes a default budget of two minutes, the pool's minute for an interpreter's start and its minute for a script, so that a start slowed past the 30s default by a busy machine does not fail a probe with `context deadline exceeded`; an interpreter whose start was held 33s failed it, and now passes.
+- `TestTheOTLPTabsRequestBodiesAreHeadedRequestBody`: with `otlp.logs` and `otlp.traces` on, the debug page's metrics, log records and spans request bodies are each headed *Request body*, and no heading names its message type; they were headed `Request body (ExportMetricsServiceRequest)` and so on.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30898,12 +30915,15 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   rule that has already kept it, else the caller's without a `th`. Its
   sampled flag MUST be `01` only where `parent_based` (the caller's flag)
   or `sample_ratio` (the trace id) has kept the trace when the request is
-  sent, and `00` otherwise. With the trace export off, a probe's caller's
+  sent, and `00` otherwise; a debug run's (§ 42.17), never exported, MUST
+  be `00`. With the trace export off, a probe's caller's
   readable `traceparent`, and its readable `tracestate`, MUST be passed on
   as they came, no id made. A `traceparent` the request sets itself, in
   `request.headers`, `request.metadata` or a forwarded header, MUST be
-  sent as it is, with no `tracestate` added; a login's request MUST carry
-  none. A trip shared by identical probes MUST be sent under the trace of
+  sent as it is, with no `tracestate` added; a `tracestate` it sets
+  without a `traceparent` MUST be dropped, on an HTTP request and a gRPC
+  call alike, wherever the exporter sends a `traceparent` of its own or of
+  its caller's; a login's request MUST carry none. A trip shared by identical probes MUST be sent under the trace of
   the probe that started it, and only that probe's span of a request MAY
   have the id it was sent under. Without `propagate`, the exporter MUST
   NOT send a `traceparent` to its targets.
@@ -30988,7 +31008,9 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   ratio was tried, and that the rate cap is not taken by a run; its
   endpoint test MUST offer the traces endpoint, sent
   `{"resourceSpans":[]}`. A run MUST have trace ids, which its requests
-  carry under `propagate` and its request lines show; its log records MUST
+  carry under `propagate` and its request lines show, with the sampled
+  flag `00` and a `tracestate` without a `th`, whatever the rules would
+  make of a probe's, since a run's trace is never exported; its log records MUST
   show the trace and the span they would be linked to, saying that a run's
   are not, and its log export body MUST carry none.
 - A probe MUST NOT wait for the export: the spans waiting MUST be bounded
@@ -34560,7 +34582,8 @@ indented, `{"resourceMetrics": []}` for none. The tab MUST show the
 resource, the scope, the points as a table that sorts by a column's
 header and keeps the rows that hold a filter's text, a badge on a row with
 notes that opens to them by click or keyboard, the points left out, and
-the body folded away with a *Copy* button, every text put in as text,
+the body folded away under the heading *Request body*, the part it is in
+saying whose it is, with a *Copy* button, every text put in as text,
 never as HTML. The page MUST show a body, the metrics' and the logs', as a
 tree when it is JSON — a tree for each of several requests, one blank line
 between them — and as text, saying it is not JSON, when it is not: each

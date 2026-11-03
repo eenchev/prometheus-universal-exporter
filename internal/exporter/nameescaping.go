@@ -114,15 +114,3 @@ func escapedSet(s *model.MetricSet, scheme string) *model.MetricSet {
 func debugExposition(s *model.MetricSet) []byte {
 	return expositionFormat{escaping: transform.NameEscapingAllowUTF8}.appendMetricSet(nil, s)
 }
-
-// anyUTF8Names reports whether a collector of the configuration keeps UTF-8
-// names, which the static targets' answer, of every collector's, may then
-// hold.
-func anyUTF8Names(cfg *model.Config) bool {
-	for i := range cfg.Collectors {
-		if transform.UTF8Names(&cfg.Collectors[i]) {
-			return true
-		}
-	}
-	return false
-}

@@ -249,8 +249,8 @@ type staticTargetsView struct {
 	rendered   []byte
 	renderedOM []byte
 	// utf8Names says merged holds a name that is not classic, of a
-	// collector that keeps UTF-8 names: it is then written for each read as
-	// the reader asks (nameescaping.go), not rendered ahead.
+	// collector that keeps or kept UTF-8 names: it is then written for each
+	// read as the reader asks (nameescaping.go), not rendered ahead.
 	utf8Names bool
 }
 
@@ -284,7 +284,10 @@ func (s *Server) currentStaticView() *staticTargetsView {
 	}
 	// An answer with a name that is not classic is written as each
 	// reader's Accept asks (nameescaping.go), so it is not rendered ahead.
-	v.utf8Names = anyUTF8Names(s.manager.Get()) && hasUTF8Names(&v.merged)
+	// What the stored results hold decides it, not the configuration in
+	// force: a reload that takes a collector off utf8 keeps its targets'
+	// results, UTF-8 names and all, until they are scraped again.
+	v.utf8Names = hasUTF8Names(&v.merged)
 	if len(v.aged) == 0 && !v.utf8Names {
 		v.rendered = appendMetricSet(nil, &v.merged)
 		v.renderedOM = appendOpenMetrics(nil, &v.merged)

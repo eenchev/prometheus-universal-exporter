@@ -39,6 +39,14 @@ func TestAPreScriptSeriesOfAnotherKindFailsTheProbeAsAScriptFailure(t *testing.T
 		scripted("kind_none", `data["metrics"][0]["help"] = None`),
 		scripted("kind_no_type", `data["metrics"][0]["type"] = "counterr"`),
 	)
+	// Each probe starts an interpreter, of its own collector, in the
+	// test's fresh pool, which leaves a start and a script a minute each
+	// (usePythonPool). The probes' own 30s default budget is shorter, and a
+	// start on a machine busy with other packages' tests once took longer
+	// than that, failing kind_labels with "context deadline exceeded" where
+	// the pool would have waited: the probes are given the pool's two
+	// minutes, so that only what the test is about can fail them.
+	server.SetDefaultProbeTimeout(2 * time.Minute)
 	for collector, want := range map[string]string{
 		"kind_help":      "collector kind_help transform failed: python pre-script: data[\"metrics\"][0]: up_thing help 5 is not a string\n",
 		"kind_type":      "collector kind_type transform failed: python pre-script: data[\"metrics\"][0]: up_thing type an array of 1 item is not a string; give \"gauge\", \"counter\", \"untyped\", \"histogram\" or \"summary\"\n",

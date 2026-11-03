@@ -924,7 +924,9 @@ its bucket's count:
 http_exporter_probe_duration_seconds_bucket{collector="app_json",kind="probe",le="0.1"} 40 # {trace_id="4bf92f3577b34da6a3ce929d0e0e4736",span_id="00f067aa0ba902b7"} 0.067 1793646517.204
 ```
 
-protobuf on its classic bucket and, the same ones, among the native
+protobuf on its classic bucket — the `+Inf` bucket's on a `+Inf` bucket
+written for it, as Prometheus' Go client does, where protobuf otherwise
+leaves that bucket to the count — and, the same ones, among the native
 histogram's exemplars, which Prometheus stores with
 `--enable-feature=exemplar-storage`; the OTLP export on the histogram's and
 the exponential histogram's points. The Prometheus text format has no

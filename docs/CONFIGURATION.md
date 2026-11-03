@@ -1203,6 +1203,10 @@ ends with the escaping it was written with, such as
 `text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8`. An answer
 whose names are all classic — any answer of a `legacy` collector, and the
 self-metrics — is written and typed as it always was, without an escaping.
+A static target's result scraped under `utf8` keeps its names through a
+reload that takes the collector back to `legacy`, until the target is
+scraped again, and the static targets endpoint writes them as the scraper
+asks meanwhile.
 
 Under `utf8` a rule's name, its labels' names, the keys of `transform.labels`
 and the names `rename` and `rename_labels` give load whatever their UTF-8,
@@ -5825,7 +5829,8 @@ is what the export does, not a description of it:
   randomness against the threshold. `otlp.traces.max_per_second` is not
   taken, and the line says so of a trace kept. The run's own trace is
   never exported. With `otlp.traces.propagate`, the run's requests carry
-  its `traceparent`, which their request lines show.
+  its `traceparent`, which their request lines show, unsampled (`00`) and
+  with no `th` in their `tracestate`, since the trace is never exported.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and

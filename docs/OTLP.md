@@ -1171,8 +1171,8 @@ dropped has none.
 The exemplars are written where a format carries them
 ([self-metrics](SELF-METRICS.md#exemplars)): in OpenMetrics, after the
 bucket's count, `# {trace_id="…",span_id="…"} 0.067 1793646517.204`; in
-protobuf, on the classic bucket and among the native histogram's
-exemplars; and over OTLP, on the histogram's and the exponential
+protobuf, on the classic bucket, the `+Inf` one's on a `+Inf` bucket
+written for it, and among the native histogram's exemplars; and over OTLP, on the histogram's and the exponential
 histogram's points, as `exemplars` with `traceId`, `spanId`, `asDouble` and
 `timeUnixNano`. The Prometheus text format has no exemplars. The series
 that measure one probe, `http_exporter_scrape_duration_seconds` and a
@@ -1202,7 +1202,8 @@ spans of a trace kept by that rule carry it: `ot=th` of the ratio's
 threshold before the caller's members, or the caller's as it came when its
 flag kept the trace, and otherwise the caller's without a `th`.
 `max_per_second` may still drop a trace sent `01`, as it may drop one its
-caller sampled.
+caller sampled. A debug page's run is always sent `00`
+([On the debug page](#on-the-debug-page)).
 
 With the trace export off, `propagate: true` passes a probe's caller's
 `traceparent` and `tracestate` on as they came, and makes no ids: the
@@ -1211,7 +1212,11 @@ passed on, as the W3C asks; a scrape has no caller, and sends none.
 
 A `traceparent` the request sets itself, in `request.headers`,
 `request.metadata` or a forwarded header (`forward_headers`), is the
-operator's and is sent as it is, with no `tracestate` of the exporter's. A
+operator's and is sent as it is, with no `tracestate` of the exporter's.
+A `tracestate` set there without a `traceparent` is dropped, on an HTTP
+request and a gRPC call alike, whenever the exporter sends a `traceparent`
+of its own or of its caller's: it was not written for that trace, and the
+exporter's `tracestate`, if any, goes in its place. A
 kubernetes collector's requests have no header of the operator's, and
 always carry the exporter's.
 A login's request (`request.login`) carries none: it goes to an identity
@@ -1224,7 +1229,10 @@ trace context of the probe that started it.
 
 A run of the debug page with `otlp.traces` on has trace ids too. Its
 requests carry the run's `traceparent` with `propagate: true`, and the
-request lines show it. Its log records, in the *OTLP* tab, show the trace
+request lines show it. A run's trace is never exported, so its
+`traceparent` is always sent unsampled, `00`, and its `tracestate` without
+a `th`, where a probe's could be `01` and `ot=th:…`: a target's tracer
+that samples by its parent records nothing of a trace no backend gets. Its log records, in the *OTLP* tab, show the trace
 and the span each would be linked to, those of the tab's spans, and say
 that they would be linked if the trace were exported: a run's never is, so
 the request body shows them without. A run's series are a target's, and

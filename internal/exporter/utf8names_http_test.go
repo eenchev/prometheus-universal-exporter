@@ -198,3 +198,25 @@ func TestStaticTargetsWriteUTF8NamesAsTheScraperAsks(t *testing.T) {
 		}
 	}
 }
+
+// A reload that takes a collector off metric_name_validation_scheme utf8
+// leaves its target's stored result as it was scraped, with its UTF-8 names,
+// until the target is scraped again. Until then the static targets endpoint
+// still writes those names as the scraper asks, never raw in an answer
+// typed as the classic text format, which a scraper could not parse.
+func TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames(t *testing.T) {
+	target := utf8Target(t, "{\"http.server.duration\",\"service.name\"=\"api\"} 0.25\n")
+	utf8 := "collectors:\n  - name: u\n    metric_name_validation_scheme: utf8\n    request:\n      type: http\n    decoder:\n      type: prometheus\n    transform:\n      type: prometheus\n"
+	targets := "interval: 1h\ntargets:\n  - name: one\n    collector: u\n    target: " + target.URL + "\n"
+	r := newReloadable(t, utf8, targets)
+	r.server.scrapeStaticTargets(context.Background(), 0)
+	r.reloadTo(strings.Replace(utf8, "    metric_name_validation_scheme: utf8\n", "", 1))
+	for _, path := range []string{"/static-targets", "/static-targets?targets=one"} {
+		recorder := httptest.NewRecorder()
+		r.server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Header().Get("Content-Type") != expositionContentType+"; escaping=underscores" ||
+			!strings.Contains(recorder.Body.String(), `http_server_duration{service_name="api",static_target="one"} 0.25`) {
+			t.Fatalf("%s: %q\n%s", path, recorder.Header().Get("Content-Type"), recorder.Body)
+		}
+	}
+}

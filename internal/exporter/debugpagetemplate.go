@@ -471,7 +471,7 @@ p.danger strong { color: var(--bad); }
 <pre id="otlp-clashes" hidden></pre>
 </div>
 <details id="otlp-body-part">
-<summary>Request body (ExportMetricsServiceRequest)</summary>
+<summary>Request body</summary>
 <div class="copy-row"><button type="button" class="secondary" id="otlp-body-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-body">Collapse all</button><span class="copy-done" id="otlp-body-copied"></span></div>
 <div class="json-view" id="otlp-body"></div>
 </details>
@@ -482,7 +482,7 @@ p.danger strong { color: var(--bad); }
 <p class="note" id="otlp-logs-count"></p>
 <div class="table-box" id="otlp-logs-box" hidden><table class="series" id="otlp-logs-table"><thead><tr><th scope="col">time</th><th scope="col">severity</th><th scope="col">body</th><th scope="col">attributes</th><th scope="col">trace</th><th scope="col">exported</th></tr></thead><tbody id="otlp-logs-rows"></tbody></table></div>
 <details id="otlp-logs-body-part">
-<summary>Request body (ExportLogsServiceRequest)</summary>
+<summary>Request body</summary>
 <div class="copy-row"><button type="button" class="secondary" id="otlp-logs-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-logs-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-logs-body">Collapse all</button><span class="copy-done" id="otlp-logs-copied"></span></div>
 <div class="json-view" id="otlp-logs-body"></div>
 </details>
@@ -495,7 +495,7 @@ p.danger strong { color: var(--bad); }
 <ul class="otlp-notes" id="otlp-traces-notes"></ul>
 <div class="table-box" id="otlp-traces-box" hidden><table class="series" id="otlp-traces-table"><thead><tr><th scope="col">span</th><th scope="col">kind</th><th scope="col">start</th><th scope="col">duration</th><th scope="col">timeline</th><th scope="col">status</th><th scope="col">attributes</th></tr></thead><tbody id="otlp-traces-rows"></tbody></table></div>
 <details id="otlp-traces-body-part">
-<summary>Request body (ExportTraceServiceRequest)</summary>
+<summary>Request body</summary>
 <div class="copy-row"><button type="button" class="secondary" id="otlp-traces-copy">Copy</button><button type="button" class="secondary" data-json-all="open" aria-controls="otlp-traces-body">Expand all</button><button type="button" class="secondary" data-json-all="close" aria-controls="otlp-traces-body">Collapse all</button><span class="copy-done" id="otlp-traces-copied"></span></div>
 <div class="json-view" id="otlp-traces-body"></div>
 </details>

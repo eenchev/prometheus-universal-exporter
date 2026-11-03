@@ -5829,7 +5829,8 @@ is what the export does, not a description of it:
   randomness against the threshold. `otlp.traces.max_per_second` is not
   taken, and the line says so of a trace kept. The run's own trace is
   never exported. With `otlp.traces.propagate`, the run's requests carry
-  its `traceparent`, which their request lines show.
+  its `traceparent`, which their request lines show, unsampled (`00`) and
+  with no `th` in their `tracestate`, since the trace is never exported.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and

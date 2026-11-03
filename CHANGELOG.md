@@ -512,6 +512,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `+Inf` classic bucket written for it, as Prometheus' Go client does: it
   was only among the native histogram's exemplars, so a Prometheus keeping
   the classic histogram never saw it.
+- With `otlp.traces.propagate: true` a debug page run's requests carry
+  their `traceparent` unsampled, `00`, and no `ot=th` in `tracestate`: a run
+  whose trace id `sample_ratio` keeps sent `01` and `ot=th:…`, so a target
+  that samples by its parent recorded its part of a trace that is never
+  exported.
 
 ## exporter 1.8.0
 

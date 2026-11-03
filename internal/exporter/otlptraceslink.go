@@ -198,7 +198,8 @@ func (l *traceLink) spanAt(at time.Time) (trace, span string, ok bool) {
 
 // headTraceSampled is what is known, when a trip sends its requests, of
 // whether its trace will be exported, which their traceparent's sampled
-// flag says, and the tracestate they carry. A trace is decided at its end,
+// flag says, and the tracestate they carry. A debug run's trace is never
+// exported, and withPropagation sends it unsampled whatever this says. A trace is decided at its end,
 // and only two of the rules can decide before: parent_based, by the
 // caller's sampled flag, and sample_ratio, by the trace id. Either keeps a
 // trace whatever else becomes of it, and so sets the flag, and the ratio's
@@ -233,6 +234,13 @@ func withPropagation(ctx context.Context, cfg model.OTLPConfig, link *traceLink,
 	}
 	if link != nil {
 		sampled, state := headTraceSampled(cfg, parent, link.traceID)
+		if link.run {
+			// A debug run's trace is never exported, so a target's tracer
+			// that samples by its parent must not record its part of it:
+			// the run's requests go unsampled, without the ratio's
+			// threshold, which only a kept trace carries.
+			sampled, state = false, spanTraceState(keptNone, cfg.Traces.SampleRatio, parent.state)
+		}
 		return fetch.WithTracePropagation(ctx, fetch.TracePropagation{TraceID: link.traceID, Sampled: sampled, State: state})
 	}
 	if !parent.ok {

@@ -1202,7 +1202,8 @@ spans of a trace kept by that rule carry it: `ot=th` of the ratio's
 threshold before the caller's members, or the caller's as it came when its
 flag kept the trace, and otherwise the caller's without a `th`.
 `max_per_second` may still drop a trace sent `01`, as it may drop one its
-caller sampled.
+caller sampled. A debug page's run is always sent `00`
+([On the debug page](#on-the-debug-page)).
 
 With the trace export off, `propagate: true` passes a probe's caller's
 `traceparent` and `tracestate` on as they came, and makes no ids: the
@@ -1224,7 +1225,10 @@ trace context of the probe that started it.
 
 A run of the debug page with `otlp.traces` on has trace ids too. Its
 requests carry the run's `traceparent` with `propagate: true`, and the
-request lines show it. Its log records, in the *OTLP* tab, show the trace
+request lines show it. A run's trace is never exported, so its
+`traceparent` is always sent unsampled, `00`, and its `tracestate` without
+a `th`, where a probe's could be `01` and `ot=th:…`: a target's tracer
+that samples by its parent records nothing of a trace no backend gets. Its log records, in the *OTLP* tab, show the trace
 and the span each would be linked to, those of the tab's spans, and say
 that they would be linked if the trace were exported: a run's never is, so
 the request body shows them without. A run's series are a target's, and

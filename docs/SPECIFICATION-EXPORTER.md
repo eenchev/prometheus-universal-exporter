@@ -30061,6 +30061,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 - `TestStaticTargetsEscapeStoredUTF8NamesAfterAReloadToLegacyNames`: a static target's result scraped under `metric_name_validation_scheme: utf8` and kept through a reload to `legacy` is answered by `/static-targets`, filtered or not and without `Accept`, escaped by `underscores` with `escaping=underscores` in its `Content-Type`; it was written raw in the classic text format.
 - `TestTheProtobufAnswerWritesTheInfBucketWithItsExemplar`: a 90 s trip whose trace was dropped writes no `+Inf` classic bucket in protobuf; a 95 s trip whose trace was exported adds one, last, with `upper_bound` `+Inf`, `cumulative_count` 2 and the exemplar of its trace and span ids and 95; no other bucket has one. Without the fix the `+Inf` exemplar was in no classic bucket.
+- `TestADebugRunPropagatesItsTraceUnsampled`: with `propagate` and `sample_ratio` 1 a probe's request carries a `traceparent` ending `-01` and `ot=th:0`, and a debug page run's to the same target `00-<trace>-<span>-00` and no `tracestate`; it carried `-01` and `ot=th:0`.
 
 # 35. Documentation requirements
 
@@ -30911,7 +30912,8 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   rule that has already kept it, else the caller's without a `th`. Its
   sampled flag MUST be `01` only where `parent_based` (the caller's flag)
   or `sample_ratio` (the trace id) has kept the trace when the request is
-  sent, and `00` otherwise. With the trace export off, a probe's caller's
+  sent, and `00` otherwise; a debug run's (§ 42.17), never exported, MUST
+  be `00`. With the trace export off, a probe's caller's
   readable `traceparent`, and its readable `tracestate`, MUST be passed on
   as they came, no id made. A `traceparent` the request sets itself, in
   `request.headers`, `request.metadata` or a forwarded header, MUST be
@@ -31001,7 +31003,9 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   ratio was tried, and that the rate cap is not taken by a run; its
   endpoint test MUST offer the traces endpoint, sent
   `{"resourceSpans":[]}`. A run MUST have trace ids, which its requests
-  carry under `propagate` and its request lines show; its log records MUST
+  carry under `propagate` and its request lines show, with the sampled
+  flag `00` and a `tracestate` without a `th`, whatever the rules would
+  make of a probe's, since a run's trace is never exported; its log records MUST
   show the trace and the span they would be linked to, saying that a run's
   are not, and its log export body MUST carry none.
 - A probe MUST NOT wait for the export: the spans waiting MUST be bounded

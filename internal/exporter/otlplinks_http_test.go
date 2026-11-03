@@ -561,6 +561,29 @@ func TestTheDebugPageShowsTheTraceparentSentAndTheLinks(t *testing.T) {
 	}
 }
 
+// A debug run's trace is never exported, so with otlp.traces.propagate its
+// requests carry its traceparent unsampled, flag 00, and no ratio's
+// threshold in their tracestate, even where sample_ratio keeps every trace
+// and a probe's request is sent sampled with ot=th:0: a target's tracer
+// that samples by its parent must not record its part of a trace that no
+// backend will get.
+func TestADebugRunPropagatesItsTraceUnsampled(t *testing.T) {
+	target := newHeaderTarget(t, 0)
+	receiver := newLogReceiver(t)
+	server, _ := linkedServer(t, receiver, time.Hour, func(c *model.Config) {
+		c.OTLP.Traces.Propagate, c.OTLP.Traces.SampleRatio = true, 1
+	})
+	server.SetDebug(DebugFull)
+	probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(target.URL), nil)
+	if sent, state := target.last(); !strings.HasSuffix(sent, "-01") || state != "ot=th:0" {
+		t.Fatalf("a probe kept by sample_ratio 1 sends %q and %q, want the flag 01 and ot=th:0", sent, state)
+	}
+	postRun(t, server, map[string]any{"configured": "text", "target": target.URL}, http.StatusOK)
+	if sent, state := target.last(); !regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-00$`).MatchString(sent) || state != "" {
+		t.Errorf("the run sends %q and %q, want the flag 00 and no tracestate", sent, state)
+	}
+}
+
 // A static target's scrape is linked as a probe is: its "static target
 // scrape failed" record carries the trace and the span of the stage that
 // failed, and with otlp.traces.propagate its request carries its

@@ -3195,8 +3195,11 @@ request to its answer: the duration its
 the log and the self-metrics name: `http` for whatever failed in reaching an
 `http` target, its name, its connection or its TLS handshake;
 `http_status`; `decode`; `transform`; `validation`; `metric` for a rule with
-`error_mode: fail`; or another request type's own fetch stage, `dns`, `tls`,
-`file`, `grpc` and the others ([Request types](#request-types)). Nothing of
+`error_mode: fail`; another request type's own fetch stage, `dns`, `tls`,
+`file`, `grpc` and the others ([Request types](#request-types)); or `panic`
+for a probe that panicked, in whatever stage, which the log has as `probe
+panicked` with its stack and the status page and the self-metrics count as
+failed, as before. Nothing of
 the error is answered, as nothing of the target's answer is
 ([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)):
 the log has the error, as it always did, and so do a

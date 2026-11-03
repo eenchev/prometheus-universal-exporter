@@ -146,8 +146,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `report_failures: true` on a collector answers every probe of it `200`
   with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
   `http_exporter_probe_elapsed_seconds`, and on a failure
-  `http_exporter_probe_failed_stage{stage}` naming the stage, with nothing
-  of the error. With `method: HEAD`, `accept_status: [any]` and
+  `http_exporter_probe_failed_stage{stage}` naming the stage, `panic` for a
+  probe that panicked, with nothing of the error. With `method: HEAD`, `accept_status: [any]` and
   `decoder.type: none` it is an uptime check that alerts on a value, as
   blackbox_exporter's `probe_success`. Failures are logged and counted in
   the self-metrics as before, and a probe `error_handling` carried on past

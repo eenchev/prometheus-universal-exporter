@@ -3580,7 +3580,8 @@ say so, after the bounded error. The text of a panic a probe or a scrape
 recovered from MUST be bounded alike in a debug report and in the log; its
 stack is logged as it was. A probe that panicked MUST be answered `500` with
 the fixed text `probe failed: the scrape panicked; the exporter's log has the
-panic`, never the panic's text: its caller keeps the answer as the scrape's
+panic`, never the panic's text (a collector with `report_failures` MUST answer
+it `200` with success `0` and the stage `panic`, § 19.5): its caller keeps the answer as the scrape's
 error, out of the exporter's hands, and a panic says whatever its code had at
 hand, a target's URL with its password as much as anything.
 
@@ -7027,16 +7028,19 @@ a failure alone, `http_exporter_probe_failed_stage{stage}` `1`, naming the
 stage the failure is counted and logged in: `http` (whatever failed in reaching
 an `http` target, its name, its connection or its TLS handshake),
 `http_status`, `decode`, `transform`, `validation`, `metric` (a rule with
-`error_mode: fail`), or a request type's own fetch stage (`dns`, `tls`,
-`file`, `grpc` and the others, § 5.1). The probe series MUST carry no label but
+`error_mode: fail`), a request type's own fetch stage (`dns`, `tls`,
+`file`, `grpc` and the others, § 5.1), or `panic` (a probe whose trip
+panicked, in whatever stage, § 6.1a). The probe series MUST carry no label but
 `stage`, and nothing of the failure's text: what a failed probe's caller is
 told (§ 19.4) MUST NOT be answered at all. A failed probe MUST answer no
 series of the collector's and no freshness gauges (§ 42.13.1).
 
 A probe MUST be a failure to the series exactly when it is one of these:
 
-- a stage under `fail` failed, a rule under `error_mode: fail` failed, or
-  `failure_backoff` kept the trip from the target (its fetch stage);
+- a stage under `fail` failed, a rule under `error_mode: fail` failed,
+  `failure_backoff` kept the trip from the target (its fetch stage), or the
+  trip panicked (`panic`): success MUST be `0` whenever the self-metrics
+  count the probe failed, whether or not a stage's error failed it;
 - a stage failed and `error_handling` carried on past it (`log`,
   `ignore`): the answer MUST hold what a probe carrying on holds (§ 19) and
   success `0` with the stage, and the probe MUST be a failure wherever the
@@ -30229,6 +30233,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `tls_version` `TLS 1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
 - `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 with `site_up 0` and success 1; a redirect with `site_http_redirects 1` and the 200 it led to; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info` with the cipher suite by its IANA name and `version="TLS 1.3"`; the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
 - `TestShippedConfigurationsMatchTheSchema`, `TestExamplesReferenceTheSchema`, `TestTheShippedFilesMatchTheSchemasAsTheyDid` and `TestShippedExampleScriptsSatisfyTheContract` (repository) take `configs/config.uptime.example.yaml` among the shipped configurations.
+
+## 34.264 Fixes to report_failures and the chart's Probes
+
+- `TestReportFailuresAnswersAPanickedProbeAFailure`: a probe of a `report_failures` collector whose request type panics is answered `200` with `http_exporter_probe_success 0` and `http_exporter_probe_failed_stage{stage="panic"} 1`, counted in `http_exporter_scrapes_total` and not in `http_exporter_scrape_success_total`; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the panic stage failed (report_failures), in place of 500: probe failed: …` and shows the stage series. Without the change the probe was answered success 1 with no stage.
 
 # 35. Documentation requirements
 

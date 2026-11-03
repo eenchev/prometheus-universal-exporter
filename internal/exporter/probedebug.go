@@ -563,6 +563,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	if slot := p.slotOf(); slot != nil {
 		defer s.trips.release(slot.Name)
 	}
+	start := time.Now()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			stack := string(debug.Stack())
@@ -576,6 +577,10 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 			verdict, answer, ok, failed = "500: probe failed: "+errScrapePanicked.Error(), nil, false, true
 			if p.static != nil {
 				verdict = "target up 0: " + errScrapePanicked.Error()
+			} else {
+				// Under report_failures a probe that panicked is answered
+				// as one that failed in the panic stage (probeFlights.run).
+				verdict, answer = reportedVerdict(p.collector, collected{stage: stagePanicked, err: errScrapePanicked}, verdict, nil, time.Since(start))
 			}
 		}
 	}()
@@ -597,7 +602,6 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	} else if runsPython(p.collector) {
 		job.python = transform.PythonWorkers().Departed()
 	}
-	start := time.Now()
 	result := s.collect(ctx, job)
 	verdict, answer = s.debugVerdict(result, p)
 	if p.static == nil {

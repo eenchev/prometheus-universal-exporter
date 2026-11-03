@@ -3250,8 +3250,11 @@ What else becomes of a probe:
   nothing of a failed probe, one carried on past a failed stage included,
   and not the three series; a stale result standing in is exported as it
   is without the key. The trace of a failed probe is a failed one, which
-  the `errors` sampling keeps; the `error.type` of one carried on past a
-  failed stage is that stage, since it was answered `200` either way.
+  the `errors` sampling keeps, answered `200`; its `error.type` is the
+  stage that failed, `panic` included, rather than the `502` or `500` it
+  would have been answered without the key, while a stale result standing
+  in keeps `stale` and a probe `failure_backoff` kept from the target
+  `backoff`.
 - **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
   with its error, answered `200` with its series.
 - **A [debug probe](#debug-probes)** says that a probe would have answered

@@ -7064,6 +7064,11 @@ answered as without the key. A failure MUST be
 logged, counted in the self-metrics, kept from the response cache and from
 the OTLP export, and recorded on the status page as without the key; the
 status page MUST give its status as `200` and its series as those answered.
+A failed probe's trace (§ 42.1c) MUST give `http.response.status_code`
+`200` and, as its `error.type`, the stage that failed, never the status
+the probe would have been answered without the key; a stale result
+standing in keeps `stale`, and a probe `failure_backoff` kept from the
+target `backoff`, as without the key.
 The response cache MUST keep, and the OTLP export (§ 42.1) MUST export, the
 collector's series alone, never the probe series; probes sharing a trip (§
 42.13a) MUST each answer their own duration from the one result, which MUST
@@ -30237,6 +30242,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 ## 34.264 Fixes to report_failures and the chart's Probes
 
 - `TestReportFailuresAnswersAPanickedProbeAFailure`: a probe of a `report_failures` collector whose request type panics is answered `200` with `http_exporter_probe_success 0` and `http_exporter_probe_failed_stage{stage="panic"} 1`, counted in `http_exporter_scrapes_total` and not in `http_exporter_scrape_success_total`; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the panic stage failed (report_failures), in place of 500: probe failed: …` and shows the stage series. Without the change the probe was answered success 1 with no stage.
+- `TestTheTraceOfAFailedProbeUnderReportFailuresNamesItsStage`: under `errors` and an hour's threshold, the trace of a `report_failures` probe of a 503 target under `on_fetch_error: fail` has `error.type` `http_status`, and that of a probe whose request type panics `panic`, each with `http.response.status_code` `200` and the status ERROR; without the change they had `502` and `500`.
 
 # 35. Documentation requirements
 

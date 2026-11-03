@@ -205,3 +205,48 @@ func TestTheTraceOfACarriedOnProbeUnderReportFailuresIsAFailure(t *testing.T) {
 		t.Errorf("the probe's span: %+v", root.otlpSpan)
 	}
 }
+
+// The trace of any failed probe of a collector with report_failures, one
+// that failed a stage under error_handling fail or panicked as much as one
+// carried on past it, has the stage as its error.type: it was answered 200,
+// which a status as its error.type would contradict.
+func TestTheTraceOfAFailedProbeUnderReportFailuresNamesItsStage(t *testing.T) {
+	testutil.CaptureLogs(t)
+	down := unavailableTarget(t)
+	for _, tc := range []struct {
+		name, target, stage string
+		panics              bool
+	}{
+		{"a failed stage", down.URL, "http_status", false},
+		{"a panic", "panics://data", "panic", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			receiver := newLogReceiver(t)
+			server := tracesServer(t, receiver, time.Hour, func(c *model.Config) {
+				c.OTLP.Traces.Errors = true
+				if tc.panics {
+					c.Collectors[0] = panickingCollector(t, "text")
+				}
+				c.Collectors[0].ReportFailures = true
+			}, nil)
+			if got := probeOnce(t, server, probeOf("text", tc.target), nil); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "http_exporter_probe_success 0\n") {
+				t.Fatalf("the probe: %d %s", got.Code, got.Body)
+			}
+			exportTracesNow(server)
+			var root *receivedSpan
+			spans := receiver.spans(t)
+			for i := range spans {
+				if spans[i].Name == "probe text" {
+					root = &spans[i]
+				}
+			}
+			if root == nil {
+				t.Fatalf("no probe span was exported: %+v", spans)
+			}
+			attrs := spanAttributes(root.otlpSpan)
+			if root.Status == nil || root.Status.Code != otlpStatusError || attrs["error.type"] != tc.stage || attrs["http.response.status_code"] != "200" {
+				t.Errorf("the probe's span: %+v; want error.type %q", root.otlpSpan, tc.stage)
+			}
+		})
+	}
+}

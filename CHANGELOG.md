@@ -153,7 +153,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   the self-metrics as before, and a probe `error_handling` carried on past
   a failed stage is one: counted no success, shown failed on the status
   page, answered by `cache.stale_if_error`'s last good result and traced
-  as failed, where without the key it is a success; static targets, which have
+  as failed, where without the key it is a success; a failed probe's trace
+  has the stage as its `error.type`, not a status; static targets, which have
   `http_exporter_target_up`, are not changed
   ([Reporting failed probes as metrics](docs/CONFIGURATION.md#reporting-failed-probes-as-metrics)).
 - `decoder.type: none` reads no body: jq and yq rules read `null` with

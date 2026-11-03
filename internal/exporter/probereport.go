@@ -110,10 +110,19 @@ func writeProbeAnswer(w http.ResponseWriter, r *http.Request, c *model.Collector
 
 // reportedTrace says in end, the end of the trace of a probe of c whose trip
 // ended as result, what report_failures answered: 200 and its series. The
-// probe stays failed in it, as it is to the self-metrics.
+// probe stays failed in it, as it is to the self-metrics, and its
+// error.type is the stage that failed, which the answer names, rather than
+// the status it would have been answered without the key, which would
+// contradict the 200 beside it. A stale result standing in and a probe
+// failure_backoff kept from the target keep their own, stale and backoff,
+// which are no status either.
 func reportedTrace(c *model.Collector, result *probeResult, end *probeTraceEnd) {
-	if reportsProbe(c, result) {
-		end.status, end.series = http.StatusOK, reportedSeries(result)
+	if !reportsProbe(c, result) {
+		return
+	}
+	end.status, end.series = http.StatusOK, reportedSeries(result)
+	if end.failed && result.outcome == "" && result.stage != "" {
+		end.stage = result.stage
 	}
 }
 

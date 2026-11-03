@@ -1062,7 +1062,8 @@ func tripLines(r *fetch.HTTPResponse) []string {
 		return nil
 	}
 	timings, _ := json.Marshal(r.Trip.JQTimings())
-	return []string{"$timings " + string(timings)}
+	connection, _ := json.Marshal(r.Trip.JQTLS())
+	return []string{"$timings " + string(timings), "$tls " + string(connection)}
 }
 
 // writeDirectory renders a directory read as its files.

@@ -5883,8 +5883,22 @@ exporter's own dialer makes to an `https://` proxy. `$timings` MUST be
 `null` for every other request type, for a response pasted on the debug
 page, and in a pagination's `next` and a login's `token` expression.
 Python's `response.timings` MUST be the same, a dict with `None` for
-`null`, and `None` whole where `$timings` is `null`. A debug probe's report
-and the debug page MUST show `$timings` as JSON under the response's status.
+`null`, and `None` whole where `$timings` is `null`.
+
+Every jq program MUST also have `$tls` bound. For the request `$timings`
+describes, sent over TLS, it MUST be an object of the connection the answer
+came on: `version`, the TLS version without its `TLS ` prefix (`"1.3"`, as
+the `tlscert` span fact `tls.protocol.version`); `cipher`, the cipher
+suite's IANA name; `server_name`, the name sent as SNI, `""` for none;
+`verified`, whether the exporter verified the chain, `false` under
+`insecure_skip_verify`; `not_before` and `not_after`, the leaf's validity in
+Unix seconds; and `subject_cn` and `issuer_cn`, the common names of the
+leaf's subject and issuer. Nothing else of the connection, and nothing
+secret, MUST be in it. It MUST be `null` over plain HTTP, a plain HTTP
+request answered over a TLS connection to an `https://` proxy among them,
+and wherever `$timings` is `null`. Python's `response.tls` MUST be the same.
+A debug probe's report and the debug page MUST show `$timings` and `$tls` as
+JSON under the response's status.
 
 ---
 
@@ -30180,7 +30194,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTimingsAreOfTheAnsweredRequest` (fetch): a new plain HTTP connection to an IP address has `connect` and no `dns` or `tls`, a `first_byte` past the target's pause before its headers and a `total` past its pause before the body; the next request on the kept connection has none of the three; a target by name has `dns`; a TLS target has `tls`; a plain HTTP request redirected to a TLS target has the `tls` and `connect` of the request it led to; `$timings` of no trip is `null`, and of one has five keys, `null` for a phase it did not have.
 - `TestAGraphiteAnswerHasTheTimingsOfItsRequest` (fetch): a graphite collector's answer carries the timings of its request.
 - `TestTimingsAreBoundInEveryProgram` (transform): jq and yq rules read `$timings` in an expression, an `items` expression and a label, per item too, `null` for the phases the request did not have and `null` whole for a response without a trip; Python's `response.timings` is the same dict, `None` without a trip.
-- `TestAProbeReadsTheTimingsOfItsRequest`: through `/probe`, an uptime collector's rules read `$timings.first_byte` past the target's pause and a series for each phase a new plain HTTP connection to an IP address has, `connect`, `first_byte` and `total`; a debug probe's report shows `$timings` as JSON under the status, and the debug page's response has it in `variables`.
+- `TestAProbeReadsTheTimingsOfItsRequest`: through `/probe`, an uptime collector's rules read `$timings.first_byte` past the target's pause and a series for each phase a new plain HTTP connection to an IP address has, `connect`, `first_byte` and `total`; a debug probe's report shows `$timings` as JSON under the status, and the debug page's response has it in `variables`, with `$tls null`.
+- `TestTheTLSConnectionIsTheTargets` (fetch): an answer over TLS verified against `tls.ca_file` has version `1.3`, an IANA cipher name, `localhost` as the SNI, `verified`, the leaf's validity and its subject's and issuer's names; under `insecure_skip_verify` it is not `verified`; `$tls` has eight keys, and is `null` for plain HTTP and no trip; a plain HTTP request answered through an `https://` proxy has no TLS connection.
+- `TestTLSIsBoundInEveryProgram` (transform): jq and yq rules read `$tls` in an expression and in labels, `null` over plain HTTP and without a trip; Python's `response.tls` is the same dict, `None` over plain HTTP.
+- `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `version` `1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
 
 # 35. Documentation requirements
 

@@ -47,7 +47,7 @@ func tripSeries(t *testing.T, c model.Collector, r *fetch.HTTPResponse) string {
 		for _, name := range model.SortedKeys(m.Labels) {
 			b.WriteString(" " + name + "=" + m.Labels[name])
 		}
-		b.WriteString(" " + strconv.FormatFloat(m.Value, 'g', -1, 64) + "\n")
+		b.WriteString(" " + strconv.FormatFloat(m.Value, 'f', -1, 64) + "\n")
 	}
 	return b.String()
 }
@@ -94,5 +94,48 @@ metric(name='phases', value=len(t))
 	bare.Trip = nil
 	if got := tripSeries(t, c, bare); got != "absent 1\n" {
 		t.Errorf("python without a trip: %s", got)
+	}
+}
+
+// $tls is the TLS connection as jq, yq and Python read it, null over plain
+// HTTP and for an answer no HTTP request brought.
+func TestTLSIsBoundInEveryProgram(t *testing.T) {
+	secure := tripResponse()
+	secure.Trip.TLSConnection = &fetch.TLSConnection{Version: "1.3", Cipher: "TLS_AES_128_GCM_SHA256", ServerName: "www.example.com", Verified: true, NotBefore: 1759276800, NotAfter: 1767225599, SubjectCN: "www.example.com", IssuerCN: "Example Issuing CA"}
+	rules := []model.MetricRule{
+		{Name: "expiry", Expression: "$tls.not_after"},
+		{Name: "verified", Expression: "if $tls.verified then 1 else 0 end"},
+		{Name: "info", Expression: "1", Labels: []model.LabelRule{{Name: "version", Expression: "$tls.version"}, {Name: "cipher", Expression: "$tls.cipher"}, {Name: "sni", Expression: "$tls.server_name"}, {Name: "subject", Expression: "$tls.subject_cn"}, {Name: "issuer", Expression: "$tls.issuer_cn"}}},
+		{Name: "valid_for", Expression: "$tls.not_after - $tls.not_before"},
+	}
+	want := "expiry 1767225599\nverified 1\n" +
+		"info cipher=TLS_AES_128_GCM_SHA256 issuer=Example Issuing CA sni=www.example.com subject=www.example.com version=1.3 1\nvalid_for 7948799\n"
+	plain := []model.MetricRule{{Name: "plain", Expression: "if $tls == null then 1 else 0 end"}}
+	for _, kind := range []string{"jq", "yq"} {
+		c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: kind}, Metrics: rules}
+		if got := tripSeries(t, c, secure); got != want {
+			t.Errorf("%s:\n%s\nwant\n%s", kind, got, want)
+		}
+		c.Metrics = plain
+		bare := tripResponse()
+		if got := tripSeries(t, c, bare); got != "plain 1\n" {
+			t.Errorf("%s over plain HTTP: %s", kind, got)
+		}
+		bare.Trip = nil
+		if got := tripSeries(t, c, bare); got != "plain 1\n" {
+			t.Errorf("%s without a trip: %s", kind, got)
+		}
+	}
+
+	requirePython(t)
+	c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: "python", Script: `metric(name='expiry', value=response.tls['not_after'], labels={'issuer': response.tls['issuer_cn']})
+metric(name='verified', value=response.tls['verified'])
+`}}
+	if got := tripSeries(t, c, secure); got != "expiry issuer=Example Issuing CA 1767225599\nverified 1\n" {
+		t.Errorf("python: %s", got)
+	}
+	c.Transform.Script = "metric(name='plain', value=1 if response.tls is None else 0)\n"
+	if got := tripSeries(t, c, tripResponse()); got != "plain 1\n" {
+		t.Errorf("python over plain HTTP: %s", got)
 	}
 }

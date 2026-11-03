@@ -4,13 +4,16 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
 // HTTPTrip is what an http or graphite collector's answer says of the
 // request that brought it, beside its status, headers and body: how long
-// each phase of that request took. It is of the request whose status the
+// each phase of that request took, and the TLS connection it was sent on.
+// It is of the request whose status the
 // answer has: the last attempt of a retried trip, the request a redirect
 // led to, a 304 that revalidated a cached response, and of a paginated
 // trip the first page, or the page whose status failed it.
@@ -27,6 +30,70 @@ type HTTPTrip struct {
 	// Total is the request's whole time, from its start to the end of
 	// reading the body.
 	Total time.Duration
+	// TLSConnection is the TLS connection the request was sent on, nil
+	// over plain HTTP.
+	TLSConnection *TLSConnection
+}
+
+// TLSConnection is what the exporter knows of a TLS connection to a target
+// and of the certificate the target presented on it, nothing secret: the
+// names follow the tlscert type's span facts (tls.protocol.version,
+// tls.cipher) and its document (server_name, verified, not_before,
+// not_after, subject_cn, issuer_cn).
+type TLSConnection struct {
+	// Version is the protocol's version, "1.3" (tls.protocol.version).
+	Version string
+	// Cipher is the cipher suite's IANA name.
+	Cipher string
+	// ServerName is the name sent as SNI, "" when none was, as for an
+	// IP address.
+	ServerName string
+	// Verified says the exporter verified the chain: false under
+	// insecure_skip_verify.
+	Verified bool
+	// NotBefore and NotAfter are the leaf's validity, in Unix seconds.
+	NotBefore, NotAfter int64
+	// SubjectCN and IssuerCN are the common names of the leaf's subject
+	// and issuer.
+	SubjectCN, IssuerCN string
+}
+
+// tlsConnectionOf is what state says of the connection a request to u was
+// answered on; nil for a request over plain HTTP, whose answer can still
+// carry the TLS state of a connection to an https:// proxy, which is not
+// the target's.
+func tlsConnectionOf(u *url.URL, state *tls.ConnectionState) *TLSConnection {
+	if state == nil || u.Scheme != "https" {
+		return nil
+	}
+	version, _ := strings.CutPrefix(tls.VersionName(state.Version), "TLS ")
+	c := &TLSConnection{Version: version, Cipher: tls.CipherSuiteName(state.CipherSuite), ServerName: state.ServerName, Verified: len(state.VerifiedChains) > 0}
+	if len(state.PeerCertificates) > 0 {
+		leaf := state.PeerCertificates[0]
+		c.NotBefore, c.NotAfter = leaf.NotBefore.Unix(), leaf.NotAfter.Unix()
+		c.SubjectCN, c.IssuerCN = leaf.Subject.CommonName, leaf.Issuer.CommonName
+	}
+	return c
+}
+
+// JQTLS is the TLS connection as jq's $tls and Python's response.tls have
+// it, null over plain HTTP and for no trip. The times are numbers, as
+// $timings' are.
+func (t *HTTPTrip) JQTLS() any {
+	if t == nil || t.TLSConnection == nil {
+		return nil
+	}
+	c := t.TLSConnection
+	return map[string]any{
+		"version":     c.Version,
+		"cipher":      c.Cipher,
+		"server_name": c.ServerName,
+		"verified":    c.Verified,
+		"not_before":  float64(c.NotBefore),
+		"not_after":   float64(c.NotAfter),
+		"subject_cn":  c.SubjectCN,
+		"issuer_cn":   c.IssuerCN,
+	}
 }
 
 // JQTimings is the trip's phases as jq's $timings and Python's
@@ -150,9 +217,13 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 }
 
 // trip is what was timed of the answered request, which ended at end, when
-// its body had been read.
-func (t *tripTrace) trip(_ *http.Response, end time.Time) *HTTPTrip {
+// its body had been read, and the connection resp came on.
+func (t *tripTrace) trip(resp *http.Response, end time.Time) *HTTPTrip {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return &HTTPTrip{DNS: t.dns, Connect: t.connect, TLS: t.tls, FirstByte: t.firstByte, Total: end.Sub(t.start)}
+	trip := &HTTPTrip{DNS: t.dns, Connect: t.connect, TLS: t.tls, FirstByte: t.firstByte, Total: end.Sub(t.start)}
+	if resp.Request != nil {
+		trip.TLSConnection = tlsConnectionOf(resp.Request.URL, resp.TLS)
+	}
+	return trip
 }

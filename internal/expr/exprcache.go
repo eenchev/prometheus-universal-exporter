@@ -124,22 +124,23 @@ func (c *exprCache[T]) len() int {
 // decoded document, so an expression evaluated against one item of a
 // metric's items can still look things up elsewhere in the response;
 // $status, the response's HTTP status; $headers, its headers by lower-case
-// name; and $timings, how long the phases of the request it answered took.
+// name; $timings, how long the phases of the request it answered took; and
+// $tls, the TLS connection the request was sent on.
 // Every program has them all, whatever the collector's request type, so a
 // rule that names one compiles anywhere and reads null where the request
 // has nothing to give (JQBindings).
-var JQVariables = []string{"$root", "$status", "$headers", "$timings"}
+var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
 // a field left nil is null to the program.
 type JQBindings struct {
-	Status, Headers, Timings any
+	Status, Headers, Timings, TLS any
 }
 
 // Values are the values to run a program with, root first, in the order of
 // JQVariables.
 func (b JQBindings) Values(root any) []any {
-	return []any{root, b.Status, b.Headers, b.Timings}
+	return []any{root, b.Status, b.Headers, b.Timings, b.TLS}
 }
 
 // A compiled program is safe to run from many goroutines at once.

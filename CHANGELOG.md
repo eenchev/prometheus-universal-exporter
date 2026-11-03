@@ -125,6 +125,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `response.timings`, and a debug probe's report shows it under the status.
   Every jq and yq program has the variable, `null` for other request types
   ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- jq and yq rules of `http` and `graphite` collectors read `$tls`, the TLS
+  connection the answer came on — `version`, `cipher`, `server_name`,
+  `verified`, and the target certificate's `not_before`, `not_after`,
+  `subject_cn` and `issuer_cn` — so an uptime check alerts on the
+  certificate's expiry without a `tlscert` collector beside it; `null` over
+  plain HTTP. A Python script has it as `response.tls`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
 - `report_failures: true` on a collector answers every probe of it `200`
   with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
   `http_exporter_probe_elapsed_seconds`, and on a failure

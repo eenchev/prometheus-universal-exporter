@@ -1395,6 +1395,7 @@ has the same on its `response`:
 | jq and yq | Python | What it is |
 | --- | --- | --- |
 | `$timings` | `response.timings` | How long the request's phases took, in seconds |
+| `$tls` | `response.tls` | The TLS connection the request was sent on, and the target's certificate |
 
 ```yaml
 transform:
@@ -1439,12 +1440,34 @@ body; a probe the [response cache](CONFIGURATION.md#response-caching)
 answers runs no rule, and its series are those of the scrape that filled
 it, timings included.
 
-`$timings` is `null` for every other request type, and on a response pasted
-on the [debug page](CONFIGURATION.md#the-debug-page); every jq and yq
-program has the variable, so a rule that reads it loads whatever the
-collector's type. A pagination's `next` and a login's `token` expression
-read it as `null` too. A [debug probe](CONFIGURATION.md#debug-probes)'s
-report and the debug page show its value under the response's status.
+`$tls` is `null` over plain HTTP, and otherwise an object of the
+connection the answer came on, the same request's, and of the certificate
+the target presented on it, nothing secret:
+
+| Key | What it is |
+| --- | --- |
+| `version` | The TLS version, `"1.2"` or `"1.3"` |
+| `cipher` | The cipher suite, by its IANA name, `"TLS_AES_128_GCM_SHA256"` |
+| `server_name` | The name sent as SNI: the URL's host or `tls.server_name`; `""` when none was sent, as to an IP address |
+| `verified` | Whether the exporter verified the chain: `false` under `insecure_skip_verify`, which is the only way a chain that does not verify is answered |
+| `not_before`, `not_after` | The target's certificate's validity, in Unix seconds |
+| `subject_cn`, `issuer_cn` | The common names of its subject and its issuer |
+
+The names are those of the [`tlscert` type](TLSCERT.md#the-document)'s
+document and of its span facts, `tls.protocol.version` and `tls.cipher`,
+whose `"1.3"` `version` is. `$tls.not_after` is when the certificate the
+target serves expires, the one an uptime check alerts on; a chain's
+intermediates and roots, and a certificate on a port that speaks no HTTP,
+are the `tlscert` type's. Through an `https://` proxy, a plain HTTP request
+has no `$tls`: the connection it came on is the proxy's.
+
+`$timings` and `$tls` are `null` for every other request type, and on a
+response pasted on the [debug page](CONFIGURATION.md#the-debug-page); every
+jq and yq program has the variables, so a rule that reads them loads
+whatever the collector's type. A pagination's `next` and a login's `token`
+expression read them as `null` too. A [debug
+probe](CONFIGURATION.md#debug-probes)'s report and the debug page show
+their values under the response's status.
 
 ## Pagination
 

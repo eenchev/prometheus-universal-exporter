@@ -8,7 +8,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
+
+// Each of the OTLP tab's three request bodies is headed Request body alone:
+// the part it is in already says whose body it is, metrics, log records or
+// spans, so the message type's name only made the heading longer.
+func TestTheOTLPTabsRequestBodiesAreHeadedRequestBody(t *testing.T) {
+	receiver := newLogReceiver(t)
+	server := tracesServer(t, receiver, 5*time.Millisecond, func(c *model.Config) { c.OTLP.Logs.Enabled = true }, nil)
+	server.SetDebug(DebugFull)
+	page := getPage(t, server, debugPagePath)
+	for _, id := range []string{"otlp-body-part", "otlp-logs-body-part", "otlp-traces-body-part"} {
+		requireContains(t, page, `<details id="`+id+`">`+"\n<summary>Request body</summary>")
+	}
+	if strings.Contains(page, "ServiceRequest)</summary>") {
+		t.Errorf("a request body's heading still names its message type")
+	}
+}
 
 // The debug page's OTLP tab shows the run's spans, by the export's own
 // code, and whether the export would send a probe's trace like it; the run
@@ -20,7 +38,7 @@ func TestTheOTLPTabShowsTheRunsSpans(t *testing.T) {
 	server := tracesServer(t, receiver, 5*time.Millisecond, nil, nil)
 	server.SetDebug(DebugFull)
 	page := getPage(t, server, debugPagePath)
-	for _, want := range []string{`id="otlp-traces-part"`, `data-signal="traces"`, "Request body (ExportTraceServiceRequest)"} {
+	for _, want := range []string{`id="otlp-traces-part"`, `data-signal="traces"`} {
 		requireContains(t, page, want)
 	}
 	answer := postRun(t, server, map[string]any{"configured": "text", "target": slow.URL}, http.StatusOK)

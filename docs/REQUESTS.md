@@ -1528,7 +1528,9 @@ collectors:
         required: false
         labels:
           - name: version
-            expression: .version
+            expression: .tls_version
+          - name: cipher_suite
+            expression: .cipher_suite
 ```
 
 Each key has its part:
@@ -1590,7 +1592,7 @@ site_http_duration_seconds{phase="total"} 0.072
 site_http_redirects 1
 site_http_ssl 1
 site_tls_cert_expiry_timestamp_seconds 1767225599
-site_tls_version_info{version="TLS 1.3"} 1
+site_tls_version_info{cipher_suite="TLS_AES_128_GCM_SHA256",version="TLS 1.3"} 1
 http_exporter_probe_success 1
 http_exporter_probe_elapsed_seconds 0.149
 ```
@@ -1603,7 +1605,7 @@ http_exporter_probe_elapsed_seconds 0.149
 | `site_http_redirects` | How many redirects were followed. |
 | `site_http_ssl` | `1` when the answered request was made over TLS. |
 | `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served expires, in Unix seconds; alert on it less `time()`. |
-| `site_tls_version_info{version}` | The TLS version of the connection, `1.2` or `1.3`. |
+| `site_tls_version_info{version,cipher_suite}` | The TLS version of the connection, `TLS 1.2` or `TLS 1.3`, and the cipher suite it settled on, by its IANA name, so an alert can name a site still on an old version or a weak suite. |
 | `http_exporter_probe_success` | `1` when the probe got an answer, whatever its status; `0` when it failed, with `http_exporter_probe_failed_stage{stage}` naming the stage. |
 | `http_exporter_probe_elapsed_seconds` | How long the whole probe took, the redirects included. |
 
@@ -1626,7 +1628,7 @@ here:
 | `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
 | `probe_http_redirects` | `site_http_redirects` | The same. |
 | `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
-| `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The version without its `TLS ` prefix: `1.3`, not `TLS 1.3`. |
+| `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |
 
 Other series of blackbox_exporter's have no rule above, but read what is
 there: `probe_http_content_length` is `$headers["content-length"] |

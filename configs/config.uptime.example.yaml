@@ -49,10 +49,12 @@ collectors:
         expression: $tls.not_after
         required: false   # none over plain HTTP
       - name: site_tls_version_info
-        description: The TLS version of the connection, as a label
+        description: The TLS version and cipher suite of the connection, as labels
         items: '$tls | select(. != null)'
         expression: "1"
         required: false
         labels:
           - name: version
             expression: .tls_version
+          - name: cipher_suite
+            expression: .cipher_suite

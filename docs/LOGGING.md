@@ -264,13 +264,20 @@ shown under the name it was written with.
 Wherever a line names the target itself, a password in it is shown as
 `redacted:redacted`, and the value of a query parameter whose name reads as a
 credential as `<redacted>`:
-`http://host:9100/metrics?token=<redacted>&tenant=a`. A name reads as a
-credential's when it contains, in any case, `auth`, `cookie`, `token`,
-`secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`, `session`,
-`signature`, `credential` or `jwt`, or when `sig` (an Azure SAS signature),
-`pwd`, `pw` or `pass` is a whole word of it — the name itself, or a part
-between punctuation or at a change to upper case, as in `db_pwd`, `X-Sig` or
-`userPass`, but not `design`, `signal` or `bypass`. Other parameters are shown
+`http://host:9100/metrics?token=<redacted>&tenant=a`. A name is read word
+by word, its words split at punctuation and at a change to upper case
+(`X-Auth-Token`, `client_secret`, `apiKey`). It reads as a credential's when,
+in any case, `auth`, `cookie`, `token`, `secret`, `password`, `passwd`,
+`passphrase`, `passcode`, `key`, `session`, `signature`, `credential` or
+`jwt` is anywhere in it once its ordinary words are taken out — words that
+only hold one of these, `author`, `authors`, `authority`, `monkey`,
+`keyboard`, `keyword`, `tokenizer` and a few like them — so `apikey`,
+`accesstoken`, `authToken` and `author_token` read as a credential's and
+`author`, `cert-authority` and `keyboard-interactive` do not; or when `sig`
+(an Azure SAS signature), `pwd`, `pw` or `pass` is a whole word of it, as in
+`db_pwd`, `X-Sig` or `userPass`, but not `design`, `signal` or `bypass`. A
+credential word run together with another, `apikey`, is still found, so a
+name errs towards being masked. Other parameters are shown
 as given. A URL's fragment, `#…`, is never shown: it is never sent to the
 target, and one copied from a browser can carry a token. The static targets
 endpoint's `target` label and the OTLP `target` attribute show a target the

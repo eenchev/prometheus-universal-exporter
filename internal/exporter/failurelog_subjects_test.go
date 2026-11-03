@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -800,8 +801,8 @@ func TestTheFailureLogWritesWhatItDidForSubjectsThatHadKeysOfTheirOwn(t *testing
 			case op == 11:
 				// The success of a trip of a collector a reload retired
 				// is no recovery.
-				now.recoveredFor(retired, nowLogger, s.key(), "recovered", attrs...)
-				was.recoveredFor(retired, wasLogger, s.reportedWas().subject(), "recovered", attrs...)
+				now.recoveredFor(context.Background(), retired, nowLogger, s.key(), "recovered", attrs...)
+				was.recoveredFor(context.Background(), retired, wasLogger, s.reportedWas().subject(), "recovered", attrs...)
 			default:
 				read := configRead{}
 				if op == 12 {

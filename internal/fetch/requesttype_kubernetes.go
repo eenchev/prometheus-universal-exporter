@@ -442,8 +442,15 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 		listing := kubeapi.Listing{
 			Client: client, Server: conn.server, Path: kubernetesPath(c, namespace), Token: token, What: kubernetesRequest(c).Resource,
 			LabelSelector: kubernetesRequest(c).LabelSelector, FieldSelector: kubernetesRequest(c).FieldSelector, MaxPageBytes: limit,
+			// With otlp.traces.propagate, each page's request carries the
+			// trace context as an HTTP target's does: the API server takes a
+			// traceparent (its APIServerTracing), and its spans are then
+			// children of the request's. No header of the request is the
+			// operator's, so there is none to leave as it is.
 			Sent: func(req *http.Request) {
+				span := propagateTrace(ctx, req.Header, false)
 				traceRequest(ctx, req.Method, req.URL.String(), req.Header, "", false)
+				traceSpanID(ctx, span)
 			},
 			// kubeapi tells a request that got no answer by this
 			// beginning of its own.

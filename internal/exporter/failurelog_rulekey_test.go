@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -167,7 +168,7 @@ func TestARulesKeyIsItsPartsJoinedHoweverItIsMade(t *testing.T) {
 	// at a time: under is the key it made of the rule.
 	remembered, quiet := newFailureLog(), slog.New(slog.DiscardHandler)
 	underOf := func(trip, metric, expression, items string) string {
-		under := remembered.ruleFailedFor(configRead{}, quiet, slog.LevelWarn, subjectKey{bytes: trip}, metric, expression, items, "failed", "metric", nil)
+		under := remembered.ruleFailedFor(context.Background(), configRead{}, quiet, slog.LevelWarn, subjectKey{bytes: trip}, metric, expression, items, "failed", "metric", nil)
 		remembered.forget(subjectKey{bytes: under})
 		return under
 	}
@@ -507,7 +508,7 @@ func TestRulesAreLookedUpFromManyScrapesAtOnce(t *testing.T) {
 				}
 				switch round % 3 {
 				case 0:
-					if under := f.ruleFailedFor(configRead{}, logger, slog.LevelWarn, trip, "m", expression, "", "failed", "metric", failed); under != want {
+					if under := f.ruleFailedFor(context.Background(), configRead{}, logger, slog.LevelWarn, trip, "m", expression, "", "failed", "metric", failed); under != want {
 						said := fmt.Sprintf("the failure of the rule %d of %q is remembered under a key of %d bytes, want its own of %d", rule, trip.bytes, len(under), len(want))
 						wrong.Store(&said)
 						return

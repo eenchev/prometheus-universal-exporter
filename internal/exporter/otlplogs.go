@@ -53,9 +53,8 @@ type OTLPLogs struct {
 	taking atomic.Pointer[otlpLogsTaking]
 
 	mu sync.Mutex
-	// queue holds the records waiting, the oldest first, each the JSON of
-	// one OTLP LogRecord.
-	queue [][]byte
+	// queue holds the records waiting, the oldest first.
+	queue []otlpQueuedRecord
 	// The counts since the start, the status page's and the
 	// self-metrics'.
 	sent                int
@@ -66,6 +65,16 @@ type OTLPLogs struct {
 	// again.
 	endpoint string
 	history  otlpLogsHistory
+}
+
+// otlpQueuedRecord is a record waiting: the JSON of one OTLP LogRecord, and
+// the trace of the probe or the scrape it was logged in, with the time it
+// was logged at, which the record is linked to when it is drained, if that
+// trace was exported by then (linkedRecord).
+type otlpQueuedRecord struct {
+	raw  []byte
+	link *traceLink
+	at   time.Time
 }
 
 // otlpLogsTaking is what the tee takes while the log export is on: lines at
@@ -152,7 +161,7 @@ func (l *OTLPLogs) wants(level slog.Level) bool {
 }
 
 // add queues one record, or drops and counts it when the queue is full.
-func (l *OTLPLogs) add(record []byte) {
+func (l *OTLPLogs) add(record otlpQueuedRecord) {
 	taking := l.taking.Load()
 	if taking == nil {
 		return
@@ -166,26 +175,59 @@ func (l *OTLPLogs) add(record []byte) {
 	l.queue = append(l.queue, record)
 }
 
-// drain takes every record waiting.
+// drain takes every record waiting, each linked to its trace when that
+// trace was exported (linkedRecord). A record whose trace is not yet decided
+// leaves without a link, which it never gets later: the log export does not
+// wait for traces.
 func (l *OTLPLogs) drain() [][]byte {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	records := l.queue
+	queued := l.queue
 	l.queue = nil
+	l.mu.Unlock()
+	if len(queued) == 0 {
+		return nil
+	}
+	records := make([][]byte, len(queued))
+	for i, q := range queued {
+		records[i] = linkedRecord(q)
+	}
 	return records
+}
+
+// linkedRecord is a record's JSON, with the trace id and the span id of the
+// span running when it was logged, and the sampled flag, where it was
+// logged in a trace that was exported: an OTLP LogRecord's traceId, spanId
+// and flags, the low byte of which are the W3C trace flags.
+func linkedRecord(q otlpQueuedRecord) []byte {
+	trace, span, ok := q.link.spanAt(q.at)
+	if !ok || len(q.raw) == 0 || q.raw[len(q.raw)-1] != '}' {
+		return q.raw
+	}
+	out := make([]byte, 0, len(q.raw)+len(trace)+len(span)+48)
+	out = append(out, q.raw[:len(q.raw)-1]...)
+	out = append(out, `,"traceId":"`...)
+	out = append(out, trace...)
+	out = append(out, `","spanId":"`...)
+	out = append(out, span...)
+	return append(out, `","flags":1}`...)
 }
 
 // requeue puts records an export could not deliver back before those queued
 // since, still within the bound, the oldest dropped first past it. Nothing
-// is put back while the log export is off.
+// is put back while the log export is off. They were linked when they were
+// drained, and are put back as they are.
 func (l *OTLPLogs) requeue(records [][]byte) {
 	taking := l.taking.Load()
 	if taking == nil || len(records) == 0 {
 		return
 	}
+	back := make([]otlpQueuedRecord, len(records), len(records)+len(l.queue))
+	for i, raw := range records {
+		back[i] = otlpQueuedRecord{raw: raw}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.queue = append(records[:len(records):len(records)], l.queue...)
+	l.queue = append(back, l.queue...)
 	l.capLocked(taking.max)
 }
 
@@ -193,7 +235,7 @@ func (l *OTLPLogs) requeue(records [][]byte) {
 func (l *OTLPLogs) capLocked(limit int) {
 	if over := len(l.queue) - limit; over > 0 {
 		l.dropped[otlpLogDropPendingCap] += over
-		l.queue = append([][]byte(nil), l.queue[over:]...)
+		l.queue = append([]otlpQueuedRecord(nil), l.queue[over:]...)
 	}
 }
 
@@ -262,11 +304,15 @@ func (h *otlpLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	if h.base.Enabled(ctx, r.Level) {
 		err = h.base.Handle(ctx, r)
 	}
+	// The line is linked to the trace of the probe or the scrape it was
+	// logged in, which ctx carries while otlp.traces is on
+	// (otlptraceslink.go); stderr's line is written now, before the trace
+	// is decided, and is not.
 	switch {
 	case h.run != nil:
-		h.run.add(r.Level, h.encode(r))
+		h.run.add(r.Level, h.encode(r), traceLinkFrom(ctx), r.Time)
 	case h.logs.wants(r.Level):
-		h.logs.add(h.encode(r))
+		h.logs.add(otlpQueuedRecord{raw: h.encode(r), link: traceLinkFrom(ctx), at: r.Time})
 	}
 	return err
 }
@@ -294,7 +340,10 @@ func (h *otlpLogHandler) WithGroup(name string) slog.Handler {
 	return &out
 }
 
-// otlpLogRecord is an OTLP LogRecord as OTLP/JSON writes it.
+// otlpLogRecord is an OTLP LogRecord as OTLP/JSON writes it. The tee
+// writes no trace id, span id or flags: those are added when the record is
+// drained, of a trace exported by then (linkedRecord), and read here only by
+// the tests and the debug page.
 type otlpLogRecord struct {
 	TimeUnixNano         string             `json:"timeUnixNano,omitempty"`
 	ObservedTimeUnixNano string             `json:"observedTimeUnixNano"`
@@ -302,6 +351,9 @@ type otlpLogRecord struct {
 	SeverityText         string             `json:"severityText"`
 	Body                 otlpAnyValue       `json:"body"`
 	Attributes           []otlpAnyAttribute `json:"attributes,omitempty"`
+	TraceID              string             `json:"traceId,omitempty"`
+	SpanID               string             `json:"spanId,omitempty"`
+	Flags                int                `json:"flags,omitempty"`
 }
 
 // otlpAnyAttribute and otlpAnyValue are an attribute of a log record and

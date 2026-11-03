@@ -11,7 +11,8 @@ import (
 // A rule's name and the names of its labels are held by the exporter to
 // what a scrape of the collector holds a name to: under name_escaping fail,
 // written, left out or written "", to the classic names, and under
-// underscores and values to any name that is not blanks alone. The schema
+// underscores and values, or metric_name_validation_scheme utf8, to any name
+// that is not blanks alone. The schema
 // says the same, by a rule of the collector that reads its name_escaping:
 // both refuse a name with a dot, a dash, a blank in it, a leading digit or
 // a letter outside ASCII under fail, which the schema refused under every
@@ -47,8 +48,9 @@ func TestSchemaAndExporterAgreeOnANameUnderEachNameEscaping(t *testing.T) {
 	blanks := []string{`" "`, `"  "`, `"\t"`}
 	tried := 0
 	for transform, collector := range collectors {
-		for _, escaping := range []string{"", "    name_escaping: \"\"\n", "    name_escaping: fail\n", "    name_escaping: underscores\n", "    name_escaping: values\n"} {
-			escapes := strings.Contains(escaping, "underscores") || strings.Contains(escaping, "values")
+		for _, escaping := range []string{"", "    name_escaping: \"\"\n", "    name_escaping: fail\n", "    name_escaping: underscores\n", "    name_escaping: values\n",
+			"    metric_name_validation_scheme: legacy\n", "    metric_name_validation_scheme: utf8\n", "    metric_name_validation_scheme: utf8\n    name_escaping: fail\n"} {
+			escapes := strings.Contains(escaping, "underscores") || strings.Contains(escaping, "values") || strings.Contains(escaping, "utf8")
 			written := func(name, label string) string { return fmt.Sprintf(collector, escaping, name, label) }
 			what := func(of, name string) string {
 				return fmt.Sprintf("a %s rule's %s %s, %s", transform, of, name, strings.TrimSpace(escaping))
@@ -133,5 +135,17 @@ func TestSchemaAndExporterAgreeOnALabelNameARenameOrRemovalTakesOff(t *testing.T
 	}
 	for _, settings := range []string{"", "      rename_labels: {}\n", "      remove_labels: []\n"} {
 		agree(t, schema, "a dotted label with "+strings.TrimSpace(settings), written(settings), false)
+	}
+}
+
+// metric_name_validation_scheme is legacy or utf8, Prometheus's names, or
+// left out or written "", which is legacy, to the schema and the exporter
+// alike; anything else, other spellings of the two among them, is refused
+// by both.
+func TestSchemaAndExporterAgreeOnTheNameValidationScheme(t *testing.T) {
+	schema := loadSchema(t)
+	collector := "collectors:\n  - name: demo\n    metric_name_validation_scheme: %s\n    request:\n      type: http\n    transform:\n      type: jq\n    metrics:\n      - expression: .v\n        name: up\n"
+	for written, accepted := range map[string]bool{"legacy": true, "utf8": true, `""`: true, "UTF8": false, "utf-8": false, "allow-utf-8": false, "classic": false, "true": false, "[utf8]": false} {
+		agree(t, schema, "metric_name_validation_scheme: "+written, fmt.Sprintf(collector, written), accepted)
 	}
 }

@@ -36,35 +36,71 @@ import (
 // for as long as the collector's statistics are, and dropped with them when a
 // reload removes the collector (pythonstats.go).
 
-// scrapeDurationBuckets are the histogram's upper bounds in seconds, from a
-// fast local endpoint to the slowest scrape a Prometheus timeout allows.
+// scrapeDurationBuckets are the upper bounds in seconds of this histogram and
+// of http_exporter_probe_duration_seconds (probedurations.go), from a fast
+// local endpoint to the slowest scrape a Prometheus timeout allows.
 var scrapeDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
-// durationHistogram is one collector's histogram. It is part of the
-// collector's statistics (serverStats), whose lock guards it, and not kept by
-// the collector's name: a trip records its duration where it records its
+// durationHistogram is one collector's histogram, of its trips or, in
+// http_exporter_probe_duration_seconds, of its probes or static scrapes. It
+// is part of the collector's statistics (serverStats), whose lock guards it,
+// and not kept by the collector's name: a trip records its duration where it records its
 // counters, so a trip that ends after a reload removed its collector, and
 // dropped those statistics, cannot be observed in the histogram of a collector
 // brought back under the name, which would then hold an observation older
 // than its creation time (selfcreated.go).
+//
+// The same observations are kept in exponential buckets too
+// (model.ExponentialHistogram), which the protobuf answer of the self-metrics
+// writes as a native histogram and the OTLP export, with
+// otlp.exponential_histograms, as an exponential histogram. They cost at most
+// 160 counters a collector, and resolve a duration to within a few percent
+// wherever it falls, where the fixed buckets can only say it was between 2.5
+// and 5 seconds.
+//
+// With otlp.traces on, each bucket keeps an exemplar: the latest
+// observation in it of a trip whose trace was exported, with that trace's
+// id and its root span's (otlptraceslink.go), as Prometheus' Go client
+// keeps the latest exemplar of each bucket. The +Inf bucket has its own.
 type durationHistogram struct {
-	counts []uint64 // per bucket, not cumulative; made by the first observation
-	sum    float64
-	count  uint64
+	counts      []uint64 // per bucket, not cumulative; made by the first observation
+	sum         float64
+	count       uint64
+	exponential *model.ExponentialHistogram
+	// exemplars are the buckets' exemplars and then the +Inf bucket's,
+	// made by the first exemplar; each is replaced, never changed.
+	exemplars []*model.Exemplar
 }
 
-func (h *durationHistogram) observe(elapsed time.Duration) {
+// observe records a duration, and returns the bucket it fell in,
+// len(scrapeDurationBuckets) for +Inf.
+func (h *durationHistogram) observe(elapsed time.Duration) int {
 	seconds := elapsed.Seconds()
 	if h.counts == nil {
 		h.counts = make([]uint64, len(scrapeDurationBuckets))
+		h.exponential = model.NewExponentialHistogram()
 	}
+	h.exponential.Observe(seconds, model.ExponentialMaxSize)
 	h.sum += seconds
 	h.count++
 	for i, bound := range scrapeDurationBuckets {
 		if seconds <= bound {
 			h.counts[i]++
-			return
+			return i
 		}
+	}
+	return len(scrapeDurationBuckets)
+}
+
+// exemplify makes e the exemplar of bucket, unless the bucket has a later
+// one: the traces of trips that ended in one order may be exported in
+// another.
+func (h *durationHistogram) exemplify(bucket int, e *model.Exemplar) {
+	if h.exemplars == nil {
+		h.exemplars = make([]*model.Exemplar, len(scrapeDurationBuckets)+1)
+	}
+	if old := h.exemplars[bucket]; old == nil || !e.Time.Before(old.Time) {
+		h.exemplars[bucket] = e
 	}
 }
 
@@ -72,33 +108,45 @@ func (h *durationHistogram) observe(elapsed time.Duration) {
 // scraped yet has an empty one.
 func (h *durationHistogram) histogram() *model.Histogram {
 	out := &model.Histogram{Sum: h.sum, Count: h.count}
+	if h.exponential != nil {
+		out.Exponential = h.exponential.AtMostScale(h.exponential.Scale)
+	} else {
+		out.Exponential = model.NewExponentialHistogram()
+	}
 	var cumulative uint64
 	for i, bound := range scrapeDurationBuckets {
 		if h.counts != nil {
 			cumulative += h.counts[i]
 		}
 		out.Buckets = append(out.Buckets, model.Bucket{UpperBound: bound, CumulativeCount: cumulative})
+		if h.exemplars != nil {
+			out.Buckets[i].Exemplar = h.exemplars[i]
+		}
+	}
+	if h.exemplars != nil {
+		out.InfExemplar = h.exemplars[len(scrapeDurationBuckets)]
 	}
 	return out
 }
 
 // tripHistogram is the scrape-time histogram of a collector's statistics.
 func (s *serverStats) tripHistogram() *model.Histogram {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.durations.histogram()
+	return durationsOf(s, tripDurations)
 }
 
 // observeTargetScrape records a trip to the target in the statistics the trip
-// counts in, when verbose self-metrics are on.
-func (s *Server) observeTargetScrape(stats *serverStats, elapsed time.Duration) {
-	if stats == nil || !s.verboseSelfMetrics() {
+// counts in, when verbose self-metrics are on, and makes it its bucket's
+// exemplar once the trace of the probe or the scrape that made the trip,
+// link, is exported (nil for none). A trip shared by several probes is
+// the trace of the probe that started it, whose context it runs in.
+func (s *Server) observeTargetScrape(stats *serverStats, elapsed time.Duration, link *traceLink) {
+	if !s.verboseSelfMetrics() {
 		return
 	}
-	stats.mu.Lock()
-	stats.durations.observe(elapsed)
-	stats.mu.Unlock()
+	observeDuration(stats, tripDurations, elapsed, link)
 }
+
+func tripDurations(s *serverStats) *durationHistogram { return &s.durations }
 
 const (
 	targetScrapeDurationHelp = "Duration of the trips this collector made to its target — request, decode, transform and validation — in seconds. Cache hits and shared probes are not trips."

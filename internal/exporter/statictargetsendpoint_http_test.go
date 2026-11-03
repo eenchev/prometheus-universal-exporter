@@ -545,7 +545,7 @@ func TestAFamilyNamedLikeAnotherTargetsHistogramSeriesIsLeftOut(t *testing.T) {
 			}
 			// The exposition is one the exporter's own decoder reads.
 			recorder := httptest.NewRecorder()
-			writeMetricSet(recorder, nil, &merged)
+			writeMetricSet(recorder, nil, &merged, false)
 			if err := parseExposition(recorder.Body.Bytes()); err != nil {
 				t.Fatalf("the merged exposition does not read back: %v\n%s", err, recorder.Body)
 			}

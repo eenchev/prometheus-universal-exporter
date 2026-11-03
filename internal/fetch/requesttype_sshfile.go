@@ -242,6 +242,8 @@ func fetchSSHFile(ctx context.Context, target string, c *model.Collector, overri
 	if err != nil {
 		return nil, onSSHHost(err, address.hostPort)
 	}
+	// The last request recorded is the read that went through.
+	traceFacts(ctx, intFact("sshfile.files", 1), intFact("sshfile.bytes", len(read.body)))
 	if err := checkMaxAge(c, full, read.info.ModTime()); err != nil {
 		return nil, onSSHHost(err, address.hostPort)
 	}
@@ -261,6 +263,7 @@ func readSSHDirectory(ctx context.Context, key sshConnKey, c *model.Collector, t
 	if err != nil {
 		return nil, onSSHHost(err, key.address)
 	}
+	traceFacts(ctx, intFact("sshfile.files", filesRead(read)), intFact("sshfile.bytes", int(read.Bytes)))
 	for i := range read.Files {
 		if f := read.Files[i].Response; f != nil {
 			f.Target = target

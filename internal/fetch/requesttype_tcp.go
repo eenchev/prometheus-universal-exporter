@@ -589,11 +589,6 @@ func (x *tcpExchanged) facts() []TraceFact {
 	return facts
 }
 
-// boolFact makes a TraceFact of a yes or a no, which tcp alone tells.
-func boolFact(key string, value bool) TraceFact {
-	return TraceFact{Key: key, Bool: value, IsBool: true}
-}
-
 // greeted is how a debug report tells the greeting, and the request for TLS
 // that followed it.
 func (x *tcpExchanged) greeted() string {

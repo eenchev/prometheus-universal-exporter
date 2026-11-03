@@ -26,6 +26,7 @@ otlp:
   #   deployment.environment: production
   # probe_attributes: false
   # metric_names: prometheus
+  # exponential_histograms: false
   # scope:
   #   name: prometheus-universal-exporter
   #   version: ""
@@ -437,7 +438,11 @@ in a unit loses it to the metric's `unit` field, a
 [UCUM](https://ucum.org/ucum) code, so the counter `http_requests_total` is
 `http_requests`, the histogram `request_duration_seconds` is
 `request_duration` of unit `s`, and the counter `process_cpu_seconds_total` is
-`process_cpu` of unit `s`. The units are those the OpenTelemetry Collector's
+`process_cpu` of unit `s`. A UTF-8 name a collector keeps
+([`metric_name_validation_scheme: utf8`](CONFIGURATION.md#keeping-utf-8-names)),
+`http.server.duration_seconds`, is sent as it is under `prometheus` and as
+`http.server.duration` of unit `s` under `otel`, its labels' names as its
+attributes' keys, dots and all. The units are those the OpenTelemetry Collector's
 Prometheus translator writes as a name's suffix, read backwards:
 
 | Suffix | Unit | Suffix | Unit | Suffix | Unit |
@@ -481,6 +486,37 @@ Two names the translation makes one — a gauge `jobs` and a counter
 name under the resource, written as two kinds
 ([above](#two-writers-of-one-series-or-one-name)): what was written last is
 exported, and the other is left out and logged.
+
+## Exponential histograms
+
+The exporter's own duration histograms,
+`http_exporter_probe_duration_seconds` (see
+[Probe durations](SELF-METRICS.md#probe-durations)) and, in verbose mode,
+`http_exporter_collector_scrape_duration_seconds` (see
+[Scrape-time histograms](SELF-METRICS.md#scrape-time-histograms)), are kept in
+fixed buckets and in exponential ones. They are exported with their fixed
+buckets unless the block says otherwise:
+
+```yaml
+otlp:
+  exponential_histograms: true
+```
+
+Each is then an OTLP exponential histogram: cumulative, with its `scale`, the
+count of durations of 0 in `zeroCount`, the counts of its buckets from
+`positive.offset` on, its sum, count, `min` and `max`. Bucket `i` holds the
+durations above base^i and up to base^(i+1), the base being 2^(2^-scale),
+as OpenTelemetry's SDKs bucket them: the histogram starts at scale 20 and
+lowers the scale, merging neighbouring buckets in pairs, whenever it would
+need more than 160 buckets, so a collector whose scrapes take 5 ms to a
+minute is sent at scale 3, a bucket per 9% of the duration.
+
+It is off by default because the receiver has to take exponential
+histograms: an OpenTelemetry Collector does, while Prometheus' OTLP endpoint
+stores them as native histograms only when it ingests those. Every other
+histogram — anything read from a target — has fixed buckets alone and is sent
+as before. The self-metrics endpoint answers the same buckets to a Prometheus
+that asks for protobuf ([native histograms](SELF-METRICS.md#native-histograms)).
 
 ## Instrumentation scope
 
@@ -805,6 +841,7 @@ otlp:
     # max_per_second: 0
     # interval: 5s
     # max_pending_spans: 10000
+    # propagate: false
 ```
 
 `traces` is switched by its own `enabled`, as `logs` is: a block that sets
@@ -844,12 +881,30 @@ keys:
 - `interval` is how often the spans waiting are sent, `5s` by default and at
   least `1s`.
 - `max_pending_spans` bounds the spans waiting, `10000` by default.
+- `propagate: true` sends the trace context to the targets
+  ([Propagation to the targets](#propagation-to-the-targets)); off, the
+  default, the targets are sent none. It is the one key read with the trace
+  export off, `enabled: false` here or in the `otlp` block: a probe's
+  caller's trace context is then passed on.
 
 What is a trace: each `/probe` request, with or without its caller's
 `traceparent`, and each scheduled scrape of a static target. A probe that
 shares an identical probe's trip ([shared](CONFIGURATION.md#identical-probes-share-one-request))
-is a trace of its own whose `shared_trip` span is the wait; the trip's
-stages are in the trace of the probe that made it. A debug run, of the debug
+is a trace of its own whose `shared_trip` span is the wait, and under it is
+a copy of the trip's spans, its stages and its requests, with span ids of
+the probe's own: the trip's spans are in the trace of every probe that used
+it, as they are, under the probe's span, in the trace of the probe that
+started it. They keep the trip's times, so those of a probe that joined
+the trip late begin before its `shared_trip` span does. The trip is no
+probe's own: one whose caller goes away before the trip ends, the probe that
+started it as much as one that joined it, has the status `ERROR`, the
+`error.type` `abandoned` and the message `the caller went away before the
+probe's trip ended`, or `… while the probe waited for an identical probe's
+trip`, its `shared_trip` span `cancelled`; under it is what the trip had
+done by then, a request still unanswered `ERROR` with `request.unfinished`
+`true` and ending as the probe did. The stage it was in, not ended, has no
+span. The trip goes on for the probes still waiting, whose traces have it
+whole. A debug run, of the debug
 page, a debug probe or a debug scrape, is never exported, as nothing of a
 run is; the debug page shows the spans the export would make of it
 ([below](#seeing-a-runs-spans)).
@@ -862,9 +917,9 @@ The spans, by OpenTelemetry's conventions where one applies:
 | `scrape <static target>` | INTERNAL | none | `collector`, `target`, `static_target`, `request.type`, `series`, `response.bytes`, `cache.hit`, `error.type` (`scrape_failed`) when it failed |
 | `cache` | INTERNAL | the probe or scrape | `stage.outcome`: `hit` or `miss`, for a collector with a `cache.ttl` |
 | `slot` | INTERNAL | the probe or scrape | the wait for one of the collector's `max_concurrent_probes`: a scrape's wait, or a probe turned away |
-| `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip |
+| `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip, a copy of the trip's spans under it; `cancelled` when the probe's caller left first |
 | `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
-| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes` |
+| `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for dns, `dns.question.type` (the record type), `dns.answer.count` and `dns.response.not_found` when the name was not found; for sql, `db.response.returned_rows`, `sql.columns` and `sql.connection.reused`; for grpc, `rpc.grpc.status_code`, the code's number; for ntp, `ntp.stratum`, `ntp.offset_seconds` and `ntp.delay_seconds`; for ldap, `ldap.result_code` and, of a `SEARCH` page, `ldap.search.entries`; for tlscert, `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`, `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and `tlscert.leaf.days_until_expiry`; for redis, `redis.reply.type` (`integer`, `simple_string`, `bulk_string`, `array`, `nil` or `error`) and `redis.reply.bytes` or `redis.reply.elements`; for sshfile and s3file, `sshfile.files` and `sshfile.bytes`, `s3file.objects` and `s3file.bytes`, of the files read; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes`. A localfile collector's reads are no request and have no span |
 | `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
 | `files`, `decode`, `transform`, `validation` | INTERNAL | the probe or scrape | the stages after the fetch, as the debug report names them |
 | `python` | INTERNAL | `transform` | the time the collector's Python scripts took, added up, from the transform's start |
@@ -885,7 +940,8 @@ spans carry the caller's `tracestate` header
 ([below](#which-traces-are-exported)). Its sampled flag keeps the trace
 only under `parent_based`; the other rules decide it as any other. A
 `traceparent` that cannot be read is no parent, and the `tracestate` beside
-it is not read. The exporter sends no `traceparent` to its targets.
+it is not read. Without [`propagate`](#propagation-to-the-targets), the
+exporter sends no `traceparent` to its targets.
 
 A trace is under the resource its series are exported under: a probe's
 under the exporter-wide resource, a static target's under
@@ -906,9 +962,13 @@ Nor is any text the target sent of a request, a stage or a probe that went
 through, which the log says nothing of: no greeting of a tcp server, no
 stderr of an sshexec command, no reason of an HTTP status line, no outcome
 as a debug report tells it. Such a span has, besides the attributes above,
-only the numbers and yes-or-no answers its request type works out of the
-answer, as the table says: sizes, an exit status, whether a greeting
-matched. A stage that went through has its `stage.note`, which the exporter
+only the numbers, yes-or-no answers and names of the exporter's own
+vocabulary that its request type works out of the answer, as the table
+says: sizes, counts, an exit status, a result code, whether a greeting
+matched, a TLS version and cipher by their registered names, a reply's
+type. A gRPC status message, an LDAP diagnostic, a certificate's subject,
+a column's name and a record's data are the target's text, and none of a
+span's. A stage that went through has its `stage.note`, which the exporter
 writes of counts, sizes, statuses, times and the directory read alone.
 
 Of a failure, a span says what the log line of that failure says, and
@@ -1024,7 +1084,10 @@ say `this line is not exported`. Failing trace exports never make the
 exporter unready. The export's state is in the
 [self-metrics](SELF-METRICS.md#otlp-export-status), while it is on, and on
 the [status page](ENDPOINTS.md#otlp-export). A reload that switches it off
-drops the spans waiting, uncounted, and probes stop recording; one that
+drops the spans waiting, uncounted, and probes stop recording; a probe or a
+scrape already under way when it did is not exported either, and counted
+nowhere, so nothing of it is sent if a later reload switches the export on
+again; one that
 switches it on records the probes from then on; one that lowers
 `max_pending_spans` below the spans waiting drops the oldest traces whole,
 and counts them. The queue is never cut inside a trace, which would leave
@@ -1050,3 +1113,119 @@ depends on the traces exported before, and the line says a trace kept may
 still be dropped by it. The run itself is never exported. At `--web.debug=full`, *Test the
 traces endpoint* sends `{"resourceSpans":[]}` to the traces endpoint, once,
 as *Test the metrics endpoint* does.
+
+## Linking metrics, logs and traces
+
+With `otlp.traces` on, a probe's or a scrape's trace is linked to the rest
+of what the exporter tells of it, and every link points at a trace that was
+exported: a trace that is dropped, as nearly every one is, is linked to by
+nothing. Without the trace export there are no trace ids, and nothing is
+linked.
+
+A trace is decided only at the end of its probe or scrape
+([Which traces are exported](#which-traces-are-exported)), after its log
+lines were logged, its trip observed and its requests sent. So its ids are
+made when it begins: the trace id, the caller's where it sent a
+`traceparent`, and the probe's or the scrape's own span id; the spans are
+made with them if the trace is kept.
+
+### Log records
+
+With `otlp.logs` on too, a log record of a line logged during a probe or a
+scrape — the exporter's own lines, such as `probe failed`, `probe stage
+failed; continuing`, `metric extraction failed` or `static target scrape
+failed` — carries, if the trace was exported, the trace's `traceId`, the
+`spanId` of the span that was running when the line was logged, and
+`flags` `1`, the sampled bit of the W3C trace flags. The span is told by
+the line's time: the innermost stage span whose times hold it, else the
+probe's or the scrape's own span. A stage that fails logs its failure
+before it ends, so a failure's line is linked to the span of the stage that
+failed, `http_status` for an HTTP answer of 500.
+
+A record is linked when the log export takes it from its queue, every
+`otlp.logs.interval`. A trace is decided when its probe ends, so a record
+taken while its probe is still running, or of a probe that ended moments
+before, as a probe slower than the interval may be, leaves without the ids,
+and is not linked later: the log export does not wait for traces. A trace
+counts as exported once its spans are queued for the trace export; one the
+endpoint refuses later is linked to all the same.
+
+The lines on stderr carry no trace or span id. They are written as they are
+logged, before the trace is decided, and an id there would point, for
+nearly every line, at a trace that was never exported; the link is on the
+OTLP records alone.
+
+### Exemplars
+
+Each bucket of `http_exporter_probe_duration_seconds` has an exemplar: the
+latest probe or static target scrape observed in it whose trace was
+exported, with the trace id and the probe's or the scrape's own span id,
+its duration and the time it was observed, as Prometheus' Go client keeps
+the latest exemplar of each bucket. With verbose self-metrics
+(`web.self_metrics.verbose`), so has each bucket of
+`http_exporter_collector_scrape_duration_seconds`, of the latest trip
+observed in it; a trip shared by several probes is of the trace of the
+probe that started it. A bucket whose observations' traces were all
+dropped has none.
+
+The exemplars are written where a format carries them
+([self-metrics](SELF-METRICS.md#exemplars)): in OpenMetrics, after the
+bucket's count, `# {trace_id="…",span_id="…"} 0.067 1793646517.204`; in
+protobuf, on the classic bucket and among the native histogram's
+exemplars; and over OTLP, on the histogram's and the exponential
+histogram's points, as `exemplars` with `traceId`, `spanId`, `asDouble` and
+`timeUnixNano`. The Prometheus text format has no exemplars. The series
+that measure one probe, `http_exporter_scrape_duration_seconds` and a
+static target's `http_exporter_target_scrape_duration_seconds`, are gauges,
+which OpenMetrics gives no exemplars; a target's series have none.
+
+### Propagation to the targets
+
+With `propagate: true`, each HTTP request of a probe or a scrape, a
+graphite one's and a kubernetes collector's to the API server too, and each
+gRPC call, as its metadata, carries a
+`traceparent` of the trace, with a span id of the request's own, which its
+`CLIENT` span is then made with, so that the target's span is a child of it,
+and a redirect followed has one of its own. A `tracestate` goes with it:
+the caller's, as the spans carry it.
+
+The sampled flag says what is known when the request is sent. A trace is
+decided at its end, and only two rules can decide before: `parent_based`,
+by the caller's sampled flag, and `sample_ratio`, by the trace id, which is
+known from the start. Either keeps the trace whatever else becomes of it,
+so the flag is `01` when one of them has, and `00` otherwise: the threshold
+and `errors`, which keep most of what is exported, are known only at the
+end, and the W3C asks for the flag only where the caller may have recorded
+the trace. A target's tracer that samples by its parent then records its
+part of the traces the exporter is sure to keep. The `tracestate` is as the
+spans of a trace kept by that rule carry it: `ot=th` of the ratio's
+threshold before the caller's members, or the caller's as it came when its
+flag kept the trace, and otherwise the caller's without a `th`.
+`max_per_second` may still drop a trace sent `01`, as it may drop one its
+caller sampled.
+
+With the trace export off, `propagate: true` passes a probe's caller's
+`traceparent` and `tracestate` on as they came, and makes no ids: the
+target's span is a child of the caller's. One that cannot be read is not
+passed on, as the W3C asks; a scrape has no caller, and sends none.
+
+A `traceparent` the request sets itself, in `request.headers`,
+`request.metadata` or a forwarded header (`forward_headers`), is the
+operator's and is sent as it is, with no `tracestate` of the exporter's. A
+kubernetes collector's requests have no header of the operator's, and
+always carry the exporter's.
+A login's request (`request.login`) carries none: it goes to an identity
+provider, often no part of the target, and the token it fetches serves
+later probes, of other traces. Probes that share a trip
+([shared](CONFIGURATION.md#identical-probes-share-one-request)) send the
+trace context of the probe that started it.
+
+### On the debug page
+
+A run of the debug page with `otlp.traces` on has trace ids too. Its
+requests carry the run's `traceparent` with `propagate: true`, and the
+request lines show it. Its log records, in the *OTLP* tab, show the trace
+and the span each would be linked to, those of the tab's spans, and say
+that they would be linked if the trace were exported: a run's never is, so
+the request body shows them without. A run's series are a target's, and
+have no exemplars.

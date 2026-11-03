@@ -682,8 +682,11 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 func ldapStartTLSOn(ctx context.Context, session *ldapConn, label string, cfg *tls.Config, hostPort string) error {
 	traceRequest(ctx, "STARTTLS", label, http.Header{"Ldap-Operation": {"STARTTLS"}}, "", false)
 	result, err := ldapOperation(session, berElement(ldapExtendedRequest, berString(ldapExtendedName, ldapStartTLSOID)), ldapExtendedResponse)
-	if err == nil && result.code != 0 {
-		err = result.err()
+	if err == nil {
+		traceFacts(ctx, intFact("ldap.result_code", int(result.code)))
+		if result.code != 0 {
+			err = result.err()
+		}
 	}
 	if err != nil {
 		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: %w", err))
@@ -721,8 +724,11 @@ func ldapBind(ctx context.Context, session *ldapConn, label, dn, password string
 	traceRequest(ctx, "BIND", label, http.Header{"Ldap-Operation": {shown}}, "", false)
 	op := berElement(ldapBindRequest, berInt(berInteger, 3), berString(berOctetString, dn), berString(ldapSimpleAuth, password))
 	result, err := ldapOperation(session, op, ldapBindResponse)
-	if err == nil && result.code != 0 {
-		err = result.err()
+	if err == nil {
+		traceFacts(ctx, intFact("ldap.result_code", int(result.code)))
+		if result.code != 0 {
+			err = result.err()
+		}
 	}
 	if err != nil {
 		// The bind's DN is the operator's account, which a probe's caller is
@@ -814,10 +820,16 @@ func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapC
 		var err error
 		cookie, err = ldapSearchPage(session, op, cookie, s, result, &entries, maxEntries)
 		if err != nil {
+			// A page the server answered with a result code tells it; one
+			// that got no answer has none.
+			if failed := (*ldapResultError)(nil); errors.As(err, &failed) {
+				traceFacts(pageCtx, intFact("ldap.result_code", int(failed.code)))
+			}
 			err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
 			traceFailedOutcome(pageCtx, "error: "+err.Error())
 			return nil, err
 		}
+		traceFacts(pageCtx, intFact("ldap.result_code", 0), intFact("ldap.search.entries", result.Count-before))
 		outcome := fmt.Sprintf("success, %d entries", result.Count-before)
 		if cookie != "" {
 			outcome += ", more to come"

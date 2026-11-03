@@ -599,3 +599,41 @@ func TestARedisDocumentPastTheResponseLimitFailsTheScrape(t *testing.T) {
 		t.Errorf("plain text within the limit: %v", err)
 	}
 }
+
+// A command's span tells its reply's type, and a bulk string's bytes or an
+// array's elements; never what the reply holds, an integer's value
+// included, nor an error reply's text.
+func TestARedisCommandsSpanTellsItsReply(t *testing.T) {
+	server := redistest.New(t)
+	server.Reply("LLEN jobs", ":42\r\n")
+	server.Reply("GET name", "$6\r\nsecret\r\n")
+	server.Reply("HMGET user a b", "*2\r\n$1\r\na\r\n$1\r\nb\r\n")
+	server.Reply("GET missing", "$-1\r\n")
+	c := redisCollector(t, func(c *model.Collector) {
+		editRedis(c, func(r *RedisConfig) {
+			r.Commands = []RedisCommand{
+				{Name: "jobs", Command: []string{"LLEN", "jobs"}},
+				{Name: "name", Command: []string{"GET", "name"}},
+				{Name: "fields", Command: []string{"HMGET", "user", "a", "b"}},
+				{Name: "missing", Command: []string{"GET", "missing"}},
+			}
+		})
+	})
+	ctx, trace := WithSpanTrace(context.Background())
+	if _, err := FetchCollector(ctx, server.Addr, c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	requests := trace.Requests()
+	want := []map[string]string{
+		{"redis.reply.type": "integer"},
+		{"redis.reply.type": "bulk_string", "redis.reply.bytes": "6"},
+		{"redis.reply.type": "array", "redis.reply.elements": "2"},
+		{"redis.reply.type": "nil"},
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("%d requests traced, want %d", len(requests), len(want))
+	}
+	for i := range want {
+		requireFacts(t, requests[i].Method, factsOf(t, requests[i]), want[i])
+	}
+}

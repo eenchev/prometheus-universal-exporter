@@ -392,7 +392,7 @@ var slotWaitHook atomic.Pointer[func(string)]
 // retired the target: what the turn leaves once one has is shown by a call
 // with a generation read before a reload.
 func (s *Server) turnSkipped(generation uint64, d dueTarget) {
-	s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
+	s.failures.failedFor(context.Background(), s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 		"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 }
 
@@ -459,7 +459,7 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					if shuttingDown(scrapeCtx) {
 						return
 					}
-					s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
+					s.failures.failedFor(scrapeCtx, s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return
 				}
@@ -471,7 +471,7 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					return
 				}
 				// A scrape that starts ends a run of skipped ones.
-				s.failures.recoveredFor(s.readTargetAt(generation, d.target.Name), s.logger, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
+				s.failures.recoveredFor(scrapeCtx, s.readTargetAt(generation, d.target.Name), s.logger, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 					"static target scrapes on schedule again", "target", d.target.Name, "collector", d.target.Collector)
 				s.scrapeTargetSince(scrapeCtx, d.config, generation, d.target)
 			}()

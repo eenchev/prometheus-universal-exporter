@@ -63,8 +63,9 @@ type TracedRequest struct {
 	// answered. An HTTP answer's failure is its Status.
 	Failed bool
 	// Facts are what the request type tells of how the request ended, for
-	// its span: numbers and yes-or-no answers the exporter worked out of
-	// the answer, never text the target sent.
+	// its span: numbers, yes-or-no answers and names of the exporter's own
+	// vocabulary — a response code's, a TLS version's — that it worked out
+	// of the answer, never text the target sent.
 	Facts []TraceFact
 	// Wait is, under request.retry.retry_after, how long the trip waited
 	// before retrying the request and why, or why it was not retried when
@@ -82,17 +83,38 @@ type TracedRequest struct {
 	// Attempt is which attempt of the request it is under request.retry,
 	// from 0; a redirect, a login and a page each begin at 0.
 	Attempt int
+	// SpanID is the span id the request was sent under in its traceparent
+	// (otlp.traces.propagate), which its CLIENT span is made with; zero
+	// when it sent none of the exporter's.
+	SpanID  [8]byte
 	started time.Time
 }
 
-// TraceFact is one fact of TracedRequest.Facts: an integer, or a boolean
-// when IsBool is set, under Key.
+// TraceFact is one fact of TracedRequest.Facts, under Key: an integer, a
+// boolean, a floating-point number or a name, as Kind says.
 type TraceFact struct {
 	Key    string
+	Kind   TraceFactKind
 	Int    int64
 	Bool   bool
-	IsBool bool
+	Double float64
+	// Name is a word the exporter chose from a set of its own, such as the
+	// name it maps a status code to: never text the target sent, which a
+	// span does not carry.
+	Name string
 }
+
+// TraceFactKind is which value of a TraceFact is its own.
+type TraceFactKind uint8
+
+// The kinds of TraceFact, which OTLP's attributes are of: intValue,
+// boolValue, doubleValue and stringValue.
+const (
+	TraceFactInt TraceFactKind = iota
+	TraceFactBool
+	TraceFactDouble
+	TraceFactName
+)
 
 // Start is when the request was sent: after any wait for its turn under
 // request.rate_limit, which is no time the target took.

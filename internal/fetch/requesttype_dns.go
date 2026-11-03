@@ -290,6 +290,9 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	// values of a URL's query, where the url label has it.
 	uri, _, _ := strings.Cut(dnsURI(c, name), "?")
 	traceRequest(ctx, dnsMethod, uri, http.Header{"Dns-Type": {doc.RecordType}, "Dns-Server": {cmp.Or(doc.Server, "system")}, "Dns-Transport": {doc.Transport}}, "", false)
+	// The record type is one of the set the configuration takes, no text
+	// of the server's, and its span tells it.
+	traceFacts(ctx, nameFact("dns.question.type", doc.RecordType))
 	answers, err := dnsLookup(ctx, c, doc.RecordType, name)
 	doc.DurationSeconds = time.Since(start).Seconds()
 	var dnsErr *net.DNSError
@@ -312,6 +315,13 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
+	}
+	// How many records came, and whether the name was not found: Go's
+	// resolver tells NXDOMAIN from an answer with no record of the type by
+	// neither, so the span names no response code.
+	traceFacts(ctx, intFact("dns.answer.count", doc.Count))
+	if doc.NotFound {
+		traceFacts(ctx, boolFact("dns.response.not_found", true))
 	}
 	switch {
 	case doc.NotFound:

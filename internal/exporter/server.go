@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // Server answers the exporter's HTTP endpoints — probes, its own metrics,
@@ -495,12 +496,15 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// at its end when a sampling rule keeps it (otlptracesampling.go). A
 	// caller's traceparent makes it a span of the caller's trace, its
 	// sampled flag and tracestate read for the rules and the spans.
-	ctx, spans := beginTrace(r.Context(), cfg.OTLP)
-	var traced probeTraceEnd
 	var parent traceParent
-	if spans != nil {
+	if otlpTracesOn(cfg.OTLP) || cfg.OTLP.Traces.Propagate {
 		parent = callerTrace(r.Header)
 	}
+	ctx, spans := beginTrace(r.Context(), cfg.OTLP, parent)
+	// With otlp.traces.propagate, the trip's requests carry the probe's
+	// trace, or with the trace export off the caller's as it came.
+	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), parent, r.Header)
+	var traced probeTraceEnd
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no
 	// new request tracked. It is called once the answer is ready, before it
@@ -514,6 +518,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, ready, parent, traced)
 		}
 		s.load.addProbe(duration)
+		// Into the collector's statistics alone, as the trip histogram's:
+		// a request's has no histogram.
+		observeProbe(rec.collector, duration, spans.traceLink())
 		rec.update(func(x *serverStats) {
 			if ok {
 				x.success++
@@ -550,7 +557,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 				at: start, duration: time.Since(start), result: probeCached,
 				status: http.StatusOK, series: len(answer.Metrics),
 			})
-			writeMetricSet(w, r, &answer)
+			writeMetricSet(w, r, &answer, transform.UTF8Names(c))
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return
 		}
@@ -591,7 +598,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		if !result.abandoned {
 			s.noteProbe(rec.read, recentKey(), result.recentProbe(start, false))
 		}
-		result.writeTo(w, r)
+		result.writeTo(w, r, transform.UTF8Names(c))
 		return
 	}
 	// A shared trip is counted apart from the probe that happens to start it
@@ -603,7 +610,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// under the collector's name as the probe that started it may.
 	trip := rec.forTrip()
 	mark := time.Now()
-	result, shared, err := s.flights.do(ctx, flightKey{probe: key, defined: followed.defined[name]}, func(ctx context.Context) *probeResult {
+	// The trip records its own trace, which the trace of every probe that
+	// uses it gets a copy of: the probe that started it may leave before it
+	// ends (probeFlights.doTraced).
+	result, shared, tripTrace, err := s.flights.doTraced(ctx, flightKey{probe: key, defined: followed.defined[name]}, spans != nil, func(ctx context.Context) *probeResult {
 		result := upstream(ctx, trip)
 		trip.commit(result.refused || result.abandoned)
 		return result
@@ -611,8 +621,20 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// This caller went away while it waited; there is nobody to answer,
 		// and no verdict of the target policy to go by. The probe starts no
-		// tracked request, whatever becomes of the trip.
-		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: "the caller went away while the probe waited for an identical probe's trip"}
+		// tracked request, whatever becomes of the trip. Its trace has what
+		// the trip had done by then, the requests still unanswered marked
+		// unfinished; the trip goes on for the probes still waiting for it,
+		// whose traces have the rest.
+		cut := time.Now()
+		failure := "the caller went away while the probe waited for an identical probe's trip"
+		if shared {
+			spans.step("shared_trip", "cancelled", mark, cut, "the caller went away before the trip of an identical probe ended")
+			spans.adopt(tripTrace, "shared_trip", cut)
+		} else {
+			failure = "the caller went away before the probe's trip ended"
+			spans.adopt(tripTrace, "", cut)
+		}
+		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: failure}
 		finish(false, true)
 		return
 	}
@@ -620,14 +642,18 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		traced = probeTraceEndOf(result)
 	}
 	if shared {
-		// The trip was another probe's, whose trace has its stages.
+		// The trip was another probe's: its stages and requests are under
+		// this probe's shared_trip span.
 		spans.step("shared_trip", "ok", mark, time.Now(), "answered by the trip of an identical probe in flight")
+		spans.adopt(tripTrace, "shared_trip", time.Time{})
 		rec.update(func(x *serverStats) { x.coalesced++ })
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
+	} else {
+		spans.adopt(tripTrace, "", time.Time{})
 	}
 	finish(result.ok, result.refused)
 	s.noteProbe(rec.read, recentKey(), result.recentProbe(start, shared))
-	result.writeTo(w, r)
+	result.writeTo(w, r, transform.UTF8Names(c))
 }
 
 // upstreamProbe is what one trip to the target needs.
@@ -695,12 +721,12 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	// or denied_targets changed or before the target's name resolved
 	// elsewhere, left in the cache.
 	if result.refused {
-		s.logger.Debug("probe refused by the target policy; no stale result served", p.logAttrs()...)
+		s.logger.DebugContext(ctx, "probe refused by the target policy; no stale result served", p.logAttrs()...)
 		return result
 	}
 	staleKey := p.failureKey().aspect(staleAspect)
 	if result.ok {
-		s.failures.recoveredFor(p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
+		s.failures.recoveredFor(ctx, p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
 		return result
 	}
 	now := time.Now()
@@ -716,7 +742,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		x.staleServed++
 		x.emitted += uint64(len(cached.Metrics))
 	})
-	s.failures.failedFor(p.rec.read, s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
+	s.failures.failedFor(ctx, p.rec.read, s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
 	out.metrics = &answer
 	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
@@ -787,7 +813,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			now := time.Now()
 			tripSpansFrom(ctx).step("slot", "refused", now, now, full.message)
 			rec.update(func(x *serverStats) { countRejection(x, full) })
-			s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+			s.failures.failedFor(ctx, rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 			http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 			rejected := out.result(false)
 			rejected.outcome, rejected.failure = probeRejected, shownFailureText(full.message)

@@ -914,7 +914,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if err != nil {
 			return nil, err
 		}
+		span := propagateTrace(requestContext, req.Header, false)
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
+		traceSpanID(requestContext, span)
 		traceAttempt(requestContext, attempt)
 		traceRateLimitWait(requestContext, waited, false)
 		resp, err := client.Do(req)

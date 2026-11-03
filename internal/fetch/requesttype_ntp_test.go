@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -440,4 +441,21 @@ func TestAnNTPCollectorsKeysAndTargetsAreChecked(t *testing.T) {
 	if r := requests[0]; r.Method != "QUERY" || r.URL != "ntp://"+s.addr || r.Header.Get("Ntp-Version") != "4" || !strings.HasPrefix(r.Outcome, "stratum 2, offset ") {
 		t.Errorf("traced %+v", r)
 	}
+}
+
+// An exchange's span tells the server's stratum, the clock's offset and the
+// round trip's delay, in seconds, as the document has them.
+func TestAnNTPExchangesSpanTellsItsFacts(t *testing.T) {
+	s := newNTPStub(t, ntpAnswering(func() ntpReply { return goodNTPReply(0) }))
+	ctx, trace := WithSpanTrace(context.Background())
+	resp, err := FetchCollector(ctx, s.addr, ntpCollector(t), RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc ntpDocument
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	format := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+	requireFacts(t, "the exchange", factsOf(t, trace.Requests()[0]), map[string]string{"ntp.stratum": "2", "ntp.offset_seconds": format(doc.OffsetSeconds), "ntp.delay_seconds": format(doc.DelaySeconds)})
 }

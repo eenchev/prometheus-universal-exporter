@@ -79,13 +79,26 @@ func TestMaskCredentialQueryValues(t *testing.T) {
 	}
 }
 
+// A name reads as a credential's by its words, split at punctuation and at a
+// change to upper case: a credential word anywhere in it, words run together
+// included (apikey, authToken), but not an ordinary word that only holds
+// one (author, monkey, keyboard); and sig, pwd, pw and pass only whole.
 func TestCredentialName(t *testing.T) {
 	for name, want := range map[string]bool{
 		"Authorization": true, "Proxy-Authorization": true, "Cookie": true, "Set-Cookie": true,
 		"X-Api-Key": true, "X-Auth-Token": true, "x-session-id": true, "X-Amz-Signature": true,
 		"sig": true, "SIG": true, "pwd": true, "pass": true, "X-Pass": true, "userPwd": true,
+		"AUTH": true, "auth": true, "authToken": true, "AuthToken": true, "apiKey": true, "apikey": true,
+		"api_key": true, "client_secret": true, "clientSecret": true, "access_token": true, "accesstoken": true,
+		"sessionid": true, "password": true, "PASSWD": true, "db_pass": true, "private_key": true, "key": true,
+		"jwt": true, "x-credentials": true, "passphrase": true, "author_token": true, "authorToken": true,
+		"authorkey": true, "monkeyKey": true, "toKen": true, "Authorize": true, "authorization": true, "X-Authorization": true,
 		"Accept": false, "Content-Type": false, "User-Agent": false, "Host": false,
 		"X-Signal": false, "X-Bypass": false, "Passthrough": false, "X-Design": false,
+		"author": false, "Author": false, "AUTHOR": false, "authors": false, "x-author": false, "authorName": false,
+		"author_id": false, "coauthor": false, "authority": false, "cert-authority": false, "authoritative": false,
+		"monkey": false, "keyboard": false, "keyboard-interactive": false, "keywords": false, "tokenizer": false,
+		"turkey": false, "whiskey": false, "keynote": false,
 	} {
 		if got := CredentialName(name); got != want {
 			t.Errorf("CredentialName(%q) = %v", name, got)
@@ -140,7 +153,7 @@ func TestRedactText(t *testing.T) {
 		`<s:Body><ns:apiKey type="x">hunter2</ns:apiKey></s:Body>`:  `<s:Body><ns:apiKey type="x">` + Redacted + `</ns:apiKey></s:Body>`,
 		"<Password><![CDATA[hunter2 & <more>]]></Password>":         "<Password>" + Redacted + "</Password>",
 		`<password>hunter2</passwordx>`:                             `<password>hunter2</passwordx>`,
-		`<author>Bob</author><title>x</title>`:                      `<author>` + Redacted + `</author><title>x</title>`,
+		`<author>Bob</author><authToken>hunter2</authToken>`:        `<author>Bob</author><authToken>` + Redacted + `</authToken>`,
 		`{"data":"{\"password\":\"hun\\\\ter2\",\"user\":\"u\"}"}`:  `{"data":"{\"password\":\"` + Redacted + `\",\"user\":\"u\"}"}`,
 		`{"data":"{\"token\": \"hunter2\"}"}`:                       `{"data":"{\"token\": \"` + Redacted + `\"}"}`,
 	} {
@@ -155,6 +168,8 @@ func TestRedactText(t *testing.T) {
 		`{"status":"down","since":"2026-09-25T10:00:00Z"}`,
 		"<html><body>Service Unavailable</body></html>",
 		"bypass=on signal: 3 design=flat",
+		"author: Bob authority=ca keyboard: us tokenizer=bpe",
+		`{"author":"Bob","authors":["Ann"]}`,
 	} {
 		if got := RedactText(text); got != text {
 			t.Errorf("RedactText(%q) changed it to %q", text, got)

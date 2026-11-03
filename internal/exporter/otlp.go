@@ -71,6 +71,9 @@ type otlpMetric struct {
 	Sum         *otlpSum       `json:"sum,omitempty"`
 	Histogram   *otlpHistogram `json:"histogram,omitempty"`
 	Summary     *otlpSummary   `json:"summary,omitempty"`
+	// ExponentialHistogram carries the exporter's own durations under
+	// otlp.exponential_histograms; nothing a target answers has one.
+	ExponentialHistogram *otlpExponentialHistogram `json:"exponentialHistogram,omitempty"`
 }
 
 // otlpCumulative is AGGREGATION_TEMPORALITY_CUMULATIVE as OTLP/JSON writes
@@ -95,6 +98,58 @@ type otlpHistogramDataPoint struct {
 	Sum               *otlpDouble     `json:"sum,omitempty"`
 	BucketCounts      []string        `json:"bucketCounts"`
 	ExplicitBounds    []otlpDouble    `json:"explicitBounds"`
+	Exemplars         []otlpExemplar  `json:"exemplars,omitempty"`
+}
+
+// otlpExemplar is an exemplar of a histogram's point (model.Exemplar): its
+// time, its value and the trace and the span it was observed in, hex as
+// OTLP/JSON writes ids. Only the exporter's own durations have them.
+type otlpExemplar struct {
+	TimeUnixNano string     `json:"timeUnixNano"`
+	AsDouble     otlpDouble `json:"asDouble"`
+	SpanID       string     `json:"spanId"`
+	TraceID      string     `json:"traceId"`
+}
+
+// otlpExemplars are a histogram's exemplars as OTLP points carry them, nil
+// for none.
+func otlpExemplars(h *model.Histogram) []otlpExemplar {
+	var out []otlpExemplar
+	for _, x := range histogramExemplars(h) {
+		out = append(out, otlpExemplar{TimeUnixNano: strconv.FormatInt(x.Time.UnixNano(), 10), AsDouble: otlpDouble(x.Value), SpanID: x.SpanID, TraceID: x.TraceID})
+	}
+	return out
+}
+
+type otlpExponentialHistogram struct {
+	DataPoints             []otlpExponentialHistogramDataPoint `json:"dataPoints"`
+	AggregationTemporality int                                 `json:"aggregationTemporality"`
+}
+
+// otlpExponentialHistogramDataPoint is one series of an exponential
+// histogram (model.ExponentialHistogram): its scale, the count of its zero
+// bucket and the per-bucket counts of its positive buckets from the bucket
+// numbered offset on. The exporter's durations are never negative, so it has
+// no negative buckets, and its zero bucket holds exact zeros only, the zero
+// threshold OTLP takes when it is left out. min and max are left out of a
+// histogram that has observed nothing, which has none.
+type otlpExponentialHistogramDataPoint struct {
+	Attributes        []otlpAttribute    `json:"attributes,omitempty"`
+	StartTimeUnixNano string             `json:"startTimeUnixNano,omitempty"`
+	TimeUnixNano      string             `json:"timeUnixNano"`
+	Count             string             `json:"count"`
+	Sum               *otlpDouble        `json:"sum,omitempty"`
+	Scale             int32              `json:"scale"`
+	ZeroCount         string             `json:"zeroCount"`
+	Positive          otlpExponentialSet `json:"positive"`
+	Min               *otlpDouble        `json:"min,omitempty"`
+	Max               *otlpDouble        `json:"max,omitempty"`
+	Exemplars         []otlpExemplar     `json:"exemplars,omitempty"`
+}
+
+type otlpExponentialSet struct {
+	Offset       int32    `json:"offset"`
+	BucketCounts []string `json:"bucketCounts"`
 }
 
 type otlpSummary struct {
@@ -822,6 +877,8 @@ func otlpPayloadPoints(payload otlpPayload) int {
 // otlpMetricPoints is how many data points a metric has.
 func otlpMetricPoints(m otlpMetric) int {
 	switch {
+	case m.ExponentialHistogram != nil:
+		return len(m.ExponentialHistogram.DataPoints)
 	case m.Histogram != nil:
 		return len(m.Histogram.DataPoints)
 	case m.Summary != nil:
@@ -837,6 +894,8 @@ func otlpMetricPoints(m otlpMetric) int {
 // otlpMetricPoint is the j'th data point of a metric.
 func otlpMetricPoint(m otlpMetric, j int) any {
 	switch {
+	case m.ExponentialHistogram != nil:
+		return m.ExponentialHistogram.DataPoints[j]
 	case m.Histogram != nil:
 		return m.Histogram.DataPoints[j]
 	case m.Summary != nil:
@@ -851,6 +910,10 @@ func otlpMetricPoint(m otlpMetric, j int) any {
 // written [], for from equal to to.
 func otlpMetricPart(m otlpMetric, from, to int) otlpMetric {
 	switch {
+	case m.ExponentialHistogram != nil:
+		h := *m.ExponentialHistogram
+		h.DataPoints = h.DataPoints[from:to:to]
+		m.ExponentialHistogram = &h
 	case m.Histogram != nil:
 		h := *m.Histogram
 		h.DataPoints = h.DataPoints[from:to:to]
@@ -1018,6 +1081,11 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 			startAt = start(m, at)
 		}
 		switch kind {
+		case otlpKindExponentialHistogram:
+			point := otlpExponentialHistogramPoint(m, attributes, at)
+			point.StartTimeUnixNano = startAt
+			h := metric(name, m.Help, shape).ExponentialHistogram
+			h.DataPoints = append(h.DataPoints, point)
 		case otlpKindHistogram:
 			point := otlpHistogramPoint(m, attributes, at)
 			point.StartTimeUnixNano = startAt
@@ -1412,15 +1480,18 @@ const (
 	otlpKindSum
 	otlpKindHistogram
 	otlpKindSummary
+	otlpKindExponentialHistogram
 )
 
 // otlpKindNames are the kinds as a log line names them.
-var otlpKindNames = [...]string{otlpKindGauge: "gauge", otlpKindSum: "sum", otlpKindHistogram: "histogram", otlpKindSummary: "summary"}
+var otlpKindNames = [...]string{otlpKindGauge: "gauge", otlpKindSum: "sum", otlpKindHistogram: "histogram", otlpKindSummary: "summary", otlpKindExponentialHistogram: "exponential histogram"}
 
 // otlpKindOf is the OTLP kind a metric is exported as. A histogram or summary
 // type without its data is exported as a gauge of its value.
 func otlpKindOf(m model.Metric) int {
 	switch {
+	case m.Type == model.HistogramMetricType && m.Histogram != nil && m.Histogram.Exponential != nil:
+		return otlpKindExponentialHistogram
 	case m.Type == model.HistogramMetricType && m.Histogram != nil:
 		return otlpKindHistogram
 	case m.Type == model.SummaryMetricType && m.Summary != nil:
@@ -1433,6 +1504,8 @@ func otlpKindOf(m model.Metric) int {
 
 func otlpKind(m otlpMetric) int {
 	switch {
+	case m.ExponentialHistogram != nil:
+		return otlpKindExponentialHistogram
 	case m.Histogram != nil:
 		return otlpKindHistogram
 	case m.Summary != nil:
@@ -1446,6 +1519,8 @@ func otlpKind(m otlpMetric) int {
 func newOTLPMetric(name, help string, shape otlpShape) otlpMetric {
 	out := otlpMetric{Name: name, Description: help, Unit: shape.unit}
 	switch shape.kind {
+	case otlpKindExponentialHistogram:
+		out.ExponentialHistogram = &otlpExponentialHistogram{AggregationTemporality: otlpCumulative}
 	case otlpKindHistogram:
 		out.Histogram = &otlpHistogram{AggregationTemporality: otlpCumulative}
 	case otlpKindSummary:
@@ -1496,6 +1571,33 @@ func otlpHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) o
 		previous = b.CumulativeCount
 	}
 	point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(count-previous, 10))
+	point.Exemplars = otlpExemplars(h)
+	return point
+}
+
+// otlpExponentialHistogramPoint is a histogram's exponential buckets as an
+// OTLP point, at the scale they were recorded at: OTLP takes every scale from
+// -10 to 20, and the recorder keeps them within 160 buckets.
+func otlpExponentialHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) otlpExponentialHistogramDataPoint {
+	h, x := m.Histogram, m.Histogram.Exponential
+	sum := otlpDouble(h.Sum)
+	point := otlpExponentialHistogramDataPoint{
+		Attributes:   attributes,
+		TimeUnixNano: at,
+		Count:        strconv.FormatUint(h.Count, 10),
+		Sum:          &sum,
+		Scale:        x.Scale,
+		ZeroCount:    strconv.FormatUint(x.ZeroCount, 10),
+		Positive:     otlpExponentialSet{Offset: x.Offset, BucketCounts: make([]string, 0, len(x.Counts))},
+	}
+	for _, count := range x.Counts {
+		point.Positive.BucketCounts = append(point.Positive.BucketCounts, strconv.FormatUint(count, 10))
+	}
+	if h.Count > 0 {
+		low, high := otlpDouble(x.Min), otlpDouble(x.Max)
+		point.Min, point.Max = &low, &high
+	}
+	point.Exemplars = otlpExemplars(h)
 	return point
 }
 
@@ -2096,7 +2198,11 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 		return
 	}
 	// The copy keeps the self-metrics out of pending, which may be queued again.
-	resources := appendToResource(append([]otlpResourceSet(nil), pending...), defaultResourceIdentity(cfg), s.selfMetricSet())
+	self := s.selfMetricSet()
+	if !cfg.ExponentialHistograms {
+		withoutExponential(&self)
+	}
+	resources := appendToResource(append([]otlpResourceSet(nil), pending...), defaultResourceIdentity(cfg), self)
 	start := time.Now()
 	deadline := start.Add(budget)
 	requests, err := s.otlpRequestsOf(cfg, resources)
@@ -2417,4 +2523,18 @@ func appendOTLPKey(dst []byte, before string, pairs map[string]string, head ...s
 		b = binary.AppendUvarint(b, uint64(len(part)))
 	}
 	return b
+}
+
+// withoutExponential leaves the exporter's own histograms with their classic
+// buckets alone, which the OTLP export sends as explicit-bucket histograms
+// unless otlp.exponential_histograms is on. A histogram is copied before it
+// is changed, since the set may share it.
+func withoutExponential(set *model.MetricSet) {
+	for i := range set.Metrics {
+		if h := set.Metrics[i].Histogram; h != nil && h.Exponential != nil {
+			classic := *h
+			classic.Exponential = nil
+			set.Metrics[i].Histogram = &classic
+		}
+	}
 }

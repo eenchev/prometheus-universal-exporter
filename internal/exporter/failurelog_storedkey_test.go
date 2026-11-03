@@ -243,8 +243,8 @@ func TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey(t *testing.T)
 				was.forgetCollectors(names)
 			case op == 8:
 				// A failure that is the trip's own, between the rules'.
-				now.failedFor(configRead{}, nowLogger, slog.LevelError, trip, "failed", "http", failures[3], attrs...)
-				was.failedFor(configRead{}, wasLogger, slog.LevelError, trip, "failed", "http", failures[3], attrs...)
+				now.failedFor(context.Background(), configRead{}, nowLogger, slog.LevelError, trip, "failed", "http", failures[3], attrs...)
+				was.failedFor(context.Background(), configRead{}, wasLogger, slog.LevelError, trip, "failed", "http", failures[3], attrs...)
 			default:
 				read := configRead{}
 				if op == 9 || trip.collector == "gone" && op < 20 {
@@ -252,7 +252,7 @@ func TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey(t *testing.T)
 				}
 				stage, err := stages[random.IntN(len(stages))], failures[random.IntN(len(failures))]
 				before := was.remembers(key)
-				under := now.ruleFailedFor(read, nowLogger, slog.LevelWarn, trip, rule[0], rule[1], rule[2], "failed", stage, err, attrs...)
+				under := now.ruleFailedFor(context.Background(), read, nowLogger, slog.LevelWarn, trip, rule[0], rule[1], rule[2], "failed", stage, err, attrs...)
 				made := rememberedRuleThenFailedUnderKey(was, read, wasLogger, slog.LevelWarn, trip, rule[0], rule[1], rule[2], "failed", stage, err, attrs...)
 				if made != key {
 					t.Fatalf("seed %d, step %d: the scrape that made the key reports the rule %q of %q under %q, want %q", seed, step, rule, trip.bytes, made, key)

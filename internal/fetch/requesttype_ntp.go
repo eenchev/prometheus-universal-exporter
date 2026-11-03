@@ -275,6 +275,7 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 		return nil, err
 	}
 	traceOutcome(ctx, fmt.Sprintf("stratum %d, offset %gs, delay %gs", doc.Stratum, doc.OffsetSeconds, doc.DelaySeconds))
+	traceFacts(ctx, intFact("ntp.stratum", doc.Stratum), doubleFact("ntp.offset_seconds", doc.OffsetSeconds), doubleFact("ntp.delay_seconds", doc.DelaySeconds))
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
 		NoStatus:   true,

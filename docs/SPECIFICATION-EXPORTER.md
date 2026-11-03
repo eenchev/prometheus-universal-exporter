@@ -7388,6 +7388,45 @@ as written and are one name once escaped are not the same rule to the load
 (§ 18.1), which compares what is written: they MUST load, and a scrape that
 has both fails as it does of two such names of a target.
 
+#### 21.1a `metric_name_validation_scheme`
+
+A collector's `metric_name_validation_scheme` MUST be `legacy`, the default
+when it is left out or written `""`, or `utf8`, Prometheus's names; any other
+value MUST be refused when the configuration loads, naming the two. Under
+`legacy` everything above holds. Under `utf8`:
+
+- a metric or label name that is valid UTF-8 and not blanks alone MUST be
+  taken, at load and at every scrape, under `name_escaping` `fail` too,
+  which then fails nothing; `name_escaping` `underscores` and `values` MUST
+  still escape what they escape, in the one place above, before the answer
+  is written. The `__` prefix, the length limits and the blanks MUST be
+  held to as under `legacy`;
+- a name that is not classic MUST be kept as it is until an answer is
+  written, and every answer that has one — `/probe`, the static targets
+  endpoint — MUST write it as the media range it answers (§ 21) asks by its
+  `escaping` parameter: `allow-utf-8` in Prometheus 3's quoted syntax, a
+  metric's name first inside the braces as `{"name",…}`, a label's as
+  `"name"="value"`, and a family's in HELP and TYPE as `"name"`, with `\`,
+  `"` and newline escaped as in a label value, in the text format and in
+  OpenMetrics alike; `underscores` as `underscores` above; `values` as
+  `values` above; and `dots` with `.` as `_dot_`, `_` as `__` and every
+  other character a classic name may not have at its position as `__`. A
+  range without the parameter, or with another value, MUST be answered as
+  `underscores`, Prometheus's default. A classic name MUST NOT be escaped
+  under any of them, `dots` included, label values MUST NOT be, and a
+  histogram's or summary's family name MUST be escaped before its `_bucket`,
+  `_sum` and `_count` are joined, as Prometheus's Go client escapes a
+  family. Two labels of one series that one escaping makes one name MUST be
+  written as one label, the same in every answer: with the value of the one
+  whose name is classic, or, of two escaped, of the first in order;
+- such an answer's `Content-Type` MUST end with `; escaping=` and the
+  escaping it was written with. An answer of classic names alone MUST be
+  written, and typed, as under `legacy`, without the parameter.
+
+A debug report's text of an answer (§ 42.17) MUST write a name that is not
+classic quoted, as it is. The OTLP export (§ 42.1) MUST send such a name as
+it is, OTLP names being free text.
+
 ---
 
 # 22. Exporter self-metrics
@@ -7400,6 +7439,7 @@ At minimum:
 http_exporter_scrapes_total
 http_exporter_scrape_success_total
 http_exporter_scrape_duration_seconds
+http_exporter_probe_duration_seconds
 http_exporter_scrape_http_status_code
 http_exporter_scrape_grpc_status_code
 http_exporter_scrape_response_bytes
@@ -7571,6 +7611,21 @@ per collector with no per-request series, MUST exist for every collector,
 that failed without contacting their target because the collector was
 backing off from it, and the targets it keeps its trips from now (§ 42.13c).
 A debug run MUST NOT be counted in either.
+`http_exporter_probe_duration_seconds`, a histogram, MUST be published
+whether or not verbose mode is on, labelled `collector` and `kind` and by
+nothing else, never by target: `kind="probe"` MUST observe every probe of
+the collector, one answered from the response cache or by sharing another
+probe's request (§ 42.13a) included, for the duration
+`http_exporter_scrape_duration_seconds` takes of it, to the answer being
+ready; `kind="static"` every static target scrape of the collector, for the
+same duration its gauge takes. Every configured collector MUST have its
+`kind="probe"` series, empty until its first probe, and its
+`kind="static"` series exactly while a static target of the file in force
+names it. A debug run MUST NOT be observed. The buckets, the exponential
+buckets, the native histogram of the protobuf answer and the exemplars
+MUST be those of the scrape-time histogram (§ 22.1a), the exemplar of a
+probe or a scrape whose trace was exported, and its creation time that of
+the collector's counters (§ 22.1b).
 `http_exporter_answer_bytes_total` and
 `http_exporter_answer_sent_bytes_total`, counters, MUST be exporter-wide,
 with no `collector` label, labelled `endpoint` with `probe`, `self_metrics`
@@ -7961,7 +8016,49 @@ NOT be observed. The buckets MUST be fixed at 0.005, 0.01, 0.025, 0.05, 0.1,
 0.25, 0.5, 1, 2.5, 5, 10, 30 and 60 seconds, plus `+Inf`. Every configured
 collector MUST have a histogram, empty until its first trip. Durations MUST only
 be recorded while verbose mode is on, so turning it on does not publish a
-history nobody asked to be kept.
+history nobody asked to be kept. The same durations MUST also be kept in
+exponential buckets (§ 42.1, `otlp.exponential_histograms`), which the
+protobuf answer below writes as native histograms.
+
+`web.self_metrics.native_histograms`, a boolean that MUST default to true,
+MUST make the self-metrics endpoint answer in Prometheus's delimited protobuf
+format, as `application/vnd.google.protobuf;
+proto=io.prometheus.client.MetricFamily; encoding=delimited` with `nosniff`
+and `Vary: Accept`, a request whose `Accept` gives that media type, with those
+two parameters, a higher quality than any type the text format or OpenMetrics
+answers (§ 21); a tie, or the setting false, MUST get the text formats as
+before. Only the self-metrics endpoint MAY answer protobuf: `/probe` and the
+static targets endpoint MUST NOT, since what they pass on has classic buckets
+alone. The answer MUST be one length-delimited
+`io.prometheus.client.MetricFamily` per family of the text answer, with its
+name, help, type and every series, labels in order of their names; a series'
+timestamp in `timestamp_ms`; and, with `web.self_metrics.created_timestamps`
+and only then, a counter's, histogram's or summary's creation time in its
+`created_timestamp`. A histogram MUST carry its classic buckets without the
+`+Inf` one, its `sample_count` and `sample_sum`, and, for the scrape-time
+histogram and `http_exporter_probe_duration_seconds` (§ 22), its native
+buckets too: `schema` the recorder's scale lowered to
+at most 3 by merging buckets, `zero_threshold` 2^-128, `zero_count`, and
+`positive_span` and `positive_delta` as Prometheus defines them, bucket `i`
+of OpenTelemetry being Prometheus's `i+1`. The protobuf answer MUST be
+written without `google.golang.org/protobuf`, which only the `grpc` request
+type may link (§ 14.1).
+
+With the trace export on (§ 42.1c), each bucket of the scrape-time
+histogram, the `+Inf` one included, MUST keep as its exemplar the latest
+trip observed in it whose trace was exported, and none of a trace dropped
+or not yet decided: the trace id and the probe's or the scrape's span id,
+as `trace_id` and `span_id`, the trip's duration and the time it was
+observed; a trace exported after a later trip's MUST NOT replace it. A
+trip shared by identical probes MUST be of the trace of the probe that
+started it. OpenMetrics MUST write a bucket's exemplar after its count, as
+`# {trace_id="…",span_id="…"} <value> <timestamp in seconds>`; protobuf in
+the classic bucket's `exemplar` and, the same ones in the order of their
+values, in the histogram's `exemplars`; the OTLP export on the histogram's
+and the exponential histogram's points, as `exemplars` with `traceId`,
+`spanId`, `asDouble` and `timeUnixNano`. The Prometheus text format MUST
+NOT carry any, and no other series MUST: the gauges of one probe's
+duration can have none in OpenMetrics.
 
 Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
 gauge a static target's health series carry on its endpoint and over OTLP
@@ -8042,7 +8139,8 @@ summaries began to count, its creation time:
 - the exporter's start, for a series that has counted since then: the
   counters of a collector of the configuration the exporter started with, its
   `http_exporter_rule_failures_total` series, its
-  `http_exporter_collector_scrape_duration_seconds` histogram and the
+  `http_exporter_collector_scrape_duration_seconds` and
+  `http_exporter_probe_duration_seconds` histograms and the
   counters of its Python workers (§ 22.1a); the reload counters (§ 22.0b) and
   the OTLP ones (§ 22.0c); the `http_exporter_python_pool_` counters of
   § 22.1a, which the pool keeps whatever a reload does; and the `go_` and
@@ -29886,6 +29984,71 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 - `TestEveryModuleDownloadOfTheWorkflowsIsTriedAgain`: every step of the workflows whose script runs `go mod download` runs it in a loop of three attempts that waits between them and fails after the last; a step running it once, as before, fails the test.
 
+## 34.258 Native and exponential histograms, UTF-8 names, and trace and masking edge cases
+
+- `TestExponentialIndexVectors`: the bucket of a value at a scale is OpenTelemetry's mapping — at scale 1 the reference implementation's vectors (15 → 7, 9 → 6, 1.5 → 1, 1 → −1, 0.55 → −2, 0.45 → −3 …), at 0, −1 and −2 the exponent mapping's, every power of two in the bucket below it (2 → 2^20 − 1 at scale 20, the largest double → 1024·2^20 − 1, the smallest → −1074·2^20 − 1), and at scale 3 Prometheus's schema-3 bounds (1.1 → 1, 0.005 → −62, 60 → 47); every index holds its value between its bounds.
+- `TestExponentialObserveDownscales`: at most four buckets at scale 0 hold 1, 2, 4 and 8; 16 lowers the scale to −1 with the counts 1, 2, 2 from offset −1; a value below grows the buckets downwards; 0 counts in the zero bucket, and min and max are kept. From scale 20, durations from 5 ms to a minute settle at scale 3 within 160 buckets, every observation counted.
+- `TestExponentialDownscaleMerges`: lowering scale 4 to 2 merges buckets −3 to 2 into −1 and 0 (6 and 15), negative indices rounding down; the original is unchanged, and a higher scale is not raised to.
+- `TestSelfMetricsAnswerProtobufWithNativeHistograms`: with Prometheus's protobuf-first `Accept`, the self-metrics answer `application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited` with `Vary: Accept`; the delimited families, decoded with protowire, are those of the text answer, a counter of type 0 with its help; the scrape-time histogram of durations 0, 3 ms, 5 ms, 70 ms and 2 s has its label, count 5, sum, the 13 classic buckets without `+Inf`, schema 3, zero threshold 2^−128, zero count 1, the spans {−67, 1}, {5, 1}, {30, 1}, {37, 1} and the deltas 1, 0, 0, 0.
+- `TestNativeBucketsAreSpansAndDeltas`: counts 2, 3, 0, 0, 1 from OpenTelemetry's bucket 0 are the spans {1, 2}, {2, 1} and the deltas 2, 1, −2.
+- `TestSelfMetricsNegotiateProtobuf`: protobuf answers only an `Accept` that gives the delimited MetricFamily type a higher quality than any text format; a tie, `encoding=text`, `q=0`, no `Accept` and OpenMetrics preferred get the text formats without native buckets, and so does Prometheus's `Accept` with `web.self_metrics.native_histograms: false`.
+- `TestProtobufCarriesCreationTimesOnlyWithTheSetting`: the protobuf answer has a histogram's and a counter's `created_timestamp` with `web.self_metrics.created_timestamps` and not without.
+- `TestOTLPExportsOwnDurationsAsExponentialHistograms`: with `otlp.exponential_histograms` the scrape-time histogram of 0, 3 ms, 5 ms, 70 ms and 2 s is exported as an exponential histogram only, temporality 2, count 5, zero count 1, scale 4, offset −135, a count of 1 in buckets −135, −123, −62 and 15 and 0 between, the sum, min 0, max 2 and a start time; without it, as an explicit-bucket histogram.
+- `TestEndpointsAnswerInTheFormatAskedFor`: Prometheus's protobuf-first `Accept` gets OpenMetrics from a probe and protobuf from the self-metrics.
+- The schema and the exporter agree on `otlp.exponential_histograms` and `web.self_metrics.native_histograms`: `true` and `false` are accepted, anything else refused.
+- `TestEscapeNameVectors`: the escaping schemes a scraper asks for are Prometheus's model's, on its own vectors: `mysystem.prod.west.cpu.load_total` is `mysystem_prod_west_cpu_load_total`, `mysystem_dot_prod_dot_west_dot_cpu_dot_load__total` and `U__mysystem_2e_prod_2e_west_2e_cpu_2e_load__total`; `label with 😱` is `label_with__`, `label__with____` and `U__label_20_with_20__1f631_`; `http.status:sum`, `æ` and `1st` likewise; `no:escaping_required` is kept by all, `dots` too, and `allow-utf-8` keeps every name; a label name escapes its colon.
+- `TestUTF8NamesAreWrittenAsTheScraperAsks`: under `metric_name_validation_scheme: utf8` a pass-through of a target's UTF-8 gauge, counter and histogram is answered, with the escaping in `Content-Type`, quoted for `escaping=allow-utf-8` in the text format (HELP, TYPE, `{"my.latency_bucket",le="0.1"}`) and in OpenMetrics (`# TYPE "my.requests" counter` with `{"my.requests_total"}`), and escaped by `underscores` without an escaping, with an unknown one and for Prometheus 2's `Accept`, by `dots` and by `values`; a classic name is kept by all; each text answer parses, and the quoted answer read back through the exporter is the same answer.
+- `TestClassicNamesUnderUTF8AreWrittenAsBefore`: an answer of classic names under `utf8` has no escaping in its `Content-Type`, whatever `Accept` asks.
+- `TestUTF8RuleNamesLoadOnlyUnderUTF8`: a jq rule `http.server.duration` with a label `service.name` loads under `utf8` and is refused under `legacy`, left out or written, naming the metric and the label; `__service.name` is refused under `utf8`; `UTF8` is no scheme.
+- `TestLabelsThatEscapeToOneNameAreOneLabel`: `a.b` and `a_b` under `underscores` are one label with `a_b`'s value, and `c.d` and `c-d` one with `c-d`'s, in every one of 20 answers.
+- `TestUTF8NamesOverOTLP`: `http.server.duration_seconds` with a label `service.name` is sent as it is under `metric_names: prometheus`, and as `http.server.duration` of unit `s` under `otel`, the attribute key keeping its dot.
+- `TestSchemaAndExporterAgreeOnANameUnderEachNameEscaping` runs under `metric_name_validation_scheme` `legacy` and `utf8` too, `utf8` taking every name that is not blanks alone as `underscores` and `values` do; `TestSchemaAndExporterAgreeOnTheNameValidationScheme`: `legacy`, `utf8` and `""` are taken by both, `UTF8`, `utf-8`, `allow-utf-8`, `classic`, `true` and a list refused by both.
+- `TestStaticTargetsWriteUTF8NamesAsTheScraperAsks`: the static targets endpoint answers a utf8 collector's target with its names escaped by `underscores` for no `Accept` and quoted for `escaping=allow-utf-8`, beside the classic `static_target` label, with the escaping in its `Content-Type`; rendered ahead, as an answer of classic names is, it was not.
+- `TestEveryConstrainedKeyOfTheSchemasIsInATable` and `TestSchemaAndExporterAgreeOnKeysWrittenEmpty` have `collectors[].metric_name_validation_scheme`: taken left out and written `""` by both, `utf8` taken and `UTF-8` refused by both.
+- `TestCredentialName`: a name reads as a credential's by its words, split at punctuation and at a change to upper case: `Authorization`, `X-Auth-Token`, `AUTH`, `authToken`, `apiKey`, `apikey`, `api_key`, `client_secret`, `clientSecret`, `accesstoken`, `sessionid`, `PASSWD`, `db_pass`, `private_key`, `key`, `jwt`, `x-credentials`, `author_token`, `authorToken`, `authorkey`, `monkeyKey`, `toKen` and `X-Authorization` do, each header's value withheld; `author`, `AUTHOR`, `authors`, `x-author`, `authorName`, `author_id`, `coauthor`, `authority`, `cert-authority`, `authoritative`, `monkey`, `keyboard`, `keyboard-interactive`, `keywords`, `tokenizer`, `turkey`, `whiskey` and `keynote` do not, nor `X-Signal`, `X-Bypass`, `Passthrough` or `X-Design`.
+- `TestRedactText`: `<author>Bob</author>` is shown and `<authToken>…</authToken>` beside it masked; `author: Bob authority=ca keyboard: us tokenizer=bpe` and `{"author":"Bob","authors":["Ann"]}` are left as they are.
+- `TestTheJSONViewerOpensANodeOfAnyNumberOfChildren`: the debug page's JSON viewer makes a node's children 2000 at a time into a fragment, one chunk a frame after the first, spreads no list into the arguments of `append` or `replaceChildren`, counts a node as made only once its last child is, has *Expand all* wait for a node's last chunk before opening its children, and says `These <n> values could not be shown: …` in a node's children's place and `This could not be shown as a tree (…).` in the box's, replacing the last body's tree, when making them throws. (In headless Chromium, an array of 200000 points opens whole near the top, deep and under *Expand all*, where it threw `RangeError` and stayed empty.)
+- `TestASharedTripsSpansAreInTheTraceOfEveryProbeThatUsedIt`: probe A starts a trip, B joins it and A's caller leaves before the target answers: B's trace has the trip's `http`, `decode`, `transform` and `validation` spans under its `shared_trip` span and the `GET` (status 200) under `http`, its root `response.bytes` `8` and `series` `1`; A's root is ERROR `the caller went away before the probe's trip ended` with `error.type` `abandoned`, and its `GET` is ERROR `unfinished…` with `request.unfinished` `true`, no status code, ending by the root's end; no span id is in both traces and no span's parent is missing.
+- `TestAProbeThatLeftAJoinedTripSaysItWaitedForIt`: probe A starts a trip, B joins it and B's caller leaves: A's trace has the trip whole under its root, no status; B's root is ERROR `the caller went away while the probe waited for an identical probe's trip`, its `shared_trip` span `cancelled` under the root, with the trip's `GET` marked `request.unfinished` `true`; no span's parent is missing.
+- `TestATraceEndedAfterAReloadSwitchedTracesOffIsNeverSent`: a probe in flight when a reload switches `otlp.traces` off ends with no span queued, and after a reload switching it on again the next export sends nothing of it.
+
+## 34.259 Metrics, logs and traces linked, otlp.traces.propagate
+
+- `TestALogRecordIsLinkedToItsProbesTraceOnlyWhenExported`: with `otlp.logs` and `otlp.traces` on under a `40ms` threshold, the `probe failed` record of a probe of a target answering 500 after `60ms` carries the exported trace's `traceId`, the `spanId` of its failed `http_status` stage and `flags` 1; that of a target answering 500 at once, whose trace is dropped, carries none, and no record an empty `traceId`; stderr's lines carry no trace or span id; with `otlp.traces` off no record carries any.
+- `TestALogRecordIsLinkedWhenItsTraceIsDecidedBeforeItLeaves`: a record drained before its trace is decided carries no ids; once the trace is exported, a line logged within a stage carries the stage's span id and one logged after it the root's, with the trace id and `flags` 1; a record of a dropped trace carries none.
+- `TestTheScrapeTimeHistogramCarriesExemplarsOfExportedTraces`: of trips of 60, 70 and 80 ms whose traces are exported in the order 70, 60 and dropped, the `le="0.1"` bucket's exemplar is the 70 ms one, written in OpenMetrics as `… 4 # {trace_id="…",span_id="…"} 0.07 <seconds>`; a 90 s trip's is on the `+Inf` bucket; a 3 ms trip's, undecided, makes none until its trace is exported; the text format carries none.
+- `TestTheProtobufAnswerCarriesTheHistogramsExemplars`: the protobuf answer, decoded with protowire, has the exemplar on the `0.1` classic bucket (field 3) and once among the histogram's exemplars (field 16), with the labels `trace_id` and `span_id` alone, the value 0.07 and its timestamp.
+- `TestTheOTLPHistogramPointsCarryTheExemplars`: the histogram's and the exponential histogram's OTLP points carry `"exemplars":[{"timeUnixNano":…,"asDouble":0.07,"spanId":…,"traceId":…}]`, and a target's histogram none.
+- `TestAnExportedProbesTripIsItsBucketsExemplar`: with verbose self-metrics and a `40ms` threshold, a `60ms` probe's trip is the one exemplar of its collector's histogram, with the exported trace's id and its probe span's id, on a bucket of at least `0.05`; a fast probe's makes none.
+- `TestAProbesRequestCarriesItsTraceparent`: with `propagate`, a probe's request carries `00-<trace>-<span>-<flags>` of its exported trace and its `GET` span's id: flags `00` with no rule decided, `01` and `tracestate` `ot=th:0` with `sample_ratio: 1`, the caller's trace id, `01` and its `tracestate` `ot=th:8,vendor=x` under `parent_based` for a caller that sampled it, `00` and `vendor=x` for one that did not; without `propagate` nothing.
+- `TestPropagateWithTheTraceExportOffPassesTheCallersOn`: with `otlp.traces.enabled: false` and `propagate`, the caller's `traceparent` and `tracestate` arrive as they came; none for no caller's, or one that cannot be read; a `traceparent` in `request.headers` arrives as it is, with no `tracestate`, with the export on or off.
+- `TestTheDebugPageShowsTheTraceparentSentAndTheLinks`: with `propagate` a run's request line shows the `Traceparent` the target got; a run's log record shows a `trace_id` and `span_id` of the tab's spans, saying it `would link`, and its log body carries no `traceId`.
+- `TestAStaticTargetsScrapeIsLinkedAsAProbeIs`: a static target's `static target scrape failed` record carries the trace and the failed stage's span, and its request the `traceparent` of its `GET` span, flags `00`.
+- `TestASharedTripIsSentUnderItsStartersTraceparent`: two probes sharing a trip send one request, under the starter's trace: the starter's `GET` span has the id sent, the joiner's another.
+- `TestATripsRequestsCarryItsTraceparent` (fetch): a request and the redirect it follows carry the trip's `traceparent` under span ids of their own, recorded with each request, its flags and `tracestate`; the login's request carries none.
+- `TestAConfiguredTraceparentIsSentAsItIs` (fetch): a caller's context passed on arrives as it came, with no span id recorded; a `traceparent` of `request.headers`, or forwarded in lower case, is sent as it is with no `tracestate`; without propagation nothing is sent.
+- `TestAGRPCCallCarriesItsTraceparent` (fetch): a gRPC call's metadata carries the trip's `traceparent` under the span id recorded with the call and its `tracestate`; one `request.metadata` sets is sent as it is.
+- `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: `traces: {enabled: false, propagate: true}` is accepted by both, and `propagate: maybe` refused by both.
+
+## 34.260 Probe duration histogram, request span facts, Kubernetes trace propagation, and an export cut short by the loop's stop
+
+- `TestTheExportLoopDoesNotScrape`: the export loop, stopped while it exports every 20ms, scraped no static target; an export the stop cut short, whose body the endpoint reads broken off, fails nothing and is not counted (§ 42.1a).
+- `TestTheProbeDurationHistogramIsAlwaysPublished`: without verbose self-metrics, three probes of a caching collector, two answered from the cache, are three observations in `http_exporter_probe_duration_seconds{collector,kind="probe"}`, the sum at least the gauge's last duration; a collector not probed has its series at 0; the family is declared once, every series labelled `collector` and `kind` alone, none `kind="static"` without static targets, the trip histogram absent, and the series in the OTLP set; a debug probe is not observed.
+- `TestStaticScrapesAreObservedApartFromProbes`: a static target scrape is one observation in its collector's `kind="static"` series and none in `kind="probe"`; a collector no static target names has no `kind="static"` series.
+- `TestTheProbeDurationHistogramHasNativeAndExponentialBuckets`: after one probe, the protobuf answer's probe histogram has count 1, the 13 classic buckets, schema 3 and one span; with `otlp.exponential_histograms` the OTLP export sends it as an exponential histogram alone.
+- `TestAnExportedProbeIsItsProbeDurationBucketsExemplar`: of a fast probe whose trace was dropped and a slow one whose trace was exported, only the slow one is an exemplar in OpenMetrics, of the exported root span's trace and span ids, on a bucket of 0.05 or above.
+- `TestAKubernetesListingCarriesItsTraceparent` (fetch): with propagation, each page of a two-page listing carries `00-<trace>-<span>-01` under the span id recorded with its request, a different one each, and the `tracestate`; with the trace export off the caller's `traceparent` and `tracestate` arrive as they came; without propagation the API server gets none.
+- `TestADNSLookupsSpanTellsItsFacts` (fetch): a lookup of a name with two A records tells `dns.question.type` `A` and `dns.answer.count` `2`; of a missing name `dns.answer.count` `0` and `dns.response.not_found` `true`.
+- `TestASQLStatementsSpanTellsItsFacts` (fetch): a statement returning two rows of two columns tells `db.response.returned_rows` `2`, `sql.columns` `2`, and `sql.connection.reused` `false` at the first scrape and `true` at the second.
+- `TestAGRPCCallsSpanTellsItsStatusCode` (fetch): a call answered OK tells `rpc.grpc.status_code` `0`, one answered NOT_FOUND `5`, and nothing else.
+- `TestAnNTPExchangesSpanTellsItsFacts` (fetch): an exchange with a stratum 2 server tells `ntp.stratum` `2` and the document's offset and delay as `ntp.offset_seconds` and `ntp.delay_seconds`.
+- `TestAnLDAPOperationsSpanTellsItsFacts` (fetch, opt-in): STARTTLS, BIND and two SEARCH pages each tell `ldap.result_code` `0`, the pages `ldap.search.entries` `500` and `100`; a search refused with 50 tells `ldap.result_code` `50` and not the diagnostic.
+- `TestATLSCertHandshakesSpanTellsItsFacts` (fetch): a TLS 1.3 handshake presenting two certificates tells `tls.protocol.name` `tls`, `tls.protocol.version` `1.3`, `tls.cipher` `TLS_AES_128_GCM_SHA256`, the leaf's `tls.server.not_after` in RFC 3339, `tlscert.certificates` `2`, about 10 `tlscert.leaf.days_until_expiry`, and `tlscert.verified` `true` with the root, `false` without.
+- `TestARedisCommandsSpanTellsItsReply` (fetch, opt-in): an integer, a bulk string of 6 bytes, an array of 2 and a nil reply tell `redis.reply.type` `integer`, `bulk_string` with `redis.reply.bytes` `6`, `array` with `redis.reply.elements` `2`, and `nil`.
+- `TestAnSSHFileReadsSpanTellsItsFacts` (fetch): a file's read tells `sshfile.files` `1` and its size in `sshfile.bytes`, a directory's of two files `2` and their sizes added up.
+- `TestAnS3FileReadsSpanTellsItsFacts` (fetch, opt-in): an object's read tells `s3file.objects` `1` and `s3file.bytes` `4`, a prefix's of two objects `2` and `9`.
+- `TestARequestsFactsAreAttributesOfTheirKind`: a request's integer, boolean, floating-point and name facts are its span's `intValue`, `boolValue`, `doubleValue` and `stringValue` attributes.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -30290,6 +30453,22 @@ resource attributes MUST be preserved:
   explicit bounds, and one count more than bounds, the last being everything
   above the highest bound — Prometheus's `+Inf` bucket, which MUST NOT appear
   as a bound. The per-bucket counts MUST add up to the count.
+- With `otlp.exponential_histograms`, a boolean that MUST default to false,
+  the exporter's own duration histograms (§ 22) MUST be exported as OTLP
+  exponential histograms instead, and nothing else: a histogram read from a
+  target has classic buckets alone and stays an explicit-bucket histogram.
+  Such a point MUST have cumulative temporality (`aggregationTemporality`
+  `2`), its count, sum, `scale`, `zeroCount` (the observations of 0), its
+  positive buckets as `positive.offset` and per-bucket `bucketCounts`, no
+  negative buckets, and `min` and `max` once it has observed anything; the
+  zero count and the bucket counts MUST add up to the count. Bucket `i` MUST
+  hold the durations `v` with base^i < v <= base^(i+1), base being
+  2^(2^-scale), mapped as OpenTelemetry's data model specifies: an exact
+  power of two by its exponent, any other value as ceil(log2(v) × 2^scale)
+  − 1. The recorder MUST start at scale 20 and keep at most 160 buckets, as
+  OpenTelemetry's SDKs do by default, lowering the scale by as little as
+  keeps every bucket within 160 whenever an observation would need more, by
+  merging each 2^n neighbouring buckets into the bucket i >> n.
 - A summary MUST be an OTLP summary with its count, sum and quantiles, and a
   summary without quantiles, such as `go_gc_duration_seconds` (§ 22.0a), MUST
   still carry its count and sum. OTLP's summary cannot leave either out, an
@@ -30641,6 +30820,17 @@ switched off, MUST be kept unchecked, by the exporter and the schema alike.
   dropped and counted. No line logged after it is exported.
 - The log export MUST NOT change readiness (§ 23), and its state MUST be on
   the status page (§ 42.14a).
+- With `otlp.traces` on too (§ 42.1c), a record of a line logged during a
+  probe or a scrape, its own or a shared trip's, MUST carry the trace's
+  `traceId`, the `spanId` of the innermost stage span whose times hold the
+  line's time, else the probe's or the scrape's span, and `flags` 1, the
+  sampled bit, when the trace was exported by the time the export takes the
+  record from its queue, and none of them otherwise: a trace dropped, or
+  not yet decided, MUST NOT be linked, then or later. A stage's failure
+  MUST be logged before the stage ends. A trace's ids MUST be made when the
+  probe or the scrape begins, so that the line, which waits in the queue,
+  is linked to the spans made of them at its end. The lines on stderr MUST
+  carry no trace or span id.
 
 ### 42.1c Traces of slow requests
 
@@ -30698,8 +30888,25 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its
   parent; its sampled flag MUST keep the trace only under `parent_based`,
-  and the other rules MUST decide it as any other. The exporter MUST NOT
-  send a `traceparent` to its targets.
+  and the other rules MUST decide it as any other.
+- With `otlp.traces.propagate`, false by default, each HTTP request (a
+  graphite one's, and each page's request of a kubernetes listing to the
+  API server, too) and each gRPC call, as metadata, of a probe or a
+  scrape MUST carry a W3C `traceparent` of its trace with a span id of the
+  request's own, which its CLIENT span MUST then have, a redirect followed
+  one of its own, and the `tracestate` its spans would carry if kept by the
+  rule that has already kept it, else the caller's without a `th`. Its
+  sampled flag MUST be `01` only where `parent_based` (the caller's flag)
+  or `sample_ratio` (the trace id) has kept the trace when the request is
+  sent, and `00` otherwise. With the trace export off, a probe's caller's
+  readable `traceparent`, and its readable `tracestate`, MUST be passed on
+  as they came, no id made. A `traceparent` the request sets itself, in
+  `request.headers`, `request.metadata` or a forwarded header, MUST be
+  sent as it is, with no `tracestate` added; a login's request MUST carry
+  none. A trip shared by identical probes MUST be sent under the trace of
+  the probe that started it, and only that probe's span of a request MAY
+  have the id it was sent under. Without `propagate`, the exporter MUST
+  NOT send a `traceparent` to its targets.
 - A trace MUST be decided once, at its end, by these rules in this order,
   the first that keeps it naming why, and MUST be dropped when none does:
   `slow`, it took `otlp.traces.threshold` or longer; `error`, it failed,
@@ -30743,8 +30950,23 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
 - A span MUST carry nothing the log does not. Of a request, a stage or a
   probe that went through it MUST carry no text the target sent — a tcp
   greeting, a command's stderr, an HTTP status line's reason, a request's
-  outcome as a debug report tells it — but only numbers and yes-or-no
-  answers its request type works out of the answer: for tcp
+  outcome as a debug report tells it — but only numbers, yes-or-no
+  answers and names of a set of the exporter's own that its request type
+  works out of the answer, each attribute of its value's type (int,
+  bool, double or string): for dns `dns.question.type`,
+  `dns.answer.count` and, for a name not found, `dns.response.not_found`;
+  for sql `db.response.returned_rows`, `sql.columns` and
+  `sql.connection.reused`; for grpc `rpc.grpc.status_code`, the code's
+  number; for ntp `ntp.stratum`, `ntp.offset_seconds` and
+  `ntp.delay_seconds`; for ldap `ldap.result_code` of each operation the
+  server answered and `ldap.search.entries` of each `SEARCH` page; for
+  tlscert `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`,
+  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and
+  `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
+  bulk string's `redis.reply.bytes` or an array's `redis.reply.elements`,
+  never a reply's value; for sshfile `sshfile.files` and `sshfile.bytes`
+  and for s3file `s3file.objects` and `s3file.bytes`, of the read that
+  went through; for tcp
   `tcp.greeting.bytes`, `tcp.greeting.matched` and `tcp.answer.bytes`, for
   sshexec `process.exit.code`, `sshexec.stdout.bytes` and
   `sshexec.stderr.bytes`. Of a failure it MUST carry what the log line of
@@ -30765,7 +30987,10 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   rule would keep it, with the ratio's randomness and threshold when the
   ratio was tried, and that the rate cap is not taken by a run; its
   endpoint test MUST offer the traces endpoint, sent
-  `{"resourceSpans":[]}`.
+  `{"resourceSpans":[]}`. A run MUST have trace ids, which its requests
+  carry under `propagate` and its request lines show; its log records MUST
+  show the trace and the span they would be linked to, saying that a run's
+  are not, and its log export body MUST carry none.
 - A probe MUST NOT wait for the export: the spans waiting MUST be bounded
   by `otlp.traces.max_pending_spans`, 10000 by default, a negative value
   refused, and a trace that finds no room for all of its spans MUST be
@@ -30781,7 +31006,20 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   the log export's lines are (§ 42.1b), as a repeated failure (§ 25).
 - A reload that switches `otlp.traces` off MUST drop the spans waiting and
   stop the recording; one that switches it on MUST record the probes and
-  scrapes from then on.
+  scrapes from then on. A probe or a scrape that ends after a reload
+  switched the export off MUST NOT be queued, whatever the configuration it
+  began under said, and MUST be counted nowhere, so that a later reload
+  switching the export on again sends nothing of it.
+- A trip shared by identical probes MUST record its spans apart from any
+  one probe's: every probe that used it MUST have the trip's stages and
+  requests in its trace, with span ids of its own — the probe that started
+  it under its probe span, one that joined it under its `shared_trip` span.
+  A probe whose caller went away before the trip ended MUST end its trace
+  with the status ERROR, `error.type` `abandoned` and a message beginning
+  `the caller went away`, saying whether the probe started the trip or
+  waited for an identical probe's, and MUST have what the trip had recorded
+  by then, each request not yet answered ERROR, with `request.unfinished`
+  `true`, ending when the probe did.
 - At shutdown, after the metrics' last export (§ 42.1a) and before the log
   records' (§ 42.1b), the spans waiting MUST be sent within what is left of
   the same `otlp.timeout`, and at least a second; when it fails they MUST be
@@ -33802,10 +34040,11 @@ among it, withheld (`fetch.RedactText`), redacted before it is cut.
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names read as a credential's
-by the rule below: they contain, in any case, `auth`, `cookie`,
+by the rule below: in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
-`session`, `signature`, `credential` or `jwt`, or have `sig`, `pwd`, `pw` or
-`pass` as a whole word. One exception: a request line MUST show the value
+`session`, `signature`, `credential` or `jwt` is in them once their ordinary
+words (`author`, `authority`, `monkey`, `keyboard`, …) are taken out, or
+they have `sig`, `pwd`, `pw` or `pass` as a whole word. One exception: a request line MUST show the value
 of a query pair that the configuration of the collector that made the
 request sets as its file writes it — a `request.query` value without a
 placeholder, a `graphite` collector's expressions without placeholders, its
@@ -33858,12 +34097,20 @@ alone (`token=SE;CRET` is shown as `token=<redacted>;<redacted>`). A pair's
 name MUST be compared with its escapes decoded, a malformed one left as it
 is (`%74oken` is `token`), and, where that differs from it, as it was
 written too; it MUST be shown as written. One rule MUST say whether a name — a header's,
-a query parameter's or a field's in logged text — reads as a credential's: it
-contains, in any case, `auth`, `cookie`, `token`, `secret`, `password`,
-`passwd`, `passphrase`, `passcode`, `key`, `session`, `signature`,
-`credential` or `jwt`, or has `sig`, `pwd`, `pw` or `pass` as a whole word,
-split at punctuation and at a change to upper case (`sig`, `db_pwd`,
-`userPass`, but not `design`, `signal` or `bypass`). A URL's fragment MUST NOT
+a query parameter's, a field's or an XML element's in logged or shown text —
+reads as a credential's. The name MUST be read as words, split at
+punctuation and at a change to upper case. It reads as a credential's when,
+in any case, `auth`, `cookie`, `token`, `secret`, `password`, `passwd`,
+`passphrase`, `passcode`, `key`, `session`, `signature`, `credential` or
+`jwt` is in it, within a word or across a change to upper case but not
+across punctuation, once each word that is an ordinary word only holding
+one of them (`author`, `authors`, `authority`, `monkey`, `keyboard`,
+`keyword`, `tokenizer` and the like, whole) is taken out — so `apikey`,
+`accesstoken`, `authToken`, `author_token` and `Authorization` read as a
+credential's and `author`, `cert-authority`, `keyboard-interactive` and
+`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw` or `pass` is a whole word
+of it (`sig`, `db_pwd`, `userPass`, but not `design`, `signal` or
+`bypass`). A URL's fragment MUST NOT
 be shown in any of these forms. An error that quotes a URL, as Go's HTTP client
 quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value
@@ -34329,7 +34576,13 @@ after what it says of the node; a folded object of a `key` string and a
 `<key> = <value>`; *Expand all* and *Collapse all* beside *Copy*, the
 latter folding every node but the top. A node's children MUST be made
 when it is first opened, and *Expand all* MUST make them in slices that
-leave the page responsive. *Copy* MUST copy the body's indented text, as
+leave the page responsive. A node of any number of children MUST open
+with all of them: they MUST be made in chunks, a chunk a frame, and MUST
+NOT be passed as the arguments of one call, which a browser limits to
+some 100000; a node MUST count as made only once its last child is. A
+node whose children cannot be made MUST say so in their place, and a body
+that cannot be shown MUST say so in place of the tree, never leaving the
+last body's tree shown. *Copy* MUST copy the body's indented text, as
 the answer has it. A long string MUST wrap within the panel, which keeps
 its height and scrolls. With `otlp.logs` on too, `otlp.logs` MUST be the run's own
 log lines as the records the log export makes of them, by the log

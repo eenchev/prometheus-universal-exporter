@@ -155,6 +155,7 @@ func httpSchemaKeys() []schemaKey {
 		// Optional, with allowed values or a pattern: "" is the default.
 		{key: "collectors[].metrics_prefix", document: jqCollector, at: collector, setting: "    metrics_prefix: %s\n", valid: "grafana", invalid: "grafana_", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].name_escaping", document: jqCollector, at: collector, setting: "    name_escaping: %s\n", valid: "underscores", invalid: "escape", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metric_name_validation_scheme", document: jqCollector, at: collector, setting: "    metric_name_validation_scheme: %s\n", valid: "utf8", invalid: "UTF-8", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].lint.ignore[]", document: jqCollector, at: collector, setting: "    lint:\n      ignore: [%s]\n", valid: "unit-suffix", invalid: "unit_suffix", absent: true},
 		{key: "collectors[].decoder.type", document: jqCollector, at: collector, setting: "    decoder:\n      type: %s\n", valid: "json", invalid: "jsonl", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.method", document: jqCollector, at: request, setting: "      method: %s\n", valid: "POST", invalid: "FETCH", absent: true, empty: true, emptyWas: refused},

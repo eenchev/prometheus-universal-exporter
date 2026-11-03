@@ -349,6 +349,7 @@ func fetchS3File(ctx context.Context, target string, c *model.Collector, overrid
 			return nil, onBucket(err, bucket)
 		}
 		traceOutcome(ctx, fmt.Sprintf("read %d files", len(read.Files)))
+		traceFacts(ctx, intFact("s3file.objects", filesRead(read)), intFact("s3file.bytes", int(read.Bytes)))
 		for i := range read.Files {
 			if f := read.Files[i].Response; f != nil {
 				f.Target = target
@@ -363,6 +364,7 @@ func fetchS3File(ctx context.Context, target string, c *model.Collector, overrid
 		return nil, onBucket(err, bucket)
 	}
 	traceOutcome(ctx, "read")
+	traceFacts(ctx, intFact("s3file.objects", 1), intFact("s3file.bytes", len(body)))
 	if err := checkMaxAge(c, path.Join(c.Request.Root, file), info.ModTime()); err != nil {
 		return nil, onBucket(err, bucket)
 	}

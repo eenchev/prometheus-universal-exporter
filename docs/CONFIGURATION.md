@@ -13,7 +13,11 @@ deliberately not part of it: Prometheus supplies each one per scrape.
 and static target scrape — of each failed one too with `errors`, of each
 its caller sampled with `parent_based`, of a `sample_ratio` share of the
 rest, at most `max_per_second` a second
-([Which traces are exported](OTLP.md#which-traces-are-exported)) — and with
+([Which traces are exported](OTLP.md#which-traces-are-exported)), linked to
+the log records and the self-metrics' exemplars of the same probe, and with
+`propagate` sent to the targets as their `traceparent`
+([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces))
+— and with
 [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
 that sends them on every resource.
 
@@ -1162,6 +1166,64 @@ rules whose names differ as written and are one name once escaped, `a.b`
 and `a_b` under `underscores`, load, since the load compares what is
 written, and fail each scrape that has both as the duplicate series, or the
 metric of two types, that two such names of a target are.
+
+#### Keeping UTF-8 names
+
+`name_escaping` escapes a name once, for every scraper. A Prometheus 3 can
+take the name as it is, and says so in its `Accept` header; an older one, or
+a dashboard written for escaped names, asks for an escaping. With
+`metric_name_validation_scheme: utf8`, Prometheus's setting of the same
+name, a collector keeps every name as it is and each answer writes it as its
+scraper asks:
+
+```yaml
+collectors:
+  - name: otel_app
+    metric_name_validation_scheme: utf8   # legacy (the default) or utf8
+    transform:
+      type: prometheus
+```
+
+| The scraper's `Accept` asks for | `{"http.server.duration", "service.name"="api"} 0.25` is answered as |
+| --- | --- |
+| `escaping=allow-utf-8`, as Prometheus 3 does | `{"http.server.duration","service.name"="api"} 0.25`, with `# HELP "http.server.duration" …` and `# TYPE "http.server.duration" gauge` |
+| `escaping=underscores`, no escaping, or one the exporter does not know | `http_server_duration{service_name="api"} 0.25` |
+| `escaping=dots` | `http_dot_server_dot_duration{service_dot_name="api"} 0.25` |
+| `escaping=values` | `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25` |
+
+These are Prometheus's own escaping schemes, as its Go client writes them:
+`underscores` and `values` as under `name_escaping`, and `dots` writing a dot
+as `_dot_`, an underscore as `__` and anything else a classic name may not
+have as `__`, so that the name can be read back. A classic name is written
+as it is under all four, `dots` too, and so is every label value. The quoted
+form is written in OpenMetrics as in the text format, and a histogram's
+`_bucket`, `_sum` and `_count` follow its family's name: `{"my.latency_bucket",le="0.1"}`
+quoted, `my_latency_bucket` under `underscores`. The answer's `Content-Type`
+ends with the escaping it was written with, such as
+`text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8`. An answer
+whose names are all classic — any answer of a `legacy` collector, and the
+self-metrics — is written and typed as it always was, without an escaping.
+
+Under `utf8` a rule's name, its labels' names, the keys of `transform.labels`
+and the names `rename` and `rename_labels` give load whatever their UTF-8,
+as under `name_escaping` `underscores` and `values`; a name of blanks alone,
+one beginning with `__` and the length limits are held to as ever.
+`name_escaping` still applies first: `underscores` or `values` escape a name
+for every scraper, which then finds nothing to escape, and `fail`, the
+default, fails nothing under `utf8`. The default is `legacy`, as before, so
+that a name never changes without someone having asked for it.
+
+A target that escapes its names unless asked, as Prometheus' Go client does,
+has to be asked: give the collector's request the header
+`Accept: text/plain;version=1.0.0;escaping=allow-utf-8`. Over
+[OTLP](OTLP.md) a name is sent as it is, since OTLP names are free text;
+`otlp.metric_names: otel` moves a unit suffix such as `_seconds` into the
+metric's unit as it does of a classic name. Two names that differ only in
+characters an escaping replaces, `a.b` and `a_b`, are one name to a scraper
+that asks for it: two such metrics reach it as a duplicate series, and two
+such labels of one series as one label, with the classic name's value, `a_b`'s
+(of two names escaped, the first in order). Keep such names apart, or escape
+them once with `name_escaping`, which refuses them.
 
 The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
@@ -4255,6 +4317,12 @@ scrape_configs:
     scrape_protocols: [PrometheusText0.0.4]
 ```
 
+A Prometheus that asks for its protobuf format first, as it does when it
+scrapes native histograms, gets OpenMetrics from `/probe` and the static
+targets endpoint, which do not write protobuf, and protobuf from the
+self-metrics endpoint, whose scrape-time histograms then carry native buckets
+too; see [Native histograms](SELF-METRICS.md#native-histograms).
+
 ## Response caching
 
 A collector may cache its results with `ttl`, a Go duration such as `60s`,
@@ -5727,7 +5795,9 @@ is what the export does, not a description of it:
   *Collapse all* open every node or fold all but the top. A node's
   contents are made when it is first opened, so a body of thousands of
   points shows at once and *Expand all* goes a level at a time without
-  holding up the page. *Copy* copies the body as indented JSON, which the
+  holding up the page. A node of many items, an array of 200000 points,
+  fills in a couple of thousand items a frame, the page answering
+  meanwhile; one that cannot be shown says so. *Copy* copies the body as indented JSON, which the
   tree is made from. A cumulative point starts at its own time, as at a
   series' first export: the export remembers when each series started,
   which a run neither reads nor changes.
@@ -5738,7 +5808,10 @@ is what the export does, not a description of it:
   shown as the metrics' body is, a tree for each request when the records
   are more than one holds. A
   probe logs a failure as `probe failed`, where a run says `debug run
-  failed`, and a repeated one once and then every five minutes.
+  failed`, and a repeated one once and then every five minutes. With
+  `otlp.traces` on, each record shows the trace and the span it would be
+  linked to, which a run's never is
+  ([Linking metrics, logs and traces](OTLP.md#on-the-debug-page)).
 - **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on: the
   spans the trace export would make of the run, by the export's own code —
   the probe's or the scrape's, each stage's and each request's — as a tree
@@ -5751,7 +5824,8 @@ is what the export does, not a description of it:
   `traceparent`) and `otlp.traces.sample_ratio`, with the run's trace id's
   randomness against the threshold. `otlp.traces.max_per_second` is not
   taken, and the line says so of a trace kept. The run's own trace is
-  never exported.
+  never exported. With `otlp.traces.propagate`, the run's requests carry
+  its `traceparent`, which their request lines show.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
 remembered, the export's self-metrics and status are unchanged, and
@@ -5855,7 +5929,10 @@ alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
 (each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
 `prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
 `left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
-`otlp.logs`, `logs` (`level`, `records`, `notes` and `body`), and with
+`otlp.logs`, `logs` (`level`, `records`, each with `time`,
+`severity_number`, `severity_text`, `body`, `attributes`, `exported`,
+`note` and, with `otlp.traces`, `trace_id`, `span_id` and `link`, `notes`
+and `body`), and with
 `otlp.traces`, `traces` (`threshold`, `errors`, `parent_based`,
 `sample_ratio`, `max_per_second`, `took`, `failed`, `exported`, `reason`
 when it would be, as `sampling.reason` names it, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
@@ -6124,11 +6201,13 @@ same credentials as a probe. The report, and the page's JSON alike, redacts:
   ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
-  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): any
-  name containing, in any case, `auth`, `cookie`, `token`, `secret`,
-  `password`, `passwd`, `passphrase`, `passcode`, `key`, `session`,
-  `signature`, `credential` or `jwt`, or with `sig`, `pwd`, `pw` or `pass` as
-  a whole word of it, as in `X-Sig` or `X-Db-Pwd`.
+  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): a
+  name one of whose words contains, in any case, `auth`, `cookie`, `token`,
+  `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
+  `session`, `signature`, `credential` or `jwt`, unless the word is an
+  ordinary one that only holds it, such as `author`, `authority`, `monkey`,
+  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw` or `pass` as a whole
+  word of it, as in `X-Sig` or `X-Db-Pwd`.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it.

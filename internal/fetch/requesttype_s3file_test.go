@@ -768,3 +768,26 @@ func TestAnS3FileLabelIsAnEscapedURL(t *testing.T) {
 		t.Errorf("url label %q, %v", label, err)
 	}
 }
+
+// A read's span tells how many objects it read and how many bytes they
+// were, an object's and a prefix's alike; never a key.
+func TestAnS3FileReadsSpanTellsItsFacts(t *testing.T) {
+	f := newFakeS3(t)
+	modified := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	f.put("metrics", "exports/app/a.prom", "a 1\n", modified)
+	f.put("metrics", "exports/app/b.prom", "b 22\n", modified)
+	for _, tc := range []struct {
+		c    *model.Collector
+		want map[string]string
+	}{
+		{f.collector(t, "object", "a.prom"), map[string]string{"s3file.objects": "1", "s3file.bytes": "4"}},
+		{f.collector(t, "prefix", "", func(r *model.RequestConfig) { r.Files = []string{"*.prom"} }), map[string]string{"s3file.objects": "2", "s3file.bytes": "9"}},
+	} {
+		ctx, trace := WithSpanTrace(context.Background())
+		if _, err := FetchCollector(ctx, "metrics", tc.c, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		requests := trace.Requests()
+		requireFacts(t, tc.c.Name, factsOf(t, requests[len(requests)-1]), tc.want)
+	}
+}

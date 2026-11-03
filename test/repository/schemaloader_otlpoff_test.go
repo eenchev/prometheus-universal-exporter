@@ -49,6 +49,7 @@ var otlpKeys = map[string]struct {
 		noValue: []string{"[a]", "{a: [b]}", "x"},
 	},
 	"probe_attributes":       {noValue: []string{"maybe", "1"}},
+	"exponential_histograms": {noValue: []string{"maybe", "1"}},
 	"compression":            {checked: []otlpValue{{"zstd", ""}, {"GZIP", ""}, {`" "`, ""}, {"5", ""}, {"true", ""}}, noValue: []string{"[gzip]", "{a: b}"}},
 	"max_pending_points":     {checked: []otlpValue{{"-1", ""}, {"-100000", ""}}, noValue: []string{"1.5", "many", "[1]"}},
 	"unready_after_failures": {checked: []otlpValue{{"-1", ""}, {"-3", ""}, {"1001", ""}}, noValue: []string{"1.5", "many", "[1]"}},
@@ -79,7 +80,8 @@ var otlpKeys = map[string]struct {
 			{"{enabled: true, sample_ratio: 1.5}", ""}, {"{enabled: true, sample_ratio: -0.1}", ""}, {"{enabled: true, max_per_second: -1}", ""},
 		},
 		noValue: []string{"x", "[a]", "{threshold: 1s}", "{enabled: maybe}", "{unknown: 1}", "{enabled: true, threshold: soon}", "{enabled: true, errors: maybe}", "{enabled: true, max_pending_spans: many}",
-			"{enabled: true, parent_based: maybe}", "{enabled: true, sample_ratio: half}", "{enabled: true, sample_ratio: [1]}", "{enabled: true, max_per_second: 1.5}"},
+			"{enabled: true, parent_based: maybe}", "{enabled: true, sample_ratio: half}", "{enabled: true, sample_ratio: [1]}", "{enabled: true, max_per_second: 1.5}",
+			"{enabled: false, propagate: maybe}", "{enabled: true, propagate: [true]}"},
 	},
 	"metric_names": {checked: []otlpValue{{"OTel", ""}, {"openmetrics", ""}, {"5", ""}}, noValue: []string{"[otel]", "{a: b}"}},
 	// A scope written is held to a name, without a control character in
@@ -175,6 +177,7 @@ func TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock(t *testing.T) {
 		"traces: {enabled: true}", "traces: {enabled: false, threshold: 1us, interval: -1s}", "traces: {enabled: true, threshold: 1ms, errors: true, interval: 1s, max_pending_spans: 0, endpoint: \"http://traces.invalid/v1/traces\"}",
 		"traces: {enabled: true, parent_based: true, sample_ratio: 0.25, max_per_second: 10}", "traces: {enabled: true, sample_ratio: 1, max_per_second: 0}", "traces: {enabled: true, sample_ratio: 0}",
 		"traces: {enabled: false, parent_based: true, sample_ratio: 2, max_per_second: -1}",
+		"traces: {enabled: false, propagate: true}", "traces: {enabled: true, propagate: true}", "traces: {enabled: true, propagate: false}",
 		"logs: {enabled: true}", "logs: {enabled: false, level: verbose, interval: -1s}", "logs: {enabled: true, level: DEBUG, interval: 1s, max_pending_records: 0, endpoint: \"http://logs.invalid/v1/logs\"}", `logs: {enabled: true, level: ""}`,
 		"exporter_instance: {enabled: true}", `exporter_instance: {enabled: true, attribute: host.name, value: pod-0}`, `exporter_instance: {enabled: true, attribute: "", value: ""}`,
 		"exporter_instance: {enabled: false, attribute: service.name}", "exporter_instance: {enabled: true, attribute: service.instance.id}"} {

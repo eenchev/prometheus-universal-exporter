@@ -176,6 +176,11 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 	}
 	callCtx := metadata.NewOutgoingContext(ctx, md)
+	// A traceparent of the operator's, in request.metadata or forwarded,
+	// is sent as it is (tracepropagation.go); otherwise each attempt sets
+	// the trip's own, under a span id of the attempt's, in md, the map
+	// callCtx carries.
+	operatorTrace := len(md.Get("traceparent")) > 0
 	start := time.Now()
 	var (
 		m  grpcMethod
@@ -217,7 +222,12 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		out := dynamicpb.NewMessage(m.desc.Output())
 		var header, trailer metadata.MD
+		var span [8]byte
+		if !operatorTrace {
+			span = propagateGRPC(ctx, md)
+		}
 		traceRequest(ctx, "POST", grpcTraceScheme(secure)+address.hostPort+m.path(), grpcTraceHeader(md), "", false)
+		traceSpanID(ctx, span)
 		// The answer's JSON is counted before the answer is decoded, and
 		// one whose JSON is surely over the limit is refused unread
 		// (answerCodec).
@@ -229,9 +239,14 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		if codec.over != nil {
 			// The call was answered OK; the answer is over the limit.
 			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
+			traceFacts(ctx, intFact("rpc.grpc.status_code", int(codes.OK)))
 			return nil, &CallAnswerError{Err: codec.over}
 		}
 		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
+		// The code as OpenTelemetry's conventions have it, a number; its
+		// name is the stage's, and the message, the server's text, is
+		// none of the span's.
+		traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
 		if err == nil {
 			body, err := renderAnswer(out, m.types)
 			if err != nil {
@@ -301,6 +316,26 @@ func grpcTraceScheme(secure bool) string {
 		return "grpcs://"
 	}
 	return "grpc://"
+}
+
+// propagateGRPC sets the trace context of ctx, under otlp.traces.propagate,
+// in md, a call's metadata, whose names are lower case, and returns the span
+// id the call is sent under, zero for none of the exporter's own
+// (tracepropagation.go).
+func propagateGRPC(ctx context.Context, md metadata.MD) [8]byte {
+	p := tracePropagationFrom(ctx)
+	if p == nil {
+		return [8]byte{}
+	}
+	parent, state, span, ok := p.values()
+	if !ok {
+		return span
+	}
+	md.Set("traceparent", parent)
+	if state != "" {
+		md.Set("tracestate", state)
+	}
+	return span
 }
 
 // grpcTraceHeader is outgoing metadata as a debug probe shows it.

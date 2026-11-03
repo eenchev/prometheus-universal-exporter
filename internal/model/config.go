@@ -99,6 +99,19 @@ type SelfMetricsConfig struct {
 	// Prometheus without its created-timestamp feature stores every _created
 	// line as one more series.
 	CreatedTimestamps bool `yaml:"created_timestamps"`
+	// NativeHistograms answers a scraper that asks for Prometheus's protobuf
+	// format with it, the exporter's own duration histograms carrying native
+	// buckets beside their classic ones. Unset means true: only a scraper
+	// that asks for protobuf gets it, and the text formats are as they are
+	// without; false answers every scraper in text. See
+	// NativeHistogramsEnabled.
+	NativeHistograms *bool `yaml:"native_histograms"`
+}
+
+// NativeHistogramsEnabled reports whether the self-metrics answer in
+// protobuf, with native histograms, a scraper that asks for it.
+func (c SelfMetricsConfig) NativeHistogramsEnabled() bool {
+	return c.NativeHistograms == nil || *c.NativeHistograms
 }
 
 // ResourceMetricsEnabled reports whether the go_ and process_ series are
@@ -162,6 +175,12 @@ type Collector struct {
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
+	// MetricNameValidationScheme is Prometheus's setting of the name: legacy,
+	// the default, holds the names of what the collector exports to the
+	// classic characters, a name outside them being handled by
+	// NameEscaping; utf8 takes any UTF-8 name, as Prometheus 3 does, and
+	// each answer escapes it as its scraper asks (exporter/nameescaping.go).
+	MetricNameValidationScheme string `yaml:"metric_name_validation_scheme"`
 	// Lint says which rules of the metric lint (transform/lint.go) are not
 	// applied to the collector's series: advice --dry-run and the debug
 	// report give, which never fails anything.
@@ -688,6 +707,12 @@ type OTLPConfig struct {
 	// names them, a counter without _total and a unit suffix moved into
 	// the metric's unit (exporter/otlpnames.go).
 	MetricNames string `yaml:"metric_names"`
+	// ExponentialHistograms sends the exporter's own duration histograms as
+	// OTLP exponential histograms, whose buckets follow the durations
+	// observed, rather than with their fixed classic buckets. Off by default:
+	// a receiver must support them, and Prometheus' OTLP endpoint stores them
+	// as native histograms only when it ingests those.
+	ExponentialHistograms bool `yaml:"exponential_histograms"`
 	// Scope is the instrumentation scope the export's metrics and log
 	// records are sent under; nil is DefaultOTLPScopeName without a
 	// version.
@@ -803,6 +828,10 @@ type OTLPTracesConfig struct {
 	// finds no room for all of its spans is dropped whole rather than
 	// waited for.
 	MaxPendingSpans int `yaml:"max_pending_spans"`
+	// Propagate sends the trace context to the targets: each request of a
+	// probe or a scrape carries its traceparent, and with the trace export
+	// off a probe's caller's is passed on as it came.
+	Propagate bool `yaml:"propagate"`
 }
 
 // UnmarshalYAML reads otlp.traces, refusing settings that enabled does not

@@ -523,7 +523,7 @@ func TestTheTraceCostsAProbeNothingWhileOff(t *testing.T) {
 	parent := context.Background()
 	mark := time.Now()
 	if got, _ := alloctest.Allocations(100, func() {
-		ctx, spans := beginTrace(parent, off)
+		ctx, spans := beginTrace(parent, off, traceParent{})
 		stages := tripStagesFrom(ctx)
 		stages.step("decode", "ok", mark, "json")
 		stages.spans.fetched(10)
@@ -533,7 +533,7 @@ func TestTheTraceCostsAProbeNothingWhileOff(t *testing.T) {
 	}
 	on := off
 	on.Traces.Enabled = true
-	if ctx, spans := beginTrace(parent, on); spans == nil || tripSpansFrom(ctx) != spans {
+	if ctx, spans := beginTrace(parent, on, traceParent{}); spans == nil || tripSpansFrom(ctx) != spans {
 		t.Error("with the trace export on a probe records no trace")
 	}
 }

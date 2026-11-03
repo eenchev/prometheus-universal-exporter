@@ -27,6 +27,9 @@ otlp:
   #   insecure_skip_verify: false
   # resource_attributes:
   #   deployment.environment: production
+  # Sends the exporter's own duration histograms as exponential histograms;
+  # the receiver must take them. See "Exponential histograms" in docs/OTLP.md.
+  # exponential_histograms: false
 
 # Optional exporter endpoint protection. Do not enable this together with a
 # collector using request.forward_authorization; both use the incoming
@@ -56,6 +59,10 @@ otlp:
 #     # --enable-feature=created-timestamp-zero-ingestion stores each one as a
 #     # series of its own. See "Created timestamps" in docs/SELF-METRICS.md.
 #     created_timestamps: false
+#     # Answers a Prometheus that asks for its protobuf format first in it,
+#     # the scrape-time histograms with native buckets beside their classic
+#     # ones. See "Native histograms" in docs/SELF-METRICS.md.
+#     native_histograms: true
 
 # A top-level key starting with x- is this file's own: the exporter ignores
 # it. It is the place for settings several collectors share, written once as

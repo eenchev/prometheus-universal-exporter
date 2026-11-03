@@ -16,6 +16,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- The self-metrics have a histogram more of each collector, always:
+  `http_exporter_probe_duration_seconds{collector,kind}`, 16 more lines of
+  the text format a collector, and 16 more for one a static target names.
+- A Prometheus that asks for its protobuf format first, as it does when it
+  scrapes native histograms, gets the self-metrics in protobuf, with
+  `http_exporter_collector_scrape_duration_seconds` carrying native buckets
+  beside its classic ones; it got OpenMetrics before. Every other scraper
+  gets what it got. `web.self_metrics.native_histograms: false` answers it in
+  OpenMetrics again.
 - Fewer Python workers stay idle, for less long: after a burst of scrapes one
   worker of each collector's script stays idle, rather than four, and an idle
   worker stops after two minutes unused, rather than five. Each is a CPython
@@ -107,6 +116,61 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   test that matched the request body's text sees the number now.
 
 ### New
+
+- With `otlp.traces`, the request spans of dns, sql, grpc, ntp, ldap,
+  tlscert, redis, sshfile and s3file collectors tell how the request ended
+  in attributes the exporter works out of the answer, never the target's
+  text: the record type and the records' count, the rows and columns
+  returned (`db.response.returned_rows`) and whether the connection was
+  kept, `rpc.grpc.status_code`, the stratum, offset and delay, the LDAP
+  result code and a page's entries, the TLS version, cipher and leaf's
+  expiry (`tls.protocol.version`, `tls.cipher`, `tls.server.not_after`)
+  with the certificates' count and whether they verified, a Redis reply's
+  type and size, and the files or objects read and their bytes
+  ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).
+- `otlp.traces.propagate: true` sends a kubernetes collector's requests to
+  the API server the `traceparent` and `tracestate` an HTTP target's
+  request carries, so an API server traced with `APIServerTracing` makes
+  its spans of the listing children of the exporter's.
+- `http_exporter_probe_duration_seconds`, a histogram of every collector's
+  probe durations (`kind="probe"`) and static target scrape durations
+  (`kind="static"`, for a collector a static target names), as
+  `http_exporter_scrape_duration_seconds` measures them, cache hits and
+  shared probes included, published with or without verbose self-metrics,
+  never by target ([Probe durations](docs/SELF-METRICS.md#probe-durations)).
+  It has the buckets of the verbose trip histogram, which stays, its native
+  and exponential buckets, and, with `otlp.traces`, exemplars of the
+  exported traces of probes and scrapes.
+- `metric_name_validation_scheme: utf8` on a collector, Prometheus 3's
+  setting: the collector keeps UTF-8 metric and label names such as
+  `http.server.duration` as they are, and each answer writes them as its
+  scraper's `Accept` asks — quoted (`{"http.server.duration"} 1`) for
+  `escaping=allow-utf-8`, escaped by `underscores` (the default), `dots` or
+  `values` otherwise — with the escaping in its `Content-Type`. The default,
+  `legacy`, is the classic names and `name_escaping` as before.
+- Native and exponential histograms of the exporter's own scrape durations:
+  `http_exporter_collector_scrape_duration_seconds` keeps its durations in
+  exponential buckets too, which follow the durations observed (scale 20
+  down to whatever fits 160 buckets, as OpenTelemetry's SDKs do). The
+  self-metrics write them as a native histogram, schema 3 at most, in
+  Prometheus's protobuf format (`web.self_metrics.native_histograms`, on by
+  default), and the OTLP export sends them as an exponential histogram with
+  `otlp.exponential_histograms: true`.
+- Metrics, logs and traces linked, with `otlp.traces` on
+  ([Linking metrics, logs and traces](docs/OTLP.md#linking-metrics-logs-and-traces)).
+  With `otlp.logs` too, a log record of a line a probe or a static target
+  scrape logged, such as `probe failed`, carries its trace's `traceId`, the
+  `spanId` of the stage it was logged in and `flags` 1, when that trace was
+  exported by the time the record is sent; stderr's lines are as before.
+  With verbose self-metrics, each bucket of
+  `http_exporter_collector_scrape_duration_seconds` has as its exemplar the
+  latest trip of an exported trace, in OpenMetrics, protobuf (classic and
+  native) and OTLP. `otlp.traces.propagate: true` sends each HTTP, graphite
+  and gRPC request to a target a W3C `traceparent` under its span's id, the
+  sampled flag set where `parent_based` or `sample_ratio` has already kept
+  the trace, and with the trace export off passes a probe's caller's
+  `traceparent` and `tracestate` on as they came; a `traceparent` in
+  `request.headers` or forwarded is sent as it is, and a login carries none.
 
 - Sampling rules for `otlp.traces`, tried after `threshold` and `errors`:
   `parent_based: true` exports the trace of a probe whose caller's
@@ -255,6 +319,32 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   anywhere on the page.
 
 ### Fixed
+
+- A field, header or query parameter named `author`, `authority`,
+  `keyboard` and the like is no longer masked as a credential: a name is now
+  read by its words, split at punctuation and at a change to upper case,
+  and an ordinary word that only holds `auth`, `key` or `token` (`author`,
+  `authors`, `authority`, `monkey`, `keyboard`, `keyword`, `tokenizer`, …)
+  no longer counts, so `author: Bob` and `<author>Bob</author>` are shown.
+  `Authorization`, `X-Auth-Token`, `apikey`, `authToken` and the rest are
+  masked as before.
+- The debug page's JSON viewer opens an array of any size: one of more
+  than some 100000 items, such as a body of 200000 points, threw
+  `RangeError` and stayed empty for good, and near the top of the body left
+  the last run's tree in the box. Items are now made a couple of thousand a
+  frame, and a node or a body that cannot be shown says so.
+- A trip shared by identical probes is in the trace of every probe that
+  used it: when the probe that started it was left by its caller, the
+  trip's spans were in no trace, the probes that joined it had only their
+  `shared_trip` span, and the one that left had a request span without a
+  status and the message that it waited for an identical probe's trip,
+  which it had started. Each probe now has a copy of the trip's spans; one
+  whose caller left has what the trip had done by then, a request still
+  unanswered marked `request.unfinished`, and a message that says whose
+  trip it was.
+- A probe or a scrape that ended after a reload switched `otlp.traces` off
+  is no longer queued, to be sent if a later reload switches the export on
+  again before the next export.
 
 - A trace's spans no longer carry text the target sent that the log never
   shows: the CLIENT span of a tcp or sshexec request that went through had

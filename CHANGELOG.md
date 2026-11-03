@@ -168,10 +168,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   native) and OTLP. `otlp.traces.propagate: true` sends each HTTP, graphite
   and gRPC request to a target a W3C `traceparent` under its span's id, the
   sampled flag set where `parent_based` or `sample_ratio` has already kept
-  the trace, and with the trace export off passes a probe's caller's
-  `traceparent` and `tracestate` on as they came; a `traceparent` in
-  `request.headers` or forwarded is sent as it is, and a login carries none.
-
+  the trace (never for a debug page run, whose trace is not exported), and
+  with the trace export off passes a probe's caller's `traceparent` and
+  `tracestate` on as they came; a `traceparent` in `request.headers`,
+  `request.metadata` or forwarded is sent as it is, a `tracestate` set there
+  without one is dropped, and a login carries none.
 - Sampling rules for `otlp.traces`, tried after `threshold` and `errors`:
   `parent_based: true` exports the trace of a probe whose caller's
   `traceparent` is sampled, and `sample_ratio` a share, 0 to 1, of the rest,
@@ -502,25 +503,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   attributes `a`; and a value whose `Error` or `String` panics, as a nil
   error's may, is `<nil>` or `!PANIC: …`, as on stderr, where it took the
   exporter down.
-- `/static-targets` no longer writes UTF-8 names raw in the classic text
-  format after a reload takes their collector from
-  `metric_name_validation_scheme: utf8` back to `legacy`: a target's result
-  scraped before the reload keeps its names until it is scraped again, and
-  is now written as the scraper asks meanwhile, as it was before the reload.
-- The self-metrics' protobuf answer keeps the exemplar of a histogram's
-  `+Inf` bucket, of a probe or a trip longer than the last bound, on a
-  `+Inf` classic bucket written for it, as Prometheus' Go client does: it
-  was only among the native histogram's exemplars, so a Prometheus keeping
-  the classic histogram never saw it.
-- With `otlp.traces.propagate: true` a debug page run's requests carry
-  their `traceparent` unsampled, `00`, and no `ot=th` in `tracestate`: a run
-  whose trace id `sample_ratio` keeps sent `01` and `ot=th:…`, so a target
-  that samples by its parent recorded its part of a trace that is never
-  exported.
-- With `otlp.traces.propagate: true` a gRPC call no longer sends a
-  `tracestate` set in `request.metadata` without a `traceparent` beside the
-  exporter's `traceparent`, which it was not written for; an HTTP request
-  already dropped such a header.
 
 ## exporter 1.8.0
 

@@ -370,6 +370,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   In the playground Tab indents by two spaces and Shift+Tab outdents (Esc,
   then Tab, leaves the editor), and Ctrl+Enter or ⌘+Enter runs from
   anywhere on the page.
+- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
+  as blackbox_exporter's uptime checks are declared: its prober the
+  exporter's Service at `/probe`, the entry's `collector` sent as the
+  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
+  its `ingress` selects, as the targets. Empty by default, so nothing is
+  rendered and the Probe CRD is needed only with an entry.
 
 ### Fixed
 

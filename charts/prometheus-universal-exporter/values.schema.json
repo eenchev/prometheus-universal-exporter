@@ -379,6 +379,83 @@
       }
     },
 
+    "probes": {
+      "type": "array",
+      "description": "Prometheus Operator Probes, one per entry, named <fullname>-<name>, whose prober is the exporter's Service at /probe with the collector parameter set to collector. Empty by default, so nothing is rendered and the Probe CRD is not needed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The Probe is named <fullname>-<name>: a DNS-1123 label, unique among the entries.",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63
+          },
+          "collector": {"type": "string", "minLength": 1, "description": "The collector each probe asks for, sent as the collector parameter; one config.data defines when the chart holds the configuration."},
+          "interval": {"$ref": "#/$defs/promDuration"},
+          "scrapeTimeout": {"$ref": "#/$defs/promDuration"},
+          "jobName": {"type": "string", "minLength": 1, "description": "The job label of the series; the Prometheus Operator's default is probe/<namespace>/<Probe name>."},
+          "labels": {"$ref": "#/$defs/stringMap"},
+          "annotations": {"$ref": "#/$defs/stringMap"},
+          "targets": {
+            "type": "array",
+            "description": "The URLs to probe, each sent as the target parameter. Not with ingress.",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "targetLabels": {"$ref": "#/$defs/stringMap", "description": "Labels added to every series of the static targets."},
+          "ingress": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The Ingresses to probe, by label: the Prometheus Operator probes each host and path of each Ingress selected. Not with targets.",
+            "properties": {
+              "selector": {"type": "object", "description": "The Ingresses' label selector, matchLabels or matchExpressions; required, since an empty one selects every Ingress: write {} to mean that."},
+              "namespaceSelector": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "The namespaces the Ingresses are looked for in: any: true for every namespace, or matchNames. Without it, the Probe's own namespace.",
+                "properties": {
+                  "any": {"type": "boolean"},
+                  "matchNames": {"type": "array", "items": {"type": "string", "minLength": 1}}
+                }
+              }
+            },
+            "required": ["selector"]
+          },
+          "relabelings": {"type": "array", "items": {"type": "object"}, "description": "Relabeling of the targets before the scrape, rendered as the targets' relabelingConfigs."},
+          "metricRelabelings": {"type": "array", "items": {"type": "object"}},
+          "params": {
+            "type": "object",
+            "description": "/probe parameters beside collector, each a list of strings. collector and target are the chart's own: collector from .collector, target from each target; setting either fails rendering.",
+            "propertyNames": {"minLength": 1, "not": {"enum": ["collector", "target"]}},
+            "additionalProperties": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The credential Prometheus presents to the exporter on this Probe's scrapes, from a Secret, as a monitor's auth. Enabled, it says which kind, type, and which Secret, secretName; rendering fails without either.",
+            "properties": {
+              "enabled": {"type": "boolean"},
+              "type": {"enum": ["bearer", "basic"]},
+              "secretName": {"type": "string"},
+              "secretKey": {"type": "string"},
+              "usernameKey": {"type": "string"},
+              "passwordKey": {"type": "string"},
+              "optional": {"type": "boolean"}
+            },
+            "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+            "then": {"required": ["type", "secretName"], "properties": {"secretName": {"minLength": 1}}}
+          }
+        },
+        "required": ["name", "collector"],
+        "oneOf": [
+          {"required": ["targets"], "not": {"required": ["ingress"]}},
+          {"required": ["ingress"], "not": {"required": ["targets"]}}
+        ]
+      }
+    },
+
     "selfMetrics": {
       "type": "object",
       "additionalProperties": false,
@@ -785,6 +862,11 @@
       "description": "With the allocator, probe targets come from allocator.probeJobs: an enabled monitors entry is refused beside allocator.enabled.",
       "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
       "then": {"properties": {"monitors": {"items": {"properties": {"enabled": {"const": false}}}}}}
+    },
+    {
+      "description": "With the allocator, probe targets come from allocator.probeJobs: a probes entry is refused beside allocator.enabled.",
+      "if": {"properties": {"allocator": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["allocator"]},
+      "then": {"properties": {"probes": {"maxItems": 0}}}
     }
   ],
 

@@ -362,11 +362,17 @@
 {{- printf "%s.%s.svc:%s" (include "prometheus-universal-exporter.fullname" .) (include "prometheus-universal-exporter.namespace" .) (include "prometheus-universal-exporter.servicePort" . | default "<nil>") -}}
 {{- end }}
 {{- /* Probe monitors send Prometheus to the exporter's Service, whatever
-       their type, so they need it. */ -}}
+       their type, and so do the Probes, whose prober is the Service, so they
+       need it. */ -}}
 {{- define "prometheus-universal-exporter.requireServiceForProbes" -}}
 {{- range .Values.monitors }}
 {{- if and .enabled (not $.Values.service.enabled) }}
 {{- fail (printf "monitors entry %q probes through the exporter's Service, which service.enabled=false leaves out; enable the Service" (toString (.name | default "unnamed"))) }}
+{{- end }}
+{{- end }}
+{{- range .Values.probes }}
+{{- if not $.Values.service.enabled }}
+{{- fail (printf "probes entry %q probes through the exporter's Service, its prober, which service.enabled=false leaves out; enable the Service" (toString (.name | default "unnamed"))) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -420,6 +426,7 @@
 {{- if include "prometheus-universal-exporter.staticTargetsMonitor" . }}{{- $other = true }}{{- end }}
 {{- if include "prometheus-universal-exporter.scrapeConfigs" . }}{{- $other = true }}{{- end }}
 {{- if include "prometheus-universal-exporter.allocatorServiceMonitor" . }}{{- $other = true }}{{- end }}
+{{- if .Values.probes }}{{- $other = true }}{{- end }}
 {{- if or $other (.Capabilities.APIVersions.Has (printf "monitoring.coreos.com/v1/%s" $kind)) }}{{ $kind }}{{- end }}
 {{- end }}
 {{- end }}
@@ -831,6 +838,52 @@ true
 {{- include "prometheus-universal-exporter.validateScrapeTiming" (list (printf "monitors entry %s" $label) $monitor.interval $monitor.scrapeTimeout) -}}
 {{- end -}}
 {{- end -}}
+{{- /* A probes entry renders a Probe named <fullname>-<name>, the kind
+       of no other object of the chart, so its name is unique among the
+       probes entries only. Its collector is checked as a monitor's is, and
+       its params may not set collector or target, which the Probe renders
+       itself: the collector from .collector, the target from each target
+       through the Prometheus Operator's relabeling. The schema says all of
+       this too; these checks hold when it is skipped. */ -}}
+{{- $probeNames := dict -}}
+{{- range $index, $probe := .Values.probes -}}
+{{- if not (kindIs "map" $probe) -}}
+{{- fail (printf "probes entry #%d is not a mapping; give it a name, a collector and its targets or ingress" $index) -}}
+{{- end -}}
+{{- $name := toString ($probe.name | default "") -}}
+{{- if not (and (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) (le (len $name) 63)) -}}
+{{- fail (printf "probes entry #%d has the name %q; the Probe is named <fullname>-<name>, so the name must be a DNS-1123 label: 1 to 63 lower-case letters, digits and hyphens, with no hyphen first or last" $index $name) -}}
+{{- end -}}
+{{- if hasKey $probeNames $name -}}
+{{- fail (printf "probes entries #%v and #%d are both named %q; each entry renders the Probe <fullname>-<name>, so names must be unique" (get $probeNames $name) $index $name) -}}
+{{- end -}}
+{{- $_ := set $probeNames $name $index -}}
+{{- if hasKey ($probe.params | default dict) "collector" -}}
+{{- fail (printf "probes entry %q sets params.collector; the chart renders the collector parameter itself, so set the entry's .collector instead" $name) -}}
+{{- end -}}
+{{- if hasKey ($probe.params | default dict) "target" -}}
+{{- fail (printf "probes entry %q sets params.target; the Prometheus Operator sets the target parameter from each target, so list the targets in .targets or select Ingresses with .ingress instead" $name) -}}
+{{- end -}}
+{{- if not $probe.collector -}}
+{{- fail (printf "probes entry %q names no collector; every probe it sends would be answered 400" $name) -}}
+{{- end -}}
+{{- if and $complete (not (hasKey $names (toString $probe.collector))) (not (contains "${" (toString $probe.collector))) -}}
+{{- fail (printf "probes entry %q names collector %q, which config.data does not define; every probe it sends would be answered 400" $name (toString $probe.collector)) -}}
+{{- end -}}
+{{- /* The Prometheus Operator takes the static targets over the Ingresses
+       when a Probe has both, so the second would be ignored without a
+       word; and a Probe with neither probes nothing. */ -}}
+{{- if and $probe.targets $probe.ingress -}}
+{{- fail (printf "probes entry %q has both targets and ingress; the Prometheus Operator would probe the targets and ignore the Ingresses, so give one of them, and a second entry for the other" $name) -}}
+{{- end -}}
+{{- if not (or $probe.targets $probe.ingress) -}}
+{{- fail (printf "probes entry %q has neither targets nor ingress; list the URLs to probe in targets, or select Ingresses with ingress.selector" $name) -}}
+{{- end -}}
+{{- if and $probe.ingress (not (hasKey $probe.ingress "selector")) -}}
+{{- fail (printf "probes entry %q has ingress without a selector; an empty selector would probe every Ingress, so give ingress.selector, {} to mean every one" $name) -}}
+{{- end -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list (printf "probes entry %q" $name) $probe.interval $probe.scrapeTimeout) -}}
+{{- end -}}
 {{- /* A probe job of the allocator names a collector as a monitor does,
        and is checked the same way. */ -}}
 {{- if and .Values.allocator .Values.allocator.enabled -}}
@@ -860,13 +913,17 @@ true
 {{- define "prometheus-universal-exporter.monitorAuth" -}}
 {{- $root := index . 0 -}}
 {{- $monitor := index . 1 -}}
+{{- /* The values key the entry is in, for the messages: monitors, or
+       probes, whose Probe takes the credential in the same fields. */ -}}
+{{- $key := "monitors" -}}
+{{- if gt (len .) 2 }}{{- $key = index . 2 -}}{{- end -}}
 {{- $auth := $monitor.auth | default dict -}}
 {{- if $auth.enabled -}}
 {{- if not (has $auth.type (list "bearer" "basic")) -}}
-{{- fail (printf "monitors entry %q enables auth without a type; set its auth.type to bearer or basic" (toString $monitor.name)) -}}
+{{- fail (printf "%s entry %q enables auth without a type; set its auth.type to bearer or basic" $key (toString $monitor.name)) -}}
 {{- end -}}
 {{- if not $auth.secretName -}}
-{{- fail (printf "monitors entry %q enables auth without a Secret; set its auth.secretName to the Secret holding the %s credential" (toString $monitor.name) $auth.type) -}}
+{{- fail (printf "%s entry %q enables auth without a Secret; set its auth.secretName to the Secret holding the %s credential" $key (toString $monitor.name) $auth.type) -}}
 {{- end -}}
 {{- if eq $auth.type "bearer" -}}
 authorization:
@@ -1308,6 +1365,9 @@ true
 {{- if $allocator.enabled -}}
 {{- if .Values.staticTargets.enabled -}}
 {{- fail "allocator.enabled and staticTargets.enabled are both true, but with the allocator the exporter pods read no static target file: the allocator splits the static targets over them; move staticTargets.data to allocator.staticTargets.data and set staticTargets.enabled to false" -}}
+{{- end -}}
+{{- range $probe := .Values.probes -}}
+{{- fail (printf "probes entry %q is set beside allocator.enabled, but with the allocator the probe targets come from allocator.probeJobs, which Prometheus fetches through the ScrapeConfigs the chart renders; move its targets to an allocator.probeJobs entry and remove the probes entry" (toString ((kindIs "map" $probe) | ternary (get $probe "name") "" | default "unnamed"))) -}}
 {{- end -}}
 {{- range $index, $monitor := .Values.monitors -}}
 {{- if $monitor.enabled -}}

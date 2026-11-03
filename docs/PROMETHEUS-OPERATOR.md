@@ -65,8 +65,47 @@ monitors:
 
 `port` is the port's name, never its number, as the Prometheus Operator's `port` field is: `port: "9115"` would match no port, so the chart refuses a number while rendering and says to name the port — in the Service's `spec.ports` for `type: service`, in the pod's `containers[].ports` for `type: pod` — and give that name.
 
+## Probes
+
+An uptime check, of the [Uptime probes](REQUESTS.md#uptime-probes) collector, names its sites rather than discovering Services or pods: the Prometheus Operator's `Probe` kind declares them, as it does for blackbox_exporter. The chart's `probes` entries render one each, its prober the exporter's Service at `/probe`:
+
+```yaml
+probes:
+  - name: sites
+    collector: site
+    interval: 1m
+    targets:
+      - https://www.example.com
+      - https://shop.example.com/health
+```
+
+renders, for a release `exporter` in the namespace `monitoring`:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: exporter-prometheus-universal-exporter-sites
+spec:
+  prober:
+    url: "exporter-prometheus-universal-exporter.monitoring.svc:8080"
+    scheme: http
+    path: /probe
+  interval: 1m
+  params:
+    - name: collector
+      values: ["site"]
+  targets:
+    staticConfig:
+      static:
+        - https://www.example.com
+        - https://shop.example.com/health
+```
+
+The Prometheus Operator moves each target into `__param_target` and `instance` and the address to the prober itself, so a Probe needs none of the relabeling above. The collector is a parameter of `spec.params`: `spec.module` would send `module=`, which the exporter does not read. An entry's `ingress`, a `selector` and a `namespaceSelector`, probes Ingresses in place of the listed `targets`, never beside them, since the Prometheus Operator ignores the Ingresses of a Probe that lists targets. With `probes` empty, the default, no Probe is rendered and the cluster needs no Probe CRD. The chart README's [Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes) has every value.
+
 ## Related pages
 
 - [REQUESTS.md](REQUESTS.md) — the request parameters a monitor's `params` map can set.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — monitor authentication and forwarding it to the target.
-- [../charts/prometheus-universal-exporter/README.md](../charts/prometheus-universal-exporter/README.md) — every `monitors` value the chart accepts.
+- [../charts/prometheus-universal-exporter/README.md](../charts/prometheus-universal-exporter/README.md) — every `monitors` and `probes` value the chart accepts.

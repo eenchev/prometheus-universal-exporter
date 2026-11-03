@@ -467,6 +467,59 @@ monitors: []
 #       usernameKey: username
 #       passwordKey: password
 #       optional: false
+# Prometheus Operator Probes, one per entry, rendered as <fullname>-<name>:
+# the uptime checks of docs/REQUESTS.md, "Uptime probes", declared as
+# blackbox_exporter's are. Prometheus sends each target, a URL listed in
+# targets or an Ingress ingress selects, to the exporter's Service at /probe
+# with the collector parameter set to collector, and labels its series with
+# the target as instance. An entry renders; the list is empty by default, so
+# nothing renders, and the Probe CRD is needed only with an entry. The name is
+# a DNS-1123 label unique among the entries; collector is required and, when
+# the chart holds the configuration, one config.data defines; an entry has
+# targets or ingress, not both; and interval and scrapeTimeout are Prometheus
+# durations, the timeout no longer than the interval. With webAuth.enabled,
+# an entry without auth of its own presents the webAuth Secret.
+probes: []
+# Example:
+# probes:
+#   - name: sites
+#     collector: site
+#     interval: 1m
+#     scrapeTimeout: 30s
+#     # The job label of the series; the Prometheus Operator's default is
+#     # probe/<namespace>/<Probe name>.
+#     jobName: site
+#     # Labels and annotations of the Probe object, for a Prometheus
+#     # probeSelector.
+#     labels: {}
+#     annotations: {}
+#     # The URLs to probe, as the collector's target...
+#     targets:
+#       - https://www.example.com
+#       - https://shop.example.com/health
+#     # ...with these labels on every series of them.
+#     targetLabels:
+#       team: web
+#     # ...or the Ingresses to probe, by label, in the namespaces given (the
+#     # Probe's own without namespaceSelector); not with targets.
+#     # ingress:
+#     #   selector:
+#     #     matchLabels:
+#     #       probe: "true"
+#     #   namespaceSelector:
+#     #     any: true
+#     # Relabeling of the targets, before the scrape, and of the samples.
+#     relabelings: []
+#     metricRelabelings: []
+#     # /probe parameters beside collector, each a list; collector and target
+#     # are the chart's own and fail rendering.
+#     params:
+#       timeout: [10s]
+#     # The credential Prometheus presents to the exporter, as on monitors.
+#     auth:
+#       enabled: false
+#       type: bearer # bearer or basic
+#       secretName: ""
 # The self-metrics ServiceMonitor/PodMonitor. What that endpoint publishes is
 # configured in the exporter configuration rather than here: set
 # web.self_metrics.verbose for the per-request series, the per-collector
@@ -475,7 +528,7 @@ monitors: []
 # process_ series describing the exporter's own CPU and memory.
 # The monitor for the exporter's own metrics: one ServiceMonitor, or a
 # PodMonitor with type pod. It is rendered with enabled when the chart renders
-# another monitor (a probe monitor or the static targets monitor), or when the
+# another monitor (a probe monitor, a Probe or the static targets monitor), or when the
 # cluster serves the kind, so an install without the Prometheus Operator does
 # not fail on it.
 selfMetrics:

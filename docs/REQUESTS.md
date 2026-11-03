@@ -1577,6 +1577,12 @@ scrape_configs:
         replacement: exporter.example:8080
 ```
 
+With the Prometheus Operator, the sites are a `Probe`, as they are for
+blackbox_exporter, and the chart renders one for each of its `probes`
+entries: [Probes](PROMETHEUS-OPERATOR.md#probes), and the chart README's
+[Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes)
+for a complete values file.
+
 The series of one probe, of `https://example.com`, which redirected once,
 to `https://www.example.com/`, another host, so the request answered made a
 connection of its own:

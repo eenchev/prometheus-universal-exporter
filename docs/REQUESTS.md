@@ -1448,18 +1448,15 @@ the target presented on it, nothing secret:
 
 | Key | What it is |
 | --- | --- |
-| `version` | The TLS version, `"1.2"` or `"1.3"` |
-| `cipher` | The cipher suite, by its IANA name, `"TLS_AES_128_GCM_SHA256"` |
+| `tls_version` | The TLS version, `"TLS 1.2"` or `"TLS 1.3"` |
+| `cipher_suite` | The cipher suite, by its IANA name, `"TLS_AES_128_GCM_SHA256"` |
 | `server_name` | The name sent as SNI: the URL's host or `tls.server_name`; `""` when none was sent, as to an IP address |
 | `verified` | Whether the exporter verified the chain: `false` under `insecure_skip_verify`, which is the only way a chain that does not verify is answered |
 | `not_before`, `not_after` | The target's certificate's validity, in Unix seconds |
 | `subject_cn`, `issuer_cn` | The common names of its subject and its issuer |
 
-The names are those of the [`tlscert` type](TLSCERT.md#the-document)'s
-document, but for `version` and `cipher`, which are its span facts',
-`tls.protocol.version` and `tls.cipher`: the document's `tls_version` is
-`"TLS 1.3"` where `version` is `"1.3"`, and its `cipher_suite` is
-`cipher`. `$tls.not_after` is when the certificate the
+The names and values are those of the [`tlscert` type](TLSCERT.md#the-document)'s
+document, so a rule reads the two alike. `$tls.not_after` is when the certificate the
 target serves expires, the one an uptime check alerts on; a chain's
 intermediates and roots, and a certificate on a port that speaks no HTTP,
 are the `tlscert` type's. Through an `https://` proxy, a plain HTTP request
@@ -1593,7 +1590,7 @@ site_http_duration_seconds{phase="total"} 0.072
 site_http_redirects 1
 site_http_ssl 1
 site_tls_cert_expiry_timestamp_seconds 1767225599
-site_tls_version_info{version="1.3"} 1
+site_tls_version_info{version="TLS 1.3"} 1
 http_exporter_probe_success 1
 http_exporter_probe_elapsed_seconds 0.149
 ```

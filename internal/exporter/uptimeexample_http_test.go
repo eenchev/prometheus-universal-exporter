@@ -55,7 +55,7 @@ func TestTheUptimeExampleAnswersTheDocumentedSeries(t *testing.T) {
 			[]string{`phase="tls"`, `phase="dns"`, "site_tls_", "http_exporter_probe_failed_stage"}},
 		{plain.URL + "/down", "", []string{"site_up 0", "site_http_status_code 503", "site_http_redirects 0", "http_exporter_probe_success 1"}, []string{"http_exporter_probe_failed_stage"}},
 		{plain.URL + "/moved", "", []string{"site_up 1", "site_http_status_code 200", "site_http_redirects 1", "http_exporter_probe_success 1"}, nil},
-		{secure.URL, "&insecure_skip_verify=true", []string{"site_up 1", "site_http_ssl 1", `site_http_duration_seconds{phase="tls"}`, `site_http_duration_seconds{phase="connect"}`, "site_tls_cert_expiry_timestamp_seconds " + expiry, `site_tls_version_info{version="1.3"} 1`, "http_exporter_probe_success 1"}, nil},
+		{secure.URL, "&insecure_skip_verify=true", []string{"site_up 1", "site_http_ssl 1", `site_http_duration_seconds{phase="tls"}`, `site_http_duration_seconds{phase="connect"}`, "site_tls_cert_expiry_timestamp_seconds " + expiry, `site_tls_version_info{version="TLS 1.3"} 1`, "http_exporter_probe_success 1"}, nil},
 		{secure.URL, "", []string{"http_exporter_probe_success 0", `http_exporter_probe_failed_stage{stage="http"} 1`, "http_exporter_probe_elapsed_seconds "}, []string{"site_"}},
 		{closedURL, "", []string{"http_exporter_probe_success 0", `http_exporter_probe_failed_stage{stage="http"} 1`}, []string{"site_"}},
 	} {

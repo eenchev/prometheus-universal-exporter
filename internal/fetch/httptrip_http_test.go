@@ -116,12 +116,12 @@ func TestTheTLSConnectionIsTheTargets(t *testing.T) {
 		return response.Trip.TLSConnection
 	}
 	verifying := httpCollector(t, func(c *model.Collector) { c.Request.TLS.CAFile = ca })
-	want := TLSConnection{Version: "1.3", ServerName: "localhost", Verified: true, NotBefore: leaf.NotBefore.Unix(), NotAfter: leaf.NotAfter.Unix(), SubjectCN: "server", IssuerCN: "server"}
+	want := TLSConnection{TLSVersion: "TLS 1.3", ServerName: "localhost", Verified: true, NotBefore: leaf.NotBefore.Unix(), NotAfter: leaf.NotAfter.Unix(), SubjectCN: "server", IssuerCN: "server"}
 	got := connectionOf(targetURL, verifying)
-	if got == nil || !strings.HasPrefix(got.Cipher, "TLS_") {
+	if got == nil || !strings.HasPrefix(got.CipherSuite, "TLS_") {
 		t.Fatalf("the connection %+v", got)
 	}
-	want.Cipher = got.Cipher
+	want.CipherSuite = got.CipherSuite
 	if *got != want {
 		t.Errorf("the connection %+v, want %+v", *got, want)
 	}
@@ -130,7 +130,7 @@ func TestTheTLSConnectionIsTheTargets(t *testing.T) {
 		t.Errorf("under insecure_skip_verify: %+v", got)
 	}
 	values := (&HTTPTrip{TLSConnection: &want}).JQTLS().(map[string]any)
-	if values["version"] != "1.3" || values["verified"] != true || values["not_after"] != float64(want.NotAfter) || values["subject_cn"] != "server" || values["server_name"] != "localhost" || len(values) != 8 {
+	if values["tls_version"] != "TLS 1.3" || values["cipher_suite"] != want.CipherSuite || values["verified"] != true || values["not_after"] != float64(want.NotAfter) || values["subject_cn"] != "server" || values["server_name"] != "localhost" || len(values) != 8 {
 		t.Errorf("$tls %v", values)
 	}
 	if (&HTTPTrip{}).JQTLS() != nil || (*HTTPTrip)(nil).JQTLS() != nil {

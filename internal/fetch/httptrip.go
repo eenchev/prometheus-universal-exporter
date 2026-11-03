@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 )
@@ -82,14 +81,15 @@ func redirectsTo(req *http.Request) int {
 
 // TLSConnection is what the exporter knows of a TLS connection to a target
 // and of the certificate the target presented on it, nothing secret: the
-// names follow the tlscert type's span facts (tls.protocol.version,
-// tls.cipher) and its document (server_name, verified, not_before,
-// not_after, subject_cn, issuer_cn).
+// names follow the tlscert type's document (tls_version, cipher_suite,
+// server_name, verified, not_before, not_after, subject_cn, issuer_cn), so
+// a rule reads the two alike.
 type TLSConnection struct {
-	// Version is the protocol's version, "1.3" (tls.protocol.version).
-	Version string
-	// Cipher is the cipher suite's IANA name.
-	Cipher string
+	// TLSVersion is the protocol's version as the tlscert document writes
+	// it, "TLS 1.3".
+	TLSVersion string
+	// CipherSuite is the cipher suite's IANA name.
+	CipherSuite string
 	// ServerName is the name sent as SNI, "" when none was, as for an
 	// IP address.
 	ServerName string
@@ -111,8 +111,7 @@ func tlsConnectionOf(u *url.URL, state *tls.ConnectionState) *TLSConnection {
 	if state == nil || u.Scheme != "https" {
 		return nil
 	}
-	version, _ := strings.CutPrefix(tls.VersionName(state.Version), "TLS ")
-	c := &TLSConnection{Version: version, Cipher: tls.CipherSuiteName(state.CipherSuite), ServerName: state.ServerName, Verified: len(state.VerifiedChains) > 0}
+	c := &TLSConnection{TLSVersion: tls.VersionName(state.Version), CipherSuite: tls.CipherSuiteName(state.CipherSuite), ServerName: state.ServerName, Verified: len(state.VerifiedChains) > 0}
 	if len(state.PeerCertificates) > 0 {
 		leaf := state.PeerCertificates[0]
 		c.NotBefore, c.NotAfter = leaf.NotBefore.Unix(), leaf.NotAfter.Unix()
@@ -130,14 +129,14 @@ func (t *HTTPTrip) JQTLS() any {
 	}
 	c := t.TLSConnection
 	return map[string]any{
-		"version":     c.Version,
-		"cipher":      c.Cipher,
-		"server_name": c.ServerName,
-		"verified":    c.Verified,
-		"not_before":  float64(c.NotBefore),
-		"not_after":   float64(c.NotAfter),
-		"subject_cn":  c.SubjectCN,
-		"issuer_cn":   c.IssuerCN,
+		"tls_version":  c.TLSVersion,
+		"cipher_suite": c.CipherSuite,
+		"server_name":  c.ServerName,
+		"verified":     c.Verified,
+		"not_before":   float64(c.NotBefore),
+		"not_after":    float64(c.NotAfter),
+		"subject_cn":   c.SubjectCN,
+		"issuer_cn":    c.IssuerCN,
 	}
 }
 

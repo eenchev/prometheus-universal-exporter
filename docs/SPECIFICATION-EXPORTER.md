@@ -5887,9 +5887,8 @@ Python's `response.timings` MUST be the same, a dict with `None` for
 
 Every jq program MUST also have `$tls` bound. For the request `$timings`
 describes, sent over TLS, it MUST be an object of the connection the answer
-came on: `version`, the TLS version without its `TLS ` prefix (`"1.3"`, as
-the `tlscert` span fact `tls.protocol.version`); `cipher`, the cipher
-suite's IANA name; `server_name`, the name sent as SNI, `""` for none;
+came on, named and written as the `tlscert` document is: `tls_version`, the
+TLS version (`"TLS 1.3"`); `cipher_suite`, the cipher suite's IANA name; `server_name`, the name sent as SNI, `""` for none;
 `verified`, whether the exporter verified the chain, `false` under
 `insecure_skip_verify`; `not_before` and `not_after`, the leaf's validity in
 Unix seconds; and `subject_cn` and `issuer_cn`, the common names of the
@@ -30212,8 +30211,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheURLIsWhereTheRedirectsLed` (fetch): after two followed redirects the URL is the last one's, its `token` value `<redacted>` and `tenant` kept, with 2 redirects; a redirect not followed leaves the target's URL and 0; a target with userinfo, an `api_key` and a fragment is shown without the userinfo and the fragment, the key `<redacted>`; `$url` and `$redirects` of no trip are `null`.
 - `TestURLAndRedirectsAreBoundInEveryProgram` (transform): jq and yq rules read `$redirects` as a value and `$url` as a label, `null` without a trip; Python's `response.url` and `response.redirects` are the same, `None` without a trip.
 - `TestAProbeReadsWhereItsRedirectsLed`: through `/probe`, a redirect to a login page is `uptime_redirects 1` and a label of `$url` of the login page with its `token` `<redacted>` and `next` kept; a debug probe's report shows `$url` and `$redirects` under `$tls`, the URL's `next` and `token` masked as its request lines mask a query the configuration did not set, `<redacted>` as written; the debug page's `variables` are `$timings`, `$tls null`, `$url` and `$redirects 0` of a target answering at once.
-- `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `version` `1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
-- `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 with `site_up 0` and success 1; a redirect with `site_http_redirects 1` and the 200 it led to; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info{version="1.3"}`; the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
+- `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `tls_version` `TLS 1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
+- `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 with `site_up 0` and success 1; a redirect with `site_http_redirects 1` and the 200 it led to; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info{version="TLS 1.3"}`; the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
 - `TestShippedConfigurationsMatchTheSchema`, `TestExamplesReferenceTheSchema`, `TestTheShippedFilesMatchTheSchemasAsTheyDid` and `TestShippedExampleScriptsSatisfyTheContract` (repository) take `configs/config.uptime.example.yaml` among the shipped configurations.
 
 # 35. Documentation requirements

@@ -55,4 +55,4 @@ collectors:
         required: false
         labels:
           - name: version
-            expression: .version
+            expression: .tls_version

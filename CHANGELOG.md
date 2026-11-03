@@ -126,7 +126,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Every jq and yq program has the variable, `null` for other request types
   ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
 - jq and yq rules of `http` and `graphite` collectors read `$tls`, the TLS
-  connection the answer came on — `version`, `cipher`, `server_name`,
+  connection the answer came on — `tls_version`, `cipher_suite`, `server_name`,
   `verified`, and the target certificate's `not_before`, `not_after`,
   `subject_cn` and `issuer_cn` — so an uptime check alerts on the
   certificate's expiry without a `tlscert` collector beside it; `null` over

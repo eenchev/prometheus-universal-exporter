@@ -99,21 +99,21 @@ func TestAProbeReadsTheTLSConnectionOfItsRequest(t *testing.T) {
         expression: "1"
         labels:
           - name: version
-            expression: $tls.version
+            expression: $tls.tls_version
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := flightServer(t, cfg.Collectors...)
 	got := probeOnce(t, server, probePath("up", target.URL, ""), nil)
-	for _, want := range []string{"uptime_tls_certificate_expiry_timestamp_seconds " + strconv.FormatFloat(float64(target.Certificate().NotAfter.Unix()), 'g', -1, 64) + "\n", "uptime_tls_verified 0\n", `uptime_tls_version_info{version="1.3"} 1` + "\n"} {
+	for _, want := range []string{"uptime_tls_certificate_expiry_timestamp_seconds " + strconv.FormatFloat(float64(target.Certificate().NotAfter.Unix()), 'g', -1, 64) + "\n", "uptime_tls_verified 0\n", `uptime_tls_version_info{version="TLS 1.3"} 1` + "\n"} {
 		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) {
 			t.Errorf("%d %s; want %q", got.Code, got.Body, want)
 		}
 	}
 	server.SetDebug(DebugFull)
 	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("up", target.URL, "&debug=true"), "/probe?")).Body.String()
-	if !regexp.MustCompile(`\n  \$timings \{[^\n]*\}\n  \$tls \{"cipher":"TLS_[A-Z0-9_]+","issuer_cn":"","not_after":[0-9]+,"not_before":[0-9]+,"server_name":"","subject_cn":"","verified":false,"version":"1.3"\}\n`).MatchString(report) {
+	if !regexp.MustCompile(`\n  \$timings \{[^\n]*\}\n  \$tls \{"cipher_suite":"TLS_[A-Z0-9_]+","issuer_cn":"","not_after":[0-9]+,"not_before":[0-9]+,"server_name":"","subject_cn":"","tls_version":"TLS 1.3","verified":false\}\n`).MatchString(report) {
 		t.Errorf("the debug report does not show $tls under $timings:\n%s", report)
 	}
 }

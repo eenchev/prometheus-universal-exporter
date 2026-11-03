@@ -102,15 +102,15 @@ metric(name='phases', value=len(t))
 // HTTP and for an answer no HTTP request brought.
 func TestTLSIsBoundInEveryProgram(t *testing.T) {
 	secure := tripResponse()
-	secure.Trip.TLSConnection = &fetch.TLSConnection{Version: "1.3", Cipher: "TLS_AES_128_GCM_SHA256", ServerName: "www.example.com", Verified: true, NotBefore: 1759276800, NotAfter: 1767225599, SubjectCN: "www.example.com", IssuerCN: "Example Issuing CA"}
+	secure.Trip.TLSConnection = &fetch.TLSConnection{TLSVersion: "TLS 1.3", CipherSuite: "TLS_AES_128_GCM_SHA256", ServerName: "www.example.com", Verified: true, NotBefore: 1759276800, NotAfter: 1767225599, SubjectCN: "www.example.com", IssuerCN: "Example Issuing CA"}
 	rules := []model.MetricRule{
 		{Name: "expiry", Expression: "$tls.not_after"},
 		{Name: "verified", Expression: "if $tls.verified then 1 else 0 end"},
-		{Name: "info", Expression: "1", Labels: []model.LabelRule{{Name: "version", Expression: "$tls.version"}, {Name: "cipher", Expression: "$tls.cipher"}, {Name: "sni", Expression: "$tls.server_name"}, {Name: "subject", Expression: "$tls.subject_cn"}, {Name: "issuer", Expression: "$tls.issuer_cn"}}},
+		{Name: "info", Expression: "1", Labels: []model.LabelRule{{Name: "version", Expression: "$tls.tls_version"}, {Name: "cipher", Expression: "$tls.cipher_suite"}, {Name: "sni", Expression: "$tls.server_name"}, {Name: "subject", Expression: "$tls.subject_cn"}, {Name: "issuer", Expression: "$tls.issuer_cn"}}},
 		{Name: "valid_for", Expression: "$tls.not_after - $tls.not_before"},
 	}
 	want := "expiry 1767225599\nverified 1\n" +
-		"info cipher=TLS_AES_128_GCM_SHA256 issuer=Example Issuing CA sni=www.example.com subject=www.example.com version=1.3 1\nvalid_for 7948799\n"
+		"info cipher=TLS_AES_128_GCM_SHA256 issuer=Example Issuing CA sni=www.example.com subject=www.example.com version=TLS 1.3 1\nvalid_for 7948799\n"
 	plain := []model.MetricRule{{Name: "plain", Expression: "if $tls == null then 1 else 0 end"}}
 	for _, kind := range []string{"jq", "yq"} {
 		c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: kind}, Metrics: rules}

@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,12 @@ func TestStaticTargetsAreScrapedOnTheirOwnIntervals(t *testing.T) {
 }
 
 // The export loop only delivers: it scrapes no target.
+//
+// The loop is stopped while it exports every 20ms, so the export in flight
+// then is cut short, as the loop's stop cuts one (§ 42.1a): the last export
+// at shutdown, FlushOTLP's, sends its data. The endpoint may then read a
+// body that broke off, which is no export and fails nothing; only exports
+// that arrived whole are counted.
 func TestTheExportLoopDoesNotScrape(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -84,9 +91,10 @@ func TestTheExportLoopDoesNotScrape(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 	var exports atomic.Int64
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		readOTLPBody(t, r)
-		exports.Add(1)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err == nil {
+			exports.Add(1)
+		}
 	}))
 	t.Cleanup(endpoint.Close)
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(endpoint.URL)},

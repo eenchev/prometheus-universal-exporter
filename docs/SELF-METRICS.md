@@ -12,6 +12,7 @@ configured:
 | `http_exporter_scrapes_total` | counter | Probes served, cache hits included. |
 | `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. |
 | `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
+| `http_exporter_probe_duration_seconds` | histogram | Labelled `collector` and `kind`: how long each probe (`kind="probe"`) and each static target scrape (`kind="static"`) took, to its answer being ready. See [Probe durations](#probe-durations). |
 | `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, or a gRPC call answered `OK` or with a code of its `accept_codes`; `304` when the target answered a [revalidation](CONFIGURATION.md#revalidating-expired-responses) with Not Modified. |
 | `http_exporter_scrape_grpc_status_code` | gauge | [`grpc`](GRPC.md#self-metrics) collectors only: the gRPC status code of the most recent call, `0` for `OK`, `14` for `UNAVAILABLE`; `-1` before the first call, or when a scrape made none, as when the message did not fit. An exporter without `grpc` collectors has no such series. |
 | `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body; `0` after a `304`, whose kept body was not downloaded again. |
@@ -84,6 +85,53 @@ results of the collector as it is.
 Every counter ends in `_total` and nothing else does. The self-metrics path
 and OTLP are built from the same definitions, so a family has the same type,
 help and value in both.
+
+## Probe durations
+
+`http_exporter_scrape_duration_seconds` only holds the last probe's
+duration, so a slow probe between two scrapes of the self-metrics is lost.
+Every collector also has a histogram of all of them, whatever
+`web.self_metrics.verbose` says:
+
+```text
+http_exporter_probe_duration_seconds_bucket{collector="app_json",kind="probe",le="0.005"} 0
+http_exporter_probe_duration_seconds_bucket{collector="app_json",kind="probe",le="0.01"} 3
+...
+http_exporter_probe_duration_seconds_bucket{collector="app_json",kind="probe",le="+Inf"} 42
+http_exporter_probe_duration_seconds_sum{collector="app_json",kind="probe"} 0.61
+http_exporter_probe_duration_seconds_count{collector="app_json",kind="probe"} 42
+```
+
+A probe is observed as the gauge measures it: from its arrival to its
+answer being ready, before the answer is written, every probe of
+`http_exporter_scrapes_total` that was not a static target's — those
+answered from the response cache, or by
+[sharing another probe's request](#shared-probes), included. So the
+histogram says how long the exporter took to answer, which is what a
+`scrape_timeout` is set against:
+
+```promql
+histogram_quantile(0.99,
+  sum by (collector, le) (rate(http_exporter_probe_duration_seconds_bucket{kind="probe"}[5m])))
+  > 8
+```
+
+A static target's scrapes are observed apart, under `kind="static"`, from
+the scrape's start to its result being ready: they run on the static target
+file's schedule, not Prometheus', and a quantile of both would describe
+neither. A collector has its `kind="static"` series while a static target
+of the file in force names it, and only then; its `kind="probe"` series it
+has from the moment it is configured, empty until its first probe. The
+histogram is never labelled by target, which a probe names: a series of
+every address asked for would have no bound.
+
+The buckets are those of the [scrape-time
+histogram](#scrape-time-histograms): 5 ms, 10 ms, 25 ms, 50 ms, 100 ms,
+250 ms, 500 ms, 1 s, 2.5 s, 5 s, 10 s, 30 s and 60 s, from a fast local
+endpoint to the longest scrape a Prometheus timeout allows, with the same
+[native buckets](#native-histograms) in the protobuf answer and the same
+[exemplars](#exemplars). A debug run is never observed. Each series counts
+since its collector's counters do ([Created timestamps](#created-timestamps)).
 
 ## Build information
 
@@ -779,7 +827,8 @@ Verbose mode also publishes `--web.gzip-level`, without a label, next to the
 ### Scrape-time histograms
 
 Verbose mode also publishes, per collector, a histogram of how long each trip to
-the target took, from sending the request to having validated metrics:
+the target took, from sending the request to having validated metrics, where
+[`http_exporter_probe_duration_seconds`](#probe-durations) has every probe:
 
 ```text
 http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.005"} 0
@@ -790,9 +839,8 @@ http_exporter_collector_scrape_duration_seconds_sum{collector="app_json"} 0.61
 http_exporter_collector_scrape_duration_seconds_count{collector="app_json"} 42
 ```
 
-`http_exporter_scrape_duration_seconds` only holds the last probe's duration, so
-a slow scrape between two Prometheus scrapes is lost. The histogram keeps all of
-them, which is what "this collector got slow" alerts need:
+It describes the target and the collector's processing, which is what "this
+collector's target got slow" alerts need:
 
 ```promql
 histogram_quantile(0.95,
@@ -805,14 +853,17 @@ The buckets are fixed: 5 ms, 10 ms, 25 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s,
 answered from the response cache, or by [sharing another probe's
 request](#shared-probes), made no trip and is not counted, so the histogram
 describes the target and the collector's processing, not how quickly the
-exporter could answer. Static targets are observed like probes. Every
+exporter could answer, which the probe histogram says. Static targets are
+observed like probes. Every
 configured collector has a histogram, empty until its first trip, and the
 durations are only recorded while verbose mode is on.
 
 #### Native histograms
 
-The fixed buckets can only say that a scrape took between 2.5 and 5 seconds.
-The same durations are also kept in exponential buckets, which Prometheus
+This section and the next are of both histograms, the [probe
+histogram](#probe-durations) and the scrape-time one: their fixed buckets can
+only say that a scrape took between 2.5 and 5 seconds. The same durations are
+also kept in exponential buckets, which Prometheus
 calls a native histogram and OpenTelemetry an exponential histogram: buckets
 that are powers of a base, each a few percent wider than the one before,
 placed wherever the durations fall. A collector's histogram starts as finely
@@ -830,11 +881,10 @@ earlier versions):
 ```yaml
 web:
   self_metrics:
-    verbose: true
     native_histograms: true   # the default
 ```
 
-The histogram is then written with both kinds of buckets, as Prometheus' Go
+Each histogram is then written with both kinds of buckets, as Prometheus' Go
 client writes one with a bucket factor: the classic buckets above, which a
 Prometheus scraping classic histograms too
 (`always_scrape_classic_histograms`) keeps, and the native ones, at schema 3
@@ -843,7 +893,7 @@ zero bucket for durations of 0. Prometheus' `native_histogram_min_bucket_factor`
 lowers the resolution further, if you want fewer buckets per series:
 
 ```promql
-histogram_quantile(0.95, sum by (collector) (rate(http_exporter_collector_scrape_duration_seconds[5m])))
+histogram_quantile(0.95, sum by (collector) (rate(http_exporter_probe_duration_seconds{kind="probe"}[5m])))
 ```
 
 Every other family is the same in protobuf as in the text format. Anyone else
@@ -857,20 +907,21 @@ exponential histograms.
 
 #### Exemplars
 
-With the [trace export](OTLP.md#traces-of-slow-requests) on too, each bucket
-has an exemplar: the latest trip observed in it whose trace was exported,
-with that trace's id and the probe's or the scrape's own span id, the trip's
-duration and when it was observed. A trace is decided at the end of its
-probe, and a trip is the bucket's exemplar from then on; a bucket whose
-trips' traces were all dropped has none. From a slow bucket, a dashboard
-goes straight to the trace of a slow trip
+With the [trace export](OTLP.md#traces-of-slow-requests) on, each bucket
+of both histograms has an exemplar: the latest probe or scrape observed in
+it, or of the scrape-time histogram the latest trip, whose trace was
+exported, with that trace's id and the probe's or the scrape's own span id,
+the duration and when it was observed. A trace is decided at the end of its
+probe, and an observation is the bucket's exemplar from then on; a bucket
+whose observations' traces were all dropped has none. From a slow bucket, a
+dashboard goes straight to the trace of a slow probe
 ([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces)).
 
 Only a format that carries exemplars has them. OpenMetrics writes one after
 its bucket's count:
 
 ```text
-http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.1"} 40 # {trace_id="4bf92f3577b34da6a3ce929d0e0e4736",span_id="00f067aa0ba902b7"} 0.067 1793646517.204
+http_exporter_probe_duration_seconds_bucket{collector="app_json",kind="probe",le="0.1"} 40 # {trace_id="4bf92f3577b34da6a3ce929d0e0e4736",span_id="00f067aa0ba902b7"} 0.067 1793646517.204
 ```
 
 protobuf on its classic bucket and, the same ones, among the native

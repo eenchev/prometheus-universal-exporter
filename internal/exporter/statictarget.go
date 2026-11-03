@@ -108,6 +108,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
+		observeStaticScrape(rec.collector, elapsed, spans.traceLink())
 		// The time was spent whether or not the result is published below:
 		// it is load all the same.
 		s.load.addStaticScrape(elapsed)

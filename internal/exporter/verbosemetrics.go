@@ -36,13 +36,15 @@ import (
 // for as long as the collector's statistics are, and dropped with them when a
 // reload removes the collector (pythonstats.go).
 
-// scrapeDurationBuckets are the histogram's upper bounds in seconds, from a
-// fast local endpoint to the slowest scrape a Prometheus timeout allows.
+// scrapeDurationBuckets are the upper bounds in seconds of this histogram and
+// of http_exporter_probe_duration_seconds (probedurations.go), from a fast
+// local endpoint to the slowest scrape a Prometheus timeout allows.
 var scrapeDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
-// durationHistogram is one collector's histogram. It is part of the
-// collector's statistics (serverStats), whose lock guards it, and not kept by
-// the collector's name: a trip records its duration where it records its
+// durationHistogram is one collector's histogram, of its trips or, in
+// http_exporter_probe_duration_seconds, of its probes or static scrapes. It
+// is part of the collector's statistics (serverStats), whose lock guards it,
+// and not kept by the collector's name: a trip records its duration where it records its
 // counters, so a trip that ends after a reload removed its collector, and
 // dropped those statistics, cannot be observed in the histogram of a collector
 // brought back under the name, which would then hold an observation older
@@ -129,9 +131,7 @@ func (h *durationHistogram) histogram() *model.Histogram {
 
 // tripHistogram is the scrape-time histogram of a collector's statistics.
 func (s *serverStats) tripHistogram() *model.Histogram {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.durations.histogram()
+	return durationsOf(s, tripDurations)
 }
 
 // observeTargetScrape records a trip to the target in the statistics the trip
@@ -140,23 +140,13 @@ func (s *serverStats) tripHistogram() *model.Histogram {
 // link, is exported (nil for none). A trip shared by several probes is
 // the trace of the probe that started it, whose context it runs in.
 func (s *Server) observeTargetScrape(stats *serverStats, elapsed time.Duration, link *traceLink) {
-	if stats == nil || !s.verboseSelfMetrics() {
+	if !s.verboseSelfMetrics() {
 		return
 	}
-	at := time.Now()
-	stats.mu.Lock()
-	bucket := stats.durations.observe(elapsed)
-	stats.mu.Unlock()
-	if link == nil {
-		return
-	}
-	link.whenExported(func(trace, span string) {
-		e := &model.Exemplar{TraceID: trace, SpanID: span, Value: elapsed.Seconds(), Time: at}
-		stats.mu.Lock()
-		stats.durations.exemplify(bucket, e)
-		stats.mu.Unlock()
-	})
+	observeDuration(stats, tripDurations, elapsed, link)
 }
+
+func tripDurations(s *serverStats) *durationHistogram { return &s.durations }
 
 const (
 	targetScrapeDurationHelp = "Duration of the trips this collector made to its target — request, decode, transform and validation — in seconds. Cache hits and shared probes are not trips."

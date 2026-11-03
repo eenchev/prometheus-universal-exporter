@@ -548,7 +548,7 @@ func TestDebugRunsCountInTheirOwnSelfMetricAlone(t *testing.T) {
 	postRun(t, server, map[string]any{"collector": "x"}, http.StatusBadRequest)
 	postRun(t, server, map[string]any{"configured": "rooms", "target": target.URL}, http.StatusForbidden)
 	metrics := getPath(server, http.MethodGet, "/self-metrics").Body.String()
-	if strings.Contains(metrics, `kind="probe"`) || strings.Contains(metrics, `kind="static"`) {
+	if strings.Contains(metrics, `debug_runs_total{kind="probe"`) || strings.Contains(metrics, `debug_runs_total{kind="static"`) {
 		t.Errorf("at edit the family has the kinds edit does not serve:\n%s", metrics)
 	}
 	for series, want := range map[string]float64{

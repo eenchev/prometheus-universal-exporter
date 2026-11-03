@@ -7439,6 +7439,7 @@ At minimum:
 http_exporter_scrapes_total
 http_exporter_scrape_success_total
 http_exporter_scrape_duration_seconds
+http_exporter_probe_duration_seconds
 http_exporter_scrape_http_status_code
 http_exporter_scrape_grpc_status_code
 http_exporter_scrape_response_bytes
@@ -7610,6 +7611,21 @@ per collector with no per-request series, MUST exist for every collector,
 that failed without contacting their target because the collector was
 backing off from it, and the targets it keeps its trips from now (§ 42.13c).
 A debug run MUST NOT be counted in either.
+`http_exporter_probe_duration_seconds`, a histogram, MUST be published
+whether or not verbose mode is on, labelled `collector` and `kind` and by
+nothing else, never by target: `kind="probe"` MUST observe every probe of
+the collector, one answered from the response cache or by sharing another
+probe's request (§ 42.13a) included, for the duration
+`http_exporter_scrape_duration_seconds` takes of it, to the answer being
+ready; `kind="static"` every static target scrape of the collector, for the
+same duration its gauge takes. Every configured collector MUST have its
+`kind="probe"` series, empty until its first probe, and its
+`kind="static"` series exactly while a static target of the file in force
+names it. A debug run MUST NOT be observed. The buckets, the exponential
+buckets, the native histogram of the protobuf answer and the exemplars
+MUST be those of the scrape-time histogram (§ 22.1a), the exemplar of a
+probe or a scrape whose trace was exported, and its creation time that of
+the collector's counters (§ 22.1b).
 `http_exporter_answer_bytes_total` and
 `http_exporter_answer_sent_bytes_total`, counters, MUST be exporter-wide,
 with no `collector` label, labelled `endpoint` with `probe`, `self_metrics`
@@ -8020,7 +8036,8 @@ timestamp in `timestamp_ms`; and, with `web.self_metrics.created_timestamps`
 and only then, a counter's, histogram's or summary's creation time in its
 `created_timestamp`. A histogram MUST carry its classic buckets without the
 `+Inf` one, its `sample_count` and `sample_sum`, and, for the scrape-time
-histogram, its native buckets too: `schema` the recorder's scale lowered to
+histogram and `http_exporter_probe_duration_seconds` (§ 22), its native
+buckets too: `schema` the recorder's scale lowered to
 at most 3 by merging buckets, `zero_threshold` 2^-128, `zero_count`, and
 `positive_span` and `positive_delta` as Prometheus defines them, bucket `i`
 of OpenTelemetry being Prometheus's `i+1`. The protobuf answer MUST be
@@ -8122,7 +8139,8 @@ summaries began to count, its creation time:
 - the exporter's start, for a series that has counted since then: the
   counters of a collector of the configuration the exporter started with, its
   `http_exporter_rule_failures_total` series, its
-  `http_exporter_collector_scrape_duration_seconds` histogram and the
+  `http_exporter_collector_scrape_duration_seconds` and
+  `http_exporter_probe_duration_seconds` histograms and the
   counters of its Python workers (§ 22.1a); the reload counters (§ 22.0b) and
   the OTLP ones (§ 22.0c); the `http_exporter_python_pool_` counters of
   § 22.1a, which the pool keeps whatever a reload does; and the `go_` and
@@ -30011,6 +30029,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAConfiguredTraceparentIsSentAsItIs` (fetch): a caller's context passed on arrives as it came, with no span id recorded; a `traceparent` of `request.headers`, or forwarded in lower case, is sent as it is with no `tracestate`; without propagation nothing is sent.
 - `TestAGRPCCallCarriesItsTraceparent` (fetch): a gRPC call's metadata carries the trip's `traceparent` under the span id recorded with the call and its `tracestate`; one `request.metadata` sets is sent as it is.
 - `TestSchemaAndExporterAgreeOnASwitchedOffOTLPBlock`: `traces: {enabled: false, propagate: true}` is accepted by both, and `propagate: maybe` refused by both.
+
+## 34.260 Probe duration histogram, request span facts, Kubernetes trace propagation, and an export cut short by the loop's stop
+
+- `TestTheExportLoopDoesNotScrape`: the export loop, stopped while it exports every 20ms, scraped no static target; an export the stop cut short, whose body the endpoint reads broken off, fails nothing and is not counted (§ 42.1a).
+- `TestTheProbeDurationHistogramIsAlwaysPublished`: without verbose self-metrics, three probes of a caching collector, two answered from the cache, are three observations in `http_exporter_probe_duration_seconds{collector,kind="probe"}`, the sum at least the gauge's last duration; a collector not probed has its series at 0; the family is declared once, every series labelled `collector` and `kind` alone, none `kind="static"` without static targets, the trip histogram absent, and the series in the OTLP set; a debug probe is not observed.
+- `TestStaticScrapesAreObservedApartFromProbes`: a static target scrape is one observation in its collector's `kind="static"` series and none in `kind="probe"`; a collector no static target names has no `kind="static"` series.
+- `TestTheProbeDurationHistogramHasNativeAndExponentialBuckets`: after one probe, the protobuf answer's probe histogram has count 1, the 13 classic buckets, schema 3 and one span; with `otlp.exponential_histograms` the OTLP export sends it as an exponential histogram alone.
+- `TestAnExportedProbeIsItsProbeDurationBucketsExemplar`: of a fast probe whose trace was dropped and a slow one whose trace was exported, only the slow one is an exemplar in OpenMetrics, of the exported root span's trace and span ids, on a bucket of 0.05 or above.
 
 # 35. Documentation requirements
 

@@ -962,7 +962,8 @@ func TestOTLPStartsTheExportersOwnSeriesAtTheirCreation(t *testing.T) {
 			}
 		}
 	}
-	if kinds["sum"] < 20 || kinds["histogram"] != 1 || kinds["summary"] != 1 {
+	// The histograms are the scrape-time one and the probe durations'.
+	if kinds["sum"] < 20 || kinds["histogram"] != 2 || kinds["summary"] != 1 {
 		t.Errorf("the export has %v, which does not cover every kind", kinds)
 	}
 	// Only the series read from a target needed its start remembered.

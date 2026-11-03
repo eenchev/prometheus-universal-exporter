@@ -518,6 +518,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, ready, parent, traced)
 		}
 		s.load.addProbe(duration)
+		// Into the collector's statistics alone, as the trip histogram's:
+		// a request's has no histogram.
+		observeProbe(rec.collector, duration, spans.traceLink())
 		rec.update(func(x *serverStats) {
 			if ok {
 				x.success++

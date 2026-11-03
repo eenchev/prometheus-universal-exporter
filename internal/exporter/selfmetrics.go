@@ -77,6 +77,11 @@ type serverStats struct {
 	// durations is the collector's scrape-time histogram of verbose mode
 	// (verbosemetrics.go). Only the per-collector statistics keep it.
 	durations durationHistogram
+	// probeDurations and staticDurations are the collector's
+	// http_exporter_probe_duration_seconds, of its probes and of its static
+	// target scrapes (probedurations.go). Only the per-collector statistics
+	// keep them.
+	probeDurations, staticDurations durationHistogram
 	// retired is set when a reload removed the collector these statistics
 	// were of (reconcile.go): what a trip that began before then still
 	// counts in them is no longer shown, and starts no request being tracked
@@ -269,6 +274,7 @@ func newServerStats(created time.Time) *serverStats {
 // collector's counters.
 var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version, built request types and built sql drivers as labels.",
+	probeDurationName:                                          probeDurationHelp,
 	"http_exporter_collector_config_valid":                     "1 for every collector of the configuration in force; a rejected reload shows in http_exporter_config_last_reload_successful, not here.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
 	"http_exporter_cache_revalidations_total":                  "Trips of this http or graphite collector that revalidated an expired cached response with If-None-Match or If-Modified-Since (cache.revalidate), by result: not_modified (the target answered 304 and the cached body was transformed again) or modified (it sent a new response the collector accepts).",
@@ -530,6 +536,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key), Created: d.created(sample.Values)})
 		}
 	}
+	out = append(out, s.probeDurationMetrics(names, stats)...)
 	out = append(out, buildInfoMetric())
 	collectors = s.manager.Get().Collectors
 	for i := range collectors {

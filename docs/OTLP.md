@@ -489,18 +489,20 @@ exported, and the other is left out and logged.
 
 ## Exponential histograms
 
-The exporter's own duration histogram,
+The exporter's own duration histograms,
+`http_exporter_probe_duration_seconds` (see
+[Probe durations](SELF-METRICS.md#probe-durations)) and, in verbose mode,
 `http_exporter_collector_scrape_duration_seconds` (see
-[Scrape-time histograms](SELF-METRICS.md#scrape-time-histograms)), is kept in
-fixed buckets and in exponential ones. It is exported with its fixed buckets
-unless the block says otherwise:
+[Scrape-time histograms](SELF-METRICS.md#scrape-time-histograms)), are kept in
+fixed buckets and in exponential ones. They are exported with their fixed
+buckets unless the block says otherwise:
 
 ```yaml
 otlp:
   exponential_histograms: true
 ```
 
-It is then an OTLP exponential histogram: cumulative, with its `scale`, the
+Each is then an OTLP exponential histogram: cumulative, with its `scale`, the
 count of durations of 0 in `zeroCount`, the counts of its buckets from
 `positive.offset` on, its sum, count, `min` and `max`. Bucket `i` holds the
 durations above base^i and up to base^(i+1), the base being 2^(2^-scale),
@@ -1150,13 +1152,16 @@ OTLP records alone.
 
 ### Exemplars
 
-With verbose self-metrics too (`web.self_metrics.verbose`), each bucket of
-`http_exporter_collector_scrape_duration_seconds` has an exemplar: the
-latest trip observed in it whose trace was exported, with the trace id and
-the probe's or the scrape's own span id, the trip's duration and the time
-it was observed, as Prometheus' Go client keeps the latest exemplar of each
-bucket. A trip shared by several probes is of the trace of the probe that
-started it. A bucket whose trips were all dropped has none.
+Each bucket of `http_exporter_probe_duration_seconds` has an exemplar: the
+latest probe or static target scrape observed in it whose trace was
+exported, with the trace id and the probe's or the scrape's own span id,
+its duration and the time it was observed, as Prometheus' Go client keeps
+the latest exemplar of each bucket. With verbose self-metrics
+(`web.self_metrics.verbose`), so has each bucket of
+`http_exporter_collector_scrape_duration_seconds`, of the latest trip
+observed in it; a trip shared by several probes is of the trace of the
+probe that started it. A bucket whose observations' traces were all
+dropped has none.
 
 The exemplars are written where a format carries them
 ([self-metrics](SELF-METRICS.md#exemplars)): in OpenMetrics, after the

@@ -16,6 +16,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- The self-metrics have a histogram more of each collector, always:
+  `http_exporter_probe_duration_seconds{collector,kind}`, 16 more lines of
+  the text format a collector, and 16 more for one a static target names.
 - A Prometheus that asks for its protobuf format first, as it does when it
   scrapes native histograms, gets the self-metrics in protobuf, with
   `http_exporter_collector_scrape_duration_seconds` carrying native buckets
@@ -114,6 +117,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `http_exporter_probe_duration_seconds`, a histogram of every collector's
+  probe durations (`kind="probe"`) and static target scrape durations
+  (`kind="static"`, for a collector a static target names), as
+  `http_exporter_scrape_duration_seconds` measures them, cache hits and
+  shared probes included, published with or without verbose self-metrics,
+  never by target ([Probe durations](docs/SELF-METRICS.md#probe-durations)).
+  It has the buckets of the verbose trip histogram, which stays, its native
+  and exponential buckets, and, with `otlp.traces`, exemplars of the
+  exported traces of probes and scrapes.
 - `metric_name_validation_scheme: utf8` on a collector, Prometheus 3's
   setting: the collector keeps UTF-8 metric and label names such as
   `http.server.duration` as they are, and each answer writes them as its

@@ -137,7 +137,7 @@ func BenchmarkJQCompiledPerEvaluation(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		iter := code.Run(data, data)
+		iter := code.Run(data, JQBindings{}.Values(data)...)
 		for {
 			if _, ok := iter.Next(); !ok {
 				break

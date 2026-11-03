@@ -38,6 +38,8 @@ type pythonResponse struct {
 	StatusCode any                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers"`
 	Body       string              `json:"body"`
+	// Timings is response.timings, jq's $timings (fetch.HTTPTrip).
+	Timings any `json:"timings"`
 }
 
 // pythonOutput is one answer from a worker: the metrics a transform emitted or

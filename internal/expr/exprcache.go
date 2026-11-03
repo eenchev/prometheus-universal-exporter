@@ -123,9 +123,24 @@ func (c *exprCache[T]) len() int {
 // JQVariables are bound in every jq program, in this order: $root, the whole
 // decoded document, so an expression evaluated against one item of a
 // metric's items can still look things up elsewhere in the response;
-// $status, the response's HTTP status; and $headers, its headers by
-// lower-case name.
-var JQVariables = []string{"$root", "$status", "$headers"}
+// $status, the response's HTTP status; $headers, its headers by lower-case
+// name; and $timings, how long the phases of the request it answered took.
+// Every program has them all, whatever the collector's request type, so a
+// rule that names one compiles anywhere and reads null where the request
+// has nothing to give (JQBindings).
+var JQVariables = []string{"$root", "$status", "$headers", "$timings"}
+
+// JQBindings are the values of JQVariables after $root for one evaluation;
+// a field left nil is null to the program.
+type JQBindings struct {
+	Status, Headers, Timings any
+}
+
+// Values are the values to run a program with, root first, in the order of
+// JQVariables.
+func (b JQBindings) Values(root any) []any {
+	return []any{root, b.Status, b.Headers, b.Timings}
+}
 
 // A compiled program is safe to run from many goroutines at once.
 var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {

@@ -3,6 +3,7 @@ package exporter
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1035,6 +1036,9 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 	}
+	for _, line := range tripLines(r) {
+		fmt.Fprintf(b, "  %s\n", line)
+	}
 	if p := r.Pages; p != nil && (len(p.Pages) > 1 || p.MoreLeft) {
 		b.WriteString(pagesLine(p))
 	}
@@ -1047,6 +1051,18 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 		return false
 	}
 	return true
+}
+
+// tripLines are the jq variables that say what the request was besides its
+// answer, each as its name and its value as JSON, for the request of an
+// http or graphite collector (fetch.HTTPTrip): what the rules read of it
+// beside the status, which a report shows.
+func tripLines(r *fetch.HTTPResponse) []string {
+	if r.Trip == nil {
+		return nil
+	}
+	timings, _ := json.Marshal(r.Trip.JQTimings())
+	return []string{"$timings " + string(timings)}
 }
 
 // writeDirectory renders a directory read as its files.

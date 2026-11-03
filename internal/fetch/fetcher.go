@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path"
@@ -75,6 +76,10 @@ type HTTPResponse struct {
 	// it 304 Not Modified: the response is then the cached one, its status
 	// and body, with its headers updated from the 304's.
 	Conditional, NotModified bool
+	// Trip is what the request an http or graphite collector's answer
+	// came from was besides its answer (HTTPTrip); nil for every other
+	// request type, and for a response the debug page was given.
+	Trip *HTTPTrip
 }
 
 // PagesRead is what request.pagination fetched for one trip.
@@ -872,7 +877,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if requestBody != "" {
 			reqBody = strings.NewReader(requestBody)
 		}
-		req, err := http.NewRequestWithContext(requestContext, method, u.String(), reqBody)
+		// Each attempt times its own requests: what the answer carries is
+		// of the attempt that brought it (HTTPTrip).
+		timing := newTripTrace(time.Now())
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(requestContext, timing.hooks()), method, u.String(), reqBody)
 		if err != nil {
 			return nil, err
 		}
@@ -1008,6 +1016,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))
 		}
 		closeErr := resp.Body.Close()
+		trip := timing.trip(resp, time.Now())
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
 			traceBodyError(requestContext, readErr)
@@ -1051,9 +1060,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// The cached response is current: it is the answer, as if
 			// it had been downloaded again.
 			traceOutcomeNote(requestContext, notModifiedNote(cached))
-			return &HTTPResponse{StatusCode: cached.StatusCode, Headers: revalidated(cached, resp.Header), Body: cached.Body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: true, NotModified: true}, nil
+			return &HTTPResponse{StatusCode: cached.StatusCode, Headers: revalidated(cached, resp.Header), Body: cached.Body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: true, NotModified: true, Trip: trip}, nil
 		}
-		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: cached != nil}
+		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: cached != nil, Trip: trip}
 		// The answer of a request a redirect led to says so when the
 		// redirect left the collector's headers behind, so a 401 from
 		// there can be told from one the target gave.

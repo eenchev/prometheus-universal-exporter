@@ -5866,6 +5866,26 @@ status MUST be the HTTP status for `http` and `graphite`, the call's status
 code for `grpc`, `0` for `OK`, and `null` for `localfile`, which has none;
 Python's `response.status_code` MUST be the same, `None` for `null`.
 
+Every jq program MUST also have `$timings` bound, whatever the collector's
+request type, so that a rule reading it compiles in every collector. For an
+`http` or `graphite` collector it MUST be an object of `dns`, `connect`,
+`tls`, `first_byte` and `total`, seconds as numbers, measured with
+`net/http/httptrace` on the request whose status `$status` is: the last
+attempt of a retried request, the request a followed redirect led to, the
+first page of a paginated collector or the page whose status failed it, and
+the conditional request of a revalidation answered `304`. `first_byte` MUST
+run from the request's start, when it asks for a connection, to the
+answer's first byte, and `total` from that start to the end of reading the
+body. A phase the request did not have MUST be `null`, not `0`: no lookup,
+connection or handshake on a reused connection, no handshake over plain
+HTTP, no lookup to an IP address or a Unix socket, and no handshake the
+exporter's own dialer makes to an `https://` proxy. `$timings` MUST be
+`null` for every other request type, for a response pasted on the debug
+page, and in a pagination's `next` and a login's `token` expression.
+Python's `response.timings` MUST be the same, a dict with `None` for
+`null`, and `None` whole where `$timings` is `null`. A debug probe's report
+and the debug page MUST show `$timings` as JSON under the response's status.
+
 ---
 
 # 18. Transformation model
@@ -30154,6 +30174,13 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestDecoderNoneIsTakenByTheTransformsThatReadNull` (config): `none` loads with `jq`, `yq` and `python`, and is refused with `regex`, `css`, `xpath`, `csv` and `prometheus`, naming the decoders each reads and `jq, yq or python` as the transforms that read `none`; `response.charset` beside it is refused; an unknown decoder's error lists `none`.
 - `TestDecoderNoneReadsTheStatusAndHeadersOfAnyAnswer`: a HEAD collector of `accept_status: [any]` and `decoder.type: none` answers an empty 204, an HTML 200 and a 503 with a broken JSON body, all with an unknown charset, with `uptime_up`, `uptime_status_code` from `$status`, `. == null` and `$headers["x-version"]`, sending HEAD; a `yq` GET of a broken document is answered; a Python script's `data` is `None`, `response.body` the body and `response.status_code` the status.
 - `TestEveryListedDecoderIsHandled` has a sample of `none`, and `TestDecoderListsNameEveryDecoder` leaves `none`, which is no format, out of the lists of formats, as it leaves `auto`.
+
+## 34.263 Uptime probes: timings, TLS and redirect variables, and the uptime recipe
+
+- `TestTimingsAreOfTheAnsweredRequest` (fetch): a new plain HTTP connection to an IP address has `connect` and no `dns` or `tls`, a `first_byte` past the target's pause before its headers and a `total` past its pause before the body; the next request on the kept connection has none of the three; a target by name has `dns`; a TLS target has `tls`; a plain HTTP request redirected to a TLS target has the `tls` and `connect` of the request it led to; `$timings` of no trip is `null`, and of one has five keys, `null` for a phase it did not have.
+- `TestAGraphiteAnswerHasTheTimingsOfItsRequest` (fetch): a graphite collector's answer carries the timings of its request.
+- `TestTimingsAreBoundInEveryProgram` (transform): jq and yq rules read `$timings` in an expression, an `items` expression and a label, per item too, `null` for the phases the request did not have and `null` whole for a response without a trip; Python's `response.timings` is the same dict, `None` without a trip.
+- `TestAProbeReadsTheTimingsOfItsRequest`: through `/probe`, an uptime collector's rules read `$timings.first_byte` past the target's pause and a series for each phase a new plain HTTP connection to an IP address has, `connect`, `first_byte` and `total`; a debug probe's report shows `$timings` as JSON under the status, and the debug page's response has it in `variables`.
 
 # 35. Documentation requirements
 

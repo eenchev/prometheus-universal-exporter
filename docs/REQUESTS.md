@@ -1386,6 +1386,66 @@ followed as before, and the status of the answer it leads to is the one
 accepted. A [static target](STATIC-TARGETS.md) may set its own `[any]`, or
 replace the collector's `[any]` with a list.
 
+## Timings, TLS and the final URL
+
+Beside `$status` and `$headers`, jq and yq rules of an `http` or `graphite`
+collector read what the request was besides its answer, and a Python script
+has the same on its `response`:
+
+| jq and yq | Python | What it is |
+| --- | --- | --- |
+| `$timings` | `response.timings` | How long the request's phases took, in seconds |
+
+```yaml
+transform:
+  type: jq
+metrics:
+  - name: app_request_seconds
+    items: '$timings | to_entries[] | select(.value != null)'
+    expression: .value
+    labels:
+      - name: phase
+        expression: .key
+```
+
+`$timings` is an object of five numbers of seconds, measured on the request
+with Go's `net/http/httptrace`:
+
+| Key | The time |
+| --- | --- |
+| `dns` | to look the target's name up |
+| `connect` | to connect to it, from the first address tried to the one that took the connection |
+| `tls` | for the TLS handshake |
+| `first_byte` | from the request's start, when it asked for a connection, to the first byte of the answer |
+| `total` | from the request's start to the end of reading the body |
+
+A phase the request did not have is `null`, not `0`: on a connection kept
+from an earlier request there is no lookup, connection or handshake; over
+plain HTTP no handshake; to an IP address or over a [Unix
+socket](#over-a-unix-socket) no lookup. Through a [proxy](#proxies) the
+lookup and the connection are the proxy's, and the handshake the target's
+through the tunnel; a connection to an `https://` proxy is made by the
+exporter itself, and its handshake is not timed.
+
+The values are of one request: the one whose status `$status` is. That is
+the last attempt of a [retried](#retries) request, the request a
+[redirect](#redirects-and-http2) led to, not the one redirected (so a
+redirect to another host has a lookup, a connection and a handshake of its
+own), and of a [paginated](#pagination) collector the first page, or the
+page whose status failed the scrape. A [revalidated
+response](CONFIGURATION.md#revalidating-expired-responses) has those of the
+conditional request, whose `304` is answered with the cached status and
+body; a probe the [response cache](CONFIGURATION.md#response-caching)
+answers runs no rule, and its series are those of the scrape that filled
+it, timings included.
+
+`$timings` is `null` for every other request type, and on a response pasted
+on the [debug page](CONFIGURATION.md#the-debug-page); every jq and yq
+program has the variable, so a rule that reads it loads whatever the
+collector's type. A pagination's `next` and a login's `token` expression
+read it as `null` too. A [debug probe](CONFIGURATION.md#debug-probes)'s
+report and the debug page show its value under the response's status.
+
 ## Pagination
 
 An API that pages its answer gives one request only the first page. With

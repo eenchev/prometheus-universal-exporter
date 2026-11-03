@@ -194,6 +194,11 @@ func oldWriteResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom stri
 	case r.StatusCode != 0:
 		fmt.Fprintf(b, "  Status %d %s\n", r.StatusCode, http.StatusText(r.StatusCode))
 	}
+	// What the request was besides its answer, short lines the bounds do
+	// not touch, which came after the oracle was written.
+	for _, line := range tripLines(r) {
+		fmt.Fprintf(b, "  %s\n", line)
+	}
 	if len(r.Headers) > 0 {
 		b.WriteString("  Headers\n")
 		oldWriteHeaders(b, r.Headers, "    ")

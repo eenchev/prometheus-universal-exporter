@@ -117,6 +117,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- jq and yq rules of `http` and `graphite` collectors read `$timings`, how
+  long the request's phases took in seconds — `dns`, `connect`, `tls`,
+  `first_byte` and `total` — measured on the request that was answered,
+  with `null` for a phase it did not have, such as the handshake over plain
+  HTTP or the connection a kept one spared; a Python script has the same as
+  `response.timings`, and a debug probe's report shows it under the status.
+  Every jq and yq program has the variable, `null` for other request types
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
 - `report_failures: true` on a collector answers every probe of it `200`
   with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
   `http_exporter_probe_elapsed_seconds`, and on a failure

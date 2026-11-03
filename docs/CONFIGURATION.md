@@ -1349,7 +1349,10 @@ required, and produces nothing when it is not. `$root` works without `items`
 too, where it is the same document as `.`. Every jq and yq expression also
 has `$status`, the response's HTTP status, and `$headers`, its headers by
 lower-case name, for a target whose status or headers say something the body
-does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses)).
+does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses)),
+and `$timings`, how long the phases of an `http` or `graphite` collector's
+request took, `null` for other types (see [Timings, TLS and the final
+URL](REQUESTS.md#timings-tls-and-the-final-url)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one

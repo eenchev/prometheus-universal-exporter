@@ -19,6 +19,12 @@ them: `response.headers["X-Mode"]` is `["a", "b"]` for a header sent twice.
 the values joined by `, `, `"a, b"`, whatever the name's case, or `None`
 without the header, or a default, `response.header("x-mode", "")`.
 
+An `http` or `graphite` collector's script also has what the request was
+besides its answer, as jq and yq rules have it ([Timings, TLS and the final
+URL](REQUESTS.md#timings-tls-and-the-final-url)): `response.timings`, a dict
+of the request's phases in seconds, `None` for a phase it did not have,
+`response.timings["first_byte"]`. It is `None` for every other request type.
+
 `target` is the target exactly as the probe or the static target gave it,
 credentials included: `https://user:password@host/api?token=abc` reaches the
 script as written, not redacted as the exporter's logs show it. Do not print

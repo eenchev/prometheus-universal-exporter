@@ -166,7 +166,7 @@ func itemsPath(items string, page any) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%q does not compile: %w", items, err)
 	}
-	iterator := code.Run(page, page, nil, nil)
+	iterator := code.Run(page, expr.JQBindings{}.Values(page)...)
 	var found []any
 	count := 0
 	for {
@@ -466,7 +466,7 @@ func nextValue(next string, response *HTTPResponse, page any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	iterator := code.Run(page, page, response.Status(), jqHeaders(response.Headers))
+	iterator := code.Run(page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
 	var first any
 	count := 0
 	for {

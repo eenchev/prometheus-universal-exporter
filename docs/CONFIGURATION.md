@@ -243,9 +243,9 @@ decoder:
 transform:
   type: jq
 metrics:
-  - name: uptime_up
+  - name: site_up
     expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
-  - name: uptime_status_code
+  - name: site_status_code
     expression: $status
 ```
 
@@ -3160,14 +3160,14 @@ collectors:
     transform:
       type: jq
     metrics:
-      - name: uptime_status_code
+      - name: site_status_code
         expression: $status
 ```
 
 A probe that succeeds is answered the collector's series, and after them:
 
 ```text
-uptime_status_code 200
+site_status_code 200
 http_exporter_probe_success 1
 http_exporter_probe_elapsed_seconds 0.012
 ```

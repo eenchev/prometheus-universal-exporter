@@ -297,7 +297,7 @@ func readsAsTime(s string) bool {
 
 // withoutReceivedSize is a gRPC status message with the mark in place of
 // the size of a message that was over a limit, after the words grpc-go's
-// client says it with, in full (google.golang.org/grpc v1.84.0, rpc_util.go):
+// client says it with, in full (google.golang.org/grpc v1.85.0, rpc_util.go):
 // `grpc: received message larger than max (5007 vs. 1000)`, the same of a
 // message once decompressed, and of one larger than the machine can hold.
 // The limit, which the configuration gave, stays. Any other words before a

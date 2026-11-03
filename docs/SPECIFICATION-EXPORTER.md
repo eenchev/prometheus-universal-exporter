@@ -25191,8 +25191,8 @@ sshfile listing sessions a host keeps open, listings given up while the host ope
   connects tcp and tcp4.
 - No PG* variable pgx reads changes the postgres configuration, those pgx
   would refuse (PGPORT notaport, PGCONNECT_TIMEOUT soon) and
-  PGREQUIREAUTH, PGCHANNELBINDING, PGMIN/MAXPROTOCOLVERSION and PGPASSFILE
-  included; PGSERVICE fails the connection saying to unset it; with no
+  PGREQUIREAUTH, PGCHANNELBINDING, PGSSLCERTMODE (set, or empty, which pgx
+  refuses), PGMIN/MAXPROTOCOLVERSION and PGPASSFILE included; PGSERVICE fails the connection saying to unset it; with no
   variable set the configuration is what it was (the old function the
   oracle); every field of pgx's configuration is one the test has looked
   at, a field a later pgx adds failing it.

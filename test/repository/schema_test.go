@@ -120,7 +120,7 @@ const (
 // for an editor; one of a type the build lacks is skipped.
 func TestShippedConfigurationsMatchTheSchema(t *testing.T) {
 	schema, built := loadSchema(t), builtSchema(t, configSchemaFile)
-	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}
+	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml", "configs/config.uptime.example.yaml"}
 	tree := shippedExamples(t)
 	files = append(files, tree.configs...)
 	for _, file := range files {
@@ -236,6 +236,7 @@ func TestExamplesReferenceTheSchema(t *testing.T) {
 	for file, render := range map[string]func() ([]byte, error){
 		"configs/config.example.yaml":         config.SchemaJSON,
 		"configs/config.otlp.example.yaml":    config.SchemaJSON,
+		"configs/config.uptime.example.yaml":  config.SchemaJSON,
 		"configs/static-targets.example.yaml": config.StaticTargetsSchemaJSON,
 	} {
 		modeline := "# yaml-language-server: $schema=" + parsedSchema(t, render)["$id"].(string)

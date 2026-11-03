@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,9 +46,9 @@ func tripSeries(t *testing.T, c model.Collector, r *fetch.HTTPResponse) string {
 	for _, m := range set.Metrics {
 		b.WriteString(m.Name)
 		for _, name := range model.SortedKeys(m.Labels) {
-			b.WriteString(" " + name + "=" + m.Labels[name])
+			fmt.Fprintf(&b, " %s=%s", name, m.Labels[name])
 		}
-		b.WriteString(" " + strconv.FormatFloat(m.Value, 'f', -1, 64) + "\n")
+		fmt.Fprintf(&b, " %s\n", strconv.FormatFloat(m.Value, 'f', -1, 64))
 	}
 	return b.String()
 }

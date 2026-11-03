@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
+# An uptime check of HTTP and HTTPS sites, the job of blackbox_exporter's http
+# prober: Prometheus names each site as the probe's target, and the collector
+# answers whether it is up, its status, how long each phase of the request
+# took, its certificate's expiry and the redirects it followed. What each
+# series means, the Prometheus job and how the series map to
+# blackbox_exporter's: docs/REQUESTS.md, "Uptime probes".
+collectors:
+  - name: site
+    # A probe that fails — a name that does not resolve, a refused
+    # connection, a timeout, a certificate that does not verify — is
+    # answered 200 with http_exporter_probe_success 0 and the stage that
+    # failed, rather than 502 and nothing.
+    report_failures: true
+    request:
+      type: http
+      # A site that refuses HEAD answers 405: use GET there, whose body is
+      # read and thrown away.
+      method: HEAD
+      follow_redirects: true
+      # Every status is the answer: site_up says whether it is a 2xx.
+      accept_status: [any]
+    decoder:
+      type: none
+    transform:
+      type: jq
+    metrics:
+      - name: site_up
+        description: Whether the site answered with a 2xx status, after its redirects
+        expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
+      - name: site_http_status_code
+        description: The HTTP status the site answered with, after its redirects
+        expression: $status
+      - name: site_http_duration_seconds
+        description: How long each phase of the answered request took; first_byte and total from its start
+        items: '$timings | to_entries[] | select(.value != null)'
+        expression: .value
+        labels:
+          - name: phase
+            expression: .key
+      - name: site_http_redirects
+        description: How many redirects were followed
+        expression: $redirects
+      - name: site_http_ssl
+        description: Whether the answered request was made over TLS
+        expression: 'if $tls == null then 0 else 1 end'
+      - name: site_tls_cert_expiry_timestamp_seconds
+        description: When the certificate the site served expires, in Unix seconds
+        expression: $tls.not_after
+        required: false   # none over plain HTTP
+      - name: site_tls_version_info
+        description: The TLS version of the connection, as a label
+        items: '$tls | select(. != null)'
+        expression: "1"
+        required: false
+        labels:
+          - name: version
+            expression: .version

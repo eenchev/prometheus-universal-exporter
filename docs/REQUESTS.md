@@ -1456,8 +1456,10 @@ the target presented on it, nothing secret:
 | `subject_cn`, `issuer_cn` | The common names of its subject and its issuer |
 
 The names are those of the [`tlscert` type](TLSCERT.md#the-document)'s
-document and of its span facts, `tls.protocol.version` and `tls.cipher`,
-whose `"1.3"` `version` is. `$tls.not_after` is when the certificate the
+document, but for `version` and `cipher`, which are its span facts',
+`tls.protocol.version` and `tls.cipher`: the document's `tls_version` is
+`"TLS 1.3"` where `version` is `"1.3"`, and its `cipher_suite` is
+`cipher`. `$tls.not_after` is when the certificate the
 target serves expires, the one an uptime check alerts on; a chain's
 intermediates and roots, and a certificate on a port that speaks no HTTP,
 are the `tlscert` type's. Through an `https://` proxy, a plain HTTP request
@@ -1471,7 +1473,7 @@ a target is in a log line: its userinfo and its fragment are left out, and
 the value of a query parameter whose name reads as a credential's —
 `token`, `api_key`, `password`, `sig` and the like — is `<redacted>`. Every
 other parameter is kept as it was sent, so a label of `$url` is safe to the
-extent that rule is: a session ID, a tenant or an e-mail address in a
+extent that rule is: an order number, a tenant or an e-mail address in a
 parameter of another name is kept, and a URL that carries one a redirect
 chose, such as a login page's `?next=`, makes a series of every value. Keep
 the URL's start alone where that matters, `$url | split("?")[0]`.
@@ -1479,11 +1481,176 @@ the URL's start alone where that matters, `$url | split("?")[0]`.
 `$timings`, `$tls`, `$url` and `$redirects` are `null` for every other
 request type, and on a response pasted on the [debug
 page](CONFIGURATION.md#the-debug-page); every jq and yq program has the
-variables, so a rule that reads them loads whatever the collector's type. A pagination's `next` and a login's `token`
-expression read them as `null` too. A [debug
-probe](CONFIGURATION.md#debug-probes)'s report and the debug page show
-their values under the response's status, `$url` with the values of the
-query masked as the report's request lines mask them.
+variables, so a rule that reads them loads whatever the collector's type.
+A pagination's `next` and a login's `token` expression read them as `null`
+too. A [debug probe](CONFIGURATION.md#debug-probes)'s report and the debug
+page show their values under the response's status, `$url` with the values
+of the query masked as the report's request lines mask them.
+
+## Uptime probes
+
+An uptime check of HTTP and HTTPS sites, the job of
+[blackbox_exporter](https://github.com/prometheus/blackbox_exporter)'s
+`http` prober, is one collector:
+[`configs/config.uptime.example.yaml`](../configs/config.uptime.example.yaml).
+
+```yaml
+collectors:
+  - name: site
+    report_failures: true
+    request:
+      type: http
+      method: HEAD
+      follow_redirects: true
+      accept_status: [any]
+    decoder:
+      type: none
+    transform:
+      type: jq
+    metrics:
+      - name: site_up
+        expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
+      - name: site_http_status_code
+        expression: $status
+      - name: site_http_duration_seconds
+        items: '$timings | to_entries[] | select(.value != null)'
+        expression: .value
+        labels:
+          - name: phase
+            expression: .key
+      - name: site_http_redirects
+        expression: $redirects
+      - name: site_http_ssl
+        expression: 'if $tls == null then 0 else 1 end'
+      - name: site_tls_cert_expiry_timestamp_seconds
+        expression: $tls.not_after
+        required: false   # none over plain HTTP
+      - name: site_tls_version_info
+        items: '$tls | select(. != null)'
+        expression: "1"
+        required: false
+        labels:
+          - name: version
+            expression: .version
+```
+
+Each key has its part:
+
+- [`report_failures: true`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
+  answers a probe that fails — a name that does not resolve, a refused
+  connection, a timeout, a certificate that does not verify — `200` with
+  `http_exporter_probe_success 0` and the stage that failed, rather than
+  `502` and no sample.
+- `method: HEAD` asks for no body. A site that refuses `HEAD` answers `405`:
+  use `GET` there, whose body is read, up to `max_response_bytes`, and
+  thrown away.
+- [`follow_redirects: true`](#redirects-and-http2) follows the site's
+  redirects, so the status is the one of where they lead, and
+  `$redirects` counts them.
+- [`accept_status: [any]`](#accepting-other-statuses) makes every status the
+  answer, so a `503` is `site_up 0` with its status rather than a failed
+  probe.
+- [`decoder.type: none`](CONFIGURATION.md#no-decoder) reads no body: the
+  rules read `$status` and the variables of [Timings, TLS and the final
+  URL](#timings-tls-and-the-final-url), never the document.
+- `required: false` on the TLS rules: over plain HTTP `$tls` is `null`, and
+  those series are left out rather than reported as missing values.
+
+Prometheus names each site as the probe's target:
+
+```yaml
+scrape_configs:
+  - job_name: site
+    metrics_path: /probe
+    params:
+      collector: [site]
+    static_configs:
+      - targets:
+          - https://www.example.com
+          - https://shop.example.com/health
+          - http://intranet.example.internal
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: exporter.example:8080
+```
+
+The series of one probe, of `https://example.com`, which redirected once,
+to `https://www.example.com/`, another host, so the request answered made a
+connection of its own:
+
+```text
+site_up 1
+site_http_status_code 200
+site_http_duration_seconds{phase="connect"} 0.011
+site_http_duration_seconds{phase="dns"} 0.004
+site_http_duration_seconds{phase="first_byte"} 0.071
+site_http_duration_seconds{phase="tls"} 0.024
+site_http_duration_seconds{phase="total"} 0.072
+site_http_redirects 1
+site_http_ssl 1
+site_tls_cert_expiry_timestamp_seconds 1767225599
+site_tls_version_info{version="1.3"} 1
+http_exporter_probe_success 1
+http_exporter_probe_elapsed_seconds 0.149
+```
+
+| Series | What it says |
+| --- | --- |
+| `site_up` | `1` when the site answered with a `2xx` status, after its redirects; `0` for any other status. Absent from a probe that failed. |
+| `site_http_status_code` | The status of the answer, after the redirects. |
+| `site_http_duration_seconds{phase}` | How long each phase of the answered request took ([`$timings`](#timings-tls-and-the-final-url)): `dns`, `connect` and `tls` each on its own, and `first_byte` and `total` from the request's start. A phase the request did not have, such as `tls` over plain HTTP, or all three on a connection kept from an earlier probe, has no series. |
+| `site_http_redirects` | How many redirects were followed. |
+| `site_http_ssl` | `1` when the answered request was made over TLS. |
+| `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served expires, in Unix seconds; alert on it less `time()`. |
+| `site_tls_version_info{version}` | The TLS version of the connection, `1.2` or `1.3`. |
+| `http_exporter_probe_success` | `1` when the probe got an answer, whatever its status; `0` when it failed, with `http_exporter_probe_failed_stage{stage}` naming the stage. |
+| `http_exporter_probe_elapsed_seconds` | How long the whole probe took, the redirects included. |
+
+A site is down when either says so: `http_exporter_probe_success == 0`, no
+answer at all, or `site_up == 0`, an answer that is not a `2xx`. Both carry
+the job's and the target's labels, so `http_exporter_probe_success == 0 or
+site_up == 0` lists the sites that are down.
+
+### Compared with blackbox_exporter
+
+The series of blackbox_exporter's `http` prober, and what answers each
+here:
+
+| blackbox_exporter | Here | Differences |
+| --- | --- | --- |
+| `probe_success` | `http_exporter_probe_success`, and `site_up` | `probe_success` is `0` for a status outside `valid_status_codes`, `2xx` by default; here a probe with an answer succeeds, and `site_up` judges its status, so the two together say what `probe_success` does. |
+| `probe_duration_seconds` | `http_exporter_probe_elapsed_seconds` | The same: the whole probe. |
+| `probe_http_status_code` | `site_http_status_code` | The same: the status after the redirects. |
+| `probe_http_duration_seconds{phase}` | `site_http_duration_seconds{phase}` | blackbox_exporter's phases, `resolve`, `connect`, `tls`, `processing` and `transfer`, are consecutive and summed over every request of the redirects. Here they are of the answered request alone; `dns`, `connect` and `tls` are its `resolve`, `connect` and `tls`, and `first_byte` and `total` run from its start, so `processing` is `first_byte` less the three before it and `transfer` is `total` less `first_byte`. A phase that did not happen has no series, where blackbox_exporter reports `0`. |
+| `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
+| `probe_http_redirects` | `site_http_redirects` | The same. |
+| `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
+| `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The version without its `TLS ` prefix: `1.3`, not `TLS 1.3`. |
+
+Other series of blackbox_exporter's have no rule above, but read what is
+there: `probe_http_content_length` is `$headers["content-length"] |
+tonumber`, and `probe_http_last_modified_timestamp_seconds` is
+`$headers["last-modified"] | parse_time` (see the [value-parsing
+helpers](CONFIGURATION.md#value-parsing-helpers)); `probe_http_version` and
+`probe_ip_protocol` have no counterpart.
+
+What this collector does not do:
+
+- No ICMP: the exporter does not ping. A host's reachability is a
+  connection to one of its ports.
+- No raw TCP: a port that speaks something other than HTTP is the
+  [`tcp`](TCP.md) type's, in a build that asks for it, and a name's records
+  the [`dns`](DNS.md) type's.
+- One certificate: the chain's intermediates and roots, a chain that does
+  not verify and the reason, and a TLS port that speaks no HTTP are the
+  [`tlscert`](TLSCERT.md) type's.
+- No body check: blackbox_exporter's `fail_if_body_matches_regexp` is a
+  `GET` with a decoder and a rule that reads the body, in a collector of its
+  own.
 
 ## Pagination
 

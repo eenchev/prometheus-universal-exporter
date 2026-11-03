@@ -2622,6 +2622,9 @@ certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
 `ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
 `kubernetes` lists Kubernetes objects — see [Kubernetes
 objects](KUBERNETES.md).
+An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
+prober makes, is an `http` collector — see [Uptime
+probes](REQUESTS.md#uptime-probes).
 A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
@@ -3197,7 +3200,8 @@ the log has the error, as it always did, and so do a
 [status page](ENDPOINTS.md#status-page). The key works alike for every
 request type. The three series carry no label of the collector's
 (`transform.labels` and `metrics_prefix` are the collector's series');
-Prometheus adds the target's.
+Prometheus adds the target's. [Uptime probes](REQUESTS.md#uptime-probes)
+puts the key together with the rest of an uptime check of HTTP sites.
 
 What else becomes of a probe:
 
@@ -3762,8 +3766,9 @@ server, start a configuration with
 
 and the editor completes keys, shows what each one does, and flags unknown keys
 and values that are not allowed as you type. The example configurations in
-`configs/`, `config.example.yaml` and `config.otlp.example.yaml`, start with
-it; the ones under `examples/` do not.
+`configs/`, `config.example.yaml`, `config.otlp.example.yaml` and
+`config.uptime.example.yaml`, start with it; the ones under `examples/` do
+not.
 
 The [static target file](STATIC-TARGETS.md) has a schema of its own,
 [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which

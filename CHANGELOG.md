@@ -132,6 +132,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   certificate's expiry without a `tlscert` collector beside it; `null` over
   plain HTTP. A Python script has it as `response.tls`
   ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- [Uptime probes](docs/REQUESTS.md#uptime-probes) puts an uptime check of
+  HTTP and HTTPS sites together, as blackbox_exporter's `http` prober makes
+  it: one collector, shipped as `configs/config.uptime.example.yaml`, the
+  Prometheus job, what each series means, and a table of blackbox_exporter's
+  series with what answers each here.
 - jq and yq rules of `http` and `graphite` collectors read `$url`, where the
   request went after its redirects, without its userinfo and with credential
   query values `<redacted>` as a target in a log line, and `$redirects`, how

@@ -30213,6 +30213,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestURLAndRedirectsAreBoundInEveryProgram` (transform): jq and yq rules read `$redirects` as a value and `$url` as a label, `null` without a trip; Python's `response.url` and `response.redirects` are the same, `None` without a trip.
 - `TestAProbeReadsWhereItsRedirectsLed`: through `/probe`, a redirect to a login page is `uptime_redirects 1` and a label of `$url` of the login page with its `token` `<redacted>` and `next` kept; a debug probe's report shows `$url` and `$redirects` under `$tls`, the URL's `next` and `token` masked as its request lines mask a query the configuration did not set, `<redacted>` as written; the debug page's `variables` are `$timings`, `$tls null`, `$url` and `$redirects 0` of a target answering at once.
 - `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `version` `1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
+- `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 with `site_up 0` and success 1; a redirect with `site_http_redirects 1` and the 200 it led to; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info{version="1.3"}`; the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
+- `TestShippedConfigurationsMatchTheSchema`, `TestExamplesReferenceTheSchema`, `TestTheShippedFilesMatchTheSchemasAsTheyDid` and `TestShippedExampleScriptsSatisfyTheContract` (repository) take `configs/config.uptime.example.yaml` among the shipped configurations.
 
 # 35. Documentation requirements
 
@@ -30262,6 +30264,19 @@ The repository MUST include documentation covering:
     `docs/<NAME>.md`, named in this list and linked from the README's index
     and from the related pages of `docs/CONFIGURATION.md`
 26. The target allocator, `pue-allocator`, in `docs/ALLOCATOR.md`
+27. Uptime probes of HTTP sites, in `docs/REQUESTS.md`, linked from the
+    README's index and from `docs/CONFIGURATION.md`: the collector of
+    `configs/config.uptime.example.yaml` — `report_failures`, `method:
+    HEAD`, `follow_redirects`, `accept_status: [any]`, `decoder.type: none`,
+    and jq rules of `$status`, `$timings`, `$tls` and `$redirects` — the
+    Prometheus job that relabels each site into `target`, what each series
+    means, a table of blackbox_exporter's `http` prober series with what
+    answers each here and how they differ, and what it does not do (ICMP,
+    raw TCP, the rest of the chain). The example MUST start with the
+    configuration schema's modeline, match the schema, and be loaded and
+    probed by a test against local sites answering `200`, `503`, a redirect
+    and TLS, and a closed port, which MUST find the series the page
+    documents and the example lint clean
 
 A list in the documentation that stands for every request type — the keys of
 each type in `docs/CONFIGURATION.md`, what a static target of each takes in

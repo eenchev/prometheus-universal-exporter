@@ -1554,12 +1554,21 @@ has no `$tls`: the connection it came on is the proxy's.
 `follow_redirects` or when the target answered at once. `$url` is shown as
 a target is in a log line: its userinfo and its fragment are left out, and
 the value of a query parameter whose name reads as a credential's —
-`token`, `api_key`, `password`, `sig` and the like — is `<redacted>`. Every
-other parameter is kept as it was sent, so a label of `$url` is safe to the
-extent that rule is: an order number, a tenant or an e-mail address in a
-parameter of another name is kept, and a URL that carries one a redirect
-chose, such as a login page's `?next=`, makes a series of every value. Keep
-the URL's start alone where that matters, `$url | split("?")[0]`.
+`token`, `api_key`, `password`, `sig`, `code` and `ticket`, which the
+redirect back from a login carries, and the like
+([the rule](LOGGING.md#repeated-failures)) — is `<redacted>`, and so is the
+value of a path parameter of such a name, as a servlet's session rides in
+the path when cookies are off: `/app;jsessionid=<redacted>`. Every other
+parameter, and every segment of the path, is kept as it was sent, so a
+label of `$url` is safe to the extent that rule is: an order number, a
+tenant or an e-mail address in a parameter of another name is kept, a URL
+that carries one a redirect chose, such as a login page's `?next=`, makes a
+series of every value, and a secret that is a segment of the path whole,
+as a bot's token in `/bot123456:AAE…/getMe`, has no name to tell it by and
+is kept. Keep the URL's path alone where that matters,
+`$url | split("?")[0] | split(";")[0]`, which ends it before its query
+and its first path parameter, and put `$url` in a label only for sites
+whose paths carry no secret.
 
 `$http_version` is the version of HTTP the same request's answer came in,
 `"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's `probe_http_version`

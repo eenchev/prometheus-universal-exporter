@@ -168,3 +168,58 @@ func TestAProbeReadsWhereItsRedirectsLed(t *testing.T) {
 		t.Errorf("the debug report does not show $url, $redirects, $http_version and $remote_ip under $tls:\n%s", report)
 	}
 }
+
+// A session in the path and OAuth's code in the query, where a redirect
+// back from a login puts them, are masked wherever the URL is shown: a
+// label of $url, the recipe's start of it, a debug probe's report, its
+// request lines and $url alike, and the log line of a failed probe that
+// names its target.
+func TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/":
+			http.Redirect(w, r, "/app;jsessionid=S3CRET?code=S3CRET2&state=x", http.StatusFound)
+		case strings.HasPrefix(r.URL.Path, "/broken"):
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer target.Close()
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: up
+    request: {type: http, follow_redirects: true}
+    decoder: {type: none}
+    transform: {type: jq}
+    metrics:
+      - name: uptime_final_url_info
+        expression: "1"
+        labels:
+          - name: url
+            expression: $url
+          - name: page
+            expression: '$url | split("?")[0] | split(";")[0]'
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := flightServer(t, cfg.Collectors...)
+	got := probeOnce(t, server, probePath("up", target.URL, ""), nil)
+	want := `uptime_final_url_info{page="` + target.URL + `/app",url="` + target.URL + `/app;jsessionid=<redacted>?code=<redacted>&state=x"} 1`
+	if body := got.Body.String(); got.Code != http.StatusOK || !strings.Contains(body, want) || strings.Contains(body, "S3CRET") {
+		t.Errorf("%d %s\nwant %s", got.Code, body, want)
+	}
+	server.SetDebug(DebugFull)
+	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("up", target.URL, "&debug=true"), "/probe?")).Body.String()
+	if strings.Contains(report, "S3CRET") || !strings.Contains(report, "\n  $url \""+target.URL+"/app;jsessionid=<redacted>?code=<redacted>&state=<redacted>\"\n") {
+		t.Errorf("the debug report:\n%s", report)
+	}
+	failed := probeOnce(t, server, probePath("up", target.URL+"/broken;jsessionid=S3CRET?ticket=S3CRET3&lang=en", ""), nil)
+	if failed.Code == http.StatusOK {
+		t.Errorf("a 500 was answered %d", failed.Code)
+	}
+	if text := logs.String(); strings.Contains(text, "S3CRET") || !strings.Contains(text, "/broken;jsessionid=<redacted>?ticket=<redacted>&lang=en") {
+		t.Errorf("the log:\n%s", text)
+	}
+}

@@ -6403,8 +6403,12 @@ same credentials as a probe. The report, and the page's JSON alike, redacts:
   `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
   `session`, `signature`, `credential` or `jwt`, unless the word is an
   ordinary one that only holds it, such as `author`, `authority`, `monkey`,
-  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw` or `pass` as a whole
-  word of it, as in `X-Sig` or `X-Db-Pwd`.
+  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw`, `pass`, `sid`,
+  `hmac` or `otp` as a whole word of it, as in `X-Sig` or `X-Db-Pwd`. A
+  query parameter's name reads as a credential's also with `code` (OAuth's
+  authorization code) or `ticket` (a CAS ticket) as a whole word of it;
+- the value of a path parameter whose name reads as a query parameter's
+  would, `/app;jsessionid=<redacted>`, in every URL shown.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it.

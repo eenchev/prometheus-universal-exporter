@@ -5916,9 +5916,10 @@ and wherever `$timings` is `null`. Python's `response.tls` MUST be the same.
 Every jq program MUST also have `$url` and `$redirects` bound. For the
 request `$timings` describes, `$url` MUST be its URL, where the followed
 redirects led, rendered by the redaction a target shown in a log line has:
-the value of each query parameter whose name reads as a credential's by the
-one rule for a name (§ 42.17) masked as `<redacted>` where it stands, every
-other parameter as it was sent, and the fragment left out; and its userinfo
+the value of each query parameter, and of each path parameter, whose name
+reads as a credential's by the one rule for a name (§ 42.17) masked as
+`<redacted>` where it stands, every other parameter and the path's segments
+as they were sent, and the fragment left out; and its userinfo
 MUST be left out, not shown as `redacted:redacted`. `$redirects` MUST be
 the number of redirects followed to it, `0` for none. Both MUST be `null`
 wherever `$timings` is. Python's `response.url` and `response.redirects`
@@ -30304,6 +30305,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAProbeReadsTheTimingsOfItsRequest` and `TestAProbeReadsWhereItsRedirectsLed`: through `/probe` a rule reads `$http_version` as `1.1` and `$remote_ip` as `127.0.0.1`; the debug report and the debug page show `$http_version "1.1"` and `$remote_ip "127.0.0.1"` after `$redirects`.
 - `TestTheUptimeExampleAnswersTheDocumentedSeries` takes `site_http_version 1.1` and `site_ip_protocol 4` of a plain and a TLS site.
 - `TestAnHTTPCollectorChecksAWebSocketUpgrade` (exporter): the recipe's WebSocket check, against a handshake server that keeps sending frames after its `101`, answers `websocket_up 1` (the status `101` and the key's `Sec-WebSocket-Accept` read from `$headers`) and `websocket_http_status_code 101` within two seconds, with the connection closed within a second of the `101`, with `new_connection` and without, and over TLS under `enable_http2` to a server that speaks HTTP/2; the endpoint saw the configured `Upgrade` and key. Without the `Upgrade` header the endpoint's `400` is `websocket_up 0` under `accept_status: [any]`.
+- `TestAPathParameterOfACredentialIsMasked` (fetch): `;jsessionid=`, `;sid=`, an escaped `;%74oken=` and `;JSESSIONID=` are masked in every segment, in a target as a log line and `$url` show it, a debug report's and an error's, and a label's, the path's escapes kept; `;v=2`, `;lang=en`, a parameter without a value and a token that is a segment whole are kept; a log line of a target masks its path's session and its query's `ticket`.
+- `TestMaskCredentialQueryValues` and `TestCredentialName` (fetch): a query's `code`, `Code`, `%63ode`, `auth_code`, `ticket`, `sid`, `SID`, `x_hmac`, `hmacSha256`, `otp`, and `country_code`, `promo_code` and `zip_code`, are masked, and `barcode`, `codec`, `ticketing`, `side`, `option` and `hmacs` are not; `sid`, `X-Sid`, `userSid`, `X-Hmac`, `hmac_sha256`, `otp` and `X-OTP` read as a credential's name, and `code`, `error_code`, `X-Code`, `ticket` and `ticket_id` do not. `TestRedactText` masks a logged body's `sid` and `hmac` and keeps an error body's `code` and `ticket`.
+- `TestTheURLIsWhereTheRedirectsLed` (fetch): a redirect to `/app;jsessionid=…?code=…&state=x` is `$url` `/app;jsessionid=<redacted>?code=<redacted>&state=x`.
+- `TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown` (exporter): through `/probe`, a label of `$url` after such a redirect, and the recipe's `$url | split("?")[0] | split(";")[0]`, hold no secret; a debug probe's report holds none; a failed probe's log line names its target with `;jsessionid=<redacted>?ticket=<redacted>&lang=en`.
 
 # 35. Documentation requirements
 
@@ -34368,7 +34373,8 @@ by the rule below: in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
 `session`, `signature`, `credential` or `jwt` is in them once their ordinary
 words (`author`, `authority`, `monkey`, `keyboard`, …) are taken out, or
-they have `sig`, `pwd`, `pw` or `pass` as a whole word. One exception: a request line MUST show the value
+they have `sig`, `pwd`, `pw`, `pass`, `sid`, `hmac` or `otp` as a whole
+word, and a query parameter's name also `code` or `ticket`. One exception: a request line MUST show the value
 of a query pair that the configuration of the collector that made the
 request sets as its file writes it — a `request.query` value without a
 placeholder, a `graphite` collector's expressions without placeholders, its
@@ -34432,9 +34438,19 @@ one of them (`author`, `authors`, `authority`, `monkey`, `keyboard`,
 `keyword`, `tokenizer` and the like, whole) is taken out — so `apikey`,
 `accesstoken`, `authToken`, `author_token` and `Authorization` read as a
 credential's and `author`, `cert-authority`, `keyboard-interactive` and
-`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw` or `pass` is a whole word
-of it (`sig`, `db_pwd`, `userPass`, but not `design`, `signal` or
-`bypass`). A URL's fragment MUST NOT
+`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw`, `pass`, `sid`, `hmac` or
+`otp` is a whole word of it (`sig`, `db_pwd`, `userPass`, `X-Hmac`, but not
+`design`, `signal`, `bypass` or `side`). A query parameter's name MUST also
+read as a credential's when `code` (OAuth's authorization code) or `ticket`
+(a CAS service ticket) is a whole word of it (`code`, `auth_code`,
+`country_code`, but not `barcode` or `codec`); a header's, a field's or an
+element's name with them MUST NOT, so an error body's `<code>401</code>` is
+shown. Wherever a URL is shown — a log line, a label, `$url`, a debug
+report, an error — the value of each path parameter, what follows a `;` in
+a segment of its path up to the next `;` or `/`, whose name reads as a
+query parameter's would MUST be masked as `<redacted>` where it stands
+(`/app;jsessionid=<redacted>`), the path's escapes kept; other path
+parameters and the segments themselves MUST be shown as they are. A URL's fragment MUST NOT
 be shown in any of these forms. An error that quotes a URL, as Go's HTTP client
 quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value

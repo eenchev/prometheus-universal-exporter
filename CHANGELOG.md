@@ -44,6 +44,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- `$url`, a target in a log line, a debug report and an error showed a
+  session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code`
+  and CAS's `ticket` in its query, which the redirect back from a login
+  carries. The value of a path parameter whose name reads as a
+  credential's is now masked, `/app;jsessionid=<redacted>`, and `code`,
+  `ticket`, `sid`, `hmac` and `otp` are credentials' names, each as a whole
+  word: `code` and `ticket` of a query parameter alone, the others of a
+  header and a field in a logged body too. A query parameter of a country's
+  or a promotion's code, `country_code`, is masked as well
+  ([Logging](docs/LOGGING.md#repeated-failures)).
 - An answer `101 Switching Protocols`, as a WebSocket endpoint gives an
   `http` collector that asks for the upgrade, had what followed it on the
   connection, the WebSocket's frames, read as its body until the probe's

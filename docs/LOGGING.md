@@ -274,10 +274,23 @@ only hold one of these, `author`, `authors`, `authority`, `monkey`,
 `keyboard`, `keyword`, `tokenizer` and a few like them — so `apikey`,
 `accesstoken`, `authToken` and `author_token` read as a credential's and
 `author`, `cert-authority` and `keyboard-interactive` do not; or when `sig`
-(an Azure SAS signature), `pwd`, `pw` or `pass` is a whole word of it, as in
-`db_pwd`, `X-Sig` or `userPass`, but not `design`, `signal` or `bypass`. A
+(an Azure SAS signature), `pwd`, `pw`, `pass`, `sid`, `hmac` or `otp` is a
+whole word of it, as in `db_pwd`, `X-Sig`, `userPass` or `X-Hmac`, but not
+`design`, `signal`, `bypass` or `side`. A query parameter's name reads as a
+credential's also when `code`, OAuth's authorization code, or `ticket`, a
+CAS service ticket, both of which a redirect back from a login carries, is
+a whole word of it: `?code=<redacted>&state=x`. As a whole word they mask
+some parameters that hold no secret, `country_code`, `zip_code` or
+`promo_code`, but not `barcode` or `codec`; as a header's name, or a
+field's in a logged body, they are left alone, an error body's
+`<code>401</code>` being no secret. A
 credential word run together with another, `apikey`, is still found, so a
-name errs towards being masked. Other parameters are shown
+name errs towards being masked. A path parameter, what follows a `;` in a
+segment of the path, is masked by the same rule for its name, as a
+servlet's session rides in a URL's path when cookies are off:
+`/app;jsessionid=<redacted>`. A segment of the path that is a secret whole,
+as a bot's token in `/bot123456:AAE…/getMe`, has no name to tell it by, and
+is shown. Other parameters are shown
 as given. A URL's fragment, `#…`, is never shown: it is never sent to the
 target, and one copied from a browser can carry a token. The static targets
 endpoint's `target` label and the OTLP `target` attribute show a target the

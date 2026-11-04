@@ -18,23 +18,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 - Nothing; you can upgrade without changes.
 
-### New
-
-- The chart's `healthProbes.mode: exec` runs the liveness and readiness
-  probes as the exporter's `--healthcheck` in the container instead of HTTP
-  GETs from the kubelet.
-- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
-  as blackbox_exporter's uptime checks are declared: its prober the
-  exporter's Service at `/probe`, the entry's `collector` sent as the
-  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
-  its `ingress` selects, as the targets. Empty by default, so nothing is
-  rendered and the Probe CRD is needed only with an entry.
-- `server.pythonMaxIdleWorkers` and `server.pythonIdleTimeout` set the
-  exporter's `--python.max-idle-workers` and `--python.idle-timeout`,
-  `server.debugDangerous` its `--web.debug.dangerous`, and
-  `server.statusRefresh` its `--web.status-refresh`; each is left out when
-  empty or false, so the exporter's default applies.
-
 ## exporter 2.0.0
 
 ### What changed for you
@@ -585,6 +568,32 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   attributes `a`; and a value whose `Error` or `String` panics, as a nil
   error's may, is `<nil>` or `!PANIC: …`, as on stderr, where it took the
   exporter down.
+
+## chart 2.0.0
+
+### What changed for you
+
+- Deploys exporter 2.0.0, a major release: read its
+  `### What changed for you` before upgrading, since configuration that
+  1.8.0 took may now be refused when it loads, such as an upper-case
+  `request.type` or a quoted `accept_status` entry like `"+503"`.
+
+### New
+
+- The chart's `healthProbes.mode: exec` runs the liveness and readiness
+  probes as the exporter's `--healthcheck` in the container instead of HTTP
+  GETs from the kubelet.
+- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
+  as blackbox_exporter's uptime checks are declared: its prober the
+  exporter's Service at `/probe`, the entry's `collector` sent as the
+  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
+  its `ingress` selects, as the targets. Empty by default, so nothing is
+  rendered and the Probe CRD is needed only with an entry.
+- `server.pythonMaxIdleWorkers` and `server.pythonIdleTimeout` set the
+  exporter's `--python.max-idle-workers` and `--python.idle-timeout`,
+  `server.debugDangerous` its `--web.debug.dangerous`, and
+  `server.statusRefresh` its `--web.status-refresh`; each is left out when
+  empty or false, so the exporter's default applies.
 
 ## exporter 1.8.0
 

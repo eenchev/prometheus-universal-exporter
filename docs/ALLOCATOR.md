@@ -511,8 +511,15 @@ of its sources last found, and puts it in force as a source's answer would
 be, in place of asking the sources itself. The copies so expand the same
 input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A snapshot
-leaves out a source that has not answered on the leader, and a follower then
-keeps what it holds of that source. A fetch names, in `If-None-Match`, the
+names each source by its owner, the probe job or `discovered_targets` entry,
+its kind and its name, not by its settings, so during a rolling update that
+changes a source's settings the new copies still take the old leader's
+targets of it. A follower keeps what it holds of a source that has not
+answered on the leader. A source of the follower's input files that the
+leader's lack altogether, as a new one does while a changed ConfigMap has
+reached the follower's pod and not yet the leader's, the follower asks
+itself, as a leader would, until the leader's snapshot has it, so its
+targets are not missing from the follower's bundles meanwhile. A fetch names, in `If-None-Match`, the
 digest of what the follower holds, not of the snapshot it took last, and the
 leader answers `304` only when the two are the same: whatever made them
 differ since, a changed ConfigMap that reached the leader's pod first or the

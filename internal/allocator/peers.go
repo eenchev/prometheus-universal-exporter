@@ -477,19 +477,26 @@ func addrText(addr netip.AddrPort) string {
 	return addr.String()
 }
 
-// peerSnapshot is the answer at SnapshotPath: what each of the copy's sources
-// that has answered found, by the source's key, which the same input files
-// give every copy alike.
+// peerSnapshot is the answer at SnapshotPath: every source of the copy's
+// input files, by its identity (sourceSpec.identity), with what it found.
+// The identity leaves the source's settings out, so copies whose input
+// files differ only in a source's settings, as old and new pods during a
+// rolling update do, still take each other's targets of it.
 type peerSnapshot struct {
-	Instance    string                  `json:"instance"`
-	Discovering bool                    `json:"discovering"`
-	Sources     map[string][]discovered `json:"sources"`
+	Instance    string                    `json:"instance"`
+	Discovering bool                      `json:"discovering"`
+	Sources     map[string]snapshotSource `json:"sources"`
 }
 
-// fetchSnapshot takes addr's snapshot and puts what it found in force. A
-// snapshot is the targets of the sources that have answered: a source it
-// leaves out keeps what this copy holds, so a leader that has not yet
-// heard from a source does not take its targets away. The fetch names in
+// snapshotSource is one source in a snapshot: whether it has answered,
+// and what its last good answer found.
+type snapshotSource struct {
+	Answered bool         `json:"answered"`
+	Found    []discovered `json:"found,omitempty"`
+}
+
+// fetchSnapshot takes addr's snapshot and puts what it found in force
+// (takeSnapshot). The fetch names in
 // If-None-Match the digest of what this copy holds, not of the snapshot it
 // took last, so a 304 says the copy holds what the leader does: whatever
 // made the two differ since, a reload that came to one first or the
@@ -505,6 +512,10 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
+		// The leader holds what this copy does, so it has every source
+		// this copy has: any this copy asked itself, the leader lacking it,
+		// is the leader's to ask now.
+		p.a.takeSnapshot(nil)
 		return true, nil
 	case http.StatusOK:
 	default:
@@ -558,17 +569,42 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	}
 }
 
-// takeSnapshot puts what found holds of each source in force in place of
-// what the source found here, as an answer of the source would be.
-func (a *Allocator) takeSnapshot(found map[string][]discovered) {
+// takeSnapshot puts what the leader's snapshot holds of each source in
+// force in place of what the source found here, as an answer of the source
+// would be. A source the leader has that has not answered there keeps what
+// this copy holds, so a leader that has not yet heard from a source does
+// not take its targets away. A source the snapshot does not have at all,
+// one the leader's input files lack, as a new source does while a changed
+// ConfigMap has not yet reached the leader's pod, is asked by this copy
+// itself, from a refresh loop of its own, until the snapshot has it:
+// taking nothing of it would leave its targets out of this copy's bundles
+// meanwhile.
+// A nil snap stands for a snapshot of what this copy holds.
+func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 	changed := false
 	a.dmu.Lock()
-	for key, list := range found {
-		s := a.sources[key]
-		if s == nil || (s.ok && sameDiscovered(s.found, list)) {
+	for _, s := range a.sources {
+		attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name}
+		got, has := snap[s.spec.identity()]
+		if snap == nil {
+			got, has = snapshotSource{}, true
+		}
+		if !has {
+			if s.cancel == nil && !a.discoveryStopped {
+				a.logger.Info("the leader's snapshot has no such discovery source; this copy asks it itself until the snapshot has it", attrs...)
+				a.startSource(s)
+			}
 			continue
 		}
-		s.found, s.ok = list, true
+		if s.cancel != nil && !a.discovering {
+			a.logger.Info("the leader's snapshot has the discovery source this copy asked itself; it takes the leader's targets of it again", attrs...)
+			s.cancel()
+			s.cancel = nil
+		}
+		if !got.Answered || (s.ok && sameDiscovered(s.found, got.Found)) {
+			continue
+		}
+		s.found, s.ok = got.Found, true
 		changed = true
 	}
 	a.dmu.Unlock()
@@ -583,14 +619,17 @@ func (a *Allocator) takeSnapshot(found map[string][]discovered) {
 func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
-	s := peerSnapshot{Instance: a.instance, Discovering: a.discovering, Sources: map[string][]discovered{}}
+	s := peerSnapshot{Instance: a.instance, Discovering: a.discovering, Sources: map[string]snapshotSource{}}
 	digest := map[string]string{}
-	for key, src := range a.sources {
+	for _, src := range a.sources {
+		id := src.spec.identity()
+		entry := snapshotSource{Answered: src.ok}
 		if src.ok {
-			s.Sources[key] = src.found
-			text, _ := json.Marshal(src.found)
-			digest[key] = string(text)
+			entry.Found = src.found
 		}
+		s.Sources[id] = entry
+		text, _ := json.Marshal(entry)
+		digest[id] = string(text)
 	}
 	return s, allocapi.Generation(digest)
 }

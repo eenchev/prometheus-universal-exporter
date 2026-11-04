@@ -113,7 +113,9 @@ func (s sourceSpec) identity() string {
 func (a *Allocator) StartDiscovery() { a.setDiscovering(true) }
 
 // setDiscovering starts the refresh loops, or stops them, keeping what the
-// sources found. After BeginShutdown it does nothing.
+// sources found; stopping them stops those a follower runs of sources the
+// leader lacks too, which its next snapshot starts again. After
+// BeginShutdown it does nothing.
 func (a *Allocator) setDiscovering(on bool) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
@@ -124,7 +126,11 @@ func (a *Allocator) setDiscovering(on bool) {
 	for _, s := range a.sources {
 		switch {
 		case on:
-			a.startSource(s)
+			// A follower may already ask a source the leader lacks
+			// (takeSnapshot).
+			if s.cancel == nil {
+				a.startSource(s)
+			}
 		case s.cancel != nil:
 			s.cancel()
 			s.cancel = nil

@@ -159,3 +159,102 @@ func TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain(t *testing.T) {
 		t.Errorf("following again, the follower serves %v, the leader %v", f, l)
 	}
 }
+
+// ownLoops counts the sources the copy runs a refresh loop of.
+func ownLoops(c *peerCopy) int {
+	c.a.dmu.Lock()
+	defer c.a.dmu.Unlock()
+	n := 0
+	for _, s := range c.a.sources {
+		if s.cancel != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// During a rolling update that changes a source's settings, a new copy
+// following a leader of the old input files takes the leader's targets of
+// that source, matched by its kind, owner and name, rather than nothing,
+// and asks no source itself.
+func TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader(t *testing.T) {
+	srv := stableSD(t)
+	old := twoJobs(srv.URL, false)
+	changed := strings.Replace(old, "refresh_interval: 1h", "refresh_interval: 30m", 1)
+	pa, pb := writeInputs(t, testConfig, "", old), writeInputs(t, testConfig, "", old)
+	ca, cb := newPeerCopy(t, pa, nil), newPeerCopy(t, pb, nil)
+	paths := map[*peerCopy]Paths{ca: pa, cb: pb}
+	leader, follower := sortedPair(ca, cb)
+	if err := os.WriteFile(paths[follower].ProbeTargets, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !follower.a.Reload(paths[follower]) {
+		t.Fatal("the reload was refused")
+	}
+	usePeers(leader, follower)
+	leader.round()
+	follower.round()
+	testutil.WaitFor(t, "the leader to discover", func() bool { return len(jobTargets(leader.a, "websites")) == 1 })
+	follower.round()
+	if l, f := jobTargets(leader.a, "websites"), jobTargets(follower.a, "websites"); !slices.Equal(l, f) {
+		t.Errorf("the follower serves %v, the leader %v", f, l)
+	}
+	if n := ownLoops(follower); n != 0 {
+		t.Errorf("the follower runs %d sources itself, want none", n)
+	}
+}
+
+// A follower whose input files have a source the leader's lack, as a new
+// copy of a changed ConfigMap does before the leader's pod has it, asks that
+// source itself and serves its targets, its snapshot age growing since it
+// does not hold what the leader's snapshot holds; once the leader has the
+// source too, the follower stops asking it and takes the leader's targets.
+func TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt(t *testing.T) {
+	srv := stableSD(t)
+	pa := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
+	pb := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
+	ca, cb := newPeerCopy(t, pa, nil), newPeerCopy(t, pb, nil)
+	paths := map[*peerCopy]Paths{ca: pa, cb: pb}
+	leader, follower := sortedPair(ca, cb)
+	reload := func(c *peerCopy) {
+		t.Helper()
+		if err := os.WriteFile(paths[c].ProbeTargets, []byte(twoJobs(srv.URL, true)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !c.a.Reload(paths[c]) {
+			t.Fatal("the reload was refused")
+		}
+	}
+	reload(follower)
+	usePeers(leader, follower)
+	leader.round()
+	follower.round()
+	testutil.WaitFor(t, "the leader to discover", func() bool { return len(jobTargets(leader.a, "websites")) == 1 })
+	follower.clock.Advance(PeerInterval)
+	follower.round()
+	testutil.WaitFor(t, "the follower to ask the source the leader lacks", func() bool {
+		return slices.Equal(jobTargets(follower.a, "extra"), []string{"https://extra.example:9100/health"})
+	})
+	if n := ownLoops(follower); n != 1 {
+		t.Errorf("the follower runs %d sources itself, want the one the leader lacks", n)
+	}
+	if l, f := jobTargets(leader.a, "websites"), jobTargets(follower.a, "websites"); !slices.Equal(l, f) {
+		t.Errorf("the follower serves %v of the job both have, the leader %v", f, l)
+	}
+	follower.clock.Advance(PeerInterval)
+	follower.round()
+	if strings.Contains(follower.metrics(t), "pue_allocator_snapshot_age_seconds 0\n") {
+		t.Error("the follower holding other targets than the leader's snapshot shows a snapshot age of 0")
+	}
+
+	reload(leader)
+	testutil.WaitFor(t, "the leader to discover the new job", func() bool { return len(jobTargets(leader.a, "extra")) == 1 })
+	follower.round()
+	if n := ownLoops(follower); n != 0 {
+		t.Errorf("the follower still runs %d sources itself", n)
+	}
+	if !strings.Contains(follower.logs.String(), "takes the leader's targets of it again") {
+		t.Errorf("the follower does not log that it stopped asking the source:\n%s", follower.logs.String())
+	}
+	hasLine(t, follower, "pue_allocator_snapshot_age_seconds 0\n")
+}

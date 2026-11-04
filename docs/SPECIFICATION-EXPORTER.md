@@ -30331,6 +30331,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
 - `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for a copy of one source or none, 32 MiB for one of two.
 - `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
+- `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
 
 # 35. Documentation requirements
 
@@ -33466,7 +33467,12 @@ given, so any difference, of a reload that reached one copy first or of the
 follower's own sources while it led, is answered with the snapshot. The
 follower MUST put each source the snapshot holds in
 force as that source's answer would be, so the copies' bundle generations and
-service discovery answers are equal, and MUST keep what it holds of a source
+service discovery answers are equal, after the same checks (no empty target,
+no label of no label name) and the same bound, its own `max_targets` of the
+source or `--discovery.max-targets`: a source's targets refused MUST be the
+source's failure, logged and counted in
+`pue_allocator_discovery_refreshes_total{result="failure"}` once while its
+text stays the same, the source keeping what the follower holds, and MUST keep what it holds of a source
 that has not answered on the leader. A source of the follower's that the
 snapshot lacks MUST be asked by the follower itself, from a refresh loop of
 its own, until a snapshot has it (or a `304` says the leader holds what the

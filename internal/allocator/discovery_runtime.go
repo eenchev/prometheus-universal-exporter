@@ -184,21 +184,10 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
 	if err != nil {
-		if text := model.SameFailureText(err); text != s.lastErr {
-			s.lastErr = text
-			s.failures++
-			if s.ok {
-				a.logger.Warn("a discovery source failed; the targets of its last good answer stay in force", append(attrs, "error", err)...)
-			} else {
-				a.logger.Warn("a discovery source failed and has never answered; it adds no targets until it does", append(attrs, "error", err)...)
-			}
-		}
+		a.sourceFailed(s, err)
 		return false
 	}
-	if s.lastErr != "" {
-		a.logger.Info("a discovery source answers again", attrs...)
-	}
-	s.lastErr = ""
+	a.sourceAnswered(s)
 	s.successes++
 	s.lastGood = a.clock.Now()
 	if s.ok && sameDiscovered(s.found, found) {
@@ -206,6 +195,33 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 	}
 	s.found, s.ok = found, true
 	return true
+}
+
+// sourceFailed logs and counts a failure of s, an answer of its own or
+// the leader's snapshot of it refused, once while its text stays the same.
+// Called under dmu.
+func (a *Allocator) sourceFailed(s *sourceState, err error) {
+	text := model.SameFailureText(err)
+	if text == s.lastErr {
+		return
+	}
+	s.lastErr = text
+	s.failures++
+	attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name, "error", err}
+	if s.ok {
+		a.logger.Warn("a discovery source failed; the targets of its last good answer stay in force", attrs...)
+	} else {
+		a.logger.Warn("a discovery source failed and has never answered; it adds no targets until it does", attrs...)
+	}
+}
+
+// sourceAnswered notes an answer of s taken, logging the end of a
+// failure. Called under dmu.
+func (a *Allocator) sourceAnswered(s *sourceState) {
+	if s.lastErr != "" {
+		a.logger.Info("a discovery source answers again", "kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name)
+	}
+	s.lastErr = ""
 }
 
 func sameDiscovered(a, b []discovered) bool {

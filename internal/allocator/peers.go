@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -622,7 +621,18 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		if !got.Answered {
 			continue
 		}
-		found, _ := flatten(got.Groups, nil, math.MaxInt)
+		// Checked and bounded as the source's own answer is, by this
+		// copy's max_targets or --discovery.max-targets: a leader of other
+		// settings, or no allocator at all, does not put more in force.
+		found, err := flatten(got.Groups, nil, s.limit)
+		if err == nil {
+			err = checkGroups(got.Groups)
+		}
+		if err != nil {
+			a.sourceFailed(s, fmt.Errorf("the leader's snapshot of it is refused: %w", err))
+			continue
+		}
+		a.sourceAnswered(s)
 		if s.ok && sameDiscovered(s.found, found) {
 			continue
 		}

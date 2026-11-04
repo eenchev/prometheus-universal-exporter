@@ -371,3 +371,35 @@ func TestASnapshotMayTakeLongerThanACheck(t *testing.T) {
 		t.Errorf("the follower serves %v, want the slow snapshot's target:\n%s", got, c.logs.String())
 	}
 }
+
+// A leader's snapshot of a source is taken as the source's own answer
+// would be: one with more targets than the follower's max_targets, or
+// with an empty target or a label of no label name, is refused, logged
+// and counted as the source's failure, and the source keeps what it held.
+func TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks(t *testing.T) {
+	srv := stableSD(t)
+	probes := strings.Replace(twoJobs(srv.URL, false), "refresh_interval: 1h}", "refresh_interval: 1h}\n        max_targets: 10", 1)
+	p := writeInputs(t, testConfig, "", probes)
+	id, _ := json.Marshal(mustLoad(t, p).sources[0].identity())
+	var many []string
+	for i := range 11 {
+		many = append(many, fmt.Sprintf(`"h%d.example:80"`, i))
+	}
+	for what, groups := range map[string]string{
+		"more than max_targets": `[{"targets":[` + strings.Join(many, ",") + `]}]`,
+		"an empty target":       `[{"targets":["ok.example:80",""]}]`,
+		"no label name":         `[{"targets":["ok.example:80"],"labels":{"bad name":"x"}}]`,
+	} {
+		c := newPeerCopy(t, p, nil)
+		body := `{"instance":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":` + groups + `}}}`
+		followFake(c, fakeLeader(t, body, 0))
+		c.round()
+		if got := jobTargets(c.a, "websites"); len(got) != 0 {
+			t.Errorf("%s: the follower serves %d targets of the snapshot", what, len(got))
+		}
+		hasLine(t, c, `pue_allocator_discovery_refreshes_total{kind="probe",owner="websites",source="cmdb",result="failure"} 1`+"\n")
+		if !strings.Contains(c.logs.String(), "the leader's snapshot of it is refused") {
+			t.Errorf("%s: the refusal is not logged:\n%s", what, c.logs.String())
+		}
+	}
+}

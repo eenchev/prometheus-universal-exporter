@@ -333,7 +333,8 @@ Each source sets exactly one of `file_sd`, `http_sd`, `kubernetes` and
   target the label `zone` with the value of its `__meta_zone`. A name
   starting with `__`, `job`, `instance` and `static_target` are refused.
 - `max_targets`, how many targets one answer may hold, `--discovery.max-targets`
-  by default.
+  by default; it bounds the leader's snapshot of the source on a follower
+  too ([Copies with discovery](#copies-with-discovery)).
 
 **`file_sd`** reads Prometheus file_sd files, JSON (`.json`) or YAML (`.yml`,
 `.yaml`) lists of `{targets: [...], labels: {...}}`, from `files`, paths or
@@ -512,7 +513,13 @@ be, in place of asking the sources itself. A snapshot writes each source's
 targets as the target groups it answered, a group's labels once rather than
 once for each of its targets, so it is about the size of the sources'
 answers; it may be up to 16 MiB for each of the follower's sources, the
-bound of one answer, and a fetch may take 30s, where a check takes 1s. The copies so expand the same
+bound of one answer, and a fetch may take 30s, where a check takes 1s. A
+source's targets in the snapshot are checked as its own answer is, and held
+to the follower's `max_targets` of the source, or `--discovery.max-targets`:
+more targets than that, an empty target or a label of no label name refuse
+them, as the source's failure, logged and counted in
+`pue_allocator_discovery_refreshes_total{result="failure"}`, and the source
+keeps what the follower holds of it. The copies so expand the same
 input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A snapshot
 names each source by its owner, the probe job or `discovered_targets` entry,
@@ -757,7 +764,8 @@ scrape_configs:
 With `--peers` only the leader asks the discovery sources, so only its
 `pue_allocator_discovery_refreshes_total` and
 `pue_allocator_discovery_last_success_timestamp_seconds` move, and only it
-logs a source's failures; a follower's `pue_allocator_discovered_targets`
+logs a source's failures, but for the leader's snapshot of a source that a
+follower refuses; a follower's `pue_allocator_discovered_targets`
 counts the targets of the snapshot it took.
 
 ## On Kubernetes

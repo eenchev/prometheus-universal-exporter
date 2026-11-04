@@ -244,12 +244,13 @@ func TestASingleObjectOverTheBoundFailsTheListing(t *testing.T) {
 
 // The requests a refused page is asked for again with are bounded by the
 // listing's context with the rest: a listing whose pages of 100 and 50 are
-// refused, each answer taking 300ms, runs out of its 750ms before the page
-// of 25 is answered.
+// refused runs out of its time while the page of 25 is not answered. The
+// server holds that answer until the client gives up rather than taking a
+// set time, which a busy machine's late timer could outlast.
 func TestPagesAskedForAgainAreBoundedByTheListingsDeadline(t *testing.T) {
 	s := kubetest.New(t)
 	s.Serve("/api/v1/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: padded(0, 60, 1000)})
-	s.Slow(300 * time.Millisecond)
+	s.HoldFrom(3)
 	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
 	defer cancel()
 	l := &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", MaxPageBytes: 30000}

@@ -178,6 +178,10 @@ td { overflow-wrap: normal; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.id { overflow-wrap: anywhere; min-width: 9em; }
 tfoot td { background: var(--panel); }
+/* Scrolled sideways, as on a phone, the spread keeps each row's member in
+   view beside its counts and bar. */
+table.spread tr > :first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+table.spread thead th:first-child, table.spread tfoot td:first-child { background: var(--panel); }
 tfoot tr:first-child td { border-top: 2px solid var(--line); }
 h3 { font-size: 15px; margin: 24px 0 8px; }
 .scroll + table.facts { margin-top: 12px; }
@@ -189,12 +193,15 @@ table.facts td { overflow-wrap: anywhere; }
 .bad { color: var(--bad); font-weight: 600; }
 .good { color: var(--good); }
 .muted { color: var(--muted); }
-code.gen { white-space: nowrap; }
+code.gen, code.flag { white-space: nowrap; }
+p.notice { margin: 16px 0 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; background: var(--panel); }
 :root { --bar-static: #c2410c; --bar-probe: #2563eb; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; } }
 :root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; }
-td.bar { width: 32%; min-width: 120px; vertical-align: middle; }
-.bar-track { position: relative; display: flex; gap: 2px; height: 12px; }
+td.bar { width: 32%; min-width: 120px; }
+/* On the first line of the row, beside the counts, however the member's
+   id wraps: 12px centred in a 21px line. */
+.bar-track { position: relative; display: flex; gap: 2px; height: 12px; margin-top: 5px; }
 .bar-track span { display: block; height: 100%; min-width: 0; }
 .bar-track span:first-child { border-radius: 2px 0 0 2px; }
 .bar-track span:last-of-type { border-radius: 0 4px 4px 0; }
@@ -322,6 +329,9 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
 // statusContent is the page's content, which a refresh swaps in.
 const statusContent = `{{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
+{{- if .Partial}}{{with .Peers}}
+<p class="notice">This copy {{if eq .Role "follower"}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members, the spread of the targets and the discovery sources are on the leader's page, and in the leader's metrics. Below are this copy and its peers.</p>
+{{- end}}{{end}}
 
 <h2>This copy</h2>
 <table class="facts">
@@ -329,12 +339,12 @@ const statusContent = `{{define "content"}}
 <tr><th>Instance</th><td><code>{{.Copy.Instance}}</code></td></tr>
 <tr><th>Started</th><td>{{.Copy.StartedAt}} <span class="muted">(up {{age .Copy.UptimeSeconds}})</span></td></tr>
 <tr><th>Ready</th><td>{{if .Copy.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
-<tr><th>Peers</th><td>{{with .Peers}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveCopies 1}} of {{.LiveCopies}} live copies{{else}}, the only live copy{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this copy asks its discovery sources itself (no --peers)</span>{{end}}</td></tr>
+<tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveCopies 1}} of {{.LiveCopies}} live copies{{else}}, the only live copy{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this copy asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
 {{- with .Peers}}
 
 <h2>Peers</h2>
-<p>{{if eq .Role "leader"}}This copy leads: it asks the discovery sources, and the other copies take what it finds.{{else if eq .Role "follower"}}This copy follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This copy has not yet checked its peers.{{end}} {{.LiveCopies}} live cop{{if eq .LiveCopies 1}}y{{else}}ies{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This copy does not know its own address: list every copy in --peers, or give --peers.self.</span>{{end}}</p>
+<p>{{if eq .Role "leader"}}This copy leads: it asks the discovery sources, and the other copies take what it finds.{{else if eq .Role "follower"}}This copy follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This copy has not yet checked its peers.{{end}} {{.LiveCopies}} live cop{{if eq .LiveCopies 1}}y{{else}}ies{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This copy does not know its own address: list every copy in <code class="flag">--peers</code>, or give <code class="flag">--peers.self</code>.</span>{{end}}</p>
 <div class="scroll">
 <table>
 <thead><tr><th>Copy</th><th>Role</th><th>Live</th><th>Discovering</th><th>Address known</th><th class="num">Last check</th><th class="num">Failures</th></tr></thead>

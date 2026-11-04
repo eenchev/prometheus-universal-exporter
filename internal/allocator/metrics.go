@@ -12,12 +12,24 @@ import (
 
 // WriteMetrics writes the allocator's own metrics in the Prometheus text
 // format, every name prefixed pue_allocator_.
+//
+// A follower under --peers.leader-only writes the peers' families alone
+// (writePeerMetrics): is_leader 0, the leader, the peers and their
+// liveness, the snapshot's age and the failures, so it stays observable and
+// a cluster without a leader shows, while the allocation, the members and
+// the discovery sources are in the leader's metrics only, and a Prometheus
+// scraping every copy keeps one series of each.
 func (a *Allocator) WriteMetrics(w io.Writer) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var b strings.Builder
 	family := func(name, kind, help string) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
+	}
+	if st := a.peersStatusLocked(a.clock.Now()); st != nil && st.LeaderOnly && st.Role != "leader" {
+		writePeerFamilies(&b, family, st)
+		_, err := io.WriteString(w, b.String())
+		return err
 	}
 	family("pue_allocator_members", "gauge", "Members in the member list allocation uses: the replicas heard from within the member TTL, once the list has held for the settle time.")
 	fmt.Fprintf(&b, "pue_allocator_members %d\n", len(a.effective))

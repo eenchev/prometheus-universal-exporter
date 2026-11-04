@@ -24,7 +24,11 @@ type Status struct {
 	GeneratedAt string     `json:"generated_at"`
 	Copy        CopyStatus `json:"copy"`
 	// Peers is nil without --peers.
-	Peers   *PeersStatus   `json:"peers"`
+	Peers *PeersStatus `json:"peers"`
+	// Partial says the copy follows under --peers.leader-only: it leaves
+	// the members, the spread and the discovery sources to the leader, and
+	// Members, Spread and Sources are nil.
+	Partial bool           `json:"partial"`
 	Members *MembersStatus `json:"members"`
 	Spread  *SpreadStatus  `json:"spread"`
 	Sources []SourceStatus `json:"sources"`
@@ -50,6 +54,8 @@ type CopyStatus struct {
 type PeersStatus struct {
 	// Role is leader or follower, or deciding before the first round.
 	Role string `json:"role"`
+	// LeaderOnly is --peers.leader-only.
+	LeaderOnly bool `json:"leader_only"`
 	// Leader is the leader's address, "self" while this copy leads
 	// without knowing its own, "" before the first round.
 	Leader string `json:"leader"`
@@ -207,15 +213,20 @@ type SourceStatus struct {
 	From string `json:"from,omitempty"`
 }
 
-// Status is the status of the allocator now.
+// Status is the status of the allocator now. A copy that does not lead
+// under --peers.leader-only gives its own part and its peers' alone
+// (Partial).
 func (a *Allocator) Status() Status {
 	now := a.clock.Now()
 	s := Status{GeneratedAt: now.UTC().Format(time.RFC3339)}
 	a.mu.Lock()
 	ready := a.inputs != nil && !a.stopped
 	s.Peers = a.peersStatusLocked(now)
-	s.Members = a.membersStatusLocked(now)
-	s.Spread = a.spreadLocked()
+	s.Partial = s.Peers != nil && s.Peers.LeaderOnly && s.Peers.Role != "leader"
+	if !s.Partial {
+		s.Members = a.membersStatusLocked(now)
+		s.Spread = a.spreadLocked()
+	}
 	a.mu.Unlock()
 
 	s.Copy = CopyStatus{Address: a.address, Instance: a.instance, Version: a.version, Revision: a.revision,
@@ -227,7 +238,9 @@ func (a *Allocator) Status() Status {
 			}
 		}
 	}
-	s.Sources = a.sourcesStatus(now)
+	if !s.Partial {
+		s.Sources = a.sourcesStatus(now)
+	}
 	return s
 }
 
@@ -433,7 +446,7 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 	a.dmu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := &PeersStatus{Role: "deciding", Discovering: discovering, AddressKnown: p.self.IsValid(),
+	st := &PeersStatus{Role: "deciding", LeaderOnly: p.o.LeaderOnly, Discovering: discovering, AddressKnown: p.self.IsValid(),
 		LiveCopies: 1, LeaderChanges: p.leaderChanges, SnapshotTaken: p.took, SnapshotFailuresInARow: p.snapshotFails,
 		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Copies: []PeerStatus{}}
 	if p.decided {

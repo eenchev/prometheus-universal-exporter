@@ -458,6 +458,8 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 			"allocator.maxMembers", "allocator.maxMembers 0 must be a whole number from 1 to 2147483647"},
 		"a settle that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=soon"},
 			"allocator.settle", `allocator.settle "soon" must be a Go duration`},
+		"leader-only without peers": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.leaderOnly=true"},
+			"", "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source"},
 		"an unknown log level": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.logLevel=loud"},
 			"allocator.logLevel", `allocator.logLevel "loud" must be debug, info, warn or error`},
 		"the pod's address in env": {[]string{"--set", "allocator.enabled=true", "--set-json", `env=[{"name":"POD_IP","value":"10.0.0.1"}]`},

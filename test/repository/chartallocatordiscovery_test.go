@@ -242,3 +242,23 @@ func TestChartRunsAllocatorPeersWithDiscovery(t *testing.T) {
 		t.Errorf("without discovery the allocator's NetworkPolicy admits its own pods: %v", got)
 	}
 }
+
+// allocator.leaderOnly runs the peers with --peers.leader-only, after their
+// other flags, so only the leader's /metrics, which the ServiceMonitor
+// scrapes on every pod, has the allocation's series; left out, the flag is
+// not given.
+func TestChartRunsTheAllocatorLeaderOnly(t *testing.T) {
+	helm := requireHelm(t)
+	const name = "test-prometheus-universal-exporter-allocator"
+	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
+	for leaderOnly, want := range map[string][]string{
+		"true":  {"--peers.self=$(POD_IP)", "--peers.leader-only"},
+		"false": {"--peers=" + name + ".monitoring.svc:9116", "--peers.self=$(POD_IP)"},
+	} {
+		docs := manifests(t, helm, "--namespace", "monitoring", "--set", "allocator.enabled=true", "--set", "allocator.leaderOnly="+leaderOnly, "--set-json", discoveryJob)
+		args := scalars(path(manifest(t, docs, "Deployment/"+name), "spec", "template", "spec", "containers", "0", "args"))
+		if !slices.Equal(args[len(args)-2:], want) {
+			t.Errorf("with allocator.leaderOnly %s the allocator's arguments end %v, want %v", leaderOnly, args[len(args)-2:], want)
+		}
+	}
+}

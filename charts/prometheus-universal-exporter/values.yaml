@@ -873,6 +873,13 @@ allocator:
   maxMembers: 1000
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
+  # With a discovery source, where the pods are peers: only the leader
+  # serves the whole of /metrics and of the status page
+  # (--peers.leader-only); the other pods serve the peers' metrics and
+  # their own peer state alone, so the ServiceMonitor below, which scrapes
+  # every pod, gets one pod's series of the allocation, not one per pod.
+  # true without a discovery source fails rendering.
+  leaderOnly: false
   # The shared bearer token, always required: the allocator refuses a request
   # without it, the exporter pods send it, and the ScrapeConfigs and the
   # allocator's ServiceMonitor below present it. Without one, any pod the

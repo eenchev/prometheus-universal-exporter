@@ -57,6 +57,7 @@ pue-allocator \
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
 | `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every copy, this one included, so each finds its own address among them. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
 | `--peers.self` | none | This copy's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the copy finds itself among its peers' addresses by asking them. Only with `--peers`. |
+| `--peers.leader-only` | off | Only the leader serves the whole of `/metrics` and of the status page; a follower serves the peers' metrics and its own peer state alone ([Leader-only metrics](#leader-only-metrics)). Only with `--peers`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
 | `--static-targets-file-schema` | | Print the JSON Schema of the static target file, with `discovered_targets`, for editors, and exit. |
@@ -586,6 +587,34 @@ the copies reach each other again, the higher leader then following the
 lower. `pue_allocator_leader{peer}` shows the leader each copy follows, and
 copies that disagree on it are split.
 
+#### Leader-only metrics
+
+Every copy serves the same allocation, and so the same series of it in
+`/metrics`: a Prometheus scraping every copy, as the chart's ServiceMonitor
+does, has one series of `pue_allocator_assigned` for each copy, told apart
+only by the `instance` and `pod` labels the scrape adds, and a query has to
+take their `max`. With `--peers.leader-only` only the leader serves the whole
+of `/metrics`. A follower answers `200` with the peers' families alone,
+`pue_allocator_is_leader` (`0`), `pue_allocator_leader{peer}`,
+`pue_allocator_peers`, `pue_allocator_peer_up{peer}`,
+`pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
+and `pue_allocator_peer_failures_total`, and none of the members, the
+allocation or the discovery sources. Each follower so stays observable,
+and a cluster whose copies all answer `pue_allocator_is_leader 0`, whose sum
+is then 0, has no leader; the allocation's series are the leader's alone,
+one of each. When another copy comes to lead they come from it, with its
+`instance` and `pod`: a query that leaves those labels out, or takes the
+`max` without them, as the examples do, reads on across the change, which
+shows as a gap of a scrape or two and a counter starting again from the new
+leader's count. Before its first check a copy counts as a follower.
+
+A follower's [status page](#status-page) is likewise short: it names the
+leader by its address and shows the copy itself and its peers, with the
+peers' series, and leaves the members, the spread and the discovery sources
+to the leader's page; `/v1/status` gives `"partial": true` with `members`,
+`spread` and `sources` `null`. The flag is refused without `--peers`: a copy
+alone is its own leader.
+
 ## Members and allocation
 
 A replica in allocator mode heartbeats to the allocator every 10s with its
@@ -775,7 +804,8 @@ to ask. It shows
 - this copy: its address (among its peers, or `--web.listen-address`), its
   process's instance, version and revision, when it started and whether it
   is ready;
-- with `--peers`, whether it leads or follows and which copy leads, and
+- with `--peers`, whether it leads or follows, which copy leads, and
+  whether it runs with `--peers.leader-only`, and
   every copy its peers' addresses give, itself included, with whether it is
   live, discovers and knows its own address, when it was last checked and
   the checks it failed in a row; how old the copy's snapshot is and whether
@@ -804,11 +834,13 @@ with their theme picker, and needs nothing from outside the allocator.
 (`address`, `instance`, `version`, `revision`, `started_at`,
 `uptime_seconds`, `ready`); `peers`, `null` without `--peers` (`role`,
 `leader` or `follower`, `deciding` before the first check; `leader`, the
-leader's address; `live_copies`, `leader_changes`, `snapshot_age_seconds`,
+leader's address; `leader_only`; `live_copies`, `leader_changes`, `snapshot_age_seconds`,
 `snapshot_taken`, `holds_leader_state`, the failures, `copies`, each with
 its `address`, `self`, `leader`, `live`, `instance`, `discovering`,
 `address_known`, `last_check` and `failures`, and `metrics`, each a
-`series` and its `value`); `members` (`formed`, `in_list`, `live` and
+`series` and its `value`); `partial`, true on a follower under
+`--peers.leader-only`, whose `members`, `spread` and `sources` are `null`;
+`members` (`formed`, `in_list`, `live` and
 `list`, each with `id`, `address`, `last_heartbeat`, `live`, `in_list`,
 `shutting_down`, `generation`, `current`, `up_to_date`, `refused` and
 `draining`); `spread` (`jobs`, and `members`, `total`, `average` and
@@ -845,6 +877,9 @@ the first visit: give any user name, and the token as the password
 | `pue_allocator_leader_changes_total` | counter | With `--peers`: changes of the leader after the first choice. |
 | `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this copy last held what the leader's snapshot holds, having fetched it, or since its start before the first time; `0` while it leads. It grows while the snapshot cannot be fetched, and while the copies' input files differ in their discovery sources. |
 | `pue_allocator_peer_failures_total{request}` | counter | With `--peers`: requests to the other copies that failed, `check` or `snapshot`. |
+
+With `--peers.leader-only` a follower serves the families of `--peers`
+alone ([Leader-only metrics](#leader-only-metrics)).
 
 With `--peers` only the leader asks the discovery sources, so only its
 `pue_allocator_discovery_refreshes_total` and
@@ -929,8 +964,11 @@ kubelet updates a ConfigMap volume in place, not one mounted with `subPath`,
 and the source reads the files again every `refresh_interval`, so a change to
 the ConfigMap reaches the allocator without a rollout.
 
-Each allocator pod's [status page](#status-page) is reached with `kubectl
-port-forward`, the leader's by the pod IP every pod's page names; see
+`allocator.leaderOnly` runs the peers with `--peers.leader-only`, so the
+allocator's ServiceMonitor, which scrapes every pod, has one pod's series of
+the allocation ([Leader-only metrics](#leader-only-metrics)). Each allocator
+pod's [status page](#status-page) is reached with `kubectl port-forward`, the
+leader's by the pod IP every pod's page names; see
 [The allocator's status page](../charts/prometheus-universal-exporter/README.md#the-allocators-status-page).
 
 Since each replica scrapes only its share of the static targets, adding

@@ -90,6 +90,11 @@ type PeerOptions struct {
 	// Resolve looks a peer's host name up; net.DefaultResolver.LookupHost
 	// when nil.
 	Resolve func(ctx context.Context, host string) ([]string, error)
+	// LeaderOnly is --peers.leader-only: only the leader serves the whole
+	// of /metrics and of the status; a follower serves the peers' part of
+	// each alone, so the copies' allocation is in one copy's metrics, not
+	// in every copy's.
+	LeaderOnly bool
 	// Client asks the peers; one of no proxy when nil. Each request is
 	// bounded by PeerTimeout, or SnapshotTimeout for a snapshot, through
 	// its context, so Client needs no timeout of its own, which would cut

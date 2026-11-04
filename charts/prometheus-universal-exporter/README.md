@@ -1679,6 +1679,19 @@ side a leader, and the targets can then flip between the two until it
 heals. See
 [Copies with discovery](../../docs/ALLOCATOR.md#copies-with-discovery).
 
+Every pod serves the same allocation, so with
+`allocator.serviceMonitor.enabled` Prometheus has the series of the
+allocation once for each pod, told apart by `pod` and `instance`, and a
+query takes their `max`. `allocator.leaderOnly: true` runs the peers with
+`--peers.leader-only`: only the leader's `/metrics` has the members, the
+allocation and the discovery sources, and every other pod's has the peers'
+families alone, `pue_allocator_is_leader` 0 among them, so each pod stays
+watched and a release with no leader shows, while the allocation is one
+pod's series. When another pod comes to lead, the series come from it, with
+its `pod` and `instance` ([Leader-only metrics](../../docs/ALLOCATOR.md#leader-only-metrics)).
+It needs a discovery source: `true` without one fails rendering, since the
+pods are then no peers and each serves everything.
+
 A `file_sd` source reads files in the allocator's pod, and an `http_sd`
 source's `bearer_token_file` and `tls` files are read there too. The
 exporter's `extraVolumes` and `extraVolumeMounts` mount into the exporter's
@@ -1738,6 +1751,7 @@ allocator refuses.
 | `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 10s)` plus 10 seconds. |
 | `allocator.maxMembers` | `1000` | `--members.max`: how many live members the allocator takes; the heartbeat of a new pod beyond them is refused until one stops heartbeating. Keep it above the most exporter pods the autoscaler runs. |
 | `allocator.logLevel` | `info` | `debug`, `info`, `warn` or `error`. |
+| `allocator.leaderOnly` | `false` | With a discovery source, where the pods are peers: `--peers.leader-only`, only the leader serves the whole of `/metrics` and of the status page, and the other pods the peers' metrics alone, so the ServiceMonitor has one pod's series of the allocation. `true` without a discovery source fails rendering. |
 | `allocator.tokenSecret.name` / `key` | `""` / `token` | The Secret holding the shared bearer token, which the allocator always requires, the exporter pods send and the ScrapeConfigs present; empty, the chart generates one (see [The allocator's token](#the-allocators-token)). |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
@@ -1798,7 +1812,9 @@ kubectl get secret <fullname>-allocator-token -o jsonpath='{.data.token}' | base
 (or your `allocator.tokenSecret`'s). With a discovery source the pods are
 peers, and every pod's page names the leader by its pod IP, as
 `pue_allocator_leader{peer}` does on every pod's `/metrics`; the pod of
-that IP is the leader, and its page is the one to read:
+that IP is the leader, and its page is the one to read. With
+`allocator.leaderOnly` the other pods' pages show only the pod and its
+peers:
 
 ```sh
 kubectl get pod -l app.kubernetes.io/name=<name>-allocator --field-selector status.podIP=<leader IP> -o name

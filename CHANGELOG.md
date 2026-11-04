@@ -73,6 +73,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   as the password of Basic auth, which the page, `/v1/status` and
   `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
+- `pue-allocator --peers.leader-only`: only the leader serves the whole of
+  `/metrics` and of the status page, and the other copies the peers'
+  metrics and their own peer state alone, so a Prometheus scraping every
+  copy has one copy's series of the allocation; the chart's
+  `allocator.leaderOnly` sets it with a discovery source
+  ([Leader-only metrics](docs/ALLOCATOR.md#leader-only-metrics)).
 - The chart runs `allocator.replicas` allocator pods, 2 by default, with a
   discovery source too, as peers of the allocator's headless Service, rolled
   out one at a time, where it ran one pod and refused more.

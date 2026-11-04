@@ -30357,6 +30357,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheStatusPageTakesTheTokenAsBasicAuth` (allocator): `/`, `/v1/status` and `/metrics` answer `401` with a `Basic` challenge without the token, `200` with the token as Basic auth's password of any user name or as a bearer token, `401` with another password or the token in the URL; the bundle, service discovery and peer endpoints and a heartbeat answer `401` to Basic auth, without a `Basic` challenge; `/healthz` and `/ready` stay open.
 - `TestThePeersStatusAgreesWithTheMetrics` (allocator): a leader's and a follower's status give their roles, the leader's address, the follower's snapshot taken and held, the copies with the leader live, discovering and last checked, and every source `ok` with its target, from the leader's own discovery or the follower's snapshot; each of the status's peer series is a line of `/metrics`, `pue_allocator_peer_up{peer}` is `1` on each; once the leader's checks fail three times the follower's `pue_allocator_peer_up` of it is `0`, it leads, the leader is down with three failures, and its page shows the series escaped and the copy down.
 - `TestTheStatusNamesTheCopysAddressAndBuild` (cmd/pue-allocator): `run`'s `/v1/status` names its `--web.listen-address` and the build's version and revision, ready, without peers.
+- `TestALeaderOnlyFollowerServesThePeersPartAlone` (allocator): with `--peers.leader-only` a follower's `/metrics` has the seven peer families and no other, `pue_allocator_is_leader 0` and the leader's `pue_allocator_leader{peer}`, while the leader's has the members, the assignments, the sources and the generations too; the follower's `/v1/status` has `"partial":true` and `"members":null`, no spread or sources, and its page names the leader and leaves out the members, targets and sources the leader's page has; once the leader's checks fail three times the follower leads and serves the whole of both.
+- `TestTheLeaderOnlyFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--peers` of its own address and `--peers.leader-only` leads, and its status says `leader_only`, not partial, with the members.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--peers.leader-only` without `--peers` exits 2; `TestVersionAndHelp`, changed: the help lists `-peers.leader-only`.
 - `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
 
 # 35. Documentation requirements
@@ -33530,7 +33533,18 @@ once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
 failure, and log once after `PeerFailures` failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
-copy MUST ask its sources itself, from its start. `docs/ALLOCATOR.md` MUST
+copy MUST ask its sources itself, from its start. With
+`--peers.leader-only`, only with `--peers` (exit 2 otherwise), a copy that
+does not lead, before its first round included, MUST answer `/metrics`
+with `200` and the families of the peers alone (`pue_allocator_peers`,
+`pue_allocator_peer_up`, `pue_allocator_is_leader`,
+`pue_allocator_leader`, `pue_allocator_leader_changes_total`,
+`pue_allocator_snapshot_age_seconds` and
+`pue_allocator_peer_failures_total`), and no other family; `/v1/status`
+with `partial` true and `members`, `spread` and `sources` `null`; and `/`
+with the copy and its peers alone, naming the leader's address. The copy
+that leads MUST serve the whole of each, so the copies' allocation is in one
+copy's metrics. `docs/ALLOCATOR.md` MUST
 describe the peers, their flags, timings and metrics, and that a network
 split gives each side a leader, the targets then flipping between the two
 until it heals.

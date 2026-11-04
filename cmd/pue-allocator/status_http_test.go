@@ -21,6 +21,19 @@ import (
 // free address, until the test ends, and returns the address.
 func startRun(t *testing.T, args ...string) string {
 	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := ln.Addr().String()
+	_ = ln.Close()
+	startRunAt(t, address, args...)
+	return address
+}
+
+// startRunAt is startRun at address.
+func startRunAt(t *testing.T, address string, args ...string) {
+	t.Helper()
 	dir := t.TempDir()
 	conf := testutil.WriteIn(t, dir, "config.yaml", `collectors:
   - name: demo
@@ -32,12 +45,6 @@ func startRun(t *testing.T, args ...string) string {
       - name: demo_value
         expression: 'value=(\d+)'
 `)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := ln.Addr().String()
-	_ = ln.Close()
 	done := make(chan int, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
@@ -60,7 +67,6 @@ func startRun(t *testing.T, args ...string) string {
 			t.Error("the allocator did not exit")
 		}
 	})
-	return address
 }
 
 func fetchStatus(t *testing.T, address string) allocator.Status {
@@ -85,5 +91,25 @@ func TestTheStatusNamesTheCopysAddressAndBuild(t *testing.T) {
 	b := exporter.BuildVersion()
 	if s.Copy.Address != address || s.Copy.Version != b.Version || s.Copy.Revision != b.Revision || !s.Copy.Ready || s.Peers != nil {
 		t.Errorf("the copy is %+v, peers %v; want %s, %s, %s", s.Copy, s.Peers, address, b.Version, b.Revision)
+	}
+}
+
+// With --peers.leader-only, a copy alone among its peers leads and serves
+// the whole of /metrics and of the status; the flag reaches the allocator.
+func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := ln.Addr().String()
+	_ = ln.Close()
+	startRunAt(t, address, "--peers="+address, "--peers.leader-only")
+	var s allocator.Status
+	testutil.WaitFor(t, "the copy to lead", func() bool {
+		s = fetchStatus(t, address)
+		return s.Peers != nil && s.Peers.Role == "leader"
+	})
+	if !s.Peers.LeaderOnly || s.Partial || s.Members == nil {
+		t.Errorf("the leader's status is %+v, peers %+v", s, s.Peers)
 	}
 }

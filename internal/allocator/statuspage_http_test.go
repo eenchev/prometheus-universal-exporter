@@ -259,3 +259,85 @@ func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 	page := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, page, "Leader election metrics", "pue_allocator_peer_up{peer=&#34;"+leader.addr.String()+"&#34;}", `<span class="bad">down</span>`)
 }
+
+// leaderOnly sets --peers.leader-only on each copy.
+func leaderOnly(copies ...*peerCopy) {
+	for _, c := range copies {
+		c.a.peers.o.LeaderOnly = true
+	}
+}
+
+// familiesOf are the names of the families in a /metrics text.
+func familiesOf(metrics string) map[string]bool {
+	out := map[string]bool{}
+	for line := range strings.SplitSeq(metrics, "\n") {
+		if name, ok := strings.CutPrefix(line, "# TYPE "); ok {
+			name, _, _ = strings.Cut(name, " ")
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// With --peers.leader-only only the leader serves the whole of /metrics and
+// of the status: a follower's /metrics has the peers' families alone, so
+// copies scraped together have one copy's series of the allocation, and
+// its status and page leave the members, the spread and the sources out,
+// naming the leader. A follower that comes to lead serves the whole.
+func TestALeaderOnlyFollowerServesThePeersPartAlone(t *testing.T) {
+	leader, follower, _ := leaderAndFollower(t)
+	leaderOnly(leader, follower)
+	peerFamilies := map[string]bool{"pue_allocator_peers": true, "pue_allocator_peer_up": true, "pue_allocator_is_leader": true, "pue_allocator_leader": true,
+		"pue_allocator_leader_changes_total": true, "pue_allocator_snapshot_age_seconds": true, "pue_allocator_peer_failures_total": true}
+	lf, ff := familiesOf(leader.metrics(t)), familiesOf(follower.metrics(t))
+	for name := range peerFamilies {
+		if !lf[name] || !ff[name] {
+			t.Errorf("%s: on the leader %v, on the follower %v", name, lf[name], ff[name])
+		}
+	}
+	for name := range ff {
+		if !peerFamilies[name] {
+			t.Errorf("the follower's /metrics has %s", name)
+		}
+	}
+	for _, name := range []string{"pue_allocator_members", "pue_allocator_assigned", "pue_allocator_discovered_targets", "pue_allocator_generation_info"} {
+		if !lf[name] {
+			t.Errorf("the leader's /metrics has no %s", name)
+		}
+	}
+	hasLine(t, follower, "pue_allocator_is_leader 0\n")
+	hasLine(t, follower, fmt.Sprintf("pue_allocator_leader{peer=%q} 1\n", leader.addr.String()))
+
+	rec := ask(follower.a.Handler(""), StatusPath, "")
+	if !strings.Contains(rec.Body.String(), `"partial":true`) || !strings.Contains(rec.Body.String(), `"members":null`) {
+		t.Errorf("the follower's status is not partial:\n%s", rec.Body)
+	}
+	fs := statusOf(t, follower.a.Handler(""), "")
+	if !fs.Partial || fs.Members != nil || fs.Spread != nil || fs.Sources != nil || !fs.Peers.LeaderOnly || fs.Peers.Leader != leader.addr.String() {
+		t.Errorf("the follower's status is %+v", fs)
+	}
+	if ls := statusOf(t, leader.a.Handler(""), ""); ls.Partial || ls.Members == nil || ls.Spread == nil || len(ls.Sources) != 2 {
+		t.Errorf("the leader's status is %+v", ls)
+	}
+	page := ask(follower.a.Handler(""), "/", "").Body.String()
+	requireIn(t, page, `<p class="notice">`, "follows the leader, <strong>"+leader.addr.String()+"</strong>", `<code class="flag">--peers.leader-only</code>`, "<h2>Peers</h2>", "Leader election metrics")
+	for _, full := range []string{"<h2>Members</h2>", "<h2>Targets</h2>", "<h2>Discovery sources</h2>"} {
+		if strings.Contains(page, full) {
+			t.Errorf("the follower's page has %s", full)
+		}
+	}
+	if page := ask(leader.a.Handler(""), "/", "").Body.String(); strings.Contains(page, `<p class="notice">`) || !strings.Contains(page, "<h2>Targets</h2>") {
+		t.Error("the leader's page is not the whole")
+	}
+
+	leader.failPeer.Store(true)
+	for range PeerFailures {
+		follower.round()
+	}
+	if ff := familiesOf(follower.metrics(t)); !ff["pue_allocator_assigned"] || !ff["pue_allocator_peer_up"] {
+		t.Error("the follower that came to lead does not serve the whole of /metrics")
+	}
+	if fs := statusOf(t, follower.a.Handler(""), ""); fs.Partial || fs.Members == nil {
+		t.Errorf("the follower that came to lead gives %+v", fs)
+	}
+}

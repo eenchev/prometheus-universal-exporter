@@ -877,7 +877,14 @@ its pods are peers of which only the leader asks the sources; the
 Deployment MUST then keep `allocator.replicas`, 2 when it is empty, and the
 default strategy, and the values schema and the templates MUST NOT refuse
 `allocator.replicas` above 1 for it. Without a discovery source the two
-flags and the variable MUST NOT be rendered.
+flags and the variable MUST NOT be rendered. `allocator.leaderOnly`, false
+by default, MUST add `--peers.leader-only` after them, so only the leader's
+`/metrics`, which the allocator's ServiceMonitor scrapes on every pod, has
+the allocation's series; true without a discovery source MUST fail
+rendering, since the allocator refuses the flag without `--peers`. The chart
+README MUST say how to reach an allocator pod's status page with `kubectl
+port-forward`, give the token as a browser asks for it, and find the leader's
+pod by the address every pod's page and `pue_allocator_leader{peer}` name.
 The allocator MUST be run with `--web.listen-address=:9116`, `--config.file` naming the
 configuration's `config.yaml`, `--static-targets-file` while
 `allocator.staticTargets.data` is not empty, `--probe-targets-file` while
@@ -1961,6 +1968,12 @@ are skipped and the text checks of the templates still run:
      own pods and its disruption budget stays `maxUnavailable: 1`; without
      discovery the allocator has 2 replicas and no `--peers`, no `env` and
      no rule for its own pods (`TestChartRunsAllocatorPeersWithDiscovery`).
+   - With a discovery source, `allocator.leaderOnly: true` makes the
+     allocator's arguments end with `--peers.self=$(POD_IP)` and
+     `--peers.leader-only`, and `false` leaves the flag out
+     (`TestChartRunsTheAllocatorLeaderOnly`); `allocator.leaderOnly: true`
+     without a discovery source fails rendering, with the values schema and
+     with it skipped (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - The allocator's Role allows only `list` on EndpointSlices
      (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
    - Every example query of an allocator metric in `docs/*.md` and the chart

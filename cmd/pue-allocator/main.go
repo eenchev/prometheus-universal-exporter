@@ -57,6 +57,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	peerList := flags.String("peers", "", "Optional allocator copies to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every copy, this one included, so each finds its own address among them. The live copy of the lowest address leads and alone asks the discovery sources; the others serve what it found")
 	peerSelf := flags.String("peers.self", "", "This copy's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the copy finds itself among the peers' addresses by asking them")
+	peerLeaderOnly := flags.Bool("peers.leader-only", false, "With --peers, only the leader serves the whole of /metrics and of the status page; a follower serves the peers' metrics and its own peer state alone, so a Prometheus scraping every copy has one copy's series of the allocation")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
 	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
@@ -92,19 +93,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))
 	}
 	var peerOptions *allocator.PeerOptions
-	if *peerList != "" {
+	switch {
+	case *peerList != "":
 		entries, err := allocator.ParsePeers(*peerList)
 		if err != nil {
 			return commandLineError(stderr, err)
 		}
-		peerOptions = &allocator.PeerOptions{Peers: entries}
+		peerOptions = &allocator.PeerOptions{Peers: entries, LeaderOnly: *peerLeaderOnly}
 		if *peerSelf != "" {
 			if peerOptions.Self, err = allocator.ParseSelf(*peerSelf, *listenAddress); err != nil {
 				return commandLineError(stderr, err)
 			}
 		}
-	} else if *peerSelf != "" {
+	case *peerSelf != "":
 		return commandLineError(stderr, errors.New("--peers.self is given without --peers"))
+	case *peerLeaderOnly:
+		return commandLineError(stderr, errors.New("--peers.leader-only is given without --peers: a copy without peers is its own leader and serves everything"))
 	}
 	if *showVersion {
 		b := exporter.BuildVersion()
@@ -169,7 +173,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
 		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
-		"peers", *peerList, "peers_self", *peerSelf}, inputs.LogAttrs()...)...)
+		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {
 		handler = alloc.HandlerReading(token)

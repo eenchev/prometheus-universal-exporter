@@ -29,6 +29,7 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		"--peers=pue-allocator":                       `--peers entry "pue-allocator" is not a host:port`,
 		"--peers=a:9116,,b:9116":                      `--peers entry "" is not a host:port`,
 		"--peers.self=10.0.3.7":                       "--peers.self is given without --peers",
+		"--peers.leader-only":                         "--peers.leader-only is given without --peers",
 		"--peers=a:9116 --peers.self=pue-allocator-0": `--peers.self "pue-allocator-0" is not an IP address`,
 	} {
 		var stdout, stderr bytes.Buffer
@@ -52,7 +53,7 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}

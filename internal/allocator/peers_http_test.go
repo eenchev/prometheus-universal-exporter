@@ -94,8 +94,9 @@ type peerCopy struct {
 	server *httptest.Server
 	addr   netip.AddrPort
 	logs   *syncBuffer
-	// failSnapshot makes the snapshot endpoint answer 500.
-	failSnapshot atomic.Bool
+	// failSnapshot makes the snapshot endpoint answer 500, and failPeer
+	// makes the check endpoint answer 504.
+	failSnapshot, failPeer atomic.Bool
 }
 
 const peerToken = "s3cret"
@@ -134,6 +135,10 @@ func newPeerCopy(t *testing.T, p Paths, ln net.Listener) *peerCopy {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == SnapshotPath && c.failSnapshot.Load() {
 			http.Error(w, "broken", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == PeerPath && c.failPeer.Load() {
+			http.Error(w, "slow", http.StatusGatewayTimeout)
 			return
 		}
 		api.ServeHTTP(w, r)

@@ -30323,6 +30323,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator) takes a `--peers` entry without a port, an empty entry, `--peers.self` without `--peers`, and a name as `--peers.self`; `TestVersionAndHelp` lists `-peers` and `-peers.self`.
 - `TestChartRunsAllocatorPeersWithDiscovery` (repository): SPECIFICATION-CHART.md § 34.29.
 
+## 34.268 Fixes to allocator peers
+
+- `TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater` (allocator): two copies of input files of their own reload a new probe job, the leader first; the follower's fetches in between leave its snapshot age growing (8s after four 2s rounds) and log the difference once; after its own reload its next fetch, naming the digest of what it holds, takes the new job's targets, the bundles' generations are equal, the age is 0 and the agreement is logged.
+- `TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain` (allocator): a follower that led while the leader's checks failed, its own sources finding other targets, serves the leader's targets again at its first round of following.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33446,10 +33451,17 @@ they found, and fetch the leader's `GET /v1/peer/snapshot` with the token
 every round, which MUST answer what each source that has answered last
 found, by the source's key (its kind, owner, name and settings), with an
 `ETag` of its digest and `304` to an `If-None-Match` naming it, and a body of
-at most 64 MiB; the follower MUST put each source the snapshot holds in
+at most 64 MiB; the follower MUST name in `If-None-Match` the digest of what
+it holds itself, computed as the leader's is, never the `ETag` it was last
+given, so any difference, of a reload that reached one copy first or of the
+follower's own sources while it led, is answered with the snapshot. The
+follower MUST put each source the snapshot holds in
 force as that source's answer would be, so the copies' bundle generations and
 service discovery answers are equal, and MUST keep what it holds of a source
-the snapshot leaves out. A copy that comes to lead MUST start the loops with
+the snapshot leaves out. A follower that, having taken the snapshot, still
+holds something else MUST NOT count it as taken for its snapshot's age, and
+MUST log so once after `PeerFailures` such fetches in a row and once when
+the two agree again. A copy that comes to lead MUST start the loops with
 what its sources hold, the snapshot it took last, so no discovered target
 leaves the bundles until each source answers; one that leads without ever
 having taken a snapshot MUST first take that of the lowest other live copy,
@@ -33572,8 +33584,8 @@ members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
 address, `self` while it leads without knowing its own),
 `pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
-(since the last snapshot taken, or the start before the first; `0` while it
-leads) and `pue_allocator_peer_failures_total{request}` (`check` or
+(since the copy last held what the leader's snapshot holds, having fetched
+it, or the start before the first time; `0` while it leads) and `pue_allocator_peer_failures_total{request}` (`check` or
 `snapshot`). `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.

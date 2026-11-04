@@ -146,7 +146,6 @@ type peers struct {
 	// round touches them.
 	resolved   map[string][]netip.AddrPort
 	resolveErr map[string]string
-	snapETag   string
 
 	mu    sync.Mutex
 	known map[netip.AddrPort]*peerState
@@ -158,12 +157,18 @@ type peers struct {
 	decided bool
 	leader  netip.AddrPort
 	leading bool
-	// snapshotAt is when the copy last took a snapshot, or followed with
-	// one unchanged; zero before its first. snapshotFails counts fetches
-	// that failed in a row, and stale says that was logged.
+	// took says the copy has fetched a snapshot. snapshotAt is when it
+	// last held what the leader's snapshot holds, after taking it or
+	// finding it the same as its own; zero before the first time.
+	// snapshotFails counts fetches that failed in a row, and stale says
+	// that was logged; differ counts fetches in a row after which the copy
+	// still held something else, and differLogged says that was logged.
+	took          bool
 	snapshotAt    time.Time
 	snapshotFails int
 	stale         bool
+	differ        int
+	differLogged  bool
 	// What /metrics counts.
 	checkFailures, snapshotFailures, leaderChanges uint64
 }
@@ -423,7 +428,7 @@ func (p *peers) round(ctx context.Context) {
 	if changed && p.decided {
 		p.leaderChanges++
 	}
-	wasLeading, hadSnapshot := p.decided && p.leading, !p.snapshotAt.IsZero()
+	wasLeading, hadSnapshot := p.decided && p.leading, p.took
 	p.decided, p.leader, p.leading = true, leader, leading
 	p.mu.Unlock()
 
@@ -440,13 +445,16 @@ func (p *peers) round(ctx context.Context) {
 			// the lowest address does, starts from what another copy has,
 			// so its discovered targets do not leave the bundles until its
 			// sources first answer. A failure leaves it to its sources.
-			_ = p.fetchSnapshot(ctx, others[0])
+			_, _ = p.fetchSnapshot(ctx, others[0])
 		}
 		p.a.setDiscovering(true)
 		return
 	}
 	p.a.setDiscovering(false)
-	if err := p.fetchSnapshot(ctx, leader); err != nil && ctx.Err() == nil {
+	agreed, err := p.fetchSnapshot(ctx, leader)
+	if err == nil {
+		p.fetched(leader, agreed)
+	} else if ctx.Err() == nil {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.snapshotFails++
@@ -481,46 +489,73 @@ type peerSnapshot struct {
 // fetchSnapshot takes addr's snapshot and puts what it found in force. A
 // snapshot is the targets of the sources that have answered: a source it
 // leaves out keeps what this copy holds, so a leader that has not yet
-// heard from a source does not take its targets away.
-func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) error {
-	resp, err := p.get(ctx, addr, SnapshotPath, p.snapETag)
+// heard from a source does not take its targets away. The fetch names in
+// If-None-Match the digest of what this copy holds, not of the snapshot it
+// took last, so a 304 says the copy holds what the leader does: whatever
+// made the two differ since, a reload that came to one first or the
+// copy's own sources answering while it led, the next fetch is answered
+// with the snapshot and corrects it. agreed says the copy holds what the
+// snapshot holds once it is taken.
+func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed bool, err error) {
+	_, held := p.a.snapshotOf()
+	resp, err := p.get(ctx, addr, SnapshotPath, held)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
-		p.tookSnapshot(addr)
-		return nil
+		return true, nil
 	case http.StatusOK:
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("%s answered %s: %s", SnapshotPath, resp.Status, firstLine(body))
+		return false, fmt.Errorf("%s answered %s: %s", SnapshotPath, resp.Status, firstLine(body))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSnapshotBytes+1))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(raw) > maxSnapshotBytes {
-		return fmt.Errorf("the snapshot is larger than %d bytes", maxSnapshotBytes)
+		return false, fmt.Errorf("the snapshot is larger than %d bytes", maxSnapshotBytes)
 	}
 	var s peerSnapshot
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return fmt.Errorf("the snapshot is not one an allocator serves: %w", err)
+		return false, fmt.Errorf("the snapshot is not one an allocator serves: %w", err)
 	}
 	p.a.takeSnapshot(s.Sources)
-	p.snapETag = etagValue(resp.Header.Get("ETag"))
-	p.tookSnapshot(addr)
-	return nil
+	_, held = p.a.snapshotOf()
+	return held == etagValue(resp.Header.Get("ETag")), nil
 }
 
-func (p *peers) tookSnapshot(addr netip.AddrPort) {
+// fetched notes a snapshot fetched from the leader addr, after which the
+// copy holds what it holds when agreed. Only then is the snapshot's age
+// reset: a copy whose input files have a source the leader's lack, or
+// lack one the leader's have, as while a changed ConfigMap reaches one
+// pod before the other, holds other targets, and its age grows, and is
+// logged once after PeerFailures fetches in a row, until the two agree.
+func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stale {
 		p.a.logger.Info("the leader's discovered targets are fetched again", "leader", addr.String())
 	}
-	p.snapshotAt, p.snapshotFails, p.stale = p.a.clock.Now(), 0, false
+	p.took, p.snapshotFails, p.stale = true, 0, false
+	if agreed {
+		if p.differLogged {
+			p.a.logger.Info("this copy holds the leader's discovered targets again", "leader", addr.String())
+		}
+		p.snapshotAt, p.differ, p.differLogged = p.a.clock.Now(), 0, false
+		return
+	}
+	p.differ++
+	if p.differ >= PeerFailures && !p.differLogged {
+		p.differLogged = true
+		since := "never"
+		if !p.snapshotAt.IsZero() {
+			since = p.snapshotAt.UTC().Format(time.RFC3339)
+		}
+		p.a.logger.Warn("this copy's discovered targets differ from the leader's snapshot, which it fetches: their input files differ in their discovery sources", "leader", addr.String(), "last_agreed", since)
+	}
 }
 
 // takeSnapshot puts what found holds of each source in force in place of
@@ -543,7 +578,8 @@ func (a *Allocator) takeSnapshot(found map[string][]discovered) {
 }
 
 // snapshotOf is the allocator's snapshot and its digest, the ETag it is
-// served with.
+// served with and the If-None-Match a follower names: copies that hold the
+// same discovered targets have the same digest.
 func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
@@ -616,7 +652,7 @@ func (a *Allocator) writePeerMetrics(b *strings.Builder, family func(name, kind,
 	}
 	family("pue_allocator_leader_changes_total", "counter", "Changes of the copy this one takes for the leader, after the first choice.")
 	fmt.Fprintf(b, "pue_allocator_leader_changes_total %d\n", p.leaderChanges)
-	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last took the leader's snapshot of discovered targets, or since its start before its first; 0 while it leads.")
+	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
 	age := 0.0
 	if !p.decided || !p.leading {
 		since := p.snapshotAt

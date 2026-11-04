@@ -512,7 +512,16 @@ be, in place of asking the sources itself. The copies so expand the same
 input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A snapshot
 leaves out a source that has not answered on the leader, and a follower then
-keeps what it holds of that source.
+keeps what it holds of that source. A fetch names, in `If-None-Match`, the
+digest of what the follower holds, not of the snapshot it took last, and the
+leader answers `304` only when the two are the same: whatever made them
+differ since, a changed ConfigMap that reached the leader's pod first or the
+follower's own sources answering while it led for a moment, the next fetch
+brings the snapshot and puts it right. A follower whose input files differ
+from the leader's in their discovery sources holds other targets after
+taking the snapshot; `pue_allocator_snapshot_age_seconds` then grows, and
+after three such fetches in a row the follower logs so once, until the two
+agree again.
 
 When the leader goes away, the copy of the next address leads from its next
 check: at once when the leader is shutting down, and after three failed
@@ -731,7 +740,7 @@ scrape_configs:
 | `pue_allocator_is_leader` | gauge | With `--peers`: `1` while this copy leads and asks the discovery sources, `0` while it follows. |
 | `pue_allocator_leader{peer}` | gauge | With `--peers`: `1`, with the address of the copy this one takes for the leader, `self` while it leads without knowing its own address. Copies that disagree on it are split. |
 | `pue_allocator_leader_changes_total` | counter | With `--peers`: changes of the leader after the first choice. |
-| `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this copy last took the leader's snapshot, or since its start before its first; `0` while it leads. |
+| `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this copy last held what the leader's snapshot holds, having fetched it, or since its start before the first time; `0` while it leads. It grows while the snapshot cannot be fetched, and while the copies' input files differ in their discovery sources. |
 | `pue_allocator_peer_failures_total{request}` | counter | With `--peers`: requests to the other copies that failed, `check` or `snapshot`. |
 
 With `--peers` only the leader asks the discovery sources, so only its

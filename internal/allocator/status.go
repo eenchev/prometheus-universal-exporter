@@ -2,6 +2,7 @@ package allocator
 
 import (
 	"bufio"
+	"fmt"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -515,33 +516,32 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 // writing each family's HELP and TYPE.
 func writePeerFamilies(b *strings.Builder, family func(name, kind, help string), st *PeersStatus) {
 	family("pue_allocator_peers", "gauge", "Allocator copies live among the peers, this one included.")
-	b.WriteString("pue_allocator_peers " + strconv.Itoa(st.LiveCopies) + "\n")
+	fmt.Fprintf(b, "pue_allocator_peers %d\n", st.LiveCopies)
 	family("pue_allocator_peer_up", "gauge", "1 for each other allocator copy among the peers that is live, by its address, 0 for one that has stopped answering.")
 	for _, c := range st.Copies {
 		if c.Self {
 			continue
 		}
-		up := "0"
+		up := 0
 		if c.Live {
-			up = "1"
+			up = 1
 		}
-		b.WriteString("pue_allocator_peer_up{peer=\"" + escape(c.Address) + "\"} " + up + "\n")
+		fmt.Fprintf(b, "pue_allocator_peer_up{peer=\"%s\"} %d\n", escape(c.Address), up)
 	}
 	family("pue_allocator_is_leader", "gauge", "1 while this allocator copy leads its peers and asks the discovery sources, 0 while it follows the leader.")
 	family("pue_allocator_leader", "gauge", "1, with the address of the copy this one takes for the leader; self when it leads and its own address is not known.")
-	isLeader := "0"
+	isLeader := 0
 	if st.Role == "leader" {
-		isLeader = "1"
+		isLeader = 1
 	}
-	b.WriteString("pue_allocator_is_leader " + isLeader + "\n")
+	fmt.Fprintf(b, "pue_allocator_is_leader %d\n", isLeader)
 	if st.Leader != "" {
-		b.WriteString("pue_allocator_leader{peer=\"" + escape(st.Leader) + "\"} 1\n")
+		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(st.Leader))
 	}
 	family("pue_allocator_leader_changes_total", "counter", "Changes of the copy this one takes for the leader, after the first choice.")
-	b.WriteString("pue_allocator_leader_changes_total " + strconv.FormatUint(st.LeaderChanges, 10) + "\n")
+	fmt.Fprintf(b, "pue_allocator_leader_changes_total %d\n", st.LeaderChanges)
 	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
-	b.WriteString("pue_allocator_snapshot_age_seconds " + strconv.FormatFloat(st.SnapshotAgeSeconds, 'f', -1, 64) + "\n")
+	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(st.SnapshotAgeSeconds, 'f', -1, 64))
 	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
-	b.WriteString("pue_allocator_peer_failures_total{request=\"check\"} " + strconv.FormatUint(st.CheckFailures, 10) + "\n")
-	b.WriteString("pue_allocator_peer_failures_total{request=\"snapshot\"} " + strconv.FormatUint(st.SnapshotFailures, 10) + "\n")
+	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", st.CheckFailures, st.SnapshotFailures)
 }

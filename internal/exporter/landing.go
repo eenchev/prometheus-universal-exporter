@@ -24,13 +24,6 @@ const landingDocs = "https://github.com/eenchev/prometheus-universal-exporter"
 // style of a cell's long text (longtext.go).
 const pageStyle = pagekit.Style + longStyle
 
-// lightColours and darkColours are the pages' colours in each theme
-// (pagekit).
-const (
-	lightColours = pagekit.LightColours
-	darkColours  = pagekit.DarkColours
-)
-
 // pagePolicy is the pages' Content-Security-Policy (pagekit.Policy).
 const pagePolicy = pagekit.Policy
 

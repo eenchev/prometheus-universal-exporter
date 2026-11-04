@@ -32,9 +32,10 @@ targets:
       timeout: 5s
       # Disabling certificate verification is an explicit security trade-off.
       # insecure_skip_verify: false
-      # Both default to false, as they do on the collector.
+      # All three default to false, as they do on the collector.
       # follow_redirects: false
       # enable_http2: false
+      # new_connection: false
       retry:
         attempts: 2
         backoff: 2s

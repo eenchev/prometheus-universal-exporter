@@ -11,7 +11,7 @@ import (
 )
 
 func TestBooleanOverrideParsing(t *testing.T) {
-	for _, name := range []string{"follow_redirects", "enable_http2", "insecure_skip_verify"} {
+	for _, name := range []string{"follow_redirects", "enable_http2", "new_connection", "insecure_skip_verify"} {
 		t.Run(name, func(t *testing.T) {
 			absent, err := ParseRequestOverrides(url.Values{})
 			if err != nil {
@@ -46,6 +46,8 @@ func overrideFor(t *testing.T, overrides RequestOverrides, name string) *bool {
 		return overrides.FollowRedirects
 	case "enable_http2":
 		return overrides.EnableHTTP2
+	case "new_connection":
+		return overrides.NewConnection
 	case "insecure_skip_verify":
 		return overrides.InsecureSkipVerify
 	}

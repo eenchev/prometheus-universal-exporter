@@ -134,6 +134,14 @@ type TransportSettings struct {
 	// connection to one socket must not carry a request meant for another,
 	// or for a host reached over TCP.
 	socket string
+	// newConnections is the collector's request.new_connection: a pool
+	// that keeps no connection, so every request it sends, each attempt
+	// and each redirect's, is sent on a connection made for it and closed
+	// after its answer. An uptime check is then of the site as a new
+	// client finds it, its name looked up, its certificate presented and
+	// verified again on every probe, where a kept connection would answer
+	// with the certificate and the address of the probe that made it.
+	newConnections bool
 }
 
 type cachedTransport struct {
@@ -206,6 +214,9 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 		MaxResponseHeaderBytes: maxResponseHeaderBytes,
 		// A proxy's refusal to tunnel fails as one (proxy.go).
 		OnProxyConnectResponse: refuseProxyConnect,
+	}
+	if settings.newConnections {
+		transport.DisableKeepAlives = true
 	}
 	if proxyURL != nil && proxyURL.Scheme == "https" {
 		transport.DialTLSContext = proxyTLSDialer(dial, handshakeTimeout())

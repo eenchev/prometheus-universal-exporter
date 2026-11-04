@@ -18,6 +18,12 @@ collectors:
       # read and thrown away.
       method: HEAD
       follow_redirects: true
+      # Every probe, and every request of its redirects, makes a connection
+      # of its own: each looks the name up, connects and verifies the
+      # certificate the site serves now. A connection kept from the last
+      # probe would answer with the certificate and the address it was made
+      # with, and time no lookup, connection or handshake.
+      new_connection: true
       # Every status is the answer: site_up says whether it is a 2xx.
       accept_status: [any]
     decoder:

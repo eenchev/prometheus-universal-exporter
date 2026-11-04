@@ -2650,6 +2650,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
+| `new_connection` | off | Send every request, each retry and redirect too, on a new connection closed after its answer, rather than on one kept from an earlier request, so every probe looks the name up, connects and verifies the certificate the target serves now; for uptime checks. See [Connections](REQUESTS.md#connections). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`, or `[any]` alone for every status from 100 to 599; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
@@ -2670,7 +2671,7 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
+`new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
 `rate_limit`, `proxy_url` and `proxy_basic_auth_file` — and `method` and
 `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
@@ -4544,7 +4545,7 @@ A stored result is only ever returned to an identical request. The cache key
 covers the collector name and its full effective configuration, the `target`,
 every `/probe` parameter the collector's request type accepts (`method`,
 `path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
-`enable_http2`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
+`enable_http2`, `new_connection`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
 and every `param_<name>`, whether it fills the request or only a [label
 value](REQUESTS.md#in-label-values)), and every header forwarded to the target, including
 a forwarded `Authorization` value and the `header_<name>` parameters that are

@@ -44,7 +44,7 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
-			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
+			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "new_connection", "allowed_schemes",
 			"allowed_targets", "denied_targets", "accept_status", "login", "rate_limit",
 			"proxy_url", "proxy_basic_auth_file",
 		},
@@ -60,12 +60,12 @@ func init() {
 		},
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
-			"follow_redirects", "enable_http2", "retry_attempts", "retry_backoff",
+			"follow_redirects", "enable_http2", "new_connection", "retry_attempts", "retry_backoff",
 			"header_", PathParamPrefix,
 		},
 		TargetFields: []string{
 			"method", "path", "body", "timeout", "insecure_skip_verify",
-			"follow_redirects", "enable_http2", "retry", "headers",
+			"follow_redirects", "enable_http2", "new_connection", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"accept_status", "login", "rate_limit", "tls",
 		},

@@ -275,6 +275,7 @@ type RequestConfig struct {
 	MaxResponseBytes     ByteSize          `yaml:"max_response_bytes"`
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
+	NewConnection        bool              `yaml:"new_connection"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,

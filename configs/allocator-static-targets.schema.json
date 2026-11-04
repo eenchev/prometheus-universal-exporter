@@ -1585,6 +1585,9 @@
                 ],
                 "type": "string"
               },
+              "new_connection": {
+                "type": "boolean"
+              },
               "passphrase_file": {
                 "description": "sshfile, with the target's private_key_file: the file of its passphrase.",
                 "not": {
@@ -3041,6 +3044,9 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "new_connection": {
+                "type": "boolean"
               },
               "passphrase_file": {
                 "description": "sshfile, with the target's private_key_file: the file of its passphrase.",

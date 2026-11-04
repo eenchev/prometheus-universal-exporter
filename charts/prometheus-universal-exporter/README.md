@@ -240,6 +240,7 @@ Supported parameters include:
 * `insecure_skip_verify`
 * `follow_redirects`
 * `enable_http2`
+* `new_connection`
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`, or in one of its label values
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
@@ -1377,6 +1378,7 @@ config:
             type: http
             method: HEAD
             follow_redirects: true
+            new_connection: true
             accept_status: [any]
           decoder:
             type: none

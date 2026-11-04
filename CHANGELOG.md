@@ -136,7 +136,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   HTTP and HTTPS sites together, as blackbox_exporter's `http` prober makes
   it: one collector, shipped as `configs/config.uptime.example.yaml`, the
   Prometheus job, what each series means, and a table of blackbox_exporter's
-  series with what answers each here.
+  series with what answers each here. The collector connects anew on every
+  probe (`new_connection`), so a site's new address or a certificate that
+  no longer verifies is seen at once, as blackbox_exporter sees it.
+- `request.new_connection: true` on an `http` or `graphite` collector sends
+  every request — each retry and each followed redirect too — on a
+  connection of its own, closed after its answer, so each looks the name up,
+  connects and verifies the certificate the target serves now, and
+  `$timings` has its lookup, connection and handshake; a probe parameter and
+  a static target set it too
+  ([Connections](docs/REQUESTS.md#connections)).
 - jq and yq rules of `http` and `graphite` collectors read `$url`, where the
   request went after its redirects, without its userinfo and with credential
   query values `<redacted>` as a target in a log line, and `$redirects`, how

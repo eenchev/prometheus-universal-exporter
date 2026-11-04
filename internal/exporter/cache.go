@@ -332,6 +332,7 @@ func probeKeyQuery(collector, target string, o fetch.RequestOverrides) url.Value
 		"insecure_skip_verify": o.InsecureSkipVerify,
 		"follow_redirects":     o.FollowRedirects,
 		"enable_http2":         o.EnableHTTP2,
+		"new_connection":       o.NewConnection,
 	} {
 		if value != nil {
 			out.Set(name, strconv.FormatBool(*value))

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -175,7 +176,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	dst = appendPythonHeaders(dst, r.Headers, &e.nul)
 	dst = append(dst, `,"body":`...)
 	dst = appendPythonString(dst, r.Body, &e.nul)
-	dst = appendPythonTrip(dst, r.Trip)
+	dst = appendPythonTrip(dst, r.Trip, &e.nul)
 	dst = append(dst, `},"target":`...)
 	dst = appendPythonString(dst, r.Target, &e.nul)
 	dst = append(dst, `,"collector":`...)
@@ -532,17 +533,54 @@ func appendPythonString[Text []byte | string](dst []byte, text Text, nul *bool) 
 
 // appendPythonTrip writes what a script's response has of the request
 // besides its answer, as jq has it (fetch.HTTPTrip): response.timings,
-// response.tls, response.url and response.redirects. Their values are
-// numbers, booleans, text and null, which json.Marshal writes as the worker
-// reads them, and which cannot fail.
-func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip) []byte {
-	for _, field := range []struct {
-		key   string
-		value any
-	}{{`,"timings":`, trip.JQTimings()}, {`,"tls":`, trip.JQTLS()}, {`,"url":`, trip.JQURL()}, {`,"redirects":`, trip.JQRedirects()}} {
-		value, _ := json.Marshal(field.value)
-		dst = append(dst, field.key...)
-		dst = append(dst, value...)
+// response.tls, response.url and response.redirects, as json.Marshal
+// writes the values jq reads, their keys in order. They are written from
+// the trip itself, without the maps jq's values are, which a request line
+// would make for every response only to write them.
+func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip, nul *bool) []byte {
+	if trip == nil {
+		return append(dst, `,"timings":null,"tls":null,"url":null,"redirects":null`...)
 	}
-	return dst
+	seconds := func(dst []byte, d *time.Duration) []byte {
+		if d == nil {
+			return append(dst, "null"...)
+		}
+		return appendPythonFloat(dst, d.Seconds())
+	}
+	dst = append(dst, `,"timings":{"connect":`...)
+	dst = seconds(dst, trip.Connect)
+	dst = append(dst, `,"dns":`...)
+	dst = seconds(dst, trip.DNS)
+	dst = append(dst, `,"first_byte":`...)
+	dst = seconds(dst, trip.FirstByte)
+	dst = append(dst, `,"tls":`...)
+	dst = seconds(dst, trip.TLS)
+	dst = append(dst, `,"total":`...)
+	dst = appendPythonFloat(dst, trip.Total.Seconds())
+	dst = append(dst, `},"tls":`...)
+	if c := trip.TLSConnection; c == nil {
+		dst = append(dst, "null"...)
+	} else {
+		dst = append(dst, `{"cipher_suite":`...)
+		dst = appendPythonString(dst, c.CipherSuite, nul)
+		dst = append(dst, `,"issuer_cn":`...)
+		dst = appendPythonString(dst, c.IssuerCN, nul)
+		dst = append(dst, `,"not_after":`...)
+		dst = appendPythonFloat(dst, float64(c.NotAfter))
+		dst = append(dst, `,"not_before":`...)
+		dst = appendPythonFloat(dst, float64(c.NotBefore))
+		dst = append(dst, `,"server_name":`...)
+		dst = appendPythonString(dst, c.ServerName, nul)
+		dst = append(dst, `,"subject_cn":`...)
+		dst = appendPythonString(dst, c.SubjectCN, nul)
+		dst = append(dst, `,"tls_version":`...)
+		dst = appendPythonString(dst, c.TLSVersion, nul)
+		dst = append(dst, `,"verified":`...)
+		dst = strconv.AppendBool(dst, c.Verified)
+		dst = append(dst, '}')
+	}
+	dst = append(dst, `,"url":`...)
+	dst = appendPythonString(dst, trip.ShownURL(), nul)
+	dst = append(dst, `,"redirects":`...)
+	return strconv.AppendInt(dst, int64(trip.Redirects), 10)
 }

@@ -21,7 +21,9 @@ type HTTPTrip struct {
 	// and the TLS handshake took, nil for a phase the request did not
 	// have: on a connection it reused, none of them; over plain HTTP, no
 	// handshake; to an IP address or a Unix socket, no lookup. Through a
-	// proxy, the lookup and the connection are the proxy's.
+	// proxy, the lookup and the connection are the proxy's, and the
+	// handshake the target's through the tunnel, never the one with an
+	// https:// proxy (proxyTLSDialer).
 	DNS, Connect, TLS *time.Duration
 	// FirstByte is the time from the request's start, when it asked for a
 	// connection, to the first byte of the answer; nil for none.
@@ -32,11 +34,10 @@ type HTTPTrip struct {
 	// TLSConnection is the TLS connection the request was sent on, nil
 	// over plain HTTP.
 	TLSConnection *TLSConnection
-	// URL is the request's URL, where the redirects led, with its
-	// userinfo and fragment left out and the values of the query
-	// parameters whose names read as credentials masked, as a target is
-	// shown in a log line (MaskCredentialQueryValues).
-	URL string
+	// URL is the request's URL, where the redirects led, as it was sent:
+	// ShownURL is what a rule reads of it. It is kept as it is, and shown
+	// only when it is read, since most collectors' rules never read it.
+	URL *url.URL
 	// Redirects is how many redirects were followed to it, 0 for none.
 	Redirects int
 }
@@ -47,7 +48,18 @@ func (t *HTTPTrip) JQURL() any {
 	if t == nil {
 		return nil
 	}
-	return t.URL
+	return t.ShownURL()
+}
+
+// ShownURL is the request's URL with its userinfo and fragment left out
+// and the values of the query parameters whose names read as credentials
+// masked, as a target is shown in a log line (MaskCredentialQueryValues);
+// "" for none.
+func (t *HTTPTrip) ShownURL() string {
+	if t == nil || t.URL == nil {
+		return ""
+	}
+	return shownURL(t.URL)
 }
 
 // JQRedirects is the number of redirects as jq's $redirects and Python's
@@ -103,12 +115,13 @@ type TLSConnection struct {
 	SubjectCN, IssuerCN string
 }
 
-// tlsConnectionOf is what state says of the connection a request to u was
-// answered on; nil for a request over plain HTTP, whose answer can still
-// carry the TLS state of a connection to an https:// proxy, which is not
-// the target's.
-func tlsConnectionOf(u *url.URL, state *tls.ConnectionState) *TLSConnection {
-	if state == nil || u.Scheme != "https" {
+// tlsConnectionOf is what state says of the connection a request was
+// answered on; nil for a request over plain HTTP. Through an https://
+// proxy, the state is the target's handshake through the tunnel, and
+// there is none for a plain HTTP target: the proxy's own connection is
+// handed to the transport as no TLS connection (proxyTLSDialer).
+func tlsConnectionOf(state *tls.ConnectionState) *TLSConnection {
+	if state == nil {
 		return nil
 	}
 	c := &TLSConnection{TLSVersion: tls.VersionName(state.Version), CipherSuite: tls.CipherSuiteName(state.CipherSuite), ServerName: state.ServerName, Verified: len(state.VerifiedChains) > 0}
@@ -261,14 +274,20 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 }
 
 // trip is what was timed of the answered request, which ended at end, when
-// its body had been read, and the connection resp came on.
-func (t *tripTrace) trip(resp *http.Response, end time.Time) *HTTPTrip {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	trip := &HTTPTrip{DNS: t.dns, Connect: t.connect, TLS: t.tls, FirstByte: t.firstByte, Total: end.Sub(t.start)}
+// its body had been read, and the connection resp came on. A nil t is an
+// attempt that was not timed (fetch says when), begun at start: its trip
+// has no phases, and its total is the whole attempt's, its redirects
+// included.
+func (t *tripTrace) trip(resp *http.Response, start, end time.Time) *HTTPTrip {
+	trip := &HTTPTrip{Total: end.Sub(start)}
+	if t != nil {
+		t.mu.Lock()
+		trip.DNS, trip.Connect, trip.TLS, trip.FirstByte, trip.Total = t.dns, t.connect, t.tls, t.firstByte, end.Sub(t.start)
+		t.mu.Unlock()
+	}
+	trip.TLSConnection = tlsConnectionOf(resp.TLS)
 	if resp.Request != nil {
-		trip.TLSConnection = tlsConnectionOf(resp.Request.URL, resp.TLS)
-		trip.URL, trip.Redirects = shownURL(resp.Request.URL), redirectsTo(resp.Request)
+		trip.URL, trip.Redirects = resp.Request.URL, redirectsTo(resp.Request)
 	}
 	return trip
 }

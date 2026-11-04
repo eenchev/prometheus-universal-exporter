@@ -3235,6 +3235,10 @@
                 },
                 "type": "array"
               },
+              "new_connection": {
+                "description": "http and graphite: send every request — each attempt, and each redirect followed — on a new connection, closed after its answer, rather than on one kept from an earlier request, so each probe looks the name up, connects and makes the TLS handshake again, and sees the certificate the site serves now. For uptime checks. Defaults to false. See docs/REQUESTS.md#connections.",
+                "type": "boolean"
+              },
               "options": {
                 "additionalProperties": {
                   "type": [

@@ -27,7 +27,7 @@ func TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters(t *testing.T) {
 		RequestType: "http", Answer: "Paste what the target answers: the body, with its Content-Type, status and headers",
 		ContentType: true, HTTPAnswer: true, TargetLabel: "URL", TargetHint: "https://host:port",
 		Params:      []debugParam{{Name: "param_city", Default: "sofia"}, {Name: "param_days"}},
-		OtherParams: []string{"method", "path", "body", "insecure_skip_verify", "follow_redirects", "enable_http2", "retry_attempts", "retry_backoff", "header_X-Tenant"},
+		OtherParams: []string{"method", "path", "body", "insecure_skip_verify", "follow_redirects", "enable_http2", "new_connection", "retry_attempts", "retry_backoff", "header_X-Tenant"},
 	}
 	if !reflect.DeepEqual(form, want) {
 		t.Errorf("the form is %+v, want %+v", form, want)

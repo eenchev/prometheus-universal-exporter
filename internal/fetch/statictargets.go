@@ -131,6 +131,10 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		value := *t.Request.EnableHTTP2
 		out.EnableHTTP2 = &value
 	}
+	if t.Request.NewConnection != nil {
+		value := *t.Request.NewConnection
+		out.NewConnection = &value
+	}
 	// Each retry key the target sets replaces the collector's; the others
 	// keep it.
 	if retry := t.Request.Retry; retry != nil {

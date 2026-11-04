@@ -562,12 +562,13 @@ that has some makes a copy of its labels for each probe.
 
 ## Redirects and HTTP/2
 
-Two transport settings live on the collector request, both off by default:
+Three transport settings live on the collector request, all off by default:
 
 ```yaml
 request:
   follow_redirects: false
   enable_http2: false
+  new_connection: false
 ```
 
 `follow_redirects` decides whether a redirect status on the target request is
@@ -748,20 +749,25 @@ is negotiated through ALPN over TLS, so this only affects HTTPS targets;
 cleartext HTTP/2 is never attempted. The default of `false` is the protocol the
 exporter has always used.
 
-Both are overridable per scrape:
+`new_connection` sends every request on a connection of its own, closed
+after its answer, rather than on one kept from an earlier request: see
+[Connections](#connections).
+
+All three are overridable per scrape:
 
 ```yaml
 params:
   follow_redirects: ["true"]
   enable_http2: ["true"]
+  new_connection: ["true"]
 ```
 
 Each accepts exactly `true` or `false`; anything else returns HTTP 400 before
 the target is contacted, so a typo cannot quietly fall back to a default. An
-absent parameter leaves the collector's setting in force, and both parameters
+absent parameter leaves the collector's setting in force, and the parameters
 are part of the response cache key, so a scrape asking for different transport
 behaviour never reads another scrape's cached result. Static targets accept
-both in their own `request` block. `redirect_trusted_hosts` is not
+all three in their own `request` block. `redirect_trusted_hosts` is not
 overridable: a probe naming it is answered as though it had not.
 
 These replace the earlier undocumented `request.redirect_policy`. A
@@ -932,6 +938,22 @@ A certificate or key replaced on disk is picked up by the next request. An idle
 connection is closed after 90 seconds, and a pool nothing has used for five
 minutes, such as one a reload left behind, is closed with it. OTLP exports keep
 their connection to the collector the same way.
+
+A kept connection answers with what it was made with: the address the
+name had when it was looked up, and the certificate the target presented
+then. A target that has moved to another address, or serves a new
+certificate, or one that no longer verifies, is not seen until the
+connection closes, and a request sent on it has no lookup, connection or
+handshake to [time](#timings-tls-and-the-final-url). `new_connection: true`
+sends every request of the collector — each [retry](#retries) and each
+request a followed [redirect](#redirects-and-http2) makes — on a connection
+made for it, which no other request uses and which is closed when its answer
+has been read, as blackbox_exporter's probes are sent. Each request then
+looks the name up, connects, and makes and verifies the TLS handshake again,
+which is what an [uptime check](#uptime-probes) is for, at the cost of a
+handshake per request. A scrape overrides it with the `new_connection`
+parameter, and a static target in its own `request` block. A login's
+request is sent on a kept connection either way.
 
 ### Proxies
 
@@ -1423,12 +1445,19 @@ with Go's `net/http/httptrace`:
 | `total` | from the request's start to the end of reading the body |
 
 A phase the request did not have is `null`, not `0`: on a connection kept
-from an earlier request there is no lookup, connection or handshake; over
+from an earlier request there is no lookup, connection or handshake, which
+[`new_connection`](#connections) makes every request have; over
 plain HTTP no handshake; to an IP address or over a [Unix
 socket](#over-a-unix-socket) no lookup. Through a [proxy](#proxies) the
 lookup and the connection are the proxy's, and the handshake the target's
 through the tunnel; a connection to an `https://` proxy is made by the
 exporter itself, and its handshake is not timed.
+
+A request is timed only when something can read its timings: when a jq or
+yq text of the collector names `$timings`, or it runs a Python script, and
+in a [debug probe](CONFIGURATION.md#debug-probes) or on the debug page,
+whose report shows them; the trace costs every request a few allocations
+that a collector reading none of it is spared.
 
 The values are of one request: the one whose status `$status` is. That is
 the last attempt of a [retried](#retries) request, the request a
@@ -1499,6 +1528,7 @@ collectors:
       type: http
       method: HEAD
       follow_redirects: true
+      new_connection: true
       accept_status: [any]
     decoder:
       type: none
@@ -1546,6 +1576,13 @@ Each key has its part:
 - [`follow_redirects: true`](#redirects-and-http2) follows the site's
   redirects, so the status is the one of where they lead, and
   `$redirects` counts them.
+- [`new_connection: true`](#connections) makes every probe, and every
+  request of its redirects, connect anew: each looks the name up, connects
+  and verifies the certificate the site serves now, and times the three. On
+  a connection kept from the last probe, a site that moved to another
+  address, or now serves a certificate that does not verify, would still
+  answer `site_up 1`, with the old certificate in `$tls`, until the
+  connection closed.
 - [`accept_status: [any]`](#accepting-other-statuses) makes every status the
   answer, so a `503` is `site_up 0` with its status rather than a failed
   probe.
@@ -1577,9 +1614,14 @@ scrape_configs:
         replacement: exporter.example:8080
 ```
 
+With the Prometheus Operator, the sites are a `Probe`, as they are for
+blackbox_exporter, and the chart renders one for each of its `probes`
+entries: [Probes](PROMETHEUS-OPERATOR.md#probes), and the chart README's
+[Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes)
+for a complete values file.
+
 The series of one probe, of `https://example.com`, which redirected once,
-to `https://www.example.com/`, another host, so the request answered made a
-connection of its own:
+to `https://www.example.com/`:
 
 ```text
 site_up 1
@@ -1601,10 +1643,10 @@ http_exporter_probe_elapsed_seconds 0.149
 | --- | --- |
 | `site_up` | `1` when the site answered with a `2xx` status, after its redirects; `0` for any other status. Absent from a probe that failed. |
 | `site_http_status_code` | The status of the answer, after the redirects. |
-| `site_http_duration_seconds{phase}` | How long each phase of the answered request took ([`$timings`](#timings-tls-and-the-final-url)): `dns`, `connect` and `tls` each on its own, and `first_byte` and `total` from the request's start. A phase the request did not have, such as `tls` over plain HTTP, or all three on a connection kept from an earlier probe, has no series. |
+| `site_http_duration_seconds{phase}` | How long each phase of the answered request took ([`$timings`](#timings-tls-and-the-final-url)): `dns`, `connect` and `tls` each on its own, and `first_byte` and `total` from the request's start. A phase the request did not have, such as `tls` over plain HTTP, or `dns` to an IP address, has no series; with `new_connection` every probe has the other two. |
 | `site_http_redirects` | How many redirects were followed. |
 | `site_http_ssl` | `1` when the answered request was made over TLS. |
-| `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served expires, in Unix seconds; alert on it less `time()`. |
+| `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served on this probe's connection expires, in Unix seconds; alert on it less `time()`. |
 | `site_tls_version_info{version,cipher_suite}` | The TLS version of the connection, `TLS 1.2` or `TLS 1.3`, and the cipher suite it settled on, by its IANA name, so an alert can name a site still on an old version or a weak suite. |
 | `http_exporter_probe_success` | `1` when the probe got an answer, whatever its status; `0` when it failed, with `http_exporter_probe_failed_stage{stage}` naming the stage. |
 | `http_exporter_probe_elapsed_seconds` | How long the whole probe took, the redirects included. |
@@ -1624,8 +1666,8 @@ here:
 | `probe_success` | `http_exporter_probe_success`, and `site_up` | `probe_success` is `0` for a status outside `valid_status_codes`, `2xx` by default; here a probe with an answer succeeds, and `site_up` judges its status, so the two together say what `probe_success` does. |
 | `probe_duration_seconds` | `http_exporter_probe_elapsed_seconds` | The same: the whole probe. |
 | `probe_http_status_code` | `site_http_status_code` | The same: the status after the redirects. |
-| `probe_http_duration_seconds{phase}` | `site_http_duration_seconds{phase}` | blackbox_exporter's phases, `resolve`, `connect`, `tls`, `processing` and `transfer`, are consecutive and summed over every request of the redirects. Here they are of the answered request alone; `dns`, `connect` and `tls` are its `resolve`, `connect` and `tls`, and `first_byte` and `total` run from its start, so `processing` is `first_byte` less the three before it and `transfer` is `total` less `first_byte`. A phase that did not happen has no series, where blackbox_exporter reports `0`. |
-| `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
+| `probe_http_duration_seconds{phase}` | `site_http_duration_seconds{phase}` | blackbox_exporter's phases, `resolve`, `connect`, `tls`, `processing` and `transfer`, are consecutive and summed over every request of the redirects. Here they are of the answered request alone; `dns`, `connect` and `tls` are its `resolve`, `connect` and `tls`, and `first_byte` and `total` run from its start, so `processing` is `first_byte` less the three before it and `transfer` is `total` less `first_byte`. Both connect anew for every request, blackbox_exporter always and this collector by its `new_connection`, so both time a lookup, a connection and a handshake on every probe. A phase that did not happen, `tls` over plain HTTP or `dns` to an IP address, has no series, where blackbox_exporter reports `0`. |
+| `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. Both are of the certificate the site presents now, on the probe's own connection. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
 | `probe_http_redirects` | `site_http_redirects` | The same. |
 | `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
 | `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |

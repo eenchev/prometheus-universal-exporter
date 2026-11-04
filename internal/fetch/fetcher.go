@@ -140,6 +140,7 @@ type RequestOverrides struct {
 	RetryBackoff       *time.Duration
 	FollowRedirects    *bool
 	EnableHTTP2        *bool
+	NewConnection      *bool
 	// Targets, From and Until are a static target's request.targets, from
 	// and until, replacing a graphite collector's; no probe parameter sets
 	// them. Targets is nil when the target does not set it.
@@ -279,6 +280,11 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 		return overrides, err
 	}
 	overrides.EnableHTTP2 = enableHTTP2
+	newConnection, err := parseBoolOverride(values, "new_connection")
+	if err != nil {
+		return overrides, err
+	}
+	overrides.NewConnection = newConnection
 	if value, ok := values["retry_attempts"]; ok {
 		raw := ""
 		if len(value) > 0 {
@@ -750,11 +756,17 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if overrides.EnableHTTP2 != nil {
 		enableHTTP2 = *overrides.EnableHTTP2
 	}
+	// new_connection sends every request of the trip on a connection made
+	// for it, from a pool that keeps none (transport.go).
+	newConnection := c.Request.NewConnection
+	if overrides.NewConnection != nil {
+		newConnection = *overrides.NewConnection
+	}
 	// The connection pool is shared with every request made with the same
 	// TLS and HTTP/2 settings (transport.go), so a static target with a tls
 	// block of its own has a pool of its own, and no connection made with
 	// one client certificate carries a request that is to present another.
-	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, c), followRedirects, 0)
+	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c), newConnections: newConnection}, c), followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -872,6 +884,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// protocolErrors counts the attempts that ended with their HTTP/2
 	// connection closed for a protocol error before the answer's headers.
 	protocolErrors := 0
+	// Timing a request's phases costs a trace of nine hooks for every
+	// attempt, which is spared a collector none of whose rules reads
+	// $timings (model.Collector.TimingsUnread). A debug run times them
+	// whatever the rules read, since its report shows them.
+	timed := !c.TimingsUnread || debugRun(ctx)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -879,8 +896,14 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		// Each attempt times its own requests: what the answer carries is
 		// of the attempt that brought it (HTTPTrip).
-		timing := newTripTrace(time.Now())
-		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(requestContext, timing.hooks()), method, u.String(), reqBody)
+		attemptStart := time.Now()
+		attemptContext := requestContext
+		var timing *tripTrace
+		if timed {
+			timing = newTripTrace(attemptStart)
+			attemptContext = httptrace.WithClientTrace(requestContext, timing.hooks())
+		}
+		req, err := http.NewRequestWithContext(attemptContext, method, u.String(), reqBody)
 		if err != nil {
 			return nil, err
 		}
@@ -1016,7 +1039,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))
 		}
 		closeErr := resp.Body.Close()
-		trip := timing.trip(resp, time.Now())
+		trip := timing.trip(resp, attemptStart, time.Now())
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
 			traceBodyError(requestContext, readErr)

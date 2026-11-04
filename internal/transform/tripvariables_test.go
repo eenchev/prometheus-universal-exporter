@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -146,7 +147,11 @@ metric(name='verified', value=response.tls['verified'])
 // request brought.
 func TestURLAndRedirectsAreBoundInEveryProgram(t *testing.T) {
 	redirected := tripResponse()
-	redirected.Trip.URL, redirected.Trip.Redirects = "https://www.example.com/health?token=<redacted>", 2
+	final, err := url.Parse("https://www.example.com/health?token=s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirected.Trip.URL, redirected.Trip.Redirects = final, 2
 	rules := []model.MetricRule{
 		{Name: "redirects", Expression: "$redirects"},
 		{Name: "final", Expression: "1", Labels: []model.LabelRule{{Name: "url", Expression: "$url"}}},

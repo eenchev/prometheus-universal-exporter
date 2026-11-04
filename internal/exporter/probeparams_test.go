@@ -53,6 +53,7 @@ var probeParameterValues = map[string][2]string{
 	"insecure_skip_verify": {"true", "false"},
 	"follow_redirects":     {"true", "false"},
 	"enable_http2":         {"true", "false"},
+	"new_connection":       {"true", "false"},
 	"retry_attempts":       {"1", "2"},
 	"retry_backoff":        {"1s", "2s"},
 	"from":                 {"-1h", "-2h"},

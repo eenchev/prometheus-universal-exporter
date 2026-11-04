@@ -146,6 +146,8 @@ Parameters:
   follows HTTP redirect statuses.
 - `enable_http2`: optional boolean overriding whether the target request may
   negotiate HTTP/2.
+- `new_connection`: optional boolean overriding whether every request of the
+  probe is sent on a connection of its own (§ 42.15b).
 
 When the selected collector enables caching, the exporter MUST serve a stored
 result instead of contacting the target while a cached entry for the identical
@@ -1015,6 +1017,7 @@ and the source MUST list the opt-in types.
 | `follow_redirects` | `false` | § 42.15. |
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
+| `new_connection` | `false` | Every request on a connection of its own, closed after its answer (§ 42.15b). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings, or `any` as the only entry, which MUST accept every status from 100 to 599 and no other; any other entry, `any` beside another entry and `any` in another case MUST be refused at load, naming the collector or the static target, and the schemas MUST refuse them too. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
@@ -1025,10 +1028,11 @@ and the source MUST list the opt-in types.
 | `unix_socket` | none | The absolute path of the Unix domain socket every request of the collector is sent over in place of a TCP connection to the URL's host (§ 42.15b). The `http` type's alone. |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
-`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
-`retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
-`http` collector MAY set `method`, `path`, `body`, `timeout`,
-`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
+`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
+`retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>`. A static
+target using an `http` collector MAY set `method`, `path`, `body`, `timeout`,
+`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
+`retry`, `headers`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 Neither a probe parameter nor a static target MAY set `proxy_url` or
@@ -1404,7 +1408,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1435,13 +1439,13 @@ lines: it only pulls. Its keys:
   refused with `400` before Graphite is contacted, since an expression has no
   escaping and a quote, comma, bracket or glob could change it.
 - It MUST accept the `/probe` parameters `path`, `timeout`,
-  `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
-  `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
+  `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
+  `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
   which replace the window for the probe; an empty one, or one holding
   whitespace, MUST be answered `400`, and so must either for a collector of
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
-  `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
+  `new_connection`, `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
   `login`, `rate_limit`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
@@ -3580,7 +3584,8 @@ say so, after the bounded error. The text of a panic a probe or a scrape
 recovered from MUST be bounded alike in a debug report and in the log; its
 stack is logged as it was. A probe that panicked MUST be answered `500` with
 the fixed text `probe failed: the scrape panicked; the exporter's log has the
-panic`, never the panic's text: its caller keeps the answer as the scrape's
+panic`, never the panic's text (a collector with `report_failures` MUST answer
+it `200` with success `0` and the stage `panic`, § 19.5): its caller keeps the answer as the scrape's
 error, out of the exporter's hands, and a panic says whatever its code had at
 hand, a target's URL with its password as much as anything.
 
@@ -5877,13 +5882,19 @@ the conditional request of a revalidation answered `304`. `first_byte` MUST
 run from the request's start, when it asks for a connection, to the
 answer's first byte, and `total` from that start to the end of reading the
 body. A phase the request did not have MUST be `null`, not `0`: no lookup,
-connection or handshake on a reused connection, no handshake over plain
+connection or handshake on a reused connection, which `new_connection`
+(§ 42.15b) leaves no request with, no handshake over plain
 HTTP, no lookup to an IP address or a Unix socket, and no handshake the
 exporter's own dialer makes to an `https://` proxy. `$timings` MUST be
 `null` for every other request type, for a response pasted on the debug
 page, and in a pagination's `next` and a login's `token` expression.
 Python's `response.timings` MUST be the same, a dict with `None` for
-`null`, and `None` whole where `$timings` is `null`.
+`null`, and `None` whole where `$timings` is `null`. The phases MAY be left
+unmeasured for a collector none of whose texts names `$timings` and that
+runs no Python script, since no rule of it can read them; a debug run of it
+MUST still measure them, since its report shows them. The values of
+`$timings`, `$tls`, `$url` and `$redirects` MAY likewise be made only for a
+program whose text names one of them.
 
 Every jq program MUST also have `$tls` bound. For the request `$timings`
 describes, sent over TLS, it MUST be an object of the connection the answer
@@ -7027,16 +7038,19 @@ a failure alone, `http_exporter_probe_failed_stage{stage}` `1`, naming the
 stage the failure is counted and logged in: `http` (whatever failed in reaching
 an `http` target, its name, its connection or its TLS handshake),
 `http_status`, `decode`, `transform`, `validation`, `metric` (a rule with
-`error_mode: fail`), or a request type's own fetch stage (`dns`, `tls`,
-`file`, `grpc` and the others, § 5.1). The probe series MUST carry no label but
+`error_mode: fail`), a request type's own fetch stage (`dns`, `tls`,
+`file`, `grpc` and the others, § 5.1), or `panic` (a probe whose trip
+panicked, in whatever stage, § 6.1a). The probe series MUST carry no label but
 `stage`, and nothing of the failure's text: what a failed probe's caller is
 told (§ 19.4) MUST NOT be answered at all. A failed probe MUST answer no
 series of the collector's and no freshness gauges (§ 42.13.1).
 
 A probe MUST be a failure to the series exactly when it is one of these:
 
-- a stage under `fail` failed, a rule under `error_mode: fail` failed, or
-  `failure_backoff` kept the trip from the target (its fetch stage);
+- a stage under `fail` failed, a rule under `error_mode: fail` failed,
+  `failure_backoff` kept the trip from the target (its fetch stage), or the
+  trip panicked (`panic`): success MUST be `0` whenever the self-metrics
+  count the probe failed, whether or not a stage's error failed it;
 - a stage failed and `error_handling` carried on past it (`log`,
   `ignore`): the answer MUST hold what a probe carrying on holds (§ 19) and
   success `0` with the stage, and the probe MUST be a failure wherever the
@@ -7060,11 +7074,19 @@ answered as without the key. A failure MUST be
 logged, counted in the self-metrics, kept from the response cache and from
 the OTLP export, and recorded on the status page as without the key; the
 status page MUST give its status as `200` and its series as those answered.
+A failed probe's trace (§ 42.1c) MUST give `http.response.status_code`
+`200` and, as its `error.type`, the stage that failed, never the status
+the probe would have been answered without the key; a stale result
+standing in keeps `stale`, and a probe `failure_backoff` kept from the
+target `backoff`, as without the key.
 The response cache MUST keep, and the OTLP export (§ 42.1) MUST export, the
 collector's series alone, never the probe series; probes sharing a trip (§
 42.13a) MUST each answer their own duration from the one result, which MUST
 NOT be changed. A debug probe (§ 42.17) MUST say that a probe would have
-answered `200` with the probe series, and show them. Static targets MUST NOT be changed by
+answered `200` with the probe series, and show them; where the last good
+result stands in for the failure, it MUST say that the probe would have
+answered that result, its age and its being stale, with success `0` and the
+stage, not the failure's own answer. Static targets MUST NOT be changed by
 the key: a static target's scrape has `http_exporter_target_up` (§ 42.14).
 
 A rule, or a derived family that is not hidden (§ 18.1), of a collector with
@@ -13751,7 +13773,7 @@ Tests MUST show:
   quantiles out of order, and refuses a bound, `NaN` or `+Inf` included, or a
   quantile given twice, next to each other or apart.
 - A probe giving `target`, `collector`, `method`, `path`, `timeout`, `body`,
-  `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
+  `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
   `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
   `400` naming the parameter, without a request to the target and without
   being counted; a repeated `header_<name>` and a repeated parameter the
@@ -30227,8 +30249,26 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestURLAndRedirectsAreBoundInEveryProgram` (transform): jq and yq rules read `$redirects` as a value and `$url` as a label, `null` without a trip; Python's `response.url` and `response.redirects` are the same, `None` without a trip.
 - `TestAProbeReadsWhereItsRedirectsLed`: through `/probe`, a redirect to a login page is `uptime_redirects 1` and a label of `$url` of the login page with its `token` `<redacted>` and `next` kept; a debug probe's report shows `$url` and `$redirects` under `$tls`, the URL's `next` and `token` masked as its request lines mask a query the configuration did not set, `<redacted>` as written; the debug page's `variables` are `$timings`, `$tls null`, `$url` and `$redirects 0` of a target answering at once.
 - `TestAProbeReadsTheTLSConnectionOfItsRequest`: through `/probe`, rules read `$tls.not_after` as the target certificate's expiry, `verified` false under `insecure_skip_verify` and `tls_version` `TLS 1.3`; a debug probe's report shows `$tls` as JSON under `$timings`.
-- `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 with `site_up 0` and success 1; a redirect with `site_http_redirects 1` and the 200 it led to; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info` with the cipher suite by its IANA name and `version="TLS 1.3"`; the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
+- `TestTheUptimeExampleAnswersTheDocumentedSeries`: `configs/config.uptime.example.yaml` lints clean, and its `site` collector answers a 200 with `site_up 1`, the status, `connect`, `first_byte` and `total` phases, no `dns` or `tls` phase, no redirect, `site_http_ssl 0`, no TLS series and `http_exporter_probe_success 1`; a 503 of the same site with `site_up 0`, success 1 and a `connect` phase of its own; a redirect with `site_http_redirects 1`, the 200 it led to and its `connect` phase; a TLS site under `insecure_skip_verify=true` with `site_http_ssl 1`, the `tls` and `connect` phases, the certificate's expiry and `site_tls_version_info` with the cipher suite by its IANA name and `version="TLS 1.3"`, and probed again, the `tls` and `connect` phases again (`new_connection`); the same site verified, and a closed port, with success 0, the `http` stage and no `site_` series; no rule's failure is logged.
 - `TestShippedConfigurationsMatchTheSchema`, `TestExamplesReferenceTheSchema`, `TestTheShippedFilesMatchTheSchemasAsTheyDid` and `TestShippedExampleScriptsSatisfyTheContract` (repository) take `configs/config.uptime.example.yaml` among the shipped configurations.
+
+## 34.264 Fixes to report_failures and the chart's Probes
+
+- `TestReportFailuresAnswersAPanickedProbeAFailure`: a probe of a `report_failures` collector whose request type panics is answered `200` with `http_exporter_probe_success 0` and `http_exporter_probe_failed_stage{stage="panic"} 1`, counted in `http_exporter_scrapes_total` and not in `http_exporter_scrape_success_total`; a debug probe's report says `A probe would have answered 200 with http_exporter_probe_success 0 and the panic stage failed (report_failures), in place of 500: probe failed: …` and shows the stage series. Without the change the probe was answered success 1 with no stage.
+- `TestTheTraceOfAFailedProbeUnderReportFailuresNamesItsStage`: under `errors` and an hour's threshold, the trace of a `report_failures` probe of a 503 target under `on_fetch_error: fail` has `error.type` `http_status`, and that of a probe whose request type panics `panic`, each with `http.response.status_code` `200` and the status ERROR; without the change they had `502` and `500`.
+- `TestADebugProbeSaysAStaleResultStandsInUnderReportFailures`: a debug probe of a `report_failures` collector under `on_decode_error: log` and `cache.stale_if_error`, whose target answered `{"v": 3}` and then a body that is no JSON, says `A probe would have answered 200 with the last good result, 5s old, marked stale (cache.stale_if_error), with http_exporter_probe_success 0 and the decode stage failed (report_failures).` and shows `demo_value 3`, `http_exporter_result_stale 1`, success `0` and the `decode` stage; without the change it said `200 with http_exporter_probe_success 0 and the decode stage failed (report_failures), in place of 200 with the last good result, …`.
+
+## 34.265 Uptime probes: new connections, the proxy's TLS phase and the variables' cost
+
+- `TestANewConnectionSeesTheCertificateASiteServesNow` (fetch): over HTTP/1.1 and HTTP/2, a collector with `new_connection` probing a site through a redirect to itself makes two connections and has the `dns`, `connect` and `tls` phases of the request it led to; after the site starts serving a certificate the collector does not trust, its next probe fails verifying it. Without `new_connection` the next probe is sent on the kept connection, with no `tls` phase and the old certificate in `$tls`.
+- `TestNewConnectionIsAStaticTargetsKeyAndAProbeParameter` (fetch): a static target's `new_connection` becomes its override; a probe without it reuses the connection the one before left, and each probe with it connects anew.
+- `TestBooleanOverrideParsing` (fetch) takes `new_connection` with `follow_redirects`, `enable_http2` and `insecure_skip_verify`; `TestEveryProbeParameterIsPartOfTheKey`, `TestARepeatedProbeParameterIsRefused`, `TestCollectorCacheKeyRequiresIdenticalRequest` (a probe with `new_connection` set differently, or left out, has a key of its own) and `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters` take it among the `http` and `graphite` probe parameters.
+- `TestTheTLSPhaseThroughAnHTTPSProxyIsTheTargets` (fetch): through an `https://` proxy, a plain HTTP target has a `connect` phase, no `tls` phase and no `$tls`; an https target whose handshake takes 150 ms has a `tls` phase at least that long, and its own verified certificate in `$tls`, not the proxy's; the proxy's own certificate is still verified, a new connection to it against roots that do not hold it failing.
+- `TestARequestIsTimedOnlyWhereSomethingReadsItsTimings` (fetch): a collector marked as reading no timings has no `connect` or `first_byte` phase, a total, and its redacted `$url`; a debug run of it, and a collector that reads them, have both phases; on a kept connection its request makes at least 12 fewer allocations than a timed one. `BenchmarkAnHTTPProbe` measures both.
+- `TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings` (config): a loaded collector whose rules read `$tls` and `$status` is marked as reading no timings, and one with an `items` of `$timings` is not.
+- `TestReadsTimingsIsWhereARuleOrAScriptMayReadThem` (transform): `$timings` in an expression, an `items` expression, a label, a transform label or any other text of the collector, and a Python script or pre-script, read the timings; rules of `$status` and `$tls` alone do not.
+- `TestTheTripsVariablesAreMadeOnlyForAProgramThatReadsThem` (transform): a program of `$status` runs with `$timings` and `$url` null and leaves them unmade; one of `$timings` reads them, and a second reads the same values, made once.
+- `TestThePythonRequestWritesTheTripAsJSONWould` (transform): the request line's `timings`, `tls`, `url` and `redirects`, of no trip, of a plain HTTP trip with a credential and markup in its query, and of a TLS trip whose certificate names need escaping, are what `json.Marshal` writes of jq's values.
 
 # 35. Documentation requirements
 
@@ -30281,7 +30321,7 @@ The repository MUST include documentation covering:
 27. Uptime probes of HTTP sites, in `docs/REQUESTS.md`, linked from the
     README's index and from `docs/CONFIGURATION.md`: the collector of
     `configs/config.uptime.example.yaml` — `report_failures`, `method:
-    HEAD`, `follow_redirects`, `accept_status: [any]`, `decoder.type: none`,
+    HEAD`, `follow_redirects`, `new_connection`, `accept_status: [any]`, `decoder.type: none`,
     and jq rules of `$status`, `$timings`, `$tls` and `$redirects` — the
     Prometheus job that relabels each site into `target`, what each series
     means, a table of blackbox_exporter's `http` prober series with what
@@ -31695,6 +31735,7 @@ body=<raw request body>
 insecure_skip_verify=<true|false>
 follow_redirects=<true|false>
 enable_http2=<true|false>
+new_connection=<true|false>
 retry_attempts=<non-negative integer>
 retry_backoff=<non-negative Go duration>
 ```
@@ -33587,7 +33628,8 @@ have none of them.
 
 ## 42.15 Redirect following and HTTP/2 negotiation
 
-Collector target requests MUST support two transport settings:
+Collector target requests MUST support two transport settings, besides
+`new_connection` (§ 42.15b):
 
 ```yaml
 request:
@@ -33621,8 +33663,8 @@ different transport behaviour never reads another scrape's cached result.
 Static targets MUST accept both settings in their `request` block with the
 same semantics.
 
-The Helm chart MUST expose both as list-valued `params` entries on each
-`monitors` item.
+The Helm chart MUST expose both, and `new_connection`, as list-valued `params`
+entries on each `monitors` item.
 
 ### 42.15b Connection reuse
 
@@ -33635,7 +33677,19 @@ Unix socket (`request.unix_socket`, below), shared by every collector and scrape
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
 closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
-use the pool of its own settings. A TLS file rotated on disk MUST be picked up
+use the pool of its own settings. An `http` or `graphite` collector with
+`request.new_connection: true` MUST instead send every request — each
+attempt, each request a followed redirect makes, each page — on a
+connection made for it, which no other request uses and which is closed once
+its answer has been read, so that every probe looks the target's name up,
+connects, and makes and verifies the TLS handshake again, and `$timings` and
+`$tls` (§ 17) are of that connection; a connection kept from an earlier
+request would answer with the address and the certificate it was made with.
+It MUST default to `false`, MUST be overridable by the `new_connection` probe
+parameter, accepting exactly `true` or `false` as `follow_redirects` is
+(§ 42.15) and part of the cache key, and MUST be settable by a static target
+of either type in its `request` block. A login's request MAY use a kept
+connection. A TLS file rotated on disk MUST be picked up
 by the next request, with the previous pool's idle connections closed. Idle
 connections MUST time out (90 seconds), and a pool unused for five minutes —
 such as one a reload made obsolete — MUST be closed and dropped. A TLS

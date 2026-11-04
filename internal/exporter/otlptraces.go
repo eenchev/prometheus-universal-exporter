@@ -998,12 +998,9 @@ func probeTraceEndOf(result *probeResult) probeTraceEnd {
 	case probeBackoff:
 		end.stage = "backoff"
 	default:
+		// A failure answered with its status; one report_failures
+		// answered 200 has its stage instead (reportedTrace).
 		end.stage = strconv.Itoa(end.status)
-		if result.carriedOn {
-			// Answered 200 as a probe carrying on is: its status says
-			// nothing of the failure, and the stage that failed does.
-			end.stage = result.stage
-		}
 	}
 	if end.failure == "" {
 		end.failure = "the probe failed"

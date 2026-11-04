@@ -868,8 +868,12 @@ keys:
   in place of a fresh one, one the concurrency limit turned away, one of a
   collector with
   [`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
-  that carried on past a failed stage, whose `error.type` is that stage, and
-  a scrape that left its target `up` 0. Off, the default, only slow ones are
+  that carried on past a failed stage, and a scrape that left its target
+  `up` 0. A failed probe of a collector with `report_failures`, answered
+  `200`, has the stage that failed as its `error.type` — `http_status`,
+  `decode`, `panic` and the others — rather than the status it would have
+  been answered without the key; a stale result standing in keeps `stale`,
+  and a probe `failure_backoff` kept from the target `backoff`. Off, the default, only slow ones are
   exported, failed or not; a failure is in the log and the self-metrics
   already.
 - `parent_based: true` exports the trace of every probe whose caller sent a

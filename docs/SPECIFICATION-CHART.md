@@ -504,11 +504,62 @@ optional `PodMonitor` resource using that entry's settings.
 
 It MUST implement the equivalent target relabeling and collector parameter behavior described for `ServiceMonitor`.
 
+### 33.6a Probe support
+
+The chart MUST provide optional Prometheus Operator `Probe` resources
+(`monitoring.coreos.com/v1`), one for each entry of the `probes` values array,
+so that uptime checks of the "Uptime probes" collector
+([REQUESTS.md](REQUESTS.md#uptime-probes)) are declared as blackbox_exporter's
+are. `probes` MUST default to an empty list, which renders no `Probe`, so a
+cluster without the Probe CRD MUST NOT need it unless an entry is given; the
+chart MUST NOT guard the `Probe` with a check of the cluster's API versions,
+as it does not guard the probe monitors.
+
+An entry renders a `Probe` named `<fullname>-<name>`, in the namespace of the
+chart's other objects, with the chart's metadata labels and annotations and
+the entry's `labels` and `annotations` over them. Its `spec.prober` MUST be
+the exporter's Service, `url` `<fullname>.<namespace>.svc:<service.port>`,
+`scheme` `http` and `path` `/probe`; its `spec.params` MUST hold `collector`
+with the entry's `collector` as its one value, then each of the entry's
+`params`, a list of strings, by name. The chart MUST NOT render `spec.module`,
+which the Prometheus Operator sends as a `module` parameter. The entry's
+`targets`, a list of URLs, MUST render as `spec.targets.staticConfig.static`
+with its `targetLabels` as the static config's `labels`; its `ingress` as
+`spec.targets.ingress`, its `selector` and `namespaceSelector` as given. The
+entry's `relabelings` MUST render as the `relabelingConfigs` of whichever of
+the two it has, its `metricRelabelings` as `spec.metricRelabelings`, and its
+`interval`, `scrapeTimeout` and `jobName` as the `Probe`'s; each MUST be left
+out when unset.
+
+An entry MUST have one of `targets` and `ingress`, not both: the Prometheus
+Operator takes the static targets over the Ingresses, so the second would be
+ignored without a word, and with neither the `Probe` probes nothing. An
+`ingress` MUST give a `selector`, `{}` to select every Ingress. An entry
+MUST NOT give `targetLabels` without `targets`: the `Probe`'s
+`targets.ingress` has no labels, so the Prometheus Operator would drop them
+without a word, and the message MUST point to `relabelings`. The name MUST
+be a DNS-1123 label unique among the entries; `collector` MUST be given and,
+when the chart holds the configuration, be a collector `config.data` defines,
+as a monitor's (§ 42.7); `params` MUST NOT set `collector` or `target`; a
+`scrapeTimeout` MUST NOT be longer than the `interval`; an enabled `auth`
+MUST have a `type` and a `secretName`; the `Probe` needs the Service, so an
+entry with `service.enabled: false` MUST fail rendering; and an entry beside
+`allocator.enabled` MUST fail rendering, since the allocator's probe targets
+are its `probeJobs` (§ 33.10c). The values schema MUST refuse each of these it
+can express, and the templates MUST refuse each with a message naming the
+entry when the schema is skipped.
+
+The credential a `Probe` presents MUST be the one a probe monitor presents
+(§ 42.7): the entry's own `auth`, as `authorization` or `basicAuth`, or else,
+with `webAuth.enabled`, the `webAuth` Secret's as `basicAuth`, since the
+exporter's Basic Auth protects `/probe`; neither, nothing. A rendered `Probe`
+counts as another monitor for the self-metrics monitor (§ 42.7).
+
 ### 33.7 CRD availability
 
 The exporter Helm chart MUST NOT install Prometheus Operator CRDs itself.
 
-If `ServiceMonitor` or `PodMonitor` is enabled and the required CRDs are absent, the chart SHOULD fail clearly or document the dependency on Prometheus Operator.
+If `ServiceMonitor`, `PodMonitor` or `Probe` is enabled and the required CRDs are absent, the chart SHOULD fail clearly or document the dependency on Prometheus Operator.
 
 ### 33.8 RBAC
 
@@ -1533,7 +1584,12 @@ are skipped and the text checks of the templates still run:
    check; and build the parent chart `testdata/chart/parent` with
    `helm dependency build`, render it with
    `prometheus-universal-exporter.enabled=true`, and find the dependency's
-   Deployment and the replica count the parent's values give it. The parent
+   Deployment and the replica count the parent's values give it; render a
+   `probes` entry of static targets with `targetLabels` and find the `Probe`,
+   its name, its prober's address and `/probe`, the `collector` parameter,
+   the target and the label, and no `module`, and pass the render to the
+   manifest check, and one of an `ingress` selector and find `ingress:`,
+   the selector and no `staticConfig`. The parent
    MUST be built in a temporary copy of the two charts, so that neither the
    `charts` directory nor the `Chart.lock` helm writes reaches the working
    tree, and the build MUST need no network. Each of the two MUST fail when
@@ -1544,8 +1600,8 @@ are skipped and the text checks of the templates still run:
    the configuration directory written with a trailing slash, an
    `extraVolumeMounts` entry there written with one, `goGC.percent` `off` as
    a string with `goMemLimit.enabled=false`, `goGC.percent=0`,
-   `goGC.percent=200` beside a `GOGC` entry in `env`, or a `replicaCount` of
-   2147483648. A check of what a render
+   `goGC.percent=200` beside a `GOGC` entry in `env`, a `replicaCount` of
+   2147483648, or a `probes` entry's `targetLabels` beside its `ingress`. A check of what a render
    holds MUST keep the render before reading it, so that helm failing fails
    the check rather than handing the reader nothing. A test MUST fail when
    either list lacks one of these checks. A test MUST also find no check in
@@ -1920,6 +1976,42 @@ are skipped and the text checks of the templates still run:
    to set instead (`TestChartRefusesPythonIdleWorkerValuesOutOfRange`). The
    whole-number tests hold `server.pythonMaxIdleWorkers` to the count range
    and pattern, and render it written as `2e6`, as the other count flags.
+47. Probes (§ 33.6a):
+   - The default values and `probes: []` render no `Probe`, and `values.yaml`
+     defaults `probes` to `[]` (`TestChartRendersNoProbeByDefault`).
+   - An entry with static targets renders a `Probe` named
+     `<fullname>-<name>` in `namespaceOverride`, with the default and the
+     entry's labels and the entry's annotations, its prober the Service's
+     address, `http` and `/probe`, `spec.params` holding `collector` and the
+     entry's `params` (a value `true` rendered as a string), the targets as
+     `staticConfig.static` with `targetLabels` and `relabelingConfigs`, its
+     `interval`, `scrapeTimeout`, `jobName` and `metricRelabelings`, no
+     `spec.module`, no credential without `webAuth` and no `ingress`, beside
+     the self-metrics monitor; an entry without the optional values renders
+     none of them (`TestChartProbesProbeStaticTargetsThroughTheService`).
+   - An entry with `ingress` renders its selector, `namespaceSelector` and
+     `relabelingConfigs` under `spec.targets.ingress` and no static config,
+     and `selector: {}` as the empty mapping
+     (`TestChartProbesProbeTheIngressesTheySelect`).
+   - With `webAuth.enabled` a `Probe` without `auth` presents the `webAuth`
+     Secret and its keys as `basicAuth`, and one with its own bearer or basic
+     `auth` that alone; without `webAuth`, none
+     (`TestChartProbesPresentTheExporterCredential`).
+   - Rendering fails for an entry with neither `targets` nor `ingress`, an
+     empty `ingress`, both, an `ingress` without `selector`, `targetLabels`
+     beside `ingress` (the message pointing to `relabelings`), no collector, a
+     collector `config.data` does not define, no name, a name in upper case
+     or with `_`, two entries of one name, `params.collector`,
+     `params.target`, a `scrapeTimeout` over the `interval`, an `auth`
+     without a Secret or a type, `service.enabled: false`, and
+     `allocator.enabled`, each with a message naming the entry, also with the
+     schema skipped; the schema refuses an unknown key such as `module`, an
+     empty target, an empty `params` list, a fractional `interval` and an
+     unknown `namespaceSelector` key; and a valid entry renders
+     (`TestChartRefusesInvalidProbes`).
+   - The chart README's Uptime probes values render the `Probe` the section
+     shows, and their configuration loads
+     (`TestChartReadmeUptimeProbeExampleRenders`).
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -2134,7 +2226,7 @@ in another namespace reaches it, and MUST fail rendering with
 
 With `selfMetrics.enabled`, exactly one self-health monitor MUST be rendered,
 a ServiceMonitor or, with `selfMetrics.type: pod`, a PodMonitor, when the
-chart renders any other monitor (a probe monitor, the static targets
+chart renders any other monitor (a probe monitor, a `Probe` (§ 33.6a), the static targets
 monitor, a probe job's ScrapeConfig or the allocator's ServiceMonitor) or the
 cluster serves that kind; a ServiceMonitor with
 `service.enabled: false` MUST fail rendering, and so MUST a static targets

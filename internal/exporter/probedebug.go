@@ -563,6 +563,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	if slot := p.slotOf(); slot != nil {
 		defer s.trips.release(slot.Name)
 	}
+	start := time.Now()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			stack := string(debug.Stack())
@@ -576,6 +577,10 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 			verdict, answer, ok, failed = "500: probe failed: "+errScrapePanicked.Error(), nil, false, true
 			if p.static != nil {
 				verdict = "target up 0: " + errScrapePanicked.Error()
+			} else {
+				// Under report_failures a probe that panicked is answered
+				// as one that failed in the panic stage (probeFlights.run).
+				verdict, answer = reportedVerdict(p.collector, collected{stage: stagePanicked, err: errScrapePanicked}, verdict, nil, "", time.Since(start))
 			}
 		}
 	}()
@@ -597,21 +602,23 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 	} else if runsPython(p.collector) {
 		job.python = transform.PythonWorkers().Departed()
 	}
-	start := time.Now()
 	result := s.collect(ctx, job)
-	verdict, answer = s.debugVerdict(result, p)
+	verdict, answer, staleAge := s.debugVerdict(result, p)
 	if p.static == nil {
-		verdict, answer = reportedVerdict(p.collector, result, verdict, answer, time.Since(start))
+		verdict, answer = reportedVerdict(p.collector, result, verdict, answer, staleAge, time.Since(start))
 	}
 	return verdict, answer, !result.failed() && !result.carriedOn && !result.aborted, result.failed() || result.aborted
 }
 
 // debugVerdict is what a probe would have answered, as probeTrip and
-// probeUpstream would answer it, and the series it would have served.
-func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.MetricSet) {
+// probeUpstream would answer it, and the series it would have served;
+// staleAge is the age of the last good result that stands in for a failed
+// trip, empty when none does.
+func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.MetricSet, string) {
 	name := p.collector.Name
 	if p.static != nil {
-		return s.staticDebugVerdict(result, p)
+		verdict, answer := s.staticDebugVerdict(result, p)
+		return verdict, answer, ""
 	}
 	var verdict string
 	// failed is what the probe answers when no stale result stands in for
@@ -619,7 +626,7 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	var failed *model.MetricSet
 	switch {
 	case result.aborted:
-		return "503: probe cancelled: the caller went away", nil
+		return "503: probe cancelled: the caller went away", nil, ""
 	case result.metric != "":
 		verdict = fmt.Sprintf("502: metric %s failed: %v", result.metric, result.err)
 	case result.refused:
@@ -633,29 +640,30 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 		answer := carriedOnAnswer(p.collector)
 		verdict = "200 with no series of the collector's: a stage failed and error_handling carried on"
 		if !p.collector.ReportFailures {
-			return verdict, &answer
+			return verdict, &answer, ""
 		}
 		failed = &answer
 	default:
 		answer := result.answer
-		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer
+		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer, ""
 	}
 	if result.unauthorized {
-		return verdict + " (no stale result: the target refused the credential)", failed
+		return verdict + " (no stale result: the target refused the credential)", failed, ""
 	}
 	if result.refused {
-		return verdict + " (no stale result: the target policy refused the target)", nil
+		return verdict + " (no stale result: the target policy refused the target)", nil, ""
 	}
 	if model.StaleIfError(p.collector) > 0 && p.staleKey != "" {
 		now := time.Now()
 		if cached, fetched, found := s.cache.GetStale(p.staleKey, now); found {
 			if answer, err := withFreshness(cached, p.collector, true, fetched, now); err == nil {
+				age := now.Sub(fetched).Round(time.Second).String()
 				return fmt.Sprintf("200 with the last good result, %s old, marked stale (cache.stale_if_error), instead of %s",
-					now.Sub(fetched).Round(time.Second), verdict), &answer
+					age, verdict), &answer, age
 			}
 		}
 	}
-	return verdict, failed
+	return verdict, failed, ""
 }
 
 // staticDebugVerdict is what a static target's scrape would have published,
@@ -1076,7 +1084,7 @@ func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) 
 	for _, v := range []struct {
 		name  string
 		value any
-	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.URL, configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
+	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.ShownURL(), configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
 		// As written, not escaped for HTML: the <redacted> of a masked
 		// query value reads as it is.
 		var value bytes.Buffer

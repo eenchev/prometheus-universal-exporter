@@ -911,6 +911,14 @@ func chartCasesMissing(local, ci map[string]bool) []string {
 		// The self-metrics at the static targets' status page.
 		"fails: " + template + "--set selfMetrics.path=/static-targets/status",
 		"fails: " + template + "--set staticTargets.path=/static --set selfMetrics.path=/static/status",
+
+		// A Probe of static targets and one of Ingresses render, and
+		// targetLabels beside an ingress, which a Probe drops, is refused.
+		"succeeds: " + template + `--set-json probes=[{"name":"sites","collector":"example","targets":["https://www.example.com"],"targetLabels":{"team":"web"}}]`,
+		`renders a line matching "^        team: web$": ` + template + `--set-json probes=[{"name":"sites","collector":"example","targets":["https://www.example.com"],"targetLabels":{"team":"web"}}]`,
+		"succeeds: " + template + `--set-json probes=[{"name":"ingresses","collector":"example","ingress":{"selector":{"matchLabels":{"probe":"true"}}}}]`,
+		`renders a line matching "^    ingress:$": ` + template + `--set-json probes=[{"name":"ingresses","collector":"example","ingress":{"selector":{"matchLabels":{"probe":"true"}}}}]`,
+		"fails: " + template + `--set-json probes=[{"name":"ingresses","collector":"example","ingress":{"selector":{}},"targetLabels":{"team":"web"}}]`,
 	}
 	// An exporter exposed outside the cluster is refused without webAuth,
 	// and with webAuth beside a configuration that does not read its files,

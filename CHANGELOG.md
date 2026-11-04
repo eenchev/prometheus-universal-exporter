@@ -136,7 +136,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   HTTP and HTTPS sites together, as blackbox_exporter's `http` prober makes
   it: one collector, shipped as `configs/config.uptime.example.yaml`, the
   Prometheus job, what each series means, and a table of blackbox_exporter's
-  series with what answers each here.
+  series with what answers each here. The collector connects anew on every
+  probe (`new_connection`), so a site's new address or a certificate that
+  no longer verifies is seen at once, as blackbox_exporter sees it.
+- `request.new_connection: true` on an `http` or `graphite` collector sends
+  every request — each retry and each followed redirect too — on a
+  connection of its own, closed after its answer, so each looks the name up,
+  connects and verifies the certificate the target serves now, and
+  `$timings` has its lookup, connection and handshake; a probe parameter and
+  a static target set it too
+  ([Connections](docs/REQUESTS.md#connections)).
 - jq and yq rules of `http` and `graphite` collectors read `$url`, where the
   request went after its redirects, without its userinfo and with credential
   query values `<redacted>` as a target in a log line, and `$redirects`, how
@@ -146,14 +155,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `report_failures: true` on a collector answers every probe of it `200`
   with an exposition, never `502`: `http_exporter_probe_success` 1 or 0,
   `http_exporter_probe_elapsed_seconds`, and on a failure
-  `http_exporter_probe_failed_stage{stage}` naming the stage, with nothing
-  of the error. With `method: HEAD`, `accept_status: [any]` and
+  `http_exporter_probe_failed_stage{stage}` naming the stage, `panic` for a
+  probe that panicked, with nothing of the error. With `method: HEAD`, `accept_status: [any]` and
   `decoder.type: none` it is an uptime check that alerts on a value, as
   blackbox_exporter's `probe_success`. Failures are logged and counted in
   the self-metrics as before, and a probe `error_handling` carried on past
   a failed stage is one: counted no success, shown failed on the status
   page, answered by `cache.stale_if_error`'s last good result and traced
-  as failed, where without the key it is a success; static targets, which have
+  as failed, where without the key it is a success; a failed probe's trace
+  has the stage as its `error.type`, not a status; static targets, which have
   `http_exporter_target_up`, are not changed
   ([Reporting failed probes as metrics](docs/CONFIGURATION.md#reporting-failed-probes-as-metrics)).
 - `decoder.type: none` reads no body: jq and yq rules read `null` with
@@ -370,6 +380,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   In the playground Tab indents by two spaces and Shift+Tab outdents (Esc,
   then Tab, leaves the editor), and Ctrl+Enter or ⌘+Enter runs from
   anywhere on the page.
+- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
+  as blackbox_exporter's uptime checks are declared: its prober the
+  exporter's Service at `/probe`, the entry's `collector` sent as the
+  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
+  its `ingress` selects, as the targets. Empty by default, so nothing is
+  rendered and the Probe CRD is needed only with an entry.
 
 ### Fixed
 

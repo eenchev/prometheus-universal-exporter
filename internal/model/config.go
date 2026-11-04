@@ -212,6 +212,12 @@ type Collector struct {
 	// set, are then not required of it, as a key a request needs is
 	// required of every other collector. It is no key of the configuration.
 	RequestNotMade bool `yaml:"-"`
+	// TimingsUnread says no rule or script of the collector reads
+	// $timings (transform.ReadsTimings), so its requests are not timed,
+	// but in a debug run (fetch). It is set when the configuration loads;
+	// a collector made otherwise has it false, and is timed. It is no key
+	// of the configuration.
+	TimingsUnread bool `yaml:"-"`
 	// FromDefaults are the keys the collector took from the defaults block
 	// of its file (CollectorDefaults.ApplyTo), by their paths, for the
 	// errors about them and the dry run to say so. It is no key of the
@@ -275,6 +281,7 @@ type RequestConfig struct {
 	MaxResponseBytes     ByteSize          `yaml:"max_response_bytes"`
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
+	NewConnection        bool              `yaml:"new_connection"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,

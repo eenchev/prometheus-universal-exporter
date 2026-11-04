@@ -18,6 +18,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Declared metrics with types, descriptions, explicit labels and per-metric error policy
 * Per-scrape overrides through `/probe` parameters, which monitors render as `params`
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
+* `Probe` resources for uptime checks of URLs and Ingresses, as blackbox_exporter is declared
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
 * SSH keys, passwords and known hosts for `sshfile` and `sshexec` collectors, from a Secret and the values
 * Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
@@ -34,7 +35,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * Kubernetes cluster
 * Helm 3
-* Prometheus Operator if you want to use `ServiceMonitor` or `PodMonitor`
+* Prometheus Operator if you want to use `ServiceMonitor`, `PodMonitor` or `Probe`
 
 ## Quick start
 
@@ -209,7 +210,7 @@ spec:
 
 The chart renders no port number. The Operator's fields for one are not the same on the two kinds or in all its releases — a PodMonitor's `portNumber` is unknown to the CRDs of releases before 0.79, and `targetPort` is deprecated on a PodMonitor and, on a ServiceMonitor, is a container port of the pods behind the Service rather than the Service's own — while every release takes a name.
 
-The exporter's own metrics get a monitor too, `<release>-prometheus-universal-exporter-self`, while `selfMetrics.enabled` is on: a `ServiceMonitor`, or a `PodMonitor` with `selfMetrics.type: pod`. It is rendered when the chart renders any other monitor — a probe monitor, the [static targets](#static-targets) monitor, a probe job's `ScrapeConfig` or the allocator's `ServiceMonitor` — or when the cluster serves that kind, so an install without the Prometheus Operator does not fail on it.
+The exporter's own metrics get a monitor too, `<release>-prometheus-universal-exporter-self`, while `selfMetrics.enabled` is on: a `ServiceMonitor`, or a `PodMonitor` with `selfMetrics.type: pod`. It is rendered when the chart renders any other monitor — a probe monitor, a [`Probe`](#uptime-probes), the [static targets](#static-targets) monitor, a probe job's `ScrapeConfig` or the allocator's `ServiceMonitor` — or when the cluster serves that kind, so an install without the Prometheus Operator does not fail on it.
 
 ## Configure the target request
 
@@ -239,6 +240,7 @@ Supported parameters include:
 * `insecure_skip_verify`
 * `follow_redirects`
 * `enable_http2`
+* `new_connection`
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`, or in one of its label values
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
@@ -1352,6 +1354,140 @@ A target with `export_via_otlp` needs `otlp.enabled: true` in the exporter
 configuration. When the chart manages the configuration, rendering fails if a
 target sets it while OTLP export is off, rather than the pod failing to start.
 
+## Uptime probes
+
+An uptime check of HTTP and HTTPS sites, the job of blackbox_exporter's `http`
+prober, is one collector ([Uptime probes](../../docs/REQUESTS.md#uptime-probes)),
+and the sites to check are a Prometheus Operator `Probe`, as they are for
+blackbox_exporter. Each `probes` entry renders one, named
+`<release>-prometheus-universal-exporter-<name>`, whose prober is the
+exporter's Service, `<fullname>.<namespace>.svc:<service.port>`, at `/probe`,
+with the entry's `collector` sent as the `collector` parameter. The
+Prometheus Operator sends each target as the `target` parameter and labels
+its series with it as `instance`, so the entry needs no relabeling of its
+own. A complete `values.yaml`:
+
+```yaml
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: site
+          report_failures: true
+          request:
+            type: http
+            method: HEAD
+            follow_redirects: true
+            new_connection: true
+            accept_status: [any]
+          decoder:
+            type: none
+          transform:
+            type: jq
+          metrics:
+            - name: site_up
+              expression: 'if $status >= 200 and $status < 300 then 1 else 0 end'
+            - name: site_http_status_code
+              expression: $status
+            - name: site_http_duration_seconds
+              items: '$timings | to_entries[] | select(.value != null)'
+              expression: .value
+              labels:
+                - name: phase
+                  expression: .key
+            - name: site_tls_cert_expiry_timestamp_seconds
+              expression: $tls.not_after
+              required: false
+
+probes:
+  - name: sites
+    collector: site
+    interval: 1m
+    scrapeTimeout: 30s
+    jobName: site
+    targets:
+      - https://www.example.com
+      - https://shop.example.com/health
+    targetLabels:
+      team: web
+```
+
+The Probe it renders for a release `exporter` in the namespace `monitoring`,
+without its labels and annotations:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: exporter-prometheus-universal-exporter-sites
+spec:
+  jobName: "site"
+  prober:
+    url: "exporter-prometheus-universal-exporter.monitoring.svc:8080"
+    scheme: http
+    path: /probe
+  interval: 1m
+  scrapeTimeout: 30s
+  params:
+    - name: collector
+      values: ["site"]
+  targets:
+    staticConfig:
+      static:
+        - https://www.example.com
+        - https://shop.example.com/health
+      labels:
+        team: web
+```
+
+In place of `targets`, `ingress` probes the Ingresses its `selector` selects,
+each host and path of each, in the Probe's own namespace or in those its
+`namespaceSelector` gives (`matchNames`, or `any: true`). An entry has one
+of the two: the Prometheus Operator would probe the static targets and ignore
+the Ingresses, so both fail rendering, and so does neither. `selector` is
+required, since an empty one selects every Ingress; write `selector: {}` to
+mean that.
+
+```yaml
+probes:
+  - name: ingresses
+    collector: site
+    ingress:
+      selector:
+        matchLabels:
+          probe: "true"
+      namespaceSelector:
+        any: true
+```
+
+The collector travels in `spec.params`, never in `spec.module`, which the
+Prometheus Operator sends as `module=`, a parameter the exporter does not
+read. `params` adds other `/probe` parameters, each a list, such as
+`timeout: [10s]`; `collector` and `target` are the chart's own and fail
+rendering. `relabelings` is rendered as the targets' `relabelingConfigs`,
+`metricRelabelings` as the Probe's, and `labels` and `annotations` on the
+Probe itself, for a Prometheus `probeSelector`; `targetLabels` labels the
+series of the static targets, and is refused beside `ingress`, whose
+targets take no labels in a Probe: label those with `relabelings`
+(`action: replace`, `targetLabel` and `replacement`). `interval` and `scrapeTimeout` are Prometheus
+durations, the timeout no longer than the interval, and left out when unset,
+so Prometheus's defaults apply. `jobName` sets the `job` label, which is
+`probe/<namespace>/<Probe name>` without it.
+
+The checks of a monitor entry hold here too: the name is a DNS-1123 label
+unique among the entries; the collector is required and, when the chart holds
+the configuration, one that `config.data` defines; the Probes need
+`service.enabled`; and the target allocator, whose probe targets are
+`allocator.probeJobs`, refuses a `probes` entry. With `webAuth.enabled` a
+Probe without `auth` of its own presents the `webAuth` Secret, as a monitor
+does, since the exporter's Basic Auth protects `/probe`; its own `auth`
+takes the keys of a [monitor's](#monitor-authentication).
+
+The Probe is a kind of the Prometheus Operator's, as the monitors are: with
+`probes` empty, the default, nothing is rendered and the cluster needs no
+Probe CRD. A rendered Probe also renders the self-metrics monitor, as any
+other monitor does.
+
 ## Target allocator
 
 With several exporter replicas, the target allocator spreads the work over
@@ -1683,6 +1819,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
 | `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
+| `probes` | array | `[]` | Prometheus Operator `Probe` resources, one per entry, whose prober is the exporter's Service at `/probe`: `name` a unique DNS-1123 label, `collector` (required, and one `config.data` defines), `targets` (URLs) or `ingress` (`selector`, `namespaceSelector`) but not both, `targetLabels` (with `targets` only), `interval` and `scrapeTimeout`, `jobName`, `labels`, `annotations`, `relabelings`, `metricRelabelings`, `params` without `collector` or `target`, and `auth` as a monitor's; see [Uptime probes](#uptime-probes). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |

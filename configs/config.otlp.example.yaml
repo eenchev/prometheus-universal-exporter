@@ -129,6 +129,10 @@ collectors:
       # Allow the target request to negotiate HTTP/2. Negotiated through ALPN
       # over TLS, so it applies to HTTPS targets. Defaults to false.
       # enable_http2: false
+      # Send every request on a new connection, closed after its answer, so
+      # each looks the name up and verifies the certificate the target
+      # serves now, as an uptime check wants. Defaults to false.
+      # new_connection: false
       # Optional fixed-delay retries for transient target failures.
       # retry:
       #   attempts: 2

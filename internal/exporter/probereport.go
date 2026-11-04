@@ -48,7 +48,7 @@ import (
 var probeSeriesHelp = map[string]string{
 	model.ProbeSuccessMetric:     "1 when the probe succeeded, 0 when a stage of its trip failed or one carried on past failed (report_failures).",
 	model.ProbeElapsedMetric:     "Seconds the probe took, from its request to its answer (report_failures).",
-	model.ProbeFailedStageMetric: "1 for the stage of the probe's trip that failed: http, http_status, decode, transform, validation, metric, or the request type's own (report_failures).",
+	model.ProbeFailedStageMetric: "1 for the stage of the probe's trip that failed: http, http_status, decode, transform, validation, metric, the request type's own, or panic (report_failures).",
 }
 
 // reportsProbe says whether the probe of c whose trip ended as result is
@@ -63,32 +63,35 @@ func reportedSeries(result *probeResult) int {
 	if result.metrics != nil {
 		n += len(result.metrics.Metrics)
 	}
-	if result.stage != "" {
+	if !result.ok && result.stage != "" {
 		n++
 	}
 	return n
 }
 
 // reportedAnswer is the answer of a probe with report_failures: the series
-// of answer, which may be nil, and after them the probe's own. failedStage
-// is the stage that failed, empty for a success. answer is not changed: the
-// probes sharing a trip each make their own from it.
-func reportedAnswer(answer *model.MetricSet, failedStage string, elapsed time.Duration) model.MetricSet {
+// of answer, which may be nil, and after them the probe's own. success is
+// whether the probe succeeded, as the self-metrics count it, and
+// failedStage the stage that failed, of a failure. A probe is not a success
+// for having no stage: one that panicked failed as much as one whose stage
+// did, and the answer may not say otherwise than the self-metrics. answer
+// is not changed: the probes sharing a trip each make their own from it.
+func reportedAnswer(answer *model.MetricSet, success bool, failedStage string, elapsed time.Duration) model.MetricSet {
 	var own []model.Metric
 	if answer != nil {
 		own = answer.Metrics
 	}
 	out := model.MetricSet{Metrics: make([]model.Metric, 0, len(own)+3)}
 	out.Metrics = append(out.Metrics, own...)
-	success := 1.0
-	if failedStage != "" {
-		success = 0
+	value := 0.0
+	if success {
+		value = 1
 	}
 	out.Metrics = append(out.Metrics,
-		model.Metric{Name: model.ProbeSuccessMetric, Help: probeSeriesHelp[model.ProbeSuccessMetric], Type: model.GaugeMetricType, Value: success},
+		model.Metric{Name: model.ProbeSuccessMetric, Help: probeSeriesHelp[model.ProbeSuccessMetric], Type: model.GaugeMetricType, Value: value},
 		model.Metric{Name: model.ProbeElapsedMetric, Help: probeSeriesHelp[model.ProbeElapsedMetric], Type: model.GaugeMetricType, Value: max(elapsed.Seconds(), 0)},
 	)
-	if failedStage != "" {
+	if !success && failedStage != "" {
 		out.Metrics = append(out.Metrics, model.Metric{Name: model.ProbeFailedStageMetric, Help: probeSeriesHelp[model.ProbeFailedStageMetric], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"stage": failedStage}})
 	}
 	return out
@@ -101,16 +104,25 @@ func writeProbeAnswer(w http.ResponseWriter, r *http.Request, c *model.Collector
 		result.writeTo(w, r, utf8Names)
 		return
 	}
-	answer := reportedAnswer(result.metrics, result.stage, elapsed)
+	answer := reportedAnswer(result.metrics, result.ok, result.stage, elapsed)
 	writeMetricSet(w, r, &answer, utf8Names)
 }
 
 // reportedTrace says in end, the end of the trace of a probe of c whose trip
 // ended as result, what report_failures answered: 200 and its series. The
-// probe stays failed in it, as it is to the self-metrics.
+// probe stays failed in it, as it is to the self-metrics, and its
+// error.type is the stage that failed, which the answer names, rather than
+// the status it would have been answered without the key, which would
+// contradict the 200 beside it. A stale result standing in and a probe
+// failure_backoff kept from the target keep their own, stale and backoff,
+// which are no status either.
 func reportedTrace(c *model.Collector, result *probeResult, end *probeTraceEnd) {
-	if reportsProbe(c, result) {
-		end.status, end.series = http.StatusOK, reportedSeries(result)
+	if !reportsProbe(c, result) {
+		return
+	}
+	end.status, end.series = http.StatusOK, reportedSeries(result)
+	if end.failed && result.outcome == "" && result.stage != "" {
+		end.stage = result.stage
 	}
 }
 
@@ -127,15 +139,22 @@ func reportedRecent(c *model.Collector, result *probeResult, recent recentProbe)
 // reportedVerdict is what a debug run says a probe of c would have
 // answered, verdict and answer as debugVerdict says them, with
 // report_failures: the same answer with the probe's series, 200 in place of
-// a failure. elapsed is the run's trip, which stands for the probe's
-// duration.
-func reportedVerdict(c *model.Collector, result collected, verdict string, answer *model.MetricSet, elapsed time.Duration) (string, *model.MetricSet) {
+// a failure. staleAge is the age of the last good result standing in for
+// the failure, which the answer is then, empty when none does. elapsed is
+// the run's trip, which stands for the probe's duration.
+func reportedVerdict(c *model.Collector, result collected, verdict string, answer *model.MetricSet, staleAge string, elapsed time.Duration) (string, *model.MetricSet) {
 	if !c.ReportFailures || result.aborted || result.refused {
 		return verdict, answer
 	}
-	reported := reportedAnswer(answer, result.stage, elapsed)
-	if result.stage == "" {
+	success := !result.failed() && !result.carriedOn
+	reported := reportedAnswer(answer, success, result.stage, elapsed)
+	switch {
+	case success:
 		return fmt.Sprintf("200 with %d series, %s 1 among them (report_failures)", len(reported.Metrics), model.ProbeSuccessMetric), &reported
+	case staleAge != "":
+		// The failure's own answer is not what the probe answers: the
+		// last good result is, with the probe's series beside it.
+		return fmt.Sprintf("200 with the last good result, %s old, marked stale (cache.stale_if_error), with %s 0 and the %s stage failed (report_failures)", staleAge, model.ProbeSuccessMetric, result.stage), &reported
 	}
 	return fmt.Sprintf("200 with %s 0 and the %s stage failed (report_failures), in place of %s", model.ProbeSuccessMetric, result.stage, verdict), &reported
 }

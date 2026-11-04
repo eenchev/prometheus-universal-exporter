@@ -218,6 +218,12 @@ func redactedPanicText(recovered any) string {
 	return model.CutTo(fetch.RedactText(fmt.Sprint(recovered)), model.MaxFailureBytes, false)
 }
 
+// stagePanicked is the stage of a probe that panicked, whichever stage it
+// was in: report_failures answers it (probereport.go) and the trace's
+// error.type is it, as a probe that failed in a stage is answered and
+// traced with that stage.
+const stagePanicked = "panic"
+
 func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlight, work func(context.Context) *probeResult) {
 	defer func() {
 		// The work runs on its own goroutine, where a panic would take the
@@ -232,7 +238,7 @@ func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlig
 			recorder := newProbeRecorder()
 			http.Error(recorder, "probe failed: "+errScrapePanicked.Error(), http.StatusInternalServerError)
 			flight.result = recorder.result(false)
-			flight.result.failure = errScrapePanicked.Error()
+			flight.result.failure, flight.result.stage = errScrapePanicked.Error(), stagePanicked
 			slog.Default().Error("probe panicked", "panic", panicText(recovered), "stack", string(debug.Stack()))
 		}
 		f.mu.Lock()

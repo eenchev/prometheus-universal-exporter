@@ -1256,10 +1256,10 @@ true
 {{- end -}}
 {{- toJson (dict "sources" $sources) -}}
 {{- end }}
-{{- /* Whether the allocator has a discovery source, and so runs as one
-       copy: each copy asks its sources on its own timer, so two could hold
-       different targets, and the exporter pods, which heartbeat and fetch
-       from every copy, would flip between their bundles. */ -}}
+{{- /* Whether the allocator has a discovery source, and so runs its
+       copies as peers (--peers): only the leader asks the sources, and the
+       others take what it found, so the exporter pods, which heartbeat and
+       fetch from every copy, get the same bundles from each. */ -}}
 {{- define "prometheus-universal-exporter.allocatorDiscovers" -}}
 {{- if and .Values.allocator .Values.allocator.enabled (include "prometheus-universal-exporter.allocatorDiscoverySources" . | fromJson).sources -}}
 true

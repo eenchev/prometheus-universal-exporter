@@ -701,17 +701,9 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The target allocator: a Deployment of pue-allocator serving config.data, its static targets and its probe jobs, with the exporter pods in allocator mode. Not with staticTargets.enabled nor with an enabled monitors entry.",
-      "if": {
-        "required": ["enabled", "probeJobs"],
-        "properties": {
-          "enabled": {"const": true},
-          "probeJobs": {"contains": {"type": "object", "required": ["discovery"], "properties": {"discovery": {"minItems": 1}}}}
-        }
-      },
-      "then": {"properties": {"replicas": {"maximum": 1, "description": "A probe job has a discovery source, so the allocator runs as one copy: copies would each ask the sources on their own timer and serve different targets."}}},
       "properties": {
         "enabled": {"type": "boolean"},
-        "replicas": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647, "description": "Allocator pods; empty is 2, or 1 with a discovery source, beside which it may not be above 1."},
+        "replicas": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647, "description": "Allocator pods; empty is 2. With a discovery source the pods are peers: the leader alone asks the sources and the others serve what it found."},
         "image": {
           "type": "object",
           "additionalProperties": false,

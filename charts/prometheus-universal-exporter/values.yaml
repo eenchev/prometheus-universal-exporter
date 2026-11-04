@@ -841,14 +841,13 @@ sqlAuth:
 # through the ScrapeConfig below); both fail rendering.
 allocator:
   enabled: false
-  # Allocator replicas; empty is 2, or 1 with a discovery source. They keep
-  # no state and need no leader: every exporter pod heartbeats to each of
-  # them, so two give availability. With a discovery source (a probe job's
-  # discovery, or discovered_targets in staticTargets.data) the allocator
-  # runs as one pod, rolled out with the Recreate strategy, and a value above
-  # 1 fails rendering: each copy would ask its sources on its own timer and
-  # serve different targets. One is enough, since it is back within seconds
-  # and the exporter pods and Prometheus keep what they have meanwhile.
+  # Allocator replicas; empty is 2. They keep no state: every exporter pod
+  # heartbeats to each of them, so two give availability. With a discovery
+  # source (a probe job's discovery, or discovered_targets in
+  # staticTargets.data) the pods are peers, found by the allocator's
+  # headless Service: the one of the lowest pod IP leads and alone asks the
+  # sources, and the others serve the targets it found, so every pod serves
+  # the same ones.
   replicas:
   # Empty fields take the exporter's image values above: the allocator binary
   # is in the same image.

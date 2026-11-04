@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // A leader that hangs while it writes its snapshot delays none of the
@@ -59,6 +61,7 @@ func TestAHangingSnapshotDoesNotDelayFailover(t *testing.T) {
 	}
 	round("following the leader")
 	hasLine(t, c, fmt.Sprintf("pue_allocator_leader{peer=%q} 1\n", leader.String()))
+	testutil.WaitFor(t, "the fetch to reach the leader", func() bool { return fetches.Load() == 1 })
 	round("with the snapshot fetch still running")
 	if n := fetches.Load(); n != 1 {
 		t.Errorf("the leader was asked for its snapshot %d times while the first fetch ran, want once", n)

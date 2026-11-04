@@ -153,21 +153,17 @@ func TestChartSchemaChecksProbeJobDiscovery(t *testing.T) {
 }
 
 // An allocator with a discovery source, in a probe job or in the static
-// target document's discovered_targets, runs as one pod, rolled out with
-// the Recreate strategy so two never serve at once: copies ask their
-// sources each on its own timer, and the exporter pods, which heartbeat and
-// fetch from every copy, would flip between their bundles. allocator.replicas
-// above 1 beside one fails rendering, by the schema for a probe job and by
-// the template with the schema skipped or for the static targets, and the
-// disruption budget of maxUnavailable 1 still lets a drain evict the one
-// pod. An allocator of files alone keeps two pods, rolled as before.
-func TestChartRunsOneAllocatorWithDiscovery(t *testing.T) {
+// target document's discovered_targets, runs its pods as peers: two by
+// default, or allocator.replicas, rolled out with the default strategy,
+// each given --peers with the headless Service's name, the one the exporter
+// pods heartbeat to, and --peers.self with its pod IP from the downward API;
+// its NetworkPolicy admits the allocator's own pods, which check each other
+// and fetch the leader's discovered targets, and its disruption budget stays
+// maxUnavailable 1. An allocator of files alone gets neither the flags nor
+// the rule.
+func TestChartRunsAllocatorPeersWithDiscovery(t *testing.T) {
 	helm := requireHelm(t)
-	const name = "Deployment/test-prometheus-universal-exporter-allocator"
-	deployment := func(args ...string) (replicas, strategy string) {
-		spec := path(manifest(t, manifests(t, helm, args...), name), "spec")
-		return text(path(spec, "replicas")), text(path(spec, "strategy", "type"))
-	}
+	const name = "test-prometheus-universal-exporter-allocator"
 	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
 	static := valuesFile(t, `allocator:
   enabled: true
@@ -181,38 +177,68 @@ func TestChartRunsOneAllocatorWithDiscovery(t *testing.T) {
           discovery:
             - file_sd: {files: [/etc/pue-sd/nodes.json]}
 `)
-	for what, args := range map[string][]string{
-		"a probe job's source":         {"--set", "allocator.enabled=true", "--set-json", discoveryJob},
-		"a static target entry's":      {"-f", static},
-		"a probe job's, replicas 1":    {"--set", "allocator.enabled=true", "--set", "allocator.replicas=1", "--set-json", discoveryJob},
-		"a static target entry's, nil": {"-f", static, "--set", "allocator.replicas=null"},
-	} {
-		if replicas, strategy := deployment(args...); replicas != "1" || strategy != "Recreate" {
-			t.Errorf("with %s the allocator has %s replicas and the strategy %q, want 1 and Recreate", what, replicas, strategy)
+	peerArgs := []string{"--peers=" + name + ".monitoring.svc:9116", "--peers.self=$(POD_IP)"}
+	allocatorSelector := []string{"app.kubernetes.io/instance=test", "app.kubernetes.io/name=prometheus-universal-exporter-allocator"}
+	// fromSelectors are the label selectors the allocator's NetworkPolicy
+	// admits, each as its sorted key=value pairs.
+	fromSelectors := func(docs map[string]*yaml.Node) [][]string {
+		var out [][]string
+		from := path(manifest(t, docs, "NetworkPolicy/"+name), "spec", "ingress", "0", "from")
+		for _, peer := range from.Content {
+			labels := path(peer, "podSelector", "matchLabels")
+			if labels == nil {
+				continue
+			}
+			var pairs []string
+			for i := 0; i+1 < len(labels.Content); i += 2 {
+				pairs = append(pairs, labels.Content[i].Value+"="+labels.Content[i+1].Value)
+			}
+			slices.Sort(pairs)
+			out = append(out, pairs)
 		}
+		return out
 	}
-	if replicas, strategy := deployment("--set", "allocator.enabled=true", "--set-json", allocatorProbeJobs); replicas != "2" || strategy != "" {
-		t.Errorf("without discovery the allocator has %s replicas and the strategy %q, want 2 and the default", replicas, strategy)
-	}
-	if replicas, _ := deployment("--set", "allocator.enabled=true", "--set", "allocator.replicas=3", "--set-json", allocatorProbeJobs); replicas != "3" {
-		t.Errorf("without discovery allocator.replicas 3 renders %s replicas", replicas)
-	}
-	pdb := path(manifest(t, manifests(t, helm, "--set", "allocator.enabled=true", "--set-json", discoveryJob), "PodDisruptionBudget/test-prometheus-universal-exporter-allocator"), "spec")
-	if text(path(pdb, "maxUnavailable")) != "1" || path(pdb, "minAvailable") != nil {
-		t.Errorf("the one allocator's disruption budget is %v, want maxUnavailable 1 alone, which lets a drain evict it", pdb)
+	for what, c := range map[string]struct {
+		args     []string
+		replicas string
+	}{
+		"a probe job's source":                {[]string{"--set", "allocator.enabled=true", "--set-json", discoveryJob}, "2"},
+		"a static target entry's":             {[]string{"-f", static}, "2"},
+		"a probe job's source, replicas 3":    {[]string{"--set", "allocator.enabled=true", "--set", "allocator.replicas=3", "--set-json", discoveryJob}, "3"},
+		"a static target entry's, replicas 1": {[]string{"-f", static, "--set", "allocator.replicas=1"}, "1"},
+	} {
+		docs := manifests(t, helm, append([]string{"--namespace", "monitoring"}, c.args...)...)
+		spec := path(manifest(t, docs, "Deployment/"+name), "spec")
+		if replicas, strategy := text(path(spec, "replicas")), text(path(spec, "strategy", "type")); replicas != c.replicas || strategy != "" {
+			t.Errorf("with %s the allocator has %s replicas and the strategy %q, want %s and the default, a RollingUpdate", what, replicas, strategy, c.replicas)
+		}
+		container := path(spec, "template", "spec", "containers", "0")
+		if args := scalars(path(container, "args")); !slices.Equal(args[len(args)-2:], peerArgs) {
+			t.Errorf("with %s the allocator's arguments end %v, want %v", what, args[len(args)-2:], peerArgs)
+		}
+		env := path(container, "env", "0")
+		if text(path(env, "name")) != "POD_IP" || text(path(env, "valueFrom", "fieldRef", "fieldPath")) != "status.podIP" {
+			t.Errorf("with %s the allocator's POD_IP is not its pod's IP: %v", what, path(container, "env"))
+		}
+		if !slices.ContainsFunc(fromSelectors(docs), func(s []string) bool { return slices.Equal(s, allocatorSelector) }) {
+			t.Errorf("with %s the allocator's NetworkPolicy admits %v, not the allocator's own pods", what, fromSelectors(docs))
+		}
+		pdb := path(manifest(t, docs, "PodDisruptionBudget/"+name), "spec")
+		if text(path(pdb, "maxUnavailable")) != "1" || path(pdb, "minAvailable") != nil {
+			t.Errorf("with %s the allocator's disruption budget is %v, want maxUnavailable 1 alone", what, pdb)
+		}
 	}
 
-	for what, c := range map[string]struct {
-		args []string
-		want string
-	}{
-		"schema, a probe job": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.replicas=2", "--set-json", discoveryJob}, "allocator.replicas"},
-		"template, a probe job": {[]string{"--skip-schema-validation", "--set", "allocator.enabled=true", "--set", "allocator.replicas=2", "--set-json", discoveryJob},
-			"allocator.replicas is 2, but the allocator has a discovery source"},
-		"template, a static target entry": {[]string{"-f", static, "--set", "allocator.replicas=2"}, "allocator.replicas is 2, but the allocator has a discovery source"},
-	} {
-		if out, ok := helmTemplate(t, helm, chartDir, c.args...); ok || !namesInHelmError(out, c.want) {
-			t.Errorf("%s: ok=%v, want an error naming %q:\n%s", what, ok, c.want, out)
-		}
+	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-json", allocatorProbeJobs)
+	spec := path(manifest(t, docs, "Deployment/"+name), "spec")
+	if replicas := text(path(spec, "replicas")); replicas != "2" {
+		t.Errorf("without discovery the allocator has %s replicas, want 2", replicas)
+	}
+	container := path(spec, "template", "spec", "containers", "0")
+	if args := strings.Join(scalars(path(container, "args")), " "); strings.Contains(args, "--peers") || path(container, "env") != nil {
+		t.Errorf("without discovery the allocator is run as a peer: %s", args)
+	}
+	if got := fromSelectors(docs); slices.ContainsFunc(got, func(s []string) bool { return slices.Equal(s, allocatorSelector) }) {
+		t.Errorf("without discovery the allocator's NetworkPolicy admits its own pods: %v", got)
 	}
 }

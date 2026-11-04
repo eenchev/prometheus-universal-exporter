@@ -1073,9 +1073,11 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, configured func(name,
 // tripLines are the jq variables that say what the request was besides its
 // answer, each as its name and its value as JSON, for the request of an
 // http or graphite collector (fetch.HTTPTrip): what the rules read of it
-// beside the status, which a report shows. $url is shown as the report
-// shows a request's URL, its query values masked but for those configured
-// says the configuration set, and cut as a request line is.
+// beside the status, which a report shows. $url is shown as the rules read
+// it, with its query values masked as the report masks a request's, but for
+// those configured says the configuration set, and cut as a request line
+// is; it is not parsed again, which would change its path's escapes
+// (fetch.RedactShownURLQuery).
 func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) []string {
 	if r.Trip == nil {
 		return nil
@@ -1084,7 +1086,7 @@ func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) 
 	for _, v := range []struct {
 		name  string
 		value any
-	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.ShownURL(), configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
+	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactShownURLQuery(r.Trip.ShownURL(), configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}, {"$http_version", r.Trip.JQHTTPVersion()}, {"$remote_ip", r.Trip.JQRemoteIP()}} {
 		// As written, not escaped for HTML: the <redacted> of a masked
 		// query value reads as it is.
 		var value bytes.Buffer

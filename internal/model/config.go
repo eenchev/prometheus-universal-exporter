@@ -213,8 +213,8 @@ type Collector struct {
 	// required of every other collector. It is no key of the configuration.
 	RequestNotMade bool `yaml:"-"`
 	// TimingsUnread says no rule or script of the collector reads
-	// $timings (transform.ReadsTimings), so its requests are not timed,
-	// but in a debug run (fetch). It is set when the configuration loads;
+	// $timings or $remote_ip (transform.ReadsTimings), so its requests are
+	// not traced, but in a debug run (fetch). It is set when the configuration loads;
 	// a collector made otherwise has it false, and is timed. It is no key
 	// of the configuration.
 	TimingsUnread bool `yaml:"-"`
@@ -283,6 +283,10 @@ type RequestConfig struct {
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	NewConnection        bool              `yaml:"new_connection"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// IPFamily is the address family the requests connect over: ip4 or
+	// ip6 alone, prefer_ip4 or prefer_ip6 first, and "" for Go's own
+	// choice, both families raced (fetch/ipfamily.go).
+	IPFamily string `yaml:"ip_family"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses

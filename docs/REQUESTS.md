@@ -955,6 +955,50 @@ handshake per request. A scrape overrides it with the `new_connection`
 parameter, and a static target in its own `request` block. A login's
 request is sent on a kept connection either way.
 
+### Address families
+
+A name with both IPv4 and IPv6 addresses is connected to over either: Go
+tries the family of the first address the lookup gave, and the other a
+moment later, and the first connection made is used. An `http` or
+`graphite` collector chooses the family with `ip_family`:
+
+```yaml
+request:
+  ip_family: ip6
+```
+
+| `ip_family` | Connects over |
+| --- | --- |
+| left out | either family, as Go connects |
+| `ip4`, `ip6` | that family alone. A target with no address of it — a name with none, or an address of the other family written as the target — fails: `www.example.com has no IPv6 address, and request.ip_family is ip6`. |
+| `prefer_ip4`, `prefer_ip6` | that family first, and the other when the first has no address, or none of its addresses takes the connection. Under a deadline, the probe's or the collector's `timeout`, the first family is given half of the time left, so an address that never answers leaves the other its half within the same probe. |
+
+So an uptime check of a site's IPv6 is `ip_family: ip6`, which a site
+reachable over IPv4 alone fails, where Go would have answered over IPv4.
+It applies to every request of the collector — each [retry](#retries),
+each request a followed [redirect](#redirects-and-http2) makes, each page —
+and not to its [login](AUTHENTICATION.md#logging-in-to-a-target), which
+connects over either family. A scrape overrides it with the `ip_family`
+parameter, `params: {ip_family: [ip4]}`, which takes the four values and no
+other, `400` otherwise; a static target sets it in its own `request` block.
+Each family has a [connection pool](#connections) of its own, so a
+connection made over IPv4 never carries a request that asked for IPv6.
+
+The family is of the exporter's connection to the target, so it is refused
+where there is none:
+
+- beside [`unix_socket`](#over-a-unix-socket), whose connection has no
+  address family;
+- beside a [`proxy_url`](#a-collectors-own-proxy) other than `direct`, and
+  for a request the [environment's proxy](#proxies) would carry, which
+  fails before the proxy is asked anything: a proxy looks the target's name
+  up and connects to it over the family it chooses, and the exporter's own
+  connection, to the proxy, says nothing of the target's. Reach such a
+  target with `proxy_url: direct`, or name it in `NO_PROXY`.
+
+A probe parameter or a static target's `ip_family` for a collector with a
+socket or a proxy of its own is refused as the key is.
+
 ### Proxies
 
 Target requests and OTLP exports go through the proxy the environment names,
@@ -1048,6 +1092,8 @@ collectors:
   configuration's, and is not held to `allowed_targets` and `denied_targets`.
 - **Connections.** Collectors with different proxies, or different
   credentials for one, never share a connection ([Connections](#connections)).
+- **No [`ip_family`](#address-families)** beside a `proxy_url` other than
+  `direct`: the proxy chooses the family it connects to the target over.
 - **`--dry-run`** lists, for each `http` and `graphite` collector, the proxy
   in force under `request_policies` as `proxy`: its `proxy_url`, its own or
   its file's `defaults`', `direct`, or `environment` when it names none and
@@ -1131,7 +1177,9 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
   proxy does not apply, and the collector takes neither from its file's
   [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file).
   `--dry-run` lists the collector under `request_policies` with its
-  `unix_socket`, and no `proxy`.
+  `unix_socket`, and no `proxy`. [`ip_family`](#address-families) beside
+  `unix_socket` is refused too: the socket's connection has no address
+  family.
 - **Configuration only.** No probe parameter sets the socket, and neither does
   a static target or `defaults`: whoever can reach `/probe` names the URL,
   whose host only goes into the request, never the file the exporter
@@ -1408,6 +1456,12 @@ followed as before, and the status of the answer it leads to is the one
 accepted. A [static target](STATIC-TARGETS.md) may set its own `[any]`, or
 replace the collector's `[any]` with a list.
 
+A `101 Switching Protocols` has no body: what follows it on the connection
+is the protocol the server switched to. Its answer is the status and the
+headers alone, and the connection is closed at once, unread, never kept for
+another request, so a [WebSocket endpoint's](#websocket-endpoints) frames are
+not read as a body until the probe's deadline.
+
 ## Timings, TLS and the final URL
 
 Beside `$status` and `$headers`, jq and yq rules of an `http` or `graphite`
@@ -1420,6 +1474,8 @@ has the same on its `response`:
 | `$tls` | `response.tls` | The TLS connection the request was sent on, and the target's certificate |
 | `$url` | `response.url` | Where the request went, after the redirects it followed |
 | `$redirects` | `response.redirects` | How many redirects it followed, `0` for none |
+| `$http_version` | `response.http_version` | The version of HTTP the answer came in: `"1.0"`, `"1.1"` or `"2"` |
+| `$remote_ip` | `response.remote_ip` | The IP address the request's connection was made to |
 
 ```yaml
 transform:
@@ -1454,7 +1510,8 @@ through the tunnel; a connection to an `https://` proxy is made by the
 exporter itself, and its handshake is not timed.
 
 A request is timed only when something can read its timings: when a jq or
-yq text of the collector names `$timings`, or it runs a Python script, and
+yq text of the collector names `$timings` or `$remote_ip`, which the same
+trace sees, or it runs a Python script, and
 in a [debug probe](CONFIGURATION.md#debug-probes) or on the debug page,
 whose report shows them; the trace costs every request a few allocations
 that a collector reading none of it is spared.
@@ -1497,21 +1554,49 @@ has no `$tls`: the connection it came on is the proxy's.
 `follow_redirects` or when the target answered at once. `$url` is shown as
 a target is in a log line: its userinfo and its fragment are left out, and
 the value of a query parameter whose name reads as a credential's —
-`token`, `api_key`, `password`, `sig` and the like — is `<redacted>`. Every
-other parameter is kept as it was sent, so a label of `$url` is safe to the
-extent that rule is: an order number, a tenant or an e-mail address in a
-parameter of another name is kept, and a URL that carries one a redirect
-chose, such as a login page's `?next=`, makes a series of every value. Keep
-the URL's start alone where that matters, `$url | split("?")[0]`.
+`token`, `api_key`, `password`, `sig`, `code` and `ticket`, which the
+redirect back from a login carries, and the like
+([the rule](LOGGING.md#repeated-failures)) — is `<redacted>`, and so is the
+value of a path parameter of such a name, after a `;` or an escaped
+`%3B`, as a servlet's session rides in the path when cookies are off:
+`/app;jsessionid=<redacted>`. A debug report shows `$url` as the rules
+read it, its escapes kept, with every query value the configuration did
+not set masked as well. Every other
+parameter, and every segment of the path, is kept as it was sent, so a
+label of `$url` is safe to the extent that rule is: an order number, a
+tenant or an e-mail address in a parameter of another name is kept, a URL
+that carries one a redirect chose, such as a login page's `?next=`, makes a
+series of every value, and a secret that is a segment of the path whole,
+as a bot's token in `/bot123456:AAE…/getMe`, has no name to tell it by and
+is kept. Keep the URL's path alone where that matters,
+`$url | split("?")[0] | split(";")[0]`, which ends it before its query
+and its first path parameter, and put `$url` in a label only for sites
+whose paths carry no secret.
 
-`$timings`, `$tls`, `$url` and `$redirects` are `null` for every other
+`$http_version` is the version of HTTP the same request's answer came in,
+`"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's `probe_http_version`
+writes it: `"2"` only where [`enable_http2`](#redirects-and-http2) let the
+request negotiate it. `$remote_ip` is the IP address its connection was
+made to, kept from an earlier request or made for it, `"203.0.113.7"` or
+`"2001:db8::7"`, the address the name resolved to and the family the
+connection took ([Address families](#address-families)). It is `null`
+through a [proxy](#proxies), whose address the connection is made to and is
+no address of the target's, and over a [Unix socket](#over-a-unix-socket),
+which has none. A name with several addresses, or one that moves, gives a
+value of each, so `$remote_ip` in a label makes a series of every address
+the site was reached at; the [uptime recipe](#uptime-probes) keeps the
+family alone, `4` or `6`.
+
+`$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and `$remote_ip`
+are `null` for every other
 request type, and on a response pasted on the [debug
 page](CONFIGURATION.md#the-debug-page); every jq and yq program has the
 variables, so a rule that reads them loads whatever the collector's type.
 A pagination's `next` and a login's `token` expression read them as `null`
 too. A [debug probe](CONFIGURATION.md#debug-probes)'s report and the debug
-page show their values under the response's status, `$url` with the values
-of the query masked as the report's request lines mask them.
+page show their values under the response's status, in that order, `$url`
+with the values of the query masked as the report's request lines mask
+them.
 
 ## Uptime probes
 
@@ -1547,6 +1632,11 @@ collectors:
             expression: .key
       - name: site_http_redirects
         expression: $redirects
+      - name: site_http_version
+        expression: '$http_version | tonumber'
+      - name: site_ip_protocol
+        expression: '$remote_ip | if . == null then null elif contains(":") then 6 else 4 end'
+        required: false   # none through a proxy
       - name: site_http_ssl
         expression: 'if $tls == null then 0 else 1 end'
       - name: site_tls_cert_expiry_timestamp_seconds
@@ -1590,7 +1680,14 @@ Each key has its part:
   rules read `$status` and the variables of [Timings, TLS and the final
   URL](#timings-tls-and-the-final-url), never the document.
 - `required: false` on the TLS rules: over plain HTTP `$tls` is `null`, and
-  those series are left out rather than reported as missing values.
+  those series are left out rather than reported as missing values; so is
+  `site_ip_protocol` through a proxy, where `$remote_ip` is `null`.
+- `site_ip_protocol` is the family of the address the site was reached at,
+  read from [`$remote_ip`](#timings-tls-and-the-final-url), and not the
+  address itself: a site behind several addresses, or one whose address
+  changes, would make a series of each in a label. Where the address is
+  wanted, an info series of it is one rule more, `expression: "1"` with a
+  label of `$remote_ip`, at that cost.
 
 Prometheus names each site as the probe's target:
 
@@ -1632,6 +1729,8 @@ site_http_duration_seconds{phase="first_byte"} 0.071
 site_http_duration_seconds{phase="tls"} 0.024
 site_http_duration_seconds{phase="total"} 0.072
 site_http_redirects 1
+site_http_version 1.1
+site_ip_protocol 6
 site_http_ssl 1
 site_tls_cert_expiry_timestamp_seconds 1767225599
 site_tls_version_info{cipher_suite="TLS_AES_128_GCM_SHA256",version="TLS 1.3"} 1
@@ -1645,6 +1744,8 @@ http_exporter_probe_elapsed_seconds 0.149
 | `site_http_status_code` | The status of the answer, after the redirects. |
 | `site_http_duration_seconds{phase}` | How long each phase of the answered request took ([`$timings`](#timings-tls-and-the-final-url)): `dns`, `connect` and `tls` each on its own, and `first_byte` and `total` from the request's start. A phase the request did not have, such as `tls` over plain HTTP, or `dns` to an IP address, has no series; with `new_connection` every probe has the other two. |
 | `site_http_redirects` | How many redirects were followed. |
+| `site_http_version` | The version of HTTP the site answered in, after its redirects: `1.1`, `2`, or `1` for HTTP/1.0. |
+| `site_ip_protocol` | `4` or `6`: the IP version of the address the answered request's connection was made to. Absent through a proxy. |
 | `site_http_ssl` | `1` when the answered request was made over TLS. |
 | `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served on this probe's connection expires, in Unix seconds; alert on it less `time()`. |
 | `site_tls_version_info{version,cipher_suite}` | The TLS version of the connection, `TLS 1.2` or `TLS 1.3`, and the cipher suite it settled on, by its IANA name, so an alert can name a site still on an old version or a weak suite. |
@@ -1656,10 +1757,68 @@ answer at all, or `site_up == 0`, an answer that is not a `2xx`. Both carry
 the job's and the target's labels, so `http_exporter_probe_success == 0 or
 site_up == 0` lists the sites that are down.
 
+### WebSocket endpoints
+
+A WebSocket endpoint is up when it accepts the handshake (RFC 6455): a
+`GET` asking to upgrade, which it answers `101 Switching Protocols` with the
+key's `Sec-WebSocket-Accept`. That is an `http` collector of its own, the
+handshake's headers its request's:
+
+```yaml
+collectors:
+  - name: websocket
+    report_failures: true
+    request:
+      type: http
+      method: GET
+      headers:
+        Connection: Upgrade
+        Upgrade: websocket
+        Sec-WebSocket-Version: "13"
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==   # any 16 bytes in base64
+      new_connection: true
+      accept_status: [101]
+    decoder:
+      type: none
+    transform:
+      type: jq
+    metrics:
+      - name: websocket_up
+        expression: 'if $status == 101 and $headers["sec-websocket-accept"] == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" then 1 else 0 end'
+      - name: websocket_http_status_code
+        expression: $status
+```
+
+- The four headers are sent as written: `Connection` and `Upgrade` are
+  hop-by-hop headers, which a collector's `headers` may set (a probe's
+  `header_` parameters never forward them). A request asking for a
+  WebSocket is sent over HTTP/1.1, even under
+  [`enable_http2`](#redirects-and-http2) to a server that speaks HTTP/2,
+  which has no `Upgrade`.
+- The key is any 16 bytes in base64, the same on every probe; the
+  `Sec-WebSocket-Accept` the endpoint answers it with is fixed by it, the
+  base64 of the SHA-1 of the key followed by
+  `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`. The key above is RFC 6455's own
+  example, whose answer is `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`; for another key,
+  `printf '%s' "<key>258EAFA5-E914-47DA-95CA-C5AB0DC85B11" | openssl sha1
+  -binary | base64` gives it. A rule comparing it tells a WebSocket server
+  from something that answers `101` without having read the key.
+- [`accept_status: [101]`](#accepting-other-statuses) takes the `101` as
+  the answer, and fails the probe on any other status, in the `http_status`
+  stage, which `report_failures` reports. With `accept_status: [any]`,
+  another status is `websocket_up 0` with its status instead.
+- The `101` is the answer: the headers alone, the connection closed at
+  once, unread, so the probe ends as soon as the handshake is answered,
+  however long the endpoint would keep sending.
+- An endpoint behind `wss://` is the same with an `https://` target, the
+  handshake made over TLS.
+
+The exporter checks the handshake only, and sends and reads no message.
+
 ### Compared with blackbox_exporter
 
-The series of blackbox_exporter's `http` prober, and what answers each
-here:
+The series of blackbox_exporter's `http` prober, and its address-family
+settings, and what answers each here:
 
 | blackbox_exporter | Here | Differences |
 | --- | --- | --- |
@@ -1669,15 +1828,17 @@ here:
 | `probe_http_duration_seconds{phase}` | `site_http_duration_seconds{phase}` | blackbox_exporter's phases, `resolve`, `connect`, `tls`, `processing` and `transfer`, are consecutive and summed over every request of the redirects. Here they are of the answered request alone; `dns`, `connect` and `tls` are its `resolve`, `connect` and `tls`, and `first_byte` and `total` run from its start, so `processing` is `first_byte` less the three before it and `transfer` is `total` less `first_byte`. Both connect anew for every request, blackbox_exporter always and this collector by its `new_connection`, so both time a lookup, a connection and a handshake on every probe. A phase that did not happen, `tls` over plain HTTP or `dns` to an IP address, has no series, where blackbox_exporter reports `0`. |
 | `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. Both are of the certificate the site presents now, on the probe's own connection. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
 | `probe_http_redirects` | `site_http_redirects` | The same. |
+| `probe_http_version` | `site_http_version` | The same: `1.1` or `2`, of the last request. |
+| `probe_ip_protocol` | `site_ip_protocol` | The same, `4` or `6`, but of the address the answered request's connection was made to, where blackbox_exporter's is of the address it resolved the target's name to; the two differ only after a redirect to another host. Through a proxy it has no series here. `probe_ip_addr_hash` has no counterpart: `$remote_ip` is the address itself. |
 | `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
 | `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |
+| `preferred_ip_protocol`, `ip_protocol_fallback` (settings of the module) | [`ip_family`](#address-families) (a key of the request, and a probe parameter) | `preferred_ip_protocol: ip4` with `ip_protocol_fallback: true` is `prefer_ip4`, and with `false` it is `ip4`; `ip6` alike. blackbox_exporter prefers `ip6` by default, and falls back only when the name has no address of the family it prefers; `prefer_ip6` falls back too when none of those addresses takes the connection. Left out here, a site is connected to over either family, as Go connects. |
 
 Other series of blackbox_exporter's have no rule above, but read what is
 there: `probe_http_content_length` is `$headers["content-length"] |
 tonumber`, and `probe_http_last_modified_timestamp_seconds` is
 `$headers["last-modified"] | parse_time` (see the [value-parsing
-helpers](CONFIGURATION.md#value-parsing-helpers)); `probe_http_version` and
-`probe_ip_protocol` have no counterpart.
+helpers](CONFIGURATION.md#value-parsing-helpers)).
 
 What this collector does not do:
 

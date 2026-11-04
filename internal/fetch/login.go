@@ -590,7 +590,7 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	}
 	// A login follows no redirect, so whose certificate it presents is
 	// never a redirect's refusal to name.
-	ctx, err = withTargetPolicy(ctx, c, u, proxy, false)
+	ctx, err = withTargetPolicy(ctx, c, u, proxy, false, "")
 	if err != nil {
 		return loginToken{}, err
 	}

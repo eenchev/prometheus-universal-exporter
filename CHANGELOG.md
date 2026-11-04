@@ -16,7 +16,79 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
-- Nothing; you can upgrade without changes.
+- A label built from `$url`, the static targets endpoint's `target` label
+  and the OTLP `target` attribute show `<redacted>` where they showed the
+  value of a query parameter with `code`, `ticket`, `sid`, `otp` or `hmac`
+  as a word of its name (`code`, `country_code`, `promo_code`, `user_sid`),
+  and of a path parameter whose name reads as a credential's
+  (`;jsessionid=`, `;sid=`, after `;` or `%3B`). A target or a URL with one
+  makes a new series, and the old one goes stale: adjust the queries,
+  recording rules and alerts that matched the old values. Where the query
+  does not matter, keep a label to the path with
+  `$url | split("?")[0] | split(";")[0]`
+  ([Logging](docs/LOGGING.md#repeated-failures)).
+
+### New
+
+- `request.ip_family` on an `http` or `graphite` collector chooses the
+  address family its requests connect over, as blackbox_exporter's
+  `preferred_ip_protocol` and `ip_protocol_fallback` do: `ip4` or `ip6`
+  alone, failing when the target has no address of it, or `prefer_ip4` or
+  `prefer_ip6` first and the other after, the first given half of the
+  time left so that one that never answers leaves the other its half of
+  the same probe. Left out, either family, as
+  before. A probe parameter and a static target set it too; it is refused
+  beside a `unix_socket` or a proxy, which chooses the family itself
+  ([Address families](docs/REQUESTS.md#address-families)).
+- jq and yq rules of `http` and `graphite` collectors read `$http_version`,
+  the version of HTTP the answer came in, `"1.0"`, `"1.1"` or `"2"`, and
+  `$remote_ip`, the IP address the request's connection was made to, `null`
+  through a proxy or over a Unix socket; a Python script has them as
+  `response.http_version` and `response.remote_ip`, and a debug report
+  shows them after `$redirects`. The uptime example and recipe answer
+  `site_http_version` and `site_ip_protocol`, blackbox_exporter's
+  `probe_http_version` and `probe_ip_protocol`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- [WebSocket endpoints](docs/REQUESTS.md#websocket-endpoints): the uptime
+  recipe checks a WebSocket endpoint's handshake with an `http` collector,
+  its request carrying the upgrade's headers and a rule comparing the
+  `Sec-WebSocket-Accept` it answers with.
+- Allocator copies with a discovery source run side by side as peers:
+  `pue-allocator --peers` names every copy, itself included, a name
+  resolving to all of them or a list, and `--peers.self` the copy's own
+  address. The live copy of the lowest address leads and alone asks the
+  discovery sources; the others fetch what it found every 2 seconds and
+  serve the same bundles and targets, and when it goes, telling the others
+  for 3 seconds before it stops, the next copy leads at once from the
+  targets it took last. New metrics say which copy leads and how long a
+  follower has not held the leader's targets
+  ([Copies with discovery](docs/ALLOCATOR.md#copies-with-discovery)).
+- The chart runs `allocator.replicas` allocator pods, 2 by default, with a
+  discovery source too, as peers of the allocator's headless Service, rolled
+  out one at a time, where it ran one pod and refused more.
+
+### Fixed
+
+- `$url`, a target in a log line, the static targets endpoint's `target`
+  label, the OTLP `target` attribute, a debug report and an error showed a
+  session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code` and
+  CAS's `ticket` in its query, which the redirect back from a login carries.
+  The value of a path parameter whose name reads as a credential's is now
+  masked, `/app;jsessionid=<redacted>`, after an escaped `;`, `%3B`, too,
+  and `code`, `ticket`, `sid`, `hmac` and `otp` are credentials' names, each
+  as a whole word: `code` and `ticket` of a query or path parameter alone, a
+  URL's in a logged body among them, the others of a header and a field in a
+  logged body too. A query parameter of a country's or a promotion's code,
+  `country_code`, is masked as well
+  ([Logging](docs/LOGGING.md#repeated-failures)). A debug report and the
+  debug page showed a redirect's `Location`, and `Content-Location`,
+  `Refresh` and `Link`, as they came; their URL is now masked as a request
+  line's is ([Debug probes](docs/CONFIGURATION.md#debug-probes)).
+- An answer `101 Switching Protocols`, as a WebSocket endpoint gives an
+  `http` collector that asks for the upgrade, had what followed it on the
+  connection, the WebSocket's frames, read as its body until the probe's
+  deadline, which failed the probe. It is now the status and the headers
+  alone, and its connection is closed at once.
 
 ## exporter 2.0.0
 

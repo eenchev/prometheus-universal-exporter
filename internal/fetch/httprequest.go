@@ -111,6 +111,14 @@ func validateHTTPRequest(x *model.Collector) error {
 	if err := validateProxy(x); err != nil {
 		return err
 	}
+	if err := checkIPFamily(x.Request.IPFamily); err != nil {
+		return fmt.Errorf("collector %q request.%w", x.Name, err)
+	}
+	if x.Request.IPFamily != "" {
+		if err := ipFamilyRoute(x); err != nil {
+			return fmt.Errorf("collector %q request.%w", x.Name, err)
+		}
+	}
 	if HasPathParams(x.Request.Path) {
 		placeholders, err := parsePathParams(x.Request.Path)
 		if err != nil {

@@ -19,7 +19,8 @@ import (
 // it answers: of a 200, a 503, a redirect, a TLS site and a closed port,
 // whether the site is up, its status, the phases of its request, the
 // redirects, the TLS connection and its certificate's expiry, and the probe
-// series report_failures adds; a site over plain HTTP has no TLS series and
+// series report_failures adds, the version of HTTP it answered in and the IP
+// version of its connection; a site over plain HTTP has no TLS series and
 // logs no failure for them, and the example lints clean. Every probe of a
 // site, the second of the same one too, and the request a redirect led to,
 // times its own connection and handshake: the example's new_connection.
@@ -53,11 +54,11 @@ func TestTheUptimeExampleAnswersTheDocumentedSeries(t *testing.T) {
 		target, extra string
 		want, absent  []string
 	}{
-		{plain.URL, "", []string{"site_up 1", "site_http_status_code 200", `site_http_duration_seconds{phase="connect"}`, `site_http_duration_seconds{phase="first_byte"}`, `site_http_duration_seconds{phase="total"}`, "site_http_redirects 0", "site_http_ssl 0", "http_exporter_probe_success 1"},
+		{plain.URL, "", []string{"site_up 1", "site_http_status_code 200", `site_http_duration_seconds{phase="connect"}`, `site_http_duration_seconds{phase="first_byte"}`, `site_http_duration_seconds{phase="total"}`, "site_http_redirects 0", "site_http_ssl 0", "site_http_version 1.1", "site_ip_protocol 4", "http_exporter_probe_success 1"},
 			[]string{`phase="tls"`, `phase="dns"`, "site_tls_", "http_exporter_probe_failed_stage"}},
 		{plain.URL + "/down", "", []string{"site_up 0", "site_http_status_code 503", "site_http_redirects 0", `site_http_duration_seconds{phase="connect"}`, "http_exporter_probe_success 1"}, []string{"http_exporter_probe_failed_stage"}},
 		{plain.URL + "/moved", "", []string{"site_up 1", "site_http_status_code 200", "site_http_redirects 1", `site_http_duration_seconds{phase="connect"}`, "http_exporter_probe_success 1"}, nil},
-		{secure.URL, "&insecure_skip_verify=true", []string{"site_up 1", "site_http_ssl 1", `site_http_duration_seconds{phase="tls"}`, `site_http_duration_seconds{phase="connect"}`, "site_tls_cert_expiry_timestamp_seconds " + expiry, `site_tls_version_info{cipher_suite="TLS_`, `",version="TLS 1.3"} 1`, "http_exporter_probe_success 1"}, nil},
+		{secure.URL, "&insecure_skip_verify=true", []string{"site_up 1", "site_http_ssl 1", "site_http_version 1.1", "site_ip_protocol 4", `site_http_duration_seconds{phase="tls"}`, `site_http_duration_seconds{phase="connect"}`, "site_tls_cert_expiry_timestamp_seconds " + expiry, `site_tls_version_info{cipher_suite="TLS_`, `",version="TLS 1.3"} 1`, "http_exporter_probe_success 1"}, nil},
 		// The same site again: new_connection makes this probe connect
 		// and shake hands too, where it would reuse the last one's
 		// connection.

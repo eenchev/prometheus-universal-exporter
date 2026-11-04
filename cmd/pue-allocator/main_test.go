@@ -18,14 +18,18 @@ import (
 // before any file is read.
 func TestAMalformedCommandLineExits2(t *testing.T) {
 	for args, want := range map[string]string{
-		"--nope":                       "flag provided but not defined",
-		"stray":                        `unexpected argument "stray"`,
-		"--settle=-1s":                 "--settle must not be negative",
-		"--members.max=0":              "--members.max must be 1 or more",
-		"--discovery.max-targets=0":    "--discovery.max-targets must be 1 or more",
-		"--config.watch-interval=-1s":  "--config.watch-interval must not be negative",
-		"--log.level=verbose":          `--log.level "verbose" is not a level`,
-		"--web.listen-address=nowhere": "--web.listen-address",
+		"--nope":                                      "flag provided but not defined",
+		"stray":                                       `unexpected argument "stray"`,
+		"--settle=-1s":                                "--settle must not be negative",
+		"--members.max=0":                             "--members.max must be 1 or more",
+		"--discovery.max-targets=0":                   "--discovery.max-targets must be 1 or more",
+		"--config.watch-interval=-1s":                 "--config.watch-interval must not be negative",
+		"--log.level=verbose":                         `--log.level "verbose" is not a level`,
+		"--web.listen-address=nowhere":                "--web.listen-address",
+		"--peers=pue-allocator":                       `--peers entry "pue-allocator" is not a host:port`,
+		"--peers=a:9116,,b:9116":                      `--peers entry "" is not a host:port`,
+		"--peers.self=10.0.3.7":                       "--peers.self is given without --peers",
+		"--peers=a:9116 --peers.self=pue-allocator-0": `--peers.self "pue-allocator-0" is not an IP address`,
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(strings.Fields(args), &stdout, &stderr); code != 2 {
@@ -48,7 +52,7 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}

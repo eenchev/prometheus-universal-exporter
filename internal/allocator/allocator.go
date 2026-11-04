@@ -128,6 +128,10 @@ type Allocator struct {
 	maxDiscovered    int
 	discovering      bool
 	discoveryStopped bool
+	// instance names the allocator's process, for a copy to know itself
+	// among its peers; peers are those, nil without --peers.
+	instance string
+	peers    *peers
 }
 
 type member struct {
@@ -161,6 +165,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		sources:       map[string]*sourceState{},
 		base:          in,
 		maxDiscovered: opts.MaxDiscoveredTargets,
+		instance:      newInstance(),
 	}
 	if a.clock == nil {
 		a.clock = realClock{}

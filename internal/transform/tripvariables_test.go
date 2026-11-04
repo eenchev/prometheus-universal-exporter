@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -177,6 +178,51 @@ func TestURLAndRedirectsAreBoundInEveryProgram(t *testing.T) {
 		t.Errorf("python: %s", got)
 	}
 	c.Transform.Script = "metric(name='absent', value=1 if response.url is None and response.redirects is None else 0)\n"
+	bare := tripResponse()
+	bare.Trip = nil
+	if got := tripSeries(t, c, bare); got != "absent 1\n" {
+		t.Errorf("python without a trip: %s", got)
+	}
+}
+
+// $http_version and $remote_ip are the version of HTTP the answer came in
+// and the address its connection was made to, as jq, yq and Python read
+// them, and null for an answer no HTTP request brought, and $remote_ip for
+// one whose address is not known.
+func TestHTTPVersionAndRemoteIPAreBoundInEveryProgram(t *testing.T) {
+	answered := tripResponse()
+	answered.Trip.ProtoMajor, answered.Trip.ProtoMinor, answered.Trip.RemoteIP = 2, 0, netip.MustParseAddr("2001:db8::7")
+	rules := []model.MetricRule{
+		{Name: "version", Expression: "$http_version | tonumber"},
+		{Name: "address", Expression: "1", Labels: []model.LabelRule{{Name: "ip", Expression: "$remote_ip"}, {Name: "version", Expression: "$http_version"}}},
+	}
+	want := "version 2\naddress ip=2001:db8::7 version=2 1\n"
+	unknown := tripResponse()
+	unknown.Trip.ProtoMajor, unknown.Trip.ProtoMinor = 1, 1
+	absent := []model.MetricRule{{Name: "absent", Expression: "if $http_version == null and $remote_ip == null then 1 else 0 end"}}
+	for _, kind := range []string{"jq", "yq"} {
+		c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: kind}, Metrics: rules}
+		if got := tripSeries(t, c, answered); got != want {
+			t.Errorf("%s:\n%s\nwant\n%s", kind, got, want)
+		}
+		c.Metrics = []model.MetricRule{{Name: "unknown", Expression: `if $remote_ip == null and $http_version == "1.1" then 1 else 0 end`}}
+		if got := tripSeries(t, c, unknown); got != "unknown 1\n" {
+			t.Errorf("%s with no address: %s", kind, got)
+		}
+		c.Metrics = absent
+		bare := tripResponse()
+		bare.Trip = nil
+		if got := tripSeries(t, c, bare); got != "absent 1\n" {
+			t.Errorf("%s without a trip: %s", kind, got)
+		}
+	}
+
+	requirePython(t)
+	c := model.Collector{Name: "trip", Transform: model.TransformConfig{Type: "python", Script: "metric(name='address', value=float(response.http_version), labels={'ip': response.remote_ip})\n"}}
+	if got := tripSeries(t, c, answered); got != "address ip=2001:db8::7 2\n" {
+		t.Errorf("python: %s", got)
+	}
+	c.Transform.Script = "metric(name='absent', value=1 if response.http_version is None and response.remote_ip is None else 0)\n"
 	bare := tripResponse()
 	bare.Trip = nil
 	if got := tripSeries(t, c, bare); got != "absent 1\n" {

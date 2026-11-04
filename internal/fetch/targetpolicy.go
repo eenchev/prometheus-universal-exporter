@@ -380,6 +380,12 @@ type policyGuard struct {
 	// (unixsocket.go), so no connection is made to an address of the hosts
 	// it checks.
 	socket bool
+	// ipFamily is the request's ip_family, "" for none (ipfamily.go): a
+	// host the request reaches through a proxy, or over the socket, is
+	// connected to by something that chooses the family itself, and is
+	// refused rather than reached over a family the request did not ask
+	// for.
+	ipFamily string
 }
 
 // certificateOwner names whose client certificate the request presents.
@@ -397,9 +403,10 @@ type policyGuardKey struct{}
 // the collector as the request is made with it, a static target's own tls
 // block in place of the collector's (withTargetTLS), so the client
 // certificate a redirect is judged by is the one the request presents;
-// ownTLS says that block is the target's.
-func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error), ownTLS bool) (context.Context, error) {
-	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS, socket: CollectorPolicy(c).UnixSocket != ""}
+// ownTLS says that block is the target's. ipFamily is the request's
+// ip_family, "" for none.
+func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error), ownTLS bool, ipFamily string) (context.Context, error) {
+	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS, socket: CollectorPolicy(c).UnixSocket != "", ipFamily: ipFamily}
 	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}
@@ -420,6 +427,9 @@ func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 		return err
 	}
 	proxied := viaProxy(g.proxy, u)
+	if g.ipFamily != "" && (proxied || g.socket) {
+		return fmt.Errorf("request.ip_family is %s, and the request to %s goes through a proxy, which looks the name up and chooses the family it connects over itself; leave ip_family out, or reach the target without a proxy (NO_PROXY, or proxy_url: direct)", g.ipFamily, host)
+	}
 	nameAllowed, err := g.policy.check(ctx, host, proxied)
 	if err != nil {
 		return err

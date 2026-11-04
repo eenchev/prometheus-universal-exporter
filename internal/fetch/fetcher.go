@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -141,6 +142,9 @@ type RequestOverrides struct {
 	FollowRedirects    *bool
 	EnableHTTP2        *bool
 	NewConnection      *bool
+	// IPFamily is the ip_family probe parameter, or a static target's
+	// request.ip_family, "" when neither sets it.
+	IPFamily string
 	// Targets, From and Until are a static target's request.targets, from
 	// and until, replacing a graphite collector's; no probe parameter sets
 	// them. Targets is nil when the target does not set it.
@@ -285,6 +289,16 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 		return overrides, err
 	}
 	overrides.NewConnection = newConnection
+	if value, ok := values["ip_family"]; ok {
+		raw := ""
+		if len(value) > 0 {
+			raw = strings.TrimSpace(value[0])
+		}
+		if raw == "" || checkIPFamily(raw) != nil {
+			return overrides, fmt.Errorf("invalid ip_family override %q; want ip4, ip6, prefer_ip4 or prefer_ip6", raw)
+		}
+		overrides.IPFamily = raw
+	}
 	if value, ok := values["retry_attempts"]; ok {
 		raw := ""
 		if len(value) > 0 {
@@ -762,11 +776,17 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if overrides.NewConnection != nil {
 		newConnection = *overrides.NewConnection
 	}
+	// ip_family is the family every connection of the trip is made over
+	// (ipfamily.go).
+	ipFamily := c.Request.IPFamily
+	if overrides.IPFamily != "" {
+		ipFamily = overrides.IPFamily
+	}
 	// The connection pool is shared with every request made with the same
 	// TLS and HTTP/2 settings (transport.go), so a static target with a tls
 	// block of its own has a pool of its own, and no connection made with
 	// one client certificate carries a request that is to present another.
-	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c), newConnections: newConnection}, c), followRedirects, 0)
+	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c), newConnections: newConnection, ipFamily: ipFamily}, c), followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -777,7 +797,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		proxy = transport.Proxy
 	}
-	ctx, err = withTargetPolicy(ctx, c, u, proxy, overrides.TLS != nil)
+	ctx, err = withTargetPolicy(ctx, c, u, proxy, overrides.TLS != nil, ipFamily)
 	if err != nil {
 		return nil, err
 	}
@@ -791,6 +811,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		requestContext, cancel = context.WithTimeout(ctx, overrides.Timeout)
 	}
 	defer cancel()
+	// The request's deadline, the probe's or its own, goes to its dials as
+	// a value, which net/http keeps where it drops the deadline: a
+	// prefer_ip4 or prefer_ip6 dial gives the first family half of what is
+	// left of it (ipfamily.go).
+	requestContext = withDialDeadline(requestContext)
 	method, requestBody := methodBody(c)
 	if overrides.Method != "" {
 		method = overrides.Method
@@ -886,7 +911,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	protocolErrors := 0
 	// Timing a request's phases costs a trace of nine hooks for every
 	// attempt, which is spared a collector none of whose rules reads
-	// $timings (model.Collector.TimingsUnread). A debug run times them
+	// $timings or $remote_ip, the address the trace sees the connection
+	// made to (model.Collector.TimingsUnread). A debug run times them
 	// whatever the rules read, since its report shows them.
 	timed := !c.TimingsUnread || debugRun(ctx)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
@@ -1026,6 +1052,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		var body []byte
 		var readErr error
 		switch {
+		case resp.StatusCode == http.StatusSwitchingProtocols:
+			// A 101 has no body: what follows it on the connection is the
+			// protocol it switched to, such as a WebSocket's frames, which
+			// the server may send for as long as the connection is open.
+			// Go hands the connection over as the body; it is closed
+			// unread, so the answer is the status and the headers alone
+			// and the probe ends at once, rather than reading the
+			// protocol's traffic until its deadline.
+			body = []byte{}
 		case declared > 0:
 			body, readErr = readBody(resp.Body, limit, declared)
 		case method == http.MethodHead || resp.ContentLength == 0:
@@ -1040,6 +1075,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		closeErr := resp.Body.Close()
 		trip := timing.trip(resp, attemptStart, time.Now())
+		// A connection through a proxy is to the proxy, whose address is
+		// not the target's: $remote_ip is null then.
+		if trip.RemoteIP.IsValid() && resp.Request != nil && viaProxy(proxy, resp.Request.URL) {
+			trip.RemoteIP = netip.Addr{}
+		}
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
 			traceBodyError(requestContext, readErr)

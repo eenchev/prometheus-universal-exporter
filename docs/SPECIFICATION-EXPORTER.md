@@ -148,6 +148,9 @@ Parameters:
   negotiate HTTP/2.
 - `new_connection`: optional boolean overriding whether every request of the
   probe is sent on a connection of its own (§ 42.15b).
+- `ip_family`: optional `ip4`, `ip6`, `prefer_ip4` or `prefer_ip6`
+  overriding the address family the probe's requests connect over
+  (§ 42.15b).
 
 When the selected collector enables caching, the exporter MUST serve a stored
 result instead of contacting the target while a cached entry for the identical
@@ -1018,6 +1021,7 @@ and the source MUST list the opt-in types.
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `new_connection` | `false` | Every request on a connection of its own, closed after its answer (§ 42.15b). |
+| `ip_family` | both | The address family the requests connect over: `ip4`, `ip6`, `prefer_ip4` or `prefer_ip6` (§ 42.15b). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings, or `any` as the only entry, which MUST accept every status from 100 to 599 and no other; any other entry, `any` beside another entry and `any` in another case MUST be refused at load, naming the collector or the static target, and the schemas MUST refuse them too. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
@@ -1029,10 +1033,10 @@ and the source MUST list the opt-in types.
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>`. A static
+`ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>`. A static
 target using an `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`retry`, `headers`,
+`ip_family`, `retry`, `headers`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 Neither a probe parameter nor a static target MAY set `proxy_url` or
@@ -1408,7 +1412,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1440,12 +1444,12 @@ lines: it only pulls. Its keys:
   escaping and a quote, comma, bracket or glob could change it.
 - It MUST accept the `/probe` parameters `path`, `timeout`,
   `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-  `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
+  `ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
   which replace the window for the probe; an empty one, or one holding
   whitespace, MUST be answered `400`, and so must either for a collector of
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
-  `new_connection`, `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
+  `new_connection`, `ip_family`, `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
   `login`, `rate_limit`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
@@ -5891,10 +5895,11 @@ page, and in a pagination's `next` and a login's `token` expression.
 Python's `response.timings` MUST be the same, a dict with `None` for
 `null`, and `None` whole where `$timings` is `null`. The phases MAY be left
 unmeasured for a collector none of whose texts names `$timings` and that
-runs no Python script, since no rule of it can read them; a debug run of it
+runs no Python script, since no rule of it can read them, and names no
+`$remote_ip` either, which the same trace sees; a debug run of it
 MUST still measure them, since its report shows them. The values of
-`$timings`, `$tls`, `$url` and `$redirects` MAY likewise be made only for a
-program whose text names one of them.
+`$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and `$remote_ip`
+MAY likewise be made only for a program whose text names one of them.
 
 Every jq program MUST also have `$tls` bound. For the request `$timings`
 describes, sent over TLS, it MUST be an object of the connection the answer
@@ -5911,16 +5916,33 @@ and wherever `$timings` is `null`. Python's `response.tls` MUST be the same.
 Every jq program MUST also have `$url` and `$redirects` bound. For the
 request `$timings` describes, `$url` MUST be its URL, where the followed
 redirects led, rendered by the redaction a target shown in a log line has:
-the value of each query parameter whose name reads as a credential's by the
-one rule for a name (§ 42.17) masked as `<redacted>` where it stands, every
-other parameter as it was sent, and the fragment left out; and its userinfo
+the value of each query parameter, and of each path parameter, whose name
+reads as a credential's by the one rule for a name (§ 42.17) masked as
+`<redacted>` where it stands, every other parameter and the path's segments
+as they were sent, and the fragment left out; and its userinfo
 MUST be left out, not shown as `redacted:redacted`. `$redirects` MUST be
 the number of redirects followed to it, `0` for none. Both MUST be `null`
 wherever `$timings` is. Python's `response.url` and `response.redirects`
-MUST be the same. A debug probe's report and the debug page MUST show
-`$timings`, `$tls`, `$url` and `$redirects`, in that order, as JSON not
+MUST be the same.
+
+Every jq program MUST also have `$http_version` and `$remote_ip` bound. For
+the request `$timings` describes, `$http_version` MUST be the version of
+HTTP its answer came in, `"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's
+`probe_http_version` writes it, whether or not the request was traced.
+`$remote_ip` MUST be the IP address the request's connection was made to,
+kept or new, as Go writes it, an IPv4 address mapped into IPv6 written as
+IPv4; it MUST be `null` for a request through a proxy, whose connection is
+to the proxy and whose address is not the target's, for one over a Unix
+socket, and for one that was not traced. A collector whose texts name
+`$remote_ip` MUST have its requests traced as one that names `$timings`
+does. Both MUST be `null` wherever `$timings` is. Python's
+`response.http_version` and `response.remote_ip` MUST be the same. A debug
+probe's report and the debug page MUST show `$timings`, `$tls`, `$url`,
+`$redirects`, `$http_version` and `$remote_ip`, in that order, as JSON not
 escaped for HTML, under the response's status, `$url` with its query values
-masked and its length cut as the report's request lines have a URL.
+masked and its length cut as the report's request lines have a URL, and
+otherwise as the rules read it: the URL MUST NOT be parsed and written
+again, so its path's escapes are the ones `$url` has.
 
 ---
 
@@ -13774,7 +13796,7 @@ Tests MUST show:
   quantile given twice, next to each other or apart.
 - A probe giving `target`, `collector`, `method`, `path`, `timeout`, `body`,
   `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-  `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
+  `ip_family`, `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
   `400` naming the parameter, without a request to the target and without
   being counted; a repeated `header_<name>` and a repeated parameter the
   probe does not read are answered `200`. Every parameter of every
@@ -30270,6 +30292,62 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheTripsVariablesAreMadeOnlyForAProgramThatReadsThem` (transform): a program of `$status` runs with `$timings` and `$url` null and leaves them unmade; one of `$timings` reads them, and a second reads the same values, made once.
 - `TestThePythonRequestWritesTheTripAsJSONWould` (transform): the request line's `timings`, `tls`, `url` and `redirects`, of no trip, of a plain HTTP trip with a credential and markup in its query, and of a TLS trip whose certificate names need escaping, are what `json.Marshal` writes of jq's values.
 
+## 34.266 Uptime probes: address families, the answer's protocol and address, WebSocket upgrades and the URL's masking
+
+- `TestTheIPFamilyIsTheNetworkDialed` (fetch): `ip4` and `ip6` dial `tcp4` and `tcp6` alone, `prefer_ip4` and `prefer_ip6` theirs and, when it is refused, the other, with at most half of a deadline's time for the first, and an error naming both families when both fail; no `ip_family` dials `tcp`, and a dial of another network is left as it is.
+- `TestARequestConnectsOverItsIPFamily` (fetch): to a target on 127.0.0.1, `ip4`, `prefer_ip4` and `prefer_ip6` are answered and `ip6` fails saying the target has no IPv6 address and naming `request.ip_family`; a probe's and a static target's `ip6` fail the same after the collector kept an IPv4 connection.
+- `TestIP6ConnectsOverIPv6` (fetch): where IPv6 works, `ip6`, `prefer_ip4` and `prefer_ip6` reach a server on `[::1]` over it, and `ip4` fails saying it has no IPv4 address; skipped where there is no IPv6.
+- `TestTheIPFamilyIsCheckedAndRefusedWhereItCannotHold` (fetch): the four values load and parse as probe parameters; another value is refused as a key, a probe parameter (an empty one too) and a static target's key; `ip_family` beside a `proxy_url` other than `direct` and beside a `unix_socket` is refused at load, and as a probe parameter and a static target's key of such a collector; a request with it that the environment's proxy would carry fails before the proxy is asked anything, where the same request without it goes through the proxy.
+- `TestNoAddressOfTheFamily` (fetch): a dial over one family to an address of the other, and a lookup that found nothing, are a want of an address; a refused connection is not.
+- `TestEveryProbeParameterIsPartOfTheKey`, `TestARepeatedProbeParameterIsRefused`, `TestCollectorCacheKeyRequiresIdenticalRequest` (a probe with `ip_family` set differently, or left out, has a key of its own), `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters` and `TestTheKeysHeldToTextAloneAreTheSchemas` take `ip_family`.
+- `TestTheTripHasTheAnswersHTTPVersionAndRemoteIP` (fetch): `$http_version` is `"1.1"`, `"1.0"` from a server answering in HTTP/1.0 and `"2"` over negotiated HTTP/2, traced or not; `$remote_ip` is `"127.0.0.1"` for a traced request to a target there, and `null` for one not traced, one through a collector's proxy's tunnel, one the environment's proxy answered and one over a Unix socket; an IPv4 address mapped into IPv6 is written as IPv4, and no trip has either.
+- `TestHTTPVersionAndRemoteIPAreBoundInEveryProgram` (transform): jq, yq and Python read the version and the address, as a number, a value and labels; `$remote_ip` is `null` where it is not known, and both are `null` without a trip.
+- `TestReadsTimingsIsWhereARuleOrAScriptMayReadThem` (transform) and `TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings` (config): a rule naming `$remote_ip` has its requests traced; one naming `$http_version` alone does not.
+- `TestThePythonRequestWritesTheTripAsJSONWould` (transform) takes `http_version` and `remote_ip`, of no trip, of HTTP/1.0 to an IPv4 address and of HTTP/2 to an IPv6 one.
+- `TestAProbeReadsTheTimingsOfItsRequest` and `TestAProbeReadsWhereItsRedirectsLed`: through `/probe` a rule reads `$http_version` as `1.1` and `$remote_ip` as `127.0.0.1`; the debug report and the debug page show `$http_version "1.1"` and `$remote_ip "127.0.0.1"` after `$redirects`.
+- `TestTheUptimeExampleAnswersTheDocumentedSeries` takes `site_http_version 1.1` and `site_ip_protocol 4` of a plain and a TLS site.
+- `TestAnHTTPCollectorChecksAWebSocketUpgrade` (exporter): the recipe's WebSocket check, against a handshake server that keeps sending frames after its `101`, answers `websocket_up 1` (the status `101` and the key's `Sec-WebSocket-Accept` read from `$headers`) and `websocket_http_status_code 101` within two seconds, with the connection closed within a second of the `101`, with `new_connection` and without, and over TLS under `enable_http2` to a server that speaks HTTP/2; the endpoint saw the configured `Upgrade` and key. Without the `Upgrade` header the endpoint's `400` is `websocket_up 0` under `accept_status: [any]`.
+- `TestAPathParameterOfACredentialIsMasked` (fetch): `;jsessionid=`, `;sid=`, an escaped `;%74oken=` and `;JSESSIONID=` are masked in every segment, in a target as a log line and `$url` show it, a debug report's and an error's, and a label's, the path's escapes kept; `;v=2`, `;lang=en`, a parameter without a value and a token that is a segment whole are kept; a log line of a target masks its path's session and its query's `ticket`.
+- `TestMaskCredentialQueryValues` and `TestCredentialName` (fetch): a query's `code`, `Code`, `%63ode`, `auth_code`, `ticket`, `sid`, `SID`, `x_hmac`, `hmacSha256`, `otp`, and `country_code`, `promo_code` and `zip_code`, are masked, and `barcode`, `codec`, `ticketing`, `side`, `option` and `hmacs` are not; `sid`, `X-Sid`, `userSid`, `X-Hmac`, `hmac_sha256`, `otp` and `X-OTP` read as a credential's name, and `code`, `error_code`, `X-Code`, `ticket` and `ticket_id` do not. `TestRedactText` masks a logged body's `sid` and `hmac` and keeps an error body's `code` and `ticket`.
+- `TestTheURLIsWhereTheRedirectsLed` (fetch): a redirect to `/app;jsessionid=…?code=…&state=x` is `$url` `/app;jsessionid=<redacted>?code=<redacted>&state=x`.
+- `TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown` (exporter): through `/probe`, a label of `$url` after such a redirect, and the recipe's `$url | split("?")[0] | split(";")[0]`, hold no secret; a debug probe's report holds none; a failed probe's log line names its target with `;jsessionid=<redacted>?ticket=<redacted>&lang=en`.
+
+## 34.267 Allocator copies with discovery: peers and a leader
+
+- `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator): addresses order IPv4 before IPv6, by the address numerically (`10.0.0.9` before `10.0.0.10`) and then by port; the leader is the copy itself alone or when lower than every live peer, the lowest live peer otherwise; for a copy of unknown address see § 34.268.
+- `TestPeersAreResolvedEveryRound` (allocator): a name resolves to every address it has, an IPv4-mapped one as IPv4, an IP entry is taken without a lookup, the copy's own `--peers.self` is among them, duplicates are taken once, and a failed lookup keeps the addresses of the last.
+- `TestPeerFlagsAreParsed` (allocator): `--peers` entries need a host and a port from 1 to 65535; `--peers.self` takes an IP address with the listen address's port, or `ip:port`, and refuses a name, port 0 and an address without a port beside a listen address of none.
+- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): of two copies served over HTTP with the token, whose http_sd sources answer each request differently, only the lower address asks them (each once); the follower serves the same service discovery answer and bundles of the same generations and files for each member and a joining one, its shares holding the leader's discovered static target; the metrics say who leads (`pue_allocator_is_leader`, `pue_allocator_leader{peer}`, `pue_allocator_peers 2`), and the follower counts no refresh.
+- `TestTheNextCopyLeadsWhenTheLeaderShutsDown` (allocator): once the leader shuts down, its `/v1/peer` answering `503`, the follower leads at its next round, serves the snapshot's targets while its own sources' answer is held, and then what they found; `pue_allocator_leader_changes_total` is 1.
+- `TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot` (allocator): a follower whose snapshot fetches fail keeps the snapshot's targets and does not discover, counts each failure, shows the snapshot's age (8s after four 2s rounds), logs once and again when a fetch succeeds; a leader that stops answering stays the leader for two failed checks and is replaced at the third, the new leader still serving the snapshot's targets.
+- `TestThePeerEndpointsNeedTheToken` (allocator): `/v1/peer` and `/v1/peer/snapshot` answer `401` without the token or with another; copies sending a wrong token never count each other live, and each leads alone.
+- `TestCopiesFindThemselvesAmongTheAddressesOfTheirName` (allocator): two copies at 127.0.0.1 and 127.0.0.2 of one port, given only a name resolving to both, find their own address by its answer; the copy of the higher address leads while the lower does not answer, and the lower, once up, leads from the higher's snapshot before its own sources answer, the higher then following it.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator) takes a `--peers` entry without a port, an empty entry, `--peers.self` without `--peers`, and a name as `--peers.self`; `TestVersionAndHelp` lists `-peers` and `-peers.self`.
+- `TestChartRunsAllocatorPeersWithDiscovery` (repository): SPECIFICATION-CHART.md § 34.29.
+
+## 34.268 Fixes to allocator peers
+
+- `TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater` (allocator): two copies of input files of their own reload a new probe job, the leader first; the follower's fetches in between leave its snapshot age growing (8s after four 2s rounds) and log the difference once; after its own reload its next fetch, naming the digest of what it holds, takes the new job's targets, the bundles' generations are equal, the age is 0 and the agreement is logged.
+- `TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain` (allocator): a follower that led while the leader's checks failed, its own sources finding other targets, serves the leader's targets again at its first round of following.
+- `TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader` (allocator): a follower whose source differs from the leader's only in its `refresh_interval` serves the leader's targets of it and runs no refresh loop itself.
+- `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
+- `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for a copy of one source or none, 32 MiB for one of two.
+- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
+- `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
+- `TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two copies whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
+- `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator), changed: a copy of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own instance is lower.
+- `TestACopyAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
+
+## 34.269 Fixes to address families and masking
+
+- `TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers` (fetch): through `FetchCollector` and its cached transport, `prefer_ip6` to a target whose IPv6 dial never answers (simulated by the transport's dial function) dials IPv6 for at most about half of a 4s deadline and is then answered over IPv4, under the probe's deadline and under the request's own `timeout` alike.
+- `TestTheURLOfAHeaderIsMasked` (fetch): `Location`, `location` and `Content-Location` have every query value, a credential's path parameter and the userinfo masked and the fragment dropped, a path alone kept and a URL that does not parse `<redacted>`; `Refresh` with `url=`, with a quoted `URL=` and with a bare URL after `,` has its URL masked and a delay alone kept; each `<…>` of `Link` is masked and its parameters kept; another header is kept as it came.
+- `TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport` (exporter): a `302`'s `Location`, `Content-Location`, `Refresh` and `Link` holding a session, a `sid`, a `code`, a `token`, a `ticket` and a `sig` are shown masked, and another header as it came, in a debug probe's report and the debug page's response headers, neither holding a secret.
+- `TestRedactTextMasksTheCodeAndTicketOfAURL` (fetch): in logged text, a URL's `?code=`, `;ticket=`, `&auth_code=`, `&amp;code=`, `;Ticket=` and `?country_code=` are masked and `&barcode=` kept; `<code>401</code>`, JSON fields `code` and `ticket`, `code=401` after a space and `;code:` are kept.
+- `TestAnEscapedSemicolonSeparatesPathParameters` (fetch): after `%3B` or `%3b` a credential's path parameter, `jsessionid`, `JSESSIONID`, `token` and an escaped `%6Asessionid`, is masked in a target as a log line shows it, an error's and a label's, the escape kept as written; `%3Bv=2`, a trailing `%3B` and a segment `token%3B=…` are kept.
+- `TestTheDebugReportsURLIsTheRulesURLWithItsQueryMasked` (fetch): the debug report's `$url` is `$url` with every query value but a configured pair's masked, its path's `%6A`, `%3B` and `%2F` as `$url` has them; a URL without a query, `<redacted>` and `""` are shown as they are.
+- `TestTheDebugReportShowsTheURLTheRulesRead` (exporter): after a redirect to `/x;%6Asessionid=…/app%3Bjsessionid=…?lang=en`, a label of `$url` is `/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>?lang=en` and a debug probe's report shows the same `$url` with `lang=<redacted>`; neither holds the session.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31736,6 +31814,7 @@ insecure_skip_verify=<true|false>
 follow_redirects=<true|false>
 enable_http2=<true|false>
 new_connection=<true|false>
+ip_family=<ip4|ip6|prefer_ip4|prefer_ip6>
 retry_attempts=<non-negative integer>
 retry_backoff=<non-negative Go duration>
 ```
@@ -33224,9 +33303,9 @@ and Prometheus the probe targets of its probe targets file, each pointed at a
 replica. What the two sides exchange MUST be the types, paths, timings and
 functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
 files and heartbeats MUST give the same bundles and answers. What discovery
-sources find is input too, asked by each copy on its own timer, so
-`docs/ALLOCATOR.md` MUST say that an allocator with a discovery source runs
-as one copy, and the chart MUST run it so (SPECIFICATION-CHART.md § 33.10c).
+sources find is input too, so copies with a discovery source MUST run as
+peers (**Peers** below), of which only the leader asks the sources, and the
+chart MUST run them so (SPECIFICATION-CHART.md § 33.10c).
 
 **Inputs.** `--config.file` MUST be loaded and checked with the exporter's
 configuration loader, `--static-targets-file` with the static target file's
@@ -33368,6 +33447,77 @@ targets stay in force until the new source first answers, a failure before
 then keeping them and being counted; a source of a new name or kind MUST
 start with nothing found.
 
+**Peers.** With `--peers`, `host:port` entries, comma-separated, each with a
+host and a decimal port from 1 to 65535 (anything else MUST exit 2), a copy
+MUST, at its start and then every `PeerInterval` (2s), resolve each entry to
+every address its host has (an IP address taken as it is, an IPv4-mapped
+IPv6 address as IPv4; a lookup that fails keeping the addresses of the last,
+logged once while its text stays the same) and ask every address but its own
+at `GET /v1/peer` with the API's bearer token within `PeerTimeout` (1s),
+without a proxy. `--peers.self`, only with `--peers` (exit 2 otherwise),
+MUST be an IP address, taking the port of `--web.listen-address`, or an IP
+address and a port, and is the copy's own address, a peer even when no entry
+resolves to it; without it, the address whose answer names the copy's own
+process (a random instance made at its start) MUST be taken for its own. A
+copy MUST be live once it has answered, until `PeerFailures` (3) checks in a
+row have failed, and MUST stop being live at once when it answers `503`,
+which `/v1/peer` MUST answer from the first `SIGTERM` or `SIGINT`, the copy
+then serving its API on, as it does during a shutdown otherwise, for
+`PeerShutdownDelay` (`PeerInterval` and `PeerTimeout`, 3s) before its server
+shuts down, so every peer's next check gets the `503` rather than a refused
+connection; and otherwise its process's instance, whether it discovers, and
+whether it knows its own address (`true` without `--peers`). The leader of a
+copy that knows its own address MUST be the lowest of the live copies and
+the copy itself, ordered by `netip.AddrPort.Compare` (IPv4 before IPv6, then
+by the address's bytes, then by port). A copy that does not know its own
+address MUST NOT follow a copy that does not discover: it MUST follow the
+lowest live copy that discovers and knows its own address, else the live
+copy of the lowest instance among those that discover, unless it discovers
+itself and its own instance is lower, and lead when no live copy discovers;
+it MUST log an error once when its own address is still not known after
+`PeerFailures` rounds. `--peers`'s help MUST say to list every copy, this
+one included. Only the leader MUST run the discovery sources' refresh loops;
+a follower MUST stop them, keeping what they found, and fetch the leader's
+`GET /v1/peer/snapshot` with the token every round, which MUST answer every
+source of the copy's input files, whether it has answered and what it last
+found, by the source's identity (the kind of its owner, the owner, its kind
+and its name, not its settings), its targets written as target groups, each
+run of targets of the same labels one group with its labels once, as a
+file_sd or http_sd answer gives them, with an `ETag` of its digest and `304`
+to an `If-None-Match` naming it; the follower MUST fetch it within
+`SnapshotTimeout` (30s), its client having no shorter timeout of its own,
+and take a body of at most 16 MiB for each of its own sources (16 MiB with
+none), and MUST name in `If-None-Match` the digest of what it holds itself,
+computed as the leader's is, never the `ETag` it was last given, so any
+difference, of a reload that reached one copy first or of the follower's own
+sources while it led, is answered with the snapshot. The follower MUST put
+each source the snapshot holds in force as that source's answer would be, so
+the copies' bundle generations and service discovery answers are equal,
+after the same checks (no empty target, no label of no label name) and the
+same bound, its own `max_targets` of the source or
+`--discovery.max-targets`: a source's targets refused MUST be the source's
+failure, logged and counted in
+`pue_allocator_discovery_refreshes_total{result="failure"}` once while its
+text stays the same, the source keeping what the follower holds, and MUST
+keep what it holds of a source that has not answered on the leader. A source
+of the follower's that the snapshot lacks MUST be asked by the follower
+itself, from a refresh loop of its own, until a snapshot has it (or a `304`
+says the leader holds what the follower does), and only then stopped. A
+follower that, having taken the snapshot, still holds something else MUST
+NOT count it as taken for its snapshot's age, and MUST log so once after
+`PeerFailures` such fetches in a row and once when the two agree again. A
+copy that comes to lead MUST start the loops with what its sources hold, the
+snapshot it took last, so no discovered target leaves the bundles until each
+source answers; one that leads without ever having taken a snapshot MUST
+first take that of the lowest other live copy, if any. A follower whose
+fetches fail MUST keep serving the snapshot it took last, count each
+failure, and log once after `PeerFailures` failures in a row and once when a
+fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
+copy MUST ask its sources itself, from its start. `docs/ALLOCATOR.md` MUST
+describe the peers, their flags, timings and metrics, and that a network
+split gives each side a leader, the targets then flipping between the two
+until it heals.
+
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the
 allocator decodes with rules by path, as the exporter's are (§ 24.3):
@@ -33474,7 +33624,14 @@ members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_members_refused_total`, and for each discovery source, by
 `kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
 `pue_allocator_discovery_refreshes_total{result}` and
-`pue_allocator_discovery_last_success_timestamp_seconds`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_discovery_last_success_timestamp_seconds`, and with
+`--peers` `pue_allocator_peers` (the live copies, itself included),
+`pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
+address, `self` while it leads without knowing its own),
+`pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
+(since the copy last held what the leader's snapshot holds, having fetched
+it, or the start before the first time; `0` while it leads) and `pue_allocator_peer_failures_total{request}` (`check` or
+`snapshot`). `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 
@@ -33663,8 +33820,8 @@ different transport behaviour never reads another scrape's cached result.
 Static targets MUST accept both settings in their `request` block with the
 same semantics.
 
-The Helm chart MUST expose both, and `new_connection`, as list-valued `params`
-entries on each `monitors` item.
+The Helm chart MUST expose both, and `new_connection` and `ip_family`, as
+list-valued `params` entries on each `monitors` item.
 
 ### 42.15b Connection reuse
 
@@ -33672,7 +33829,7 @@ Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
 `server_name`, a static target's own `tls` block being its set — HTTP/2
-choice, proxy (`request.proxy_url` and its credentials' files, below) and
+choice, `ip_family` (below), proxy (`request.proxy_url` and its credentials' files, below) and
 Unix socket (`request.unix_socket`, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
@@ -33689,7 +33846,36 @@ It MUST default to `false`, MUST be overridable by the `new_connection` probe
 parameter, accepting exactly `true` or `false` as `follow_redirects` is
 (§ 42.15) and part of the cache key, and MUST be settable by a static target
 of either type in its `request` block. A login's request MAY use a kept
-connection. A TLS file rotated on disk MUST be picked up
+connection.
+
+`request.ip_family` of an `http` or `graphite` collector MUST choose the
+address family every request of the collector's trip — each attempt, each
+redirect followed, each page — connects to the target over: `ip4` and `ip6`
+MUST dial that family alone (Go's `tcp4` and `tcp6`), and a target with no
+address of it, a name whose lookup for the family finds none or an address of
+the other family written as the target, MUST fail with an error saying the
+target has no address of that family and naming `request.ip_family`;
+`prefer_ip4` and `prefer_ip6` MUST dial that family first and the other when
+the first has no address or none of its addresses takes the connection,
+giving the first family at most half of the time left under the request's
+deadline, the probe's or its own timeout, so that a family whose address
+never answers leaves the other its half within the same probe, though the
+HTTP client dials with a context detached from the request's; left
+out, the exporter MUST dial as Go does, both families. Any other value MUST be
+refused at load, naming the collector, and the schemas MUST refuse it. It
+MUST be overridable by the `ip_family` probe parameter, whose value MUST be
+one of the four, any other, an empty one included, answered `400` before the
+target is contacted, and part of the cache key, and MUST be settable by a
+static target of either type in its `request` block, checked at load. The
+family MUST be part of the pool's settings, so a connection made over one
+family never carries a request that asked for the other. The exporter MUST
+NOT apply it to a connection it does not make to the target: it MUST be
+refused at load beside `request.unix_socket` and beside a `request.proxy_url`
+other than `direct`, as a probe parameter or a static target's key of such a
+collector, and a request with it that the environment's proxy would carry
+MUST fail, saying so, before the proxy is asked anything; a proxy looks the
+target's name up and chooses the family itself. A login's request MAY be made
+over either family. A TLS file rotated on disk MUST be picked up
 by the next request, with the previous pool's idle connections closed. Idle
 connections MUST time out (90 seconds), and a pool unused for five minutes —
 such as one a reload made obsolete — MUST be closed and dropped. A TLS
@@ -33697,7 +33883,14 @@ handshake with a target MUST be given up after 10 seconds, whatever is left
 of the probe's deadline; a pool MAY be built with another limit, which the
 tests do (§ 34) and the exporter MUST NOT. A response
 body MUST be read to its end before it is closed where the exporter can, so
-the connection returns to the pool.
+the connection returns to the pool. A `101 Switching Protocols` answer MUST
+NOT have its body read: what follows it on the connection is the protocol
+switched to, such as a WebSocket's frames, which may never end. Its body
+MUST be empty, and its connection MUST be closed at once, kept for no
+other request, so a probe of a WebSocket endpoint's handshake ends when the
+handshake is answered. The `Connection` and `Upgrade` headers of a
+collector's `request.headers` MUST be sent as written, so an `http`
+collector can ask for the upgrade.
 
 Every transport MUST send its requests through the proxy the environment names:
 `HTTPS_PROXY` for `https` URLs, `HTTP_PROXY` for `http` ones, `NO_PROXY` for
@@ -34299,7 +34492,8 @@ by the rule below: in any case, `auth`, `cookie`,
 `token`, `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
 `session`, `signature`, `credential` or `jwt` is in them once their ordinary
 words (`author`, `authority`, `monkey`, `keyboard`, …) are taken out, or
-they have `sig`, `pwd`, `pw` or `pass` as a whole word. One exception: a request line MUST show the value
+they have `sig`, `pwd`, `pw`, `pass`, `sid`, `hmac` or `otp` as a whole
+word, and a query parameter's name also `code` or `ticket`. One exception: a request line MUST show the value
 of a query pair that the configuration of the collector that made the
 request sets as its file writes it — a `request.query` value without a
 placeholder, a `graphite` collector's expressions without placeholders, its
@@ -34312,6 +34506,15 @@ escapes decoded. A value a probe parameter or a placeholder gave, one a
 own request keys and the API server's `continue` token MUST stay masked,
 and so MUST every query value of an error, which a probe's caller is told
 as well.
+A response or request header that carries a URL — `Location` and
+`Content-Location`, a URL whole, the URL of `Refresh` after its delay, and
+each `<…>` of `Link` — MUST have that URL shown as a request line shows one
+whose configuration set no pair: every query value and the value of a path
+parameter whose name reads as a credential's masked, its userinfo withheld
+and its fragment left out, the path's escapes and the rest of the header's
+value kept; a URL that does not parse MUST be shown as `<redacted>`. A
+redirect's `Location` is where the next request goes, and carries what it
+does.
 
 With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request
@@ -34363,9 +34566,23 @@ one of them (`author`, `authors`, `authority`, `monkey`, `keyboard`,
 `keyword`, `tokenizer` and the like, whole) is taken out — so `apikey`,
 `accesstoken`, `authToken`, `author_token` and `Authorization` read as a
 credential's and `author`, `cert-authority`, `keyboard-interactive` and
-`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw` or `pass` is a whole word
-of it (`sig`, `db_pwd`, `userPass`, but not `design`, `signal` or
-`bypass`). A URL's fragment MUST NOT
+`tokenizer` MUST NOT; or when `sig`, `pwd`, `pw`, `pass`, `sid`, `hmac` or
+`otp` is a whole word of it (`sig`, `db_pwd`, `userPass`, `X-Hmac`, but not
+`design`, `signal`, `bypass` or `side`). A query parameter's name MUST also
+read as a credential's when `code` (OAuth's authorization code) or `ticket`
+(a CAS service ticket) is a whole word of it (`code`, `auth_code`,
+`country_code`, but not `barcode` or `codec`); a header's, a field's or an
+element's name with them MUST NOT, so an error body's `<code>401</code>` is
+shown, but in text (`fetch.RedactText`) a name right after a `?`, a `&` or a
+`;` and right before a `=`, a parameter of a URL's query or path, MUST be
+read as a query parameter's, so a URL in a logged body has its `code` and
+`ticket` masked as it would anywhere else. Wherever a URL is shown — a log line, a label, `$url`, a debug
+report, an error — the value of each path parameter, what follows a `;`,
+written as it is or escaped as `%3B` in either case, in a segment of its
+path up to the next such `;` or `/`, whose name reads as a
+query parameter's would MUST be masked as `<redacted>` where it stands
+(`/app;jsessionid=<redacted>`), the path's escapes kept; other path
+parameters and the segments themselves MUST be shown as they are. A URL's fragment MUST NOT
 be shown in any of these forms. An error that quotes a URL, as Go's HTTP client
 quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value

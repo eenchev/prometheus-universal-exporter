@@ -33,7 +33,9 @@ import (
 //     tells nothing about the request, and a URL copied from a browser can
 //     carry a token in it (#access_token=…).
 //   - A header's value is withheld when its name reads as a credential's
-//     (CredentialName).
+//     (CredentialName), and the URL of one that carries a URL — Location,
+//     Content-Location, Refresh, Link — is masked as a debug report's
+//     request line is (RedactHeaderValue).
 //   - Text the exporter did not write, such as an error page, has what reads
 //     as a credential in it masked (RedactText), a URL's userinfo among
 //     it, by the same rule for a name: a key or field whose name
@@ -69,7 +71,8 @@ const (
 var redactedUser = url.UserPassword("redacted", "redacted")
 
 // RedactURL renders u with its credentials withheld as how says. u itself is
-// left alone.
+// left alone. Whatever how says, the value of a path parameter whose name
+// reads as a credential's is masked (maskPathParams).
 func RedactURL(u *url.URL, how URLRedaction) string {
 	shown := *u
 	switch how {
@@ -79,7 +82,7 @@ func RedactURL(u *url.URL, how URLRedaction) string {
 		shown.ForceQuery = false
 		shown.Fragment = ""
 		shown.RawFragment = ""
-		return shown.String()
+		return withMaskedPath(&shown)
 	case MaskQueryValues:
 		shown.RawQuery = maskQuery(u.RawQuery, true)
 	case MaskCredentialQueryValues:
@@ -90,7 +93,94 @@ func RedactURL(u *url.URL, how URLRedaction) string {
 	if shown.User != nil {
 		shown.User = redactedUser
 	}
-	return shown.String()
+	return withMaskedPath(&shown)
+}
+
+// withMaskedPath is u as a string, the values of its path parameters whose
+// names read as credentials' masked (maskPathParams). The path is masked as
+// it is written in the URL, its escapes kept, and put in place of u's own,
+// so <redacted> stands as it does in a query rather than escaped as a path
+// would have it.
+func withMaskedPath(u *url.URL) string {
+	if u.Opaque != "" || !strings.Contains(u.RawPath+u.Path, ";") {
+		return u.String()
+	}
+	path := u.EscapedPath()
+	masked := maskPathParams(path)
+	if masked == path {
+		return u.String()
+	}
+	pathless := *u
+	pathless.Path, pathless.RawPath = "", ""
+	whole := pathless.String()
+	pathless.RawQuery, pathless.ForceQuery = "", false
+	start := pathless.String()
+	return start + masked + strings.TrimPrefix(whole, start)
+}
+
+// maskPathParams is an escaped path with the value of each path parameter
+// whose name reads as a credential's, as a query parameter's would
+// (credentialQueryName), masked where it stands: /app;jsessionid=SECRET
+// becomes /app;jsessionid=<redacted>, as a servlet container's session id
+// rides in a URL's path when cookies are off. A parameter is what follows a
+// ; in a segment, up to the next ; or /, name=value or a name alone. A ;
+// written escaped, %3B in either case, separates parameters too: a server
+// that decodes the path before it looks for parameters reads
+// /app%3Bjsessionid=SECRET as /app;jsessionid=SECRET. A segment that is a
+// secret whole, as a bot's token in /bot123:AAE…/getMe, has no name to tell
+// it by, and is kept.
+func maskPathParams(path string) string {
+	if !strings.Contains(path, ";") && !strings.Contains(strings.ToUpper(path), "%3B") {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for i, segment := range strings.Split(path, "/") {
+		if i > 0 {
+			b.WriteByte('/')
+		}
+		for j := 0; segment != ""; j++ {
+			piece, separator := segment, ""
+			if end, size := pathParamSeparator(segment); end >= 0 {
+				piece, separator = segment[:end], segment[end:end+size]
+			}
+			segment = segment[len(piece)+len(separator):]
+			name, _, hasValue := strings.Cut(piece, "=")
+			if j > 0 && hasValue && credentialPathName(name) {
+				b.WriteString(name)
+				b.WriteString("=" + Redacted)
+			} else {
+				b.WriteString(piece)
+			}
+			b.WriteString(separator)
+		}
+	}
+	return b.String()
+}
+
+// pathParamSeparator is where the first ; of a segment of an escaped path
+// stands, written as it is or escaped, %3B or %3b, and how long it is
+// written; -1 for none.
+func pathParamSeparator(segment string) (int, int) {
+	for i := 0; i < len(segment); i++ {
+		switch {
+		case segment[i] == ';':
+			return i, 1
+		case segment[i] == '%' && i+2 < len(segment) && segment[i+1] == '3' && (segment[i+2] == 'B' || segment[i+2] == 'b'):
+			return i, 3
+		}
+	}
+	return -1, 0
+}
+
+// credentialPathName says whether a path parameter's name, as it is written
+// in a path, reads as a credential's: decoded as a path is, and as it was
+// written, as credentialQueryName reads a query's.
+func credentialPathName(raw string) bool {
+	if name, err := url.PathUnescape(raw); err == nil && name != raw && credentialQueryName(name) {
+		return true
+	}
+	return credentialQueryName(raw)
 }
 
 // RedactURLString is RedactURL for a URL not yet parsed: one that does not
@@ -219,7 +309,24 @@ func RedactRequestURL(raw string, configured func(name, value string) bool) stri
 	if shown.User != nil {
 		shown.User = redactedUser
 	}
-	return shown.String()
+	return withMaskedPath(&shown)
+}
+
+// RedactShownURLQuery is a URL as $url has it (HTTPTrip.ShownURL), its
+// path's parameters and its query's credentials already masked, with the
+// values of its query masked as a debug report's request line masks them
+// (RedactRequestURL), configured saying which pairs are shown. The URL is
+// not parsed again: a path with <redacted> in it, which a path would have
+// escaped, would no longer keep its own escapes, and Go would write it
+// again in its own, /a;%6Asessionid as /a;jsessionid, so the report's $url
+// would differ from the one the rules read. Only what follows the first ?
+// is masked, the path holding none of its own unescaped.
+func RedactShownURLQuery(shown string, configured func(name, value string) bool) string {
+	start, query, ok := strings.Cut(shown, "?")
+	if !ok {
+		return shown
+	}
+	return start + "?" + maskQueryShowing(query, true, configured)
 }
 
 // credentialUpToEquals says whether what a query holds before its first =,
@@ -241,7 +348,22 @@ func credentialUpToEquals(raw string) bool {
 // in it only that way.
 func credentialQueryName(raw string) bool {
 	name := queryName(raw)
-	return CredentialName(name) || name != raw && CredentialName(raw)
+	return CredentialName(name) || hasWholePart(name, queryCredentialParts) || name != raw && (CredentialName(raw) || hasWholePart(raw, queryCredentialParts))
+}
+
+// hasWholePart says whether one of parts, in any case, is a whole word of
+// name, as nameParts splits it.
+func hasWholePart(name string, parts []string) bool {
+	for _, chunk := range strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		for _, part := range nameParts(chunk) {
+			for _, credential := range parts {
+				if strings.EqualFold(part, credential) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // queryName is the name of a query pair as a server reads it: its escapes
@@ -284,8 +406,21 @@ var credentialWords = []string{"auth", "cookie", "token", "secret", "password", 
 // word of it — the name itself, or a part between punctuation or at a
 // change to upper case — since inside a longer word they are something
 // else: sig (an Azure SAS signature) is not design or signal, and pass is
-// not bypass or compass.
-var credentialParts = []string{"sig", "pwd", "pw", "pass"}
+// not bypass or compass; sid is a session's id, hmac a request's
+// signature and otp a one-time password.
+var credentialParts = []string{"sig", "pwd", "pw", "pass", "sid", "hmac", "otp"}
+
+// queryCredentialParts are what the name of a query parameter, or of a
+// path parameter (maskPathParams), holding a credential reads like as a
+// whole word of it, and nothing else's: code is OAuth's authorization
+// code, which the redirect back from a login carries in its query, and
+// ticket a CAS service ticket, which the redirect back from CAS does. As a
+// header's name, or a field's or an element's in text, they name ordinary
+// things, an error body's <code>401</code> or a helpdesk's ticket, so
+// CredentialName leaves them alone. As a whole word they still mask some
+// query parameters that hold no secret, a country_code or a promo_code, as
+// the rule errs towards masking.
+var queryCredentialParts = []string{"code", "ticket"}
 
 // ordinaryWords are words that hold a credential word without being about a
 // credential, so a name's word that is one of them, whole, does not read as
@@ -371,13 +506,39 @@ func nameParts(name string) []string {
 }
 
 // RedactHeaderValue is a header's value as it may be shown: Redacted when the
-// name reads as a credential's.
+// name reads as a credential's, and otherwise, for a header that carries a
+// URL, the value with its URL masked as a debug report's request line masks
+// one (RedactRequestURL): Location and Content-Location, which are a URL
+// whole, Refresh's url=, and each <…> of Link. A redirect's Location is
+// where the request goes next, and carries what it does: a session in its
+// path, an OAuth code or a token in its query.
 func RedactHeaderValue(name, value string) string {
 	if CredentialName(name) {
 		return Redacted
 	}
+	switch strings.ToLower(name) {
+	case "location", "content-location":
+		return RedactRequestURL(strings.TrimSpace(value), nil)
+	case "refresh":
+		if m := refreshURL.FindStringSubmatchIndex(value); m != nil {
+			return value[:m[2]] + RedactRequestURL(value[m[2]:m[3]], nil) + value[m[3]:]
+		}
+	case "link":
+		return linkURL.ReplaceAllStringFunc(value, func(target string) string {
+			return "<" + RedactRequestURL(target[1:len(target)-1], nil) + ">"
+		})
+	}
 	return value
 }
+
+// refreshURL is the URL of a Refresh header, 5; url=https://… or
+// 0;'/next': what follows the delay and its separator, and url= if it is
+// there, up to a closing quote or the end, in its group.
+var refreshURL = regexp.MustCompile(`(?i)^\s*[0-9.]*\s*[;,]\s*(?:url\s*=\s*)?['"]?([^'"]*?)['"]?\s*$`)
+
+// linkURL is a URL of a Link header, <https://…>; rel="next", its angle
+// brackets included.
+var linkURL = regexp.MustCompile(`<[^<>]*>`)
 
 // textCredentials find what reads as a credential in text the exporter did
 // not write whatever it is called, each with the part to keep in its first
@@ -443,7 +604,8 @@ func redactElements(text string) string {
 // basic credential, a JSON Web Token, a URL's userinfo, and the value of a
 // key, a field or an XML element whose name reads as a credential's
 // (CredentialName, the rule a header's and a query parameter's name are
-// held to). It errs towards masking: a word that only looks like a
+// held to), and of a URL's query or path parameter whose name reads as a
+// query parameter's would (textCredential). It errs towards masking: a word that only looks like a
 // credential's value may be masked too.
 func RedactText(text string) string {
 	for _, c := range textCredentials {
@@ -454,7 +616,7 @@ func RedactText(text string) string {
 	done := 0
 	for _, m := range textField.FindAllStringSubmatchIndex(text, -1) {
 		// A field found inside a value already masked is part of it.
-		if m[0] < done || !CredentialName(text[m[2]:m[3]]) {
+		if m[0] < done || !textCredential(text, m[2], m[3]) {
 			continue
 		}
 		values := textValue
@@ -474,6 +636,21 @@ func RedactText(text string) string {
 	}
 	b.WriteString(text[done:])
 	return b.String()
+}
+
+// textCredential says whether the name text[start:end] of a textField reads
+// as a credential's: by CredentialName, or, when it is a query's or a path's
+// parameter — right after a ?, a & or a ;, and right before a = — by the rule
+// for a query parameter's name (credentialQueryName), with code and ticket,
+// so a URL in logged text, …/cb?code=…&state=x or …/x;ticket=…, has them
+// masked as the URL shown anywhere else has. A field of JSON or an element
+// named code, "code":401 or <code>401</code>, is no URL's and is kept.
+func textCredential(text string, start, end int) bool {
+	name := text[start:end]
+	if CredentialName(name) {
+		return true
+	}
+	return start > 0 && strings.IndexByte("?&;", text[start-1]) >= 0 && end < len(text) && text[end] == '=' && credentialQueryName(name)
 }
 
 // RedactURLErrors withholds the credentials of every URL quoted by a

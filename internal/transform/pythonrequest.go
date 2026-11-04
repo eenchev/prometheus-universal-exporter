@@ -206,7 +206,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 // for data the encoder does not write itself: a value of a type no decoder
 // makes.
 func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects()}}
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
 	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
 		input.DataIsBody = true
 	} else {
@@ -533,13 +533,14 @@ func appendPythonString[Text []byte | string](dst []byte, text Text, nul *bool) 
 
 // appendPythonTrip writes what a script's response has of the request
 // besides its answer, as jq has it (fetch.HTTPTrip): response.timings,
-// response.tls, response.url and response.redirects, as json.Marshal
+// response.tls, response.url, response.redirects, response.http_version
+// and response.remote_ip, as json.Marshal
 // writes the values jq reads, their keys in order. They are written from
 // the trip itself, without the maps jq's values are, which a request line
 // would make for every response only to write them.
 func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip, nul *bool) []byte {
 	if trip == nil {
-		return append(dst, `,"timings":null,"tls":null,"url":null,"redirects":null`...)
+		return append(dst, `,"timings":null,"tls":null,"url":null,"redirects":null,"http_version":null,"remote_ip":null`...)
 	}
 	seconds := func(dst []byte, d *time.Duration) []byte {
 		if d == nil {
@@ -582,5 +583,18 @@ func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip, nul *bool) []byte {
 	dst = append(dst, `,"url":`...)
 	dst = appendPythonString(dst, trip.ShownURL(), nul)
 	dst = append(dst, `,"redirects":`...)
-	return strconv.AppendInt(dst, int64(trip.Redirects), 10)
+	dst = strconv.AppendInt(dst, int64(trip.Redirects), 10)
+	dst = append(dst, `,"http_version":`...)
+	if version, ok := trip.JQHTTPVersion().(string); ok {
+		dst = appendPythonString(dst, version, nul)
+	} else {
+		dst = append(dst, "null"...)
+	}
+	dst = append(dst, `,"remote_ip":`...)
+	if !trip.RemoteIP.IsValid() {
+		return append(dst, "null"...)
+	}
+	dst = append(dst, '"')
+	dst = trip.RemoteIP.AppendTo(dst)
+	return append(dst, '"')
 }

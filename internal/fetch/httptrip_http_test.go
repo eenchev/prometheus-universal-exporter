@@ -171,8 +171,9 @@ func TestTheTLSConnectionIsTheTargets(t *testing.T) {
 }
 
 // The URL an answer carries is where the redirects led, without the
-// userinfo and with the values of credential query parameters masked, as a
-// target is shown in a log line, and the redirects are counted.
+// userinfo and with the values of credential query and path parameters
+// masked, as a target is shown in a log line, and the redirects are
+// counted.
 func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -180,6 +181,10 @@ func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
 			http.Redirect(w, r, "/hop", http.StatusFound)
 		case "/hop":
 			http.Redirect(w, r, "/end?token=t1&tenant=a", http.StatusMovedPermanently)
+		case "/login":
+			// A servlet's session in the path, and OAuth's code in the
+			// query, of the redirect back from a login.
+			http.Redirect(w, r, "/app;jsessionid=S3CRET?code=S3CRET2&state=x", http.StatusFound)
 		default:
 			_, _ = w.Write([]byte("ok"))
 		}
@@ -206,6 +211,9 @@ func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
 	withUser := strings.Replace(server.URL, "http://", "http://scraper:s3cret@", 1) + "/end?api_key=k&tenant=b#part"
 	if trip := tripOf(withUser, true); trip.ShownURL() != server.URL+"/end?api_key=<redacted>&tenant=b" || trip.Redirects != 0 {
 		t.Errorf("a URL with userinfo, a credential and a fragment: %q, %d", trip.ShownURL(), trip.Redirects)
+	}
+	if trip := tripOf(server.URL+"/login", true); trip.ShownURL() != server.URL+"/app;jsessionid=<redacted>?code=<redacted>&state=x" {
+		t.Errorf("a redirect to a session in the path and a code in the query: %q", trip.ShownURL())
 	}
 	trip := &HTTPTrip{URL: &url.URL{Scheme: "http", Host: "x", Path: "/"}, Redirects: 1}
 	if trip.JQURL() != "http://x/" || trip.JQRedirects() != 1 || (*HTTPTrip)(nil).JQURL() != nil || (*HTTPTrip)(nil).JQRedirects() != nil {

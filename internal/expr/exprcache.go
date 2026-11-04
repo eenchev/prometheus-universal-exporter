@@ -126,22 +126,24 @@ func (c *exprCache[T]) len() int {
 // $status, the response's HTTP status; $headers, its headers by lower-case
 // name; $timings, how long the phases of the request it answered took;
 // $tls, the TLS connection the request was sent on; $url, where the request
-// went after its redirects; and $redirects, how many redirects led there.
+// went after its redirects; $redirects, how many redirects led there;
+// $http_version, the version of HTTP the answer came in; and $remote_ip, the
+// address the request's connection was made to.
 // Every program has them all, whatever the collector's request type, so a
 // rule that names one compiles anywhere and reads null where the request
 // has nothing to give (JQBindings).
-var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects"}
+var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
 // a field left nil is null to the program.
 type JQBindings struct {
-	Status, Headers, Timings, TLS, URL, Redirects any
+	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP any
 }
 
 // Values are the values to run a program with, root first, in the order of
 // JQVariables.
 func (b JQBindings) Values(root any) []any {
-	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects}
+	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP}
 }
 
 // A compiled program is safe to run from many goroutines at once.
@@ -161,7 +163,7 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 // tripVariables are the variables of JQVariables that are of the request
 // an answer came from, whose values are made only for a program that reads
 // one (JQProgram.ReadsTrip).
-var tripVariables = []string{"$timings", "$tls", "$url", "$redirects"}
+var tripVariables = []string{"$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip"}
 
 // readsTrip says whether expression may read a variable of tripVariables.
 // jq names a variable only as it is written, so a program that reads one

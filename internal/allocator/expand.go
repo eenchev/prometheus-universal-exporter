@@ -284,7 +284,7 @@ func (in *Inputs) expand(found map[string][]discovered, checked map[string]check
 	digest := map[string]string{"files": in.digest}
 	for _, s := range in.sources {
 		if list, ok := found[s.key]; ok {
-			text, _ := json.Marshal(list)
+			text, _ := json.Marshal(groupsOf(list))
 			digest["source/"+s.key] = string(text)
 		}
 	}

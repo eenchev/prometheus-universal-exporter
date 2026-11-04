@@ -72,6 +72,19 @@ func TestMaskCredentialQueryValues(t *testing.T) {
 		// Harmless names stay: the short words count only as a whole word.
 		{"https://host/p?design=a&signal=b&bypass=c&compass=d&passthrough=e&page=2", "https://host/p?design=a&signal=b&bypass=c&compass=d&passthrough=e&page=2"},
 		{"https://host/p?tenant=a#pwd=s3cret", "https://host/p?tenant=a"},
+		// OAuth's code and CAS's ticket, which a redirect back from a
+		// login carries; a session's sid, a request's hmac, a one-time
+		// password's otp.
+		{"https://app/cb?code=S1&state=xyz&session_state=S2", "https://app/cb?code=<redacted>&state=xyz&session_state=<redacted>"},
+		{"https://app/cas?ticket=ST-1-S3&service=https%3A%2F%2Fapp", "https://app/cas?ticket=<redacted>&service=https%3A%2F%2Fapp"},
+		{"https://h/p?sid=a&SID=b&x_hmac=c&hmacSha256=d&otp=e&Code=f&auth_code=g", "https://h/p?sid=<redacted>&SID=<redacted>&x_hmac=<redacted>&hmacSha256=<redacted>&otp=<redacted>&Code=<redacted>&auth_code=<redacted>"},
+		// As whole words they are masked where they hold no secret too:
+		// a country's or a promotion's code.
+		{"https://h/p?country_code=BG&promo_code=SPRING&zip_code=1000", "https://h/p?country_code=<redacted>&promo_code=<redacted>&zip_code=<redacted>"},
+		// Inside another word they are not: a barcode, a codec, a
+		// ticketing system, a side, an option.
+		{"https://h/p?barcode=1&codec=h264&ticketing=on&side=left&option=a&hmacs=b", "https://h/p?barcode=1&codec=h264&ticketing=on&side=left&option=a&hmacs=b"},
+		{"https://h/p?%63ode=S", "https://h/p?%63ode=<redacted>"},
 	} {
 		if got := RedactURLString(tc.raw, MaskCredentialQueryValues); got != tc.want {
 			t.Errorf("RedactURLString(%q)\n got %q\nwant %q", tc.raw, got, tc.want)
@@ -99,12 +112,41 @@ func TestCredentialName(t *testing.T) {
 		"author_id": false, "coauthor": false, "authority": false, "cert-authority": false, "authoritative": false,
 		"monkey": false, "keyboard": false, "keyboard-interactive": false, "keywords": false, "tokenizer": false,
 		"turkey": false, "whiskey": false, "keynote": false,
+		// sid, hmac and otp whole; code and ticket are a query's alone
+		// (credentialQueryName), and as a header's or a field's name
+		// they are not.
+		"sid": true, "X-Sid": true, "userSid": true, "X-Hmac": true, "hmac_sha256": true, "otp": true, "X-OTP": true,
+		"side": false, "inside": false, "option": false, "hmacs": false,
+		"code": false, "error_code": false, "X-Code": false, "ticket": false, "ticket_id": false,
 	} {
 		if got := CredentialName(name); got != want {
 			t.Errorf("CredentialName(%q) = %v", name, got)
 		}
 		if got := RedactHeaderValue(name, "v") == Redacted; got != want {
 			t.Errorf("RedactHeaderValue(%q) redacted: %v", name, got)
+		}
+	}
+}
+
+// A header that carries a URL has the URL masked as a debug report's
+// request line is, every query value and a credential's path parameter,
+// and the rest of the value kept; another header is shown as it came.
+func TestTheURLOfAHeaderIsMasked(t *testing.T) {
+	for _, c := range []struct{ name, value, want string }{
+		{"Location", "/app;jsessionid=S1?token=S2&code=S3", "/app;jsessionid=<redacted>?token=<redacted>&code=<redacted>"},
+		{"location", "https://user:pw@h.example/a?x=1#access_token=S4", "https://redacted:redacted@h.example/a?x=<redacted>"},
+		{"Content-Location", "/doc;sid=S5", "/doc;sid=<redacted>"},
+		{"Location", "/plain/path", "/plain/path"},
+		{"Location", "https://h.example/%zz", Redacted},
+		{"Refresh", "5; url=https://h.example/next?ticket=S6", "5; url=https://h.example/next?ticket=<redacted>"},
+		{"Refresh", "0;URL='/next;jsessionid=S7'", "0;URL='/next;jsessionid=<redacted>'"},
+		{"Refresh", "3, /x?a=S8", "3, /x?a=<redacted>"},
+		{"Refresh", "30", "30"},
+		{"Link", `</p?page=2&token=S9>; rel="next", </q;jsessionid=S10>; rel=prev`, `</p?page=<redacted>&token=<redacted>>; rel="next", </q;jsessionid=<redacted>>; rel=prev`},
+		{"X-Next", "/app;jsessionid=kept?token=kept", "/app;jsessionid=kept?token=kept"},
+	} {
+		if got := RedactHeaderValue(c.name, c.value); got != c.want {
+			t.Errorf("RedactHeaderValue(%q, %q) = %q, want %q", c.name, c.value, got, c.want)
 		}
 	}
 }
@@ -118,6 +160,8 @@ func TestRedactText(t *testing.T) {
 		`Authorization: Bearer s3cretCCCCCC`:                                "s3cretCCCCCC",
 		`auth: Basic dXNlcjpzM2NyZXQ=`:                                      "dXNlcjpzM2NyZXQ=",
 		`password: s3cretDDD`:                                               "s3cretDDD",
+		`{"sid":"s3cretSID","otp":"s3cretOTP"}`:                             "s3cretSID",
+		`hmac=s3cretHMAC&user=x`:                                            "s3cretHMAC",
 		`"client_secret" : "s3cretEEE"`:                                     "s3cretEEE",
 		`X-Api-Key=s3cretFFF`:                                               "s3cretFFF",
 		`https://acct.blob.core.windows.net/c?sv=1&sig=s3cretGGG`:           "s3cretGGG",
@@ -164,12 +208,41 @@ func TestRedactText(t *testing.T) {
 	for _, text := range []string{
 		"502 Bad Gateway: the upstream did not answer",
 		"<error><code>401</code><message>denied</message></error>",
+		`{"error":{"code":"NOT_FOUND","ticket":"T-1"}}`,
 		"<password/><user>u</user>",
 		`{"status":"down","since":"2026-09-25T10:00:00Z"}`,
 		"<html><body>Service Unavailable</body></html>",
 		"bypass=on signal: 3 design=flat",
 		"author: Bob authority=ca keyboard: us tokenizer=bpe",
 		`{"author":"Bob","authors":["Ann"]}`,
+	} {
+		if got := RedactText(text); got != text {
+			t.Errorf("RedactText(%q) changed it to %q", text, got)
+		}
+	}
+}
+
+// A URL in logged text has its query's and its path's code and ticket
+// masked, as a URL shown anywhere else has, while a field or an element
+// of the text named code or ticket is kept.
+func TestRedactTextMasksTheCodeAndTicketOfAURL(t *testing.T) {
+	for text, want := range map[string]string{
+		`<a href="https://app.example/cb?code=S1&state=x">continue</a>`:      `<a href="https://app.example/cb?code=<redacted>&state=x">continue</a>`,
+		"redirected to https://app.example/x;ticket=S2 and failed":           "redirected to https://app.example/x;ticket=<redacted> and failed",
+		"see /cb?state=x&auth_code=S3&lang=en":                               "see /cb?state=x&auth_code=<redacted>&lang=en",
+		`<a href="/cb?a=1&amp;code=S4">`:                                     `<a href="/cb?a=1&amp;code=<redacted>">`,
+		"/login?service=x;Ticket=S5":                                         "/login?service=x;Ticket=<redacted>",
+		`{"code":401,"ticket":"T-1","next":"/cb?country_code=BG&barcode=1"}`: `{"code":401,"ticket":"T-1","next":"/cb?country_code=<redacted>&barcode=1"}`,
+	} {
+		if got := RedactText(text); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", text, got, want)
+		}
+	}
+	for _, text := range []string{
+		"<error><code>401</code><message>denied</message></error>",
+		`{"error":{"code":"NOT_FOUND","ticket":"T-1"}}`,
+		"code=401 ticket=T-1",
+		"status;code: 401",
 	} {
 		if got := RedactText(text); got != text {
 			t.Errorf("RedactText(%q) changed it to %q", text, got)

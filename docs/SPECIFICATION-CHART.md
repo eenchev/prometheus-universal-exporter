@@ -869,12 +869,15 @@ MUST run as a `Deployment` of `allocator.replicas` pods, a whole number from 1
 to 2147483647, 2 when it is empty, the default, from the exporter's image
 unless `allocator.image` names another, running `/bin/pue-allocator`, the
 binary beside the exporter's in the image. While a probe job or a `discovered_targets` entry of
-`allocator.staticTargets.data` has a discovery source, the Deployment MUST
-have one replica and the `Recreate` strategy, and `allocator.replicas` above
-1 MUST fail rendering, naming the value, and be refused by the values schema
-for a probe job's source: each copy asks its sources on its own timer, so two
-would serve the exporter pods and Prometheus different targets, and a
-rolling update would run the old pod beside the new one while it terminates.
+`allocator.staticTargets.data` has a discovery source, the allocator MUST
+also be run with `--peers=<fullname>-allocator.<namespace>.svc:9116`, the
+headless Service below, and `--peers.self=$(POD_IP)`, with the environment
+variable `POD_IP` set from the pod's `status.podIP` by the downward API, so
+its pods are peers of which only the leader asks the sources; the
+Deployment MUST then keep `allocator.replicas`, 2 when it is empty, and the
+default strategy, and the values schema and the templates MUST NOT refuse
+`allocator.replicas` above 1 for it. Without a discovery source the two
+flags and the variable MUST NOT be rendered.
 The allocator MUST be run with `--web.listen-address=:9116`, `--config.file` naming the
 configuration's `config.yaml`, `--static-targets-file` while
 `allocator.staticTargets.data` is not empty, `--probe-targets-file` while
@@ -903,11 +906,14 @@ its Service, its monitors, its disruption budget and NetworkPolicy — selects
 them. The chart MUST render a headless Service `<fullname>-allocator` with
 the port `http`, 9116, over the allocator's pods, so the exporter pods reach
 every allocator at its name; a `PodDisruptionBudget` of `maxUnavailable: 1`
-while `allocator.pdb.enabled`, the default, which lets a node drain evict the
-one allocator of a release with discovery; and a NetworkPolicy while
+while `allocator.pdb.enabled`, the default, which lets a node drain evict an
+allocator, one at a time; and a NetworkPolicy while
 `allocator.networkPolicy.enabled`, the default, admitting ingress to the
-allocator's `http` port only from the release's exporter pods and from the
-peers of `allocator.networkPolicy.prometheus`, which defaults to pods labelled
+allocator's `http` port only from the release's exporter pods, from the
+allocator's own pods, by their selector labels, while it has a discovery
+source, since they check each other and fetch the leader's discovered
+targets, and from the peers of `allocator.networkPolicy.prometheus`, which
+defaults to pods labelled
 `app.kubernetes.io/name: prometheus` in any namespace, as the Prometheus
 Operator labels Prometheus.
 
@@ -1947,13 +1953,14 @@ are skipped and the text checks of the templates still run:
      beside the allocator, a mount over the cache or token directory, and a
      ScrapeConfig timeout longer than its interval.
    - With a discovery source, of a probe job or of a `discovered_targets`
-     entry, the allocator's Deployment has one replica and the `Recreate`
-     strategy, an empty or 1 `allocator.replicas` included, and its
-     disruption budget stays `maxUnavailable: 1`; `allocator.replicas: 2`
-     fails rendering, through the schema for a probe job and through the
-     template with the schema skipped or for a static target entry; without
-     discovery the allocator keeps 2 replicas, or `allocator.replicas`, and
-     the default strategy (`TestChartRunsOneAllocatorWithDiscovery`).
+     entry, the allocator's Deployment has 2 replicas, or
+     `allocator.replicas`, 3 and 1 included, and the default strategy; its
+     arguments end with `--peers=<fullname>-allocator.monitoring.svc:9116`
+     and `--peers.self=$(POD_IP)`, its first environment variable is
+     `POD_IP` from `status.podIP`, its NetworkPolicy admits the allocator's
+     own pods and its disruption budget stays `maxUnavailable: 1`; without
+     discovery the allocator has 2 replicas and no `--peers`, no `env` and
+     no rule for its own pods (`TestChartRunsAllocatorPeersWithDiscovery`).
    - The allocator's Role allows only `list` on EndpointSlices
      (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
    - Every example query of an allocator metric in `docs/*.md` and the chart

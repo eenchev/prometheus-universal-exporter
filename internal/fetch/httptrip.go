@@ -2,9 +2,12 @@ package fetch
 
 import (
 	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -40,6 +43,59 @@ type HTTPTrip struct {
 	URL *url.URL
 	// Redirects is how many redirects were followed to it, 0 for none.
 	Redirects int
+	// ProtoMajor and ProtoMinor are the version of HTTP the answer came
+	// in, 1 and 1 for HTTP/1.1, 2 and 0 for HTTP/2; 0 and 0 for none.
+	ProtoMajor, ProtoMinor int
+	// RemoteIP is the address the request's connection was made to, the
+	// zero Addr when it is not known: a request that was not traced (fetch
+	// says when), one through a proxy, whose connection is to the proxy and
+	// not to the target, and one over a Unix socket, which has no address.
+	RemoteIP netip.Addr
+}
+
+// JQHTTPVersion is the version of HTTP the answer came in, as jq's
+// $http_version and Python's response.http_version have it: "1.0", "1.1"
+// or "2", as blackbox_exporter's probe_http_version writes it; null for no
+// trip.
+func (t *HTTPTrip) JQHTTPVersion() any {
+	if t == nil || t.ProtoMajor == 0 {
+		return nil
+	}
+	switch {
+	case t.ProtoMajor == 1 && t.ProtoMinor == 1:
+		return "1.1"
+	case t.ProtoMajor == 1 && t.ProtoMinor == 0:
+		return "1.0"
+	case t.ProtoMajor >= 2:
+		// HTTP/2 has no minor version: Go writes it HTTP/2.0.
+		return strconv.Itoa(t.ProtoMajor)
+	}
+	return strconv.Itoa(t.ProtoMajor) + "." + strconv.Itoa(t.ProtoMinor)
+}
+
+// JQRemoteIP is the address the request's connection was made to, as jq's
+// $remote_ip and Python's response.remote_ip have it: "203.0.113.7" or
+// "2001:db8::7", an IPv4 address that came as one mapped into IPv6 written
+// as IPv4; null when it is not known (RemoteIP) and for no trip.
+func (t *HTTPTrip) JQRemoteIP() any {
+	if t == nil || !t.RemoteIP.IsValid() {
+		return nil
+	}
+	return t.RemoteIP.String()
+}
+
+// remoteIP is the IP address of addr, a connection's remote address: the
+// zero Addr for one that is no TCP address, as a Unix socket's.
+func remoteIP(addr net.Addr) netip.Addr {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok || tcp == nil {
+		return netip.Addr{}
+	}
+	ip, ok := netip.AddrFromSlice(tcp.IP)
+	if !ok {
+		return netip.Addr{}
+	}
+	return ip.Unmap()
 }
 
 // JQURL is the URL as jq's $url and Python's response.url have it, null for
@@ -177,11 +233,12 @@ func tripSeconds(d *time.Duration) any {
 }
 
 // tripTrace times the phases of one attempt's requests through
-// net/http/httptrace. A redirect is a request of its own, which asks for a
-// connection again (GetConn), so each GetConn starts the timings anew and
-// what is left at the end is the last request's, the one answered. The
-// hooks may be called from the transport's own goroutines, a dial that
-// tries several addresses among them, hence the lock.
+// net/http/httptrace, and keeps the address of the connection each was sent
+// on. A redirect is a request of its own, which asks for a connection again
+// (GetConn), so each GetConn starts the timings anew and what is left at the
+// end is the last request's, the one answered. The hooks may be called from
+// the transport's own goroutines, a dial that tries several addresses among
+// them, hence the lock.
 type tripTrace struct {
 	mu                  sync.Mutex
 	start               time.Time
@@ -190,6 +247,9 @@ type tripTrace struct {
 	dns, connect, tls   *time.Duration
 	firstByte           *time.Duration
 	connected           bool
+	// remote is the remote address of the connection the request got,
+	// kept or new (GotConn).
+	remote net.Addr
 }
 
 func newTripTrace(start time.Time) *tripTrace { return &tripTrace{start: start} }
@@ -208,7 +268,7 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.start, t.dnsStart, t.dialStart, t.handshakeStart = time.Now(), time.Time{}, time.Time{}, time.Time{}
-			t.dns, t.connect, t.tls, t.firstByte, t.connected = nil, nil, nil, nil, false
+			t.dns, t.connect, t.tls, t.firstByte, t.connected, t.remote = nil, nil, nil, nil, false, nil
 		},
 		DNSStart: func(httptrace.DNSStartInfo) {
 			t.mu.Lock()
@@ -258,6 +318,9 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.connected = true
+			if info.Conn != nil {
+				t.remote = info.Conn.RemoteAddr()
+			}
 			if info.Reused {
 				// Whatever was timed was not of this connection.
 				t.dns, t.connect, t.tls = nil, nil, nil
@@ -276,13 +339,14 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 // trip is what was timed of the answered request, which ended at end, when
 // its body had been read, and the connection resp came on. A nil t is an
 // attempt that was not timed (fetch says when), begun at start: its trip
-// has no phases, and its total is the whole attempt's, its redirects
-// included.
+// has no phases and no remote address, and its total is the whole
+// attempt's, its redirects included.
 func (t *tripTrace) trip(resp *http.Response, start, end time.Time) *HTTPTrip {
-	trip := &HTTPTrip{Total: end.Sub(start)}
+	trip := &HTTPTrip{Total: end.Sub(start), ProtoMajor: resp.ProtoMajor, ProtoMinor: resp.ProtoMinor}
 	if t != nil {
 		t.mu.Lock()
 		trip.DNS, trip.Connect, trip.TLS, trip.FirstByte, trip.Total = t.dns, t.connect, t.tls, t.firstByte, end.Sub(t.start)
+		trip.RemoteIP = remoteIP(t.remote)
 		t.mu.Unlock()
 	}
 	trip.TLSConnection = tlsConnectionOf(resp.TLS)

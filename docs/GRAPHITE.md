@@ -62,7 +62,7 @@ is its host:
 | `until` | `now` | The end of the window. |
 | `path` | `/render` | Joined onto the target, for a Graphite served under a prefix or behind a proxy such as Grafana's. |
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
-| `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md), [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy) for `proxy_url` and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
+| `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md), [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy) for `proxy_url` and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
 
 The probe's target is the Graphite server, and a query it carries is sent as
 written, before `query` and the type's own parameters — except a pair of it
@@ -92,7 +92,7 @@ saying Graphite did not answer with render JSON, and how its answer starts.
 
 The same `/probe` parameters as `http` apply — `path`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>` — and `from` and `until`,
+`ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>` — and `from` and `until`,
 which replace the window for that probe: `params: {from: [-1h]}` on a
 monitor. `method` and `body` get a `400`, and so do `from` and `until` for a
 collector of another type.
@@ -308,7 +308,7 @@ as a failing target is — and a read that skips none again logs that it did.
 A [static target](STATIC-TARGETS.md) of a `graphite` collector is scraped by
 the exporter on its interval. Its `target` is the Graphite server's URL, and
 under `request` it may set `path`, `timeout`, `insecure_skip_verify`,
-`follow_redirects`, `enable_http2`, `new_connection`, `retry`, static `headers`, the credential
+`follow_redirects`, `enable_http2`, `new_connection`, `ip_family`, `retry`, static `headers`, the credential
 keys (`basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`),
 its own [`login`](AUTHENTICATION.md#logging-in-to-a-target),
 its own [`rate_limit`](REQUESTS.md#rate-limiting),

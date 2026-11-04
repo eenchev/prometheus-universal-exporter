@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"testing"
@@ -30,6 +31,8 @@ func TestReadsTimingsIsWhereARuleOrAScriptMayReadThem(t *testing.T) {
 		"a Python script":          {model.Collector{Transform: model.TransformConfig{Type: "python", Script: "emit('up', 1)"}}, true},
 		"a Python pre-script":      {model.Collector{Transform: model.TransformConfig{Type: "jq", PreScript: "data = data"}}, true},
 		"text of no rule names it": {model.Collector{Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "up", Expression: "1", Description: "not $timings"}}}, true},
+		"the remote address":       {model.Collector{Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "ip", Expression: "1", Labels: []model.LabelRule{{Name: "ip", Expression: "$remote_ip"}}}}}, true},
+		"the HTTP version alone":   {model.Collector{Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "v", Expression: "$http_version | tonumber"}}}, false},
 	} {
 		if got := ReadsTimings(&test.collector); got != test.reads {
 			t.Errorf("%s: ReadsTimings is %v", name, got)
@@ -67,16 +70,17 @@ func TestTheTripsVariablesAreMadeOnlyForAProgramThatReadsThem(t *testing.T) {
 	}
 }
 
-// The request line writes response.timings, response.tls, response.url and
-// response.redirects from the trip, as json.Marshal writes the values jq
+// The request line writes response.timings, response.tls, response.url,
+// response.redirects, response.http_version and response.remote_ip from the
+// trip, as json.Marshal writes the values jq
 // reads: of no trip, of one over plain HTTP with phases it did not have,
 // and of one over TLS whose certificate's names need escaping.
 func TestThePythonRequestWritesTheTripAsJSONWould(t *testing.T) {
 	connect, tlsPhase, firstByte := 1500*time.Microsecond, 30*time.Nanosecond, 2*time.Second
 	for name, trip := range map[string]*fetch.HTTPTrip{
 		"none":  nil,
-		"plain": {Connect: &connect, FirstByte: &firstByte, Total: 3 * time.Second, URL: &url.URL{Scheme: "http", Host: "x", Path: "/a", RawQuery: "token=s3cret&b=<c>"}},
-		"tls": {DNS: &connect, Connect: &connect, TLS: &tlsPhase, FirstByte: &firstByte, Total: 4 * time.Second, Redirects: 3, URL: &url.URL{Scheme: "https", Host: "x"},
+		"plain": {Connect: &connect, FirstByte: &firstByte, Total: 3 * time.Second, ProtoMajor: 1, ProtoMinor: 0, RemoteIP: netip.MustParseAddr("203.0.113.7"), URL: &url.URL{Scheme: "http", Host: "x", Path: "/a", RawQuery: "token=s3cret&b=<c>"}},
+		"tls": {DNS: &connect, Connect: &connect, TLS: &tlsPhase, FirstByte: &firstByte, Total: 4 * time.Second, Redirects: 3, URL: &url.URL{Scheme: "https", Host: "x"}, ProtoMajor: 2, RemoteIP: netip.MustParseAddr("2001:db8::7"),
 			TLSConnection: &fetch.TLSConnection{TLSVersion: "TLS 1.3", CipherSuite: "TLS_AES_128_GCM_SHA256", ServerName: "x", Verified: true, NotBefore: 1700000000, NotAfter: 1800000000, SubjectCN: "a <b> & \"c\"", IssuerCN: "\u2028é"}},
 	} {
 		var nul bool
@@ -85,7 +89,7 @@ func TestThePythonRequestWritesTheTripAsJSONWould(t *testing.T) {
 		for _, field := range []struct {
 			key   string
 			value any
-		}{{`,"timings":`, trip.JQTimings()}, {`,"tls":`, trip.JQTLS()}, {`,"url":`, trip.JQURL()}, {`,"redirects":`, trip.JQRedirects()}} {
+		}{{`,"timings":`, trip.JQTimings()}, {`,"tls":`, trip.JQTLS()}, {`,"url":`, trip.JQURL()}, {`,"redirects":`, trip.JQRedirects()}, {`,"http_version":`, trip.JQHTTPVersion()}, {`,"remote_ip":`, trip.JQRemoteIP()}} {
 			value, err := json.Marshal(field.value)
 			if err != nil {
 				t.Fatal(err)

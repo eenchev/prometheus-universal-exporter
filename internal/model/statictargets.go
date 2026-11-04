@@ -77,6 +77,7 @@ type TargetRequestConfig struct {
 	FollowRedirects    *bool              `yaml:"follow_redirects"`
 	EnableHTTP2        *bool              `yaml:"enable_http2"`
 	NewConnection      *bool              `yaml:"new_connection"`
+	IPFamily           *string            `yaml:"ip_family"`
 	Retry              *TargetRetryConfig `yaml:"retry"`
 	Headers            map[string]string  `yaml:"headers"`
 	BasicAuth          *BasicAuth         `yaml:"basic_auth"`

@@ -241,6 +241,7 @@ Supported parameters include:
 * `follow_redirects`
 * `enable_http2`
 * `new_connection`
+* `ip_family`
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`, or in one of its label values
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
@@ -1522,7 +1523,7 @@ allocator:
 `allocator.enabled` renders:
 
 * the allocator, a Deployment `<fullname>-allocator` of `allocator.replicas`
-  pods (2, or 1 with a discovery source, below), with a headless Service of the same name on port 9116, a
+  pods (2 by default), with a headless Service of the same name on port 9116, a
   PodDisruptionBudget (`allocator.pdb.enabled`) and a NetworkPolicy
   (`allocator.networkPolicy.enabled`). Its pods are scheduled by
   `allocator`'s own `nodeSelector`, `tolerations`, `affinity`,
@@ -1656,21 +1657,27 @@ allocator calls no API, so `serviceAccount.automount` decides its token as
 before.
 
 With any discovery source, in a probe job or in the `discovered_targets` of
-`allocator.staticTargets.data`, the allocator runs as one pod. Each copy
-asks its sources on its own timer, so two copies could hold different
-targets for a refresh interval, or for as long as one cannot reach a source,
-and the exporter pods, which heartbeat every copy and fetch their bundle from
+`allocator.staticTargets.data`, the allocator's pods run as peers. Each copy
+asking its sources on its own timer could hold different targets for a
+refresh interval, or for as long as one cannot reach a source, and the
+exporter pods, which heartbeat every copy and fetch their bundle from
 whichever answers, would flip between them, as would Prometheus's service
-discovery answers. One allocator is enough: it keeps no state and is back
-within seconds, and the exporter pods keep their bundle and Prometheus its
-targets meanwhile. Its Deployment then has `replicas: 1` and the `Recreate`
-strategy, which stops the old pod before starting the new one, where a
-rolling update would run both while the old one terminates.
-`allocator.replicas` above 1 fails rendering, refused by the values schema
-for a probe job's source; leave it empty or set it to 1. The disruption
-budget of `maxUnavailable: 1` lets a node drain evict the one pod, which is
-replaced at once. See
-[One copy with discovery](../../docs/ALLOCATOR.md#one-copy-with-discovery).
+discovery answers. So each pod is run with
+`--peers=<fullname>-allocator.<namespace>.svc:9116`, the headless Service
+the exporter pods heartbeat to, and `--peers.self=$(POD_IP)`, its pod's IP
+from the downward API: the live pod of the lowest IP leads and alone asks
+the sources, and the others serve the targets it found, fetched from it
+every 2 seconds, so every pod serves the same bundles and the same targets.
+When the leader goes, the pod of the next IP leads, serving the targets it
+took last until its sources answer. `allocator.replicas` is 2 by default, as
+without discovery, and any number is safe; the Deployment rolls out with
+the default strategy, a pod at a time, under the disruption budget of
+`maxUnavailable: 1`, and the allocator's NetworkPolicy also admits the
+allocator's own pods, which check each other and fetch the leader's targets.
+A network split that keeps the pods from reaching each other gives each
+side a leader, and the targets can then flip between the two until it
+heals. See
+[Copies with discovery](../../docs/ALLOCATOR.md#copies-with-discovery).
 
 A `file_sd` source reads files in the allocator's pod, and an `http_sd`
 source's `bearer_token_file` and `tls` files are read there too. The
@@ -1725,7 +1732,7 @@ allocator refuses.
 | Value | Default | Purpose |
 | --- | --- | --- |
 | `allocator.enabled` | `false` | Deploy the allocator and run the exporter in allocator mode. |
-| `allocator.replicas` | empty: `2`, or `1` with a discovery source | Allocator pods, from 1. They keep no state and need no leader. With a discovery source, above 1 fails rendering: copies would serve different targets. |
+| `allocator.replicas` | empty: `2` | Allocator pods, from 1. They keep no state. With a discovery source they are peers, run with `--peers` and `--peers.self`: the leader alone asks the sources and the others serve what it found. |
 | `allocator.image` | the exporter's | `repository`, `tag`, `pullPolicy`; each empty field takes `image`'s. |
 | `allocator.resources` | 50m/64Mi, 500m/256Mi | The allocator's requests and limits. |
 | `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 10s)` plus 10 seconds. |
@@ -1738,7 +1745,7 @@ allocator refuses.
 | `allocator.rbac.create` | `true` | With a `kubernetes` discovery source, let the allocator's ServiceAccount list EndpointSlices where the sources list them. |
 | `allocator.serviceAccount.name` | `""` | An existing ServiceAccount the allocator's pods run as, with or without a `kubernetes` source; the chart then creates none. Empty, `<fullname>-allocator` with a `kubernetes` source, the exporter's account without one. |
 | `allocator.extraVolumes` / `extraVolumeMounts` | `[]` | Volumes and mounts of the allocator's pods only, as `extraVolumes` and `extraVolumeMounts` are the exporter's: a `file_sd` source's files, an `http_sd` source's token and TLS files. |
-| `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`. |
+| `allocator.networkPolicy.enabled` | `true` | Admit ingress to the allocator only from the exporter pods and from `prometheus`, and with a discovery source from the allocator's own pods. |
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
 | `allocator.podLabels` / `podAnnotations` | `{}` | Labels and annotations of the allocator's pods only; a label the chart sets fails rendering, and `checksum/config` stays the chart's. |

@@ -1352,8 +1352,9 @@ lower-case name, for a target whose status or headers say something the body
 does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses));
 `$timings`, how long the phases of an `http` or `graphite` collector's
 request took, `$tls`, the TLS connection it was sent on, `$url`, where its
-redirects led, and `$redirects`, how many there were, each `null` for other
-types (see [Timings, TLS and the final
+redirects led, `$redirects`, how many there were, `$http_version`, the
+version of HTTP the answer came in, and `$remote_ip`, the address its
+connection was made to, each `null` for other types (see [Timings, TLS and the final
 URL](REQUESTS.md#timings-tls-and-the-final-url)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
@@ -2651,6 +2652,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB, and a `grpc` answer's headers, and its trailers, each at the same ([gRPC](GRPC.md#errors-and-retries)). At least 1 KiB when set ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `new_connection` | off | Send every request, each retry and redirect too, on a new connection closed after its answer, rather than on one kept from an earlier request, so every probe looks the name up, connects and verifies the certificate the target serves now; for uptime checks. See [Connections](REQUESTS.md#connections). |
+| `ip_family` | both | The address family its requests connect over: `ip4` or `ip6` alone, failing when the target has no address of it, or `prefer_ip4` or `prefer_ip6` first and the other after; left out, both, as Go connects. Not with `unix_socket` or a `proxy_url` other than `direct`. See [Address families](REQUESTS.md#address-families). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`, or `[any]` alone for every status from 100 to 599; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
@@ -2671,7 +2673,7 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
+`new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
 `rate_limit`, `proxy_url` and `proxy_basic_auth_file` — and `method` and
 `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
@@ -4545,7 +4547,7 @@ A stored result is only ever returned to an identical request. The cache key
 covers the collector name and its full effective configuration, the `target`,
 every `/probe` parameter the collector's request type accepts (`method`,
 `path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
-`enable_http2`, `new_connection`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
+`enable_http2`, `new_connection`, `ip_family`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
 and every `param_<name>`, whether it fills the request or only a [label
 value](REQUESTS.md#in-label-values)), and every header forwarded to the target, including
 a forwarded `Authorization` value and the `header_<name>` parameters that are
@@ -6401,8 +6403,17 @@ same credentials as a probe. The report, and the page's JSON alike, redacts:
   `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
   `session`, `signature`, `credential` or `jwt`, unless the word is an
   ordinary one that only holds it, such as `author`, `authority`, `monkey`,
-  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw` or `pass` as a whole
-  word of it, as in `X-Sig` or `X-Db-Pwd`.
+  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw`, `pass`, `sid`,
+  `hmac` or `otp` as a whole word of it, as in `X-Sig` or `X-Db-Pwd`. A
+  query parameter's name reads as a credential's also with `code` (OAuth's
+  authorization code) or `ticket` (a CAS ticket) as a whole word of it;
+- the value of a path parameter whose name reads as a query parameter's
+  would, `/app;jsessionid=<redacted>`, in every URL shown.
+- the URL of a header that carries one — `Location`, `Content-Location`,
+  `Refresh` and each `<…>` of `Link` — as a request line's: every query
+  value and a credential's path parameter masked, so a redirect's
+  `Location: /app;jsessionid=<redacted>?code=<redacted>` shows where it led
+  without what it carried.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it.

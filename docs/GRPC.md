@@ -64,7 +64,7 @@ The probe's `target` is the server, `host:port`:
 | `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make many times larger (see [The answer](#the-answer)). With `reflection`, also the most bytes of files a reflection question takes, never less than 10 MiB. |
 
 `path`, `query`, `headers`, `body`, `method`, `follow_redirects`,
-`redirect_trusted_hosts`, `enable_http2`, `new_connection` and `allowed_schemes` are `http`'s
+`redirect_trusted_hosts`, `enable_http2`, `new_connection`, `ip_family` and `allowed_schemes` are `http`'s
 and refused, as any key of
 another request type is. The method is `rpc`, not `method`, because `method`
 is already the HTTP verb, and a key that meant two things by type would read
@@ -515,7 +515,7 @@ the collector's.
 `param_<name>` and `header_<name>` work as for `http`, and `message`, which
 replaces `request.message` for that probe as `body` replaces an `http` body,
 placeholders and all. `method`, `path`, `body`, `follow_redirects`,
-`enable_http2`, `new_connection`, `from` and `until` are answered `400`.
+`enable_http2`, `new_connection`, `ip_family`, `from` and `until` are answered `400`.
 
 ## Static targets
 

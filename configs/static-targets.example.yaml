@@ -36,6 +36,8 @@ targets:
       # follow_redirects: false
       # enable_http2: false
       # new_connection: false
+      # ip4, ip6, prefer_ip4 or prefer_ip6; left out, the collector's.
+      # ip_family: ip6
       retry:
         attempts: 2
         backoff: 2s

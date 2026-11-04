@@ -13,7 +13,9 @@ spec:
     matchLabels:
       {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 6 }}
   {{- /* Callers are this release's exporter pods, which heartbeat and fetch
-         their bundles, and Prometheus, which fetches the probe targets.
+         their bundles, Prometheus, which fetches the probe targets, and,
+         with a discovery source, the other allocator pods, which check each
+         other and fetch the leader's discovered targets.
          Egress stays open: the allocator's discovery sources, an http_sd URL,
          the Kubernetes API server or a dns_sd server, are reached through
          it. */}}
@@ -25,6 +27,11 @@ spec:
             matchLabels:
               app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
               app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
+        - podSelector:
+            matchLabels:
+              {{- include "prometheus-universal-exporter.allocatorSelectorLabels" . | nindent 14 }}
+        {{- end }}
         {{- with .Values.allocator.networkPolicy.prometheus }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

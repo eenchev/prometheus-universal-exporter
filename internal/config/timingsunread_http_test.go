@@ -9,8 +9,9 @@ import (
 )
 
 // Loading a configuration marks the collectors none of whose rules reads
-// $timings, whose requests are then not timed (model.Collector.TimingsUnread),
-// and leaves timed those whose rules may read them.
+// $timings or $remote_ip, whose requests are then not traced
+// (model.Collector.TimingsUnread), and leaves traced those whose rules may
+// read them: $http_version is the answer's, which needs no trace.
 func TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	document := `collectors:
@@ -21,6 +22,8 @@ func TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings(t *testing.T) {
     metrics:
       - name: up
         expression: 'if $tls == null then $status else 0 end'
+      - name: http_version
+        expression: '$http_version | tonumber'
   - name: phases
     request: {type: http}
     decoder: {type: none}
@@ -32,6 +35,13 @@ func TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings(t *testing.T) {
         labels:
           - name: phase
             expression: .key
+  - name: address
+    request: {type: http}
+    decoder: {type: none}
+    transform: {type: jq}
+    metrics:
+      - name: ip_protocol
+        expression: 'if ($remote_ip | contains(":")) then 6 else 4 end'
 `
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
@@ -40,7 +50,7 @@ func TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Collectors[0].TimingsUnread || cfg.Collectors[1].TimingsUnread {
-		t.Errorf("timings unread: up %v, phases %v; want true and false", cfg.Collectors[0].TimingsUnread, cfg.Collectors[1].TimingsUnread)
+	if !cfg.Collectors[0].TimingsUnread || cfg.Collectors[1].TimingsUnread || cfg.Collectors[2].TimingsUnread {
+		t.Errorf("timings unread: up %v, phases %v, address %v; want true, false and false", cfg.Collectors[0].TimingsUnread, cfg.Collectors[1].TimingsUnread, cfg.Collectors[2].TimingsUnread)
 	}
 }

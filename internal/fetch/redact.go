@@ -33,7 +33,9 @@ import (
 //     tells nothing about the request, and a URL copied from a browser can
 //     carry a token in it (#access_token=…).
 //   - A header's value is withheld when its name reads as a credential's
-//     (CredentialName).
+//     (CredentialName), and the URL of one that carries a URL — Location,
+//     Content-Location, Refresh, Link — is masked as a debug report's
+//     request line is (RedactHeaderValue).
 //   - Text the exporter did not write, such as an error page, has what reads
 //     as a credential in it masked (RedactText), a URL's userinfo among
 //     it, by the same rule for a name: a key or field whose name
@@ -466,13 +468,39 @@ func nameParts(name string) []string {
 }
 
 // RedactHeaderValue is a header's value as it may be shown: Redacted when the
-// name reads as a credential's.
+// name reads as a credential's, and otherwise, for a header that carries a
+// URL, the value with its URL masked as a debug report's request line masks
+// one (RedactRequestURL): Location and Content-Location, which are a URL
+// whole, Refresh's url=, and each <…> of Link. A redirect's Location is
+// where the request goes next, and carries what it does: a session in its
+// path, an OAuth code or a token in its query.
 func RedactHeaderValue(name, value string) string {
 	if CredentialName(name) {
 		return Redacted
 	}
+	switch strings.ToLower(name) {
+	case "location", "content-location":
+		return RedactRequestURL(strings.TrimSpace(value), nil)
+	case "refresh":
+		if m := refreshURL.FindStringSubmatchIndex(value); m != nil {
+			return value[:m[2]] + RedactRequestURL(value[m[2]:m[3]], nil) + value[m[3]:]
+		}
+	case "link":
+		return linkURL.ReplaceAllStringFunc(value, func(target string) string {
+			return "<" + RedactRequestURL(target[1:len(target)-1], nil) + ">"
+		})
+	}
 	return value
 }
+
+// refreshURL is the URL of a Refresh header, 5; url=https://… or
+// 0;'/next': what follows the delay and its separator, and url= if it is
+// there, up to a closing quote or the end, in its group.
+var refreshURL = regexp.MustCompile(`(?i)^\s*[0-9.]*\s*[;,]\s*(?:url\s*=\s*)?['"]?([^'"]*?)['"]?\s*$`)
+
+// linkURL is a URL of a Link header, <https://…>; rel="next", its angle
+// brackets included.
+var linkURL = regexp.MustCompile(`<[^<>]*>`)
 
 // textCredentials find what reads as a credential in text the exporter did
 // not write whatever it is called, each with the part to keep in its first

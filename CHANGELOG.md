@@ -68,7 +68,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   word: `code` and `ticket` of a query parameter alone, the others of a
   header and a field in a logged body too. A query parameter of a country's
   or a promotion's code, `country_code`, is masked as well
-  ([Logging](docs/LOGGING.md#repeated-failures)).
+  ([Logging](docs/LOGGING.md#repeated-failures)). A debug report and the
+  debug page showed a redirect's `Location`, and `Content-Location`,
+  `Refresh` and `Link`, as they came; their URL is now masked as a request
+  line's is ([Debug probes](docs/CONFIGURATION.md#debug-probes)).
 - An answer `101 Switching Protocols`, as a WebSocket endpoint gives an
   `http` collector that asks for the upgrade, had what followed it on the
   connection, the WebSocket's frames, read as its body until the probe's

@@ -30339,6 +30339,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 ## 34.269 Fixes to address families and masking
 
 - `TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers` (fetch): through `FetchCollector` and its cached transport, `prefer_ip6` to a target whose IPv6 dial never answers (simulated by the transport's dial function) dials IPv6 for at most about half of a 4s deadline and is then answered over IPv4, under the probe's deadline and under the request's own `timeout` alike.
+- `TestTheURLOfAHeaderIsMasked` (fetch): `Location`, `location` and `Content-Location` have every query value, a credential's path parameter and the userinfo masked and the fragment dropped, a path alone kept and a URL that does not parse `<redacted>`; `Refresh` with `url=`, with a quoted `URL=` and with a bare URL after `,` has its URL masked and a delay alone kept; each `<…>` of `Link` is masked and its parameters kept; another header is kept as it came.
+- `TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport` (exporter): a `302`'s `Location`, `Content-Location`, `Refresh` and `Link` holding a session, a `sid`, a `code`, a `token`, a `ticket` and a `sig` are shown masked, and another header as it came, in a debug probe's report and the debug page's response headers, neither holding a secret.
 
 # 35. Documentation requirements
 
@@ -34498,6 +34500,15 @@ escapes decoded. A value a probe parameter or a placeholder gave, one a
 own request keys and the API server's `continue` token MUST stay masked,
 and so MUST every query value of an error, which a probe's caller is told
 as well.
+A response or request header that carries a URL — `Location` and
+`Content-Location`, a URL whole, the URL of `Refresh` after its delay, and
+each `<…>` of `Link` — MUST have that URL shown as a request line shows one
+whose configuration set no pair: every query value and the value of a path
+parameter whose name reads as a credential's masked, its userinfo withheld
+and its fragment left out, the path's escapes and the rest of the header's
+value kept; a URL that does not parse MUST be shown as `<redacted>`. A
+redirect's `Location` is where the next request goes, and carries what it
+does.
 
 With `--web.debug=full`, `/static-targets?debug=<name>` MUST scrape the static
 target of that name once, as its schedule would — with its own request

@@ -128,6 +128,29 @@ func TestCredentialName(t *testing.T) {
 	}
 }
 
+// A header that carries a URL has the URL masked as a debug report's
+// request line is, every query value and a credential's path parameter,
+// and the rest of the value kept; another header is shown as it came.
+func TestTheURLOfAHeaderIsMasked(t *testing.T) {
+	for _, c := range []struct{ name, value, want string }{
+		{"Location", "/app;jsessionid=S1?token=S2&code=S3", "/app;jsessionid=<redacted>?token=<redacted>&code=<redacted>"},
+		{"location", "https://user:pw@h.example/a?x=1#access_token=S4", "https://redacted:redacted@h.example/a?x=<redacted>"},
+		{"Content-Location", "/doc;sid=S5", "/doc;sid=<redacted>"},
+		{"Location", "/plain/path", "/plain/path"},
+		{"Location", "https://h.example/%zz", Redacted},
+		{"Refresh", "5; url=https://h.example/next?ticket=S6", "5; url=https://h.example/next?ticket=<redacted>"},
+		{"Refresh", "0;URL='/next;jsessionid=S7'", "0;URL='/next;jsessionid=<redacted>'"},
+		{"Refresh", "3, /x?a=S8", "3, /x?a=<redacted>"},
+		{"Refresh", "30", "30"},
+		{"Link", `</p?page=2&token=S9>; rel="next", </q;jsessionid=S10>; rel=prev`, `</p?page=<redacted>&token=<redacted>>; rel="next", </q;jsessionid=<redacted>>; rel=prev`},
+		{"X-Next", "/app;jsessionid=kept?token=kept", "/app;jsessionid=kept?token=kept"},
+	} {
+		if got := RedactHeaderValue(c.name, c.value); got != c.want {
+			t.Errorf("RedactHeaderValue(%q, %q) = %q, want %q", c.name, c.value, got, c.want)
+		}
+	}
+}
+
 // Text the exporter did not write has what reads as a credential masked,
 // and ordinary text left alone.
 func TestRedactText(t *testing.T) {

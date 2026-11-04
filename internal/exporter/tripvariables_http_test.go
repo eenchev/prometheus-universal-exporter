@@ -223,3 +223,63 @@ func TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown(t *testing.T)
 		t.Errorf("the log:\n%s", text)
 	}
 }
+
+// A redirect's Location, Content-Location, Refresh and Link carry where the
+// request goes next, a session in its path and a code or a token in its
+// query among it: the debug report and the debug page show them masked as
+// a request line is, every query value and the credential's path parameter
+// <redacted>, and the rest of each header as it came.
+func TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/app;jsessionid=S3CRET?code=S3CRET2&state=x")
+		w.Header().Set("Content-Location", "https://other.example/c;sid=S3CRET3?token=S3CRET4")
+		w.Header().Set("Refresh", "0; url=/next?ticket=S3CRET5")
+		w.Header().Set("Link", `</n;jsessionid=S3CRET6>; rel="next", <https://cdn.example/s.css?sig=S3CRET7>; rel=preload`)
+		w.Header().Set("X-Plain", "/kept;v=2?lang=en")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer target.Close()
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: up
+    request: {type: http, follow_redirects: false, accept_status: [any]}
+    decoder: {type: none}
+    transform: {type: jq}
+    metrics:
+      - name: up_status
+        expression: $status
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := flightServer(t, cfg.Collectors...)
+	server.SetDebug(DebugFull)
+	wants := []string{
+		"Location: /app;jsessionid=<redacted>?code=<redacted>&state=<redacted>",
+		"Content-Location: https://other.example/c;sid=<redacted>?token=<redacted>",
+		"Refresh: 0; url=/next?ticket=<redacted>",
+		`Link: </n;jsessionid=<redacted>>; rel="next", <https://cdn.example/s.css?sig=<redacted>>; rel=preload`,
+		"X-Plain: /kept;v=2?lang=en",
+	}
+	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("up", target.URL, "&debug=true"), "/probe?")).Body.String()
+	for _, want := range wants {
+		if !strings.Contains(report, "  "+want+"\n") {
+			t.Errorf("the debug report has no %q", want)
+		}
+	}
+	if strings.Contains(report, "S3CRET") {
+		t.Errorf("the debug report shows a secret:\n%s", report)
+	}
+	answer := postRun(t, server, map[string]any{"configured": "up", "target": target.URL}, http.StatusOK)
+	if answer.Response == nil {
+		t.Fatalf("the debug page showed no response: %+v", answer)
+	}
+	for _, want := range wants {
+		found := false
+		for _, line := range answer.Response.Headers {
+			found = found || line == want
+		}
+		if !found {
+			t.Errorf("the debug page's response headers %q have no %q", answer.Response.Headers, want)
+		}
+	}
+}

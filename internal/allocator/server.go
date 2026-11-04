@@ -45,6 +45,8 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 	api.HandleFunc("GET "+allocapi.BundlePath, a.serveBundle)
 	api.HandleFunc("GET "+allocapi.SDPathPrefix+"{job}", a.serveSD)
 	api.HandleFunc("GET /metrics", a.serveMetrics)
+	api.HandleFunc("GET "+PeerPath, a.servePeer)
+	api.HandleFunc("GET "+SnapshotPath, a.serveSnapshot)
 	mux := http.NewServeMux()
 	mux.Handle("/", authorized(token, api))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

@@ -107,16 +107,28 @@ func (s sourceSpec) identity() string {
 
 // StartDiscovery starts a refresh loop for every discovery source, and for
 // every source a reload adds later, each asking its source at once and
-// then every refresh_interval. BeginShutdown stops them.
-func (a *Allocator) StartDiscovery() {
+// then every refresh_interval. BeginShutdown stops them. A copy among peers
+// (UsePeers) does not call it: RunPeers starts and stops the loops as the
+// copy comes to lead and stops leading.
+func (a *Allocator) StartDiscovery() { a.setDiscovering(true) }
+
+// setDiscovering starts the refresh loops, or stops them, keeping what the
+// sources found. After BeginShutdown it does nothing.
+func (a *Allocator) setDiscovering(on bool) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
-	if a.discovering || a.discoveryStopped {
+	if a.discoveryStopped || a.discovering == on {
 		return
 	}
-	a.discovering = true
+	a.discovering = on
 	for _, s := range a.sources {
-		a.startSource(s)
+		switch {
+		case on:
+			a.startSource(s)
+		case s.cancel != nil:
+			s.cancel()
+			s.cancel = nil
+		}
 	}
 }
 

@@ -130,6 +130,7 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 		}
 		fmt.Fprintf(&b, "pue_allocator_discovery_last_success_timestamp_seconds{%s} %s\n", labels(m), strconv.FormatFloat(at, 'f', -1, 64))
 	}
+	a.writePeerMetrics(&b, family)
 	_, err := io.WriteString(w, b.String())
 	return err
 }

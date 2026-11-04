@@ -30310,6 +30310,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheURLIsWhereTheRedirectsLed` (fetch): a redirect to `/app;jsessionid=…?code=…&state=x` is `$url` `/app;jsessionid=<redacted>?code=<redacted>&state=x`.
 - `TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown` (exporter): through `/probe`, a label of `$url` after such a redirect, and the recipe's `$url | split("?")[0] | split(";")[0]`, hold no secret; a debug probe's report holds none; a failed probe's log line names its target with `;jsessionid=<redacted>?ticket=<redacted>&lang=en`.
 
+## 34.267 Allocator copies with discovery: peers and a leader
+
+- `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator): addresses order IPv4 before IPv6, by the address numerically (`10.0.0.9` before `10.0.0.10`) and then by port; the leader is the copy itself alone or when lower than every live peer, the lowest live peer otherwise, and a copy of unknown address leads only with no live peer.
+- `TestPeersAreResolvedEveryRound` (allocator): a name resolves to every address it has, an IPv4-mapped one as IPv4, an IP entry is taken without a lookup, the copy's own `--peers.self` is among them, duplicates are taken once, and a failed lookup keeps the addresses of the last.
+- `TestPeerFlagsAreParsed` (allocator): `--peers` entries need a host and a port from 1 to 65535; `--peers.self` takes an IP address with the listen address's port, or `ip:port`, and refuses a name, port 0 and an address without a port beside a listen address of none.
+- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): of two copies served over HTTP with the token, whose http_sd sources answer each request differently, only the lower address asks them (each once); the follower serves the same service discovery answer and bundles of the same generations and files for each member and a joining one, its shares holding the leader's discovered static target; the metrics say who leads (`pue_allocator_is_leader`, `pue_allocator_leader{peer}`, `pue_allocator_peers 2`), and the follower counts no refresh.
+- `TestTheNextCopyLeadsWhenTheLeaderShutsDown` (allocator): once the leader shuts down, its `/v1/peer` answering `503`, the follower leads at its next round, serves the snapshot's targets while its own sources' answer is held, and then what they found; `pue_allocator_leader_changes_total` is 1.
+- `TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot` (allocator): a follower whose snapshot fetches fail keeps the snapshot's targets and does not discover, counts each failure, shows the snapshot's age (8s after four 2s rounds), logs once and again when a fetch succeeds; a leader that stops answering stays the leader for two failed checks and is replaced at the third, the new leader still serving the snapshot's targets.
+- `TestThePeerEndpointsNeedTheToken` (allocator): `/v1/peer` and `/v1/peer/snapshot` answer `401` without the token or with another; copies sending a wrong token never count each other live, and each leads alone.
+- `TestCopiesFindThemselvesAmongTheAddressesOfTheirName` (allocator): two copies at 127.0.0.1 and 127.0.0.2 of one port, given only a name resolving to both, find their own address by its answer; the copy of the higher address leads while the lower does not answer, and the lower, once up, leads from the higher's snapshot before its own sources answer, the higher then following it.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator) takes a `--peers` entry without a port, an empty entry, `--peers.self` without `--peers`, and a name as `--peers.self`; `TestVersionAndHelp` lists `-peers` and `-peers.self`.
+- `TestChartRunsAllocatorPeersWithDiscovery` (repository): SPECIFICATION-CHART.md § 34.29.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33265,9 +33278,9 @@ and Prometheus the probe targets of its probe targets file, each pointed at a
 replica. What the two sides exchange MUST be the types, paths, timings and
 functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
 files and heartbeats MUST give the same bundles and answers. What discovery
-sources find is input too, asked by each copy on its own timer, so
-`docs/ALLOCATOR.md` MUST say that an allocator with a discovery source runs
-as one copy, and the chart MUST run it so (SPECIFICATION-CHART.md § 33.10c).
+sources find is input too, so copies with a discovery source MUST run as
+peers (**Peers** below), of which only the leader asks the sources, and the
+chart MUST run them so (SPECIFICATION-CHART.md § 33.10c).
 
 **Inputs.** `--config.file` MUST be loaded and checked with the exporter's
 configuration loader, `--static-targets-file` with the static target file's
@@ -33409,6 +33422,45 @@ targets stay in force until the new source first answers, a failure before
 then keeping them and being counted; a source of a new name or kind MUST
 start with nothing found.
 
+**Peers.** With `--peers`, `host:port` entries, comma-separated, each with
+a host and a decimal port from 1 to 65535 (anything else MUST exit 2), a
+copy MUST, at its start and then every `PeerInterval` (2s), resolve each
+entry to every address its host has (an IP address taken as it is, an
+IPv4-mapped IPv6 address as IPv4; a lookup that fails keeping the addresses
+of the last, logged once while its text stays the same) and ask every
+address but its own at `GET /v1/peer` with the API's bearer token within
+`PeerTimeout` (1s), without a proxy. `--peers.self`, only with `--peers`
+(exit 2 otherwise), MUST be an IP address, taking the port of
+`--web.listen-address`, or an IP address and a port, and is the copy's own
+address, a peer even when no entry resolves to it; without it, the address
+whose answer names the copy's own process (a random instance made at its
+start) MUST be taken for its own. A copy MUST be live once it has answered,
+until `PeerFailures` (3) checks in a row have failed, and MUST stop being
+live at once when it answers `503`, which `/v1/peer` MUST answer from the
+first `SIGTERM` or `SIGINT`. The leader MUST be the lowest of the live copies
+and the copy itself, ordered by `netip.AddrPort.Compare` (IPv4 before IPv6,
+then by the address's bytes, then by port), the copy itself counting as the
+highest while its own address is not known. Only the leader MUST run the
+discovery sources' refresh loops; a follower MUST stop them, keeping what
+they found, and fetch the leader's `GET /v1/peer/snapshot` with the token
+every round, which MUST answer what each source that has answered last
+found, by the source's key (its kind, owner, name and settings), with an
+`ETag` of its digest and `304` to an `If-None-Match` naming it, and a body of
+at most 64 MiB; the follower MUST put each source the snapshot holds in
+force as that source's answer would be, so the copies' bundle generations and
+service discovery answers are equal, and MUST keep what it holds of a source
+the snapshot leaves out. A copy that comes to lead MUST start the loops with
+what its sources hold, the snapshot it took last, so no discovered target
+leaves the bundles until each source answers; one that leads without ever
+having taken a snapshot MUST first take that of the lowest other live copy,
+if any. A follower whose fetches fail MUST keep serving the snapshot it took
+last, count each failure, and log once after `PeerFailures` failures in a
+row and once when a fetch succeeds again. A change of leader MUST be logged.
+Without `--peers` a copy MUST ask its sources itself, from its start.
+`docs/ALLOCATOR.md` MUST describe the peers, their flags, timings and
+metrics, and that a network split gives each side a leader, the targets then
+flipping between the two until it heals.
+
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the
 allocator decodes with rules by path, as the exporter's are (§ 24.3):
@@ -33515,7 +33567,14 @@ members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_members_refused_total`, and for each discovery source, by
 `kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
 `pue_allocator_discovery_refreshes_total{result}` and
-`pue_allocator_discovery_last_success_timestamp_seconds`. `/healthz` MUST answer `200`; `/ready`
+`pue_allocator_discovery_last_success_timestamp_seconds`, and with
+`--peers` `pue_allocator_peers` (the live copies, itself included),
+`pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
+address, `self` while it leads without knowing its own),
+`pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
+(since the last snapshot taken, or the start before the first; `0` while it
+leads) and `pue_allocator_peer_failures_total{request}` (`check` or
+`snapshot`). `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 

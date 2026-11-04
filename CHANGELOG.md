@@ -41,6 +41,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   recipe checks a WebSocket endpoint's handshake with an `http` collector,
   its request carrying the upgrade's headers and a rule comparing the
   `Sec-WebSocket-Accept` it answers with.
+- Allocator copies with a discovery source run side by side as peers:
+  `pue-allocator --peers` names the copies, a name resolving to all of them
+  or a list, and `--peers.self` the copy's own address. The live copy of the
+  lowest address leads and alone asks the discovery sources; the others
+  fetch what it found every 2 seconds and serve the same bundles and
+  targets, and when it goes the next copy leads from the targets it took
+  last. New metrics say which copy leads and how old a follower's targets
+  are ([Copies with discovery](docs/ALLOCATOR.md#copies-with-discovery)).
+- The chart runs `allocator.replicas` allocator pods, 2 by default, with a
+  discovery source too, as peers of the allocator's headless Service, rolled
+  out one at a time, where it ran one pod and refused more.
 
 ### Fixed
 

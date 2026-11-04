@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -54,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
+	peerList := flags.String("peers", "", "Optional allocator copies to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. The live copy of the lowest address leads and alone asks the discovery sources; the others serve what it found")
+	peerSelf := flags.String("peers.self", "", "This copy's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the copy finds itself among the peers' addresses by asking them")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
 	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
@@ -87,6 +90,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *maxDiscovered < 1 {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))
+	}
+	var peerOptions *allocator.PeerOptions
+	if *peerList != "" {
+		entries, err := allocator.ParsePeers(*peerList)
+		if err != nil {
+			return commandLineError(stderr, err)
+		}
+		peerOptions = &allocator.PeerOptions{Peers: entries}
+		if *peerSelf != "" {
+			if peerOptions.Self, err = allocator.ParseSelf(*peerSelf, *listenAddress); err != nil {
+				return commandLineError(stderr, err)
+			}
+		}
+	} else if *peerSelf != "" {
+		return commandLineError(stderr, errors.New("--peers.self is given without --peers"))
 	}
 	if *showVersion {
 		b := exporter.BuildVersion()
@@ -123,9 +141,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger})
-	// The sources are asked at once, well before the first member list
-	// forms, a settle time after the start.
-	alloc.StartDiscovery()
+	if peerOptions != nil {
+		if token != nil {
+			peerOptions.Token = token.Token
+		}
+		// The peers decide whether this copy asks the sources; RunPeers
+		// starts once the API listens, so a copy asking its own address
+		// finds itself.
+		alloc.UsePeers(*peerOptions)
+	} else {
+		// The sources are asked at once, well before the first member list
+		// forms, a settle time after the start.
+		alloc.StartDiscovery()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -138,14 +166,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Info("starting allocator", append([]any{"version", exporter.BuildVersion().Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil}, inputs.LogAttrs()...)...)
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
+		"peers", *peerList, "peers_self", *peerSelf}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {
 		handler = alloc.HandlerReading(token)
 	}
 	server := newServer(*listenAddress, handler)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddress)
+	if err != nil {
+		logger.Error("HTTP server stopped", "error", err)
+		return 1
+	}
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.ListenAndServe() }()
+	go func() { serverErr <- server.Serve(listener) }()
+	if peerOptions != nil {
+		go alloc.RunPeers(ctx)
+	}
 	select {
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

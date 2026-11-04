@@ -16,12 +16,12 @@ discovery answer.
 
 It keeps nothing on disk. The same input files and the same heartbeats give
 the same bundles and the same answers, so a restarted allocator, or a second
-copy beside the first, answers as the first did. That holds while the inputs
-are files alone: a [discovery source](#discovering-targets) is asked by each
-copy on its own timer, and two copies can find different targets for a
-refresh interval or, when one cannot reach the source, for as long as that
-lasts, so an allocator that discovers runs as one copy
-([One copy with discovery](#one-copy-with-discovery)).
+copy beside the first, answers as the first did. What a
+[discovery source](#discovering-targets) finds is input too, and two copies
+asking it each on its own timer could find different targets, so copies
+with a discovery source run as peers: one leads and asks the sources, and
+the others take what it found
+([Copies with discovery](#copies-with-discovery)).
 
 ## Running it
 
@@ -55,6 +55,8 @@ pue-allocator \
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
+| `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
+| `--peers.self` | none | This copy's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the copy finds itself among its peers' addresses by asking them. Only with `--peers`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
 | `--static-targets-file-schema` | | Print the JSON Schema of the static target file, with `discovered_targets`, for editors, and exit. |
@@ -478,22 +480,64 @@ targets stay in force until the new source first answers, and a failure
 before then keeps them, as any failure does, and is counted. A source
 renamed, or of another kind, starts with no targets.
 
-### One copy with discovery
+### Copies with discovery
 
-Each allocator copy asks its sources on its own timer, so two copies can hold
+Each allocator copy asking its sources on its own timer could hold
 different targets, and so different bundles and service discovery answers,
 for up to a refresh interval, and for as long as one of them cannot reach a
-source. An exporter replica heartbeats every copy and fetches its bundle from
-whichever answers, and Prometheus asks whichever its request reaches, so with
-two copies a replica's bundle and a job's targets would flip between them.
-An allocator with a discovery source therefore runs as one copy. It keeps no
-state and is back within seconds of a restart, while the replicas keep their
-bundle in force and Prometheus its last service discovery answer, so one
-copy loses nothing but changes made while it is away. The chart runs one
-when a source is configured ([On Kubernetes](#on-kubernetes)); without the
-chart, run one. An allocator of input files alone may run as several copies.
-A copy being stopped stops taking requests at `SIGTERM`, so a replacement
-started meanwhile, as one is for an evicted pod, does not serve beside it.
+source; an exporter replica heartbeats every copy and fetches its bundle
+from whichever answers, and Prometheus asks whichever its request reaches,
+so a replica's bundle and a job's targets would flip between them. So copies
+with a discovery source run as peers, each given `--peers`: the name every
+copy's address resolves to, as the chart's headless Service, or a list of
+their addresses. Without `--peers` a copy asks its sources itself, which is
+right for one copy alone; copies of input files alone need no peers.
+
+Every 2s each copy resolves `--peers` to its addresses and asks each other
+copy at `GET /v1/peer`, with the API's token, within 1s. A copy that answered is
+live until three such checks in a row have failed, so one slow answer does
+not move the leader; one that answers `503`, as a copy shutting down does,
+stops being live at once. A copy knows its own address from `--peers.self`,
+or else by asking: the address answering with its own process's name is
+itself. The leader is the live copy of the lowest address, itself included:
+IPv4 addresses before IPv6, each by its bytes, so `10.0.0.9` before
+`10.0.0.10`, then by port. A copy whose own address is not known counts as
+the highest, leading only while no other copy is live. Every copy that sees
+the same live copies so chooses the same leader.
+
+Only the leader asks the discovery sources. Every other copy, a follower,
+fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
+of its sources last found, and puts it in force as a source's answer would
+be, in place of asking the sources itself. The copies so expand the same
+input files with the same discovered targets, and serve the same bundles, of
+the same generations, and the same service discovery answers. A snapshot
+leaves out a source that has not answered on the leader, and a follower then
+keeps what it holds of that source.
+
+When the leader goes away, the copy of the next address leads from its next
+check: at once when the leader is shutting down, and after three failed
+checks when it stops answering. It starts asking the sources, and serves the
+targets of the snapshot it took last until each source first answers, as a
+source whose settings a reload changed does, so the targets never leave the
+bundles. A copy that comes to lead without ever having taken a snapshot, as
+a new copy of the lowest address does, first takes that of the lowest other
+live copy. A copy that sees a lower copy come back stops asking its sources and
+follows it. A follower that cannot fetch the leader's snapshot keeps serving
+the one it took last, never nothing; after three failures in a row it logs
+so once, and `pue_allocator_snapshot_age_seconds` tells how old its snapshot
+is ([Metrics](#metrics)).
+
+A copy shutting down answers `/v1/peer` with `503` from the first signal,
+while its API still serves, so the next copy leads before it is gone.
+Copies being replaced one at a time, as a rolling update does, so keep the
+targets. Peers are not a consensus: a network split that leaves two groups
+of copies unable to reach each other gives each group a leader, each asking
+the sources on its own timer, and while the split lasts the replicas'
+bundles and the job's targets can flip between the two groups' findings, as
+they would between copies without peers. It heals at the next check after
+the copies reach each other again, the higher leader then following the
+lower. `pue_allocator_leader{peer}` shows the leader each copy follows, and
+copies that disagree on it are split.
 
 ## Members and allocation
 
@@ -570,6 +614,8 @@ holds a token again, logged once.
 | `POST /v1/heartbeat` | replica | The generation of the bundle the replica is to have. |
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
+| `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true}`: the copy's process, and whether it asks its discovery sources; `503` while it shuts down. |
+| `GET /v1/peer/snapshot` | another copy | What each of the copy's discovery sources last found, by source, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
 | `GET /healthz` | kubelet | `200` while the process serves. |
 | `GET /ready` | kubelet | `200` once the input files are loaded, which they are from the start; `503` while shutting down. |
@@ -615,8 +661,8 @@ A bundle is a tree of files, keyed by path:
   gets the configuration alone and can answer probes while it waits.
 - `generation` is the digest of the files: the same files give the same
   generation, on every allocator. Discovered targets are part of the files,
-  so allocators that discover agree only on what they have found alike
-  ([One copy with discovery](#one-copy-with-discovery)).
+  so allocators that discover agree on them by taking the leader's
+  ([Copies with discovery](#copies-with-discovery)).
 
 The answer carries the generation as its `ETag`, quoted. A request whose
 `If-None-Match` names the generation the replica has is answered `304` when
@@ -681,6 +727,18 @@ scrape_configs:
 | `pue_allocator_discovered_targets{kind,owner,source}` | gauge | Targets of each discovery source's last good answer, by `kind` (`probe` or `static`), `owner` (the probe job or the `discovered_targets` entry) and `source` (its name); `0` before it answers. |
 | `pue_allocator_discovery_refreshes_total{kind,owner,source,result}` | counter | Answers of each discovery source taken (`success`), and its failures (`failure`), one counted once while its text stays the same. |
 | `pue_allocator_discovery_last_success_timestamp_seconds{kind,owner,source}` | gauge | When each discovery source last answered, in Unix seconds; `0` before it does. |
+| `pue_allocator_peers` | gauge | With `--peers`: the live copies, this one included. |
+| `pue_allocator_is_leader` | gauge | With `--peers`: `1` while this copy leads and asks the discovery sources, `0` while it follows. |
+| `pue_allocator_leader{peer}` | gauge | With `--peers`: `1`, with the address of the copy this one takes for the leader, `self` while it leads without knowing its own address. Copies that disagree on it are split. |
+| `pue_allocator_leader_changes_total` | counter | With `--peers`: changes of the leader after the first choice. |
+| `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this copy last took the leader's snapshot, or since its start before its first; `0` while it leads. |
+| `pue_allocator_peer_failures_total{request}` | counter | With `--peers`: requests to the other copies that failed, `check` or `snapshot`. |
+
+With `--peers` only the leader asks the discovery sources, so only its
+`pue_allocator_discovery_refreshes_total` and
+`pue_allocator_discovery_last_success_timestamp_seconds` move, and only it
+logs a source's failures; a follower's `pue_allocator_discovered_targets`
+counts the targets of the snapshot it took.
 
 ## On Kubernetes
 
@@ -688,14 +746,16 @@ The Helm chart deploys the allocator with `allocator.enabled`, beside the
 exporter, and switches the replicas to allocator mode; see
 [Target allocator](../charts/prometheus-universal-exporter/README.md#target-allocator)
 in the chart README. It runs `allocator.replicas` allocators, two by default,
-from the exporter's image, behind a headless Service on port 9116: they need
-no leader, since each hears every heartbeat, a replica heartbeating to every
-address the Service's name resolves to. With a discovery source, in a probe
-job or in the static targets, it runs one allocator, and refuses
-`allocator.replicas` above 1, rolling it out with the `Recreate` strategy so
-the old pod is gone before the new one starts
-([One copy with discovery](#one-copy-with-discovery)); its disruption budget
-of `maxUnavailable: 1` still lets a node drain evict it. The configuration (`config.data`)
+from the exporter's image, behind a headless Service on port 9116: each
+hears every heartbeat, a replica heartbeating to every address the Service's
+name resolves to, so for the members and the allocation they need no
+leader. With a discovery source, in a probe job or in the static targets,
+each is run with `--peers` naming that Service and `--peers.self` its pod's
+IP, so the pods are peers and only the leader asks the sources
+([Copies with discovery](#copies-with-discovery)), and the allocator's
+NetworkPolicy admits the allocator's own pods; they are rolled out as any
+Deployment is, one at a time, under a disruption budget of
+`maxUnavailable: 1`. The configuration (`config.data`)
 and `allocator.staticTargets.data` and `allocator.probeJobs`, the static
 targets and the probe jobs, are mounted into the allocator only; a change to
 them rolls the allocator, and reaches the replicas as a new bundle without a
@@ -764,8 +824,9 @@ or on how busy they are, `autoscaling.targetBusy`
 
 ## Without Kubernetes
 
-Run `pue-allocator` on one or two hosts, one with a discovery source
-([One copy with discovery](#one-copy-with-discovery)), start each exporter with
+Run `pue-allocator` on one or two hosts, with a discovery source each given
+`--peers` with both hosts' addresses, or a name resolving to both
+([Copies with discovery](#copies-with-discovery)), start each exporter with
 `--allocator.url=http://allocator.internal:9116`, and point Prometheus's
 `http_sd_configs` at the same address, one scrape configuration per probe
 job. systemd units, Compose and plain VMs need nothing else.

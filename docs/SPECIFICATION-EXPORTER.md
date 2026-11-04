@@ -30353,6 +30353,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.270 Allocator status page and leader-only metrics
 
+- `TestTheStatusShowsTheMembersAndTheSpread` (allocator): with three members, one reporting its current bundle, one none, and one an id holding HTML, `/v1/status` gives the copy's address, version, revision, readiness and 20s of uptime, no peers, the members with their addresses, generations and whether each is up to date, and per member static and probe counts equal to `pue_allocator_assigned`'s, by job, with totals of 30 static and 2 probe targets, the average and the imbalance; `/` is HTML with the icon, the theme script and picker, the refresh controls (Off chosen, `?refresh=30s` choosing 30s), the bars and the id escaped, its fragment has no bar, and `?format=json` is answered `400`.
+- `TestTheStatusPageTakesTheTokenAsBasicAuth` (allocator): `/`, `/v1/status` and `/metrics` answer `401` with a `Basic` challenge without the token, `200` with the token as Basic auth's password of any user name or as a bearer token, `401` with another password or the token in the URL; the bundle, service discovery and peer endpoints and a heartbeat answer `401` to Basic auth, without a `Basic` challenge; `/healthz` and `/ready` stay open.
+- `TestThePeersStatusAgreesWithTheMetrics` (allocator): a leader's and a follower's status give their roles, the leader's address, the follower's snapshot taken and held, the copies with the leader live, discovering and last checked, and every source `ok` with its target, from the leader's own discovery or the follower's snapshot; each of the status's peer series is a line of `/metrics`, `pue_allocator_peer_up{peer}` is `1` on each; once the leader's checks fail three times the follower's `pue_allocator_peer_up` of it is `0`, it leads, the leader is down with three failures, and its page shows the series escaped and the copy down.
+- `TestTheStatusNamesTheCopysAddressAndBuild` (cmd/pue-allocator): `run`'s `/v1/status` names its `--web.listen-address` and the build's version and revision, ready, without peers.
 - `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
 
 # 35. Documentation requirements
@@ -33624,8 +33628,43 @@ unreadable token file MUST stop the start. The file MUST be read again when
 its modification time or size changes, so a rotated token is required from
 the next request; a file that is empty or cannot be read after a change MUST
 refuse every such request with `401` until it holds a token, the failure
-logged once while it stays the same. The allocator MUST serve plain HTTP
-only.
+logged once while it stays the same. `GET` and `HEAD` of `/`,
+`/v1/status` and `/metrics`, and no other request, MUST also take the token
+as the password of HTTP Basic auth, of any user name, compared in constant
+time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
+one, so a browser prompts; the token MUST NOT be taken from the URL. The
+allocator MUST serve plain HTTP only.
+
+**Status page.** `GET /v1/status` MUST answer the copy's status as JSON:
+its address among its peers when known, else `--web.listen-address`, its
+instance, the build's version and revision, its start and uptime, and
+whether it is ready; with `--peers` (else `null`) its role, the leader,
+the live copies, the leader changes, the snapshot's age, whether it has
+taken one and holds the leader's targets, its check and snapshot failures,
+every address of its peers, its own included, with liveness, the last
+answer's discovering and address-known, the last check and the failures in
+a row, and the series of the peers' metric families exactly as `/metrics`
+writes them; every member known with its address, last heartbeat, whether
+it is live, in the member list and shutting down, the generation it
+reports, the one it is to have, a refusal it reports and the static targets
+it keeps draining; the spread, per member of the member list and per other
+live member a probe is routed to, of the static targets it owns as
+`pue_allocator_assigned` counts them, those it drains, and the probe targets
+routed to it by job and in all, with the totals, the average per member and
+the imbalance (the most a member has divided by the average, `0` with no
+target); and every discovery source with its kind, owner, source kind,
+result (`ok`, `failing` with its error, or `pending`), targets, last
+refresh and last success, and whether what it holds came from the copy's
+own discovery or the leader's snapshot. `GET /` MUST render the same as an
+HTML page framed as the exporter's pages are (§ 42.14a: the bar with the
+theme picker, the logo as its icon, the same `Content-Security-Policy`,
+`X-Frame-Options: DENY` and `Cache-Control: no-store`), every value escaped,
+with a bar of each member's targets drawn in CSS alone, and the exporter's
+status page's refresh controls, `?refresh=` keeping the interval and
+`?format=fragment` answering the content alone, without the bar; another
+`format` MUST be answered `400`. `docs/ALLOCATOR.md` MUST describe the page,
+the JSON and how a browser gives the token, and the chart README how to
+reach a pod's page and find the leader's.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
@@ -33639,6 +33678,8 @@ members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_discovery_refreshes_total{result}` and
 `pue_allocator_discovery_last_success_timestamp_seconds`, and with
 `--peers` `pue_allocator_peers` (the live copies, itself included),
+`pue_allocator_peer_up{peer}` (`1` for each other address of the peers
+that is live, `0` for one that is not),
 `pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
 address, `self` while it leads without knowing its own),
 `pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`

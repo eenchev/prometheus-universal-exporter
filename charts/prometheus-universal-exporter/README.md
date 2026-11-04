@@ -1774,6 +1774,37 @@ named `POD_NAME` or `POD_IP`, which the chart sets.
 pods have IPv4 addresses. With `networkPolicy.egress` rules, the exporter's
 NetworkPolicy also lets its pods reach the allocator.
 
+### The allocator's status page
+
+Each allocator pod serves a status page at `/` on its port 9116: the copy,
+its peers and which pod leads, the members, how the targets are spread over
+them, and the discovery sources
+([Status page](../../docs/ALLOCATOR.md#status-page)). The chart exposes the
+port inside the cluster only; reach a pod's page with `kubectl
+port-forward`, which the allocator's NetworkPolicy does not stand in the
+way of, and open the forwarded port, 9116 on your machine, in a browser:
+
+```sh
+kubectl port-forward svc/<fullname>-allocator 9116
+```
+
+That reaches one of the pods. The browser asks for a user name and a
+password: give any user name, and the allocator's token as the password,
+
+```sh
+kubectl get secret <fullname>-allocator-token -o jsonpath='{.data.token}' | base64 -d
+```
+
+(or your `allocator.tokenSecret`'s). With a discovery source the pods are
+peers, and every pod's page names the leader by its pod IP, as
+`pue_allocator_leader{peer}` does on every pod's `/metrics`; the pod of
+that IP is the leader, and its page is the one to read:
+
+```sh
+kubectl get pod -l app.kubernetes.io/name=<name>-allocator --field-selector status.podIP=<leader IP> -o name
+kubectl port-forward pod/<that pod> 9116
+```
+
 ## Using the chart as a dependency
 
 The chart can be a dependency of your own chart. Its values then go under its name in the parent's values, and a `condition` switches it on and off:

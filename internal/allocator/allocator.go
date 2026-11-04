@@ -53,6 +53,9 @@ type Options struct {
 	// answer, for a source that sets no max_targets; 0 takes
 	// DefaultMaxDiscoveredTargets.
 	MaxDiscoveredTargets int
+	// Address is --web.listen-address, Version and Revision the build's,
+	// which the status shows (Status).
+	Address, Version, Revision string
 }
 
 // Allocator holds the inputs in force, the members, the member list that
@@ -132,6 +135,8 @@ type Allocator struct {
 	// among its peers; peers are those, nil without --peers.
 	instance string
 	peers    *peers
+	// address, version and revision are Options'.
+	address, version, revision string
 }
 
 type member struct {
@@ -166,6 +171,9 @@ func New(in *Inputs, opts Options) *Allocator {
 		base:          in,
 		maxDiscovered: opts.MaxDiscoveredTargets,
 		instance:      newInstance(),
+		address:       opts.Address,
+		version:       opts.Version,
+		revision:      opts.Revision,
 	}
 	if a.clock == nil {
 		a.clock = realClock{}

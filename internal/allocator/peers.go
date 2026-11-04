@@ -189,8 +189,10 @@ type peerState struct {
 	fails int
 	// self says the address is this copy's own.
 	self bool
-	// answer is the peer's last answer.
-	answer peerAnswer
+	// answer is the peer's last answer, and checked when it was last
+	// checked, whatever the check's outcome; zero for this copy.
+	answer  peerAnswer
+	checked time.Time
 }
 
 // peers runs a copy's part among its peers.
@@ -456,6 +458,7 @@ func (p *peers) round(ctx context.Context) {
 	discovering := p.a.discovering
 	p.a.dmu.Unlock()
 
+	now := p.a.clock.Now()
 	p.mu.Lock()
 	known := make(map[netip.AddrPort]*peerState, len(addrs))
 	for i, addr := range addrs {
@@ -465,6 +468,9 @@ func (p *peers) round(ctx context.Context) {
 		}
 		known[addr] = st
 		r := results[i]
+		if addr != self {
+			st.checked = now
+		}
 		switch {
 		case addr == self || r.answer.Instance == p.a.instance:
 			st.self, st.live, st.fails = true, false, 0
@@ -767,11 +773,13 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		if err == nil {
 			err = checkGroups(got.Groups)
 		}
+		s.refreshed = a.clock.Now()
 		if err != nil {
 			a.sourceFailed(s, fmt.Errorf("the leader's snapshot of it is refused: %w", err))
 			continue
 		}
 		a.sourceAnswered(s)
+		s.fromSnapshot = true
 		if s.ok && sameDiscovered(s.found, found) {
 			continue
 		}
@@ -838,46 +846,7 @@ func (a *Allocator) serveSnapshot(w http.ResponseWriter, r *http.Request) {
 // writePeerMetrics writes the metrics of the peers, when there are.
 // Called under a.mu.
 func (a *Allocator) writePeerMetrics(b *strings.Builder, family func(name, kind, help string)) {
-	p := a.peers
-	if p == nil {
-		return
+	if st := a.peersStatusLocked(a.clock.Now()); st != nil {
+		writePeerFamilies(b, family, st)
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	live := 1
-	for _, st := range p.known {
-		if st.live && !st.self {
-			live++
-		}
-	}
-	family("pue_allocator_peers", "gauge", "Allocator copies live among the peers, this one included.")
-	fmt.Fprintf(b, "pue_allocator_peers %d\n", live)
-	family("pue_allocator_is_leader", "gauge", "1 while this allocator copy leads its peers and asks the discovery sources, 0 while it follows the leader.")
-	family("pue_allocator_leader", "gauge", "1, with the address of the copy this one takes for the leader; self when it leads and its own address is not known.")
-	isLeader := 0
-	if p.decided && p.leading {
-		isLeader = 1
-	}
-	fmt.Fprintf(b, "pue_allocator_is_leader %d\n", isLeader)
-	if p.decided {
-		leader := "self"
-		if p.leader.IsValid() {
-			leader = p.leader.String()
-		}
-		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(leader))
-	}
-	family("pue_allocator_leader_changes_total", "counter", "Changes of the copy this one takes for the leader, after the first choice.")
-	fmt.Fprintf(b, "pue_allocator_leader_changes_total %d\n", p.leaderChanges)
-	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
-	age := 0.0
-	if !p.decided || !p.leading {
-		since := p.snapshotAt
-		if since.IsZero() {
-			since = a.started
-		}
-		age = max(a.clock.Now().Sub(since).Seconds(), 0)
-	}
-	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(age, 'f', -1, 64))
-	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
-	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", p.checkFailures, p.snapshotFailures)
 }

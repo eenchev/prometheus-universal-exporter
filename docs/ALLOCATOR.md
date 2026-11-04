@@ -46,11 +46,11 @@ pue-allocator \
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--web.listen-address` | `:9116` | Where the API, `/metrics`, `/healthz` and `/ready` are served, over plain HTTP. |
+| `--web.listen-address` | `:9116` | Where the API, the [status page](#status-page), `/metrics`, `/healthz` and `/ready` are served, over plain HTTP. |
 | `--config.file` | `/etc/prometheus-universal-exporter/config.yaml` | The configuration the replicas are served, with the collector files it lists. |
 | `--static-targets-file` | none | The static target file, split among the replicas. |
 | `--probe-targets-file` | none | The probe targets file, served to Prometheus at `/v1/sd/<job>`. |
-| `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. |
+| `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. The status page, `/v1/status` and `/metrics` also take it as the password of Basic auth, for a browser ([Status page](#status-page)). |
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
@@ -654,7 +654,13 @@ and `/ready` answers `401` to a request without `Authorization: Bearer
 changes, so a rotated token is the one required from the next request. A
 file that is empty or missing at the start stops the allocator; one that
 becomes empty or unreadable later refuses every request with `401` until it
-holds a token again, logged once.
+holds a token again, logged once. A browser cannot send a bearer token, so
+`GET` of the status page, `/v1/status` and `/metrics`, what a person reads,
+also takes the token as the password of HTTP Basic auth, of any user name,
+and their `401` asks for it, so the browser prompts; no other endpoint takes
+Basic auth, since a browser sends the credentials it was given with any
+request to the allocator, another site's page's included, and a heartbeat
+must not be one of them. The token is never taken from the URL.
 
 | Endpoint | Caller | Answer |
 | --- | --- | --- |
@@ -663,6 +669,8 @@ holds a token again, logged once.
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true, "address_known": true}`: the copy's process, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
 | `GET /v1/peer/snapshot` | another copy | Every discovery source of the copy's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /` | a person | The [status page](#status-page). |
+| `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
 | `GET /healthz` | kubelet | `200` while the process serves. |
 | `GET /ready` | kubelet | `200` once the input files are loaded, which they are from the start; `503` while shutting down. |
@@ -759,6 +767,62 @@ scrape_configs:
           credentials_file: /etc/prometheus/pue-allocator-token
 ```
 
+## Status page
+
+`GET /` is a page for a person: what this copy holds, without a Prometheus
+to ask. It shows
+
+- this copy: its address (among its peers, or `--web.listen-address`), its
+  process's instance, version and revision, when it started and whether it
+  is ready;
+- with `--peers`, whether it leads or follows and which copy leads, and
+  every copy its peers' addresses give, itself included, with whether it is
+  live, discovers and knows its own address, when it was last checked and
+  the checks it failed in a row; how old the copy's snapshot is and whether
+  it holds the leader's discovered targets; and the series of the peers'
+  metrics as `/metrics` has them ([Metrics](#metrics));
+- the members: each one's address, how long ago its last heartbeat came,
+  the bundle it has in force beside the one it is to have, a refusal it
+  reports, whether it is in the member list, joining, silent or shutting
+  down, and the static targets it keeps draining;
+- how the targets are spread: for each member, the static targets it owns,
+  those it keeps draining, the probe targets service discovery routes to it,
+  by probe job and in all, and the total, with a bar of each; then the
+  totals, the average per member and the imbalance, the most any member has
+  divided by the average, `1.00×` for targets spread evenly;
+- the discovery sources: each one's kind, owner, result, with the error
+  while it fails, its targets, when it was last refreshed, and whether what
+  it holds is this copy's own discovery or the leader's snapshot.
+
+The page refreshes itself as the exporter's status page does: Refresh, and
+an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
+`?refresh=30s`, fetching the page's content again (`?format=fragment`) and
+skipping its turn while the tab is hidden. It has the exporter's pages' bar,
+with their theme picker, and needs nothing from outside the allocator.
+
+`GET /v1/status` answers the same as JSON: `generated_at`; `copy`
+(`address`, `instance`, `version`, `revision`, `started_at`,
+`uptime_seconds`, `ready`); `peers`, `null` without `--peers` (`role`,
+`leader` or `follower`, `deciding` before the first check; `leader`, the
+leader's address; `live_copies`, `leader_changes`, `snapshot_age_seconds`,
+`snapshot_taken`, `holds_leader_state`, the failures, `copies`, each with
+its `address`, `self`, `leader`, `live`, `instance`, `discovering`,
+`address_known`, `last_check` and `failures`, and `metrics`, each a
+`series` and its `value`); `members` (`formed`, `in_list`, `live` and
+`list`, each with `id`, `address`, `last_heartbeat`, `live`, `in_list`,
+`shutting_down`, `generation`, `current`, `up_to_date`, `refused` and
+`draining`); `spread` (`jobs`, and `members`, `total`, `average` and
+`imbalance`, each with `static`, `draining`, `probe`, `probe_jobs` by job
+and `total`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
+`ok`, `failing` or `pending`, `error`, `targets`, `last_refresh`,
+`last_success` and `from`, `own` or `snapshot`). Times are RFC 3339 in UTC,
+each with its age in seconds beside it.
+
+With `--web.token-file` a browser asks for a user name and a password on
+the first visit: give any user name, and the token as the password
+([API](#api)). On Kubernetes, reach the page through `kubectl port-forward`
+([On Kubernetes](#on-kubernetes)).
+
 ## Metrics
 
 | Metric | Type | Meaning |
@@ -775,6 +839,7 @@ scrape_configs:
 | `pue_allocator_discovery_refreshes_total{kind,owner,source,result}` | counter | Answers of each discovery source taken (`success`), and its failures (`failure`), one counted once while its text stays the same. |
 | `pue_allocator_discovery_last_success_timestamp_seconds{kind,owner,source}` | gauge | When each discovery source last answered, in Unix seconds; `0` before it does. |
 | `pue_allocator_peers` | gauge | With `--peers`: the live copies, this one included. |
+| `pue_allocator_peer_up{peer}` | gauge | With `--peers`: `1` for each other copy that is live, by its address, `0` for one that has stopped answering, until its name no longer resolves to it. |
 | `pue_allocator_is_leader` | gauge | With `--peers`: `1` while this copy leads and asks the discovery sources, `0` while it follows. |
 | `pue_allocator_leader{peer}` | gauge | With `--peers`: `1`, with the address of the copy this one takes for the leader, `self` while it leads without knowing its own address. Copies that disagree on it are split. |
 | `pue_allocator_leader_changes_total` | counter | With `--peers`: changes of the leader after the first choice. |
@@ -863,6 +928,10 @@ file that names it, which in the chart is a ConfigMap of the chart's own. The
 kubelet updates a ConfigMap volume in place, not one mounted with `subPath`,
 and the source reads the files again every `refresh_interval`, so a change to
 the ConfigMap reaches the allocator without a rollout.
+
+Each allocator pod's [status page](#status-page) is reached with `kubectl
+port-forward`, the leader's by the pod IP every pod's page names; see
+[The allocator's status page](../charts/prometheus-universal-exporter/README.md#the-allocators-status-page).
 
 Since each replica scrapes only its share of the static targets, adding
 replicas spreads them thinner, and the chart's `autoscaling` can scale the

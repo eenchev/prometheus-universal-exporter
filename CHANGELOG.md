@@ -61,9 +61,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   their checks of the leader so a leader that hangs while it answers does
   not hold them up, and serve the same bundles and targets, and when it goes, telling the others
   for 3 seconds before it stops, the next copy leads at once from the
-  targets it took last. New metrics say which copy leads and how long a
-  follower has not held the leader's targets
+  targets it took last. New metrics say which copy leads, which copies are
+  up (`pue_allocator_peer_up{peer}`) and how long a follower has not held
+  the leader's targets
   ([Copies with discovery](docs/ALLOCATOR.md#copies-with-discovery)).
+- `pue-allocator` serves a status page at `/`: the copy, its peers and the
+  leader, the members and their bundles, how the targets are spread over
+  the members, with the average and the imbalance, and the discovery
+  sources, refreshing itself as the exporter's status page does; and the
+  same as JSON at `/v1/status`. A browser gives `--web.token-file`'s token
+  as the password of Basic auth, which the page, `/v1/status` and
+  `/metrics` take beside the bearer token
+  ([Status page](docs/ALLOCATOR.md#status-page)).
 - The chart runs `allocator.replicas` allocator pods, 2 by default, with a
   discovery source too, as peers of the allocator's headless Service, rolled
   out one at a time, where it ran one pod and refused more.

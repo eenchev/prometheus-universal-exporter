@@ -45,11 +45,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("pue-allocator", flag.ContinueOnError)
 	// Every line on stderr stays JSON, as the exporter's do.
 	flags.SetOutput(io.Discard)
-	listenAddress := flags.String("web.listen-address", ":9116", "Address on which to expose the allocator's API, metrics and health endpoints")
+	listenAddress := flags.String("web.listen-address", ":9116", "Address on which to expose the allocator's API, status page, metrics and health endpoints")
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the configuration the replicas are served, with the collector files it lists, which must be relative paths inside its directory")
 	staticTargetsFile := flags.String("static-targets-file", "", "Optional static target file, split among the replicas; a target's shard_key, when set, is hashed in place of its name")
 	probeTargetsFile := flags.String("probe-targets-file", "", "Optional probe targets file of probe_jobs, served to Prometheus at /v1/sd/<job>")
-	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry")
+	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry; the status page, /v1/status and /metrics also take it as Basic auth's password, for a browser")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
@@ -140,7 +140,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("invalid input files; exiting", "error", err)
 		return 1
 	}
-	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger})
+	build := exporter.BuildVersion()
+	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
+		Address: *listenAddress, Version: build.Version, Revision: build.Revision})
 	if peerOptions != nil {
 		if token != nil {
 			peerOptions.Token = token.Token
@@ -164,7 +166,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer ticker.Stop()
 		go alloc.WatchLoop(watchDone, ticker.C, paths)
 	}
-	logger.Info("starting allocator", append([]any{"version", exporter.BuildVersion().Version, "address", *listenAddress,
+	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
 		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
 		"peers", *peerList, "peers_self", *peerSelf}, inputs.LogAttrs()...)...)

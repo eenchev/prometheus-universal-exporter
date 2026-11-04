@@ -53,3 +53,53 @@ func TestAPathParameterOfACredentialIsMasked(t *testing.T) {
 		t.Errorf("an error's URL: %s", got)
 	}
 }
+
+// A ; written escaped, %3B or %3b, separates path parameters as one written
+// as it is does, since a server that decodes the path first reads it as one:
+// the value after it is masked in every form, the escape kept as written.
+func TestAnEscapedSemicolonSeparatesPathParameters(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://h/x;jsessionid=S1/app%3Bjsessionid=S2?a=1": "https://h/x;jsessionid=<redacted>/app%3Bjsessionid=<redacted>?a=1",
+		"https://h/app%3bJSESSIONID=S3%3Bv=2":               "https://h/app%3bJSESSIONID=<redacted>%3Bv=2",
+		"https://h/a;v=1%3Btoken=S4;lang=en":                "https://h/a;v=1%3Btoken=<redacted>;lang=en",
+		"https://h/a%3B%6Asessionid=S5":                     "https://h/a%3B%6Asessionid=<redacted>",
+		"https://h/a%3Bv=2/b%3B":                            "https://h/a%3Bv=2/b%3B",
+		"https://h/token%3B=S6":                             "https://h/token%3B=S6",
+	} {
+		for _, how := range []URLRedaction{MaskCredentialQueryValues, MaskQueryValues, DropQuery} {
+			got := RedactURLString(raw, how)
+			wantHow := want
+			switch how {
+			case MaskQueryValues:
+				wantHow = strings.Replace(want, "?a=1", "?a=<redacted>", 1)
+			case DropQuery:
+				wantHow, _, _ = strings.Cut(want, "?")
+			}
+			if got != wantHow {
+				t.Errorf("RedactURLString(%q, %d)\n got %q\nwant %q", raw, how, got, wantHow)
+			}
+		}
+	}
+}
+
+// The debug report's $url is $url as the rules read it with its query
+// values masked as the report masks them, the configured pairs shown: it is
+// not parsed again, so the path's escapes stay as $url has them, where a
+// URL parsed with <redacted> in its path would have them written anew.
+func TestTheDebugReportsURLIsTheRulesURLWithItsQueryMasked(t *testing.T) {
+	raw := "https://h/x;%6Asessionid=S1/app%3Bjsessionid=S2/a%2Fb?lang=en&token=S3&page=2"
+	shown := RedactURLString(raw, MaskCredentialQueryValues)
+	if want := "https://h/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>/a%2Fb?lang=en&token=<redacted>&page=2"; shown != want {
+		t.Fatalf("$url\n got %q\nwant %q", shown, want)
+	}
+	configured := func(name, value string) bool { return name == "lang" && value == "en" }
+	want := "https://h/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>/a%2Fb?lang=en&token=<redacted>&page=<redacted>"
+	if got := RedactShownURLQuery(shown, configured); got != want {
+		t.Errorf("the debug report's $url\n got %q\nwant %q", got, want)
+	}
+	for _, url := range []string{"https://h/a;jsessionid=<redacted>", Redacted, ""} {
+		if got := RedactShownURLQuery(url, nil); got != url {
+			t.Errorf("RedactShownURLQuery(%q) = %q", url, got)
+		}
+	}
+}

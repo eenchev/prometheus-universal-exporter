@@ -288,12 +288,11 @@ masked as a query's or a path's parameter, right after a `?`, a `&` or a
 `;` and before a `=`: `href="/cb?code=<redacted>&state=x"`. A
 credential word run together with another, `apikey`, is still found, so a
 name errs towards being masked. A path parameter, what follows a `;` in a
-segment of the path, is masked by the same rule for its name, as a
-servlet's session rides in a URL's path when cookies are off:
-`/app;jsessionid=<redacted>`. A segment of the path that is a secret whole,
-as a bot's token in `/bot123456:AAE…/getMe`, has no name to tell it by, and
-is shown. Other parameters are shown
-as given. A URL's fragment, `#…`, is never shown: it is never sent to the
+segment of the path, written as it is or escaped as `%3B`, is masked by
+the same rule for its name, as a servlet's session rides in a URL's path
+when cookies are off: `/app;jsessionid=<redacted>`. A segment of the path
+that is a secret whole, as a bot's token in `/bot123456:AAE…/getMe`, has
+no name to tell it by, and is shown. Other parameters are shown as given. A URL's fragment, `#…`, is never shown: it is never sent to the
 target, and one copied from a browser can carry a token. The static targets
 endpoint's `target` label and the OTLP `target` attribute show a target the
 same way, and a header's value is withheld by the same rule for its name.

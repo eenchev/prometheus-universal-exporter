@@ -1557,8 +1557,11 @@ the value of a query parameter whose name reads as a credential's —
 `token`, `api_key`, `password`, `sig`, `code` and `ticket`, which the
 redirect back from a login carries, and the like
 ([the rule](LOGGING.md#repeated-failures)) — is `<redacted>`, and so is the
-value of a path parameter of such a name, as a servlet's session rides in
-the path when cookies are off: `/app;jsessionid=<redacted>`. Every other
+value of a path parameter of such a name, after a `;` or an escaped
+`%3B`, as a servlet's session rides in the path when cookies are off:
+`/app;jsessionid=<redacted>`. A debug report shows `$url` as the rules
+read it, its escapes kept, with every query value the configuration did
+not set masked as well. Every other
 parameter, and every segment of the path, is kept as it was sent, so a
 label of `$url` is safe to the extent that rule is: an order number, a
 tenant or an e-mail address in a parameter of another name is kept, a URL

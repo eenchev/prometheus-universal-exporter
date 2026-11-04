@@ -63,7 +63,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code`
   and CAS's `ticket` in its query, which the redirect back from a login
   carries. The value of a path parameter whose name reads as a
-  credential's is now masked, `/app;jsessionid=<redacted>`, and `code`,
+  credential's is now masked, `/app;jsessionid=<redacted>`, after an
+  escaped `;`, `%3B`, too, and `code`,
   `ticket`, `sid`, `hmac` and `otp` are credentials' names, each as a whole
   word: `code` and `ticket` of a query or path parameter alone, a URL's in
   a logged body among them, the others of a header and a field in a logged

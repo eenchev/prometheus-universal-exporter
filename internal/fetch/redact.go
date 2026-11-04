@@ -123,11 +123,14 @@ func withMaskedPath(u *url.URL) string {
 // (credentialQueryName), masked where it stands: /app;jsessionid=SECRET
 // becomes /app;jsessionid=<redacted>, as a servlet container's session id
 // rides in a URL's path when cookies are off. A parameter is what follows a
-// ; in a segment, up to the next ; or /, name=value or a name alone. A
-// segment that is a secret whole, as a bot's token in /bot123:AAE…/getMe,
-// has no name to tell it by, and is kept.
+// ; in a segment, up to the next ; or /, name=value or a name alone. A ;
+// written escaped, %3B in either case, separates parameters too: a server
+// that decodes the path before it looks for parameters reads
+// /app%3Bjsessionid=SECRET as /app;jsessionid=SECRET. A segment that is a
+// secret whole, as a bot's token in /bot123:AAE…/getMe, has no name to tell
+// it by, and is kept.
 func maskPathParams(path string) string {
-	if !strings.Contains(path, ";") {
+	if !strings.Contains(path, ";") && !strings.Contains(strings.ToUpper(path), "%3B") {
 		return path
 	}
 	var b strings.Builder
@@ -136,20 +139,38 @@ func maskPathParams(path string) string {
 		if i > 0 {
 			b.WriteByte('/')
 		}
-		for j, piece := range strings.Split(segment, ";") {
-			if j > 0 {
-				b.WriteByte(';')
+		for j := 0; segment != ""; j++ {
+			piece, separator := segment, ""
+			if end, size := pathParamSeparator(segment); end >= 0 {
+				piece, separator = segment[:end], segment[end:end+size]
 			}
+			segment = segment[len(piece)+len(separator):]
 			name, _, hasValue := strings.Cut(piece, "=")
 			if j > 0 && hasValue && credentialPathName(name) {
 				b.WriteString(name)
 				b.WriteString("=" + Redacted)
-				continue
+			} else {
+				b.WriteString(piece)
 			}
-			b.WriteString(piece)
+			b.WriteString(separator)
 		}
 	}
 	return b.String()
+}
+
+// pathParamSeparator is where the first ; of a segment of an escaped path
+// stands, written as it is or escaped, %3B or %3b, and how long it is
+// written; -1 for none.
+func pathParamSeparator(segment string) (int, int) {
+	for i := 0; i < len(segment); i++ {
+		switch {
+		case segment[i] == ';':
+			return i, 1
+		case segment[i] == '%' && i+2 < len(segment) && segment[i+1] == '3' && (segment[i+2] == 'B' || segment[i+2] == 'b'):
+			return i, 3
+		}
+	}
+	return -1, 0
 }
 
 // credentialPathName says whether a path parameter's name, as it is written
@@ -289,6 +310,23 @@ func RedactRequestURL(raw string, configured func(name, value string) bool) stri
 		shown.User = redactedUser
 	}
 	return withMaskedPath(&shown)
+}
+
+// RedactShownURLQuery is a URL as $url has it (HTTPTrip.ShownURL), its
+// path's parameters and its query's credentials already masked, with the
+// values of its query masked as a debug report's request line masks them
+// (RedactRequestURL), configured saying which pairs are shown. The URL is
+// not parsed again: a path with <redacted> in it, which a path would have
+// escaped, would no longer keep its own escapes, and Go would write it
+// again in its own, /a;%6Asessionid as /a;jsessionid, so the report's $url
+// would differ from the one the rules read. Only what follows the first ?
+// is masked, the path holding none of its own unescaped.
+func RedactShownURLQuery(shown string, configured func(name, value string) bool) string {
+	start, query, ok := strings.Cut(shown, "?")
+	if !ok {
+		return shown
+	}
+	return start + "?" + maskQueryShowing(query, true, configured)
 }
 
 // credentialUpToEquals says whether what a query holds before its first =,

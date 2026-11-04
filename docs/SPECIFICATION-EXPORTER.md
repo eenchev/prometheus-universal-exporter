@@ -5940,7 +5940,9 @@ does. Both MUST be `null` wherever `$timings` is. Python's
 probe's report and the debug page MUST show `$timings`, `$tls`, `$url`,
 `$redirects`, `$http_version` and `$remote_ip`, in that order, as JSON not
 escaped for HTML, under the response's status, `$url` with its query values
-masked and its length cut as the report's request lines have a URL.
+masked and its length cut as the report's request lines have a URL, and
+otherwise as the rules read it: the URL MUST NOT be parsed and written
+again, so its path's escapes are the ones `$url` has.
 
 ---
 
@@ -30342,6 +30344,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheURLOfAHeaderIsMasked` (fetch): `Location`, `location` and `Content-Location` have every query value, a credential's path parameter and the userinfo masked and the fragment dropped, a path alone kept and a URL that does not parse `<redacted>`; `Refresh` with `url=`, with a quoted `URL=` and with a bare URL after `,` has its URL masked and a delay alone kept; each `<…>` of `Link` is masked and its parameters kept; another header is kept as it came.
 - `TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport` (exporter): a `302`'s `Location`, `Content-Location`, `Refresh` and `Link` holding a session, a `sid`, a `code`, a `token`, a `ticket` and a `sig` are shown masked, and another header as it came, in a debug probe's report and the debug page's response headers, neither holding a secret.
 - `TestRedactTextMasksTheCodeAndTicketOfAURL` (fetch): in logged text, a URL's `?code=`, `;ticket=`, `&auth_code=`, `&amp;code=`, `;Ticket=` and `?country_code=` are masked and `&barcode=` kept; `<code>401</code>`, JSON fields `code` and `ticket`, `code=401` after a space and `;code:` are kept.
+- `TestAnEscapedSemicolonSeparatesPathParameters` (fetch): after `%3B` or `%3b` a credential's path parameter, `jsessionid`, `JSESSIONID`, `token` and an escaped `%6Asessionid`, is masked in a target as a log line shows it, an error's and a label's, the escape kept as written; `%3Bv=2`, a trailing `%3B` and a segment `token%3B=…` are kept.
+- `TestTheDebugReportsURLIsTheRulesURLWithItsQueryMasked` (fetch): the debug report's `$url` is `$url` with every query value but a configured pair's masked, its path's `%6A`, `%3B` and `%2F` as `$url` has them; a URL without a query, `<redacted>` and `""` are shown as they are.
+- `TestTheDebugReportShowsTheURLTheRulesRead` (exporter): after a redirect to `/x;%6Asessionid=…/app%3Bjsessionid=…?lang=en`, a label of `$url` is `/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>?lang=en` and a debug probe's report shows the same `$url` with `lang=<redacted>`; neither holds the session.
 
 # 35. Documentation requirements
 
@@ -34572,8 +34577,9 @@ shown, but in text (`fetch.RedactText`) a name right after a `?`, a `&` or a
 `;` and right before a `=`, a parameter of a URL's query or path, MUST be
 read as a query parameter's, so a URL in a logged body has its `code` and
 `ticket` masked as it would anywhere else. Wherever a URL is shown — a log line, a label, `$url`, a debug
-report, an error — the value of each path parameter, what follows a `;` in
-a segment of its path up to the next `;` or `/`, whose name reads as a
+report, an error — the value of each path parameter, what follows a `;`,
+written as it is or escaped as `%3B` in either case, in a segment of its
+path up to the next such `;` or `/`, whose name reads as a
 query parameter's would MUST be masked as `<redacted>` where it stands
 (`/app;jsessionid=<redacted>`), the path's escapes kept; other path
 parameters and the segments themselves MUST be shown as they are. A URL's fragment MUST NOT

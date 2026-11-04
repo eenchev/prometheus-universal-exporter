@@ -283,3 +283,45 @@ func TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport(t *testing.T) {
 		}
 	}
 }
+
+// A debug probe's report shows $url as the rules read it, its query values
+// masked as the report masks them: after a redirect to a path with an
+// escaped name and an escaped ; before a session, the report's $url keeps
+// the path's escapes as the label of $url has them, and neither holds the
+// session.
+func TestTheDebugReportShowsTheURLTheRulesRead(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/x;%6Asessionid=S3CRET/app%3Bjsessionid=S3CRET2?lang=en", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: up
+    request: {type: http, follow_redirects: true}
+    decoder: {type: none}
+    transform: {type: jq}
+    metrics:
+      - name: uptime_final_url_info
+        expression: "1"
+        labels:
+          - name: url
+            expression: $url
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := flightServer(t, cfg.Collectors...)
+	path := target.URL + "/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>"
+	got := probeOnce(t, server, probePath("up", target.URL, ""), nil)
+	if body := got.Body.String(); !strings.Contains(body, `uptime_final_url_info{url="`+path+`?lang=en"} 1`) || strings.Contains(body, "S3CRET") {
+		t.Errorf("%d %s", got.Code, body)
+	}
+	server.SetDebug(DebugFull)
+	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("up", target.URL, "&debug=true"), "/probe?")).Body.String()
+	if strings.Contains(report, "S3CRET") || !strings.Contains(report, "\n  $url \""+path+"?lang=<redacted>\"\n") {
+		t.Errorf("the debug report:\n%s", report)
+	}
+}

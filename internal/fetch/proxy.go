@@ -194,6 +194,14 @@ var proxyTLSRoots *x509.CertPool
 // through the tunnel by the transport as without a proxy. Without this the
 // transport would greet the proxy with the target's TLS settings, showing it
 // the target's client certificate and expecting the target's server_name.
+//
+// The connection is handed over as a plain net.Conn (proxyConn). Given a
+// *tls.Conn, the transport would take it for the target's own: it would
+// report the finished handshake to the request's trace as the request's
+// TLS phase, a no-op of microseconds that left the target's real handshake
+// through the tunnel untimed, and keep the proxy's connection state as the
+// one the answer came on, which over plain HTTP is no connection of the
+// target's at all (HTTPTrip).
 func proxyTLSDialer(dial func(ctx context.Context, network, address string) (net.Conn, error), timeout time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := dial(ctx, network, address)
@@ -211,9 +219,14 @@ func proxyTLSDialer(dial func(ctx context.Context, network, address string) (net
 			_ = conn.Close()
 			return nil, err
 		}
-		return tlsConn, nil
+		return proxyConn{tlsConn}, nil
 	}
 }
+
+// proxyConn is the TLS connection to an https:// proxy as nothing but a
+// net.Conn, so the transport neither times its handshake nor takes its
+// state for the target's (proxyTLSDialer).
+type proxyConn struct{ net.Conn }
 
 // ProxyRefusedError is a proxy's refusal to tunnel to a target: its answer
 // to the CONNECT of an https target other than 200. The status is the proxy's own words, which a

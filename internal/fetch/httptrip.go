@@ -21,7 +21,9 @@ type HTTPTrip struct {
 	// and the TLS handshake took, nil for a phase the request did not
 	// have: on a connection it reused, none of them; over plain HTTP, no
 	// handshake; to an IP address or a Unix socket, no lookup. Through a
-	// proxy, the lookup and the connection are the proxy's.
+	// proxy, the lookup and the connection are the proxy's, and the
+	// handshake the target's through the tunnel, never the one with an
+	// https:// proxy (proxyTLSDialer).
 	DNS, Connect, TLS *time.Duration
 	// FirstByte is the time from the request's start, when it asked for a
 	// connection, to the first byte of the answer; nil for none.
@@ -103,12 +105,13 @@ type TLSConnection struct {
 	SubjectCN, IssuerCN string
 }
 
-// tlsConnectionOf is what state says of the connection a request to u was
-// answered on; nil for a request over plain HTTP, whose answer can still
-// carry the TLS state of a connection to an https:// proxy, which is not
-// the target's.
-func tlsConnectionOf(u *url.URL, state *tls.ConnectionState) *TLSConnection {
-	if state == nil || u.Scheme != "https" {
+// tlsConnectionOf is what state says of the connection a request was
+// answered on; nil for a request over plain HTTP. Through an https://
+// proxy, the state is the target's handshake through the tunnel, and
+// there is none for a plain HTTP target: the proxy's own connection is
+// handed to the transport as no TLS connection (proxyTLSDialer).
+func tlsConnectionOf(state *tls.ConnectionState) *TLSConnection {
+	if state == nil {
 		return nil
 	}
 	c := &TLSConnection{TLSVersion: tls.VersionName(state.Version), CipherSuite: tls.CipherSuiteName(state.CipherSuite), ServerName: state.ServerName, Verified: len(state.VerifiedChains) > 0}
@@ -267,7 +270,7 @@ func (t *tripTrace) trip(resp *http.Response, end time.Time) *HTTPTrip {
 	defer t.mu.Unlock()
 	trip := &HTTPTrip{DNS: t.dns, Connect: t.connect, TLS: t.tls, FirstByte: t.firstByte, Total: end.Sub(t.start)}
 	if resp.Request != nil {
-		trip.TLSConnection = tlsConnectionOf(resp.Request.URL, resp.TLS)
+		trip.TLSConnection = tlsConnectionOf(resp.TLS)
 		trip.URL, trip.Redirects = shownURL(resp.Request.URL), redirectsTo(resp.Request)
 	}
 	return trip

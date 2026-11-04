@@ -58,7 +58,7 @@ whose port is 0 or past 65535, which no connection can use, is refused
 naming the port, as a `grpc`, `sshfile`, `sql`, `tlscert` or `ntp` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
-`new_connection` and the `retry` settings — overriding the collector's own request for that target only.
+`new_connection`, `ip_family` and the `retry` settings — overriding the collector's own request for that target only.
 Which of these keys a target may set follows its collector's
 [request type](CONFIGURATION.md#request-types), as the table says; a key the
 type does not take is refused when the file loads, naming the target, and of
@@ -68,7 +68,7 @@ collector is looked at):
 
 | Type | `target` | What a target's `request` may set |
 | --- | --- | --- |
-| `http` | an absolute URL | `method`, `path`, `body`, `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`, `retry`, `headers`, [`accept_status`](REQUESTS.md#accepting-other-statuses), [`rate_limit`](REQUESTS.md#rate-limiting), its own credentials: `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` and [`login`](AUTHENTICATION.md#logging-in-to-a-target), and its own `tls` |
+| `http` | an absolute URL | `method`, `path`, `body`, `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`, `ip_family`, `retry`, `headers`, [`accept_status`](REQUESTS.md#accepting-other-statuses), [`rate_limit`](REQUESTS.md#rate-limiting), its own credentials: `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` and [`login`](AUTHENTICATION.md#logging-in-to-a-target), and its own `tls` |
 | [`graphite`](GRAPHITE.md#static-targets) | the Graphite server's URL | all `http`'s keys but `method` and `body`, plus its own `targets`, `from` and `until` |
 | [`grpc`](GRPC.md#static-targets) | the server | `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`, with its `codes`, [`accept_codes`](GRPC.md#errors-and-retries), its own credentials, `basic_auth`, `basic_auth_file`, `bearer_token` and `bearer_token_file`, and its own `tls` |
 | [`localfile`](LOCALFILE.md#static-targets) | a file under `request.root`, optional | `path` and `timeout` |

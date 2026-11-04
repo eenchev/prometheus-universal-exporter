@@ -18,6 +18,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 - Nothing; you can upgrade without changes.
 
+### New
+
+- `request.ip_family` on an `http` or `graphite` collector chooses the
+  address family its requests connect over, as blackbox_exporter's
+  `preferred_ip_protocol` and `ip_protocol_fallback` do: `ip4` or `ip6`
+  alone, failing when the target has no address of it, or `prefer_ip4` or
+  `prefer_ip6` first and the other after. Left out, either family, as
+  before. A probe parameter and a static target set it too; it is refused
+  beside a `unix_socket` or a proxy, which chooses the family itself
+  ([Address families](docs/REQUESTS.md#address-families)).
+
 ## exporter 2.0.0
 
 ### What changed for you

@@ -241,6 +241,7 @@ Supported parameters include:
 * `follow_redirects`
 * `enable_http2`
 * `new_connection`
+* `ip_family`
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`, or in one of its label values
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector

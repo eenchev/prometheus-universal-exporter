@@ -338,6 +338,9 @@ func probeKeyQuery(collector, target string, o fetch.RequestOverrides) url.Value
 			out.Set(name, strconv.FormatBool(*value))
 		}
 	}
+	if o.IPFamily != "" {
+		out.Set("ip_family", o.IPFamily)
+	}
 	if o.RetryAttempts != nil {
 		out.Set("retry_attempts", strconv.Itoa(*o.RetryAttempts))
 	}

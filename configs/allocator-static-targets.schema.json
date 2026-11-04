@@ -951,6 +951,16 @@
               "insecure_skip_verify": {
                 "type": "boolean"
               },
+              "ip_family": {
+                "description": "http and graphite: replaces the collector's request.ip_family: ip4, ip6, prefer_ip4 or prefer_ip6.",
+                "enum": [
+                  "ip4",
+                  "ip6",
+                  "prefer_ip4",
+                  "prefer_ip6"
+                ],
+                "type": "string"
+              },
               "login": {
                 "additionalProperties": false,
                 "allOf": [
@@ -2410,6 +2420,16 @@
               },
               "insecure_skip_verify": {
                 "type": "boolean"
+              },
+              "ip_family": {
+                "description": "http and graphite: replaces the collector's request.ip_family: ip4, ip6, prefer_ip4 or prefer_ip6.",
+                "enum": [
+                  "ip4",
+                  "ip6",
+                  "prefer_ip4",
+                  "prefer_ip6"
+                ],
+                "type": "string"
               },
               "login": {
                 "additionalProperties": false,

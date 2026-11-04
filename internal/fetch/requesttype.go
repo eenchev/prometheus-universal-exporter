@@ -820,6 +820,11 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	if err := checkAcceptStatus(t.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)
 	}
+	if t.Request.IPFamily != nil {
+		if family := *t.Request.IPFamily; family == "" || checkIPFamily(family) != nil {
+			return fmt.Errorf("target %q request.ip_family %q is not ip4, ip6, prefer_ip4 or prefer_ip6", t.Name, family)
+		}
+	}
 	if err := checkTargetRetryStatuses(t, c); err != nil {
 		return fmt.Errorf("target %q %w", t.Name, err)
 	}

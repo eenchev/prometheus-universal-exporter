@@ -2513,6 +2513,17 @@
                 },
                 "type": "array"
               },
+              "ip_family": {
+                "description": "http and graphite: the address family the requests connect to the target over. ip4 or ip6 connect over that family alone, and fail when the target has no address of it; prefer_ip4 or prefer_ip6 try that family first and the other when it has no address or none takes the connection. Left out, both families, as Go connects. Not with unix_socket or a proxy_url other than direct, and a request with it is refused rather than sent through the environment's proxy. See docs/REQUESTS.md#address-families.",
+                "enum": [
+                  "ip4",
+                  "ip6",
+                  "prefer_ip4",
+                  "prefer_ip6",
+                  ""
+                ],
+                "type": "string"
+              },
               "keepalive_count_max": {
                 "description": "sshfile and sshexec: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3.",
                 "minimum": 1,

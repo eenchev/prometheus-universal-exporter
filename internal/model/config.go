@@ -283,6 +283,10 @@ type RequestConfig struct {
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	NewConnection        bool              `yaml:"new_connection"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// IPFamily is the address family the requests connect over: ip4 or
+	// ip6 alone, prefer_ip4 or prefer_ip6 first, and "" for Go's own
+	// choice, both families raced (fetch/ipfamily.go).
+	IPFamily string `yaml:"ip_family"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses

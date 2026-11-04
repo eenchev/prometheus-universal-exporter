@@ -45,6 +45,7 @@ func TestARepeatedProbeParameterIsRefused(t *testing.T) {
 		"follow_redirects":     "&follow_redirects=true&follow_redirects=false",
 		"enable_http2":         "&enable_http2=true&enable_http2=",
 		"new_connection":       "&new_connection=true&new_connection=false",
+		"ip_family":            "&ip_family=ip4&ip_family=ip6",
 		"retry_attempts":       "&retry_attempts=1&retry_attempts=2",
 		"retry_backoff":        "&retry_backoff=1s&retry_backoff=2s",
 		"param_region":         "&param_region=us&param_region=eu",

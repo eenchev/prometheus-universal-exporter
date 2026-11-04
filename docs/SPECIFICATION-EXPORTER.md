@@ -148,6 +148,9 @@ Parameters:
   negotiate HTTP/2.
 - `new_connection`: optional boolean overriding whether every request of the
   probe is sent on a connection of its own (§ 42.15b).
+- `ip_family`: optional `ip4`, `ip6`, `prefer_ip4` or `prefer_ip6`
+  overriding the address family the probe's requests connect over
+  (§ 42.15b).
 
 When the selected collector enables caching, the exporter MUST serve a stored
 result instead of contacting the target while a cached entry for the identical
@@ -1018,6 +1021,7 @@ and the source MUST list the opt-in types.
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `new_connection` | `false` | Every request on a connection of its own, closed after its answer (§ 42.15b). |
+| `ip_family` | both | The address family the requests connect over: `ip4`, `ip6`, `prefer_ip4` or `prefer_ip6` (§ 42.15b). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings, or `any` as the only entry, which MUST accept every status from 100 to 599 and no other; any other entry, `any` beside another entry and `any` in another case MUST be refused at load, naming the collector or the static target, and the schemas MUST refuse them too. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
@@ -1029,10 +1033,10 @@ and the source MUST list the opt-in types.
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>`. A static
+`ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>`. A static
 target using an `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`retry`, `headers`,
+`ip_family`, `retry`, `headers`,
 the basic and bearer credential keys, `accept_status`, `login` and
 `rate_limit`. No probe parameter MAY set or change `login` or `rate_limit`.
 Neither a probe parameter nor a static target MAY set `proxy_url` or
@@ -1408,7 +1412,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `login`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -1440,12 +1444,12 @@ lines: it only pulls. Its keys:
   escaping and a quote, comma, bracket or glob could change it.
 - It MUST accept the `/probe` parameters `path`, `timeout`,
   `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-  `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
+  `ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
   which replace the window for the probe; an empty one, or one holding
   whitespace, MUST be answered `400`, and so must either for a collector of
   another type. A static target using a `graphite` collector MAY set `path`,
   `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
-  `new_connection`, `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
+  `new_connection`, `ip_family`, `retry`, `headers`, the basic and bearer credential keys, `accept_status`,
   `login`, `rate_limit`, and `targets`, `from` and `until`, which replace the collector's. A static target's
   `targets` MUST be checked like the collector's, repeats included, and MUST
   NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
@@ -13774,7 +13778,7 @@ Tests MUST show:
   quantile given twice, next to each other or apart.
 - A probe giving `target`, `collector`, `method`, `path`, `timeout`, `body`,
   `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-  `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
+  `ip_family`, `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
   `400` naming the parameter, without a request to the target and without
   being counted; a repeated `header_<name>` and a repeated parameter the
   probe does not read are answered `200`. Every parameter of every
@@ -30270,6 +30274,15 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheTripsVariablesAreMadeOnlyForAProgramThatReadsThem` (transform): a program of `$status` runs with `$timings` and `$url` null and leaves them unmade; one of `$timings` reads them, and a second reads the same values, made once.
 - `TestThePythonRequestWritesTheTripAsJSONWould` (transform): the request line's `timings`, `tls`, `url` and `redirects`, of no trip, of a plain HTTP trip with a credential and markup in its query, and of a TLS trip whose certificate names need escaping, are what `json.Marshal` writes of jq's values.
 
+## 34.266 Uptime probes: address families, the answer's protocol and address, WebSocket upgrades and the URL's masking
+
+- `TestTheIPFamilyIsTheNetworkDialed` (fetch): `ip4` and `ip6` dial `tcp4` and `tcp6` alone, `prefer_ip4` and `prefer_ip6` theirs and, when it is refused, the other, with at most half of a deadline's time for the first, and an error naming both families when both fail; no `ip_family` dials `tcp`, and a dial of another network is left as it is.
+- `TestARequestConnectsOverItsIPFamily` (fetch): to a target on 127.0.0.1, `ip4`, `prefer_ip4` and `prefer_ip6` are answered and `ip6` fails saying the target has no IPv6 address and naming `request.ip_family`; a probe's and a static target's `ip6` fail the same after the collector kept an IPv4 connection.
+- `TestIP6ConnectsOverIPv6` (fetch): where IPv6 works, `ip6`, `prefer_ip4` and `prefer_ip6` reach a server on `[::1]` over it, and `ip4` fails saying it has no IPv4 address; skipped where there is no IPv6.
+- `TestTheIPFamilyIsCheckedAndRefusedWhereItCannotHold` (fetch): the four values load and parse as probe parameters; another value is refused as a key, a probe parameter (an empty one too) and a static target's key; `ip_family` beside a `proxy_url` other than `direct` and beside a `unix_socket` is refused at load, and as a probe parameter and a static target's key of such a collector; a request with it that the environment's proxy would carry fails before the proxy is asked anything, where the same request without it goes through the proxy.
+- `TestNoAddressOfTheFamily` (fetch): a dial over one family to an address of the other, and a lookup that found nothing, are a want of an address; a refused connection is not.
+- `TestEveryProbeParameterIsPartOfTheKey`, `TestARepeatedProbeParameterIsRefused`, `TestCollectorCacheKeyRequiresIdenticalRequest` (a probe with `ip_family` set differently, or left out, has a key of its own), `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters` and `TestTheKeysHeldToTextAloneAreTheSchemas` take `ip_family`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -31736,6 +31749,7 @@ insecure_skip_verify=<true|false>
 follow_redirects=<true|false>
 enable_http2=<true|false>
 new_connection=<true|false>
+ip_family=<ip4|ip6|prefer_ip4|prefer_ip6>
 retry_attempts=<non-negative integer>
 retry_backoff=<non-negative Go duration>
 ```
@@ -33663,8 +33677,8 @@ different transport behaviour never reads another scrape's cached result.
 Static targets MUST accept both settings in their `request` block with the
 same semantics.
 
-The Helm chart MUST expose both, and `new_connection`, as list-valued `params`
-entries on each `monitors` item.
+The Helm chart MUST expose both, and `new_connection` and `ip_family`, as
+list-valued `params` entries on each `monitors` item.
 
 ### 42.15b Connection reuse
 
@@ -33672,7 +33686,7 @@ Requests to targets and OTLP exports MUST reuse their connections. The
 exporter MUST keep one connection pool per distinct set of TLS settings — the
 CA, client certificate and key files, `insecure_skip_verify` and
 `server_name`, a static target's own `tls` block being its set — HTTP/2
-choice, proxy (`request.proxy_url` and its credentials' files, below) and
+choice, `ip_family` (below), proxy (`request.proxy_url` and its credentials' files, below) and
 Unix socket (`request.unix_socket`, below), shared by every collector and scrape that uses the same set, rather
 than a pool per request, which would reuse no connection, pay a TLS handshake
 on every HTTPS scrape, and leave each idle connection open until the other end
@@ -33689,7 +33703,33 @@ It MUST default to `false`, MUST be overridable by the `new_connection` probe
 parameter, accepting exactly `true` or `false` as `follow_redirects` is
 (§ 42.15) and part of the cache key, and MUST be settable by a static target
 of either type in its `request` block. A login's request MAY use a kept
-connection. A TLS file rotated on disk MUST be picked up
+connection.
+
+`request.ip_family` of an `http` or `graphite` collector MUST choose the
+address family every request of the collector's trip — each attempt, each
+redirect followed, each page — connects to the target over: `ip4` and `ip6`
+MUST dial that family alone (Go's `tcp4` and `tcp6`), and a target with no
+address of it, a name whose lookup for the family finds none or an address of
+the other family written as the target, MUST fail with an error saying the
+target has no address of that family and naming `request.ip_family`;
+`prefer_ip4` and `prefer_ip6` MUST dial that family first and the other when
+the first has no address or none of its addresses takes the connection,
+giving the first family at most half of the time left under a deadline; left
+out, the exporter MUST dial as Go does, both families. Any other value MUST be
+refused at load, naming the collector, and the schemas MUST refuse it. It
+MUST be overridable by the `ip_family` probe parameter, whose value MUST be
+one of the four, any other, an empty one included, answered `400` before the
+target is contacted, and part of the cache key, and MUST be settable by a
+static target of either type in its `request` block, checked at load. The
+family MUST be part of the pool's settings, so a connection made over one
+family never carries a request that asked for the other. The exporter MUST
+NOT apply it to a connection it does not make to the target: it MUST be
+refused at load beside `request.unix_socket` and beside a `request.proxy_url`
+other than `direct`, as a probe parameter or a static target's key of such a
+collector, and a request with it that the environment's proxy would carry
+MUST fail, saying so, before the proxy is asked anything; a proxy looks the
+target's name up and chooses the family itself. A login's request MAY be made
+over either family. A TLS file rotated on disk MUST be picked up
 by the next request, with the previous pool's idle connections closed. Idle
 connections MUST time out (90 seconds), and a pool unused for five minutes —
 such as one a reload made obsolete — MUST be closed and dropped. A TLS

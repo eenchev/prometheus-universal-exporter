@@ -142,6 +142,11 @@ type TransportSettings struct {
 	// verified again on every probe, where a kept connection would answer
 	// with the certificate and the address of the probe that made it.
 	newConnections bool
+	// ipFamily is the collector's request.ip_family (ipfamily.go): the
+	// family every connection of the pool is made over, "" for Go's own
+	// choice. A connection made over one family must not carry a request
+	// that asked for the other.
+	ipFamily string
 }
 
 type cachedTransport struct {
@@ -186,7 +191,7 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 		return nil, err
 	}
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	dialTo := dialer.DialContext
+	dialTo := familyDialer(dialer.DialContext, settings.ipFamily)
 	if settings.socket != "" {
 		// Every connection goes to the socket, whatever host and port the
 		// URL names, and never through a proxy, the environment's

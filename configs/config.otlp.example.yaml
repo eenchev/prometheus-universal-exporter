@@ -133,6 +133,10 @@ collectors:
       # each looks the name up and verifies the certificate the target
       # serves now, as an uptime check wants. Defaults to false.
       # new_connection: false
+      # The address family the requests connect over: ip4 or ip6 alone,
+      # prefer_ip4 or prefer_ip6 first and the other after. Left out,
+      # either, as Go connects. Not with a proxy or a unix_socket.
+      # ip_family: prefer_ip6
       # Optional fixed-delay retries for transient target failures.
       # retry:
       #   attempts: 2

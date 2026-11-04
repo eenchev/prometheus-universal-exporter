@@ -955,6 +955,50 @@ handshake per request. A scrape overrides it with the `new_connection`
 parameter, and a static target in its own `request` block. A login's
 request is sent on a kept connection either way.
 
+### Address families
+
+A name with both IPv4 and IPv6 addresses is connected to over either: Go
+tries the family of the first address the lookup gave, and the other a
+moment later, and the first connection made is used. An `http` or
+`graphite` collector chooses the family with `ip_family`:
+
+```yaml
+request:
+  ip_family: ip6
+```
+
+| `ip_family` | Connects over |
+| --- | --- |
+| left out | either family, as Go connects |
+| `ip4`, `ip6` | that family alone. A target with no address of it — a name with none, or an address of the other family written as the target — fails: `www.example.com has no IPv6 address, and request.ip_family is ip6`. |
+| `prefer_ip4`, `prefer_ip6` | that family first, and the other when the first has no address, or none of its addresses takes the connection. Under a timeout the first family is given half of the time left, so an address that never answers leaves the other its half. |
+
+So an uptime check of a site's IPv6 is `ip_family: ip6`, which a site
+reachable over IPv4 alone fails, where Go would have answered over IPv4.
+It applies to every request of the collector — each [retry](#retries),
+each request a followed [redirect](#redirects-and-http2) makes, each page —
+and not to its [login](AUTHENTICATION.md#logging-in-to-a-target), which
+connects over either family. A scrape overrides it with the `ip_family`
+parameter, `params: {ip_family: [ip4]}`, which takes the four values and no
+other, `400` otherwise; a static target sets it in its own `request` block.
+Each family has a [connection pool](#connections) of its own, so a
+connection made over IPv4 never carries a request that asked for IPv6.
+
+The family is of the exporter's connection to the target, so it is refused
+where there is none:
+
+- beside [`unix_socket`](#over-a-unix-socket), whose connection has no
+  address family;
+- beside a [`proxy_url`](#a-collectors-own-proxy) other than `direct`, and
+  for a request the [environment's proxy](#proxies) would carry, which
+  fails before the proxy is asked anything: a proxy looks the target's name
+  up and connects to it over the family it chooses, and the exporter's own
+  connection, to the proxy, says nothing of the target's. Reach such a
+  target with `proxy_url: direct`, or name it in `NO_PROXY`.
+
+A probe parameter or a static target's `ip_family` for a collector with a
+socket or a proxy of its own is refused as the key is.
+
 ### Proxies
 
 Target requests and OTLP exports go through the proxy the environment names,
@@ -1048,6 +1092,8 @@ collectors:
   configuration's, and is not held to `allowed_targets` and `denied_targets`.
 - **Connections.** Collectors with different proxies, or different
   credentials for one, never share a connection ([Connections](#connections)).
+- **No [`ip_family`](#address-families)** beside a `proxy_url` other than
+  `direct`: the proxy chooses the family it connects to the target over.
 - **`--dry-run`** lists, for each `http` and `graphite` collector, the proxy
   in force under `request_policies` as `proxy`: its `proxy_url`, its own or
   its file's `defaults`', `direct`, or `environment` when it names none and
@@ -1131,7 +1177,9 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
   proxy does not apply, and the collector takes neither from its file's
   [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file).
   `--dry-run` lists the collector under `request_policies` with its
-  `unix_socket`, and no `proxy`.
+  `unix_socket`, and no `proxy`. [`ip_family`](#address-families) beside
+  `unix_socket` is refused too: the socket's connection has no address
+  family.
 - **Configuration only.** No probe parameter sets the socket, and neither does
   a static target or `defaults`: whoever can reach `/probe` names the URL,
   whose host only goes into the request, never the file the exporter
@@ -1658,8 +1706,8 @@ site_up == 0` lists the sites that are down.
 
 ### Compared with blackbox_exporter
 
-The series of blackbox_exporter's `http` prober, and what answers each
-here:
+The series of blackbox_exporter's `http` prober, and its address-family
+settings, and what answers each here:
 
 | blackbox_exporter | Here | Differences |
 | --- | --- | --- |
@@ -1671,6 +1719,7 @@ here:
 | `probe_http_redirects` | `site_http_redirects` | The same. |
 | `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
 | `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |
+| `preferred_ip_protocol`, `ip_protocol_fallback` (settings of the module) | [`ip_family`](#address-families) (a key of the request, and a probe parameter) | `preferred_ip_protocol: ip4` with `ip_protocol_fallback: true` is `prefer_ip4`, and with `false` it is `ip4`; `ip6` alike. blackbox_exporter prefers `ip6` by default, and falls back only when the name has no address of the family it prefers; `prefer_ip6` falls back too when none of those addresses takes the connection. Left out here, a site is connected to over either family, as Go connects. |
 
 Other series of blackbox_exporter's have no rule above, but read what is
 there: `probe_http_content_length` is `$headers["content-length"] |

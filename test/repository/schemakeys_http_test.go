@@ -229,6 +229,7 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.proxy_url", of: "with its scheme in capitals", document: jqCollector, at: request, setting: "      proxy_url: %s\n", valid: "HTTP://proxy.example:3128", invalid: "FTP://proxy.example", absent: true, empty: true, emptyWas: refused},
 		// A collector's Unix socket: both refuse a relative path, and take
 		// "" as the key left out.
+		{key: "collectors[].request.ip_family", document: jqCollector, at: request, setting: "      ip_family: %s\n", valid: "prefer_ip6", invalid: "ipv6", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.unix_socket", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/var/run/docker.sock", invalid: "var/run/docker.sock", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.unix_socket", of: "of nothing but blanks", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/run/php/php-fpm.sock", invalid: `"  "`, absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
@@ -309,6 +310,7 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].name", file: inTargetFile, document: oneTarget, at: "    name: a\n", setting: "    name: %s\n", valid: "a", invalid: "bad-name", absent: true, empty: true, emptyWas: refused},
 		{key: "targets[].collector", file: inTargetFile, document: oneTarget, at: "    collector: demo\n", setting: "    collector: %s\n", valid: "demo", emptyWas: taken, booleanAlone: `references unknown collector "true"`, numberAlone: `references unknown collector "1"`},
 		{key: "targets[].request.method", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      method: %s\n", valid: "POST", invalid: "FETCH", absent: true, empty: true, emptyWas: refused},
+		{key: "targets[].request.ip_family", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      ip_family: %s\n", valid: "ip4", invalid: "IP4", absent: true},
 		{key: "targets[].request.accept_status[]", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "targets[].request.accept_status[]", of: "written with a point", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
 		{key: "targets[].request.accept_status[]", of: "with an exponent", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},

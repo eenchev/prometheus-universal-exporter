@@ -370,6 +370,9 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 	if t.Request.NewConnection != nil {
 		values.Set("new_connection", strconv.FormatBool(*t.Request.NewConnection))
 	}
+	if t.Request.IPFamily != nil {
+		values.Set("ip_family", *t.Request.IPFamily)
+	}
 	if retry := t.Request.Retry; retry != nil {
 		if retry.Attempts != nil {
 			values.Set("retry_attempts", strconv.Itoa(*retry.Attempts))

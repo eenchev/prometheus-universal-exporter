@@ -30336,6 +30336,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator), changed: a copy of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own instance is lower.
 - `TestACopyAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
 
+## 34.269 Fixes to address families and masking
+
+- `TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers` (fetch): through `FetchCollector` and its cached transport, `prefer_ip6` to a target whose IPv6 dial never answers (simulated by the transport's dial function) dials IPv6 for at most about half of a 4s deadline and is then answered over IPv4, under the probe's deadline and under the request's own `timeout` alike.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33845,7 +33849,10 @@ the other family written as the target, MUST fail with an error saying the
 target has no address of that family and naming `request.ip_family`;
 `prefer_ip4` and `prefer_ip6` MUST dial that family first and the other when
 the first has no address or none of its addresses takes the connection,
-giving the first family at most half of the time left under a deadline; left
+giving the first family at most half of the time left under the request's
+deadline, the probe's or its own timeout, so that a family whose address
+never answers leaves the other its half within the same probe, though the
+HTTP client dials with a context detached from the request's; left
 out, the exporter MUST dial as Go does, both families. Any other value MUST be
 refused at load, naming the collector, and the schemas MUST refuse it. It
 MUST be overridable by the `ip_family` probe parameter, whose value MUST be

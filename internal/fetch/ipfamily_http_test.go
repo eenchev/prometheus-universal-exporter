@@ -274,3 +274,88 @@ func TestNoAddressOfTheFamily(t *testing.T) {
 		t.Error("a refused connection is no want of an address")
 	}
 }
+
+// prefer_ip6 to a target whose IPv6 address never answers falls back to
+// IPv4 within the probe, through the transport the request is made with:
+// net/http dials with a context that has dropped the request's deadline,
+// so the deadline reaches the dial as a value, and IPv6 is given half of
+// what is left of it, under the probe's deadline and under the request's
+// own timeout alike. A blackholed IPv6 address is a dial that waits for
+// its context, as one to an address that never answers waits for the
+// Dialer's timeout.
+func TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer server.Close()
+	collector := httpCollector(t, func(x *model.Collector) { x.Request.IPFamily = "prefer_ip6"; x.Request.NewConnection = true })
+	if _, err := FetchCollector(context.Background(), server.URL, collector, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var dialed []string
+	var ip6For []time.Duration
+	blackhole := func(ctx context.Context, network, address string) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, network)
+		mu.Unlock()
+		if network == "tcp6" {
+			start := time.Now()
+			select {
+			case <-ctx.Done():
+			case <-time.After(30 * time.Second): // the transport's Dialer.Timeout
+			}
+			mu.Lock()
+			ip6For = append(ip6For, time.Since(start))
+			mu.Unlock()
+			return nil, &net.OpError{Op: "dial", Net: network, Err: context.DeadlineExceeded}
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	}
+	transports.mu.Lock()
+	var replaced []*http.Transport
+	for settings, entry := range transports.entries {
+		if settings.ipFamily == "prefer_ip6" {
+			entry.transport.CloseIdleConnections()
+			entry.transport.DialContext = policyDialer(familyDialer(blackhole, "prefer_ip6"))
+			replaced = append(replaced, entry.transport)
+		}
+	}
+	transports.mu.Unlock()
+	if len(replaced) == 0 {
+		t.Fatal("no prefer_ip6 transport was made")
+	}
+	defer func() {
+		transports.mu.Lock()
+		defer transports.mu.Unlock()
+		for settings, entry := range transports.entries {
+			if settings.ipFamily == "prefer_ip6" {
+				delete(transports.entries, settings)
+				entry.transport.CloseIdleConnections()
+			}
+		}
+	}()
+	for _, c := range []struct {
+		name      string
+		deadline  time.Duration
+		overrides RequestOverrides
+	}{
+		{"the probe's deadline", 4 * time.Second, RequestOverrides{}},
+		{"the request's timeout", time.Minute, RequestOverrides{Timeout: 4 * time.Second}},
+	} {
+		mu.Lock()
+		dialed, ip6For = nil, nil
+		mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), c.deadline)
+		start := time.Now()
+		response, err := FetchCollector(ctx, server.URL, collector, c.overrides, nil)
+		took := time.Since(start)
+		cancel()
+		mu.Lock()
+		if err != nil || response.StatusCode != http.StatusOK || strings.Join(dialed, ",") != "tcp6,tcp4" {
+			t.Errorf("prefer_ip6 to a blackholed IPv6 address under %s of 4s: dialed %v, took %s: %v", c.name, dialed, took, err)
+		}
+		if len(ip6For) != 1 || ip6For[0] > 2500*time.Millisecond {
+			t.Errorf("under %s of 4s IPv6 was given %v, want about half", c.name, ip6For)
+		}
+		mu.Unlock()
+	}
+}

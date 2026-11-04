@@ -811,6 +811,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		requestContext, cancel = context.WithTimeout(ctx, overrides.Timeout)
 	}
 	defer cancel()
+	// The request's deadline, the probe's or its own, goes to its dials as
+	// a value, which net/http keeps where it drops the deadline: a
+	// prefer_ip4 or prefer_ip6 dial gives the first family half of what is
+	// left of it (ipfamily.go).
+	requestContext = withDialDeadline(requestContext)
 	method, requestBody := methodBody(c)
 	if overrides.Method != "" {
 		method = overrides.Method

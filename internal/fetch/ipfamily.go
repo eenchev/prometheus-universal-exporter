@@ -23,7 +23,10 @@ import (
 //     the first has no address, or none of its addresses takes the
 //     connection: a site whose IPv6 is broken is still reached, over IPv4.
 //     Under a deadline the first family is given half of the time left, so
-//     an address that never answers leaves the other its half.
+//     an address that never answers leaves the other its half. The deadline
+//     is the request's (withDialDeadline): net/http dials with a context
+//     detached from the request's, which keeps its values and loses its
+//     deadline, so a dial's own context has none.
 //   - Left out, Go dials as it always has: the addresses of both families,
 //     the first one's family raced against the other's a moment later
 //     (RFC 6555's "happy eyeballs").
@@ -94,7 +97,7 @@ func familyDialer(dial func(ctx context.Context, network, address string) (net.C
 		}
 		first := ctx
 		cancel := func() {}
-		if deadline, ok := ctx.Deadline(); ok {
+		if deadline, ok := dialDeadline(ctx); ok {
 			first, cancel = context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/2))
 		}
 		conn, err := dial(first, networks[0], address)
@@ -113,6 +116,34 @@ func familyDialer(dial func(ctx context.Context, network, address string) (net.C
 		}
 		return nil, fmt.Errorf("%w; then over %s: %w", err, familyName(networks[1]), fallbackErr)
 	}
+}
+
+type dialDeadlineKey struct{}
+
+// withDialDeadline is ctx carrying its deadline as a value too, for the
+// dials of the requests made with it (dialDeadline). net/http dials a
+// request's connection with context.WithoutCancel of the request's context,
+// so that a connection a cancelled request began can still serve the next:
+// the dial keeps the values and loses the deadline, and a prefer_ip4 or
+// prefer_ip6 dial would give its first family the Dialer's whole timeout,
+// failing the request at its deadline over an address that never answers
+// without trying the other family.
+func withDialDeadline(ctx context.Context) context.Context {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, dialDeadlineKey{}, deadline)
+}
+
+// dialDeadline is the deadline of a dial: its context's own, or else the
+// one of the request that asked for it (withDialDeadline).
+func dialDeadline(ctx context.Context) (time.Time, bool) {
+	if deadline, ok := ctx.Deadline(); ok {
+		return deadline, true
+	}
+	deadline, ok := ctx.Value(dialDeadlineKey{}).(time.Time)
+	return deadline, ok
 }
 
 // noAddressOf says whether err is a dial's over one family to a host that

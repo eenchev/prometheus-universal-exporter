@@ -971,7 +971,7 @@ request:
 | --- | --- |
 | left out | either family, as Go connects |
 | `ip4`, `ip6` | that family alone. A target with no address of it — a name with none, or an address of the other family written as the target — fails: `www.example.com has no IPv6 address, and request.ip_family is ip6`. |
-| `prefer_ip4`, `prefer_ip6` | that family first, and the other when the first has no address, or none of its addresses takes the connection. Under a timeout the first family is given half of the time left, so an address that never answers leaves the other its half. |
+| `prefer_ip4`, `prefer_ip6` | that family first, and the other when the first has no address, or none of its addresses takes the connection. Under a deadline, the probe's or the collector's `timeout`, the first family is given half of the time left, so an address that never answers leaves the other its half within the same probe. |
 
 So an uptime check of a site's IPv6 is `ip_family: ip6`, which a site
 reachable over IPv4 alone fails, where Go would have answered over IPv4.

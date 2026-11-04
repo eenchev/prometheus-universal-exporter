@@ -24,7 +24,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   address family its requests connect over, as blackbox_exporter's
   `preferred_ip_protocol` and `ip_protocol_fallback` do: `ip4` or `ip6`
   alone, failing when the target has no address of it, or `prefer_ip4` or
-  `prefer_ip6` first and the other after. Left out, either family, as
+  `prefer_ip6` first and the other after, the first given half of the
+  time left so that one that never answers leaves the other its half of
+  the same probe. Left out, either family, as
   before. A probe parameter and a static target set it too; it is refused
   beside a `unix_socket` or a proxy, which chooses the family itself
   ([Address families](docs/REQUESTS.md#address-families)).

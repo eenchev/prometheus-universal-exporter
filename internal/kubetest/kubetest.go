@@ -25,7 +25,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // Server is a stand-in API server.
@@ -40,7 +39,7 @@ type Server struct {
 	forbid   map[string]bool
 	raw      map[string]string
 	requests []Request
-	delay    time.Duration
+	holdFrom int
 }
 
 // List is what a listing of a path answers: the list's kind and
@@ -129,12 +128,13 @@ func (s *Server) RequireToken(token string) {
 	s.token = token
 }
 
-// Slow has the server take d to answer each request from now on, or its
-// client to give up first.
-func (s *Server) Slow(d time.Duration) {
+// HoldFrom has the server hold the answer to its n-th request, counted from
+// 1 since it started, and to every one after it, until the client gives up,
+// so a test of a deadline does not hang on how fast the machine is.
+func (s *Server) HoldFrom(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.delay = d
+	s.holdFrom = n
 }
 
 // Requests are the requests the server was sent, in order.
@@ -151,14 +151,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	forbidden := s.forbid[r.URL.Path]
 	raw, answered := s.raw[r.URL.Path]
 	token := s.token
-	delay := s.delay
+	hold := s.holdFrom > 0 && len(s.requests) >= s.holdFrom
 	s.mu.Unlock()
-	if delay > 0 {
-		select {
-		case <-time.After(delay):
-		case <-r.Context().Done():
-			return
-		}
+	if hold {
+		<-r.Context().Done()
+		return
 	}
 	if token == "" {
 		raw, _ := os.ReadFile(filepath.Join(s.Dir, "token"))

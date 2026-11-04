@@ -16,6 +16,29 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Nothing; you can upgrade without changes.
+
+### New
+
+- The chart's `healthProbes.mode: exec` runs the liveness and readiness
+  probes as the exporter's `--healthcheck` in the container instead of HTTP
+  GETs from the kubelet.
+- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
+  as blackbox_exporter's uptime checks are declared: its prober the
+  exporter's Service at `/probe`, the entry's `collector` sent as the
+  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
+  its `ingress` selects, as the targets. Empty by default, so nothing is
+  rendered and the Probe CRD is needed only with an entry.
+- `server.pythonMaxIdleWorkers` and `server.pythonIdleTimeout` set the
+  exporter's `--python.max-idle-workers` and `--python.idle-timeout`,
+  `server.debugDangerous` its `--web.debug.dangerous`, and
+  `server.statusRefresh` its `--web.status-refresh`; each is left out when
+  empty or false, so the exporter's default applies.
+
+## exporter 2.0.0
+
+### What changed for you
+
 - The self-metrics have a histogram more of each collector, always:
   `http_exporter_probe_duration_seconds{collector,kind}`, 16 more lines of
   the text format a collector, and 16 more for one a static target names.
@@ -321,9 +344,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `--healthcheck` asks a running exporter whether it is ready (`/ready`), or
   with `--healthcheck=health` alive (`/health`), and exits 0 or 1, for a
   container health check in an image without `curl`.
-- The chart's `healthProbes.mode: exec` runs the liveness and readiness
-  probes as the exporter's `--healthcheck` in the container instead of HTTP
-  GETs from the kubelet.
 - `request.unix_socket` sends an `http` collector's requests over a Unix
   domain socket, such as Docker's `/var/run/docker.sock` or a php-fpm status
   socket, as `curl --unix-socket` does; the URL's host is still the `Host`
@@ -380,12 +400,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   In the playground Tab indents by two spaces and Shift+Tab outdents (Esc,
   then Tab, leaves the editor), and Ctrl+Enter or ⌘+Enter runs from
   anywhere on the page.
-- The chart's `probes` renders a Prometheus Operator `Probe` for each entry,
-  as blackbox_exporter's uptime checks are declared: its prober the
-  exporter's Service at `/probe`, the entry's `collector` sent as the
-  `collector` parameter, and its `targets`, a list of URLs, or the Ingresses
-  its `ingress` selects, as the targets. Empty by default, so nothing is
-  rendered and the Probe CRD is needed only with an entry.
 
 ### Fixed
 

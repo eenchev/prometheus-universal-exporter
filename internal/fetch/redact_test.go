@@ -222,6 +222,34 @@ func TestRedactText(t *testing.T) {
 	}
 }
 
+// A URL in logged text has its query's and its path's code and ticket
+// masked, as a URL shown anywhere else has, while a field or an element
+// of the text named code or ticket is kept.
+func TestRedactTextMasksTheCodeAndTicketOfAURL(t *testing.T) {
+	for text, want := range map[string]string{
+		`<a href="https://app.example/cb?code=S1&state=x">continue</a>`:      `<a href="https://app.example/cb?code=<redacted>&state=x">continue</a>`,
+		"redirected to https://app.example/x;ticket=S2 and failed":           "redirected to https://app.example/x;ticket=<redacted> and failed",
+		"see /cb?state=x&auth_code=S3&lang=en":                               "see /cb?state=x&auth_code=<redacted>&lang=en",
+		`<a href="/cb?a=1&amp;code=S4">`:                                     `<a href="/cb?a=1&amp;code=<redacted>">`,
+		"/login?service=x;Ticket=S5":                                         "/login?service=x;Ticket=<redacted>",
+		`{"code":401,"ticket":"T-1","next":"/cb?country_code=BG&barcode=1"}`: `{"code":401,"ticket":"T-1","next":"/cb?country_code=<redacted>&barcode=1"}`,
+	} {
+		if got := RedactText(text); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", text, got, want)
+		}
+	}
+	for _, text := range []string{
+		"<error><code>401</code><message>denied</message></error>",
+		`{"error":{"code":"NOT_FOUND","ticket":"T-1"}}`,
+		"code=401 ticket=T-1",
+		"status;code: 401",
+	} {
+		if got := RedactText(text); got != text {
+			t.Errorf("RedactText(%q) changed it to %q", text, got)
+		}
+	}
+}
+
 // An error quoting a URL, as Go's HTTP client quotes the one it requested,
 // quotes it without its credentials, and still is what it was.
 func TestRedactURLErrors(t *testing.T) {

@@ -30341,6 +30341,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers` (fetch): through `FetchCollector` and its cached transport, `prefer_ip6` to a target whose IPv6 dial never answers (simulated by the transport's dial function) dials IPv6 for at most about half of a 4s deadline and is then answered over IPv4, under the probe's deadline and under the request's own `timeout` alike.
 - `TestTheURLOfAHeaderIsMasked` (fetch): `Location`, `location` and `Content-Location` have every query value, a credential's path parameter and the userinfo masked and the fragment dropped, a path alone kept and a URL that does not parse `<redacted>`; `Refresh` with `url=`, with a quoted `URL=` and with a bare URL after `,` has its URL masked and a delay alone kept; each `<…>` of `Link` is masked and its parameters kept; another header is kept as it came.
 - `TestTheURLOfARedirectsHeadersIsMaskedInTheDebugReport` (exporter): a `302`'s `Location`, `Content-Location`, `Refresh` and `Link` holding a session, a `sid`, a `code`, a `token`, a `ticket` and a `sig` are shown masked, and another header as it came, in a debug probe's report and the debug page's response headers, neither holding a secret.
+- `TestRedactTextMasksTheCodeAndTicketOfAURL` (fetch): in logged text, a URL's `?code=`, `;ticket=`, `&auth_code=`, `&amp;code=`, `;Ticket=` and `?country_code=` are masked and `&barcode=` kept; `<code>401</code>`, JSON fields `code` and `ticket`, `code=401` after a space and `;code:` are kept.
 
 # 35. Documentation requirements
 
@@ -34567,7 +34568,10 @@ read as a credential's when `code` (OAuth's authorization code) or `ticket`
 (a CAS service ticket) is a whole word of it (`code`, `auth_code`,
 `country_code`, but not `barcode` or `codec`); a header's, a field's or an
 element's name with them MUST NOT, so an error body's `<code>401</code>` is
-shown. Wherever a URL is shown — a log line, a label, `$url`, a debug
+shown, but in text (`fetch.RedactText`) a name right after a `?`, a `&` or a
+`;` and right before a `=`, a parameter of a URL's query or path, MUST be
+read as a query parameter's, so a URL in a logged body has its `code` and
+`ticket` masked as it would anywhere else. Wherever a URL is shown — a log line, a label, `$url`, a debug
 report, an error — the value of each path parameter, what follows a `;` in
 a segment of its path up to the next `;` or `/`, whose name reads as a
 query parameter's would MUST be masked as `<redacted>` where it stands

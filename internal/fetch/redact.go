@@ -566,7 +566,8 @@ func redactElements(text string) string {
 // basic credential, a JSON Web Token, a URL's userinfo, and the value of a
 // key, a field or an XML element whose name reads as a credential's
 // (CredentialName, the rule a header's and a query parameter's name are
-// held to). It errs towards masking: a word that only looks like a
+// held to), and of a URL's query or path parameter whose name reads as a
+// query parameter's would (textCredential). It errs towards masking: a word that only looks like a
 // credential's value may be masked too.
 func RedactText(text string) string {
 	for _, c := range textCredentials {
@@ -577,7 +578,7 @@ func RedactText(text string) string {
 	done := 0
 	for _, m := range textField.FindAllStringSubmatchIndex(text, -1) {
 		// A field found inside a value already masked is part of it.
-		if m[0] < done || !CredentialName(text[m[2]:m[3]]) {
+		if m[0] < done || !textCredential(text, m[2], m[3]) {
 			continue
 		}
 		values := textValue
@@ -597,6 +598,21 @@ func RedactText(text string) string {
 	}
 	b.WriteString(text[done:])
 	return b.String()
+}
+
+// textCredential says whether the name text[start:end] of a textField reads
+// as a credential's: by CredentialName, or, when it is a query's or a path's
+// parameter — right after a ?, a & or a ;, and right before a = — by the rule
+// for a query parameter's name (credentialQueryName), with code and ticket,
+// so a URL in logged text, …/cb?code=…&state=x or …/x;ticket=…, has them
+// masked as the URL shown anywhere else has. A field of JSON or an element
+// named code, "code":401 or <code>401</code>, is no URL's and is kept.
+func textCredential(text string, start, end int) bool {
+	name := text[start:end]
+	if CredentialName(name) {
+		return true
+	}
+	return start > 0 && strings.IndexByte("?&;", text[start-1]) >= 0 && end < len(text) && text[end] == '=' && credentialQueryName(name)
 }
 
 // RedactURLErrors withholds the credentials of every URL quoted by a

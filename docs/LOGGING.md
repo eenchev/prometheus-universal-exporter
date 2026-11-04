@@ -283,7 +283,9 @@ a whole word of it: `?code=<redacted>&state=x`. As a whole word they mask
 some parameters that hold no secret, `country_code`, `zip_code` or
 `promo_code`, but not `barcode` or `codec`; as a header's name, or a
 field's in a logged body, they are left alone, an error body's
-`<code>401</code>` being no secret. A
+`<code>401</code>` being no secret, but a URL in a logged body has them
+masked as a query's or a path's parameter, right after a `?`, a `&` or a
+`;` and before a `=`: `href="/cb?code=<redacted>&state=x"`. A
 credential word run together with another, `apikey`, is still found, so a
 name errs towards being masked. A path parameter, what follows a `;` in a
 segment of the path, is masked by the same rule for its name, as a

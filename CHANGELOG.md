@@ -65,8 +65,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   carries. The value of a path parameter whose name reads as a
   credential's is now masked, `/app;jsessionid=<redacted>`, and `code`,
   `ticket`, `sid`, `hmac` and `otp` are credentials' names, each as a whole
-  word: `code` and `ticket` of a query parameter alone, the others of a
-  header and a field in a logged body too. A query parameter of a country's
+  word: `code` and `ticket` of a query or path parameter alone, a URL's in
+  a logged body among them, the others of a header and a field in a logged
+  body too. A query parameter of a country's
   or a promotion's code, `country_code`, is masked as well
   ([Logging](docs/LOGGING.md#repeated-failures)). A debug report and the
   debug page showed a redirect's `Location`, and `Content-Location`,

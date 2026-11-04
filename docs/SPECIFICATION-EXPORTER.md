@@ -29819,7 +29819,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.239 The pages' icon, the debug page's playground, and long texts and aligned controls on the pages
 
-- `TestThePagesIconIsTheProjectsLogo`: `internal/exporter/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
+- `TestThePagesIconIsTheProjectsLogo`: `internal/pagekit/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
 - `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
 - `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.

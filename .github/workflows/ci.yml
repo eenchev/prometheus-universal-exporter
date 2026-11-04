@@ -66,9 +66,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -102,6 +102,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -136,6 +137,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -713,9 +715,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -749,6 +751,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -783,6 +786,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -959,9 +963,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -995,6 +999,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1029,6 +1034,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -1199,9 +1205,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1235,6 +1241,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1269,6 +1276,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -1367,9 +1375,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1403,6 +1411,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1437,6 +1446,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -1581,9 +1591,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1617,6 +1627,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1651,6 +1662,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -1790,9 +1802,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -1826,6 +1838,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -1860,6 +1873,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -2017,9 +2031,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -2053,6 +2067,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -2087,6 +2102,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,
@@ -2259,9 +2275,9 @@ jobs:
               - '.githooks/**'
               - 'LICENSE'
               - '.artifacthub-repo.yml'
-              # The pages' icon, which the exporter package embeds: a copy
+              # The pages' icon, which the pagekit package embeds: a copy
               # of docs/logo.svg, which a test holds it to.
-              - 'internal/exporter/logo.svg'
+              - 'internal/pagekit/logo.svg'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -2295,6 +2311,7 @@ jobs:
               - 'internal/kubetest/**'
               - 'internal/ldaptest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/redistest/**'
               - 'internal/sqltest/**'
               - 'internal/sshtest/**'
@@ -2329,6 +2346,7 @@ jobs:
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
               - 'internal/model/**'
+              - 'internal/pagekit/**'
               - 'internal/testutil/**'
               - 'internal/transform/**'
       # paths-filter compares a tag push with the tag's merge base on main,

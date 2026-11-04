@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
 // The status page, at the static targets path followed by /status, shows
@@ -465,11 +466,7 @@ table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
-form.refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0; }
-form.refresh label { display: inline-flex; align-items: center; gap: 6px; }
-form.refresh a.button, form.refresh button, form.refresh select { display: inline-flex; align-items: center; height: 30px; font: inherit; line-height: 1; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; text-decoration: none; }
-form.refresh a.button { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
-dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+`+pagekit.RefreshStyle+`dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
 dialog#whole::backdrop { background: rgb(0 0 0 / 0.5); }
 dialog#whole .box { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 34px); padding: 16px; }
 dialog#whole pre { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

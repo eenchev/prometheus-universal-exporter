@@ -1,9 +1,9 @@
 package exporter
 
 import (
-	_ "embed"
-	"encoding/base64"
 	"html/template"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
 // Every HTML page of the exporter — the landing page, the collectors page,
@@ -81,73 +81,19 @@ const chromeTemplate = `{{define "chrome"}}<header class="site"><nav aria-label=
 {{- range .Links}}{{if .Current}}<span aria-current="page">{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}<a href="{{.Docs}}">Documentation</a>` + themePicker + `</span>
 </nav></header>{{end}}`
 
-// The theme is chosen in the bar of every page: Auto, the default, follows
-// the browser's light or dark preference, and Light and Dark hold whatever
-// it prefers. The choice is kept in the browser's local storage, so it holds
-// on every page and every visit; where the browser keeps none, as in some
-// private windows, it holds until the page is left. It is the data-theme
-// attribute of the html element (pageStyle), which themeHead sets from what
-// is kept before the page is first drawn, so a page never shows in the other
-// theme first; the status page's refresh swaps in its content alone, under
-// that element, and keeps it. Without JavaScript nothing could be kept or
-// applied, so the picker stays hidden and the pages follow the browser.
+// The theme is chosen in the bar of every page, as on the allocator's
+// (pagekit): themeHead sets the choice kept before the page is first drawn,
+// and themePicker, in the bar, changes it; the status page's refresh swaps
+// in its content alone and keeps it.
+const (
+	themeHead   = pagekit.ThemeHead
+	themePicker = pagekit.ThemePicker
+)
 
-// themeStorageKey is where the choice is kept: light or dark, and nothing
-// for Auto.
-const themeStorageKey = "theme"
-
-// themeHead is the script every page's head runs first.
-const themeHead = `<script id="theme-head">try { const theme = localStorage.getItem("` + themeStorageKey + `"); if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme; } catch (error) { /* Auto, then */ }</script>`
-
-// themePicker is the picker in the bar, shown by its script, which runs in
-// a function of its own so that nothing it declares meets a page's own
-// script.
-const themePicker = `<label class="theme" hidden>Theme <select id="theme">
-<option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option>
-</select></label><script id="theme-script">
-(() => {
-  const picker = document.getElementById("theme"), root = document.documentElement;
-  picker.value = root.dataset.theme || "auto";
-  picker.addEventListener("change", () => {
-    if (picker.value === "auto") delete root.dataset.theme;
-    else root.dataset.theme = picker.value;
-    try {
-      if (picker.value === "auto") localStorage.removeItem("` + themeStorageKey + `");
-      else localStorage.setItem("` + themeStorageKey + `", picker.value);
-    } catch (error) { /* chosen for this page alone */ }
-  });
-  picker.parentElement.hidden = false;
-})();
-</script>`
-
-// chromeStyle is the bar's part of pageStyle.
-const chromeStyle = `
-header.site { margin: -16px 0 20px; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
-header.site nav { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 20px; }
-header.site .pages { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
-header.site a { text-decoration: none; }
-header.site a:hover { text-decoration: underline; }
-header.site [aria-current="page"] { color: var(--fg); font-weight: 600; }
-header.site label.theme { color: var(--muted); }
-header.site .danger-badge { padding: 1px 8px; border: 1px solid var(--bad); border-radius: 999px; background: var(--danger-bg); color: var(--bad); font-size: 12px; font-weight: 600; }
-header.site label.theme[hidden] { display: none; }
-header.site label.theme select { width: auto; height: 26px; margin: 0 0 0 4px; padding: 0 30px 0 8px; border: 1px solid var(--line); border-radius: 6px; background-color: var(--bg); color: var(--fg); font: inherit; font-size: 13px; background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; }
-`
-
-// logoSVG is the project's logo, docs/logo.svg, which the go:embed pattern
-// cannot reach from here: logo.svg is a copy of it, and
-// TestThePagesIconIsTheProjectsLogo fails the moment the two differ.
-//
-//go:embed logo.svg
-var logoSVG []byte
-
-// pageIcon is the pages' browser-tab icon, the logo as a data: URL in the
-// page itself, so it needs no request: none that the exporter's Basic Auth
-// would ask a credential for, nor one a reverse proxy's path prefix would
-// have to be reckoned with. pagePolicy's img-src allows data: for it. It is
-// written into each page's template text rather than given to it as data,
-// since html/template would refuse a data: URL put in an href.
-var pageIcon = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString(logoSVG) + `">`
+// pageIcon is the pages' browser-tab icon, the project's logo as a data:
+// URL (pagekit.Icon), which no request of the browser needs the exporter's
+// Basic Auth for.
+var pageIcon = pagekit.Icon
 
 // pageTemplate parses a page's template, text, with the bar it places and
 // the template for a cell's long text (longtext.go).

@@ -529,7 +529,10 @@ A snapshot writes each source's targets as the target groups it answered, a
 group's labels once rather than once for each of its targets, so it is about
 the size of the sources' answers; it may be up to 16 MiB for each of the
 follower's sources, the bound of one answer, and a fetch may take 30s, where
-a check takes 1s. A source's targets in the snapshot are checked as its own
+a check takes 1s. The fetch runs beside the checks, one at a time, so a
+leader that hangs while it writes its snapshot delays none of them: the
+follower goes on checking every 2s, and when the leader stops being live it
+leads, or follows the next copy, at once, cancelling the fetch. A source's targets in the snapshot are checked as its own
 answer is, and held to the follower's `max_targets` of the source, or
 `--discovery.max-targets`: more targets than that, an empty target or a
 label of no label name refuse them, as the source's failure, logged and

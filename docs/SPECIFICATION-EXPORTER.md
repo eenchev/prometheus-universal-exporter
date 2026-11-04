@@ -30348,6 +30348,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheDebugReportsURLIsTheRulesURLWithItsQueryMasked` (fetch): the debug report's `$url` is `$url` with every query value but a configured pair's masked, its path's `%6A`, `%3B` and `%2F` as `$url` has them; a URL without a query, `<redacted>` and `""` are shown as they are.
 - `TestTheDebugReportShowsTheURLTheRulesRead` (exporter): after a redirect to `/x;%6Asessionid=…/app%3Bjsessionid=…?lang=en`, a label of `$url` is `/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>?lang=en` and a debug probe's report shows the same `$url` with `lang=<redacted>`; neither holds the session.
 
+## 34.270 Allocator status page and leader-only metrics
+
+- `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33486,7 +33490,12 @@ run of targets of the same labels one group with its labels once, as a
 file_sd or http_sd answer gives them, with an `ETag` of its digest and `304`
 to an `If-None-Match` naming it; the follower MUST fetch it within
 `SnapshotTimeout` (30s), its client having no shorter timeout of its own,
-and take a body of at most 16 MiB for each of its own sources (16 MiB with
+beside its rounds rather than within them, one fetch at a time (a round
+that finds the fetch of the same leader still running MUST NOT start
+another), so a leader that hangs while it writes its snapshot MUST NOT
+delay any check; a fetch MUST be cancelled, and MUST put nothing in force
+nor count as a failure, once the copy follows another copy, leads or shuts
+down; and take a body of at most 16 MiB for each of its own sources (16 MiB with
 none), and MUST name in `If-None-Match` the digest of what it holds itself,
 computed as the leader's is, never the `ETag` it was last given, so any
 difference, of a reload that reached one copy first or of the follower's own
@@ -33509,7 +33518,8 @@ NOT count it as taken for its snapshot's age, and MUST log so once after
 copy that comes to lead MUST start the loops with what its sources hold, the
 snapshot it took last, so no discovered target leaves the bundles until each
 source answers; one that leads without ever having taken a snapshot MUST
-first take that of the lowest other live copy, if any. A follower whose
+first take that of the lowest other live copy, if any, starting the loops
+once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
 failure, and log once after `PeerFailures` failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a

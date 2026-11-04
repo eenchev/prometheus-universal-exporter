@@ -57,8 +57,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `pue-allocator --peers` names every copy, itself included, a name
   resolving to all of them or a list, and `--peers.self` the copy's own
   address. The live copy of the lowest address leads and alone asks the
-  discovery sources; the others fetch what it found every 2 seconds and
-  serve the same bundles and targets, and when it goes, telling the others
+  discovery sources; the others fetch what it found every 2 seconds, beside
+  their checks of the leader so a leader that hangs while it answers does
+  not hold them up, and serve the same bundles and targets, and when it goes, telling the others
   for 3 seconds before it stops, the next copy leads at once from the
   targets it took last. New metrics say which copy leads and how long a
   follower has not held the leader's targets

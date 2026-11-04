@@ -155,8 +155,26 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 		return nil, err
 	}
 	path, isPath := fieldPath(query)
-	return &JQProgram{Code: code, path: path, isPath: isPath}, nil
+	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression)}, nil
 })
+
+// tripVariables are the variables of JQVariables that are of the request
+// an answer came from, whose values are made only for a program that reads
+// one (JQProgram.ReadsTrip).
+var tripVariables = []string{"$timings", "$tls", "$url", "$redirects"}
+
+// readsTrip says whether expression may read a variable of tripVariables.
+// jq names a variable only as it is written, so a program that reads one
+// holds its name; text that holds it otherwise, as in a string, only costs
+// the values it did not need.
+func readsTrip(expression string) bool {
+	for _, name := range tripVariables {
+		if strings.Contains(expression, name) {
+			return true
+		}
+	}
+	return false
+}
 
 // CompileJQ compiles a jq expression, once per distinct expression.
 func CompileJQ(expression string) (*gojq.Code, error) {
@@ -182,6 +200,10 @@ type JQProgram struct {
 	// path is the field names in order, when isPath: none for ".".
 	path   []string
 	isPath bool
+	// ReadsTrip says the program may read $timings, $tls, $url or
+	// $redirects, whose values are otherwise not made: a program that
+	// does not name them is run with them null.
+	ReadsTrip bool
 }
 
 // Lookup evaluates the program directly when it is a field path and every

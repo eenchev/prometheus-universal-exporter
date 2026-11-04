@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -196,17 +197,17 @@ func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
 		}
 		return response.Trip
 	}
-	if trip := tripOf(server.URL, true); trip.URL != server.URL+"/end?token=<redacted>&tenant=a" || trip.Redirects != 2 {
-		t.Errorf("after two redirects: %q, %d", trip.URL, trip.Redirects)
+	if trip := tripOf(server.URL, true); trip.ShownURL() != server.URL+"/end?token=<redacted>&tenant=a" || trip.Redirects != 2 {
+		t.Errorf("after two redirects: %q, %d", trip.ShownURL(), trip.Redirects)
 	}
-	if trip := tripOf(server.URL, false); trip.URL != server.URL || trip.Redirects != 0 {
-		t.Errorf("a redirect not followed: %q, %d", trip.URL, trip.Redirects)
+	if trip := tripOf(server.URL, false); trip.ShownURL() != server.URL || trip.Redirects != 0 {
+		t.Errorf("a redirect not followed: %q, %d", trip.ShownURL(), trip.Redirects)
 	}
 	withUser := strings.Replace(server.URL, "http://", "http://scraper:s3cret@", 1) + "/end?api_key=k&tenant=b#part"
-	if trip := tripOf(withUser, true); trip.URL != server.URL+"/end?api_key=<redacted>&tenant=b" || trip.Redirects != 0 {
-		t.Errorf("a URL with userinfo, a credential and a fragment: %q, %d", trip.URL, trip.Redirects)
+	if trip := tripOf(withUser, true); trip.ShownURL() != server.URL+"/end?api_key=<redacted>&tenant=b" || trip.Redirects != 0 {
+		t.Errorf("a URL with userinfo, a credential and a fragment: %q, %d", trip.ShownURL(), trip.Redirects)
 	}
-	trip := &HTTPTrip{URL: "http://x/", Redirects: 1}
+	trip := &HTTPTrip{URL: &url.URL{Scheme: "http", Host: "x", Path: "/"}, Redirects: 1}
 	if trip.JQURL() != "http://x/" || trip.JQRedirects() != 1 || (*HTTPTrip)(nil).JQURL() != nil || (*HTTPTrip)(nil).JQRedirects() != nil {
 		t.Error("$url and $redirects")
 	}

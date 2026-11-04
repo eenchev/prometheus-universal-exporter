@@ -128,6 +128,8 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 		return err
 	}
 	x.LabelParams = labels
+	// Its requests are timed only when a rule or script reads the timings.
+	x.TimingsUnread = !transform.ReadsTimings(x)
 	if err := checkPlaceholdersAreFilled(x); err != nil {
 		return err
 	}

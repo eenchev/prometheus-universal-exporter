@@ -1047,7 +1047,7 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		}
 		return false, ruleFailure(c, rule, err)
 	}
-	code, err := expr.CompileJQ(rule.Items)
+	program, err := expr.CompileJQProgram(rule.Items)
 	if err != nil {
 		_, failure := fail(fmt.Errorf("metric %q items: %w", rule.Name, err))
 		return failure
@@ -1059,7 +1059,7 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 	// gave instead of running the program again (jqSharing).
 	items := sharing.items(ctx, rule.Items, later)
 	if items.kept == nil {
-		items.running = runWithVariables(ctx, code, data, data)
+		items.running = runWithVariables(ctx, program, data, data)
 	}
 	// The rule's series are those of out from start on. Room is made for
 	// them at once where the number of items is known beforehand, and for
@@ -1171,7 +1171,7 @@ func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any,
 	if value, ok := program.Lookup(input); ok {
 		return []any{value}, nil
 	}
-	iterator := runWithVariables(ctx, program.Code, input, root)
+	iterator := runWithVariables(ctx, program, input, root)
 	values := []any{}
 	for {
 		value, ok := iterator.Next()
@@ -1209,7 +1209,7 @@ func runJQ(ctx context.Context, input, root any, expression string) (*jqValues, 
 	if value, ok := program.Lookup(input); ok {
 		return &jqValues{looked: value, hasLooked: true}, nil
 	}
-	return &jqValues{program: runWithVariables(ctx, program.Code, input, root)}, nil
+	return &jqValues{program: runWithVariables(ctx, program, input, root)}, nil
 }
 
 // next takes the program's next value; ok is false when there is none. An
@@ -1250,34 +1250,63 @@ func (v *jqValues) rest() int {
 }
 
 // responseVariablesKey holds the values of the jq variables after $root for
-// a response (expr.JQVariables): $status and $headers, the response's status as a
-// number and its headers as an object of lower-case names, each with its
-// values joined by ", ", as HTTP allows, null when the response has none;
-// and $timings, $tls, $url and $redirects, null but for the request of an
-// http or graphite collector (fetch.HTTPTrip).
+// a response (expr.JQVariables), a *responseVariables: $status and
+// $headers, the response's status as a number and its headers as an object
+// of lower-case names, each with its values joined by ", ", as HTTP allows,
+// null when the response has none; and $timings, $tls, $url and
+// $redirects, null but for the request of an http or graphite collector
+// (fetch.HTTPTrip).
 type responseVariablesKey struct{}
+
+// responseVariables are the jq variables of a response. Those of its
+// request, the trip's, are made the first time a program that reads one
+// runs (expr.JQProgram.ReadsTrip), and kept for the rest: most collectors'
+// rules read none, and making $timings and $tls for every response cost
+// them maps they never read.
+type responseVariables struct {
+	status, headers any
+	trip            *fetch.HTTPTrip
+	once            sync.Once
+	// read are all the variables, the trip's made, once once is done.
+	read expr.JQBindings
+}
 
 // withResponseVariables puts the jq variables for r into ctx.
 func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
 	if r == nil {
 		return ctx
 	}
-	vars := expr.JQBindings{Status: r.Status(), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects()}
+	vars := &responseVariables{status: r.Status(), trip: r.Trip}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {
 			headers[strings.ToLower(name)] = strings.Join(values, ", ")
 		}
-		vars.Headers = headers
+		vars.headers = headers
 	}
 	return context.WithValue(ctx, responseVariablesKey{}, vars)
 }
 
-// runWithVariables runs code on input with the jq variables of ctx's
+// values are the variables to run program with, root as $root.
+func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
+	if v == nil {
+		return expr.JQBindings{}.Values(root)
+	}
+	if !program.ReadsTrip {
+		return expr.JQBindings{Status: v.status, Headers: v.headers}.Values(root)
+	}
+	v.once.Do(func() {
+		trip := v.trip
+		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects()}
+	})
+	return v.read.Values(root)
+}
+
+// runWithVariables runs program on input with the jq variables of ctx's
 // response, root as $root.
-func runWithVariables(ctx context.Context, code *gojq.Code, input, root any) gojq.Iter {
-	vars, _ := ctx.Value(responseVariablesKey{}).(expr.JQBindings)
-	return code.RunWithContext(ctx, input, vars.Values(root)...)
+func runWithVariables(ctx context.Context, program *expr.JQProgram, input, root any) gojq.Iter {
+	vars, _ := ctx.Value(responseVariablesKey{}).(*responseVariables)
+	return program.Code.RunWithContext(ctx, input, vars.values(program, root)...)
 }
 
 // evaluateJQOne runs a program that must produce at most one value; no value
@@ -1293,7 +1322,7 @@ func evaluateJQOne(ctx context.Context, input, root any, expression string) (any
 	if value, ok := program.Lookup(input); ok {
 		return value, nil
 	}
-	iterator := runWithVariables(ctx, program.Code, input, root)
+	iterator := runWithVariables(ctx, program, input, root)
 	var first any
 	count := 0
 	for {

@@ -1453,6 +1453,12 @@ lookup and the connection are the proxy's, and the handshake the target's
 through the tunnel; a connection to an `https://` proxy is made by the
 exporter itself, and its handshake is not timed.
 
+A request is timed only when something can read its timings: when a jq or
+yq text of the collector names `$timings`, or it runs a Python script, and
+in a [debug probe](CONFIGURATION.md#debug-probes) or on the debug page,
+whose report shows them; the trace costs every request a few allocations
+that a collector reading none of it is spared.
+
 The values are of one request: the one whose status `$status` is. That is
 the last attempt of a [retried](#retries) request, the request a
 [redirect](#redirects-and-http2) led to, not the one redirected (so a

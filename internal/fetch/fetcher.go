@@ -884,6 +884,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// protocolErrors counts the attempts that ended with their HTTP/2
 	// connection closed for a protocol error before the answer's headers.
 	protocolErrors := 0
+	// Timing a request's phases costs a trace of nine hooks for every
+	// attempt, which is spared a collector none of whose rules reads
+	// $timings (model.Collector.TimingsUnread). A debug run times them
+	// whatever the rules read, since its report shows them.
+	timed := !c.TimingsUnread || debugRun(ctx)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -891,8 +896,14 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		// Each attempt times its own requests: what the answer carries is
 		// of the attempt that brought it (HTTPTrip).
-		timing := newTripTrace(time.Now())
-		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(requestContext, timing.hooks()), method, u.String(), reqBody)
+		attemptStart := time.Now()
+		attemptContext := requestContext
+		var timing *tripTrace
+		if timed {
+			timing = newTripTrace(attemptStart)
+			attemptContext = httptrace.WithClientTrace(requestContext, timing.hooks())
+		}
+		req, err := http.NewRequestWithContext(attemptContext, method, u.String(), reqBody)
 		if err != nil {
 			return nil, err
 		}
@@ -1028,7 +1039,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))
 		}
 		closeErr := resp.Body.Close()
-		trip := timing.trip(resp, time.Now())
+		trip := timing.trip(resp, attemptStart, time.Now())
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
 			traceBodyError(requestContext, readErr)

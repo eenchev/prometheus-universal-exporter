@@ -1084,7 +1084,7 @@ func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) 
 	for _, v := range []struct {
 		name  string
 		value any
-	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.URL, configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
+	}{{"$timings", r.Trip.JQTimings()}, {"$tls", r.Trip.JQTLS()}, {"$url", shownStart(fetch.RedactRequestURL(r.Trip.ShownURL(), configured), debugURLLimit)}, {"$redirects", r.Trip.JQRedirects()}} {
 		// As written, not escaped for HTML: the <redacted> of a masked
 		// query value reads as it is.
 		var value bytes.Buffer

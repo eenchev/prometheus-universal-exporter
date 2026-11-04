@@ -5889,7 +5889,12 @@ exporter's own dialer makes to an `https://` proxy. `$timings` MUST be
 `null` for every other request type, for a response pasted on the debug
 page, and in a pagination's `next` and a login's `token` expression.
 Python's `response.timings` MUST be the same, a dict with `None` for
-`null`, and `None` whole where `$timings` is `null`.
+`null`, and `None` whole where `$timings` is `null`. The phases MAY be left
+unmeasured for a collector none of whose texts names `$timings` and that
+runs no Python script, since no rule of it can read them; a debug run of it
+MUST still measure them, since its report shows them. The values of
+`$timings`, `$tls`, `$url` and `$redirects` MAY likewise be made only for a
+program whose text names one of them.
 
 Every jq program MUST also have `$tls` bound. For the request `$timings`
 describes, sent over TLS, it MUST be an object of the connection the answer
@@ -30259,6 +30264,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestNewConnectionIsAStaticTargetsKeyAndAProbeParameter` (fetch): a static target's `new_connection` becomes its override; a probe without it reuses the connection the one before left, and each probe with it connects anew.
 - `TestBooleanOverrideParsing` (fetch) takes `new_connection` with `follow_redirects`, `enable_http2` and `insecure_skip_verify`; `TestEveryProbeParameterIsPartOfTheKey`, `TestARepeatedProbeParameterIsRefused`, `TestCollectorCacheKeyRequiresIdenticalRequest` (a probe with `new_connection` set differently, or left out, has a key of its own) and `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters` take it among the `http` and `graphite` probe parameters.
 - `TestTheTLSPhaseThroughAnHTTPSProxyIsTheTargets` (fetch): through an `https://` proxy, a plain HTTP target has a `connect` phase, no `tls` phase and no `$tls`; an https target whose handshake takes 150 ms has a `tls` phase at least that long, and its own verified certificate in `$tls`, not the proxy's; the proxy's own certificate is still verified, a new connection to it against roots that do not hold it failing.
+- `TestARequestIsTimedOnlyWhereSomethingReadsItsTimings` (fetch): a collector marked as reading no timings has no `connect` or `first_byte` phase, a total, and its redacted `$url`; a debug run of it, and a collector that reads them, have both phases; on a kept connection its request makes at least 12 fewer allocations than a timed one. `BenchmarkAnHTTPProbe` measures both.
+- `TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings` (config): a loaded collector whose rules read `$tls` and `$status` is marked as reading no timings, and one with an `items` of `$timings` is not.
+- `TestReadsTimingsIsWhereARuleOrAScriptMayReadThem` (transform): `$timings` in an expression, an `items` expression, a label, a transform label or any other text of the collector, and a Python script or pre-script, read the timings; rules of `$status` and `$tls` alone do not.
+- `TestTheTripsVariablesAreMadeOnlyForAProgramThatReadsThem` (transform): a program of `$status` runs with `$timings` and `$url` null and leaves them unmade; one of `$timings` reads them, and a second reads the same values, made once.
+- `TestThePythonRequestWritesTheTripAsJSONWould` (transform): the request line's `timings`, `tls`, `url` and `redirects`, of no trip, of a plain HTTP trip with a credential and markup in its query, and of a TLS trip whose certificate names need escaping, are what `json.Marshal` writes of jq's values.
 
 # 35. Documentation requirements
 

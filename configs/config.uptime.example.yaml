@@ -47,6 +47,13 @@ collectors:
       - name: site_http_redirects
         description: How many redirects were followed
         expression: $redirects
+      - name: site_http_version
+        description: The version of HTTP the site answered in, 1.0, 1.1 or 2
+        expression: '$http_version | tonumber'
+      - name: site_ip_protocol
+        description: The IP version the answered request's connection was made over, 4 or 6
+        expression: '$remote_ip | if . == null then null elif contains(":") then 6 else 4 end'
+        required: false   # none through a proxy
       - name: site_http_ssl
         description: Whether the answered request was made over TLS
         expression: 'if $tls == null then 0 else 1 end'

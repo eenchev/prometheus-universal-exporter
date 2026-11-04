@@ -213,8 +213,8 @@ type Collector struct {
 	// required of every other collector. It is no key of the configuration.
 	RequestNotMade bool `yaml:"-"`
 	// TimingsUnread says no rule or script of the collector reads
-	// $timings (transform.ReadsTimings), so its requests are not timed,
-	// but in a debug run (fetch). It is set when the configuration loads;
+	// $timings or $remote_ip (transform.ReadsTimings), so its requests are
+	// not traced, but in a debug run (fetch). It is set when the configuration loads;
 	// a collector made otherwise has it false, and is timed. It is no key
 	// of the configuration.
 	TimingsUnread bool `yaml:"-"`

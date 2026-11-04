@@ -7,23 +7,34 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// ReadsTimings says whether a rule or a script of c may read the timings of
-// its request, $timings or Python's response.timings, which are measured
-// only when something reads them (model.Collector.TimingsUnread).
+// ReadsTimings says whether a rule or a script of c may read what only the
+// trace of its request sees: the timings, $timings or Python's
+// response.timings, and the address the connection was made to,
+// $remote_ip or response.remote_ip. A request is traced only when
+// something reads them (model.Collector.TimingsUnread).
 //
 // A Python script may reach response.timings by a name it makes, so a
 // collector with one always reads them. A jq or yq program can name a
-// variable only as it is written, so one that reads $timings holds that
-// text: every text of the collector is looked through for it, whichever
-// key holds it, so a key that comes to hold a program is never missed. A
-// text that holds it and is no program, or that names another variable
-// $timings of its own, only costs the timing it did not need.
+// variable only as it is written, so one that reads $timings or $remote_ip
+// holds that text: every text of the collector is looked through for them,
+// whichever key holds it, so a key that comes to hold a program is never
+// missed. A text that holds one and is no program, or that names another
+// variable of that name of its own, only costs the trace it did not need.
 func ReadsTimings(c *model.Collector) bool {
 	if c.Transform.Type == "python" || strings.TrimSpace(c.Transform.PreScript) != "" {
 		return true
 	}
-	return textSearch{text: "$timings", seen: map[uintptr]bool{}}.in(reflect.ValueOf(c).Elem())
+	for _, text := range tracedVariables {
+		if (textSearch{text: text, seen: map[uintptr]bool{}}).in(reflect.ValueOf(c).Elem()) {
+			return true
+		}
+	}
+	return false
 }
+
+// tracedVariables are the jq variables whose values only the trace of a
+// request sees.
+var tracedVariables = []string{"$timings", "$remote_ip"}
 
 // textSearch looks for text in every string of a value, however deep,
 // each pointer followed once.

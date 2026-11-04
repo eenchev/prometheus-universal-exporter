@@ -1468,6 +1468,8 @@ has the same on its `response`:
 | `$tls` | `response.tls` | The TLS connection the request was sent on, and the target's certificate |
 | `$url` | `response.url` | Where the request went, after the redirects it followed |
 | `$redirects` | `response.redirects` | How many redirects it followed, `0` for none |
+| `$http_version` | `response.http_version` | The version of HTTP the answer came in: `"1.0"`, `"1.1"` or `"2"` |
+| `$remote_ip` | `response.remote_ip` | The IP address the request's connection was made to |
 
 ```yaml
 transform:
@@ -1502,7 +1504,8 @@ through the tunnel; a connection to an `https://` proxy is made by the
 exporter itself, and its handshake is not timed.
 
 A request is timed only when something can read its timings: when a jq or
-yq text of the collector names `$timings`, or it runs a Python script, and
+yq text of the collector names `$timings` or `$remote_ip`, which the same
+trace sees, or it runs a Python script, and
 in a [debug probe](CONFIGURATION.md#debug-probes) or on the debug page,
 whose report shows them; the trace costs every request a few allocations
 that a collector reading none of it is spared.
@@ -1552,14 +1555,30 @@ parameter of another name is kept, and a URL that carries one a redirect
 chose, such as a login page's `?next=`, makes a series of every value. Keep
 the URL's start alone where that matters, `$url | split("?")[0]`.
 
-`$timings`, `$tls`, `$url` and `$redirects` are `null` for every other
+`$http_version` is the version of HTTP the same request's answer came in,
+`"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's `probe_http_version`
+writes it: `"2"` only where [`enable_http2`](#redirects-and-http2) let the
+request negotiate it. `$remote_ip` is the IP address its connection was
+made to, kept from an earlier request or made for it, `"203.0.113.7"` or
+`"2001:db8::7"`, the address the name resolved to and the family the
+connection took ([Address families](#address-families)). It is `null`
+through a [proxy](#proxies), whose address the connection is made to and is
+no address of the target's, and over a [Unix socket](#over-a-unix-socket),
+which has none. A name with several addresses, or one that moves, gives a
+value of each, so `$remote_ip` in a label makes a series of every address
+the site was reached at; the [uptime recipe](#uptime-probes) keeps the
+family alone, `4` or `6`.
+
+`$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and `$remote_ip`
+are `null` for every other
 request type, and on a response pasted on the [debug
 page](CONFIGURATION.md#the-debug-page); every jq and yq program has the
 variables, so a rule that reads them loads whatever the collector's type.
 A pagination's `next` and a login's `token` expression read them as `null`
 too. A [debug probe](CONFIGURATION.md#debug-probes)'s report and the debug
-page show their values under the response's status, `$url` with the values
-of the query masked as the report's request lines mask them.
+page show their values under the response's status, in that order, `$url`
+with the values of the query masked as the report's request lines mask
+them.
 
 ## Uptime probes
 
@@ -1595,6 +1614,11 @@ collectors:
             expression: .key
       - name: site_http_redirects
         expression: $redirects
+      - name: site_http_version
+        expression: '$http_version | tonumber'
+      - name: site_ip_protocol
+        expression: '$remote_ip | if . == null then null elif contains(":") then 6 else 4 end'
+        required: false   # none through a proxy
       - name: site_http_ssl
         expression: 'if $tls == null then 0 else 1 end'
       - name: site_tls_cert_expiry_timestamp_seconds
@@ -1638,7 +1662,14 @@ Each key has its part:
   rules read `$status` and the variables of [Timings, TLS and the final
   URL](#timings-tls-and-the-final-url), never the document.
 - `required: false` on the TLS rules: over plain HTTP `$tls` is `null`, and
-  those series are left out rather than reported as missing values.
+  those series are left out rather than reported as missing values; so is
+  `site_ip_protocol` through a proxy, where `$remote_ip` is `null`.
+- `site_ip_protocol` is the family of the address the site was reached at,
+  read from [`$remote_ip`](#timings-tls-and-the-final-url), and not the
+  address itself: a site behind several addresses, or one whose address
+  changes, would make a series of each in a label. Where the address is
+  wanted, an info series of it is one rule more, `expression: "1"` with a
+  label of `$remote_ip`, at that cost.
 
 Prometheus names each site as the probe's target:
 
@@ -1680,6 +1711,8 @@ site_http_duration_seconds{phase="first_byte"} 0.071
 site_http_duration_seconds{phase="tls"} 0.024
 site_http_duration_seconds{phase="total"} 0.072
 site_http_redirects 1
+site_http_version 1.1
+site_ip_protocol 6
 site_http_ssl 1
 site_tls_cert_expiry_timestamp_seconds 1767225599
 site_tls_version_info{cipher_suite="TLS_AES_128_GCM_SHA256",version="TLS 1.3"} 1
@@ -1693,6 +1726,8 @@ http_exporter_probe_elapsed_seconds 0.149
 | `site_http_status_code` | The status of the answer, after the redirects. |
 | `site_http_duration_seconds{phase}` | How long each phase of the answered request took ([`$timings`](#timings-tls-and-the-final-url)): `dns`, `connect` and `tls` each on its own, and `first_byte` and `total` from the request's start. A phase the request did not have, such as `tls` over plain HTTP, or `dns` to an IP address, has no series; with `new_connection` every probe has the other two. |
 | `site_http_redirects` | How many redirects were followed. |
+| `site_http_version` | The version of HTTP the site answered in, after its redirects: `1.1`, `2`, or `1` for HTTP/1.0. |
+| `site_ip_protocol` | `4` or `6`: the IP version of the address the answered request's connection was made to. Absent through a proxy. |
 | `site_http_ssl` | `1` when the answered request was made over TLS. |
 | `site_tls_cert_expiry_timestamp_seconds` | When the certificate the site served on this probe's connection expires, in Unix seconds; alert on it less `time()`. |
 | `site_tls_version_info{version,cipher_suite}` | The TLS version of the connection, `TLS 1.2` or `TLS 1.3`, and the cipher suite it settled on, by its IANA name, so an alert can name a site still on an old version or a weak suite. |
@@ -1717,6 +1752,8 @@ settings, and what answers each here:
 | `probe_http_duration_seconds{phase}` | `site_http_duration_seconds{phase}` | blackbox_exporter's phases, `resolve`, `connect`, `tls`, `processing` and `transfer`, are consecutive and summed over every request of the redirects. Here they are of the answered request alone; `dns`, `connect` and `tls` are its `resolve`, `connect` and `tls`, and `first_byte` and `total` run from its start, so `processing` is `first_byte` less the three before it and `transfer` is `total` less `first_byte`. Both connect anew for every request, blackbox_exporter always and this collector by its `new_connection`, so both time a lookup, a connection and a handshake on every probe. A phase that did not happen, `tls` over plain HTTP or `dns` to an IP address, has no series, where blackbox_exporter reports `0`. |
 | `probe_ssl_earliest_cert_expiry` | `site_tls_cert_expiry_timestamp_seconds` | blackbox_exporter's is the earliest expiry of the chain the site presented; here it is the site's own certificate's. Both are of the certificate the site presents now, on the probe's own connection. A [`tlscert`](TLSCERT.md) collector reads the whole chain, `chain.earliest_not_after`. |
 | `probe_http_redirects` | `site_http_redirects` | The same. |
+| `probe_http_version` | `site_http_version` | The same: `1.1` or `2`, of the last request. |
+| `probe_ip_protocol` | `site_ip_protocol` | The same, `4` or `6`, but of the address the answered request's connection was made to, where blackbox_exporter's is of the address it resolved the target's name to; the two differ only after a redirect to another host. Through a proxy it has no series here. `probe_ip_addr_hash` has no counterpart: `$remote_ip` is the address itself. |
 | `probe_http_ssl` | `site_http_ssl` | The same: whether the last request was made over TLS. |
 | `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |
 | `preferred_ip_protocol`, `ip_protocol_fallback` (settings of the module) | [`ip_family`](#address-families) (a key of the request, and a probe parameter) | `preferred_ip_protocol: ip4` with `ip_protocol_fallback: true` is `prefer_ip4`, and with `false` it is `ip4`; `ip6` alike. blackbox_exporter prefers `ip6` by default, and falls back only when the name has no address of the family it prefers; `prefer_ip6` falls back too when none of those addresses takes the connection. Left out here, a site is connected to over either family, as Go connects. |
@@ -1725,8 +1762,7 @@ Other series of blackbox_exporter's have no rule above, but read what is
 there: `probe_http_content_length` is `$headers["content-length"] |
 tonumber`, and `probe_http_last_modified_timestamp_seconds` is
 `$headers["last-modified"] | parse_time` (see the [value-parsing
-helpers](CONFIGURATION.md#value-parsing-helpers)); `probe_http_version` and
-`probe_ip_protocol` have no counterpart.
+helpers](CONFIGURATION.md#value-parsing-helpers)).
 
 What this collector does not do:
 

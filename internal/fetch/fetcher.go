@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -905,7 +906,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	protocolErrors := 0
 	// Timing a request's phases costs a trace of nine hooks for every
 	// attempt, which is spared a collector none of whose rules reads
-	// $timings (model.Collector.TimingsUnread). A debug run times them
+	// $timings or $remote_ip, the address the trace sees the connection
+	// made to (model.Collector.TimingsUnread). A debug run times them
 	// whatever the rules read, since its report shows them.
 	timed := !c.TimingsUnread || debugRun(ctx)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
@@ -1059,6 +1061,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		closeErr := resp.Body.Close()
 		trip := timing.trip(resp, attemptStart, time.Now())
+		// A connection through a proxy is to the proxy, whose address is
+		// not the target's: $remote_ip is null then.
+		if trip.RemoteIP.IsValid() && resp.Request != nil && viaProxy(proxy, resp.Request.URL) {
+			trip.RemoteIP = netip.Addr{}
+		}
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
 			traceBodyError(requestContext, readErr)

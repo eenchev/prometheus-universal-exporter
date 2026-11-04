@@ -1253,9 +1253,9 @@ func (v *jqValues) rest() int {
 // a response (expr.JQVariables), a *responseVariables: $status and
 // $headers, the response's status as a number and its headers as an object
 // of lower-case names, each with its values joined by ", ", as HTTP allows,
-// null when the response has none; and $timings, $tls, $url and
-// $redirects, null but for the request of an http or graphite collector
-// (fetch.HTTPTrip).
+// null when the response has none; and $timings, $tls, $url, $redirects,
+// $http_version and $remote_ip, null but for the request of an http or
+// graphite collector (fetch.HTTPTrip).
 type responseVariablesKey struct{}
 
 // responseVariables are the jq variables of a response. Those of its
@@ -1297,7 +1297,7 @@ func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
 	}
 	v.once.Do(func() {
 		trip := v.trip
-		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects()}
+		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects(), HTTPVersion: trip.JQHTTPVersion(), RemoteIP: trip.JQRemoteIP()}
 	})
 	return v.read.Values(root)
 }

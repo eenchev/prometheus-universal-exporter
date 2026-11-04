@@ -5895,10 +5895,11 @@ page, and in a pagination's `next` and a login's `token` expression.
 Python's `response.timings` MUST be the same, a dict with `None` for
 `null`, and `None` whole where `$timings` is `null`. The phases MAY be left
 unmeasured for a collector none of whose texts names `$timings` and that
-runs no Python script, since no rule of it can read them; a debug run of it
+runs no Python script, since no rule of it can read them, and names no
+`$remote_ip` either, which the same trace sees; a debug run of it
 MUST still measure them, since its report shows them. The values of
-`$timings`, `$tls`, `$url` and `$redirects` MAY likewise be made only for a
-program whose text names one of them.
+`$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and `$remote_ip`
+MAY likewise be made only for a program whose text names one of them.
 
 Every jq program MUST also have `$tls` bound. For the request `$timings`
 describes, sent over TLS, it MUST be an object of the connection the answer
@@ -5921,8 +5922,22 @@ other parameter as it was sent, and the fragment left out; and its userinfo
 MUST be left out, not shown as `redacted:redacted`. `$redirects` MUST be
 the number of redirects followed to it, `0` for none. Both MUST be `null`
 wherever `$timings` is. Python's `response.url` and `response.redirects`
-MUST be the same. A debug probe's report and the debug page MUST show
-`$timings`, `$tls`, `$url` and `$redirects`, in that order, as JSON not
+MUST be the same.
+
+Every jq program MUST also have `$http_version` and `$remote_ip` bound. For
+the request `$timings` describes, `$http_version` MUST be the version of
+HTTP its answer came in, `"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's
+`probe_http_version` writes it, whether or not the request was traced.
+`$remote_ip` MUST be the IP address the request's connection was made to,
+kept or new, as Go writes it, an IPv4 address mapped into IPv6 written as
+IPv4; it MUST be `null` for a request through a proxy, whose connection is
+to the proxy and whose address is not the target's, for one over a Unix
+socket, and for one that was not traced. A collector whose texts name
+`$remote_ip` MUST have its requests traced as one that names `$timings`
+does. Both MUST be `null` wherever `$timings` is. Python's
+`response.http_version` and `response.remote_ip` MUST be the same. A debug
+probe's report and the debug page MUST show `$timings`, `$tls`, `$url`,
+`$redirects`, `$http_version` and `$remote_ip`, in that order, as JSON not
 escaped for HTML, under the response's status, `$url` with its query values
 masked and its length cut as the report's request lines have a URL.
 
@@ -30282,6 +30297,12 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheIPFamilyIsCheckedAndRefusedWhereItCannotHold` (fetch): the four values load and parse as probe parameters; another value is refused as a key, a probe parameter (an empty one too) and a static target's key; `ip_family` beside a `proxy_url` other than `direct` and beside a `unix_socket` is refused at load, and as a probe parameter and a static target's key of such a collector; a request with it that the environment's proxy would carry fails before the proxy is asked anything, where the same request without it goes through the proxy.
 - `TestNoAddressOfTheFamily` (fetch): a dial over one family to an address of the other, and a lookup that found nothing, are a want of an address; a refused connection is not.
 - `TestEveryProbeParameterIsPartOfTheKey`, `TestARepeatedProbeParameterIsRefused`, `TestCollectorCacheKeyRequiresIdenticalRequest` (a probe with `ip_family` set differently, or left out, has a key of its own), `TestTheDebugPageAsksAnHTTPCollectorForAURLAndItsParameters` and `TestTheKeysHeldToTextAloneAreTheSchemas` take `ip_family`.
+- `TestTheTripHasTheAnswersHTTPVersionAndRemoteIP` (fetch): `$http_version` is `"1.1"`, `"1.0"` from a server answering in HTTP/1.0 and `"2"` over negotiated HTTP/2, traced or not; `$remote_ip` is `"127.0.0.1"` for a traced request to a target there, and `null` for one not traced, one through a collector's proxy's tunnel, one the environment's proxy answered and one over a Unix socket; an IPv4 address mapped into IPv6 is written as IPv4, and no trip has either.
+- `TestHTTPVersionAndRemoteIPAreBoundInEveryProgram` (transform): jq, yq and Python read the version and the address, as a number, a value and labels; `$remote_ip` is `null` where it is not known, and both are `null` without a trip.
+- `TestReadsTimingsIsWhereARuleOrAScriptMayReadThem` (transform) and `TestALoadedCollectorIsTimedOnlyWhereARuleReadsItsTimings` (config): a rule naming `$remote_ip` has its requests traced; one naming `$http_version` alone does not.
+- `TestThePythonRequestWritesTheTripAsJSONWould` (transform) takes `http_version` and `remote_ip`, of no trip, of HTTP/1.0 to an IPv4 address and of HTTP/2 to an IPv6 one.
+- `TestAProbeReadsTheTimingsOfItsRequest` and `TestAProbeReadsWhereItsRedirectsLed`: through `/probe` a rule reads `$http_version` as `1.1` and `$remote_ip` as `127.0.0.1`; the debug report and the debug page show `$http_version "1.1"` and `$remote_ip "127.0.0.1"` after `$redirects`.
+- `TestTheUptimeExampleAnswersTheDocumentedSeries` takes `site_http_version 1.1` and `site_ip_protocol 4` of a plain and a TLS site.
 
 # 35. Documentation requirements
 

@@ -28,6 +28,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   before. A probe parameter and a static target set it too; it is refused
   beside a `unix_socket` or a proxy, which chooses the family itself
   ([Address families](docs/REQUESTS.md#address-families)).
+- jq and yq rules of `http` and `graphite` collectors read `$http_version`,
+  the version of HTTP the answer came in, `"1.0"`, `"1.1"` or `"2"`, and
+  `$remote_ip`, the IP address the request's connection was made to, `null`
+  through a proxy or over a Unix socket; a Python script has them as
+  `response.http_version` and `response.remote_ip`, and a debug report
+  shows them after `$redirects`. The uptime example and recipe answer
+  `site_http_version` and `site_ip_protocol`, blackbox_exporter's
+  `probe_http_version` and `probe_ip_protocol`
+  ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
 
 ## exporter 2.0.0
 

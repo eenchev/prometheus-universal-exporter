@@ -72,8 +72,9 @@ func TestAProbeReadsTheTimingsOfItsRequest(t *testing.T) {
 	}
 	// The debug page shows them as the report does.
 	answer := postRun(t, server, map[string]any{"configured": "up", "target": target.URL}, http.StatusOK)
-	if answer.Response == nil || len(answer.Response.Variables) != 4 || !strings.HasPrefix(answer.Response.Variables[0], `$timings {"connect":`) || answer.Response.Variables[1] != "$tls null" ||
-		answer.Response.Variables[2] != `$url "`+target.URL+`"` || answer.Response.Variables[3] != "$redirects 0" {
+	if answer.Response == nil || len(answer.Response.Variables) != 6 || !strings.HasPrefix(answer.Response.Variables[0], `$timings {"connect":`) || answer.Response.Variables[1] != "$tls null" ||
+		answer.Response.Variables[2] != `$url "`+target.URL+`"` || answer.Response.Variables[3] != "$redirects 0" ||
+		answer.Response.Variables[4] != `$http_version "1.1"` || answer.Response.Variables[5] != `$remote_ip "127.0.0.1"` {
 		t.Errorf("the debug page's response: %+v", answer.Response)
 	}
 }
@@ -119,9 +120,11 @@ func TestAProbeReadsTheTLSConnectionOfItsRequest(t *testing.T) {
 }
 
 // Through /probe, rules read where the redirects led and how many there
-// were: a label of $url carries no credential the target's query held. A
-// debug probe's report shows $url and $redirects under $tls, the URL with
-// the query values masked as its request lines mask them.
+// were: a label of $url carries no credential the target's query held; and
+// the version of HTTP the answer came in and the address its connection was
+// made to. A debug probe's report shows $url, $redirects, $http_version and
+// $remote_ip under $tls, the URL with the query values masked as its
+// request lines mask them.
 func TestAProbeReadsWhereItsRedirectsLed(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,13 +142,20 @@ func TestAProbeReadsWhereItsRedirectsLed(t *testing.T) {
         labels:
           - name: url
             expression: $url
+      - name: uptime_http_version
+        expression: '$http_version | tonumber'
+      - name: uptime_remote_info
+        expression: "1"
+        labels:
+          - name: ip
+            expression: $remote_ip
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := flightServer(t, cfg.Collectors...)
 	got := probeOnce(t, server, probePath("up", target.URL, ""), nil)
-	for _, want := range []string{"uptime_status_code 200\n", "uptime_redirects 1\n", `uptime_final_url_info{url="` + target.URL + `/login?next=%2F&token=<redacted>"} 1` + "\n"} {
+	for _, want := range []string{"uptime_status_code 200\n", "uptime_redirects 1\n", `uptime_final_url_info{url="` + target.URL + `/login?next=%2F&token=<redacted>"} 1` + "\n", "uptime_http_version 1.1\n", `uptime_remote_info{ip="127.0.0.1"} 1` + "\n"} {
 		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) {
 			t.Errorf("%d %s; want %q", got.Code, got.Body, want)
 		}
@@ -154,7 +164,7 @@ func TestAProbeReadsWhereItsRedirectsLed(t *testing.T) {
 	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("up", target.URL, "&debug=true"), "/probe?")).Body.String()
 	// The report masks the values of a query the configuration did not
 	// set, as it does in its request lines.
-	if !strings.Contains(report, "\n  $tls null\n  $url \""+target.URL+"/login?next=<redacted>&token=<redacted>\"\n  $redirects 1\n") {
-		t.Errorf("the debug report does not show $url and $redirects under $tls:\n%s", report)
+	if !strings.Contains(report, "\n  $tls null\n  $url \""+target.URL+"/login?next=<redacted>&token=<redacted>\"\n  $redirects 1\n  $http_version \"1.1\"\n  $remote_ip \"127.0.0.1\"\n") {
+		t.Errorf("the debug report does not show $url, $redirects, $http_version and $remote_ip under $tls:\n%s", report)
 	}
 }

@@ -26,8 +26,11 @@ of the request's phases in seconds, `None` for a phase it did not have,
 `response.timings["first_byte"]`; `response.tls`, a dict of the TLS
 connection and the target's certificate, `response.tls["not_after"]`, `None`
 over plain HTTP; `response.url`, where the request went after its redirects,
-with its credentials withheld; and `response.redirects`, how many it
-followed. All four are `None` for every other request type.
+with its credentials withheld; `response.redirects`, how many it
+followed; `response.http_version`, the version of HTTP the answer came in,
+`"1.0"`, `"1.1"` or `"2"`; and `response.remote_ip`, the IP address the
+request's connection was made to, `"203.0.113.7"`, `None` through a proxy or
+over a Unix socket. All six are `None` for every other request type.
 
 `target` is the target exactly as the probe or the static target gave it,
 credentials included: `https://user:password@host/api?token=abc` reaches the

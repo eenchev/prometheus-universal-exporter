@@ -30303,6 +30303,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestThePythonRequestWritesTheTripAsJSONWould` (transform) takes `http_version` and `remote_ip`, of no trip, of HTTP/1.0 to an IPv4 address and of HTTP/2 to an IPv6 one.
 - `TestAProbeReadsTheTimingsOfItsRequest` and `TestAProbeReadsWhereItsRedirectsLed`: through `/probe` a rule reads `$http_version` as `1.1` and `$remote_ip` as `127.0.0.1`; the debug report and the debug page show `$http_version "1.1"` and `$remote_ip "127.0.0.1"` after `$redirects`.
 - `TestTheUptimeExampleAnswersTheDocumentedSeries` takes `site_http_version 1.1` and `site_ip_protocol 4` of a plain and a TLS site.
+- `TestAnHTTPCollectorChecksAWebSocketUpgrade` (exporter): the recipe's WebSocket check, against a handshake server that keeps sending frames after its `101`, answers `websocket_up 1` (the status `101` and the key's `Sec-WebSocket-Accept` read from `$headers`) and `websocket_http_status_code 101` within two seconds, with the connection closed within a second of the `101`, with `new_connection` and without, and over TLS under `enable_http2` to a server that speaks HTTP/2; the endpoint saw the configured `Upgrade` and key. Without the `Upgrade` header the endpoint's `400` is `websocket_up 0` under `accept_status: [any]`.
 
 # 35. Documentation requirements
 
@@ -33758,7 +33759,14 @@ handshake with a target MUST be given up after 10 seconds, whatever is left
 of the probe's deadline; a pool MAY be built with another limit, which the
 tests do (§ 34) and the exporter MUST NOT. A response
 body MUST be read to its end before it is closed where the exporter can, so
-the connection returns to the pool.
+the connection returns to the pool. A `101 Switching Protocols` answer MUST
+NOT have its body read: what follows it on the connection is the protocol
+switched to, such as a WebSocket's frames, which may never end. Its body
+MUST be empty, and its connection MUST be closed at once, kept for no
+other request, so a probe of a WebSocket endpoint's handshake ends when the
+handshake is answered. The `Connection` and `Upgrade` headers of a
+collector's `request.headers` MUST be sent as written, so an `http`
+collector can ask for the upgrade.
 
 Every transport MUST send its requests through the proxy the environment names:
 `HTTPS_PROXY` for `https` URLs, `HTTP_PROXY` for `http` ones, `NO_PROXY` for

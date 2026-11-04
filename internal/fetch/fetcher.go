@@ -1047,6 +1047,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		var body []byte
 		var readErr error
 		switch {
+		case resp.StatusCode == http.StatusSwitchingProtocols:
+			// A 101 has no body: what follows it on the connection is the
+			// protocol it switched to, such as a WebSocket's frames, which
+			// the server may send for as long as the connection is open.
+			// Go hands the connection over as the body; it is closed
+			// unread, so the answer is the status and the headers alone
+			// and the probe ends at once, rather than reading the
+			// protocol's traffic until its deadline.
+			body = []byte{}
 		case declared > 0:
 			body, readErr = readBody(resp.Body, limit, declared)
 		case method == http.MethodHead || resp.ContentLength == 0:

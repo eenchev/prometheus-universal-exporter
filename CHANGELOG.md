@@ -37,6 +37,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `site_http_version` and `site_ip_protocol`, blackbox_exporter's
   `probe_http_version` and `probe_ip_protocol`
   ([Timings, TLS and the final URL](docs/REQUESTS.md#timings-tls-and-the-final-url)).
+- [WebSocket endpoints](docs/REQUESTS.md#websocket-endpoints): the uptime
+  recipe checks a WebSocket endpoint's handshake with an `http` collector,
+  its request carrying the upgrade's headers and a rule comparing the
+  `Sec-WebSocket-Accept` it answers with.
+
+### Fixed
+
+- An answer `101 Switching Protocols`, as a WebSocket endpoint gives an
+  `http` collector that asks for the upgrade, had what followed it on the
+  connection, the WebSocket's frames, read as its body until the probe's
+  deadline, which failed the probe. It is now the status and the headers
+  alone, and its connection is closed at once.
 
 ## exporter 2.0.0
 

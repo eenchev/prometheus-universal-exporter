@@ -1456,6 +1456,12 @@ followed as before, and the status of the answer it leads to is the one
 accepted. A [static target](STATIC-TARGETS.md) may set its own `[any]`, or
 replace the collector's `[any]` with a list.
 
+A `101 Switching Protocols` has no body: what follows it on the connection
+is the protocol the server switched to. Its answer is the status and the
+headers alone, and the connection is closed at once, unread, never kept for
+another request, so a [WebSocket endpoint's](#websocket-endpoints) frames are
+not read as a body until the probe's deadline.
+
 ## Timings, TLS and the final URL
 
 Beside `$status` and `$headers`, jq and yq rules of an `http` or `graphite`
@@ -1738,6 +1744,64 @@ A site is down when either says so: `http_exporter_probe_success == 0`, no
 answer at all, or `site_up == 0`, an answer that is not a `2xx`. Both carry
 the job's and the target's labels, so `http_exporter_probe_success == 0 or
 site_up == 0` lists the sites that are down.
+
+### WebSocket endpoints
+
+A WebSocket endpoint is up when it accepts the handshake (RFC 6455): a
+`GET` asking to upgrade, which it answers `101 Switching Protocols` with the
+key's `Sec-WebSocket-Accept`. That is an `http` collector of its own, the
+handshake's headers its request's:
+
+```yaml
+collectors:
+  - name: websocket
+    report_failures: true
+    request:
+      type: http
+      method: GET
+      headers:
+        Connection: Upgrade
+        Upgrade: websocket
+        Sec-WebSocket-Version: "13"
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==   # any 16 bytes in base64
+      new_connection: true
+      accept_status: [101]
+    decoder:
+      type: none
+    transform:
+      type: jq
+    metrics:
+      - name: websocket_up
+        expression: 'if $status == 101 and $headers["sec-websocket-accept"] == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" then 1 else 0 end'
+      - name: websocket_http_status_code
+        expression: $status
+```
+
+- The four headers are sent as written: `Connection` and `Upgrade` are
+  hop-by-hop headers, which a collector's `headers` may set (a probe's
+  `header_` parameters never forward them). A request asking for a
+  WebSocket is sent over HTTP/1.1, even under
+  [`enable_http2`](#redirects-and-http2) to a server that speaks HTTP/2,
+  which has no `Upgrade`.
+- The key is any 16 bytes in base64, the same on every probe; the
+  `Sec-WebSocket-Accept` the endpoint answers it with is fixed by it, the
+  base64 of the SHA-1 of the key followed by
+  `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`. The key above is RFC 6455's own
+  example, whose answer is `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`; for another key,
+  `printf '%s' "<key>258EAFA5-E914-47DA-95CA-C5AB0DC85B11" | openssl sha1
+  -binary | base64` gives it. A rule comparing it tells a WebSocket server
+  from something that answers `101` without having read the key.
+- [`accept_status: [101]`](#accepting-other-statuses) takes the `101` as
+  the answer, and fails the probe on any other status, in the `http_status`
+  stage, which `report_failures` reports. With `accept_status: [any]`,
+  another status is `websocket_up 0` with its status instead.
+- The `101` is the answer: the headers alone, the connection closed at
+  once, unread, so the probe ends as soon as the handshake is answered,
+  however long the endpoint would keep sending.
+- An endpoint behind `wss://` is the same with an `https://` target, the
+  handshake made over TLS.
+
+The exporter checks the handshake only, and sends and reads no message.
 
 ### Compared with blackbox_exporter
 

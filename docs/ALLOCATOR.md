@@ -55,7 +55,7 @@ pue-allocator \
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
-| `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
+| `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every copy, this one included, so each finds its own address among them. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
 | `--peers.self` | none | This copy's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the copy finds itself among its peers' addresses by asking them. Only with `--peers`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
@@ -502,9 +502,20 @@ stops being live at once. A copy knows its own address from `--peers.self`,
 or else by asking: the address answering with its own process's name is
 itself. The leader is the live copy of the lowest address, itself included:
 IPv4 addresses before IPv6, each by its bytes, so `10.0.0.9` before
-`10.0.0.10`, then by port. A copy whose own address is not known counts as
-the highest, leading only while no other copy is live. Every copy that sees
-the same live copies so chooses the same leader.
+`10.0.0.10`, then by port. Every copy that sees the same live copies so
+chooses the same leader.
+
+A copy whose own address is not known, because `--peers` leaves it out and
+no `--peers.self` gives it, or because the copy cannot reach itself, cannot
+place itself in that order. It follows only a copy that discovers, which
+`/v1/peer` tells, as it tells whether the copy knows its own address: the
+lowest such copy that knows its own address, else the one of the lowest
+process name among those that do not, unless it leads itself and its own
+name is lower still; with no copy discovering it leads. Two such copies so
+settle on one leader within two checks, rather than each following the
+other with neither asking the sources. After three checks without finding
+its own address a copy logs an error once: list every copy in `--peers`,
+this one included, or give `--peers.self`.
 
 Only the leader asks the discovery sources. Every other copy, a follower,
 fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
@@ -641,7 +652,7 @@ holds a token again, logged once.
 | `POST /v1/heartbeat` | replica | The generation of the bundle the replica is to have. |
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
-| `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true}`: the copy's process, and whether it asks its discovery sources; `503` while it shuts down. |
+| `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true, "address_known": true}`: the copy's process, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
 | `GET /v1/peer/snapshot` | another copy | Every discovery source of the copy's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
 | `GET /healthz` | kubelet | `200` while the process serves. |

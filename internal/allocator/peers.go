@@ -127,15 +127,48 @@ func ParseSelf(raw, listenAddress string) (netip.AddrPort, error) {
 // leader.
 func comparePeers(a, b netip.AddrPort) int { return a.Compare(b) }
 
-// chooseLeader is the leader among this copy, of the address self, and
-// the live peers others, in order: the lowest of them, this copy counting
-// as the highest while its address is not known, so that it then leads
-// only when no other copy is live. leading says the leader is this copy.
-func chooseLeader(self netip.AddrPort, others []netip.AddrPort) (leader netip.AddrPort, leading bool) {
-	if len(others) == 0 || (self.IsValid() && comparePeers(self, others[0]) < 0) {
-		return self, true
+// livePeer is a live peer and its last answer at PeerPath.
+type livePeer struct {
+	addr   netip.AddrPort
+	answer peerAnswer
+}
+
+// chooseLeader is the leader among this copy, of the address self, its
+// process instance, discovering while it does, and the live peers others,
+// in order. leading says the leader is this copy.
+//
+// A copy that knows its address takes the lowest of its own and the
+// others'. One that does not cannot place itself among them, as when
+// --peers leaves its own address out or it cannot reach itself; were it
+// to follow the lowest other, two such copies would follow each other and
+// neither would discover. It follows only a copy that discovers, the
+// lowest that knows its own address, which leads by the order alone, and
+// else the lowest instance among those that do not, keeping on leading
+// itself when its own instance is lower still; with no copy discovering
+// it leads. Two copies of unknown addresses so settle on one leader, the
+// lower instance, even when both begin to lead in the same round.
+func chooseLeader(self netip.AddrPort, instance string, discovering bool, others []livePeer) (leader netip.AddrPort, leading bool) {
+	if self.IsValid() {
+		if len(others) == 0 || comparePeers(self, others[0].addr) < 0 {
+			return self, true
+		}
+		return others[0].addr, false
 	}
-	return others[0], false
+	var unranked *livePeer
+	for i := range others {
+		o := &others[i]
+		switch {
+		case !o.answer.Discovering:
+		case o.answer.AddressKnown:
+			return o.addr, false
+		case unranked == nil || o.answer.Instance < unranked.answer.Instance:
+			unranked = o
+		}
+	}
+	if unranked == nil || (discovering && instance < unranked.answer.Instance) {
+		return netip.AddrPort{}, true
+	}
+	return unranked.addr, false
 }
 
 // peerState is what a copy knows of one of its peers.
@@ -146,6 +179,8 @@ type peerState struct {
 	fails int
 	// self says the address is this copy's own.
 	self bool
+	// answer is the peer's last answer.
+	answer peerAnswer
 }
 
 // peers runs a copy's part among its peers.
@@ -160,8 +195,12 @@ type peers struct {
 
 	mu    sync.Mutex
 	known map[netip.AddrPort]*peerState
-	// self is this copy's address, invalid until it is known.
-	self netip.AddrPort
+	// self is this copy's address, invalid until it is known. rounds
+	// counts the rounds, and selfMissing says the address was still not
+	// known after PeerFailures of them, which is logged once.
+	self        netip.AddrPort
+	rounds      int
+	selfMissing bool
 	// decided says a leader has been chosen; leader is it, invalid when it
 	// is this copy and its address is not known, and leading says it is
 	// this copy.
@@ -289,6 +328,11 @@ type peerAnswer struct {
 	// Discovering says the copy asks its discovery sources itself: it
 	// leads, or runs without peers.
 	Discovering bool `json:"discovering"`
+	// AddressKnown says the copy knows its own address, and so leads by
+	// the order of the addresses alone, or runs without peers and never
+	// follows: a copy that does not know its own follows such a copy
+	// first (chooseLeader).
+	AddressKnown bool `json:"address_known"`
 }
 
 // errShuttingDown is a peer's answer that it is shutting down.
@@ -335,28 +379,28 @@ func (b *cancelBody) Close() error {
 	return err
 }
 
-// check asks addr whether it is up, and reports the instance answering.
-func (p *peers) check(ctx context.Context, addr netip.AddrPort) (string, error) {
+// check asks addr whether it is up, and reports its answer.
+func (p *peers) check(ctx context.Context, addr netip.AddrPort) (peerAnswer, error) {
 	resp, err := p.get(ctx, addr, PeerPath, "", PeerTimeout)
 	if err != nil {
-		return "", err
+		return peerAnswer{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil {
-		return "", err
+		return peerAnswer{}, err
 	}
 	switch {
 	case resp.StatusCode == http.StatusServiceUnavailable:
-		return "", errShuttingDown
+		return peerAnswer{}, errShuttingDown
 	case resp.StatusCode != http.StatusOK:
-		return "", fmt.Errorf("%s answered %s: %s", PeerPath, resp.Status, firstLine(body))
+		return peerAnswer{}, fmt.Errorf("%s answered %s: %s", PeerPath, resp.Status, firstLine(body))
 	}
 	var answer peerAnswer
 	if err := json.Unmarshal(body, &answer); err != nil || answer.Instance == "" {
-		return "", fmt.Errorf("%s answered no allocator's instance", PeerPath)
+		return peerAnswer{}, fmt.Errorf("%s answered no allocator's instance", PeerPath)
 	}
-	return answer.Instance, nil
+	return answer, nil
 }
 
 func firstLine(b []byte) string {
@@ -374,8 +418,8 @@ func (p *peers) round(ctx context.Context) {
 	p.mu.Unlock()
 
 	type result struct {
-		instance string
-		err      error
+		answer peerAnswer
+		err    error
 	}
 	results := make([]result, len(addrs))
 	var wg sync.WaitGroup
@@ -384,14 +428,17 @@ func (p *peers) round(ctx context.Context) {
 			continue
 		}
 		wg.Go(func() {
-			instance, err := p.check(ctx, addr)
-			results[i] = result{instance, err}
+			answer, err := p.check(ctx, addr)
+			results[i] = result{answer, err}
 		})
 	}
 	wg.Wait()
 	if ctx.Err() != nil {
 		return
 	}
+	p.a.dmu.Lock()
+	discovering := p.a.discovering
+	p.a.dmu.Unlock()
 
 	p.mu.Lock()
 	known := make(map[netip.AddrPort]*peerState, len(addrs))
@@ -403,7 +450,7 @@ func (p *peers) round(ctx context.Context) {
 		known[addr] = st
 		r := results[i]
 		switch {
-		case addr == self || r.instance == p.a.instance:
+		case addr == self || r.answer.Instance == p.a.instance:
 			st.self, st.live, st.fails = true, false, 0
 			if !p.self.IsValid() {
 				p.self, self = addr, addr
@@ -412,7 +459,7 @@ func (p *peers) round(ctx context.Context) {
 			if !st.live && st.fails >= PeerFailures {
 				p.a.logger.Info("an allocator copy answers again", "peer", addr.String())
 			}
-			st.live, st.fails = true, 0
+			st.live, st.fails, st.answer = true, 0, r.answer
 		default:
 			st.fails++
 			p.checkFailures++
@@ -426,14 +473,19 @@ func (p *peers) round(ctx context.Context) {
 		}
 	}
 	p.known = known
+	p.rounds++
+	if !self.IsValid() && p.rounds >= PeerFailures && !p.selfMissing {
+		p.selfMissing = true
+		p.a.logger.Error("no address of --peers answers as this copy, so it cannot place itself among its peers: list every copy in --peers, this one included, or give --peers.self; meanwhile it follows only a copy that discovers", "peers", strings.Join(p.o.Peers, ","))
+	}
 
-	var others []netip.AddrPort
+	var others []livePeer
 	for _, addr := range addrs {
 		if st := known[addr]; st.live && !st.self {
-			others = append(others, addr)
+			others = append(others, livePeer{addr, st.answer})
 		}
 	}
-	leader, leading := chooseLeader(self, others)
+	leader, leading := chooseLeader(self, p.a.instance, discovering, others)
 	// Leading, a copy whose own address became known has not changed
 	// leader.
 	changed := !p.decided || leading != p.leading || (!leading && leader != p.leader)
@@ -457,7 +509,7 @@ func (p *peers) round(ctx context.Context) {
 			// the lowest address does, starts from what another copy has,
 			// so its discovered targets do not leave the bundles until its
 			// sources first answer. A failure leaves it to its sources.
-			_, _ = p.fetchSnapshot(ctx, others[0])
+			_, _ = p.fetchSnapshot(ctx, others[0].addr)
 		}
 		p.a.setDiscovering(true)
 		return
@@ -677,7 +729,13 @@ func (a *Allocator) servePeer(w http.ResponseWriter, _ *http.Request) {
 	a.dmu.Lock()
 	discovering := a.discovering
 	a.dmu.Unlock()
-	writeJSON(w, peerAnswer{Instance: a.instance, Discovering: discovering})
+	known := true
+	if p := a.peers; p != nil {
+		p.mu.Lock()
+		known = p.self.IsValid()
+		p.mu.Unlock()
+	}
+	writeJSON(w, peerAnswer{Instance: a.instance, Discovering: discovering, AddressKnown: known})
 }
 
 func (a *Allocator) serveSnapshot(w http.ResponseWriter, r *http.Request) {

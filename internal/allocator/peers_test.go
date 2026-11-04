@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -13,8 +14,11 @@ import (
 
 // The copies' addresses are ordered by address and then port, IPv4 before
 // IPv6, numerically rather than as text, so 10.0.0.9 comes before 10.0.0.10
-// on every copy; the leader is the lowest of the live copies and this one,
-// which counts as the highest while its own address is not known.
+// on every copy; the leader is the lowest of the live copies and this one.
+// A copy whose own address is not known follows only a copy that
+// discovers: the lowest that knows its own address, or else the lowest
+// instance of those that do not, unless it leads itself and its own
+// instance is lower; with none discovering it leads.
 func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
 	addrs := []netip.AddrPort{
 		netip.MustParseAddrPort("[fd00::1]:9116"),
@@ -35,23 +39,38 @@ func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
 	}
 
 	self := netip.MustParseAddrPort("10.0.0.10:9116")
+	unknown := netip.AddrPort{}
+	// peer is a live peer: its address, then d when it discovers, k when
+	// it knows its own address, and its instance after a colon.
+	peer := func(spec string) livePeer {
+		addr, rest, _ := strings.Cut(spec, " ")
+		flags, instance, _ := strings.Cut(rest, ":")
+		return livePeer{netip.MustParseAddrPort(addr), peerAnswer{Instance: instance, Discovering: strings.Contains(flags, "d"), AddressKnown: strings.Contains(flags, "k")}}
+	}
 	for what, c := range map[string]struct {
-		self    netip.AddrPort
-		others  []string
-		leader  string
-		leading bool
+		self        netip.AddrPort
+		instance    string
+		discovering bool
+		others      []string
+		leader      string
+		leading     bool
 	}{
-		"alone":                        {self, nil, "10.0.0.10:9116", true},
-		"lower than every live peer":   {self, []string{"10.0.0.11:9116", "[fd00::1]:9116"}, "10.0.0.10:9116", true},
-		"a live peer lower":            {self, []string{"10.0.0.9:9116", "10.0.0.11:9116"}, "10.0.0.9:9116", false},
-		"its own address unknown":      {netip.AddrPort{}, []string{"10.0.0.11:9116"}, "10.0.0.11:9116", false},
-		"unknown, and no peer is live": {netip.AddrPort{}, nil, "invalid AddrPort", true},
+		"alone":                        {self, "m", false, nil, "10.0.0.10:9116", true},
+		"lower than every live peer":   {self, "m", false, []string{"10.0.0.11:9116 dk:a", "[fd00::1]:9116 k:b"}, "10.0.0.10:9116", true},
+		"a live peer lower":            {self, "m", false, []string{"10.0.0.9:9116 k:z", "10.0.0.11:9116 dk:a"}, "10.0.0.9:9116", false},
+		"unknown, and no peer is live": {unknown, "m", false, nil, "invalid AddrPort", true},
+		// A copy of unknown address follows no copy that does not discover.
+		"unknown, no peer discovers":                        {unknown, "m", false, []string{"10.0.0.9:9116 k:a", "10.0.0.11:9116 :b"}, "invalid AddrPort", true},
+		"unknown, a ranked peer discovers":                  {unknown, "a", true, []string{"10.0.0.9:9116 d:b", "10.0.0.11:9116 dk:z"}, "10.0.0.11:9116", false},
+		"unknown, a lower instance discovers":               {unknown, "m", true, []string{"10.0.0.9:9116 d:z", "10.0.0.11:9116 d:b"}, "10.0.0.11:9116", false},
+		"unknown, leading, of the lowest instance":          {unknown, "a", true, []string{"10.0.0.9:9116 d:z", "10.0.0.11:9116 d:b"}, "invalid AddrPort", true},
+		"unknown, not leading, a higher instance discovers": {unknown, "a", false, []string{"10.0.0.9:9116 d:z"}, "10.0.0.9:9116", false},
 	} {
-		var others []netip.AddrPort
+		var others []livePeer
 		for _, o := range c.others {
-			others = append(others, netip.MustParseAddrPort(o))
+			others = append(others, peer(o))
 		}
-		leader, leading := chooseLeader(c.self, others)
+		leader, leading := chooseLeader(c.self, c.instance, c.discovering, others)
 		if leader.String() != c.leader || leading != c.leading {
 			t.Errorf("%s: the leader is %s, leading %v; want %s, %v", what, leader, leading, c.leader, c.leading)
 		}

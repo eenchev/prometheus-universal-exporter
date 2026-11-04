@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -400,6 +401,54 @@ func TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks(t *testing.T) {
 		hasLine(t, c, `pue_allocator_discovery_refreshes_total{kind="probe",owner="websites",source="cmdb",result="failure"} 1`+"\n")
 		if !strings.Contains(c.logs.String(), "the leader's snapshot of it is refused") {
 			t.Errorf("%s: the refusal is not logged:\n%s", what, c.logs.String())
+		}
+	}
+}
+
+// Two copies whose --peers name only the other, neither given --peers.self,
+// cannot place themselves among their peers. Each follows only a copy that
+// discovers, so they settle on one leader, the lower instance when both
+// begin to lead in the same round, rather than each following the other
+// with neither discovering; each logs once that its own address is missing.
+func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
+	for _, together := range []bool{false, true} {
+		srv := newSDServer(t)
+		p := peerInputs(t, srv)
+		a, b := newPeerCopy(t, p, nil), newPeerCopy(t, p, nil)
+		token := func() (string, error) { return peerToken, nil }
+		a.a.UsePeers(PeerOptions{Peers: []string{b.addr.String()}, Token: token})
+		b.a.UsePeers(PeerOptions{Peers: []string{a.addr.String()}, Token: token})
+		for range PeerFailures + 2 {
+			if together {
+				var wg sync.WaitGroup
+				wg.Go(a.round)
+				wg.Go(b.round)
+				wg.Wait()
+			} else {
+				a.round()
+				b.round()
+			}
+		}
+		if a.discovering() == b.discovering() {
+			t.Fatalf("rounds together %v: the copies discover %v and %v, want one leader", together, a.discovering(), b.discovering())
+		}
+		leader, follower := a, b
+		if b.discovering() {
+			leader, follower = b, a
+		}
+		if together && leader.a.instance > follower.a.instance {
+			t.Errorf("the copy of the higher instance leads")
+		}
+		testutil.WaitFor(t, "the leader to discover", func() bool { return serves(leader, t, "first") })
+		follower.round()
+		if !serves(follower, t, "first") {
+			t.Errorf("rounds together %v: the follower serves %v", together, follower.probeTargets(t))
+		}
+		for _, c := range []*peerCopy{a, b} {
+			const missing = "no address of --peers answers as this copy"
+			if n := strings.Count(c.logs.String(), missing); n != 1 {
+				t.Errorf("rounds together %v: logged %q %d times, want once:\n%s", together, missing, n, c.logs.String())
+			}
 		}
 	}
 }

@@ -520,37 +520,39 @@ this one included, or give `--peers.self`.
 Only the leader asks the discovery sources. Every other copy, a follower,
 fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
 of its sources last found, and puts it in force as a source's answer would
-be, in place of asking the sources itself. A snapshot writes each source's
-targets as the target groups it answered, a group's labels once rather than
-once for each of its targets, so it is about the size of the sources'
-answers; it may be up to 16 MiB for each of the follower's sources, the
-bound of one answer, and a fetch may take 30s, where a check takes 1s. A
-source's targets in the snapshot are checked as its own answer is, and held
-to the follower's `max_targets` of the source, or `--discovery.max-targets`:
-more targets than that, an empty target or a label of no label name refuse
-them, as the source's failure, logged and counted in
-`pue_allocator_discovery_refreshes_total{result="failure"}`, and the source
-keeps what the follower holds of it. The copies so expand the same
+be, in place of asking the sources itself. The copies so expand the same
 input files with the same discovered targets, and serve the same bundles, of
-the same generations, and the same service discovery answers. A snapshot
-names each source by its owner, the probe job or `discovered_targets` entry,
-its kind and its name, not by its settings, so during a rolling update that
-changes a source's settings the new copies still take the old leader's
-targets of it. A follower keeps what it holds of a source that has not
-answered on the leader. A source of the follower's input files that the
-leader's lack altogether, as a new one does while a changed ConfigMap has
-reached the follower's pod and not yet the leader's, the follower asks
-itself, as a leader would, until the leader's snapshot has it, so its
-targets are not missing from the follower's bundles meanwhile. A fetch names, in `If-None-Match`, the
-digest of what the follower holds, not of the snapshot it took last, and the
-leader answers `304` only when the two are the same: whatever made them
-differ since, a changed ConfigMap that reached the leader's pod first or the
-follower's own sources answering while it led for a moment, the next fetch
-brings the snapshot and puts it right. A follower whose input files differ
-from the leader's in their discovery sources holds other targets after
-taking the snapshot; `pue_allocator_snapshot_age_seconds` then grows, and
-after three such fetches in a row the follower logs so once, until the two
-agree again.
+the same generations, and the same service discovery answers. A follower
+keeps what it holds of a source that has not answered on the leader.
+
+A snapshot writes each source's targets as the target groups it answered, a
+group's labels once rather than once for each of its targets, so it is about
+the size of the sources' answers; it may be up to 16 MiB for each of the
+follower's sources, the bound of one answer, and a fetch may take 30s, where
+a check takes 1s. A source's targets in the snapshot are checked as its own
+answer is, and held to the follower's `max_targets` of the source, or
+`--discovery.max-targets`: more targets than that, an empty target or a
+label of no label name refuse them, as the source's failure, logged and
+counted in `pue_allocator_discovery_refreshes_total{result="failure"}`, and
+the source keeps what the follower holds of it.
+
+A snapshot names each source by its owner, the probe job or
+`discovered_targets` entry, its kind and its name, not by its settings, so
+during a rolling update that changes a source's settings the new copies
+still take the old leader's targets of it. A source of the follower's input
+files that the leader's lack altogether, as a new one does while a changed
+ConfigMap has reached the follower's pod and not yet the leader's, the
+follower asks itself, as a leader would, until the leader's snapshot has
+it, so its targets are not missing from the follower's bundles meanwhile.
+A fetch names, in `If-None-Match`, the digest of what the follower holds,
+not of the snapshot it took last, and the leader answers `304` only when the
+two are the same: whatever made them differ since, a changed ConfigMap that
+reached the leader's pod first or the follower's own sources answering while
+it led for a moment, the next fetch brings the snapshot and puts it right. A
+follower whose input files differ from the leader's in their discovery
+sources holds other targets after taking the snapshot;
+`pue_allocator_snapshot_age_seconds` then grows, and after three such
+fetches in a row the follower logs so once, until the two agree again.
 
 When the leader goes away, the copy of the next address leads from its next
 check: at once when the leader is shutting down, and after three failed
@@ -571,9 +573,8 @@ server stops: `/ready` answers `503`, a bundle long poll is answered at
 once, and heartbeats, bundles, service discovery answers and its snapshot
 are served as before. Every peer so sees it shutting down at its next
 check, and the next copy leads at once rather than after three refused
-connections.
-Copies being replaced one at a time, as a rolling update does, so keep the
-targets. Peers are not a consensus: a network split that leaves two groups
+connections. Copies being replaced one at a time, as a rolling update does,
+so keep the targets. Peers are not a consensus: a network split that leaves two groups
 of copies unable to reach each other gives each group a leader, each asking
 the sources on its own timer, and while the split lasts the replicas'
 bundles and the job's targets can flip between the two groups' findings, as

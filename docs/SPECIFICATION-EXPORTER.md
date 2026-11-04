@@ -30332,7 +30332,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for a copy of one source or none, 32 MiB for one of two.
 - `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
 - `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
-- `TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two copies whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in the same rounds, settle within five rounds on one leader, the lower instance when they check together; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
+- `TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two copies whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
 - `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator), changed: a copy of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own instance is lower.
 - `TestACopyAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
 
@@ -33435,75 +33435,76 @@ targets stay in force until the new source first answers, a failure before
 then keeping them and being counted; a source of a new name or kind MUST
 start with nothing found.
 
-**Peers.** With `--peers`, `host:port` entries, comma-separated, each with
-a host and a decimal port from 1 to 65535 (anything else MUST exit 2), a
-copy MUST, at its start and then every `PeerInterval` (2s), resolve each
-entry to every address its host has (an IP address taken as it is, an
-IPv4-mapped IPv6 address as IPv4; a lookup that fails keeping the addresses
-of the last, logged once while its text stays the same) and ask every
-address but its own at `GET /v1/peer` with the API's bearer token within
-`PeerTimeout` (1s), without a proxy. `--peers.self`, only with `--peers`
-(exit 2 otherwise), MUST be an IP address, taking the port of
-`--web.listen-address`, or an IP address and a port, and is the copy's own
-address, a peer even when no entry resolves to it; without it, the address
-whose answer names the copy's own process (a random instance made at its
-start) MUST be taken for its own. A copy MUST be live once it has answered,
-until `PeerFailures` (3) checks in a row have failed, and MUST stop being
-live at once when it answers `503`, which `/v1/peer` MUST answer from the
-first `SIGTERM` or `SIGINT`, the copy then serving its API on, as it does
-during a shutdown otherwise, for `PeerShutdownDelay` (`PeerInterval` and
-`PeerTimeout`, 3s) before its server shuts down, so every peer's next check
-gets the `503` rather than a refused connection; and otherwise its process's instance, whether
-it discovers, and whether it knows its own address (`true` without
-`--peers`). The leader of a copy that knows its own address MUST be the
-lowest of the live copies and the copy itself, ordered by
-`netip.AddrPort.Compare` (IPv4 before IPv6, then by the address's bytes,
-then by port). A copy that does not know its own address MUST NOT follow a
-copy that does not discover: it MUST follow the lowest live copy that
-discovers and knows its own address, else the live copy of the lowest
-instance among those that discover, unless it discovers itself and its own
-instance is lower, and lead when no live copy discovers; it MUST log an
-error once when its own address is still not known after `PeerFailures`
-rounds. `--peers`'s help MUST say to list every copy, this one included. Only the leader MUST run the
-discovery sources' refresh loops; a follower MUST stop them, keeping what
-they found, and fetch the leader's `GET /v1/peer/snapshot` with the token
-every round, which MUST answer every source of the copy's input files,
-whether it has answered and what it last found, by the source's identity
-(the kind of its owner, the owner, its kind and its name, not its
-settings), its targets written as target groups, each run of targets of the
-same labels one group with its labels once, as a file_sd or http_sd answer
-gives them, with an `ETag` of its digest and `304` to an `If-None-Match`
-naming it; the follower MUST fetch it within `SnapshotTimeout` (30s), its
-client having no shorter timeout of its own, and take a body of at most
-16 MiB for each of its own sources (16 MiB with none), and MUST name in `If-None-Match` the digest of what
-it holds itself, computed as the leader's is, never the `ETag` it was last
-given, so any difference, of a reload that reached one copy first or of the
-follower's own sources while it led, is answered with the snapshot. The
-follower MUST put each source the snapshot holds in
-force as that source's answer would be, so the copies' bundle generations and
-service discovery answers are equal, after the same checks (no empty target,
-no label of no label name) and the same bound, its own `max_targets` of the
-source or `--discovery.max-targets`: a source's targets refused MUST be the
-source's failure, logged and counted in
+**Peers.** With `--peers`, `host:port` entries, comma-separated, each with a
+host and a decimal port from 1 to 65535 (anything else MUST exit 2), a copy
+MUST, at its start and then every `PeerInterval` (2s), resolve each entry to
+every address its host has (an IP address taken as it is, an IPv4-mapped
+IPv6 address as IPv4; a lookup that fails keeping the addresses of the last,
+logged once while its text stays the same) and ask every address but its own
+at `GET /v1/peer` with the API's bearer token within `PeerTimeout` (1s),
+without a proxy. `--peers.self`, only with `--peers` (exit 2 otherwise),
+MUST be an IP address, taking the port of `--web.listen-address`, or an IP
+address and a port, and is the copy's own address, a peer even when no entry
+resolves to it; without it, the address whose answer names the copy's own
+process (a random instance made at its start) MUST be taken for its own. A
+copy MUST be live once it has answered, until `PeerFailures` (3) checks in a
+row have failed, and MUST stop being live at once when it answers `503`,
+which `/v1/peer` MUST answer from the first `SIGTERM` or `SIGINT`, the copy
+then serving its API on, as it does during a shutdown otherwise, for
+`PeerShutdownDelay` (`PeerInterval` and `PeerTimeout`, 3s) before its server
+shuts down, so every peer's next check gets the `503` rather than a refused
+connection; and otherwise its process's instance, whether it discovers, and
+whether it knows its own address (`true` without `--peers`). The leader of a
+copy that knows its own address MUST be the lowest of the live copies and
+the copy itself, ordered by `netip.AddrPort.Compare` (IPv4 before IPv6, then
+by the address's bytes, then by port). A copy that does not know its own
+address MUST NOT follow a copy that does not discover: it MUST follow the
+lowest live copy that discovers and knows its own address, else the live
+copy of the lowest instance among those that discover, unless it discovers
+itself and its own instance is lower, and lead when no live copy discovers;
+it MUST log an error once when its own address is still not known after
+`PeerFailures` rounds. `--peers`'s help MUST say to list every copy, this
+one included. Only the leader MUST run the discovery sources' refresh loops;
+a follower MUST stop them, keeping what they found, and fetch the leader's
+`GET /v1/peer/snapshot` with the token every round, which MUST answer every
+source of the copy's input files, whether it has answered and what it last
+found, by the source's identity (the kind of its owner, the owner, its kind
+and its name, not its settings), its targets written as target groups, each
+run of targets of the same labels one group with its labels once, as a
+file_sd or http_sd answer gives them, with an `ETag` of its digest and `304`
+to an `If-None-Match` naming it; the follower MUST fetch it within
+`SnapshotTimeout` (30s), its client having no shorter timeout of its own,
+and take a body of at most 16 MiB for each of its own sources (16 MiB with
+none), and MUST name in `If-None-Match` the digest of what it holds itself,
+computed as the leader's is, never the `ETag` it was last given, so any
+difference, of a reload that reached one copy first or of the follower's own
+sources while it led, is answered with the snapshot. The follower MUST put
+each source the snapshot holds in force as that source's answer would be, so
+the copies' bundle generations and service discovery answers are equal,
+after the same checks (no empty target, no label of no label name) and the
+same bound, its own `max_targets` of the source or
+`--discovery.max-targets`: a source's targets refused MUST be the source's
+failure, logged and counted in
 `pue_allocator_discovery_refreshes_total{result="failure"}` once while its
-text stays the same, the source keeping what the follower holds, and MUST keep what it holds of a source
-that has not answered on the leader. A source of the follower's that the
-snapshot lacks MUST be asked by the follower itself, from a refresh loop of
-its own, until a snapshot has it (or a `304` says the leader holds what the
-follower does), and only then stopped. A follower that, having taken the snapshot, still
-holds something else MUST NOT count it as taken for its snapshot's age, and
-MUST log so once after `PeerFailures` such fetches in a row and once when
-the two agree again. A copy that comes to lead MUST start the loops with
-what its sources hold, the snapshot it took last, so no discovered target
-leaves the bundles until each source answers; one that leads without ever
-having taken a snapshot MUST first take that of the lowest other live copy,
-if any. A follower whose fetches fail MUST keep serving the snapshot it took
-last, count each failure, and log once after `PeerFailures` failures in a
-row and once when a fetch succeeds again. A change of leader MUST be logged.
-Without `--peers` a copy MUST ask its sources itself, from its start.
-`docs/ALLOCATOR.md` MUST describe the peers, their flags, timings and
-metrics, and that a network split gives each side a leader, the targets then
-flipping between the two until it heals.
+text stays the same, the source keeping what the follower holds, and MUST
+keep what it holds of a source that has not answered on the leader. A source
+of the follower's that the snapshot lacks MUST be asked by the follower
+itself, from a refresh loop of its own, until a snapshot has it (or a `304`
+says the leader holds what the follower does), and only then stopped. A
+follower that, having taken the snapshot, still holds something else MUST
+NOT count it as taken for its snapshot's age, and MUST log so once after
+`PeerFailures` such fetches in a row and once when the two agree again. A
+copy that comes to lead MUST start the loops with what its sources hold, the
+snapshot it took last, so no discovered target leaves the bundles until each
+source answers; one that leads without ever having taken a snapshot MUST
+first take that of the lowest other live copy, if any. A follower whose
+fetches fail MUST keep serving the snapshot it took last, count each
+failure, and log once after `PeerFailures` failures in a row and once when a
+fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
+copy MUST ask its sources itself, from its start. `docs/ALLOCATOR.md` MUST
+describe the peers, their flags, timings and metrics, and that a network
+split gives each side a leader, the targets then flipping between the two
+until it heals.
 
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the

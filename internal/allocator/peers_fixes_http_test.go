@@ -407,13 +407,12 @@ func TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks(t *testing.T) {
 
 // Two copies whose --peers name only the other, neither given --peers.self,
 // cannot place themselves among their peers. Each follows only a copy that
-// discovers, so they settle on one leader, the lower instance when both
-// begin to lead in the same round, rather than each following the other
-// with neither discovering; each logs once that its own address is missing.
+// discovers, so they settle on one leader, even when their rounds run
+// together and both may begin to lead in the same round, rather than each
+// following the other with neither discovering; each logs once that its own address is missing.
 func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 	for _, together := range []bool{false, true} {
-		srv := newSDServer(t)
-		p := peerInputs(t, srv)
+		p := writeInputs(t, testConfig, "", twoJobs(stableSD(t).URL, false))
 		a, b := newPeerCopy(t, p, nil), newPeerCopy(t, p, nil)
 		token := func() (string, error) { return peerToken, nil }
 		a.a.UsePeers(PeerOptions{Peers: []string{b.addr.String()}, Token: token})
@@ -436,13 +435,11 @@ func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 		if b.discovering() {
 			leader, follower = b, a
 		}
-		if together && leader.a.instance > follower.a.instance {
-			t.Errorf("the copy of the higher instance leads")
-		}
-		testutil.WaitFor(t, "the leader to discover", func() bool { return serves(leader, t, "first") })
+		want := []string{"https://probes.example:9100/health"}
+		testutil.WaitFor(t, "the leader to discover", func() bool { return slices.Equal(jobTargets(leader.a, "websites"), want) })
 		follower.round()
-		if !serves(follower, t, "first") {
-			t.Errorf("rounds together %v: the follower serves %v", together, follower.probeTargets(t))
+		if got := jobTargets(follower.a, "websites"); !slices.Equal(got, want) {
+			t.Errorf("rounds together %v: the follower serves %v", together, got)
 		}
 		for _, c := range []*peerCopy{a, b} {
 			const missing = "no address of --peers answers as this copy"

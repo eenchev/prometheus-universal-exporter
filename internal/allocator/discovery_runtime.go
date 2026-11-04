@@ -209,8 +209,8 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 }
 
 func sameDiscovered(a, b []discovered) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
+	x, _ := json.Marshal(groupsOf(a))
+	y, _ := json.Marshal(groupsOf(b))
 	return string(x) == string(y)
 }
 

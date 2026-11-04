@@ -3,15 +3,19 @@
 package allocator
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -257,4 +261,113 @@ func TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt(t *testing.T) {
 		t.Errorf("the follower does not log that it stopped asking the source:\n%s", follower.logs.String())
 	}
 	hasLine(t, follower, "pue_allocator_snapshot_age_seconds 0\n")
+}
+
+// A file_sd file of one group of 10000 targets with 7 KB of labels, 236 KB
+// on disk, is a snapshot of about its own size, the group's labels written
+// once rather than once for each target (70 MB); the follower takes it and
+// serves every target. A snapshot may be up to 16 MiB for each of the
+// follower's sources.
+func TestASnapshotWritesAGroupsLabelsOnce(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(`[{"targets": [`)
+	for i := range 10000 {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"h-%d.example:%d"`, i, 1000+i)
+	}
+	fmt.Fprintf(&b, `], "labels": {"__meta_note": %q}}]`, strings.Repeat("y", 7000))
+	file := testutil.WriteIn(t, dir, "one.json", b.String())
+	probes := `probe_jobs:
+  - name: websites
+    collector: demo
+    target_template: https://{{address}}/
+    discovery:
+      - name: f
+        file_sd: {files: ["` + file + `"], refresh_interval: 1h}
+`
+	p := writeInputs(t, testConfig, "", probes)
+	leader, follower := sortedPair(newPeerCopy(t, p, nil), newPeerCopy(t, p, nil))
+	usePeers(leader, follower)
+	leader.round()
+	follower.round()
+	testutil.WaitFor(t, "the leader to discover", func() bool { return len(jobTargets(leader.a, "websites")) == 10000 })
+
+	req, _ := http.NewRequest(http.MethodGet, leader.server.URL+SnapshotPath, nil)
+	req.Header.Set("Authorization", "Bearer "+peerToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > 2*b.Len() {
+		t.Errorf("the snapshot of a %d byte file_sd file is %d bytes", b.Len(), len(body))
+	}
+	follower.round()
+	if n := len(jobTargets(follower.a, "websites")); n != 10000 {
+		t.Errorf("the follower serves %d targets, want 10000:\n%s", n, follower.logs.String())
+	}
+	hasLine(t, follower, "pue_allocator_snapshot_age_seconds 0\n")
+	if got, want := follower.a.maxSnapshotBytes(), 16<<20; got != want {
+		t.Errorf("a snapshot of a copy of one source may be %d bytes, want %d", got, want)
+	}
+	if got, want := New(nil, Options{Logger: testutil.QuietLogger(t)}).maxSnapshotBytes(), 16<<20; got != want {
+		t.Errorf("a snapshot of a copy of no source may be %d bytes, want %d", got, want)
+	}
+	two := New(mustLoad(t, peerInputs(t, newSDServer(t))), Options{Logger: testutil.QuietLogger(t)})
+	if got, want := two.maxSnapshotBytes(), 32<<20; got != want {
+		t.Errorf("a snapshot of a copy of two sources may be %d bytes, want %d", got, want)
+	}
+}
+
+// fakeLeader is a leader of the given snapshot body, held for delay before
+// it is written, the headers sent at once.
+func fakeLeader(t *testing.T, body string, delay time.Duration) netip.AddrPort {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == PeerPath {
+			fmt.Fprint(w, `{"instance":"leader","discovering":true,"address_known":true}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return netip.MustParseAddrPort(srv.Listener.Addr().String())
+}
+
+// followFake makes c follow the leader at addr, c's own address being
+// above any the test listens on.
+func followFake(c *peerCopy, addr netip.AddrPort) {
+	c.a.UsePeers(PeerOptions{Peers: []string{addr.String()}, Self: netip.MustParseAddrPort("127.255.255.254:1"),
+		Token: func() (string, error) { return peerToken, nil }})
+}
+
+// A snapshot whose body takes longer than a check may, as a large one over
+// a busy network does, is taken: a fetch has SnapshotTimeout, not
+// PeerTimeout.
+func TestASnapshotMayTakeLongerThanACheck(t *testing.T) {
+	srv := stableSD(t)
+	p := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
+	c := newPeerCopy(t, p, nil)
+	id, _ := json.Marshal(mustLoad(t, p).sources[0].identity())
+	body := `{"instance":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":[{"targets":["slow.example:80"],"labels":null}]}}}`
+	followFake(c, fakeLeader(t, body, PeerTimeout+500*time.Millisecond))
+	c.round()
+	if got := jobTargets(c.a, "websites"); !slices.Equal(got, []string{"https://slow.example:80/health"}) {
+		t.Errorf("the follower serves %v, want the slow snapshot's target:\n%s", got, c.logs.String())
+	}
 }

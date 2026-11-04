@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -40,20 +41,29 @@ const (
 
 // The timings of the peers. Every PeerInterval a copy resolves its peers,
 // asks each at PeerPath within PeerTimeout and, as a follower, fetches the
-// leader's snapshot. A copy that answered stays live until PeerFailures
+// leader's snapshot within SnapshotTimeout: a snapshot holds what every
+// source found, which may be megabytes where a check is a few bytes, and a
+// fetch cut short would leave the follower on its last snapshot for as long
+// as the snapshot stays that large. A copy that answered stays live until PeerFailures
 // checks in a row have failed, so one slow answer does not move the
 // leader; one that answers it is shutting down stops being live at once.
 // A follower whose snapshot fetches fail PeerFailures times in a row says
 // so, once, and keeps serving the snapshot it fetched last.
 const (
-	PeerInterval = 2 * time.Second
-	PeerTimeout  = time.Second
-	PeerFailures = 3
+	PeerInterval    = 2 * time.Second
+	PeerTimeout     = time.Second
+	SnapshotTimeout = 30 * time.Second
+	PeerFailures    = 3
 )
 
-// maxSnapshotBytes bounds a snapshot's body: what every source found,
-// which a source's own answer bounds at 16 MiB.
-const maxSnapshotBytes = 64 << 20
+// maxSnapshotBytes bounds a snapshot's body: what every source found, a
+// source's own answer being bounded at maxDiscoveryAnswerBytes, so that
+// bound for each of the copy's sources, and for one when it has none.
+func (a *Allocator) maxSnapshotBytes() int {
+	a.dmu.Lock()
+	defer a.dmu.Unlock()
+	return max(len(a.sources), 1) * maxDiscoveryAnswerBytes
+}
 
 // PeerOptions are the settings of the peers.
 type PeerOptions struct {
@@ -71,8 +81,10 @@ type PeerOptions struct {
 	// Resolve looks a peer's host name up; net.DefaultResolver.LookupHost
 	// when nil.
 	Resolve func(ctx context.Context, host string) ([]string, error)
-	// Client asks the peers; one of no proxy, each request bounded by
-	// PeerTimeout, when nil.
+	// Client asks the peers; one of no proxy when nil. Each request is
+	// bounded by PeerTimeout, or SnapshotTimeout for a snapshot, through
+	// its context, so Client needs no timeout of its own, which would cut
+	// a snapshot short.
 	Client *http.Client
 }
 
@@ -186,7 +198,7 @@ func (a *Allocator) UsePeers(o PeerOptions) {
 		// The copies reach each other inside their network, never through
 		// a proxy the environment names for the discovery sources.
 		transport.Proxy = nil
-		o.Client = &http.Client{Transport: transport, Timeout: PeerTimeout,
+		o.Client = &http.Client{Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	if o.Self.IsValid() {
@@ -283,9 +295,10 @@ type peerAnswer struct {
 // errShuttingDown is a peer's answer that it is shutting down.
 var errShuttingDown = errors.New("the copy is shutting down")
 
-// get asks addr for path, with the token, If-None-Match etag when not "".
-func (p *peers) get(ctx context.Context, addr netip.AddrPort, path, etag string) (*http.Response, error) {
-	ctx, cancel := context.WithTimeout(ctx, PeerTimeout)
+// get asks addr for path, with the token, If-None-Match etag when not "",
+// within timeout, reading the body included.
+func (p *peers) get(ctx context.Context, addr netip.AddrPort, path, etag string, timeout time.Duration) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr.String()+path, nil)
 	if err != nil {
 		cancel()
@@ -325,7 +338,7 @@ func (b *cancelBody) Close() error {
 
 // check asks addr whether it is up, and reports the instance answering.
 func (p *peers) check(ctx context.Context, addr netip.AddrPort) (string, error) {
-	resp, err := p.get(ctx, addr, PeerPath, "")
+	resp, err := p.get(ctx, addr, PeerPath, "", PeerTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -489,10 +502,14 @@ type peerSnapshot struct {
 }
 
 // snapshotSource is one source in a snapshot: whether it has answered,
-// and what its last good answer found.
+// and what its last good answer found, as target groups (groupsOf): a
+// group's labels are written once, as the source's answer has them, not
+// once for each of its targets, which for a file_sd file of one group of
+// thousands of targets, each with kilobytes of labels, would make a
+// snapshot of a few hundred kilobytes one of tens of megabytes.
 type snapshotSource struct {
-	Answered bool         `json:"answered"`
-	Found    []discovered `json:"found,omitempty"`
+	Answered bool          `json:"answered"`
+	Groups   []TargetGroup `json:"groups,omitempty"`
 }
 
 // fetchSnapshot takes addr's snapshot and puts what it found in force
@@ -505,7 +522,7 @@ type snapshotSource struct {
 // snapshot holds once it is taken.
 func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed bool, err error) {
 	_, held := p.a.snapshotOf()
-	resp, err := p.get(ctx, addr, SnapshotPath, held)
+	resp, err := p.get(ctx, addr, SnapshotPath, held, SnapshotTimeout)
 	if err != nil {
 		return false, err
 	}
@@ -522,12 +539,13 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return false, fmt.Errorf("%s answered %s: %s", SnapshotPath, resp.Status, firstLine(body))
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSnapshotBytes+1))
+	limit := p.a.maxSnapshotBytes()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return false, err
 	}
-	if len(raw) > maxSnapshotBytes {
-		return false, fmt.Errorf("the snapshot is larger than %d bytes", maxSnapshotBytes)
+	if len(raw) > limit {
+		return false, fmt.Errorf("the snapshot is larger than %d bytes, %d for each of this copy's discovery sources", limit, maxDiscoveryAnswerBytes)
 	}
 	var s peerSnapshot
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -601,10 +619,14 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 			s.cancel()
 			s.cancel = nil
 		}
-		if !got.Answered || (s.ok && sameDiscovered(s.found, got.Found)) {
+		if !got.Answered {
 			continue
 		}
-		s.found, s.ok = got.Found, true
+		found, _ := flatten(got.Groups, nil, math.MaxInt)
+		if s.ok && sameDiscovered(s.found, found) {
+			continue
+		}
+		s.found, s.ok = found, true
 		changed = true
 	}
 	a.dmu.Unlock()
@@ -625,7 +647,7 @@ func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 		id := src.spec.identity()
 		entry := snapshotSource{Answered: src.ok}
 		if src.ok {
-			entry.Found = src.found
+			entry.Groups = groupsOf(src.found)
 		}
 		s.Sources[id] = entry
 		text, _ := json.Marshal(entry)

@@ -30329,6 +30329,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain` (allocator): a follower that led while the leader's checks failed, its own sources finding other targets, serves the leader's targets again at its first round of following.
 - `TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader` (allocator): a follower whose source differs from the leader's only in its `refresh_interval` serves the leader's targets of it and runs no refresh loop itself.
 - `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
+- `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for a copy of one source or none, 32 MiB for one of two.
+- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
 
 # 35. Documentation requirements
 
@@ -33453,9 +33455,12 @@ they found, and fetch the leader's `GET /v1/peer/snapshot` with the token
 every round, which MUST answer every source of the copy's input files,
 whether it has answered and what it last found, by the source's identity
 (the kind of its owner, the owner, its kind and its name, not its
-settings), with an
-`ETag` of its digest and `304` to an `If-None-Match` naming it, and a body of
-at most 64 MiB; the follower MUST name in `If-None-Match` the digest of what
+settings), its targets written as target groups, each run of targets of the
+same labels one group with its labels once, as a file_sd or http_sd answer
+gives them, with an `ETag` of its digest and `304` to an `If-None-Match`
+naming it; the follower MUST fetch it within `SnapshotTimeout` (30s), its
+client having no shorter timeout of its own, and take a body of at most
+16 MiB for each of its own sources (16 MiB with none), and MUST name in `If-None-Match` the digest of what
 it holds itself, computed as the leader's is, never the `ETag` it was last
 given, so any difference, of a reload that reached one copy first or of the
 follower's own sources while it led, is answered with the snapshot. The

@@ -508,7 +508,11 @@ the same live copies so chooses the same leader.
 Only the leader asks the discovery sources. Every other copy, a follower,
 fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
 of its sources last found, and puts it in force as a source's answer would
-be, in place of asking the sources itself. The copies so expand the same
+be, in place of asking the sources itself. A snapshot writes each source's
+targets as the target groups it answered, a group's labels once rather than
+once for each of its targets, so it is about the size of the sources'
+answers; it may be up to 16 MiB for each of the follower's sources, the
+bound of one answer, and a fetch may take 30s, where a check takes 1s. The copies so expand the same
 input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A snapshot
 names each source by its owner, the probe job or `discovered_targets` entry,
@@ -631,7 +635,7 @@ holds a token again, logged once.
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true}`: the copy's process, and whether it asks its discovery sources; `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another copy | What each of the copy's discovery sources last found, by source, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer/snapshot` | another copy | Every discovery source of the copy's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
 | `GET /healthz` | kubelet | `200` while the process serves. |
 | `GET /ready` | kubelet | `200` once the input files are loaded, which they are from the start; `503` while shutting down. |

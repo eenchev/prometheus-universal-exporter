@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -80,7 +81,10 @@ func checkGroups(groups []TargetGroup) error {
 }
 
 // flatten is the targets of groups, each with its group's labels and the
-// labels mapping applied, refused when there are more than limit.
+// labels mapping applied, refused when there are more than limit. The
+// targets of a group share one map of labels, which nothing changes: a
+// group of many targets and many labels, as a file_sd file's can be, is
+// held once rather than once for each target.
 func flatten(groups []TargetGroup, mapping map[string]string, limit int) ([]discovered, error) {
 	n := 0
 	for i := range groups {
@@ -91,11 +95,30 @@ func flatten(groups []TargetGroup, mapping map[string]string, limit int) ([]disc
 	}
 	out := make([]discovered, 0, n)
 	for _, g := range groups {
+		labels := mapLabels(g.Labels, mapping)
 		for _, target := range g.Targets {
-			out = append(out, discovered{Address: target, Labels: mapLabels(g.Labels, mapping)})
+			out = append(out, discovered{Address: target, Labels: labels})
 		}
 	}
 	return out, nil
+}
+
+// groupsOf is found as target groups: each run of targets with the same
+// labels one group, as flatten made them of a source's groups, so the
+// groups of a file_sd or http_sd answer come back as it gave them and
+// flatten gives found back. What a source found is written, in a snapshot
+// and a digest, as its groups, not target by target with every label of
+// its group.
+func groupsOf(found []discovered) []TargetGroup {
+	var out []TargetGroup
+	for _, d := range found {
+		if n := len(out); n > 0 && maps.Equal(out[n-1].Labels, d.Labels) {
+			out[n-1].Targets = append(out[n-1].Targets, d.Address)
+			continue
+		}
+		out = append(out, TargetGroup{Targets: []string{d.Address}, Labels: d.Labels})
+	}
+	return out
 }
 
 // mapLabels is labels with mapping applied: each label mapping names set

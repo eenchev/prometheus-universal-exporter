@@ -55,6 +55,12 @@ const (
 	PeerFailures    = 3
 )
 
+// PeerShutdownDelay is how long a copy among peers keeps serving after
+// BeginShutdown, its PeerPath answering 503, before its server stops: a
+// round of every peer and its check, so each peer sees it is shutting
+// down and the next copy leads at once.
+const PeerShutdownDelay = PeerInterval + PeerTimeout
+
 // maxSnapshotBytes bounds a snapshot's body: what every source found, a
 // source's own answer being bounded at maxDiscoveryAnswerBytes, so that
 // bound for each of the copy's sources, and for one when it has none.

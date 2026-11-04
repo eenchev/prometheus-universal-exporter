@@ -566,7 +566,12 @@ so once, and `pue_allocator_snapshot_age_seconds` tells how old its snapshot
 is ([Metrics](#metrics)).
 
 A copy shutting down answers `/v1/peer` with `503` from the first signal,
-while its API still serves, so the next copy leads before it is gone.
+and keeps serving for 3s more, a round of every peer's checks, before its
+server stops: `/ready` answers `503`, a bundle long poll is answered at
+once, and heartbeats, bundles, service discovery answers and its snapshot
+are served as before. Every peer so sees it shutting down at its next
+check, and the next copy leads at once rather than after three refused
+connections.
 Copies being replaced one at a time, as a rolling update does, so keep the
 targets. Peers are not a consensus: a network split that leaves two groups
 of copies unable to reach each other gives each group a leader, each asking

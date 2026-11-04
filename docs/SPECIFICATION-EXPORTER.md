@@ -30334,6 +30334,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
 - `TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two copies whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in the same rounds, settle within five rounds on one leader, the lower instance when they check together; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
 - `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator), changed: a copy of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own instance is lower.
+- `TestACopyAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
 
 # 35. Documentation requirements
 
@@ -33449,7 +33450,10 @@ whose answer names the copy's own process (a random instance made at its
 start) MUST be taken for its own. A copy MUST be live once it has answered,
 until `PeerFailures` (3) checks in a row have failed, and MUST stop being
 live at once when it answers `503`, which `/v1/peer` MUST answer from the
-first `SIGTERM` or `SIGINT`, and otherwise its process's instance, whether
+first `SIGTERM` or `SIGINT`, the copy then serving its API on, as it does
+during a shutdown otherwise, for `PeerShutdownDelay` (`PeerInterval` and
+`PeerTimeout`, 3s) before its server shuts down, so every peer's next check
+gets the `503` rather than a refused connection; and otherwise its process's instance, whether
 it discovers, and whether it knows its own address (`true` without
 `--peers`). The leader of a copy that knows its own address MUST be the
 lowest of the live copies and the copy itself, ordered by

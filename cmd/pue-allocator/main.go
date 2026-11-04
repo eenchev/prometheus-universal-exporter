@@ -193,6 +193,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		stop()
 		logger.Info("shutting down; a second signal exits at once")
 		alloc.BeginShutdown()
+		if peerOptions != nil {
+			// The peers check /v1/peer every PeerInterval: serving on, with
+			// 503 there, until each has checked lets the next copy lead at
+			// once, where a closed listener would only be counted out after
+			// PeerFailures refused checks.
+			logger.Info("answering the peers that this copy shuts down before stopping the server", "delay", allocator.PeerShutdownDelay.String())
+			time.Sleep(allocator.PeerShutdownDelay)
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {

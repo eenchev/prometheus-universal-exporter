@@ -16,7 +16,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
-- Nothing; you can upgrade without changes.
+- A label built from `$url`, the static targets endpoint's `target` label
+  and the OTLP `target` attribute show `<redacted>` where they showed the
+  value of a query parameter with `code`, `ticket`, `sid`, `otp` or `hmac`
+  as a word of its name (`code`, `country_code`, `promo_code`, `user_sid`),
+  and of a path parameter whose name reads as a credential's
+  (`;jsessionid=`, `;sid=`, after `;` or `%3B`). A target or a URL with one
+  makes a new series, and the old one goes stale: adjust the queries,
+  recording rules and alerts that matched the old values. Where the query
+  does not matter, keep a label to the path with
+  `$url | split("?")[0] | split(";")[0]`
+  ([Logging](docs/LOGGING.md#repeated-failures)).
 
 ### New
 
@@ -59,17 +69,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
-- `$url`, a target in a log line, a debug report and an error showed a
-  session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code`
-  and CAS's `ticket` in its query, which the redirect back from a login
-  carries. The value of a path parameter whose name reads as a
-  credential's is now masked, `/app;jsessionid=<redacted>`, after an
-  escaped `;`, `%3B`, too, and `code`,
-  `ticket`, `sid`, `hmac` and `otp` are credentials' names, each as a whole
-  word: `code` and `ticket` of a query or path parameter alone, a URL's in
-  a logged body among them, the others of a header and a field in a logged
-  body too. A query parameter of a country's
-  or a promotion's code, `country_code`, is masked as well
+- `$url`, a target in a log line, the static targets endpoint's `target`
+  label, the OTLP `target` attribute, a debug report and an error showed a
+  session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code` and
+  CAS's `ticket` in its query, which the redirect back from a login carries.
+  The value of a path parameter whose name reads as a credential's is now
+  masked, `/app;jsessionid=<redacted>`, after an escaped `;`, `%3B`, too,
+  and `code`, `ticket`, `sid`, `hmac` and `otp` are credentials' names, each
+  as a whole word: `code` and `ticket` of a query or path parameter alone, a
+  URL's in a logged body among them, the others of a header and a field in a
+  logged body too. A query parameter of a country's or a promotion's code,
+  `country_code`, is masked as well
   ([Logging](docs/LOGGING.md#repeated-failures)). A debug report and the
   debug page showed a redirect's `Location`, and `Content-Location`,
   `Refresh` and `Link`, as they came; their URL is now masked as a request

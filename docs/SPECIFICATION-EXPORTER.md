@@ -3707,9 +3707,12 @@ this order, without cycles:
 8. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
 9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
-10. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+10. `pagekit`: what the HTML pages of the exporter and of the target
+   allocator share: the stylesheet, the theme, the icon and the refresh
+   controls.
+11. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-11. `allocator`: the target allocator (§ 42.14d).
+12. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.

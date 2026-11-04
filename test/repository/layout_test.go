@@ -151,7 +151,7 @@ func TestOnlyTestsHoldTheShutdownDelay(t *testing.T) {
 
 // internalLayers is the order of the internal packages: each may import only
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
-var internalLayers = []string{"allocapi", "model", "kubeapi", "expr", "fetch", "decode", "transform", "config", "allocclient", "exporter", "allocator"}
+var internalLayers = []string{"allocapi", "model", "kubeapi", "expr", "fetch", "decode", "transform", "config", "allocclient", "pagekit", "exporter", "allocator"}
 
 // testOnly are the internal packages only tests import: testutil, with the
 // package within it, alloctest, that measures allocations, grpctest, the

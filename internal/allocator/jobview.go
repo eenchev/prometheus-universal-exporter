@@ -32,13 +32,6 @@ import (
 // leaves them out unless asked for them, ?meta=1, and its filter then
 // matches only the labels shown, as a row's data-match does; the JSON
 // keeps them all.
-//
-// A discovered target carries its source's labels whose names start with
-// __, as __meta_kubernetes_namespace, for the job's relabeling: often a
-// dozen a target, they bury the labels the target is shown with. The page
-// leaves them out unless asked for them, ?meta=1, and its filter then
-// matches only the labels shown, as a row's data-match does; the JSON
-// keeps them all.
 
 // JobView is the answer at StatusPath?job=<name>.
 type JobView struct {

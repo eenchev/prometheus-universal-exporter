@@ -336,7 +336,7 @@ table.sortable th[aria-sort="descending"]:not(.num) button::after { content: " \
 table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191 "; color: var(--accent); }
 table.sortable th.num[aria-sort="descending"] button::before { content: "\2193 "; color: var(--accent); }
 td.sources { min-width: 10em; }
-span.source { white-space: nowrap; }
+td.sources span.source { white-space: nowrap; }
 form.filter.jobs { margin: 0 0 8px; }
 form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: border-box; }
 /* On a phone the label is "Instance" over "ID", so the column is no wider
@@ -635,6 +635,7 @@ const statusContent = `{{define "content"}}
 <tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
 <tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
 <tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
+<tr><th>Input files</th><td>{{if .Instance.WatchIntervalSeconds}}read again every {{age .Instance.WatchIntervalSeconds}} for changes{{else}}<span class="muted">read once, at the start</span> (<code class="flag">--config.watch-interval=0</code>){{end}}</td></tr>
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
@@ -679,7 +680,7 @@ const statusContent = `{{define "content"}}
 {{- with .Members}}
 
 <h2>Members</h2>
-<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}} The replicas heartbeat every {{age .HeartbeatIntervalSeconds}}; a member not heard from for {{age .MemberTTLSeconds}} stops being live.</p>
+<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}} The replicas heartbeat every {{age .HeartbeatIntervalSeconds}}; a member not heard from for {{age .MemberTTLSeconds}} stops being live. A changed member list holds for {{age .SettleSeconds}} before targets move.</p>
 {{- if .List}}
 <div class="scroll">
 <table>
@@ -776,7 +777,7 @@ const statusContent = `{{define "content"}}
 {{- if .Sources}}
 <div class="scroll">
 <table>
-<thead><tr><th>Source</th><th>Owner</th><th>Result</th><th class="num">Targets</th><th class="num">Last refresh</th><th>From</th></tr></thead>
+<thead><tr><th>Source</th><th>Owner</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
 <tbody>
 {{- range .Sources}}
 <tr>
@@ -784,6 +785,7 @@ const statusContent = `{{define "content"}}
 <td>{{.Owner}}<br><span class="muted">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
 <td>{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
+<td class="num">{{age .RefreshIntervalSeconds}}</td>
 <td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
 <td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
 </tr>

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -103,7 +104,7 @@ var (
 // be probed with: each names a collector it has, each target is one that
 // collector's request type takes, and each parameter one a probe of that
 // collector may be sent.
-func checkProbeFile(f *ProbeFile, c *model.Config, base string) error {
+func checkProbeFile(f *ProbeFile, c *model.Config, base string, defaultRefresh time.Duration) error {
 	if len(f.Jobs) == 0 {
 		return errors.New("probe_jobs must not be empty")
 	}
@@ -117,14 +118,14 @@ func checkProbeFile(f *ProbeFile, c *model.Config, base string) error {
 			return fmt.Errorf("probe job %q is defined twice; give each job its own name", job.Name)
 		}
 		seen[job.Name] = true
-		if err := checkProbeJob(job, c, base); err != nil {
+		if err := checkProbeJob(job, c, base, defaultRefresh); err != nil {
 			return fmt.Errorf("probe job %q: %w", job.Name, err)
 		}
 	}
 	return nil
 }
 
-func checkProbeJob(job *ProbeJob, c *model.Config, base string) error {
+func checkProbeJob(job *ProbeJob, c *model.Config, base string, defaultRefresh time.Duration) error {
 	collector := model.CollectorByName(c, job.Collector)
 	if strings.TrimSpace(job.Collector) == "" {
 		return errors.New("collector is required: the collector of the configuration that probes the job's targets")
@@ -140,7 +141,7 @@ func checkProbeJob(job *ProbeJob, c *model.Config, base string) error {
 	if len(job.Targets) == 0 && len(job.Discovery) == 0 {
 		return errors.New("targets must not be empty, unless discovery finds them")
 	}
-	if err := checkDiscovery(job.Discovery, base); err != nil {
+	if err := checkDiscovery(job.Discovery, base, defaultRefresh); err != nil {
 		return err
 	}
 	if err := checkTargetTemplate(job.TargetTemplate); err != nil {

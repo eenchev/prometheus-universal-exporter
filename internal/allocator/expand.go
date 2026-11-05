@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -73,14 +74,14 @@ func splitDiscovered(raw []byte) ([]byte, *yaml.Node) {
 // keys, with sampleAddress in place of a discovered address: whatever the
 // entry writes is checked at load, and only the target and the labels of a
 // discovered target are left to check when it is found.
-func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Config, base string) ([]*discoveredEntry, error) {
+func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration) ([]*discoveredEntry, error) {
 	if list.Kind != yaml.SequenceNode || len(list.Content) == 0 {
 		return nil, fmt.Errorf("%s must be a list of entries, each a static target with discovery", config.DiscoveredTargetsKey)
 	}
 	var out []*discoveredEntry
 	seen := map[string]bool{}
 	for i, node := range list.Content {
-		e, err := readDiscoveredEntry(node, head, conf, base)
+		e, err := readDiscoveredEntry(node, head, conf, base, defaultRefresh)
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %d: %w", config.DiscoveredTargetsKey, i, err)
 		}
@@ -103,7 +104,7 @@ func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Confi
 	return out, nil
 }
 
-func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config, base string) (*discoveredEntry, error) {
+func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration) (*discoveredEntry, error) {
 	if node.Kind != yaml.MappingNode {
 		return nil, errors.New("it is not a mapping")
 	}
@@ -139,7 +140,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	if len(e.discovery) == 0 {
 		return nil, fmt.Errorf("entry %q discovery must not be empty", e.name)
 	}
-	if err := checkDiscovery(e.discovery, base); err != nil {
+	if err := checkDiscovery(e.discovery, base, defaultRefresh); err != nil {
 		return nil, fmt.Errorf("entry %q: %w", e.name, err)
 	}
 	if err := checkTargetTemplate(e.template); err != nil {

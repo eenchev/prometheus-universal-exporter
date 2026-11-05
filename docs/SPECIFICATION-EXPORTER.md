@@ -30405,6 +30405,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAJobViewIsBounded` (allocator): a job of 1005 targets lists 1000 of them, the page says `Only the first 1000 are listed</span>; 5 more are left out.`, and `?filter=h1004` finds the one beyond the bound.
 - `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator): under `--peers.leader-only` a follower's `/v1/status?job=<name>` is `partial` with the leader's address and no spread or targets, its page names the leader with the notice and has no filter box or targets, and the leader's view is whole.
 - `TestTheStatusShowsTheMembersAndTheSpread` and `TestTheMemberViewListsItsTargets` read a job's counts from `spread.jobs`, which replaced `spread.members[].probe_jobs`; `TestAMemberViewOfAGoneMemberSaysSo` looks for the script hiding the filter box for an unknown member or job.
+- `TestASourceWithoutARefreshIntervalTakesTheDefault` (allocator): of a probe job's `file_sd` and `dns_sd` sources that set no `refresh_interval` and a `file_sd` source of `2m`, `/v1/status` gives `refresh_interval_seconds` 60, 30 and 120 without `--discovery.refresh-interval` (`Paths.DiscoveryRefresh`), and 7, 7 and 120 with 7s, which the sources' refresh loops wait and the `dns_sd` source's default timeout is cut to, and the page has the column `Refreshed every` with `7s`; a `dns_sd` `timeout` of 10s is taken under its own default and refused under a default of 5s, `dns_sd.timeout 10s is longer than its refresh_interval 5s`.
+- `TestTheStatusSaysHowOftenTheInputsAreRead` (allocator): with `Options.WatchInterval` 45s the status has `watch_interval_seconds` 45 and the page `read again every 45s for changes` under Input files; with 0 it has 0 and `read once, at the start` with `--config.watch-interval=0`; both have `settle_seconds` 15 and say `A changed member list holds for 15s before targets move.`
+- `TestTheIntervalFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--config.watch-interval=45s`, `--settle=3s` and `--discovery.refresh-interval=7s` and a probe job of a `file_sd` source without `refresh_interval` and one of `2m` gives a status of a 45s watch interval, a 3s settle time and sources asked every 7 and 120 seconds.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
+- `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
 
 # 35. Documentation requirements
 
@@ -33411,7 +33416,9 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes` and
+and a source that sets none MUST be asked every `--discovery.refresh-interval`
+when that is given (at least `1s`, else exit 2), whatever its kind, and
+else every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and
 `dns_sd`; a
 `timeout` written longer than it MUST be refused, and one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
@@ -33711,14 +33718,17 @@ allocator MUST serve plain HTTP only.
 calling an allocator process an instance and its process's id its `id`, no
 key saying copy: under `instance` its address among its peers when known,
 else `--web.listen-address`, its `id`, the build's version and revision, its
-start and uptime, and whether it is ready; under `peers`, with `--peers`
+start and uptime, whether it is ready, and `--config.watch-interval` in
+seconds (`watch_interval_seconds`, `0` for files read once), which the page
+MUST show; under `peers`, with `--peers`
 (else `null`), its role, the leader, the live instances (`live_instances`),
 the leader changes, the snapshot's age, whether it has taken one and holds
 the leader's targets, its check and snapshot failures, every address of its
 peers, its own included (`instances`), with liveness, the last answer's
 `id`, discovering and address-known, the last check and the failures in a
 row, and the series of the peers' metric families exactly as `/metrics`
-writes them; the heartbeat interval and the member TTL in seconds; every
+writes them; the heartbeat interval, the member TTL and `--settle` in
+seconds, which the page MUST show; every
 member known with its address, last heartbeat, whether it is late (live,
 with its last heartbeat more than one and a half heartbeat intervals old,
 which the page MUST mark), whether it is live, in the member list and
@@ -33736,7 +33746,10 @@ uneven when the most is at least 1.5 times the targets divided by the
 members rounded up, and its discovery sources with their result; and every
 discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
-`pending`), targets, last refresh and last success, and whether what it
+`pending`), targets, the interval it is asked at
+(`refresh_interval_seconds`: its `refresh_interval`, else
+`--discovery.refresh-interval`, else its kind's default), which the page
+MUST show, last refresh and last success, and whether what it
 holds came from the instance's own discovery or the leader's snapshot. `GET
 /` MUST render the same as an HTML page framed as the exporter's pages are
 (§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target

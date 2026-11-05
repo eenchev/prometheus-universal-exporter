@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -27,6 +28,11 @@ type Paths struct {
 	StaticTargets string
 	// ProbeTargets is the probe targets file (ProbeFile).
 	ProbeTargets string
+	// DiscoveryRefresh is the refresh_interval of a discovery source that
+	// sets none (--discovery.refresh-interval); 0 leaves each kind its
+	// own default (DiscoveryConfig.refresh). It is read with the files, as
+	// the sources are checked against it.
+	DiscoveryRefresh time.Duration
 }
 
 // Inputs are the allocator's input files as one checked whole: what every
@@ -114,7 +120,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	if p.ProbeTargets != "" {
 		probes, err := parseProbeFile(p.ProbeTargets, before.probeTargets)
 		if err == nil {
-			err = checkProbeFile(probes, conf, filepath.Dir(p.ProbeTargets))
+			err = checkProbeFile(probes, conf, filepath.Dir(p.ProbeTargets), p.DiscoveryRefresh)
 			if err != nil {
 				err = fmt.Errorf("probe targets file %s: %w", p.ProbeTargets, err)
 			}
@@ -133,7 +139,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 			return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
 		}
 		if entries != nil {
-			if in.entries, err = readDiscoveredEntries(entries, in.static.head, conf, filepath.Dir(p.StaticTargets)); err != nil {
+			if in.entries, err = readDiscoveredEntries(entries, in.static.head, conf, filepath.Dir(p.StaticTargets), p.DiscoveryRefresh); err != nil {
 				return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
 			}
 		}

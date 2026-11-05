@@ -134,3 +134,34 @@ func TestTheHeartbeatIntervalFlagReachesTheAllocator(t *testing.T) {
 		t.Errorf("the heartbeat reply is %+v, %v; want a heartbeat interval of 2.5 seconds", reply, err)
 	}
 }
+
+// --config.watch-interval, --settle and --discovery.refresh-interval reach
+// the allocator, which says them in its status: how often it reads the
+// input files again, how long a changed member list holds, and how often
+// it asks a discovery source that sets no refresh_interval, where one that
+// sets its own keeps it.
+func TestTheIntervalFlagsReachTheAllocator(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteIn(t, dir, "sd/a.json", `[{"targets": ["10.0.0.1:80"]}]`)
+	probes := testutil.WriteIn(t, dir, "probes.yaml", `probe_jobs:
+  - name: web
+    collector: demo
+    discovery:
+      - name: default
+        file_sd: {files: [sd/a.json]}
+      - name: own
+        file_sd: {files: [sd/a.json], refresh_interval: 2m}
+`)
+	address := startRun(t, "--probe-targets-file="+probes, "--config.watch-interval=45s", "--settle=3s", "--discovery.refresh-interval=7s")
+	s := fetchStatus(t, address)
+	if s.Instance.WatchIntervalSeconds != 45 || s.Members == nil || s.Members.SettleSeconds != 3 {
+		t.Errorf("the instance is %+v and the members %+v; want a watch interval of 45s and a settle time of 3s", s.Instance, s.Members)
+	}
+	refresh := map[string]float64{}
+	for _, src := range s.Sources {
+		refresh[src.Name] = src.RefreshIntervalSeconds
+	}
+	if len(refresh) != 2 || refresh["default"] != 7 || refresh["own"] != 120 {
+		t.Errorf("the sources are refreshed every %v seconds, want default 7 and own 120", refresh)
+	}
+}

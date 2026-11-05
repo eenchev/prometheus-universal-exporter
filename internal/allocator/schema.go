@@ -169,8 +169,8 @@ func discoverySchemaRules() map[string]map[string]any {
 		return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
 	}
 	labelPattern := labelName.String()
-	// A refresh_interval is at least minDiscoveryRefresh, or 0, the default.
-	refreshLeast := fetch.SchemaLeastDuration(minDiscoveryRefresh, true)
+	// A refresh_interval is at least MinDiscoveryRefresh, or 0, the default.
+	refreshLeast := fetch.SchemaLeastDuration(MinDiscoveryRefresh, true)
 	return map[string]map[string]any{
 		"[]": {
 			"oneOf": []any{

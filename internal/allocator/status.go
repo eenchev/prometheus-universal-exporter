@@ -50,6 +50,10 @@ type InstanceStatus struct {
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	// Ready is what /ready answers: false once the instance shuts down.
 	Ready bool `json:"ready"`
+	// WatchIntervalSeconds is --config.watch-interval, how often the input
+	// files are read again for changes; 0 for files read once, at the
+	// start.
+	WatchIntervalSeconds float64 `json:"watch_interval_seconds"`
 }
 
 // PeersStatus is the instance's part among its peers.
@@ -129,6 +133,9 @@ type MembersStatus struct {
 	// three intervals.
 	HeartbeatIntervalSeconds float64 `json:"heartbeat_interval_seconds"`
 	MemberTTLSeconds         float64 `json:"member_ttl_seconds"`
+	// SettleSeconds is --settle, how long a changed member list must hold
+	// before targets move.
+	SettleSeconds float64 `json:"settle_seconds"`
 	// List is every member known, by id.
 	List []MemberStatus `json:"list"`
 }
@@ -263,6 +270,10 @@ type SourceStatus struct {
 	Error  string `json:"error,omitempty"`
 	// Targets are those of its last good answer.
 	Targets int `json:"targets"`
+	// RefreshIntervalSeconds is how often it is asked: its
+	// refresh_interval, or --discovery.refresh-interval for a source that
+	// sets none, or its kind's default.
+	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds"`
 	// LastRefresh is when it was last asked or taken from the leader's
 	// snapshot, LastSuccess when that last succeeded, RFC 3339 in UTC, ""
 	// for never.
@@ -291,7 +302,8 @@ func (a *Allocator) Status() Status {
 	a.mu.Unlock()
 
 	s.Instance = InstanceStatus{Address: a.address, ID: a.id, Version: a.version, Revision: a.revision,
-		StartedAt: a.started.UTC().Format(time.RFC3339), UptimeSeconds: ageSeconds(now.Sub(a.started).Seconds()), Ready: ready}
+		StartedAt: a.started.UTC().Format(time.RFC3339), UptimeSeconds: ageSeconds(now.Sub(a.started).Seconds()), Ready: ready,
+		WatchIntervalSeconds: a.watchInterval.Seconds()}
 	if s.Peers != nil {
 		for _, c := range s.Peers.Instances {
 			if c.Self {
@@ -314,7 +326,7 @@ func ageSeconds(d float64) float64 {
 // membersStatusLocked is the members. Called under a.mu.
 func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 	out := &MembersStatus{Formed: a.settled, List: []MemberStatus{},
-		HeartbeatIntervalSeconds: a.heartbeatInterval.Seconds(), MemberTTLSeconds: a.memberTTL.Seconds()}
+		HeartbeatIntervalSeconds: a.heartbeatInterval.Seconds(), MemberTTLSeconds: a.memberTTL.Seconds(), SettleSeconds: a.settle.Seconds()}
 	if a.settled {
 		out.InList = len(a.effective)
 	}
@@ -490,7 +502,8 @@ func (a *Allocator) sourcesStatus(now time.Time) []SourceStatus {
 	defer a.dmu.Unlock()
 	out := make([]SourceStatus, 0, len(a.sources))
 	for _, s := range a.sources {
-		st := SourceStatus{Name: s.spec.cfg.Name, Kind: s.spec.kind, Owner: s.spec.owner, Type: s.spec.cfg.kind()}
+		st := SourceStatus{Name: s.spec.cfg.Name, Kind: s.spec.kind, Owner: s.spec.owner, Type: s.spec.cfg.kind(),
+			RefreshIntervalSeconds: s.spec.cfg.refresh().Seconds()}
 		switch {
 		case s.lastErr != "":
 			st.Result, st.Error = "failing", s.lastErr

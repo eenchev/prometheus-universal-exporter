@@ -27,6 +27,8 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		"--heartbeat.interval=2m1s":                   "--heartbeat.interval must be from 1s to 2m, got 2m1s",
 		"--heartbeat.interval=0s":                     "--heartbeat.interval must be from 1s to 2m, got 0s",
 		"--discovery.max-targets=0":                   "--discovery.max-targets must be 1 or more",
+		"--discovery.refresh-interval=999ms":          "--discovery.refresh-interval must be 1s or more, or 0 for each kind's own default, got 999ms",
+		"--discovery.refresh-interval=-1s":            "--discovery.refresh-interval must be 1s or more, or 0 for each kind's own default, got -1s",
 		"--config.watch-interval=-1s":                 "--config.watch-interval must not be negative",
 		"--log.level=verbose":                         `--log.level "verbose" is not a level`,
 		"--web.listen-address=nowhere":                "--web.listen-address",
@@ -57,7 +59,7 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-discovery.refresh-interval", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}

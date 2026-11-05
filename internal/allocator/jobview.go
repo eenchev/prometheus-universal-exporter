@@ -238,11 +238,11 @@ const jobContent = `{{define "content"}}
 <h2>This probe job</h2>
 <table class="facts">
 <tr><th>Collector</th><td>{{$sp.Collector}}</td></tr>
-<tr><th>Targets</th><td>{{$sp.Targets}}{{if .Sources}} <span class="muted">(listed and discovered)</span>{{end}}</td></tr>
+<tr><th>Targets</th><td>{{$sp.Targets}}{{if .Sources}} <span class="muted">(those discovered included)</span>{{end}}</td></tr>
 <tr><th>Shard key</th><td>{{.ShardKey}}</td></tr>
 <tr><th>Labels</th><td>{{template "labels" .Labels}}</td></tr>
 <tr><th>Params</th><td>{{template "labels" .Params}}</td></tr>
-<tr><th>Discovery</th><td>{{range .Sources}}<span class="source"><strong>{{.Name}}</strong> <span class="muted">{{.Type}}</span> {{template "result" .Result}}{{if eq .Result "failing"}} <span class="muted">{{.Error}}</span>{{end}}</span><br>{{else}}<span class="muted">none: the probe targets file lists every target</span>{{end}}</td></tr>
+<tr><th>Discovery</th><td>{{range .Sources}}<span class="source"><strong>{{.Name}}</strong> <span class="muted">{{.Type}}</span> {{template "result" .Result}}, refreshed every {{age .RefreshIntervalSeconds}}{{if eq .Result "failing"}} <span class="muted">{{.Error}}</span>{{end}}</span><br>{{else}}<span class="muted">none: the probe targets file lists every target</span>{{end}}</td></tr>
 </table>
 
 <h2>Members <span class="count">{{len $sp.Members}}</span></h2>

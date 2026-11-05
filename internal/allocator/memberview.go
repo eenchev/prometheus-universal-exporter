@@ -301,7 +301,10 @@ type memberPage struct {
 // columns, its name and its value (span.v), so the value starts on the
 // name's line however long its first unbreakable run, and its lines wrap
 // in its own column; a hanging indent would move a run longer than the
-// line's rest to the line below.
+// line's rest to the line below. The name sits on the value's first
+// baseline, so a label (span.label) is an inline flex box, whose baseline
+// is its first line's: an inline block's is its last line's, and a label
+// that wraps would put the name beside its second line.
 const memberStyle = `
 p.back { margin: 0 0 4px; font-size: 14px; }
 .member-id { overflow-wrap: anywhere; }
@@ -322,7 +325,7 @@ td.target { overflow-wrap: anywhere; min-width: 14em; }
 table.targets td.id { min-width: 13em; }
 td.labels { min-width: 10em; }
 td.moved { overflow-wrap: anywhere; min-width: 9em; }
-span.label { display: inline-block; margin: 0 4px 2px 0; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; text-indent: 0; }
+span.label { display: inline-flex; margin: 0 4px 2px 0; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; text-indent: 0; }
 table.jobs { width: auto; min-width: 50%; margin-bottom: 12px; }
 @media (max-width: 640px) {
   table.targets, table.targets tbody, table.targets tr, table.targets td { display: block; width: 100%; }

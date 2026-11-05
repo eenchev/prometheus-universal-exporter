@@ -945,7 +945,8 @@ matches nothing, with no page load; Search all, or Enter,
 asks the allocator with `?filter=<text>`, which applies the same match to
 every target of the member before the bound below. A filter of spaces
 alone is no filter. On a phone each row's cells stack, each beside its
-name. Each list holds at most
+name, which stays on the first line of the value, of a label that wraps
+too. Each list holds at most
 1000 targets, so a member of a share of tens of thousands stays a page a
 browser draws at once; a list cut short says how many are left out, and
 the filter finds them. The view refreshes itself as the page does, the

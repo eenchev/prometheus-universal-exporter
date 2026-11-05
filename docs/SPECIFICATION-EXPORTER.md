@@ -30389,6 +30389,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the copy it reaches, heartbeats a copy whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
 - `TestAReplicaSaysNoIntervalUntilACopyDoes` (allocclient): a client started with the default interval, and one with 4s, leave `interval_seconds` out of their heartbeats while the allocator says no interval, also in the heartbeat answered with the first 5s, and say 5 in every heartbeat after it, also once the allocator says none again.
 - `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): a copy with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; a copy hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
+- `TestAWrappedLabelKeepsTheNameOnItsFirstLine` (allocator): the member view's style makes a label an inline flex box, not an inline block, beside the phone layout's grid of name and value on one baseline, so a label that wraps keeps the cell's name on its first line.
 
 # 35. Documentation requirements
 
@@ -33740,7 +33741,9 @@ how many match and, cut short, how many are left out. The page MUST have a
 filter box, outside the content a refresh swaps, that hides as it is typed
 the rows none of whose texts `?filter=` matches holds it, which each row
 MUST carry joined by line feeds (`data-match`), not the row's text, with
-plain JavaScript, and submits `?filter=`. `GET /v1/status?member=<id>` MUST answer the same as JSON
+plain JavaScript, and submits `?filter=`. At a phone's width each row's
+cells MUST stack, each beside its name, the name on the value's first line,
+also when the value's first label wraps. `GET /v1/status?member=<id>` MUST answer the same as JSON
 (`allocator.MemberView`). A member the allocator does not know MUST be
 answered `404` as JSON, and the page and its fragment MUST answer `200`
 saying so, the filter box hidden, so a view refreshing itself shows the

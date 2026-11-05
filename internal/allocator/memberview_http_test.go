@@ -289,3 +289,24 @@ func TestTheFilterBoxMatchesWhatTheAllocatorMatches(t *testing.T) {
 		}
 	}
 }
+
+// On a phone a named cell is a grid of its name and its value on one
+// baseline, the value's first: a label is an inline flex box, whose
+// baseline is its first line's, so a label long enough to wrap keeps the
+// cell's name beside its first line; an inline block's baseline is its
+// last line's. Measured in Chromium at 320px, the name of a cell whose
+// first label wraps is beside its first line with it and beside its second
+// without; at 1280px nothing moves but a label that wraps there too.
+func TestAWrappedLabelKeepsTheNameOnItsFirstLine(t *testing.T) {
+	p := writeInputs(t, testConfig, staticTargets(4), "")
+	clock := newFakeClock()
+	a := New(mustLoad(t, p), Options{Settle: 15 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	beat(t, a, "r1")
+	keepBeating(t, a, clock, 20*time.Second, "r1")
+	page := ask(a.Handler(""), "/?member=r1", "").Body.String()
+	requireIn(t, page, `span.label { display: inline-flex;`, `table.targets td[data-label] { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: baseline; }`)
+	if strings.Contains(page, `span.label { display: inline-block;`) {
+		t.Error("a label is an inline block, whose baseline is its last line's")
+	}
+}

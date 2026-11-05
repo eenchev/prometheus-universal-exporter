@@ -641,7 +641,10 @@ lookup of the copies' addresses, made every interval, are given up on after
 addresses it resolved to last. When the copies say different intervals,
 as during a rollout that changes it, it takes the shortest, so each copy
 hears it within its own interval, and a copy that does not answer, or says
-none, changes nothing. A heartbeat the replica gave up waiting for can
+none, changes nothing. A new interval takes effect at once, for the
+heartbeats and the lookup alike: the next follows it after the last, at
+once when that is past, so a replica told a shorter interval also finds a
+copy that has just started within it. A heartbeat the replica gave up waiting for can
 still reach the allocator after a later one, so each carries the name of the
 replica's process, random and made at its start, and a sequence number
 counting that process's heartbeats from 1: the allocator applies a heartbeat

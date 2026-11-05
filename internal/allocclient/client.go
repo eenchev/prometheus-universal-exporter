@@ -414,14 +414,24 @@ func (c *Client) authorize(req *http.Request) error {
 }
 
 // heartbeatLoop looks up the allocator's addresses at once, then every
-// heartbeat interval and at once after a bundle was put in force or refused,
-// and runs a heartbeat schedule of its own for each address
+// heartbeat interval, counted from when the lookup before ended, and at once
+// after a bundle was put in force or refused, and runs a heartbeat schedule of its own for each address
 // (heartbeatAddress) until ctx ends. A copy of the allocator that is slow to
 // answer, or hangs, so delays only the heartbeats to itself: every other
 // copy goes on hearing the replica each interval, where one round waiting
 // for every copy would let a hung one make the replica late to all of them.
 // An address the host no longer resolves to has its schedule stopped; a
 // lookup that fails keeps those of the addresses it resolved to last.
+//
+// An interval that changes takes effect at once here too, as it does for
+// the heartbeats: the next lookup follows the new interval after the last,
+// at once when that is past. A replica told a shorter interval says it to
+// every copy it heartbeats, and a copy of the allocator that has just
+// started is told it by them, and waits no longer for the replicas to reach
+// it (the allocator's firstSettle); a lookup still on the old, longer interval would find
+// that copy only up to the old interval after its start, by when it may
+// have formed its first member list of the replicas that happened to look
+// up sooner.
 func (c *Client) heartbeatLoop(ctx context.Context) {
 	type schedule struct {
 		now  chan struct{}
@@ -430,18 +440,31 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 	schedules := map[string]*schedule{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	lookup := time.NewTimer(0)
-	defer lookup.Stop()
+	// last is when the lookup before ended, the zero time before the first,
+	// so the first is made at once.
+	var last time.Time
 	for {
 		beat := false
-		select {
-		case <-ctx.Done():
-			return
-		case <-lookup.C:
-		case <-c.beat:
-			beat = true
+		for waiting := true; waiting; {
+			c.mu.Lock()
+			next, changed := last.Add(c.interval), c.intervalChanged
+			c.mu.Unlock()
+			timer := time.NewTimer(time.Until(next))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				waiting = false
+			case <-c.beat:
+				timer.Stop()
+				beat, waiting = true, false
+			case <-changed:
+				timer.Stop()
+			}
 		}
 		addrs := c.lookup(ctx)
+		last = time.Now()
 		for addr, s := range schedules {
 			if !slices.Contains(addrs, addr) {
 				s.stop()
@@ -460,7 +483,6 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 			schedules[addr] = s
 			wg.Go(func() { c.heartbeatAddress(sctx, addr, s.now) })
 		}
-		lookup.Reset(c.heartbeatInterval())
 	}
 }
 

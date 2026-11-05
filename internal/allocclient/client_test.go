@@ -1452,3 +1452,71 @@ func TestAFailedLookupHeartbeatsTheAddressesResolvedLast(t *testing.T) {
 		t.Error("a heartbeat without an address resolved was sent")
 	}
 }
+
+// firstHeard is a transport of allocator copies that answer every heartbeat
+// at once saying a 1s interval, noting when each address first heard one
+// and the interval that heartbeat said. A bundle request is answered 503.
+type firstHeard struct {
+	mu   sync.Mutex
+	at   map[string]time.Time
+	said map[string]float64
+}
+
+func (f *firstHeard) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	if req.URL.Path != allocapi.HeartbeatPath {
+		http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
+		return rec.Result(), nil
+	}
+	var hb allocapi.Heartbeat
+	b, _ := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	_ = json.Unmarshal(b, &hb)
+	f.mu.Lock()
+	if host := req.URL.Hostname(); f.at[host].IsZero() {
+		f.at[host], f.said[host] = time.Now(), hb.IntervalSeconds
+	}
+	f.mu.Unlock()
+	_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":1}`)
+	return rec.Result(), nil
+}
+
+// A replica on a 4s interval, standing in for the longer interval of the
+// copies before a rollout, is told 1s by the copy it reaches, and from then
+// on looks up the copies' addresses every second, as it heartbeats: a copy
+// whose address appears 300ms after the start is heartbeated within about
+// a second, saying 1s, not at the lookup the old interval had set, 4s in.
+// A copy told 1s waits no longer than that for the replicas to reach it.
+func TestTheLookupFollowsAShortenedInterval(t *testing.T) {
+	transport := &firstHeard{at: map[string]time.Time{}, said: map[string]float64{}}
+	var second atomic.Bool
+	start := time.Now()
+	startClient(t, newFakeAllocator(t), func(o *Options) {
+		o.URL = "http://pue-allocator.monitoring.svc:9116"
+		o.Transport = transport
+		o.HeartbeatInterval = 4 * time.Second
+		o.Resolve = func(context.Context, string) ([]string, error) {
+			if second.Load() {
+				return []string{"10.1.0.4", "10.1.0.5"}, nil
+			}
+			return []string{"10.1.0.4"}, nil
+		}
+	})
+	time.Sleep(300 * time.Millisecond)
+	second.Store(true)
+	time.Sleep(4500 * time.Millisecond)
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	at, ok := transport.at["10.1.0.5"]
+	if !ok {
+		t.Fatal("the copy appearing at 0.3s heard no heartbeat in 4.8s")
+	}
+	// The lookup is due 1s after the one at the start; a starved CPU
+	// accounts for the rest of the 2s.
+	if found := at.Sub(start); found > 2*time.Second {
+		t.Errorf("the copy appearing at 0.3s was first heartbeated %s after the start, at a 1s interval", found.Round(time.Millisecond))
+	}
+	if said := transport.said["10.1.0.5"]; said != 1 {
+		t.Errorf("the first heartbeat to the new copy said interval_seconds %v, want 1", said)
+	}
+}

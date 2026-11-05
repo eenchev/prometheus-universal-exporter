@@ -94,7 +94,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   10s and the member TTL at 30s. The exporter heartbeats each copy on a
   schedule of its own, giving up on a heartbeat after 5s or the interval
   when that is shorter, so a copy that hangs makes the replica late to no
-  other. Each heartbeat says the interval the replica heartbeats at
+  other, and looks up the copies' addresses at the interval in force, a
+  new one taking effect at once. Each heartbeat says the interval the replica heartbeats at
   (`interval_seconds`), and a copy's first member list waits the longest
   any says, so a copy started with a shorter interval than the copies
   before it hears every replica first. The status page shows both and marks a

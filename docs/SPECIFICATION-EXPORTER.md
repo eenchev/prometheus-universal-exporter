@@ -30386,6 +30386,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMemberViewOfAGoneMemberSaysSo` (allocator): the fragment of r2's view lists its targets; once r2 has stopped long enough to be forgotten, its fragment answers `200` with the as-of line and the notice that the allocator knows no member r2, no table and no frame, its page `200` with the filter form `hidden` and the script hiding it on that notice, the JSON `404`, and r1's page has its filter shown.
 - `TestTheFilterBoxMatchesWhatTheAllocatorMatches` (allocator): a static row's `data-match` is its name, target, collector, moved-to (empty) and labels in name order, and a probe row's its target, job and collector, joined by line feeds; the script matches `data-match`, not the row's text, and the hint says both match the same fields; the allocator matches no target for `30s`, `alphahttp` or `demoteam`; `?filter=%20` and `%20%20` are no filter, matching every target, unechoed.
 - `TestTheMemberViewListsItsTargets` (allocator), changed: the page of an unknown member answers `200`, its JSON still `404`.
+- `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the copy it reaches, heartbeats a copy whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
 
 # 35. Documentation requirements
 
@@ -33824,7 +33825,8 @@ reply said a `heartbeat_interval_seconds` other than 0 MUST make the
 interval the shortest of them, each first brought within `1s` and `2m` (one
 below, a negative one included, taken as `1s`, one above as `2m`), and the
 next heartbeat to every address MUST follow that interval after the last
-one to it; when none says one, because every copy failed or none sends the
+one to it, and the next lookup of the addresses that interval after the
+last lookup ended, at once when that is past; when none says one, because every copy failed or none sends the
 field, the interval MUST stay as it is.
 
 The exporter MUST ask for its bundle with `GET

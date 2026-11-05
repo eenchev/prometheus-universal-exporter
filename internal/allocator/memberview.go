@@ -257,6 +257,8 @@ func matchText(target any) string {
 		return strings.Join(t.matchTexts(), "\n")
 	case MemberProbeTarget:
 		return strings.Join(t.matchTexts(), "\n")
+	case JobTarget:
+		return strings.Join(t.matchTexts(), "\n")
 	}
 	return ""
 }
@@ -397,7 +399,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Probe job</th><th>Collector</th><th class="num">Targets</th></tr></thead>
 <tbody>
 {{- range .Probes.Jobs}}
-<tr><td class="id">{{.Job}}</td><td>{{.Collector}}</td><td class="num">{{.Targets}}</td></tr>
+<tr><td class="id"><a href="?job={{.Job}}" title="the probe job {{.Job}}">{{.Job}}</a></td><td>{{.Collector}}</td><td class="num">{{.Targets}}</td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -409,33 +411,14 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Target</th><th>Probe job</th><th>Collector</th></tr></thead>
 <tbody>
 {{- range .Probes.List}}
-<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job"><span class="v">{{.Job}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job"><span class="v"><a href="?job={{.Job}}">{{.Job}}</a></span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
 </div>
 {{- end}}
 {{- end}}
-{{end}}
-{{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
-{{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
-{{- define "list-note"}}
-{{- if eq .Total 0}}
-<p class="muted">None.</p>
-{{- else if eq .Matching 0}}
-<p class="muted">None of the {{.Total}} holds “{{.Filter}}”.</p>
-{{- else}}
-{{- if lt .Matching .Total}}
-<p class="note">{{.Matching}} of the {{.Total}} hold “{{.Filter}}”.</p>
-{{- end}}
-{{- if lt .Shown .Matching}}
-<p class="note"><span class="bad">Only the first {{.Shown}} are listed</span>; {{.Hidden}} more are left out. Filter to narrow the list.</p>
-{{- end}}
-<p class="note muted" data-rows-of="{{.Table}}"></p>
-<p class="muted" data-none-of="{{.Table}}" hidden>No row below holds what is typed in the filter; Search all looks through every target.</p>
-{{- end}}
-{{- end}}
-`
+{{end}}`
 
 // listNoteData is what a list's note says: how many targets it has, how
 // many the filter matches, how many it shows, and its table's id.

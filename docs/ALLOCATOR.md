@@ -882,10 +882,27 @@ its instance ID. It shows
   reports, whether it is in the member list, joining, silent or shutting
   down, and the static targets it keeps draining;
 - how the targets are spread: for each member, the static targets it owns,
-  those it keeps draining, the probe targets service discovery routes to it,
-  by probe job and in all, and the total, with a bar of each; then the
-  totals, the average per member and the imbalance, the most any member has
-  divided by the average, `1.00×` for targets spread evenly;
+  those it keeps draining, the probe targets service discovery routes to it
+  and the total, with a bar of each; then the totals, the average per member
+  and the imbalance, the most any member has divided by the average, `1.00×`
+  for targets spread evenly. The columns stay these whatever the number of
+  probe jobs;
+- the probe jobs, a row each: the job, which links to its view
+  ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
+  targets, the members it is routed among, the fewest, the average and the
+  most targets of the job a member of them has, the imbalance, the most
+  divided by the average, and its discovery sources with their result, or
+  `listed` for a job whose file lists every target. The members a job is
+  routed among are those service discovery may route its targets to
+  ([Service discovery](#service-discovery)), so one given none of its
+  targets counts, with 0, and Min shows it. The imbalance is marked where
+  the most is half again as many as the evenest split would give a member,
+  the targets divided by the members and rounded up: a job of 2 targets over
+  3 members cannot do better than `1.50×`, so the average alone would mark
+  every small job. A click on a column's heading sorts the table by it, a
+  second the other way, and a filter box above it hides, as it is typed, the
+  jobs whose name, collector and sources' names do not hold its text, in any
+  case; a refresh keeps the order, the filter and the caret;
 - the discovery sources: each one's kind, owner, result, with the error
   while it fails, its targets, when it was last refreshed, and whether what
   it holds is this instance's own discovery or the leader's snapshot.
@@ -909,9 +926,12 @@ whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
 `in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds` and
 `list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
 `in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`
-and `draining`); `spread` (`jobs`, and `members`, `total`, `average` and
-`imbalance`, each with `static`, `draining`, `probe`, `probe_jobs` by job
-and `total`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
+and `draining`); `spread` (`members`, `total`, `average` and `imbalance`,
+each with `static`, `draining`, `probe` and `total`, and `jobs`, in file
+order, each with `job`, `collector`, `targets`, `members`, the members it is
+routed among by id, each with its `member` and `targets`, `min`, `average`,
+`max`, `imbalance`, `uneven`, the mark above, and `sources`, each with its
+`name`, `type` and `result`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
 `ok`, `failing` or `pending`, `error`, `targets`, `last_refresh`,
 `last_success` and `from`, `own` or `snapshot`). Times are RFC 3339 in UTC,
 each with its age in seconds beside it.
@@ -967,6 +987,44 @@ that it has, its filter box hidden; `?member=` without an id is answered
 `400`. Under
 `--peers.leader-only` a follower serves no member's view, as it serves no
 members: the page names the leader, whose page has it, and the JSON is
+`partial` with the leader's address. A probe job's name in the member's
+view links to the job's view.
+
+### A probe job's targets
+
+A probe job's name in the probe jobs table links to its view,
+`GET /?job=<name>`: where that job's targets go, to answer "which pod probes
+this site?" without asking service discovery. It shows
+
+- the job: its collector, its targets, listed and discovered, its shard
+  key, its labels, a label written `""` left out, its params, and its
+  discovery sources, each with its kind and result, and its error while it
+  fails, or none;
+- the members it is routed among, each linking to its view, with the
+  targets of the job it has and a bar of them, the most first, the fewest
+  to the most and the average above them, the imbalance marked as in the
+  probe jobs table;
+- its targets, by target, each with the member service discovery routes
+  it to, which links to that member's view, and the labels its discovery
+  source gave it, but those the job's own labels set or take away.
+
+The counts are the spread's for the job. A target is shown with its
+credentials withheld as on a member's view, and a param whose name reads
+as a credential's, such as `api_key` or `token`, as `<redacted>`; any other
+param is shown as written, with what reads as a credential in its value
+masked. The filter box, Search all (`?filter=<text>`), the bound of 1000
+targets and the refresh are a member's view's; the filter matches a
+target, its member and its labels as `name=value`. Its bar's JSON link is
+`GET /v1/status?job=<name>`, the same as JSON: `generated_at`, `job`,
+`filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
+`spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
+`params`, `sources` (as the status's `sources` have them) and `targets`
+(`total`, `matching` and `list`, each with `target`, `member` and
+`labels`). A job the probe targets file does not have is answered `404` as
+JSON, and the page, and its fragment, say so with `200`, its filter box
+hidden, so a view left open over a reload that renamed the job shows it;
+`?job=` without a name is answered `400`. Under `--peers.leader-only` a
+follower serves no job's view: the page names the leader, and the JSON is
 `partial` with the leader's address.
 
 ## Metrics

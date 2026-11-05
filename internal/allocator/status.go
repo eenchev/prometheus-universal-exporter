@@ -166,8 +166,6 @@ type MemberStatus struct {
 
 // SpreadStatus is how the targets are spread over the members.
 type SpreadStatus struct {
-	// Jobs are the probe jobs, in file order, as ProbeJobs name them.
-	Jobs []string `json:"jobs"`
 	// Members are the members of the member list, and any other live
 	// member a probe is routed to, by id.
 	Members []SpreadMember `json:"members"`
@@ -177,6 +175,10 @@ type SpreadStatus struct {
 	Total     SpreadCounts `json:"total"`
 	Average   SpreadCounts `json:"average"`
 	Imbalance SpreadCounts `json:"imbalance"`
+	// Jobs are the probe jobs, in file order, each with how its targets
+	// are spread: one column of the members' table each would not fit a
+	// page beside a few jobs.
+	Jobs []JobSpread `json:"jobs"`
 }
 
 // SpreadMember is one member's targets.
@@ -188,14 +190,62 @@ type SpreadMember struct {
 // SpreadCounts count a member's targets, or a sum, an average or an
 // imbalance of them: Static, the static targets it owns, Draining those it
 // keeps draining, Probe the probe targets service discovery routes to it,
-// ProbeJobs the same by probe job, and Total all of them.
+// and Total all of them.
 type SpreadCounts struct {
-	Static    float64            `json:"static"`
-	Draining  float64            `json:"draining"`
-	Probe     float64            `json:"probe"`
-	ProbeJobs map[string]float64 `json:"probe_jobs"`
-	Total     float64            `json:"total"`
+	Static   float64 `json:"static"`
+	Draining float64 `json:"draining"`
+	Probe    float64 `json:"probe"`
+	Total    float64 `json:"total"`
 }
+
+// JobSpread is how one probe job's targets are spread over the members
+// its probes are routed among (routing): those are the members a target
+// of the job can go to, so one of them given none of its targets counts,
+// with 0, where a member outside them would not.
+type JobSpread struct {
+	Job       string `json:"job"`
+	Collector string `json:"collector"`
+	// Targets are the job's targets, listed and discovered.
+	Targets int `json:"targets"`
+	// Members are the members it is routed among, by id, each with the
+	// targets routed to it; none while no member is live or the member
+	// list has not formed.
+	Members []JobMember `json:"members"`
+	// Min, Average and Max are the fewest, the mean and the most targets
+	// of a member of Members, and Imbalance is Max divided by Average: 1
+	// for targets spread evenly, 0 when there are none.
+	Min       int     `json:"min"`
+	Average   float64 `json:"average"`
+	Max       int     `json:"max"`
+	Imbalance float64 `json:"imbalance"`
+	// Uneven says Max is at least half again as many as the evenest split
+	// would give the member of the most, Targets divided by the members
+	// and rounded up (unevenFactor). Against Average alone a job of few
+	// targets would always read uneven: 2 targets over 3 members cannot
+	// do better than 1.5.
+	Uneven bool `json:"uneven"`
+	// Sources are the job's discovery sources, in the order of the
+	// status's; none for a job whose file lists every target.
+	Sources []JobSource `json:"sources"`
+}
+
+// JobMember is the targets of a probe job routed to one member.
+type JobMember struct {
+	Member  string `json:"member"`
+	Targets int    `json:"targets"`
+}
+
+// JobSource is one discovery source of a probe job, as SourceStatus has
+// it.
+type JobSource struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Result string `json:"result"`
+}
+
+// unevenFactor is how many times the evenest split's most a job's most
+// must be for the job to be uneven (JobSpread.Uneven).
+const unevenFactor = 1.5
 
 // SourceStatus is one discovery source.
 type SourceStatus struct {
@@ -251,6 +301,7 @@ func (a *Allocator) Status() Status {
 	}
 	if !s.Partial {
 		s.Sources = a.sourcesStatus(now)
+		sourcesOfJobs(s.Spread, s.Sources)
 	}
 	return s
 }
@@ -304,12 +355,12 @@ func contains(list []string, s string) bool {
 // service discovery routes it to, as /metrics counts them. Called under
 // a.mu.
 func (a *Allocator) spreadLocked() *SpreadStatus {
-	out := &SpreadStatus{Jobs: []string{}, Members: []SpreadMember{}}
+	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}}
 	rows := map[string]*SpreadMember{}
 	row := func(name string) *SpreadMember {
 		r := rows[name]
 		if r == nil {
-			r = &SpreadMember{Member: name, SpreadCounts: SpreadCounts{ProbeJobs: map[string]float64{}}}
+			r = &SpreadMember{Member: name}
 			rows[name] = r
 		}
 		return r
@@ -318,11 +369,6 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 		row(name)
 	}
 	in := a.inputs
-	if in != nil && in.Probes != nil {
-		for i := range in.Probes.Jobs {
-			out.Jobs = append(out.Jobs, in.Probes.Jobs[i].Name)
-		}
-	}
 	if in != nil && len(a.effective) > 0 {
 		for i := range in.shardKeys {
 			owner, _ := allocapi.Owner(a.effective, in.shardKeys[i])
@@ -331,18 +377,19 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 		for key := range a.draining {
 			row(key.member).Draining++
 		}
-		if in.Probes != nil {
-			for i := range in.Probes.Jobs {
-				j := &in.Probes.Jobs[i]
-				pool := a.routing(j)
-				for _, target := range j.Targets {
-					if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil {
-						r := row(owner)
-						r.Probe++
-						r.ProbeJobs[j.Name]++
-					}
+	}
+	if in != nil && in.Probes != nil {
+		for i := range in.Probes.Jobs {
+			j := &in.Probes.Jobs[i]
+			js, _ := a.jobSpreadLocked(j)
+			// A job's targets count towards the members' rows once the
+			// member list has formed, as the static targets do.
+			if len(a.effective) > 0 {
+				for _, m := range js.Members {
+					row(m.Member).Probe += float64(m.Targets)
 				}
 			}
+			out.Jobs = append(out.Jobs, js)
 		}
 	}
 	names := make([]string, 0, len(rows))
@@ -352,15 +399,11 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 	sort.Strings(names)
 	for _, name := range names {
 		r := rows[name]
-		for _, job := range out.Jobs {
-			r.ProbeJobs[job] += 0
-		}
 		r.Total = r.Static + r.Draining + r.Probe
 		out.Members = append(out.Members, *r)
 	}
 
-	most := SpreadCounts{ProbeJobs: map[string]float64{}}
-	out.Total = SpreadCounts{ProbeJobs: map[string]float64{}}
+	var most SpreadCounts
 	for _, r := range out.Members {
 		add := func(sum, top *float64, v float64) {
 			*sum += v
@@ -370,14 +413,6 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 		add(&out.Total.Draining, &most.Draining, r.Draining)
 		add(&out.Total.Probe, &most.Probe, r.Probe)
 		add(&out.Total.Total, &most.Total, r.Total)
-		for _, job := range out.Jobs {
-			v := r.ProbeJobs[job]
-			out.Total.ProbeJobs[job] += v
-			most.ProbeJobs[job] = max(most.ProbeJobs[job], v)
-		}
-	}
-	for _, job := range out.Jobs {
-		out.Total.ProbeJobs[job] += 0
 	}
 	n := float64(len(out.Members))
 	average := func(v float64) float64 {
@@ -393,14 +428,60 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 		return 0
 	}
 	out.Average = SpreadCounts{Static: average(out.Total.Static), Draining: average(out.Total.Draining),
-		Probe: average(out.Total.Probe), Total: average(out.Total.Total), ProbeJobs: map[string]float64{}}
+		Probe: average(out.Total.Probe), Total: average(out.Total.Total)}
 	out.Imbalance = SpreadCounts{Static: imbalance(most.Static, out.Total.Static), Draining: imbalance(most.Draining, out.Total.Draining),
-		Probe: imbalance(most.Probe, out.Total.Probe), Total: imbalance(most.Total, out.Total.Total), ProbeJobs: map[string]float64{}}
-	for _, job := range out.Jobs {
-		out.Average.ProbeJobs[job] = average(out.Total.ProbeJobs[job])
-		out.Imbalance.ProbeJobs[job] = imbalance(most.ProbeJobs[job], out.Total.ProbeJobs[job])
-	}
+		Probe: imbalance(most.Probe, out.Total.Probe), Total: imbalance(most.Total, out.Total.Total)}
 	return out
+}
+
+// jobSpreadLocked is how j's targets are spread over the members it is
+// routed among, and the member each target is routed to, "" for none.
+// Called under a.mu.
+func (a *Allocator) jobSpreadLocked(j *ProbeJob) (JobSpread, map[string]string) {
+	out := JobSpread{Job: j.Name, Collector: j.Collector, Targets: len(j.Targets), Members: []JobMember{}, Sources: []JobSource{}}
+	pool := a.routing(j)
+	owners := make(map[string]string, len(j.Targets))
+	counts := make(map[string]int, len(pool))
+	for _, target := range j.Targets {
+		if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil {
+			owners[target] = owner
+			counts[owner]++
+		}
+	}
+	for _, name := range pool {
+		out.Members = append(out.Members, JobMember{Member: name, Targets: counts[name]})
+	}
+	if len(out.Members) == 0 {
+		return out, owners
+	}
+	routed := 0
+	out.Min = out.Members[0].Targets
+	for _, m := range out.Members {
+		routed += m.Targets
+		out.Min, out.Max = min(out.Min, m.Targets), max(out.Max, m.Targets)
+	}
+	out.Average = float64(routed) / float64(len(out.Members))
+	if out.Average > 0 {
+		out.Imbalance = float64(out.Max) / out.Average
+		evenest := (routed + len(out.Members) - 1) / len(out.Members)
+		out.Uneven = float64(out.Max) >= unevenFactor*float64(evenest)
+	}
+	return out, owners
+}
+
+// sourcesOfJobs puts each probe job's discovery sources of sources in its
+// spread.
+func sourcesOfJobs(sp *SpreadStatus, sources []SourceStatus) {
+	if sp == nil {
+		return
+	}
+	for i := range sp.Jobs {
+		for _, s := range sources {
+			if s.Kind == "probe" && s.Owner == sp.Jobs[i].Job {
+				sp.Jobs[i].Sources = append(sp.Jobs[i].Sources, JobSource{Name: s.Name, Type: s.Type, Result: s.Result})
+			}
+		}
+	}
 }
 
 // sourcesStatus is every discovery source, in the order of /metrics.

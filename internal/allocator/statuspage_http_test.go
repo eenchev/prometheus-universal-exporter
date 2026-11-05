@@ -76,7 +76,7 @@ func TestTheStatusShowsTheMembersAndTheSpread(t *testing.T) {
 
 	metrics := metricsOf(t, a)
 	sp := s.Spread
-	if len(sp.Members) != 3 || len(sp.Jobs) != 1 || sp.Jobs[0] != "websites" {
+	if len(sp.Members) != 3 || len(sp.Jobs) != 1 || sp.Jobs[0].Job != "websites" {
 		t.Fatalf("the spread is %+v", sp)
 	}
 	most := 0.0
@@ -87,12 +87,12 @@ func TestTheStatusShowsTheMembersAndTheSpread(t *testing.T) {
 				t.Errorf("the status has %s, /metrics not:\n%s", line, metrics)
 			}
 		}
-		if m.ProbeJobs["websites"] != m.Probe || m.Total != m.Static+m.Draining+m.Probe {
+		if m.Total != m.Static+m.Draining+m.Probe {
 			t.Errorf("%s: %+v", m.Member, m.SpreadCounts)
 		}
 		most = max(most, m.Total)
 	}
-	if sp.Total.Static != 30 || sp.Total.Probe != 2 || sp.Total.Total != 32 || sp.Total.ProbeJobs["websites"] != 2 {
+	if sp.Total.Static != 30 || sp.Total.Probe != 2 || sp.Total.Total != 32 || sp.Jobs[0].Targets != 2 {
 		t.Errorf("the total is %+v", sp.Total)
 	}
 	if sp.Average.Total != 32.0/3 || sp.Imbalance.Total != most/(32.0/3) {

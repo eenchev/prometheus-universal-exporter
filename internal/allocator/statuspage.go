@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
@@ -19,8 +20,8 @@ import (
 // the same icon, and the same refresh controls, which fetch the page's
 // content again, ?format=fragment, and swap it in. Every value is escaped by
 // html/template, and the script writes text with textContent alone. With
-// ?member=<id> it is that member's view instead (memberview.go), in the
-// same frame.
+// ?member=<id> it is that member's view instead (memberview.go), and with
+// ?job=<name> that probe job's (jobview.go), in the same frame.
 
 // StatusPath is where the status is served as JSON.
 const StatusPath = "/v1/status"
@@ -31,6 +32,10 @@ const statusDocs = "https://github.com/eenchev/prometheus-universal-exporter/blo
 func (a *Allocator) serveStatus(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Has("member") {
 		a.serveMemberView(w, r)
+		return
+	}
+	if r.URL.Query().Has("job") {
+		a.serveJobView(w, r)
 		return
 	}
 	writeStatusJSON(w, a.Status())
@@ -50,7 +55,7 @@ func writeStatusJSON(w http.ResponseWriter, v any) {
 }
 
 // serveStatusPage answers the status page, or with ?member=<id> the
-// member's view; with ?format=fragment its content alone, which the page's
+// member's view and with ?job=<name> the probe job's; with ?format=fragment its content alone, which the page's
 // refresh swaps in.
 func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
@@ -62,7 +67,8 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 	s := a.Status()
 	frame := pageFrame{Version: s.Instance.Version, Revision: s.Instance.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
 	page, content := statusPageTemplate, statusContentTemplate
-	if query.Has("member") {
+	switch {
+	case query.Has("member"):
 		member := query.Get("member")
 		if member == "" {
 			http.Error(w, "the member parameter names a member; / without it is the whole status", http.StatusBadRequest)
@@ -77,8 +83,28 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 		frame.Member = &memberPage{MemberView: view, Known: known}
 		frame.Content = frame.Member
 		frame.JSON += "?" + url.Values{"member": {member}}.Encode()
+		if !view.Partial {
+			frame.Filter = &filterForm{Param: "member", Value: member, Text: view.Filter, Hidden: !known, Limit: view.Limit}
+		}
 		page, content = memberPageTemplate, memberContentTemplate
-	} else {
+	case query.Has("job"):
+		job := query.Get("job")
+		if job == "" {
+			http.Error(w, "the job parameter names a probe job; / without it is the whole status", http.StatusBadRequest)
+			return
+		}
+		// A job the probe targets file does not have is a page that says
+		// so, answered 200, as a gone member's is: a view left open over a
+		// reload that renamed the job then shows it. The JSON answers 404.
+		view, known := a.JobView(job, query.Get("filter"))
+		frame.Job = jobPageOf(view, known)
+		frame.Content = frame.Job
+		frame.JSON += "?" + url.Values{"job": {job}}.Encode()
+		if !view.Partial {
+			frame.Filter = &filterForm{Param: "job", Value: job, Text: view.Filter, Hidden: !known, Limit: view.Limit}
+		}
+		page, content = jobPageTemplate, jobContentTemplate
+	default:
 		frame.Content = statusPageOf(s)
 	}
 	t := page
@@ -106,18 +132,33 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageFrame is what frames a page's content: the bar, the heading, the
-// refresh controls and, on a member's view, its way back and its filter.
+// refresh controls and, on a member's or a probe job's view, its way back
+// and its filter.
 type pageFrame struct {
 	Version, Revision string
 	Refresh           pagekit.RefreshControl
 	Docs              string
 	// JSON is where the bar's JSON link points, relative to the page.
 	JSON string
-	// Member is the member's view, nil on the status page.
+	// Member is the member's view and Job the probe job's, nil elsewhere.
 	Member *memberPage
-	// Content is what the content template renders: a statusPage, or
-	// Member.
+	Job    *jobPage
+	// Filter is a view's filter, nil on the status page and on a view a
+	// follower leaves to its leader.
+	Filter *filterForm
+	// Content is what the content template renders: a statusPage, Member
+	// or Job.
 	Content any
+}
+
+// filterForm is a view's filter: outside the content, so a refresh keeps
+// what is typed, and sent with the view's own parameter, Param=Value, member
+// or job. Text is the filter in force, Limit the bound of a list, and
+// Hidden hides the form while the allocator knows no such member or job.
+type filterForm struct {
+	Param, Value, Text string
+	Limit              int
+	Hidden             bool
 }
 
 // statusPage is what the page's template renders: the status, with the
@@ -128,10 +169,9 @@ type statusPage struct {
 }
 
 // spreadView is the spread as the table shows it: a row of each member,
-// with its bar, and rows of the total, the average and the imbalance, each
-// with a cell of each probe job.
+// with its bar, and rows of the total, the average and the imbalance. The
+// probe jobs have a table of their own, a row each.
 type spreadView struct {
-	Jobs                      []string
 	Members                   []spreadRow
 	Total, Average, Imbalance spreadRow
 	// AveragePct is where the average total falls on the bars, which run
@@ -143,7 +183,6 @@ type spreadView struct {
 type spreadRow struct {
 	Member                              string
 	Static, Draining, Probe, Total      float64
-	Jobs                                []float64
 	StaticPct, DrainingPct, ProbePct    float64
 	StaticText, DrainingText, ProbeText string
 }
@@ -154,7 +193,7 @@ func statusPageOf(s Status) statusPage {
 	if sp == nil {
 		return page
 	}
-	v := spreadView{Jobs: sp.Jobs, Shown: len(sp.Members) > 0}
+	v := spreadView{Shown: len(sp.Members) > 0}
 	most := 0.0
 	for _, m := range sp.Members {
 		most = max(most, m.Total)
@@ -166,11 +205,7 @@ func statusPageOf(s Status) statusPage {
 		return math.Round(n/most*1000) / 10
 	}
 	row := func(name string, c SpreadCounts) spreadRow {
-		r := spreadRow{Member: name, Static: c.Static, Draining: c.Draining, Probe: c.Probe, Total: c.Total}
-		for _, job := range sp.Jobs {
-			r.Jobs = append(r.Jobs, c.ProbeJobs[job])
-		}
-		return r
+		return spreadRow{Member: name, Static: c.Static, Draining: c.Draining, Probe: c.Probe, Total: c.Total}
 	}
 	for _, m := range sp.Members {
 		r := row(m.Member, m.SpreadCounts)
@@ -217,7 +252,24 @@ func shortGeneration(g string) string {
 	return g
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration, "listNote": listNote, "match": matchText}
+// sourceNames are a probe job's sources' names, a line each, as the probe
+// jobs table's filter matches them.
+func sourceNames(sources []JobSource) string {
+	names := make([]string, 0, len(sources))
+	for _, s := range sources {
+		names = append(names, s.Name)
+	}
+	return strings.Join(names, "\n")
+}
+
+// jobMatch is a probe job row's data-match: the job, its collector and
+// its sources' names, a line each.
+func jobMatch(j JobSpread) string {
+	return strings.Join([]string{j.Job, j.Collector, sourceNames(j.Sources)}, "\n")
+}
+
+var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration,
+	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
 // the exporter's status page draws them, numbers right-aligned in figures
@@ -272,6 +324,21 @@ td.bar { width: 32%; min-width: 120px; }
 .legend b { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
 .legend b.avg { width: 0; height: 14px; border-radius: 0; border-left: 2px solid var(--fg); }
 @media (max-width: 640px) { td.bar { min-width: 90px; } }
+/* A sortable table's headings are buttons, marked as the exporter's debug
+   page marks its series table's: ↕ for a column not sorted by, ↑ or ↓ for
+   the one sorted by. A number's column has the mark before its name, so
+   the name ends where the column's numbers end. */
+table.sortable th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+table.sortable th:not(.num) button::after { content: " \2195"; color: var(--muted); }
+table.sortable th.num button::before { content: "\2195 "; color: var(--muted); }
+table.sortable th[aria-sort="ascending"]:not(.num) button::after { content: " \2191"; color: var(--accent); }
+table.sortable th[aria-sort="descending"]:not(.num) button::after { content: " \2193"; color: var(--accent); }
+table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191 "; color: var(--accent); }
+table.sortable th.num[aria-sort="descending"] button::before { content: "\2193 "; color: var(--accent); }
+td.sources { min-width: 10em; }
+span.source { white-space: nowrap; }
+form.filter.jobs { margin: 0 0 8px; }
+form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: border-box; }
 /* On a phone the label is "Instance" over "ID", so the column is no wider
    than its other labels and the instance ID keeps the room it has beside
    them, rather than its last character wrapping alone onto a line. */
@@ -281,7 +348,7 @@ td.bar { width: 32%; min-width: 120px; }
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
+{{if or .Member .Job}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
 <span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 
@@ -296,6 +363,7 @@ func statusTemplate(content string) (page, contentTemplate *template.Template) {
 var (
 	statusPageTemplate, statusContentTemplate = statusTemplate(statusContent)
 	memberPageTemplate, memberContentTemplate = statusTemplate(memberContent)
+	jobPageTemplate, jobContentTemplate       = statusTemplate(jobContent)
 )
 
 // statusFrame frames a page's content (pageFrame).
@@ -304,7 +372,7 @@ var statusFrame = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{with .Member}}Member {{.Member}}{{else}}Status{{end}} · pue-allocator</title>
+<title>{{with .Member}}Member {{.Member}}{{else}}{{with .Job}}Probe job {{.Job}}{{else}}Status{{end}}{{end}} · pue-allocator</title>
 ` + pagekit.Icon + "\n" + pagekit.ThemeHead + `
 <style>` + pagekit.Style + pagekit.RefreshStyle + statusStyle + memberStyle + `</style>
 {{- if .Refresh.Seconds}}
@@ -314,9 +382,12 @@ var statusFrame = `<!DOCTYPE html>
 <body>
 <main>
 ` + statusChrome + `
-{{- with .Member}}
+{{- if .Member}}
 <p class="back"><a href="./">← Allocator status</a></p>
-<h1>Member <span class="member-id">{{.Member}}</span></h1>
+<h1>Member <span class="member-id">{{.Member.Member}}</span></h1>
+{{- else if .Job}}
+<p class="back"><a href="./">← Allocator status</a></p>
+<h1>Probe job <span class="member-id">{{.Job.Job}}</span></h1>
 {{- else}}
 <h1>Allocator status</h1>
 {{- end}}
@@ -331,17 +402,21 @@ var statusFrame = `<!DOCTYPE html>
 <noscript><button type="submit">Apply</button></noscript>
 <span id="refresh-state" class="muted" role="status" aria-live="polite"></span>
 </form>
-{{- with .Member}}{{if not .Partial}}
-<form class="filter" id="filter" method="get" role="search"{{if not .Known}} hidden{{end}}>
-<input type="hidden" name="member" value="{{.Member}}">
+{{- with .Filter}}
+<form class="filter" id="filter" method="get" role="search"{{if .Hidden}} hidden{{end}}>
+<input type="hidden" name="{{.Param}}" value="{{.Value}}">
 {{- if $.Refresh.Seconds}}
 <input type="hidden" name="refresh" value="{{$.Refresh.Interval}}">
 {{- end}}
+{{- if eq .Param "member"}}
 <label for="target-filter">Filter: name, target, collector, label or job</label>
-<span class="filter-row"><input id="target-filter" name="filter" type="search" value="{{.Filter}}" autocomplete="off" spellcheck="false"><button type="submit">Search all</button></span>
-<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the member{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. Both match a target's name, target, collector, labels, probe job and the member it moved to.</span>
+{{- else}}
+<label for="target-filter">Filter: target, member or label</label>
+{{- end}}
+<span class="filter-row"><input id="target-filter" name="filter" type="search" value="{{.Text}}" autocomplete="off" spellcheck="false"><button type="submit">Search all</button></span>
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else}}Both match a target, the member it is routed to and its labels.{{end}}</span>
 </form>
-{{- end}}{{end}}
+{{- end}}
 <div id="status-content">
 {{- template "content" .Content}}
 </div>
@@ -369,13 +444,14 @@ var statusFrame = `<!DOCTYPE html>
     state.textContent = "As of " + clock(Date.parse(dataAt) || refreshedAt);
   }
   asOf();
-  // A member's view filters its tables' rows as the filter is typed,
+  // A member's or a probe job's view filters its tables' rows as the
+  // filter is typed,
   // matching in any case the texts the allocator's filter matches, which
   // each row carries in data-match, one a line, and counts the rows left;
   // the filter is outside the content, so a refresh keeps what was typed
   // and filters the new rows again. Search all asks the allocator, which
   // filters every target, those beyond a list's bound included. The
-  // filter is hidden while the allocator knows no such member.
+  // filter is hidden while the allocator knows no such member or job.
   const filter = $("target-filter");
   function filterRows() {
     if (!filter) return;
@@ -394,7 +470,7 @@ var statusFrame = `<!DOCTYPE html>
       if (none) none.hidden = shown > 0;
       table.hidden = shown === 0;
     }
-    $("filter").hidden = content.querySelector("#unknown-member") !== null;
+    $("filter").hidden = content.querySelector("#unknown-member, #unknown-job") !== null;
   }
   if (filter) {
     filter.addEventListener("input", filterRows);
@@ -407,6 +483,61 @@ var statusFrame = `<!DOCTYPE html>
     });
     filterRows();
   }
+  // The status page's probe jobs table sorts by the column whose heading
+  // is clicked, the other way at a second click, numbers by their value
+  // (data-value) and text as it reads, a tie in file order (data-order);
+  // and it filters its rows as its filter is typed, matching in any case
+  // the texts each row carries in data-match. Both are in the content,
+  // which a refresh replaces, so the order chosen and the text typed are
+  // kept here and put back on the new table, the caret where it was.
+  let jobSort = -1, jobDown = false, jobFilter = "";
+  function arrangeJobs() {
+    const table = content.querySelector("table#probe-jobs"), box = $("jobs-filter");
+    if (!table) return;
+    if (box) {
+      box.value = jobFilter;
+      box.form.hidden = false;
+    }
+    const heads = table.tHead.rows[0].cells, body = table.tBodies[0];
+    const numeric = jobSort >= 0 && heads[jobSort].dataset.sort === "num";
+    const key = (row) => {
+      const cell = row.cells[jobSort];
+      return numeric ? Number(cell.dataset.value) : cell.textContent.trim();
+    };
+    const rows = Array.from(body.rows).sort((x, y) => {
+      let c = 0;
+      if (jobSort >= 0) c = numeric ? key(x) - key(y) : key(x).localeCompare(key(y));
+      if (jobDown) c = -c;
+      return c || Number(x.dataset.order) - Number(y.dataset.order);
+    });
+    for (const row of rows) body.appendChild(row);
+    for (let i = 0; i < heads.length; i++) heads[i].setAttribute("aria-sort", i === jobSort ? (jobDown ? "descending" : "ascending") : "none");
+    const needle = jobFilter.trim().toLowerCase();
+    let shown = 0;
+    for (const row of rows) {
+      row.hidden = needle !== "" && !(row.dataset.match || "").toLowerCase().includes(needle);
+      if (!row.hidden) shown++;
+    }
+    const count = content.querySelector('[data-rows-of="probe-jobs"]');
+    if (count) count.textContent = needle === "" ? "" : shown === 0 ? "No probe job holds what is typed in the filter." : shown + " of the " + rows.length + " probe jobs match.";
+  }
+  content.addEventListener("click", (event) => {
+    const button = event.target.closest("table#probe-jobs th button");
+    if (!button) return;
+    const column = button.parentElement.cellIndex;
+    jobDown = column === jobSort ? !jobDown : false;
+    jobSort = column;
+    arrangeJobs();
+  });
+  content.addEventListener("input", (event) => {
+    if (event.target.id !== "jobs-filter") return;
+    jobFilter = event.target.value;
+    arrangeJobs();
+  });
+  content.addEventListener("submit", (event) => {
+    if (event.target.id === "jobs") event.preventDefault();
+  });
+  arrangeJobs();
   async function refresh() {
     if (inFlight) return;
     inFlight = true;
@@ -416,10 +547,17 @@ var statusFrame = `<!DOCTYPE html>
     try {
       const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
       if (!response.ok) throw new Error("HTTP " + response.status);
+      const typing = document.activeElement && document.activeElement.id === "jobs-filter" ? document.activeElement : null;
+      const caret = typing && [typing.selectionStart, typing.selectionEnd];
       content.innerHTML = await response.text();
       refreshedAt = Date.now();
       asOf();
       filterRows();
+      arrangeJobs();
+      if (typing && $("jobs-filter")) {
+        $("jobs-filter").focus();
+        $("jobs-filter").setSelectionRange(caret[0], caret[1]);
+      }
     } catch (error) {
       state.className = "bad";
       state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data as of " + clock(Date.parse(dataAt) || refreshedAt);
@@ -455,14 +593,34 @@ var statusFrame = `<!DOCTYPE html>
 </html>
 `
 
-// statusParts are what the status page and a member's view both show of
-// a member (MemberStatus): how long ago its last heartbeat came, marked
-// when one is overdue, the bundle it has in force beside the one it is to
-// have, and its state.
+// statusParts are what the status page and the views share: of a member
+// (MemberStatus), how long ago its last heartbeat came, marked when one is
+// overdue, the bundle it has in force beside the one it is to have, and
+// its state; a discovery source's result; and a view's targets, labels
+// and the note over a list.
 const statusParts = `
 {{- define "heartbeat"}}{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{end}}
+{{- define "result"}}{{if eq . "ok"}}<span class="good">ok</span>{{else if eq . "failing"}}<span class="bad">failing</span>{{else}}<span class="muted">not answered yet</span>{{end}}{{end}}
+{{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
+{{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
+{{- define "list-note"}}
+{{- if eq .Total 0}}
+<p class="muted">None.</p>
+{{- else if eq .Matching 0}}
+<p class="muted">None of the {{.Total}} holds “{{.Filter}}”.</p>
+{{- else}}
+{{- if lt .Matching .Total}}
+<p class="note">{{.Matching}} of the {{.Total}} hold “{{.Filter}}”.</p>
+{{- end}}
+{{- if lt .Shown .Matching}}
+<p class="note"><span class="bad">Only the first {{.Shown}} are listed</span>; {{.Hidden}} more are left out. Filter to narrow the list.</p>
+{{- end}}
+<p class="note muted" data-rows-of="{{.Table}}"></p>
+<p class="muted" data-none-of="{{.Table}}" hidden>No row below holds what is typed in the filter; Search all looks through every target.</p>
+{{- end}}
+{{- end}}
 `
 
 // statusContent is the page's content, which a refresh swaps in.
@@ -548,7 +706,7 @@ const statusContent = `{{define "content"}}
 <p>{{count .Total.Static}} static target{{if ne .Total.Static 1.0}}s{{end}}{{if .Total.Draining}}, {{count .Total.Draining}} draining,{{end}} and {{count .Total.Probe}} probe target{{if ne .Total.Probe 1.0}}s{{end}} over {{len .Members}} member{{if ne (len .Members) 1}}s{{end}}: {{average .Average.Total}} per member on average, the most {{imbalance .Imbalance.Total}} the average.</p>
 <div class="scroll">
 <table class="spread">
-<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th>{{range .Jobs}}<th class="num" title="probe job {{.}}">{{.}}</th>{{end}}<th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>
+<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>
 <tbody>
 {{- $avg := .AveragePct}}
 {{- range .Members}}
@@ -556,7 +714,6 @@ const statusContent = `{{define "content"}}
 <td class="id"><a href="?member={{.Member}}" title="the targets of {{.Member}}"><strong>{{.Member}}</strong></a></td>
 <td class="num">{{count .Static}}</td>
 <td class="num">{{count .Draining}}</td>
-{{- range .Jobs}}<td class="num">{{count .}}</td>{{end}}
 <td class="num">{{count .Probe}}</td>
 <td class="num"><strong>{{count .Total}}</strong></td>
 <td class="bar"><div class="bar-track" role="img" aria-label="{{.StaticText}}; {{.DrainingText}}; {{.ProbeText}}">{{if .Static}}<span class="seg-static" style="width: {{.StaticPct}}%" title="{{.StaticText}}"></span>{{end}}{{if .Draining}}<span class="seg-draining" style="width: {{.DrainingPct}}%" title="{{.DrainingText}}"></span>{{end}}{{if .Probe}}<span class="seg-probe" style="width: {{.ProbePct}}%" title="{{.ProbeText}}"></span>{{end}}<i class="avg" style="left: {{$avg}}%" title="the average per member"></i></div></td>
@@ -565,18 +722,53 @@ const statusContent = `{{define "content"}}
 </tbody>
 <tfoot>
 {{- with .Total}}
-<tr><td>{{.Member}}</td><td class="num">{{count .Static}}</td><td class="num">{{count .Draining}}</td>{{range .Jobs}}<td class="num">{{count .}}</td>{{end}}<td class="num">{{count .Probe}}</td><td class="num">{{count .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{count .Static}}</td><td class="num">{{count .Draining}}</td><td class="num">{{count .Probe}}</td><td class="num">{{count .Total}}</td><td></td></tr>
 {{- end}}
 {{- with .Average}}
-<tr><td>{{.Member}}</td><td class="num">{{average .Static}}</td><td class="num">{{average .Draining}}</td>{{range .Jobs}}<td class="num">{{average .}}</td>{{end}}<td class="num">{{average .Probe}}</td><td class="num">{{average .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{average .Static}}</td><td class="num">{{average .Draining}}</td><td class="num">{{average .Probe}}</td><td class="num">{{average .Total}}</td><td></td></tr>
 {{- end}}
 {{- with .Imbalance}}
-<tr><td>{{.Member}}</td><td class="num">{{imbalance .Static}}</td><td class="num">{{imbalance .Draining}}</td>{{range .Jobs}}<td class="num">{{imbalance .}}</td>{{end}}<td class="num">{{imbalance .Probe}}</td><td class="num">{{imbalance .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{imbalance .Static}}</td><td class="num">{{imbalance .Draining}}</td><td class="num">{{imbalance .Probe}}</td><td class="num">{{imbalance .Total}}</td><td></td></tr>
 {{- end}}
 </tfoot>
 </table>
 </div>
 <p class="legend"><span><b class="seg-static"></b>static, owned</span><span><b class="seg-draining"></b>static, draining</span><span><b class="seg-probe"></b>probe, routed</span><span><b class="avg"></b>average per member</span><span>Bars run to the largest total.</span></p>
+{{- end}}{{end}}
+{{- with .Spread}}{{if .Jobs}}
+
+<h2>Probe jobs</h2>
+<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is half again as many as the evenest split would give a member.</p>
+<form class="filter jobs" id="jobs" role="search" hidden>
+<label for="jobs-filter">Filter: job, collector or source</label>
+<input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
+<span class="muted">Click a column's heading to sort by it, again for the other way.</span>
+</form>
+<p class="note muted" data-rows-of="probe-jobs"></p>
+<div class="scroll">
+<table class="spread sortable" id="probe-jobs">
+<thead><tr><th aria-sort="none" data-sort="text"><button type="button">Job</button></th><th aria-sort="none" data-sort="text"><button type="button">Collector</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Targets</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Members</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Min</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Avg</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Max</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Imbalance</button></th><th aria-sort="none" data-sort="text"><button type="button">Sources</button></th></tr></thead>
+<tbody>
+{{- range $i, $j := .Jobs}}
+<tr data-order="{{$i}}" data-match="{{jobMatch $j}}">
+<td class="id"><a href="?job={{.Job}}" title="the targets of the probe job {{.Job}}"><strong>{{.Job}}</strong></a></td>
+<td>{{.Collector}}</td>
+<td class="num" data-value="{{.Targets}}">{{.Targets}}</td>
+<td class="num" data-value="{{len .Members}}">{{len .Members}}</td>
+{{- if .Members}}
+<td class="num" data-value="{{.Min}}">{{.Min}}</td>
+<td class="num" data-value="{{.Average}}">{{average .Average}}</td>
+<td class="num" data-value="{{.Max}}">{{.Max}}</td>
+<td class="num" data-value="{{.Imbalance}}">{{if .Uneven}}<span class="bad" title="Max is half again as many as the evenest split would give a member">{{imbalance .Imbalance}}</span>{{else}}{{imbalance .Imbalance}}{{end}}</td>
+{{- else}}
+<td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td>
+{{- end}}
+<td class="sources">{{range $k, $s := .Sources}}{{if $k}}<br>{{end}}<span class="source">{{.Name}} {{template "result" .Result}}</span>{{else}}<span class="muted">listed</span>{{end}}</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
 {{- end}}{{end}}
 {{- if .Members}}
 
@@ -590,7 +782,7 @@ const statusContent = `{{define "content"}}
 <tr>
 <td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted">{{.Type}}</span></td>
 <td>{{.Owner}}<br><span class="muted">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
-<td>{{if eq .Result "ok"}}<span class="good">ok</span>{{else if eq .Result "failing"}}<span class="bad">failing</span>{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{else}}<span class="muted">not answered yet</span>{{end}}</td>
+<td>{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
 <td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>

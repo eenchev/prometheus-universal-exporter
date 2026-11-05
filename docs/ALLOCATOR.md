@@ -902,7 +902,7 @@ Prometheus asking again. Each wait has its own setting:
 | The input files: the configuration, its collector files, the static and probe target files | the next read of them, every `1m` | `--config.watch-interval`; the chart's `allocator.configWatchInterval`. On Kubernetes the kubelet also takes up to about a minute to update a mounted ConfigMap. |
 | A discovery source's targets | the next ask of the source, every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and `dns_sd` | the source's `refresh_interval`, or `--discovery.refresh-interval` for every source that sets none; the chart's `allocator.discoveryRefreshInterval` |
 | A follower's targets, among peers | the next fetch of the leader's snapshot, every 2s | fixed ([Instances with discovery](#instances-with-discovery)) |
-| The members: a replica joining or gone | a gone replica's member TTL, three heartbeat intervals, then the settle time for either | `--heartbeat.interval` (`10s`) and `--settle` (`15s`); the chart's `allocator.heartbeatInterval` and `allocator.settle` |
+| The members: a replica joining, shutting down or gone | the settle time for a replica joining and for one shutting down cleanly, whose last heartbeat says so (on `SIGTERM`); for a replica gone without a word, its member TTL, three heartbeat intervals, then the settle time | `--heartbeat.interval` (`10s`) and `--settle` (`15s`); the chart's `allocator.heartbeatInterval` and `allocator.settle` |
 | A bundle, to a replica | nothing: the long poll answers at once | |
 | A probe target, to Prometheus | Prometheus's next ask of `/v1/sd/<job>`, every `1m` by its default | the scrape configuration's `http_sd_configs` `refresh_interval`; the chart's `allocator.scrapeConfig.refreshInterval` (`30s`) |
 

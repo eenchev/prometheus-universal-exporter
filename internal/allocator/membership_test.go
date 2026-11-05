@@ -198,7 +198,7 @@ func TestASilentMemberLeavesAfterTheTTLAndTheSettleTime(t *testing.T) {
 }
 
 // A member shutting down leaves the live members at once, without waiting
-// for its TTL, and the member list after the settle time.
+// for its TTL, and the member list after the settle time, and not before.
 func TestAMemberShuttingDownLeavesAtOnce(t *testing.T) {
 	a, clock := membershipAllocator(t, 15*time.Second)
 	beat(t, a, "r1", "r2")
@@ -206,7 +206,11 @@ func TestAMemberShuttingDownLeavesAtOnce(t *testing.T) {
 	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r2", Advertise: "r2:9115", ShuttingDown: true})); err != nil {
 		t.Fatal(err)
 	}
-	keepBeating(t, a, clock, 15*time.Second, "r1")
+	keepBeating(t, a, clock, 15*time.Second-time.Millisecond, "r1")
+	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
+		t.Fatalf("got the member list %v 1ms before the settle time after r2 shut down, want [r1 r2]", got)
+	}
+	keepBeating(t, a, clock, time.Millisecond, "r1")
 	if got := effective(a); !slices.Equal(got, []string{"r1"}) {
 		t.Fatalf("got the member list %v the settle time after r2 shut down, want [r1]", got)
 	}

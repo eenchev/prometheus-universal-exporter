@@ -74,6 +74,10 @@ type Allocator struct {
 	// heartbeatInterval is Options.HeartbeatInterval, and memberTTL the
 	// member TTL of it.
 	heartbeatInterval, memberTTL time.Duration
+	// longestHeard is the longest interval a heartbeat said its replica was
+	// heartbeating at (allocapi.Heartbeat.IntervalSeconds) before the first
+	// member list formed, kept within allocapi's bounds (firstSettle).
+	longestHeard time.Duration
 	// maxMembers bounds the live members; full says a heartbeat was
 	// refused for it since the last new member was taken, so the refusals
 	// are logged once while the allocator stays full.
@@ -233,6 +237,9 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.settled && hb.IntervalSeconds != 0 {
+		a.longestHeard = max(a.longestHeard, allocapi.ClampHeartbeatInterval(hb.IntervalSeconds))
+	}
 	m := a.members[hb.Member]
 	if (m != nil && m.stale(hb)) || (m == nil && hb.ShuttingDown) {
 		return a.replyLocked(hb.Member), nil
@@ -399,8 +406,7 @@ func (a *Allocator) update() {
 
 // settleDue reports whether the proposed member list takes effect at now:
 // it differs from the effective one, has held for the settle time, and, for
-// the first one, is not empty and comes a heartbeat interval or more after
-// the start.
+// the first one, is not empty and comes no sooner than firstSettle.
 func (a *Allocator) settleDue(now time.Time) bool {
 	if a.settled && slices.Equal(a.proposed, a.effective) {
 		return false
@@ -411,9 +417,18 @@ func (a *Allocator) settleDue(now time.Time) bool {
 	return !now.Before(a.proposedAt.Add(a.settle))
 }
 
-// firstSettle is the earliest the first member list takes effect.
+// firstSettle is the earliest the first member list takes effect: the
+// settle time after the start, or a heartbeat interval, the copy's own or
+// the longest a replica heard from said it was heartbeating at, when that
+// is longer. A copy started with an interval shorter than the copies before
+// it hears each replica only at the replica's next heartbeat on the old
+// interval, which reaches it within that interval of its start (the
+// replica looks up the copies' addresses every interval); a heartbeat of
+// any replica says the old interval, as each replica was told the same, so
+// the first list waits for the others too, rather than forming of those
+// that happened to come first and changing as each of the rest arrives.
 func (a *Allocator) firstSettle() time.Time {
-	return a.started.Add(max(a.settle, a.heartbeatInterval))
+	return a.started.Add(max(a.settle, a.heartbeatInterval, a.longestHeard))
 }
 
 // takeEffect makes the proposed member list the effective one. A static

@@ -109,6 +109,13 @@ type Heartbeat struct {
 	// Refused names the bundle generation the replica could not load, and
 	// why; its last good bundle stays in force.
 	Refused *Refusal `json:"refused,omitempty"`
+	// IntervalSeconds is the heartbeat interval the replica was heartbeating
+	// at when it built the heartbeat, in seconds. A copy of the allocator
+	// that has just started, with an interval shorter than the copies
+	// before it said, learns from it how long the replicas it has not heard
+	// from yet may take to reach it, and forms its first member list no
+	// sooner.
+	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
 }
 
 // Refusal is a bundle a replica would not load.

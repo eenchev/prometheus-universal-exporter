@@ -662,7 +662,15 @@ moves. The first member list forms once the live members have not changed
 for `--settle`, each replica heard from for the first time starting the wait
 again, and no sooner than `--settle` or a heartbeat interval, whichever is
 longer, after the allocator started, so a restarted allocator has heard from
-every replica before it hands out shares.
+every replica before it hands out shares. The heartbeat interval there is
+the longest of the allocator's own and those its replicas say, in each
+heartbeat, they were heartbeating at: a copy started with a shorter
+`--heartbeat.interval` than the copies before it said, as during a rollout
+that shortens it, hears a replica first at the replica's next heartbeat on
+the old interval, and a replica looks up the copies' addresses every
+interval, so every replica has reached it within the old interval of its
+start; its first heartbeat says that interval, and the first member list
+waits it.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
 is refused for the other. A shorter interval finds a replica that has
@@ -748,7 +756,7 @@ must not be one of them. The token is never taken from the URL.
 ```json
 {"member": "exporter-0", "advertise": "10.0.3.7:9115",
  "instance": "J7KTZ3TQWK76RFHIUQJRRUD646", "sequence": 42, "generation": "8117cfab…",
- "shutting_down": false, "refused": {"generation": "…", "error": "…"}}
+ "shutting_down": false, "refused": {"generation": "…", "error": "…"}, "interval_seconds": 10}
 ```
 
 `member`, `advertise`, a `host:port` with a host and a decimal port from 1
@@ -761,7 +769,9 @@ it is shutting down is remembered for the member TTL after its last heartbeat, t
 not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
-having reported none. A body over 64 KiB
+having reported none. `interval_seconds` is the interval the replica was
+heartbeating at when it sent the heartbeat, which the first member list
+waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
 the generation of the member's bundle, or `""` while the member list has not

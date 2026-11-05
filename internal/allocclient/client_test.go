@@ -1175,7 +1175,8 @@ func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
 }
 
 // The client heartbeats at the interval the allocator's reply says from the
-// heartbeat after it on, though it started with another.
+// heartbeat after it on, though it started with another, and each heartbeat
+// says the interval it was sent at.
 func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	a := newFakeAllocator(t)
 	a.mu.Lock()
@@ -1190,6 +1191,9 @@ func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	}
 	if got := c.heartbeatInterval(); got != time.Second {
 		t.Errorf("the heartbeat interval in force is %s, want 1s", got)
+	}
+	if first.IntervalSeconds != 3600 || second.IntervalSeconds != 1 {
+		t.Errorf("the heartbeats said the intervals %v and %v, want 3600 and 1", first.IntervalSeconds, second.IntervalSeconds)
 	}
 }
 

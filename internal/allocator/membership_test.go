@@ -421,3 +421,69 @@ func TestARefusalIsLoggedAgainAfterOneIsOver(t *testing.T) {
 		t.Errorf("the refusals were logged %d times, want twice:\n%s", got, logs)
 	}
 }
+
+// A copy started with a shorter --heartbeat.interval, 5s, than the copies
+// before it said, 40s, hears each replica first at the replica's next
+// heartbeat on the old interval. The first replica's heartbeat says 40s, so
+// the first member list waits 40s after the start, by which every replica
+// has been heard, rather than forming after the settle time of those heard
+// first and changing as the rest arrive.
+func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) {
+	clock := newFakeClock()
+	a := New(nil, Options{Settle: 15 * time.Second, HeartbeatInterval: 5 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	at := func(interval time.Duration, members ...string) {
+		t.Helper()
+		for _, name := range members {
+			if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: name, Advertise: name + ":9115", IntervalSeconds: interval.Seconds()})); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// r1's heartbeat on the old interval comes 1s after the start; it
+	// heartbeats every 5s from then on.
+	clock.Advance(time.Second)
+	at(40*time.Second, "r1")
+	for range 5 {
+		clock.Advance(5 * time.Second)
+		at(5*time.Second, "r1")
+	}
+	// 26s after the start, past the settle time of r1 alone: r2 and r3,
+	// still on the old interval, have not been heard.
+	if got := effective(a); got != nil {
+		t.Fatalf("the first member list formed of %v before r2 and r3 were heard", got)
+	}
+	clock.Advance(4 * time.Second)
+	at(40*time.Second, "r2", "r3")
+	at(5*time.Second, "r1")
+	for range 2 {
+		clock.Advance(5 * time.Second)
+		at(5*time.Second, "r1", "r2", "r3")
+	}
+	if got := effective(a); got != nil {
+		t.Fatalf("the first member list formed of %v before 40s", got)
+	}
+	clock.Advance(5 * time.Second)
+	at(5*time.Second, "r1", "r2", "r3")
+	if got := effective(a); !slices.Equal(got, []string{"r1", "r2", "r3"}) || memberChanges(a) != 0 {
+		t.Errorf("40s after the start got the member list %v after %d changes, want [r1 r2 r3] as the first", got, memberChanges(a))
+	}
+	// An interval said outside allocapi's bounds is brought within them:
+	// a bogus one cannot hold the first list back for longer than 2m.
+	b := New(nil, Options{Settle: time.Second, HeartbeatInterval: 5 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(b.BeginShutdown)
+	if _, err := b.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115", IntervalSeconds: 1e9})); err != nil {
+		t.Fatal(err)
+	}
+	for range 23 {
+		clock.Advance(5 * time.Second)
+		beat(t, b, "r1")
+	}
+	if got := effective(b); got != nil {
+		t.Errorf("115s after the start of a copy told 1e9s the member list formed: %v", got)
+	}
+	clock.Advance(5 * time.Second)
+	if got := effective(b); !slices.Equal(got, []string{"r1"}) {
+		t.Errorf("2m after the start of a copy told 1e9s the member list is %v, want [r1]", got)
+	}
+}

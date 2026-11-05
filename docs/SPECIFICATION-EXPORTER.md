@@ -30381,6 +30381,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers` (allocclient): beside an allocator copy that never answers, one answering a 1s interval hears the replica at least 4 times in 4.5s, never more than 1.5s apart; heartbeats to the hung copy are given up on within 1.5s, and every lookup of the addresses is bounded by at most the 1s interval.
 - `TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy` (allocclient): a client started with an hour's interval, of two copies one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
 - `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
+- `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): a copy with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; a copy with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
+- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat says `interval_seconds` 3600 and the one after the reply saying 1 says 1.
 
 # 35. Documentation requirements
 
@@ -33614,7 +33616,9 @@ reports one after a heartbeat without. A change of the live members MUST take ef
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
-before `max(--settle, --heartbeat.interval)` after the start. A member
+before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
+is the longest `interval_seconds` a heartbeat heard before it formed said,
+brought within `1s` and `2m`, 0 when none said one. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33791,9 +33795,10 @@ fails MUST keep the addresses it resolved to last. A heartbeat MUST carry the me
 address, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force,
 `shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
-random name made once at the exporter's start, and the `sequence`, 1 for the
+random name made once at the exporter's start, the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
-that a heartbeat given up on and arriving late is known for an old one; on that signal the
+that a heartbeat given up on and arriving late is known for an old one, and
+`interval_seconds`, the heartbeat interval in force when it was built; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`

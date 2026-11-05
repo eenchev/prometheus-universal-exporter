@@ -30393,7 +30393,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.271 Allocator pages say instance
 
-- `TestTheAllocatorPagesSayInstance` (allocator): the page of an allocator without `--peers`, a leader's page and fragment, a `--peers.leader-only` follower's page and the member views of both have no `copy` or `copies` in their visible text, scripts, styles and code left out; each page has the heading `This instance` and the row `Instance ID`, whose label goes on two lines at a width of 400px or less; without peers it says this instance asks its discovery sources itself; the leader's has the `Instance` column, `(this instance)`, the `ID` beside an address, `This instance leads: it asks the discovery sources, and the other instances take what it finds.` and `2 live instances`; the follower's notice and its member view's say `This instance follows the leader`, its page `Below are this instance and its peers.` and `This instance follows <leader>:`.
+- `TestTheAllocatorPagesSayInstance` (allocator): the page of an allocator without `--peers`, a leader's page and fragment, a `--peers.leader-only` follower's page and the member views of both have no `copy` or `copies` in their visible text, scripts, styles and code left out; each page has the heading `This instance` and the row `Instance ID`, whose label goes on two lines at a width of 400px or less; without peers it says this instance asks its discovery sources itself; the leader's has the `Instance` column, `(this instance)`, the `ID` beside an address, `This instance leads: it asks the discovery sources, and the other instances take what it finds.` and `2 live instances`; the follower's notice and its member view's say `This instance follows the leader`, its page `Below are this instance and its peers.` and `This instance follows <leader>:`. The bar names the allocator `Prometheus Universal Exporter · Target Allocator` on the leader's page and, as a link back, on its member view.
 
 # 35. Documentation requirements
 
@@ -33720,8 +33720,8 @@ target); and every discovery source with its kind, owner, source kind,
 result (`ok`, `failing` with its error, or `pending`), targets, last
 refresh and last success, and whether what it holds came from the copy's
 own discovery or the leader's snapshot. `GET /` MUST render the same as an
-HTML page framed as the exporter's pages are (§ 42.14a: the bar with the
-theme picker, the logo as its icon, the same `Content-Security-Policy`,
+HTML page framed as the exporter's pages are (§ 42.14a: the bar, naming
+it `Prometheus Universal Exporter · Target Allocator`, with the theme picker, the logo as its icon, the same `Content-Security-Policy`,
 `X-Frame-Options: DENY` and `Cache-Control: no-store`), every value escaped,
 calling each allocator process an instance and never a copy (`This instance`,
 the peers' `Instance` column, `(this instance)`, `live instances`) and its

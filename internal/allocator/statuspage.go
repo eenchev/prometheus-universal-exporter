@@ -281,7 +281,7 @@ td.bar { width: 32%; min-width: 120px; }
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · allocator</span>{{end}}
+{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
 <span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 

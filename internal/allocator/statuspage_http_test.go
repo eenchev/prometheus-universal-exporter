@@ -417,4 +417,8 @@ func TestTheAllocatorPagesSayInstance(t *testing.T) {
 		"This instance leads: it asks the discovery sources, and the other instances take what it finds.", "2 live instances", "leader</span> of 2 live instances")
 	requireIn(t, pages["follower"], `<p class="notice">This instance follows the leader`, "Below are this instance and its peers.", "This instance follows "+leader.addr.String()+":")
 	requireIn(t, pages["follower's view"], `<p class="notice">This instance follows the leader`)
+	// The bar names the allocator by its full name, on the status page and
+	// on a member's view alike.
+	requireIn(t, pages["leader"], `<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>`)
+	requireIn(t, pages["leader's view"], `<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>`)
 }

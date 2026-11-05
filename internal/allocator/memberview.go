@@ -72,8 +72,10 @@ type MemberStaticTarget struct {
 	Target string `json:"target"`
 	// Labels are the target's own labels, a label written "" left out, as
 	// the exporter leaves it out.
-	Labels   map[string]string `json:"labels,omitempty"`
-	Interval string            `json:"interval"`
+	Labels map[string]string `json:"labels,omitempty"`
+	// Interval is the target's interval as Go writes it, 1m0s; the page
+	// writes it as it writes every duration (pagekit.Duration), 1m.
+	Interval string `json:"interval"`
 	// MovedTo is, for a target draining, the member that owns it now, and
 	// DrainsForSeconds how much longer the member keeps it.
 	MovedTo          string  `json:"moved_to,omitempty"`
@@ -370,7 +372,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{.Interval}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>

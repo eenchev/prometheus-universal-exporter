@@ -2,8 +2,8 @@
 // allocator share, so the two look and behave alike: the stylesheet and its
 // light and dark colours, the theme picker and the script that applies the
 // theme chosen before a page is first drawn, the project's logo as the
-// browser-tab icon, the pages' Content-Security-Policy, and the controls of
-// a page that refreshes itself. Each page's bar and content stay its
+// browser-tab icon, the pages' Content-Security-Policy, the controls of a
+// page that refreshes itself, and how a page writes a duration. Each page's bar and content stay its
 // program's own.
 package pagekit
 

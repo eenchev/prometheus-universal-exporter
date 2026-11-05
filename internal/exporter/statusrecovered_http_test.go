@@ -23,7 +23,7 @@ const recoveredLabel = `<span class="recovered-label">Earlier failure, recovered
 
 // recoveredAt is the time line under a recovered error: when, and how long
 // ago as the page writes an age.
-var recoveredAt = regexp.MustCompile(`</div><span class="muted">at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \((\d+h)?(\d+m)?\d+s ago\)</span>`)
+var recoveredAt = regexp.MustCompile(`</div><span class="muted">at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \((\d+[hm])*\d+[hms] ago\)</span>`)
 
 // isRecovered is a last_error_recovered given and true, isFailing one given
 // and false: an error is there, and what failed has not succeeded since.
@@ -212,8 +212,8 @@ func TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted(t *testing.T) {
 	requireRecovered(t, "the recovered log export's Last error", logsCell, "the log endpoint refused it", true)
 	requireRecovered(t, "the recovered trace export's Last error", tracesCell, "the trace endpoint refused it", true)
 	for what, cell := range map[string]string{"log": logsCell, "trace": tracesCell} {
-		if !strings.Contains(cell, "(35m0s ago)") {
-			t.Errorf("the recovered %s export's error does not say it was 35m0s ago:\n%s", what, cell)
+		if !strings.Contains(cell, "(35m ago)") {
+			t.Errorf("the recovered %s export's error does not say it was 35m ago:\n%s", what, cell)
 		}
 	}
 	if d := otlpDetails(t, server); !isRecovered(d.Logs.LastErrorRecovered) || !isRecovered(d.Traces.LastErrorRecovered) {

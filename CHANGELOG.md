@@ -27,6 +27,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   does not matter, keep a label to the path with
   `$url | split("?")[0] | split(";")[0]`
   ([Logging](docs/LOGGING.md#repeated-failures)).
+- The status page writes a duration as Go does with every unit that is zero
+  left out: an interval of `1m`, an age of `35m` and a threshold of `2h`
+  where it wrote `1m0s`, `35m0s` and `2h0m0s`. The JSON keeps Go's form
+  and its seconds ([Status page](docs/ENDPOINTS.md#status-page)).
 
 ### New
 
@@ -72,7 +76,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   average and most a member has, the imbalance, marked where uneven, and
   its discovery sources, sortable by any column and with a filter box, and
   the discovery sources, refreshing itself as the exporter's status page
-  does; and the same as JSON at `/v1/status`. Each member links to its own
+  does and writing a duration as it does, `1m` and `1h30s`; and the same
+  as JSON at `/v1/status`. Each member links to its own
   view, `/?member=<id>` and `/v1/status?member=<id>`: the static targets it
   owns and drains, with where they moved, and the probe targets routed to
   it by job, credentials withheld, with a filter box and at most 1000

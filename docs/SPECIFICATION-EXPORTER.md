@@ -3708,8 +3708,8 @@ this order, without cycles:
    files, and their schemas.
 9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
 10. `pagekit`: what the HTML pages of the exporter and of the target
-   allocator share: the stylesheet, the theme, the icon and the refresh
-   controls.
+   allocator share: the stylesheet, the theme, the icon, the refresh
+   controls and how a duration is written.
 11. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
 12. `allocator`: the target allocator (§ 42.14d).
@@ -8469,6 +8469,15 @@ Recommended behavior:
   (`img-src data:`) and which needs no request. The copy the build embeds
   MUST be checked against `docs/logo.svg` by a test, so the two cannot
   drift apart.
+- Every HTML page the exporter and the target allocator serve MUST write a
+  duration it shows — an interval configured, a threshold, an age, how long
+  something took — in Go's form with every unit that is zero left out:
+  `1m`, `1m30s`, `2h` and `1h30s`, never `1m0s`, `2h0m0s` or `1h0m30s`; a
+  fraction of a second MUST be kept (`1m0.5s`), one under a second MUST be
+  written as Go writes it (`500ms`), and none as `0s`. One helper
+  (`pagekit.Duration`) MUST write them for both programs. The JSON answers
+  MUST keep their values as they are: seconds as numbers, and a duration
+  held as a string, as a static target's `interval`, in Go's form (`1m0s`).
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -30101,7 +30110,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted`: a static target that failed and then succeeded keeps its error with `last_error_recovered` true, and its row shows it under the label "Earlier failure, recovered since", the error in a muted block and `at <time> (<age> ago)` under it; a target whose last scrape failed has `last_error_recovered` false and its error shown as before, unlabelled, with `at <time>` alone. `TestTheStatusPagesOTLPJSON` and `TestTheRecentProbesJSONShape` still pass unchanged: without a last error the field is left out.
 - `TestTheRecentProbesShowARecoveredErrorMuted`: of the recent probes, a collector and target whose latest probe succeeded after a failed one has its error shown as recovered and `last_error_recovered` true; one whose latest probe failed has it shown as before and false.
 - `TestTheOTLPExportsRecoveredErrorIsShownMuted`: the OTLP export's Last error is shown as before while the last export failed, `last_error_recovered` false, and as recovered, with the JSON's `otlp.last_error_recovered` true, once an export got through after it.
-- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m0s ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
 
 ## 34.255 Fixes from the 2026-11-02 audit: what spans carry, whole traces, export intervals, and the debug page's credentials and times
 
@@ -30411,6 +30420,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
 - `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
+
+## 34.273 Allocator polish: durations, source labels, the first member list
+
+- `TestADurationLeavesOutItsZeroUnits` (pagekit): `pagekit.Duration` writes 0 as `0s`, 500ms, 1.5ms and 1.5s as Go does, 1m, 1m30s, 1m0.5s, 10m, 1m14s, 1h, 2h, 1h30s, 1h10m, 1h10m1s, 1h0.5s, 100h, -1m and -1h30s with every zero unit left out.
+- `TestADurationTextIsWrittenAsADuration` (pagekit): `pagekit.DurationText` writes `1m0s`, `2h0m0s` and `1h0m30s` as `1m`, `2h` and `1h30s`, keeps `30s` and `500ms`, and gives `never` and the empty text as they are.
+- `TestTheAllocatorPagesWriteDurationsWithoutZeroUnits` (allocator): an allocator of a 1m heartbeat interval, a 2m settle time and a 1h watch interval, 74s after its start, has `(up 1m14s)`, `read again every 1h for changes` and `heartbeat every 1m; a member not heard from for 3m stops being live. A changed member list holds for 2m` on its page; a `file_sd` source's default 1m is `1m` in the sources table and `refreshed every 1m` on its job's view, and a static target's own 1m interval is `1m` on its member's view and `1m0s` in the view's JSON; no page has `m0s` or `h0m`.
+- `TestTheStatusPageWritesDurationsWithoutZeroUnits` (exporter): the status page writes a static target's 1m interval as `1m`, the metrics export's 1m, the log export's 2h and the trace export's 1h0m30s intervals as `every 1m`, `every 2h` and `every 1h30s`, and the trace threshold of 1m as `took 1m or longer` and `threshold 1m`, with no `m0s` or `h0m`; the JSON keeps `1m0s`, `2h0m0s`, `1h0m30s` and `1m0s`.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), changed: a recovered error's age is `(35m ago)`, an age matched as hours, minutes and seconds each left out when zero; `TestTheStatusPageShowsTheJSONsValuesEscaped` finds a row's interval as the page writes it.
 
 # 35. Documentation requirements
 

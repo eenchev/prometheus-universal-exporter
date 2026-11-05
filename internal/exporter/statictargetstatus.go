@@ -384,20 +384,22 @@ func rootLink(path string) string {
 }
 
 // shownScrapeDuration is d to the millisecond, or to the microsecond under
-// one, which a scrape answered from the cache takes.
+// one, which a scrape answered from the cache takes, as the pages write a
+// duration (pagekit.Duration).
 func shownScrapeDuration(d time.Duration) string {
 	if d < time.Millisecond {
-		return d.Round(time.Microsecond).String()
+		return pagekit.Duration(d.Round(time.Microsecond))
 	}
-	return d.Round(time.Millisecond).String()
+	return pagekit.Duration(d.Round(time.Millisecond))
 }
 
-// shortDuration is d in whole seconds, minutes and hours, as an age reads.
+// shortDuration is d in whole seconds, minutes and hours, as an age reads
+// and as the pages write a duration (pagekit.Duration): 1m, not 1m0s.
 func shortDuration(d time.Duration) string {
 	if d < time.Second {
 		return "0s"
 	}
-	return d.Truncate(time.Second).String()
+	return pagekit.Duration(d.Truncate(time.Second))
 }
 
 func (s *Server) staticTargetsStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -668,7 +670,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 {{- range .Rows}}
 <tr>
 <td class="what"><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
-<td>{{.Interval}}</td>
+<td>{{duration .Interval}}</td>
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
 <td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
@@ -708,7 +710,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <h2 id="otlp">OTLP export</h2>
 {{- with .OTLP}}
 {{- if .Enabled}}
-<p>Exported {{.Protocol}} every {{.Interval}}: the probes' results, {{if .Exported.StaticTargets}}{{.Exported.StaticTargets}} static target{{if ne .Exported.StaticTargets 1}}s{{end}} with <code>export_via_otlp</code>, {{end}}and the exporter's own metrics.{{if .Allocator}} These are the exports of this replica.{{end}}</p>
+<p>Exported {{.Protocol}} every {{duration .Interval}}: the probes' results, {{if .Exported.StaticTargets}}{{.Exported.StaticTargets}} static target{{if ne .Exported.StaticTargets 1}}s{{end}} with <code>export_via_otlp</code>, {{end}}and the exporter's own metrics.{{if .Allocator}} These are the exports of this replica.{{end}}</p>
 <div class="scroll">
 <table class="facts">
 <tbody>
@@ -732,7 +734,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <h3 id="otlp-logs">Log export</h3>
 {{- with .Logs}}
 {{- if .Enabled}}
-<p>The exporter's own log lines at {{.Level}} and above, exported every {{.Interval}}. Failing log exports do not make the exporter unready.</p>
+<p>The exporter's own log lines at {{.Level}} and above, exported every {{duration .Interval}}. Failing log exports do not make the exporter unready.</p>
 <div class="scroll">
 <table class="facts">
 <tbody>
@@ -754,7 +756,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <h3 id="otlp-traces">Trace export</h3>
 {{- with .Traces}}
 {{- if .Enabled}}
-<p>The traces of the probes and static target scrapes that took {{.Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}{{if .ParentBased}}, and of every probe whose caller sampled it{{end}}{{if .SampleRatio}}, and {{.SampleRatioText}} of the others by their trace ids{{end}}, exported every {{.Interval}}{{if .MaxPerSecond}}, at most {{.MaxPerSecond}} trace{{if ne .MaxPerSecond 1}}s{{end}} a second{{end}}. Failing trace exports do not make the exporter unready.</p>
+<p>The traces of the probes and static target scrapes that took {{duration .Threshold}} or longer{{if .Errors}}, and of every one that failed{{end}}{{if .ParentBased}}, and of every probe whose caller sampled it{{end}}{{if .SampleRatio}}, and {{.SampleRatioText}} of the others by their trace ids{{end}}, exported every {{duration .Interval}}{{if .MaxPerSecond}}, at most {{.MaxPerSecond}} trace{{if ne .MaxPerSecond 1}}s{{end}} a second{{end}}. Failing trace exports do not make the exporter unready.</p>
 <div class="scroll">
 <table class="facts">
 <tbody>
@@ -763,7 +765,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
-<tr><th>Sampling rules</th><td>threshold {{.Threshold}}; errors {{.Errors}}; parent_based {{.ParentBased}}; sample_ratio {{.SampleRatioText}}; max_per_second {{if .MaxPerSecond}}{{.MaxPerSecond}}{{else}}no cap{{end}}</td></tr>
+<tr><th>Sampling rules</th><td>threshold {{duration .Threshold}}; errors {{.Errors}}; parent_based {{.ParentBased}}; sample_ratio {{.SampleRatioText}}; max_per_second {{if .MaxPerSecond}}{{.MaxPerSecond}}{{else}}no cap{{end}}</td></tr>
 <tr><th>Traces kept</th><td>{{.TracesKept.Slow}} slow, {{.TracesKept.Error}} failed, {{.TracesKept.Parent}} sampled by the caller, {{.TracesKept.Ratio}} sampled by the ratio</td></tr>
 <tr><th>Traces dropped</th><td>{{.TracesDropped.NotSampled}} not sampled, {{.TracesDropped.Rate}} over the rate cap, {{.TracesDropped.Queue}} with no room in the queue</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} span{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>

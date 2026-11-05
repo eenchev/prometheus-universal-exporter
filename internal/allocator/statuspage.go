@@ -234,13 +234,14 @@ func imbalance(n float64) string {
 	return strconv.FormatFloat(n, 'f', 2, 64) + "×"
 }
 
-// age writes seconds as an age reads, in whole seconds, minutes and hours.
+// age writes seconds, an age or an interval, in whole seconds, minutes and
+// hours, as the pages write a duration (pagekit.Duration): 1m, not 1m0s.
 func age(s float64) string {
 	d := time.Duration(s * float64(time.Second)).Truncate(time.Second)
 	if d < time.Second {
 		return "0s"
 	}
-	return d.String()
+	return pagekit.Duration(d)
 }
 
 // shortGeneration is a generation's first 8 characters, which tell
@@ -268,7 +269,7 @@ func jobMatch(j JobSpread) string {
 	return strings.Join([]string{j.Job, j.Collector, sourceNames(j.Sources)}, "\n")
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration,
+var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "duration": pagekit.DurationText, "gen": shortGeneration,
 	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as

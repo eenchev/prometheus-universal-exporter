@@ -937,6 +937,12 @@ its instance ID. It shows
   and whether what
   it holds is this instance's own discovery or the leader's snapshot.
 
+The page writes a duration, an interval or an age, as the exporter's pages
+do: Go's form with every unit that is zero left out, `1m`, `1m30s`, `2h`
+and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. The JSON
+keeps its values: seconds as numbers, and a static target's `interval` as
+Go writes it, `1m0s`.
+
 The page refreshes itself as the exporter's status page does: Refresh, and
 an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
 `?refresh=30s`, fetching the page's content again (`?format=fragment`) and

@@ -67,16 +67,35 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   discovery](docs/ALLOCATOR.md#instances-with-discovery)).
 - `pue-allocator` serves a status page at `/`: the instance, its peers and the
   leader, the members and their bundles, how the targets are spread over
-  the members, with the average and the imbalance, and the discovery
-  sources, refreshing itself as the exporter's status page does; and the
-  same as JSON at `/v1/status`. Each member links to its own view,
-  `/?member=<id>` and `/v1/status?member=<id>`: the static targets it owns
-  and drains, with where they moved, and the probe targets routed to it by
-  job, credentials withheld, with a filter box and at most 1000 targets a
-  list ([A member's targets](docs/ALLOCATOR.md#a-members-targets)). A
+  the members, with the average and the imbalance, a table of the probe
+  jobs, each with its targets, the members it is routed among, the fewest,
+  average and most a member has, the imbalance, marked where uneven, and
+  its discovery sources, sortable by any column and with a filter box, and
+  the discovery sources, refreshing itself as the exporter's status page
+  does; and the same as JSON at `/v1/status`. Each member links to its own
+  view, `/?member=<id>` and `/v1/status?member=<id>`: the static targets it
+  owns and drains, with where they moved, and the probe targets routed to
+  it by job, credentials withheld, with a filter box and at most 1000
+  targets a list ([A member's targets](docs/ALLOCATOR.md#a-members-targets)).
+  Each probe job links to its own view, `/?job=<name>` and
+  `/v1/status?job=<name>`: its collector, labels, params (credentials
+  withheld) and sources, the targets each member has with a bar, and each
+  target with the member it is routed to and its labels, filtered and
+  bounded as a member's ([A probe job's
+  targets](docs/ALLOCATOR.md#a-probe-jobs-targets)). A
   browser gives `--web.token-file`'s token as the password of Basic auth,
   which the page, `/v1/status` and `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
+- `pue-allocator --discovery.refresh-interval`: how often a discovery source
+  that sets no `refresh_interval` is asked, whatever its kind; left out,
+  each kind keeps its own default. The chart sets it from
+  `allocator.discoveryRefreshInterval`, and the allocator's
+  `--config.watch-interval` from the new `allocator.configWatchInterval`.
+  The status page shows how often the input files are read, the settle
+  time and each source's interval, and the allocator docs list every delay
+  between a change and the exporters with the setting of each ([How fast
+  changes reach the
+  exporters](docs/ALLOCATOR.md#how-fast-changes-reach-the-exporters)).
 - `pue-allocator --peers.leader-only`: only the leader serves the whole of
   `/metrics` and of the status page, and the other instances the peers'
   metrics and their own peer state alone, so a Prometheus scraping every

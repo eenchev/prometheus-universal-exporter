@@ -55,6 +55,7 @@ pue-allocator \
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
 | `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
+| `--discovery.refresh-interval` | each kind's own | How often a [discovery source](#discovering-targets) that sets no `refresh_interval` is asked, `1s` or more, whatever its kind. Left out, or `0`, each kind keeps its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. A source's `timeout` is held to it as to a `refresh_interval` written ([How fast changes reach the exporters](#how-fast-changes-reach-the-exporters)). |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
 | `--peers` | none | The allocator instances to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every instance, this one included, so each finds its own address among them. The instances are then peers, of which only the leader asks the discovery sources ([Instances with discovery](#instances-with-discovery)). |
 | `--peers.self` | none | This instance's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the instance finds itself among its peers' addresses by asking them. Only with `--peers`. |
@@ -337,6 +338,10 @@ Each source sets exactly one of `file_sd`, `http_sd`, `kubernetes` and
 - `max_targets`, how many targets one answer may hold, `--discovery.max-targets`
   by default; it bounds the leader's snapshot of the source on a follower
   too ([Instances with discovery](#instances-with-discovery)).
+
+Each kind sets `refresh_interval`, how often the source is asked, at least
+`1s`. Left out it is `--discovery.refresh-interval` when that is given, and
+else the kind's own default below.
 
 **`file_sd`** reads Prometheus file_sd files, JSON (`.json`) or YAML (`.yml`,
 `.yaml`) lists of `{targets: [...], labels: {...}}`, from `files`, paths or
@@ -858,6 +863,28 @@ scrape_configs:
           credentials_file: /etc/prometheus/pue-allocator-token
 ```
 
+### How fast changes reach the exporters
+
+An exporter replica is handed a changed bundle at once: its long poll of
+`/v1/bundle` is answered the moment the bundle changes, and Prometheus is
+answered the new probe targets at its next ask of `/v1/sd/<job>`. What a
+change waits for is the allocator noticing it, and for a probe target
+Prometheus asking again. Each wait has its own setting:
+
+| A change of | Waits for | Set by |
+| --- | --- | --- |
+| The input files: the configuration, its collector files, the static and probe target files | the next read of them, every `1m` | `--config.watch-interval`; the chart's `allocator.configWatchInterval`. On Kubernetes the kubelet also takes up to about a minute to update a mounted ConfigMap. |
+| A discovery source's targets | the next ask of the source, every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and `dns_sd` | the source's `refresh_interval`, or `--discovery.refresh-interval` for every source that sets none; the chart's `allocator.discoveryRefreshInterval` |
+| A follower's targets, among peers | the next fetch of the leader's snapshot, every 2s | fixed ([Instances with discovery](#instances-with-discovery)) |
+| The members: a replica joining or gone | a gone replica's member TTL, three heartbeat intervals, then the settle time for either | `--heartbeat.interval` (`10s`) and `--settle` (`15s`); the chart's `allocator.heartbeatInterval` and `allocator.settle` |
+| A bundle, to a replica | nothing: the long poll answers at once | |
+| A probe target, to Prometheus | Prometheus's next ask of `/v1/sd/<job>`, every `1m` by its default | the scrape configuration's `http_sd_configs` `refresh_interval`; the chart's `allocator.scrapeConfig.refreshInterval` (`30s`) |
+
+The status page shows the allocator's own: the input files' interval under
+This instance, the settle time under Members and each source's interval in
+the discovery sources table. A shorter interval notices a change sooner,
+for more reads of the files, and more asks of a source's API.
+
 ## Status page
 
 `GET /` is a page for a person: what this instance holds, without a Prometheus
@@ -866,8 +893,9 @@ id its process takes at its start, the `id` of `instance` in `/v1/status`,
 its instance ID. It shows
 
 - this instance: its address (among its peers, or `--web.listen-address`),
-  its instance ID, version and revision, when it started and whether it
-  is ready;
+  its instance ID, version and revision, when it started, how often it reads
+  the input files again (`--config.watch-interval`) or that it read them
+  once, and whether it is ready;
 - with `--peers`, whether it leads or follows, which instance leads, and
   whether it runs with `--peers.leader-only`, and
   every instance its peers' addresses give, itself included, with its ID,
@@ -875,19 +903,38 @@ its instance ID. It shows
   checked and the checks it failed in a row; how old the instance's
   snapshot is and whether it holds the leader's discovered targets; and the series of the peers'
   metrics as `/metrics` has them ([Metrics](#metrics));
-- the members: the heartbeat interval and the member TTL; each one's
+- the members: the heartbeat interval, the member TTL and `--settle`; each one's
   address, how long ago its last heartbeat came, marked when a heartbeat is
   overdue, more than one and a half intervals after the last,
   the bundle it has in force beside the one it is to have, a refusal it
   reports, whether it is in the member list, joining, silent or shutting
   down, and the static targets it keeps draining;
 - how the targets are spread: for each member, the static targets it owns,
-  those it keeps draining, the probe targets service discovery routes to it,
-  by probe job and in all, and the total, with a bar of each; then the
-  totals, the average per member and the imbalance, the most any member has
-  divided by the average, `1.00×` for targets spread evenly;
+  those it keeps draining, the probe targets service discovery routes to it
+  and the total, with a bar of each; then the totals, the average per member
+  and the imbalance, the most any member has divided by the average, `1.00×`
+  for targets spread evenly. The columns stay these whatever the number of
+  probe jobs;
+- the probe jobs, a row each: the job, which links to its view
+  ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
+  targets, the members it is routed among, the fewest, the average and the
+  most targets of the job a member of them has, the imbalance, the most
+  divided by the average, and its discovery sources with their result, or
+  `listed` for a job whose file lists every target. The members a job is
+  routed among are those service discovery may route its targets to
+  ([Service discovery](#service-discovery)), so one given none of its
+  targets counts, with 0, and Min shows it. The imbalance is marked where
+  the most is half again as many as the evenest split would give a member,
+  the targets divided by the members and rounded up: a job of 2 targets over
+  3 members cannot do better than `1.50×`, so the average alone would mark
+  every small job. A click on a column's heading sorts the table by it, a
+  second the other way, and a filter box above it hides, as it is typed, the
+  jobs whose name, collector and sources' names do not hold its text, in any
+  case; a refresh keeps the order, the filter and the caret;
 - the discovery sources: each one's kind, owner, result, with the error
-  while it fails, its targets, when it was last refreshed, and whether what
+  while it fails, its targets, how often it is asked (its
+  `refresh_interval`, or the default it takes), when it was last refreshed,
+  and whether what
   it holds is this instance's own discovery or the leader's snapshot.
 
 The page refreshes itself as the exporter's status page does: Refresh, and
@@ -898,7 +945,7 @@ with their theme picker, and needs nothing from outside the allocator.
 
 `GET /v1/status` answers the same as JSON: `generated_at`; `instance`
 (`address`, `id`, `version`, `revision`, `started_at`, `uptime_seconds`,
-`ready`); `peers`, `null` without `--peers` (`role`, `leader` or `follower`,
+`ready`, `watch_interval_seconds`, `0` for files read once); `peers`, `null` without `--peers` (`role`, `leader` or `follower`,
 `deciding` before the first check; `leader`, the leader's address;
 `leader_only`; `live_instances`, `leader_changes`, `snapshot_age_seconds`,
 `snapshot_taken`, `holds_leader_state`, the failures, `instances`, each with
@@ -906,13 +953,17 @@ its `address`, `self`, `leader`, `live`, `id`, `discovering`,
 `address_known`, `last_check` and `failures`, and `metrics`, each a `series`
 and its `value`); `partial`, true on a follower under `--peers.leader-only`,
 whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
-`in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds` and
-`list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
+`in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds`,
+`settle_seconds` and `list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
 `in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`
-and `draining`); `spread` (`jobs`, and `members`, `total`, `average` and
-`imbalance`, each with `static`, `draining`, `probe`, `probe_jobs` by job
-and `total`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
-`ok`, `failing` or `pending`, `error`, `targets`, `last_refresh`,
+and `draining`); `spread` (`members`, `total`, `average` and `imbalance`,
+each with `static`, `draining`, `probe` and `total`, and `jobs`, in file
+order, each with `job`, `collector`, `targets`, `members`, the members it is
+routed among by id, each with its `member` and `targets`, `min`, `average`,
+`max`, `imbalance`, `uneven`, the mark above, and `sources`, each with its
+`name`, `type` and `result`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
+`ok`, `failing` or `pending`, `error`, `targets`,
+`refresh_interval_seconds`, `last_refresh`,
 `last_success` and `from`, `own` or `snapshot`). Times are RFC 3339 in UTC,
 each with its age in seconds beside it.
 
@@ -967,6 +1018,44 @@ that it has, its filter box hidden; `?member=` without an id is answered
 `400`. Under
 `--peers.leader-only` a follower serves no member's view, as it serves no
 members: the page names the leader, whose page has it, and the JSON is
+`partial` with the leader's address. A probe job's name in the member's
+view links to the job's view.
+
+### A probe job's targets
+
+A probe job's name in the probe jobs table links to its view,
+`GET /?job=<name>`: where that job's targets go, to answer "which pod probes
+this site?" without asking service discovery. It shows
+
+- the job: its collector, its targets, listed and discovered, its shard
+  key, its labels, a label written `""` left out, its params, and its
+  discovery sources, each with its kind and result, and its error while it
+  fails, or none;
+- the members it is routed among, each linking to its view, with the
+  targets of the job it has and a bar of them, the most first, the fewest
+  to the most and the average above them, the imbalance marked as in the
+  probe jobs table;
+- its targets, by target, each with the member service discovery routes
+  it to, which links to that member's view, and the labels its discovery
+  source gave it, but those the job's own labels set or take away.
+
+The counts are the spread's for the job. A target is shown with its
+credentials withheld as on a member's view, and a param whose name reads
+as a credential's, such as `api_key` or `token`, as `<redacted>`; any other
+param is shown as written, with what reads as a credential in its value
+masked. The filter box, Search all (`?filter=<text>`), the bound of 1000
+targets and the refresh are a member's view's; the filter matches a
+target, its member and its labels as `name=value`. Its bar's JSON link is
+`GET /v1/status?job=<name>`, the same as JSON: `generated_at`, `job`,
+`filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
+`spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
+`params`, `sources` (as the status's `sources` have them) and `targets`
+(`total`, `matching` and `list`, each with `target`, `member` and
+`labels`). A job the probe targets file does not have is answered `404` as
+JSON, and the page, and its fragment, say so with `200`, its filter box
+hidden, so a view left open over a reload that renamed the job shows it;
+`?job=` without a name is answered `400`. Under `--peers.leader-only` a
+follower serves no job's view: the page names the leader, and the JSON is
 `partial` with the leader's address.
 
 ## Metrics

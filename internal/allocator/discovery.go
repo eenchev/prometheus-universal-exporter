@@ -34,6 +34,10 @@ type DiscoveryConfig struct {
 	// MaxTargets bounds the targets one answer may hold; an answer with
 	// more is refused as a failure. 0 takes --discovery.max-targets.
 	MaxTargets int `yaml:"max_targets"`
+	// defaultRefresh is --discovery.refresh-interval, which checkDiscovery
+	// fills: the refresh_interval of a source that sets none, 0 for its
+	// kind's own.
+	defaultRefresh time.Duration
 }
 
 // FileSDConfig reads Prometheus file_sd files: JSON (.json) or YAML (.yml,
@@ -121,8 +125,9 @@ const (
 	// DefaultAddressType is the addressType of the EndpointSlices a
 	// kubernetes source takes by default.
 	DefaultAddressType = "IPv4"
-	// minDiscoveryRefresh is the shortest refresh_interval taken.
-	minDiscoveryRefresh = time.Second
+	// MinDiscoveryRefresh is the shortest refresh_interval taken, and the
+	// shortest --discovery.refresh-interval.
+	MinDiscoveryRefresh = time.Second
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
 	// a page of a Kubernetes listing.
 	maxDiscoveryAnswerBytes = 16 << 20
@@ -156,7 +161,10 @@ func (d *DiscoveryConfig) kind() string {
 	return ""
 }
 
-// refresh is how often the source is asked again.
+// refresh is how often the source is asked again: its refresh_interval,
+// or for a source that sets none --discovery.refresh-interval
+// (defaultRefresh), or, without that, its kind's own default: 1m for
+// file_sd and http_sd, 30s for kubernetes and dns_sd.
 func (d *DiscoveryConfig) refresh() time.Duration {
 	var set model.Duration
 	var def time.Duration
@@ -170,10 +178,13 @@ func (d *DiscoveryConfig) refresh() time.Duration {
 	case d.DNSSD != nil:
 		set, def = d.DNSSD.RefreshInterval, DefaultDNSSDRefresh
 	}
-	if set == 0 {
-		return def
+	switch {
+	case set != 0:
+		return time.Duration(set)
+	case d.defaultRefresh > 0:
+		return d.defaultRefresh
 	}
-	return time.Duration(set)
+	return def
 }
 
 // reservedTargetLabels are what a discovery source's labels may not set:
@@ -181,13 +192,15 @@ func (d *DiscoveryConfig) refresh() time.Duration {
 // target) or Prometheus's, and static_target the static targets endpoint's.
 var reservedTargetLabels = map[string]bool{"job": true, "instance": true, "static_target": true}
 
-// checkDiscovery checks a discovery list, filling each source's name. base
-// is the directory of the file it is in, against which a relative path is
-// taken; each path is rewritten so.
-func checkDiscovery(list []DiscoveryConfig, base string) error {
+// checkDiscovery checks a discovery list, filling each source's name and
+// the refresh_interval of a source that sets none, defaultRefresh, 0 for
+// its kind's own. base is the directory of the file it is in, against
+// which a relative path is taken; each path is rewritten so.
+func checkDiscovery(list []DiscoveryConfig, base string, defaultRefresh time.Duration) error {
 	names := map[string]bool{}
 	for i := range list {
 		d := &list[i]
+		d.defaultRefresh = defaultRefresh
 		kinds := 0
 		for _, set := range []bool{d.FileSD != nil, d.HTTPSD != nil, d.Kubernetes != nil, d.DNSSD != nil} {
 			if set {
@@ -231,8 +244,8 @@ func (d *DiscoveryConfig) check(base string) error {
 			return fmt.Errorf("labels sets %s from %q, which is not a label name", name, from)
 		}
 	}
-	if d.refresh() < minDiscoveryRefresh {
-		return fmt.Errorf("refresh_interval %s is under the least, %s", d.refresh(), minDiscoveryRefresh)
+	if d.refresh() < MinDiscoveryRefresh {
+		return fmt.Errorf("refresh_interval %s is under the least, %s", d.refresh(), MinDiscoveryRefresh)
 	}
 	switch {
 	case d.FileSD != nil:

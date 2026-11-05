@@ -343,6 +343,33 @@ func TestChartRendersAScrapeConfigPerProbeJob(t *testing.T) {
 // HorizontalPodAutoscaler, with no Service of its own beside its one Service,
 // and the values schema refuses an allocator.cache key: the cache is the
 // emptyDir alone.
+// allocator.configWatchInterval and allocator.discoveryRefreshInterval are
+// rendered as the allocator's --config.watch-interval and
+// --discovery.refresh-interval when set, 0s reading the input files once,
+// and left out when empty (TestChartRendersTheAllocatorAndTheExporterInAllocatorMode).
+func TestChartSetsHowOftenTheAllocatorLooksForChanges(t *testing.T) {
+	helm := requireHelm(t)
+	for _, c := range []struct {
+		watch, refresh string
+		want           []string
+	}{
+		{"30s", "15s", []string{"--config.watch-interval=30s", "--discovery.refresh-interval=15s"}},
+		{"0s", "", []string{"--config.watch-interval=0s"}},
+		{"", "2m", []string{"--discovery.refresh-interval=2m"}},
+	} {
+		docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-string", "allocator.configWatchInterval="+c.watch, "--set-string", "allocator.discoveryRefreshInterval="+c.refresh)
+		var got []string
+		for _, arg := range scalars(path(manifest(t, docs, "Deployment/test-prometheus-universal-exporter-allocator"), "spec", "template", "spec", "containers", "0", "args")) {
+			if strings.HasPrefix(arg, "--config.watch-interval=") || strings.HasPrefix(arg, "--discovery.refresh-interval=") {
+				got = append(got, arg)
+			}
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("configWatchInterval %q and discoveryRefreshInterval %q render %v, want %v", c.watch, c.refresh, got, c.want)
+		}
+	}
+}
+
 func TestChartRunsTheExporterAsADeploymentInAllocatorMode(t *testing.T) {
 	helm := requireHelm(t)
 	docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set", "autoscaling.enabled=true")
@@ -466,6 +493,14 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 			"", `allocator.heartbeatInterval "2m1s" must be a Go duration from 1s to 2m`},
 		"a heartbeat interval of zero": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.heartbeatInterval=0s"},
 			"", `allocator.heartbeatInterval "0s" must be a Go duration from 1s to 2m`},
+		"a watch interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.configWatchInterval=often"},
+			"allocator.configWatchInterval", `allocator.configWatchInterval "often" must be a Go duration of zero or more`},
+		"a refresh interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=often"},
+			"allocator.discoveryRefreshInterval", `allocator.discoveryRefreshInterval "often" must be a Go duration of 1s or more`},
+		"a refresh interval under 1s": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=500ms"},
+			"", `allocator.discoveryRefreshInterval "500ms" must be a Go duration of 1s or more`},
+		"a refresh interval of zero": {[]string{"--set", "allocator.enabled=true", "--set-string", "allocator.discoveryRefreshInterval=0s"},
+			"", `allocator.discoveryRefreshInterval "0s" must be a Go duration of 1s or more`},
 		"leader-only without peers": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.leaderOnly=true"},
 			"", "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source"},
 		"an unknown log level": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.logLevel=loud"},

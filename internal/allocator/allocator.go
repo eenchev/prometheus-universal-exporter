@@ -60,8 +60,11 @@ type Options struct {
 	// DefaultMaxDiscoveredTargets.
 	MaxDiscoveredTargets int
 	// Address is --web.listen-address, Version and Revision the build's,
-	// which the status shows (Status).
+	// and WatchInterval --config.watch-interval, 0 for files read once,
+	// which the status shows (Status): the watch itself is the command's
+	// (WatchLoop).
 	Address, Version, Revision string
+	WatchInterval              time.Duration
 }
 
 // Allocator holds the inputs in force, the members, the member list that
@@ -149,8 +152,9 @@ type Allocator struct {
 	// among its peers; peers are those, nil without --peers.
 	id    string
 	peers *peers
-	// address, version and revision are Options'.
+	// address, version, revision and watchInterval are Options'.
 	address, version, revision string
+	watchInterval              time.Duration
 }
 
 type member struct {
@@ -189,6 +193,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		address:           opts.Address,
 		version:           opts.Version,
 		revision:          opts.Revision,
+		watchInterval:     opts.WatchInterval,
 	}
 	if a.clock == nil {
 		a.clock = realClock{}

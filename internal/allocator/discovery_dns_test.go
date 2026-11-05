@@ -200,7 +200,7 @@ func TestDNSSDIsCheckedAtLoad(t *testing.T) {
 		return DiscoveryConfig{DNSSD: &DNSSDConfig{Names: []string{"_metrics._tcp.Example.COM."}, Server: "10.0.0.53"}}
 	}
 	list := []DiscoveryConfig{{FileSD: &FileSDConfig{Files: []string{"a.json"}}}, ok()}
-	if err := checkDiscovery(list, "/"); err != nil {
+	if err := checkDiscovery(list, "/", 0); err != nil {
 		t.Fatalf("a good source was refused: %v", err)
 	}
 	n := list[1].DNSSD
@@ -212,7 +212,7 @@ func TestDNSSDIsCheckedAtLoad(t *testing.T) {
 	}
 	address := ok()
 	address.DNSSD.Type, address.DNSSD.Port = "AAAA", 9100
-	if err := checkDiscovery([]DiscoveryConfig{address}, "/"); err != nil {
+	if err := checkDiscovery([]DiscoveryConfig{address}, "/", 0); err != nil {
 		t.Errorf("an AAAA source with a port was refused: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -240,14 +240,14 @@ func TestDNSSDIsCheckedAtLoad(t *testing.T) {
 	} {
 		d := ok()
 		c.mutate(d.DNSSD)
-		err := checkDiscovery([]DiscoveryConfig{d}, "/")
+		err := checkDiscovery([]DiscoveryConfig{d}, "/", 0)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want an error with %q", name, err, c.want)
 		}
 	}
 	two := ok()
 	two.HTTPSD = &HTTPSDConfig{URL: "https://cmdb.example/sd"}
-	if err := checkDiscovery([]DiscoveryConfig{two}, "/"); err == nil || !strings.Contains(err.Error(), "exactly one of file_sd, http_sd, kubernetes and dns_sd") {
+	if err := checkDiscovery([]DiscoveryConfig{two}, "/", 0); err == nil || !strings.Contains(err.Error(), "exactly one of file_sd, http_sd, kubernetes and dns_sd") {
 		t.Errorf("dns_sd beside http_sd: got %v", err)
 	}
 }

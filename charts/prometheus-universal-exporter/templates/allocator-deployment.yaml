@@ -116,6 +116,14 @@ spec:
             {{- with $allocator.heartbeatInterval }}
             - {{ printf "--heartbeat.interval=%s" . | quote }}
             {{- end }}
+            {{- /* Empty leaves the allocator's default; 0, which reads the
+                   files once, is a value of its own, not taken for unset. */}}
+            {{- if not (eq ($allocator.configWatchInterval | default "" | toString) "") }}
+            - {{ printf "--config.watch-interval=%s" (toString $allocator.configWatchInterval) | quote }}
+            {{- end }}
+            {{- with $allocator.discoveryRefreshInterval }}
+            - {{ printf "--discovery.refresh-interval=%s" . | quote }}
+            {{- end }}
             {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
                    taken for unset. */}}
             - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}

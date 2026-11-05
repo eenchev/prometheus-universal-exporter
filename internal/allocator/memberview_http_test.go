@@ -106,9 +106,19 @@ func TestTheMemberViewListsItsTargets(t *testing.T) {
 			t.Errorf("the draining target is %+v", st)
 		}
 	}
+	jobCount := func(job string) int {
+		for _, j := range s.Spread.Jobs {
+			for _, m := range j.Members {
+				if j.Job == job && m.Member == "r1" {
+					return m.Targets
+				}
+			}
+		}
+		return -1
+	}
 	if len(v.Probes.Jobs) != 2 || v.Probes.Jobs[0].Job != "websites" || v.Probes.Jobs[1].Job != "apis" ||
-		float64(v.Probes.Jobs[0].Targets) != spread.ProbeJobs["websites"] || float64(v.Probes.Jobs[1].Targets) != spread.ProbeJobs["apis"] {
-		t.Errorf("the probe jobs are %+v, the spread's %v", v.Probes.Jobs, spread.ProbeJobs)
+		v.Probes.Jobs[0].Targets != jobCount("websites") || v.Probes.Jobs[1].Targets != jobCount("apis") {
+		t.Errorf("the probe jobs are %+v, the spread's %+v", v.Probes.Jobs, s.Spread.Jobs)
 	}
 	for i, pt := range v.Probes.List {
 		if pt.Collector != "demo" || (i > 0 && v.Probes.List[i-1].Job == pt.Job && v.Probes.List[i-1].Target > pt.Target) {
@@ -243,7 +253,7 @@ func TestAMemberViewOfAGoneMemberSaysSo(t *testing.T) {
 	if page.Code != http.StatusOK {
 		t.Errorf("the page of the gone r2 answered %d", page.Code)
 	}
-	requireIn(t, page.Body.String(), `<form class="filter" id="filter" method="get" role="search" hidden>`, `$("filter").hidden = content.querySelector("#unknown-member") !== null;`)
+	requireIn(t, page.Body.String(), `<form class="filter" id="filter" method="get" role="search" hidden>`, `$("filter").hidden = content.querySelector("#unknown-member, #unknown-job") !== null;`)
 	if rec := ask(h, StatusPath+"?member=r2", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("the JSON of the gone r2 answered %d, want 404", rec.Code)
 	}

@@ -48,7 +48,7 @@ func addresses(found []discovered) []string {
 func testSource(t *testing.T, d DiscoveryConfig, limit int) (*Allocator, *sourceState) {
 	t.Helper()
 	list := []DiscoveryConfig{d}
-	if err := checkDiscovery(list, t.TempDir()); err != nil {
+	if err := checkDiscovery(list, t.TempDir(), 0); err != nil {
 		t.Fatal(err)
 	}
 	a := New(nil, Options{Logger: testutil.QuietLogger(t)})
@@ -101,7 +101,7 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 	ok := func() DiscoveryConfig {
 		return DiscoveryConfig{Kubernetes: &KubernetesConfig{Port: "metrics", LabelSelector: "app=db,tier in (a, b),!legacy,env!=dev"}}
 	}
-	if err := checkDiscovery([]DiscoveryConfig{ok()}, "/"); err != nil {
+	if err := checkDiscovery([]DiscoveryConfig{ok()}, "/", 0); err != nil {
 		t.Fatalf("a good source was refused: %v", err)
 	}
 	for name, c := range map[string]struct {
@@ -151,18 +151,18 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 	} {
 		d := ok()
 		c.mutate(&d)
-		err := checkDiscovery([]DiscoveryConfig{d}, "/")
+		err := checkDiscovery([]DiscoveryConfig{d}, "/", 0)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want an error with %q", name, err, c.want)
 		}
 	}
 	twice := []DiscoveryConfig{ok(), ok()}
 	twice[0].Name, twice[1].Name = "a", "a"
-	if err := checkDiscovery(twice, "/"); err == nil || !strings.Contains(err.Error(), "named twice") {
+	if err := checkDiscovery(twice, "/", 0); err == nil || !strings.Contains(err.Error(), "named twice") {
 		t.Errorf("two sources of one name: got %v", err)
 	}
 	unnamed := []DiscoveryConfig{ok(), {FileSD: &FileSDConfig{Files: []string{"sd/*.json"}}}}
-	if err := checkDiscovery(unnamed, "/etc/pue"); err != nil || unnamed[0].Name != "kubernetes_0" || unnamed[1].Name != "file_sd_1" || unnamed[1].FileSD.Files[0] != "/etc/pue/sd/*.json" {
+	if err := checkDiscovery(unnamed, "/etc/pue", 0); err != nil || unnamed[0].Name != "kubernetes_0" || unnamed[1].Name != "file_sd_1" || unnamed[1].FileSD.Files[0] != "/etc/pue/sd/*.json" {
 		t.Errorf("got the names %q and %q and the file %q, %v; want kubernetes_0, file_sd_1 and a path from the file's directory", unnamed[0].Name, unnamed[1].Name, unnamed[1].FileSD.Files, err)
 	}
 }
@@ -654,7 +654,7 @@ func TestAnUnsetTimeoutIsCutToTheRefreshInterval(t *testing.T) {
 			{HTTPSD: &HTTPSDConfig{URL: "https://cmdb.example/sd", RefreshInterval: c.refresh, Timeout: c.timeout}},
 			{Kubernetes: &KubernetesConfig{Port: "metrics", RefreshInterval: c.refresh, Timeout: c.timeout}},
 		} {
-			if err := checkDiscovery([]DiscoveryConfig{d}, "/"); err != nil {
+			if err := checkDiscovery([]DiscoveryConfig{d}, "/", 0); err != nil {
 				t.Errorf("%s every %s with the timeout %s: refused, %v", d.kind(), time.Duration(c.refresh), time.Duration(c.timeout), err)
 			}
 			if got := d.timeout(); got != c.want {

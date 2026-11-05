@@ -56,6 +56,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
 	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
+	discoveryRefresh := flags.Duration("discovery.refresh-interval", 0, "How often to ask a discovery source that sets no refresh_interval, 1s or more; 0 leaves each kind its own default: 1m for file_sd and http_sd, 30s for kubernetes and dns_sd")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	peerList := flags.String("peers", "", "Optional allocator instances to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every instance, this one included, so each finds its own address among them. The live instance of the lowest address leads and alone asks the discovery sources; the others serve what it found")
 	peerSelf := flags.String("peers.self", "", "This instance's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the instance finds itself among the peers' addresses by asking them")
@@ -93,6 +94,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *maxMembers < 1 {
 		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
+	}
+	if *discoveryRefresh != 0 && *discoveryRefresh < allocator.MinDiscoveryRefresh {
+		return commandLineError(stderr, fmt.Errorf("--discovery.refresh-interval must be %s or more, or 0 for each kind's own default, got %s", allocator.MinDiscoveryRefresh, *discoveryRefresh))
 	}
 	if *maxDiscovered < 1 {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))
@@ -143,7 +147,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	paths := allocator.Paths{Config: *configFile, StaticTargets: *staticTargetsFile, ProbeTargets: *probeTargetsFile}
+	paths := allocator.Paths{Config: *configFile, StaticTargets: *staticTargetsFile, ProbeTargets: *probeTargetsFile, DiscoveryRefresh: *discoveryRefresh}
 	inputs, err := loadStartInputs(allocator.LoadInputs, paths, time.Sleep)
 	if err != nil {
 		logger.Error("invalid input files; exiting", "error", err)
@@ -151,7 +155,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	build := exporter.BuildVersion()
 	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, HeartbeatInterval: *heartbeatInterval, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
-		Address: *listenAddress, Version: build.Version, Revision: build.Revision})
+		Address: *listenAddress, Version: build.Version, Revision: build.Revision, WatchInterval: *watchInterval})
 	if peerOptions != nil {
 		if token != nil {
 			peerOptions.Token = token.Token
@@ -177,7 +181,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "heartbeat_interval", heartbeatInterval.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "heartbeat_interval", heartbeatInterval.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "discovery_refresh_interval", discoveryRefresh.String(), "token", token != nil,
 		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {

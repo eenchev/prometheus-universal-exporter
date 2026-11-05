@@ -30398,6 +30398,20 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheFlagHelpSaysInstance` (cmd/pue-allocator): `-h` says `copy` or `copies` on no line, and `--peers`'s help says `List every instance, this one included`.
 - The allocator's tests that named an allocator process a copy are renamed for an instance, with what they check unchanged: `TestPeersAreOrderedAndTheLowestLiveInstanceLeads`, `TestTheNextInstanceLeadsWhenTheLeaderShutsDown`, `TestInstancesFindThemselvesAmongTheAddressesOfTheirName`, `TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader`, `TestAnInstanceAmongPeersAnswers503BeforeItStops`, `TestTheStatusNamesTheInstanceByItsAddressAndBuild`, `TestTheShortestIntervalOfTheInstancesIsTaken`, `TestAHungInstanceDoesNotDelayTheHeartbeatsToTheOthers`, `TestAnAnnouncedIntervalReachesTheScheduleOfEveryInstance` and `TestAReplicaSaysNoIntervalUntilAnInstanceDoes`; `TestThePeersStatusAgreesWithTheMetrics` reads `instance`, `instances` and `live_instances`, and the peers' tests look for the log lines as they now read (`an allocator instance stopped answering`, `no address of --peers answers as this instance`).
 
+## 34.272 Allocator probe jobs table and job view
+
+- `TestTheStatusPageHasAProbeJobsTable` (allocator): with four probe jobs over r1, r2 and r3, websites of six listed targets, apis of two, pods of three targets a `file_sd` source finds and legacy of one listed target and a source of a file that is no JSON, after one refresh of the sources, `/v1/status`'s `spread.jobs` has the four in file order, each routed among r1, r2 and r3 by id, its members' targets summing to its targets, its `min`, `average`, `max` and `imbalance` those of its members' counts, and `uneven` true exactly when the most is at least 1.5 times the targets over the members rounded up; each member's `probe` is the sum of its jobs' counts; websites has the collector demo and no sources (`[]`), pods its source ok and legacy its source failing, and legacy, one target over three members, is not uneven at `3`; the page's targets table has the fixed columns Member, Static, Draining, Probe, Total and Share and no column of a probe job, and the probe jobs table has sortable headings, a link of each job to `?job=<name>`, a `data-match` of the job, collector and sources' names, each source with its result, `listed` for a job without one, the filter box, hidden until the script shows it, a refresh that arranges the table again and puts the caret back, the sort mark before a number column's name, and the imbalance marked exactly on the uneven jobs.
+- `TestTheJobViewListsItsTargets` (allocator): with the same jobs, `/v1/status?job=websites` has the collector, the shard key `target`, the label team and not the one written `""`, the param timeout as written and api_key as `<redacted>`, no sources, the members with the spread's counts, the most first, and the six targets by target, each with the member `SD` routes it to and no labels; pods has its source ok and three targets, each with the label namespace its source gave it and not team, which the job sets; apis shows its targets' `access_token` as `<redacted>` and never the token; the page has its title, the bar's home and JSON links, the way back, the heading, the filter box with the job, its label and hint, the job's facts, the params masked, `none: the probe targets file lists every target`, the members' table, the targets' table and a link to a member's view, and never the credential or the label written `""`; legacy's page shows its source failing; the fragment is the content alone; `?filter=<member>`, in upper case, lists that member's targets alone, every count but the matching kept, and `?filter=namespace=shop` pods' three; an unknown job is answered `200` on the page, with the notice, the filter box hidden and the script hiding it, and on its fragment, and `404` as JSON, and an empty `job` `400` on both; a member's view links each probe job, in its jobs table and in its list, to the job's view.
+- `TestAJobViewIsBounded` (allocator): a job of 1005 targets lists 1000 of them, the page says `Only the first 1000 are listed</span>; 5 more are left out.`, and `?filter=h1004` finds the one beyond the bound.
+- `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator): under `--peers.leader-only` a follower's `/v1/status?job=<name>` is `partial` with the leader's address and no spread or targets, its page names the leader with the notice and has no filter box or targets, and the leader's view is whole.
+- `TestTheStatusShowsTheMembersAndTheSpread` and `TestTheMemberViewListsItsTargets` read a job's counts from `spread.jobs`, which replaced `spread.members[].probe_jobs`; `TestAMemberViewOfAGoneMemberSaysSo` looks for the script hiding the filter box for an unknown member or job.
+- `TestASourceWithoutARefreshIntervalTakesTheDefault` (allocator): of a probe job's `file_sd` and `dns_sd` sources that set no `refresh_interval` and a `file_sd` source of `2m`, `/v1/status` gives `refresh_interval_seconds` 60, 30 and 120 without `--discovery.refresh-interval` (`Paths.DiscoveryRefresh`), and 7, 7 and 120 with 7s, which the sources' refresh loops wait and the `dns_sd` source's default timeout is cut to, and the page has the column `Refreshed every` with `7s`; a `dns_sd` `timeout` of 10s is taken under its own default and refused under a default of 5s, `dns_sd.timeout 10s is longer than its refresh_interval 5s`.
+- `TestTheStatusSaysHowOftenTheInputsAreRead` (allocator): with `Options.WatchInterval` 45s the status has `watch_interval_seconds` 45 and the page `read again every 45s for changes` under Input files; with 0 it has 0 and `read once, at the start` with `--config.watch-interval=0`; both have `settle_seconds` 15 and say `A changed member list holds for 15s before targets move.`
+- `TestTheIntervalFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--config.watch-interval=45s`, `--settle=3s` and `--discovery.refresh-interval=7s` and a probe job of a `file_sd` source without `refresh_interval` and one of `2m` gives a status of a 45s watch interval, a 3s settle time and sources asked every 7 and 120 seconds.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
+- `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
+- `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33403,7 +33417,9 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 `instance` or `static_target`, set to the value of the source label it
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
-`1m` by default for `file_sd` and `http_sd` and `30s` for `kubernetes` and
+and a source that sets none MUST be asked every `--discovery.refresh-interval`
+when that is given (at least `1s`, else exit 2), whatever its kind, and
+else every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and
 `dns_sd`; a
 `timeout` written longer than it MUST be refused, and one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
@@ -33703,14 +33719,17 @@ allocator MUST serve plain HTTP only.
 calling an allocator process an instance and its process's id its `id`, no
 key saying copy: under `instance` its address among its peers when known,
 else `--web.listen-address`, its `id`, the build's version and revision, its
-start and uptime, and whether it is ready; under `peers`, with `--peers`
+start and uptime, whether it is ready, and `--config.watch-interval` in
+seconds (`watch_interval_seconds`, `0` for files read once), which the page
+MUST show; under `peers`, with `--peers`
 (else `null`), its role, the leader, the live instances (`live_instances`),
 the leader changes, the snapshot's age, whether it has taken one and holds
 the leader's targets, its check and snapshot failures, every address of its
 peers, its own included (`instances`), with liveness, the last answer's
 `id`, discovering and address-known, the last check and the failures in a
 row, and the series of the peers' metric families exactly as `/metrics`
-writes them; the heartbeat interval and the member TTL in seconds; every
+writes them; the heartbeat interval, the member TTL and `--settle` in
+seconds, which the page MUST show; every
 member known with its address, last heartbeat, whether it is late (live,
 with its last heartbeat more than one and a half heartbeat intervals old,
 which the page MUST mark), whether it is live, in the member list and
@@ -33718,11 +33737,20 @@ shutting down, the generation it reports, the one it is to have, a refusal
 it reports and the static targets it keeps draining; the spread, per member
 of the member list and per other live member a probe is routed to, of the
 static targets it owns as `pue_allocator_assigned` counts them, those it
-drains, and the probe targets routed to it by job and in all, with the
-totals, the average per member and the imbalance (the most a member has
-divided by the average, `0` with no target); and every discovery source with
+drains, and the probe targets routed to it, with the totals, the average per
+member and the imbalance (the most a member has divided by the average, `0`
+with no target); each probe job, in file order, with its collector, its
+targets, the members it is routed among (`routing`), each with the targets
+of the job routed to it, 0 included, the fewest, the average and the most of
+those, the imbalance (the most divided by the average, `0` with no target),
+uneven when the most is at least 1.5 times the targets divided by the
+members rounded up, and its discovery sources with their result; and every
+discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
-`pending`), targets, last refresh and last success, and whether what it
+`pending`), targets, the interval it is asked at
+(`refresh_interval_seconds`: its `refresh_interval`, else
+`--discovery.refresh-interval`, else its kind's default), which the page
+MUST show, last refresh and last success, and whether what it
 holds came from the instance's own discovery or the leader's snapshot. `GET
 /` MUST render the same as an HTML page framed as the exporter's pages are
 (§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target
@@ -33732,7 +33760,15 @@ no-store`), every value escaped, calling each allocator process an instance
 and never a copy (`This instance`, the peers' `Instance` column, `(this
 instance)`, `live instances`) and its process's random id its `Instance ID`
 (`ID` beside each peer's address), with a bar of each member's targets drawn
-in CSS alone, and the exporter's status page's refresh controls, `?refresh=`
+in CSS alone, the members' table's columns fixed (member, static, draining,
+probe, total and the bar, never a column per probe job), a probe jobs table
+of a row per job with the job, linked to its view, collector, targets,
+members, min, average, max, the imbalance, marked where uneven, and the
+sources with their result or `listed`, sorted by a column at a click on its
+heading and the other way at a second, numbers by value and ties in file
+order, and filtered as a filter box is typed by the job, collector and
+sources' names (`data-match`), with plain JavaScript, a refresh keeping the
+order, the filter and the caret, and the exporter's status page's refresh controls, `?refresh=`
 keeping the interval and `?format=fragment` answering the content alone,
 without the bar; another `format` MUST be answered `400`. Each member's id
 in the members and in the spread MUST link to its view, `GET /?member=<id>`,
@@ -33762,9 +33798,26 @@ answered `404` as JSON, and the page and its fragment MUST answer `200`
 saying so, the filter box hidden, so a view refreshing itself shows the
 member gone; an empty `member` MUST be answered `400` on both. A follower
 under `--peers.leader-only` MUST NOT serve a member's targets: its view
-names the leader and its JSON is `partial`, with the leader's address. Both
+names the leader and its JSON is `partial`, with the leader's address. A
+member's view MUST link each probe job's name to the job's view. Each probe
+job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
+member's view is: the job's collector, targets, shard key, labels (one
+written `""` left out), params, a param whose name reads as a credential's
+(`fetch.CredentialName`) as `<redacted>` and any other through
+`fetch.RedactText`, and discovery sources with their result; the members it
+is routed among, linked to their views, with the targets of the job each
+has, as the spread counts them, and a bar, the most first; and its targets
+by target, each shown as `fetch.DisplayTarget` shows it, with the member
+`SD` routes it to, linked, and the labels its source gave it but those the
+job sets or takes away. `?filter=` MUST cut the targets to those whose
+target, member or a label as `name=value` holds the text, before the first
+1000. `GET /v1/status?job=<name>` MUST answer the same as JSON
+(`allocator.JobView`); a job the probe targets file does not have MUST be
+answered `404` as JSON and `200` saying so on the page and its fragment, the
+filter box hidden; an empty `job` MUST be answered `400` on both; a follower
+under `--peers.leader-only` MUST name the leader and answer `partial`. All
 take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
-the page, the member's view, the JSON and how a browser gives the token, and
+the page, the member's view, the probe job's view, the JSON and how a browser gives the token, and
 the chart README how to reach a pod's page and find the leader's.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,

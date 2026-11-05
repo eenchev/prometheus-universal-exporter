@@ -291,7 +291,7 @@ says how it keeps up with the allocator; one outside it has none of these:
 | --- | --- | --- |
 | `http_exporter_allocator_generation_info{generation}` | gauge | `1`, with the generation of the bundle whose configuration is in force, named from the moment that configuration answers probes; absent before the first. |
 | `http_exporter_allocator_last_sync_timestamp_seconds` | gauge | Unix time the exporter last heard from the allocator which bundle is its own, unchanged or new; `0` before the first. |
-| `http_exporter_allocator_sync_errors_total{stage}` | counter | Failed exchanges with the allocator, by `stage`: `heartbeat` (one per copy of the allocator that did not take it), `fetch` (the bundle request) or `write` (into the cache directory), each from zero. |
+| `http_exporter_allocator_sync_errors_total{stage}` | counter | Failed exchanges with the allocator, by `stage`: `heartbeat` (one per instance of the allocator that did not take it), `fetch` (the bundle request) or `write` (into the cache directory), each from zero. |
 | `http_exporter_allocator_bundle_refused_total` | counter | Bundles the exporter would not load; the bundle in force stays. |
 
 The reloads of the bundle's files are counted in the
@@ -341,8 +341,8 @@ the static targets, those it keeps draining included, and the allocator's
 `pue_allocator_targets{kind="static"}` and
 `pue_allocator_targets_per_member{kind="static"}` are the count across
 replicas and its average per member ([Metrics](ALLOCATOR.md#metrics)). Every
-allocator copy reports them, one series each, so a query takes their `max`:
-a `sum`, or the series as they are, would count the targets once per copy.
+allocator instance reports them, one series each, so a query takes their `max`:
+a `sum`, or the series as they are, would count the targets once per instance.
 
 ### Pods metrics from prometheus-adapter
 
@@ -410,7 +410,7 @@ The allocator's own count can be an External metric instead, which does not
 depend on the replicas having caught up with the allocator. This rule, in the
 prometheus-adapter chart's `rules.external`, serves it as
 `allocator_static_targets`, one series per namespace however many
-allocator copies report it, since it takes their `max`:
+allocator instances report it, since it takes their `max`:
 
 ```yaml
 rules:
@@ -476,8 +476,8 @@ spec:
 The query is the load of every pod together, which KEDA divides by the
 target to find the replica count. With the allocator, a second trigger does
 what `targetStaticTargetsPerPod` does. Its query takes the `max` of the
-allocator copies' series: KEDA wants one value, and fails on a query that
-answers one series per copy.
+allocator instances' series: KEDA wants one value, and fails on a query that
+answers one series per instance.
 
 ```yaml
     - type: prometheus

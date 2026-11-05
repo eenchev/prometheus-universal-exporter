@@ -16,12 +16,12 @@ var (
 	maxOfAllocatorSeries = regexp.MustCompile(`max(\s+by\s*\([^)]*\))?\s*\(\s*pue_allocator_[a-z_]+`)
 )
 
-// Every allocator copy reports its metrics, one series each, so a query of
-// an example that sums them, or takes them as they are, counts every target
-// once per copy: an External metric's average doubles with two copies, and
-// KEDA refuses an answer of several series. Every query an example of the
-// docs or the chart README makes of an allocator metric takes their max,
-// and so does every prometheus-adapter rule over one.
+// Every allocator instance reports its metrics, one series each, so a query
+// of an example that sums them, or takes them as they are, counts every
+// target once per instance: an External metric's average doubles with two
+// instances, and KEDA refuses an answer of several series. Every query an
+// example of the docs or the chart README makes of an allocator metric takes
+// their max, and so does every prometheus-adapter rule over one.
 func TestExampleQueriesOfAllocatorMetricsTakeTheirMax(t *testing.T) {
 	pages, err := filepath.Glob("docs/*.md")
 	if err != nil {
@@ -41,7 +41,7 @@ func TestExampleQueriesOfAllocatorMetricsTakeTheirMax(t *testing.T) {
 				}
 				queries++
 				if len(allocatorSeries.FindAllString(line, -1)) != len(maxOfAllocatorSeries.FindAllString(line, -1)) {
-					t.Errorf("%s: an example queries an allocator metric without taking the max of the allocator copies' series: %s", page, strings.TrimSpace(line))
+					t.Errorf("%s: an example queries an allocator metric without taking the max of the allocator instances' series: %s", page, strings.TrimSpace(line))
 				}
 			}
 			for _, rule := range strings.Split(block, "- seriesQuery:")[1:] {
@@ -51,7 +51,7 @@ func TestExampleQueriesOfAllocatorMetricsTakeTheirMax(t *testing.T) {
 				}
 				queries++
 				if !strings.Contains(rule, "metricsQuery: max by (<<.GroupBy>>) (<<.Series>>") {
-					t.Errorf("%s: the prometheus-adapter rule over%s does not take the max of the allocator copies' series", page, series)
+					t.Errorf("%s: the prometheus-adapter rule over%s does not take the max of the allocator instances' series", page, series)
 				}
 			}
 		}

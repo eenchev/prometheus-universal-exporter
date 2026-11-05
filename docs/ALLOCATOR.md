@@ -16,12 +16,12 @@ discovery answer.
 
 It keeps nothing on disk. The same input files and the same heartbeats give
 the same bundles and the same answers, so a restarted allocator, or a second
-copy beside the first, answers as the first did. What a
-[discovery source](#discovering-targets) finds is input too, and two copies
-asking it each on its own timer could find different targets, so copies
+instance beside the first, answers as the first did. What a
+[discovery source](#discovering-targets) finds is input too, and two instances
+asking it each on its own timer could find different targets, so instances
 with a discovery source run as peers: one leads and asks the sources, and
 the others take what it found
-([Copies with discovery](#copies-with-discovery)).
+([Instances with discovery](#instances-with-discovery)).
 
 ## Running it
 
@@ -56,8 +56,8 @@ pue-allocator \
 | `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
-| `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every copy, this one included, so each finds its own address among them. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
-| `--peers.self` | none | This copy's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the copy finds itself among its peers' addresses by asking them. Only with `--peers`. |
+| `--peers` | none | The allocator instances to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every instance, this one included, so each finds its own address among them. The instances are then peers, of which only the leader asks the discovery sources ([Instances with discovery](#instances-with-discovery)). |
+| `--peers.self` | none | This instance's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the instance finds itself among its peers' addresses by asking them. Only with `--peers`. |
 | `--peers.leader-only` | off | Only the leader serves the whole of `/metrics` and of the status page; a follower serves the peers' metrics and its own peer state alone ([Leader-only metrics](#leader-only-metrics)). Only with `--peers`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
@@ -336,7 +336,7 @@ Each source sets exactly one of `file_sd`, `http_sd`, `kubernetes` and
   starting with `__`, `job`, `instance` and `static_target` are refused.
 - `max_targets`, how many targets one answer may hold, `--discovery.max-targets`
   by default; it bounds the leader's snapshot of the source on a follower
-  too ([Copies with discovery](#copies-with-discovery)).
+  too ([Instances with discovery](#instances-with-discovery)).
 
 **`file_sd`** reads Prometheus file_sd files, JSON (`.json`) or YAML (`.yml`,
 `.yaml`) lists of `{targets: [...], labels: {...}}`, from `files`, paths or
@@ -488,46 +488,46 @@ targets stay in force until the new source first answers, and a failure
 before then keeps them, as any failure does, and is counted. A source
 renamed, or of another kind, starts with no targets.
 
-### Copies with discovery
+### Instances with discovery
 
-Each allocator copy asking its sources on its own timer could hold
+Each allocator instance asking its sources on its own timer could hold
 different targets, and so different bundles and service discovery answers,
 for up to a refresh interval, and for as long as one of them cannot reach a
-source; an exporter replica heartbeats every copy and fetches its bundle
+source; an exporter replica heartbeats every instance and fetches its bundle
 from whichever answers, and Prometheus asks whichever its request reaches,
-so a replica's bundle and a job's targets would flip between them. So copies
+so a replica's bundle and a job's targets would flip between them. So instances
 with a discovery source run as peers, each given `--peers`: the name every
-copy's address resolves to, as the chart's headless Service, or a list of
-their addresses. Without `--peers` a copy asks its sources itself, which is
-right for one copy alone; copies of input files alone need no peers.
+instance's address resolves to, as the chart's headless Service, or a list of
+their addresses. Without `--peers` an instance asks its sources itself, which is
+right for one instance alone; instances of input files alone need no peers.
 
-Every 2s each copy resolves `--peers` to its addresses and asks each other
-copy at `GET /v1/peer`, with the API's token, within 1s. A copy that answered is
-live until three such checks in a row have failed, so one slow answer does
-not move the leader; one that answers `503`, as a copy shutting down does,
-stops being live at once. A copy knows its own address from `--peers.self`,
-or else by asking: the address answering with its own process's name is
-itself. The leader is the live copy of the lowest address, itself included:
-IPv4 addresses before IPv6, each by its bytes, so `10.0.0.9` before
-`10.0.0.10`, then by port. Every copy that sees the same live copies so
-chooses the same leader.
+Every 2s each instance resolves `--peers` to its addresses and asks each
+other instance at `GET /v1/peer`, with the API's token, within 1s. An
+instance that answered is live until three such checks in a row have failed,
+so one slow answer does not move the leader; one that answers `503`, as an
+instance shutting down does, stops being live at once. An instance knows its
+own address from `--peers.self`, or else by asking: the address answering
+with its own instance ID is itself. The leader is the live instance of
+the lowest address, itself included: IPv4 addresses before IPv6, each by its
+bytes, so `10.0.0.9` before `10.0.0.10`, then by port. Every instance that
+sees the same live instances so chooses the same leader.
 
-A copy whose own address is not known, because `--peers` leaves it out and
-no `--peers.self` gives it, or because the copy cannot reach itself, cannot
-place itself in that order. It follows only a copy that discovers, which
-`/v1/peer` tells, as it tells whether the copy knows its own address: the
-lowest such copy that knows its own address, else the one of the lowest
-process name among those that do not, unless it leads itself and its own
-name is lower still; with no copy discovering it leads. Two such copies so
-settle on one leader within two checks, rather than each following the
-other with neither asking the sources. After three checks without finding
-its own address a copy logs an error once: list every copy in `--peers`,
-this one included, or give `--peers.self`.
+An instance whose own address is not known, because `--peers` leaves it out
+and no `--peers.self` gives it, or because the instance cannot reach itself,
+cannot place itself in that order. It follows only an instance that
+discovers, which `/v1/peer` tells, as it tells whether the instance knows
+its own address: the lowest such instance that knows its own address, else
+the one of the lowest instance ID among those that do not, unless it leads
+itself and its own ID is lower still; with no instance discovering it leads.
+Two such instances so settle on one leader within two checks, rather than
+each following the other with neither asking the sources. After three checks
+without finding its own address an instance logs an error once: list every
+instance in `--peers`, this one included, or give `--peers.self`.
 
-Only the leader asks the discovery sources. Every other copy, a follower,
+Only the leader asks the discovery sources. Every other instance, a follower,
 fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
 of its sources last found, and puts it in force as a source's answer would
-be, in place of asking the sources itself. The copies so expand the same
+be, in place of asking the sources itself. The instances so expand the same
 input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A follower
 keeps what it holds of a source that has not answered on the leader.
@@ -539,7 +539,7 @@ follower's sources, the bound of one answer, and a fetch may take 30s, where
 a check takes 1s. The fetch runs beside the checks, one at a time, so a
 leader that hangs while it writes its snapshot delays none of them: the
 follower goes on checking every 2s, and when the leader stops being live it
-leads, or follows the next copy, at once, cancelling the fetch. A source's targets in the snapshot are checked as its own
+leads, or follows the next instance, at once, cancelling the fetch. A source's targets in the snapshot are checked as its own
 answer is, and held to the follower's `max_targets` of the source, or
 `--discovery.max-targets`: more targets than that, an empty target or a
 label of no label name refuse them, as the source's failure, logged and
@@ -548,7 +548,7 @@ the source keeps what the follower holds of it.
 
 A snapshot names each source by its owner, the probe job or
 `discovered_targets` entry, its kind and its name, not by its settings, so
-during a rolling update that changes a source's settings the new copies
+during a rolling update that changes a source's settings the new instances
 still take the old leader's targets of it. A source of the follower's input
 files that the leader's lack altogether, as a new one does while a changed
 ConfigMap has reached the follower's pod and not yet the leader's, the
@@ -564,40 +564,41 @@ sources holds other targets after taking the snapshot;
 `pue_allocator_snapshot_age_seconds` then grows, and after three such
 fetches in a row the follower logs so once, until the two agree again.
 
-When the leader goes away, the copy of the next address leads from its next
-check: at once when the leader is shutting down, and after three failed
+When the leader goes away, the instance of the next address leads from its
+next check: at once when the leader is shutting down, and after three failed
 checks when it stops answering. It starts asking the sources, and serves the
 targets of the snapshot it took last until each source first answers, as a
 source whose settings a reload changed does, so the targets never leave the
-bundles. A copy that comes to lead without ever having taken a snapshot, as
-a new copy of the lowest address does, first takes that of the lowest other
-live copy. A copy that sees a lower copy come back stops asking its sources and
-follows it. A follower that cannot fetch the leader's snapshot keeps serving
-the one it took last, never nothing; after three failures in a row it logs
-so once, and `pue_allocator_snapshot_age_seconds` tells how old its snapshot
-is ([Metrics](#metrics)).
+bundles. An instance that comes to lead without ever having taken a
+snapshot, as a new instance of the lowest address does, first takes that of
+the lowest other live instance. An instance that sees a lower instance come
+back stops asking its sources and follows it. A follower that cannot fetch
+the leader's snapshot keeps serving the one it took last, never nothing;
+after three failures in a row it logs so once, and
+`pue_allocator_snapshot_age_seconds` tells how old its snapshot is
+([Metrics](#metrics)).
 
-A copy shutting down answers `/v1/peer` with `503` from the first signal,
+An instance shutting down answers `/v1/peer` with `503` from the first signal,
 and keeps serving for 3s more, a round of every peer's checks, before its
 server stops: `/ready` answers `503`, a bundle long poll is answered at
 once, and heartbeats, bundles, service discovery answers and its snapshot
 are served as before. Every peer so sees it shutting down at its next
-check, and the next copy leads at once rather than after three refused
-connections. Copies being replaced one at a time, as a rolling update does,
+check, and the next instance leads at once rather than after three refused
+connections. Instances being replaced one at a time, as a rolling update does,
 so keep the targets. Peers are not a consensus: a network split that leaves two groups
-of copies unable to reach each other gives each group a leader, each asking
+of instances unable to reach each other gives each group a leader, each asking
 the sources on its own timer, and while the split lasts the replicas'
 bundles and the job's targets can flip between the two groups' findings, as
-they would between copies without peers. It heals at the next check after
-the copies reach each other again, the higher leader then following the
-lower. `pue_allocator_leader{peer}` shows the leader each copy follows, and
-copies that disagree on it are split.
+they would between instances without peers. It heals at the next check after
+the instances reach each other again, the higher leader then following the
+lower. `pue_allocator_leader{peer}` shows the leader each instance follows, and
+instances that disagree on it are split.
 
 #### Leader-only metrics
 
-Every copy serves the same allocation, and so the same series of it in
-`/metrics`: a Prometheus scraping every copy, as the chart's ServiceMonitor
-does, has one series of `pue_allocator_assigned` for each copy, told apart
+Every instance serves the same allocation, and so the same series of it in
+`/metrics`: a Prometheus scraping every instance, as the chart's ServiceMonitor
+does, has one series of `pue_allocator_assigned` for each instance, told apart
 only by the `instance` and `pod` labels the scrape adds, and a query has to
 take their `max`. With `--peers.leader-only` only the leader serves the whole
 of `/metrics`. A follower answers `200` with the peers' families alone,
@@ -606,20 +607,20 @@ of `/metrics`. A follower answers `200` with the peers' families alone,
 `pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
 and `pue_allocator_peer_failures_total`, and none of the members, the
 allocation or the discovery sources. Each follower so stays observable,
-and a cluster whose copies all answer `pue_allocator_is_leader 0`, whose sum
+and a cluster whose instances all answer `pue_allocator_is_leader 0`, whose sum
 is then 0, has no leader; the allocation's series are the leader's alone,
-one of each. When another copy comes to lead they come from it, with its
+one of each. When another instance comes to lead they come from it, with its
 `instance` and `pod`: a query that leaves those labels out, or takes the
 `max` without them, as the examples do, reads on across the change, which
 shows as a gap of a scrape or two and a counter starting again from the new
-leader's count. Before its first check a copy counts as a follower.
+leader's count. Before its first check an instance counts as a follower.
 
 A follower's [status page](#status-page) is likewise short: it names the
 leader by its address and shows the instance itself and its peers, with the
 peers' series, and leaves the members, the spread and the discovery sources
 to the leader's page; `/v1/status` gives `"partial": true` with `members`,
-`spread` and `sources` `null`. The flag is refused without `--peers`: a copy
-alone is its own leader.
+`spread` and `sources` `null`. The flag is refused without `--peers`: an
+instance alone is its own leader.
 
 ## Members and allocation
 
@@ -632,19 +633,19 @@ next heartbeat on, so the two sides cannot disagree, and the exporter has no
 setting of it. Until an answer says one, as before its first, the replica
 heartbeats every 10s. It keeps an interval said outside `1s` to `2m` within
 them, so a bogus answer can neither make it heartbeat without pause nor
-fall silent. A replica heartbeats every copy of the allocator
-([On Kubernetes](#on-kubernetes)), each on a schedule of its own: a copy
+fall silent. A replica heartbeats every instance of the allocator
+([On Kubernetes](#on-kubernetes)), each on a schedule of its own: an instance
 that is slow to answer, or hangs, delays only the heartbeats to itself, and
-the others hear the replica every interval. A heartbeat to a copy, and the
-lookup of the copies' addresses, made every interval, are given up on after
+the others hear the replica every interval. A heartbeat to an instance, and the
+lookup of the instances' addresses, made every interval, are given up on after
 5s, or the interval when that is shorter; a lookup that fails keeps the
-addresses it resolved to last. When the copies say different intervals,
-as during a rollout that changes it, it takes the shortest, so each copy
-hears it within its own interval, and a copy that does not answer, or says
+addresses it resolved to last. When the instances say different intervals,
+as during a rollout that changes it, it takes the shortest, so each instance
+hears it within its own interval, and an instance that does not answer, or says
 none, changes nothing. A new interval takes effect at once, for the
 heartbeats and the lookup alike: the next follows it after the last, at
 once when that is past, so a replica told a shorter interval also finds a
-copy that has just started within it. A heartbeat the replica gave up waiting for can
+instance that has just started within it. A heartbeat the replica gave up waiting for can
 still reach the allocator after a later one, so each carries the name of the
 replica's process, random and made at its start, and a sequence number
 counting that process's heartbeats from 1: the allocator applies a heartbeat
@@ -659,27 +660,28 @@ outlives two heartbeats lost in a row; a replica that says it is shutting
 down stops being live at once, so no probe is routed to it any more, and
 leaves the member list as any other change does, after `--settle`.
 
-A change to the live members takes effect once it has held for `--settle`:
-a replica that restarts and is back within it keeps its share, and nothing
+A change to the live members takes effect once it has held for `--settle`: a
+replica that restarts and is back within it keeps its share, and nothing
 moves. The first member list forms once the live members have not changed
 for `--settle`, each replica heard from for the first time starting the wait
 again, and no sooner than `--settle` or a heartbeat interval, whichever is
 longer, after the allocator started, so a restarted allocator has heard from
 every replica before it hands out shares. The heartbeat interval there is
 the longest of the allocator's own and those its replicas say, in each
-heartbeat, they were heartbeating at: a copy started with a shorter
-`--heartbeat.interval` than the copies before it said, as during a rollout
-that shortens it, hears a replica first at the replica's next heartbeat on
-the old interval, and a replica looks up the copies' addresses every
-interval, so every replica has reached it within the old interval of its
-start; its first heartbeat says that interval, and the first member list
-waits it. A replica that has not been told an interval yet, as one that
-has just started, says none, as the 10s it heartbeats at until then is no
-copy's, and its heartbeat does not change the wait. So the first list waits
-the old interval when a replica told it reaches the copy before the copy's
-own interval and `--settle` have passed, as one heartbeating every
-interval does; replicas started after the copy and heard alone until then
-form the first list by themselves, and it changes as the others arrive.
+heartbeat, they were heartbeating at: an instance started with a shorter
+`--heartbeat.interval` than the instances before it said, as during a
+rollout that shortens it, hears a replica first at the replica's next
+heartbeat on the old interval, and a replica looks up the instances'
+addresses every interval, so every replica has reached it within the old
+interval of its start; its first heartbeat says that interval, and the first
+member list waits it. A replica that has not been told an interval yet, as
+one that has just started, says none, as the 10s it heartbeats at until then
+is no instance's, and its heartbeat does not change the wait. So the first
+list waits the old interval when a replica told it reaches the instance
+before the instance's own interval and `--settle` have passed, as one
+heartbeating every interval does; replicas started after the instance and
+heard alone until then form the first list by themselves, and it changes as
+the others arrive.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
 is refused for the other. A shorter interval finds a replica that has
@@ -689,9 +691,9 @@ move `--settle` after that. A replica that restarts under the same id
 within the member TTL is never missed, whatever `--settle` is; `--settle`
 is what keeps a replica that is gone for longer, but back within it, from
 moving its share. An interval longer than `--settle` makes the first member
-list wait the interval rather than `--settle`. The copies of the allocator
+list wait the interval rather than `--settle`. The instances of the allocator
 check each other every 2s whatever the interval
-([Copies with discovery](#copies-with-discovery)): it is the replicas'
+([Instances with discovery](#instances-with-discovery)): it is the replicas'
 timing alone. Until then the bundle and service
 discovery endpoints answer `503`, and replicas and Prometheus keep what they
 have.
@@ -752,8 +754,8 @@ must not be one of them. The token is never taken from the URL.
 | `POST /v1/heartbeat` | replica | The generation of the bundle the replica is to have, and the heartbeat interval. |
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
-| `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true, "address_known": true}`: the copy's process, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another copy | Every discovery source of the copy's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer` | another instance | `{"id": "…", "discovering": true, "address_known": true}`: the instance's process id, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
+| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /` | a person | The [status page](#status-page). |
 | `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
@@ -779,7 +781,7 @@ not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
 having reported none. `interval_seconds` is the interval the replica was
-heartbeating at when it sent the heartbeat, left out until a copy of the
+heartbeating at when it sent the heartbeat, left out until an instance of the
 allocator has said one, which the first member list waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
@@ -806,7 +808,7 @@ A bundle is a tree of files, keyed by path:
 - `generation` is the digest of the files: the same files give the same
   generation, on every allocator. Discovered targets are part of the files,
   so allocators that discover agree on them by taking the leader's
-  ([Copies with discovery](#copies-with-discovery)).
+  ([Instances with discovery](#instances-with-discovery)).
 
 The answer carries the generation as its `ETag`, quoted. A request whose
 `If-None-Match` names the generation the replica has is answered `304` when
@@ -860,8 +862,8 @@ scrape_configs:
 
 `GET /` is a page for a person: what this instance holds, without a Prometheus
 to ask. The page calls each allocator process an instance, and the random
-id its process takes at its start, the `instance` of `/v1/status`, its
-instance ID. It shows
+id its process takes at its start, the `id` of `instance` in `/v1/status`,
+its instance ID. It shows
 
 - this instance: its address (among its peers, or `--web.listen-address`),
   its instance ID, version and revision, when it started and whether it
@@ -894,21 +896,20 @@ an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
 skipping its turn while the tab is hidden. It has the exporter's pages' bar,
 with their theme picker, and needs nothing from outside the allocator.
 
-`GET /v1/status` answers the same as JSON: `generated_at`; `copy`
-(`address`, `instance`, `version`, `revision`, `started_at`,
-`uptime_seconds`, `ready`); `peers`, `null` without `--peers` (`role`,
-`leader` or `follower`, `deciding` before the first check; `leader`, the
-leader's address; `leader_only`; `live_copies`, `leader_changes`, `snapshot_age_seconds`,
-`snapshot_taken`, `holds_leader_state`, the failures, `copies`, each with
-its `address`, `self`, `leader`, `live`, `instance`, `discovering`,
-`address_known`, `last_check` and `failures`, and `metrics`, each a
-`series` and its `value`); `partial`, true on a follower under
-`--peers.leader-only`, whose `members`, `spread` and `sources` are `null`;
-`members` (`formed`, `in_list`, `live`, `heartbeat_interval_seconds`,
-`member_ttl_seconds` and
-`list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`, `in_list`,
-`shutting_down`, `generation`, `current`, `up_to_date`, `refused` and
-`draining`); `spread` (`jobs`, and `members`, `total`, `average` and
+`GET /v1/status` answers the same as JSON: `generated_at`; `instance`
+(`address`, `id`, `version`, `revision`, `started_at`, `uptime_seconds`,
+`ready`); `peers`, `null` without `--peers` (`role`, `leader` or `follower`,
+`deciding` before the first check; `leader`, the leader's address;
+`leader_only`; `live_instances`, `leader_changes`, `snapshot_age_seconds`,
+`snapshot_taken`, `holds_leader_state`, the failures, `instances`, each with
+its `address`, `self`, `leader`, `live`, `id`, `discovering`,
+`address_known`, `last_check` and `failures`, and `metrics`, each a `series`
+and its `value`); `partial`, true on a follower under `--peers.leader-only`,
+whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
+`in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds` and
+`list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
+`in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`
+and `draining`); `spread` (`jobs`, and `members`, `total`, `average` and
 `imbalance`, each with `static`, `draining`, `probe`, `probe_jobs` by job
 and `total`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
 `ok`, `failing` or `pending`, `error`, `targets`, `last_refresh`,
@@ -983,13 +984,13 @@ members: the page names the leader, whose page has it, and the JSON is
 | `pue_allocator_discovered_targets{kind,owner,source}` | gauge | Targets of each discovery source's last good answer, by `kind` (`probe` or `static`), `owner` (the probe job or the `discovered_targets` entry) and `source` (its name); `0` before it answers. |
 | `pue_allocator_discovery_refreshes_total{kind,owner,source,result}` | counter | Answers of each discovery source taken (`success`), and its failures (`failure`), one counted once while its text stays the same. |
 | `pue_allocator_discovery_last_success_timestamp_seconds{kind,owner,source}` | gauge | When each discovery source last answered, in Unix seconds; `0` before it does. |
-| `pue_allocator_peers` | gauge | With `--peers`: the live copies, this one included. |
-| `pue_allocator_peer_up{peer}` | gauge | With `--peers`: `1` for each other copy that is live, by its address, `0` for one that has stopped answering, until its name no longer resolves to it. |
-| `pue_allocator_is_leader` | gauge | With `--peers`: `1` while this copy leads and asks the discovery sources, `0` while it follows. |
-| `pue_allocator_leader{peer}` | gauge | With `--peers`: `1`, with the address of the copy this one takes for the leader, `self` while it leads without knowing its own address. Copies that disagree on it are split. |
+| `pue_allocator_peers` | gauge | With `--peers`: the live instances, this one included. |
+| `pue_allocator_peer_up{peer}` | gauge | With `--peers`: `1` for each other instance that is live, by its address, `0` for one that has stopped answering, until its name no longer resolves to it. |
+| `pue_allocator_is_leader` | gauge | With `--peers`: `1` while this instance leads and asks the discovery sources, `0` while it follows. |
+| `pue_allocator_leader{peer}` | gauge | With `--peers`: `1`, with the address of the instance this one takes for the leader, `self` while it leads without knowing its own address. Instances that disagree on it are split. |
 | `pue_allocator_leader_changes_total` | counter | With `--peers`: changes of the leader after the first choice. |
-| `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this copy last held what the leader's snapshot holds, having fetched it, or since its start before the first time; `0` while it leads. It grows while the snapshot cannot be fetched, and while the copies' input files differ in their discovery sources. |
-| `pue_allocator_peer_failures_total{request}` | counter | With `--peers`: requests to the other copies that failed, `check` or `snapshot`. |
+| `pue_allocator_snapshot_age_seconds` | gauge | With `--peers`: seconds since this instance last held what the leader's snapshot holds, having fetched it, or since its start before the first time; `0` while it leads. It grows while the snapshot cannot be fetched, and while the instances' input files differ in their discovery sources. |
+| `pue_allocator_peer_failures_total{request}` | counter | With `--peers`: requests to the other instances that failed, `check` or `snapshot`. |
 
 With `--peers.leader-only` a follower serves the families of `--peers`
 alone ([Leader-only metrics](#leader-only-metrics)).
@@ -1013,7 +1014,7 @@ name resolves to, so for the members and the allocation they need no
 leader. With a discovery source, in a probe job or in the static targets,
 each is run with `--peers` naming that Service and `--peers.self` its pod's
 IP, so the pods are peers and only the leader asks the sources
-([Copies with discovery](#copies-with-discovery)), and the allocator's
+([Instances with discovery](#instances-with-discovery)), and the allocator's
 NetworkPolicy admits the allocator's own pods; they are rolled out as any
 Deployment is, one at a time, under a disruption budget of
 `maxUnavailable: 1`. The configuration (`config.data`)
@@ -1094,7 +1095,7 @@ or on how busy they are, `autoscaling.targetBusy`
 
 Run `pue-allocator` on one or two hosts, with a discovery source each given
 `--peers` with both hosts' addresses, or a name resolving to both
-([Copies with discovery](#copies-with-discovery)), start each exporter with
-`--allocator.url=http://allocator.internal:9116`, and point Prometheus's
-`http_sd_configs` at the same address, one scrape configuration per probe
-job. systemd units, Compose and plain VMs need nothing else.
+([Instances with discovery](#instances-with-discovery)), start each exporter
+with `--allocator.url=http://allocator.internal:9116`, and point
+Prometheus's `http_sd_configs` at the same address, one scrape configuration
+per probe job. systemd units, Compose and plain VMs need nothing else.

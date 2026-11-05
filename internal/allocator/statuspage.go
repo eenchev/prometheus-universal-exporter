@@ -60,7 +60,7 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := a.Status()
-	frame := pageFrame{Version: s.Copy.Version, Revision: s.Copy.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
+	frame := pageFrame{Version: s.Instance.Version, Revision: s.Instance.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
 	page, content := statusPageTemplate, statusContentTemplate
 	if query.Has("member") {
 		member := query.Get("member")
@@ -474,23 +474,23 @@ const statusContent = `{{define "content"}}
 
 <h2>This instance</h2>
 <table class="facts">
-<tr><th>Address</th><td>{{.Copy.Address}}</td></tr>
-<tr><th class="wraps">Instance ID</th><td><code>{{.Copy.Instance}}</code></td></tr>
-<tr><th>Started</th><td>{{.Copy.StartedAt}} <span class="muted">(up {{age .Copy.UptimeSeconds}})</span></td></tr>
-<tr><th>Ready</th><td>{{if .Copy.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
-<tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveCopies 1}} of {{.LiveCopies}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
+<tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
+<tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
+<tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
+<tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
+<tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
 {{- with .Peers}}
 
 <h2>Peers</h2>
-<p>{{if eq .Role "leader"}}This instance leads: it asks the discovery sources, and the other instances take what it finds.{{else if eq .Role "follower"}}This instance follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This instance has not yet checked its peers.{{end}} {{.LiveCopies}} live instance{{if ne .LiveCopies 1}}s{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This instance does not know its own address: list every instance in <code class="flag">--peers</code>, or give <code class="flag">--peers.self</code>.</span>{{end}}</p>
+<p>{{if eq .Role "leader"}}This instance leads: it asks the discovery sources, and the other instances take what it finds.{{else if eq .Role "follower"}}This instance follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This instance has not yet checked its peers.{{end}} {{.LiveInstances}} live instance{{if ne .LiveInstances 1}}s{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This instance does not know its own address: list every instance in <code class="flag">--peers</code>, or give <code class="flag">--peers.self</code>.</span>{{end}}</p>
 <div class="scroll">
 <table>
 <thead><tr><th>Instance</th><th>Role</th><th>Live</th><th>Discovering</th><th>Address known</th><th class="num">Last check</th><th class="num">Failures</th></tr></thead>
 <tbody>
-{{- range .Copies}}
+{{- range .Instances}}
 <tr>
-<td class="id">{{.Address}}{{if .Self}} <span class="muted">(this instance)</span>{{end}}{{if .Instance}}<br><span class="muted">ID</span> <code>{{.Instance}}</code>{{end}}</td>
+<td class="id">{{.Address}}{{if .Self}} <span class="muted">(this instance)</span>{{end}}{{if .ID}}<br><span class="muted">ID</span> <code>{{.ID}}</code>{{end}}</td>
 <td>{{if .Leader}}<strong>leader</strong>{{else}}follower{{end}}</td>
 <td>{{if .Live}}<span class="good">live</span>{{else}}<span class="bad">down</span>{{end}}</td>
 <td>{{if .Discovering}}yes{{else}}<span class="muted">no</span>{{end}}</td>

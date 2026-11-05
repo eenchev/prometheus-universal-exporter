@@ -1,7 +1,7 @@
 {{- if and .Values.allocator .Values.allocator.enabled }}
 {{- $allocator := .Values.allocator }}
 {{- $image := $allocator.image | default dict }}
-{{- /* --peers.leader-only is a peers' flag, and the copies are peers only
+{{- /* --peers.leader-only is a peers' flag, and the instances are peers only
        with a discovery source: the allocator would refuse it without. */}}
 {{- if and $allocator.leaderOnly (not (include "prometheus-universal-exporter.allocatorDiscovers" .)) }}
 {{- fail "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source, so the allocator's pods are no peers and each serves everything: set it false, or add a discovery source" }}
@@ -17,7 +17,7 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 spec:
   {{- $replicas := include "prometheus-universal-exporter.wholeNumber" (list "allocator.replicas" $allocator.replicas 1 2147483647) }}
-  {{- /* With a discovery source the copies are peers: the live copy of the
+  {{- /* With a discovery source the instances are peers: the live instance of the
          lowest pod IP leads and alone asks the sources, and the others serve
          what it found, so any number of them serve the same targets, and a
          RollingUpdate is safe (--peers below). */}}
@@ -120,7 +120,7 @@ spec:
                    taken for unset. */}}
             - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}
             {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
-            {{- /* The copies find each other by the headless Service's name,
+            {{- /* The instances find each other by the headless Service's name,
                    the one the exporter pods heartbeat to, and each knows
                    itself among its addresses by its pod IP, even before the
                    Service lists it. */}}

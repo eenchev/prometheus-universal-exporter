@@ -35,7 +35,7 @@ type MemberView struct {
 	// GeneratedAt is when the view was taken, RFC 3339 in UTC.
 	GeneratedAt string `json:"generated_at"`
 	Member      string `json:"member"`
-	// Partial says the copy follows under --peers.leader-only and leaves
+	// Partial says the instance follows under --peers.leader-only and leaves
 	// the members to the leader, at Leader; Status, Static, Draining and
 	// Probes are nil.
 	Partial bool   `json:"partial"`

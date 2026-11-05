@@ -245,8 +245,8 @@ name empty MUST fail rendering. The chart README MUST say that a metrics
 adapter serves the two metrics, and link the self-metrics documentation's
 prometheus-adapter rules and KEDA example. Every example query of an
 allocator metric there, and every prometheus-adapter rule over one, MUST take
-the `max` of the series, which every allocator copy reports, so the targets
-are not counted once per copy and KEDA gets one series.
+the `max` of the series, which every allocator instance reports, so the targets
+are not counted once per instance and KEDA gets one series.
 
 Without the allocator every replica scrapes every static target, so the chart MUST document running
 static targets with one replica and without autoscaling: each added replica
@@ -1993,7 +1993,7 @@ are skipped and the text checks of the templates still run:
      (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
    - Every example query of an allocator metric in `docs/*.md` and the chart
      README, and every prometheus-adapter rule over one, takes the `max` of
-     the allocator copies' series
+     the allocator instances' series
      (`TestExampleQueriesOfAllocatorMetricsTakeTheirMax`).
    - The chart's renders without the allocator are unchanged: `make helm-test`
      and the CI chart steps also render allocator mode and reject the allocator

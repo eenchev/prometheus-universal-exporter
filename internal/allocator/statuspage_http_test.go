@@ -40,7 +40,7 @@ func statusOf(t *testing.T, h http.Handler, header string) Status {
 	return s
 }
 
-// The status, as JSON and as the page, shows the copy, the members and
+// The status, as JSON and as the page, shows the instance, the members and
 // how the targets are spread over them, counted as /metrics counts them,
 // with the totals, the average per member and the imbalance; every value
 // the page shows is escaped.
@@ -60,8 +60,8 @@ func TestTheStatusShowsTheMembersAndTheSpread(t *testing.T) {
 	}
 	h := a.Handler("")
 	s := statusOf(t, h, "")
-	if s.Copy.Address != ":9116" || s.Copy.Version != "9.9.9" || s.Copy.Revision != "abc123" || !s.Copy.Ready || s.Copy.UptimeSeconds != 20 || s.Peers != nil {
-		t.Errorf("the copy is %+v, peers %v", s.Copy, s.Peers)
+	if s.Instance.Address != ":9116" || s.Instance.Version != "9.9.9" || s.Instance.Revision != "abc123" || !s.Instance.Ready || s.Instance.UptimeSeconds != 20 || s.Peers != nil {
+		t.Errorf("the instance is %+v, peers %v", s.Instance, s.Peers)
 	}
 	if !s.Members.Formed || s.Members.InList != 3 || s.Members.Live != 3 || len(s.Members.List) != 3 {
 		t.Fatalf("the members are %+v", s.Members)
@@ -156,6 +156,7 @@ func TestTheStatusMarksAMemberLateByTheConfiguredInterval(t *testing.T) {
 		`<span class="bad" title="a heartbeat is overdue">7s ago</span>`)
 }
 
+// metricsOf is a's /metrics text.
 func metricsOf(t *testing.T, a *Allocator) string {
 	t.Helper()
 	var b strings.Builder
@@ -226,25 +227,25 @@ func TestTheStatusPageTakesTheTokenAsBasicAuth(t *testing.T) {
 	}
 }
 
-// Among peers the status shows the leader, every copy with its liveness,
-// its last check and its failures, the snapshot's age and whether the copy
+// Among peers the status shows the leader, every instance with its liveness,
+// its last check and its failures, the snapshot's age and whether the instance
 // holds the leader's targets, and each source's origin: the leader's own
 // discovery, the follower's from the snapshot. Its metrics are /metrics'
 // lines of the peers' families, pue_allocator_peer_up{peer} among them,
-// which goes to 0 for a copy that stops answering.
+// which goes to 0 for an instance that stops answering.
 func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 	leader, follower, _ := leaderAndFollower(t)
 	ls := statusOf(t, leader.a.Handler(""), "")
 	fs := statusOf(t, follower.a.Handler(""), "")
-	if ls.Peers.Role != "leader" || ls.Peers.Leader != leader.addr.String() || !ls.Peers.HoldsLeaderState || ls.Copy.Address != leader.addr.String() {
+	if ls.Peers.Role != "leader" || ls.Peers.Leader != leader.addr.String() || !ls.Peers.HoldsLeaderState || ls.Instance.Address != leader.addr.String() {
 		t.Errorf("the leader's peers are %+v", ls.Peers)
 	}
-	if fs.Peers.Role != "follower" || fs.Peers.Leader != leader.addr.String() || !fs.Peers.HoldsLeaderState || !fs.Peers.SnapshotTaken || fs.Peers.LiveCopies != 2 {
+	if fs.Peers.Role != "follower" || fs.Peers.Leader != leader.addr.String() || !fs.Peers.HoldsLeaderState || !fs.Peers.SnapshotTaken || fs.Peers.LiveInstances != 2 {
 		t.Errorf("the follower's peers are %+v", fs.Peers)
 	}
-	if len(fs.Peers.Copies) != 2 || fs.Peers.Copies[0].Address != leader.addr.String() || !fs.Peers.Copies[0].Leader || !fs.Peers.Copies[0].Live ||
-		!fs.Peers.Copies[0].Discovering || fs.Peers.Copies[0].LastCheck == "" || !fs.Peers.Copies[1].Self || fs.Peers.Copies[1].Leader {
-		t.Errorf("the follower's copies are %+v", fs.Peers.Copies)
+	if len(fs.Peers.Instances) != 2 || fs.Peers.Instances[0].Address != leader.addr.String() || !fs.Peers.Instances[0].Leader || !fs.Peers.Instances[0].Live ||
+		!fs.Peers.Instances[0].Discovering || fs.Peers.Instances[0].LastCheck == "" || !fs.Peers.Instances[1].Self || fs.Peers.Instances[1].Leader {
+		t.Errorf("the follower's instances are %+v", fs.Peers.Instances)
 	}
 	for name, s := range map[string]Status{"leader": ls, "follower": fs} {
 		want := map[string]string{"leader": "own", "follower": "snapshot"}[name]
@@ -257,7 +258,7 @@ func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 			}
 		}
 	}
-	samples := func(c *peerCopy, s Status) {
+	samples := func(c *peerInstance, s Status) {
 		t.Helper()
 		metrics := c.metrics(t)
 		for _, m := range s.Peers.Metrics {
@@ -279,7 +280,7 @@ func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 	}
 	hasLine(t, follower, fmt.Sprintf("pue_allocator_peer_up{peer=%q} 0\n", leader.addr.String()))
 	fs = statusOf(t, follower.a.Handler(""), "")
-	if fs.Peers.Role != "leader" || fs.Peers.Copies[0].Live || fs.Peers.Copies[0].Failures != PeerFailures || fs.Peers.CheckFailures != PeerFailures {
+	if fs.Peers.Role != "leader" || fs.Peers.Instances[0].Live || fs.Peers.Instances[0].Failures != PeerFailures || fs.Peers.CheckFailures != PeerFailures {
 		t.Errorf("after the leader's checks failed the follower's peers are %+v", fs.Peers)
 	}
 	samples(follower, fs)
@@ -287,9 +288,9 @@ func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 	requireIn(t, page, "Leader election metrics", "pue_allocator_peer_up{peer=&#34;"+leader.addr.String()+"&#34;}", `<span class="bad">down</span>`)
 }
 
-// leaderOnly sets --peers.leader-only on each copy.
-func leaderOnly(copies ...*peerCopy) {
-	for _, c := range copies {
+// leaderOnly sets --peers.leader-only on each instance.
+func leaderOnly(instances ...*peerInstance) {
+	for _, c := range instances {
 		c.a.peers.o.LeaderOnly = true
 	}
 }
@@ -308,7 +309,7 @@ func familiesOf(metrics string) map[string]bool {
 
 // With --peers.leader-only only the leader serves the whole of /metrics and
 // of the status: a follower's /metrics has the peers' families alone, so
-// copies scraped together have one copy's series of the allocation, and
+// instances scraped together have one instance's series of the allocation, and
 // its status and page leave the members, the spread and the sources out,
 // naming the leader. A follower that comes to lead serves the whole.
 func TestALeaderOnlyFollowerServesThePeersPartAlone(t *testing.T) {
@@ -388,7 +389,7 @@ func TestTheAllocatorPagesSayInstance(t *testing.T) {
 	t.Cleanup(alone.BeginShutdown)
 	leader, follower, _ := leaderAndFollower(t)
 	leaderOnly(leader, follower)
-	for _, c := range []*peerCopy{leader, follower} {
+	for _, c := range []*peerInstance{leader, follower} {
 		if _, err := c.a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115"})); err != nil {
 			t.Fatal(err)
 		}
@@ -421,4 +422,93 @@ func TestTheAllocatorPagesSayInstance(t *testing.T) {
 	// on a member's view alike.
 	requireIn(t, pages["leader"], `<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>`)
 	requireIn(t, pages["leader's view"], `<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>`)
+}
+
+// jsonKeys are the keys of every object in the JSON document body, at any
+// depth.
+func jsonKeys(t *testing.T, body []byte) map[string]bool {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("%v: %s", err, body)
+	}
+	keys := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, e := range v {
+				keys[k] = true
+				walk(e)
+			}
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		}
+	}
+	walk(doc)
+	return keys
+}
+
+// saysCopy matches copy or copies as a word, whatever its case.
+var saysCopy = regexp.MustCompile(`(?i)\bcop(y|ies)\b`)
+
+// The allocator's answers call an allocator process an instance, as its
+// pages do, and the random id its process takes its id: /v1/status has
+// instance.id, instances with an id each and live_instances, /v1/peer and
+// /v1/peer/snapshot an id, and no key of them says copy; no HELP of
+// /metrics says copy either, alone or among peers.
+func TestTheAllocatorsAnswersSayInstance(t *testing.T) {
+	alone := New(mustLoad(t, writeInputs(t, testConfig, staticTargets(3), testProbes)), Options{Settle: time.Second, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	t.Cleanup(alone.BeginShutdown)
+	leader, follower, _ := leaderAndFollower(t)
+	bearer := "Bearer " + peerToken
+	idOf := func(c *peerInstance, path string) (any, []byte) {
+		t.Helper()
+		body := ask(c.a.Handler(peerToken), path, bearer).Body.Bytes()
+		var answer map[string]any
+		if err := json.Unmarshal(body, &answer); err != nil {
+			t.Fatalf("%s: %v: %s", path, err, body)
+		}
+		return answer["id"], body
+	}
+	leaderID, peerBody := idOf(leader, PeerPath)
+	followerID, _ := idOf(follower, PeerPath)
+	snapshotID, snapshotBody := idOf(leader, SnapshotPath)
+	if id, ok := leaderID.(string); !ok || id == "" || followerID == leaderID || snapshotID != leaderID {
+		t.Errorf("%s answered %s, the follower's id %v, and %s %s; want an id each, the snapshot's the leader's", PeerPath, peerBody, followerID, SnapshotPath, snapshotBody)
+	}
+	status := ask(follower.a.Handler(""), StatusPath, "").Body.Bytes()
+	var s struct {
+		Instance map[string]any `json:"instance"`
+		Peers    struct {
+			LiveInstances any              `json:"live_instances"`
+			Instances     []map[string]any `json:"instances"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(status, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Instance["id"] != followerID || s.Peers.LiveInstances != 2.0 || len(s.Peers.Instances) != 2 ||
+		s.Peers.Instances[0]["id"] != leaderID || s.Peers.Instances[1]["id"] != followerID {
+		t.Errorf("%s answered %s; want instance.id %v, live_instances 2 and instances with the ids %v and %v", StatusPath, status, followerID, leaderID, followerID)
+	}
+	if keys := jsonKeys(t, peerBody); len(keys) != 3 || !keys["id"] || !keys["discovering"] || !keys["address_known"] {
+		t.Errorf("%s has the keys %v, want id, discovering and address_known", PeerPath, keys)
+	}
+	for path, body := range map[string][]byte{StatusPath: status, PeerPath: peerBody, SnapshotPath: snapshotBody} {
+		for k := range jsonKeys(t, body) {
+			if strings.Contains(strings.ToLower(k), "cop") {
+				t.Errorf("%s has the key %s", path, k)
+			}
+		}
+	}
+	for name, metrics := range map[string]string{"alone": metricsOf(t, alone), "leader": leader.metrics(t), "follower": follower.metrics(t)} {
+		for line := range strings.SplitSeq(metrics, "\n") {
+			if strings.HasPrefix(line, "# HELP ") && saysCopy.MatchString(line) {
+				t.Errorf("the %s's /metrics says copy: %s", name, line)
+			}
+		}
+	}
 }

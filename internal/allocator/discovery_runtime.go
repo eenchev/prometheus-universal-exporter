@@ -112,10 +112,10 @@ func (s sourceSpec) identity() string {
 }
 
 // StartDiscovery starts a refresh loop for every discovery source, and for
-// every source a reload adds later, each asking its source at once and
-// then every refresh_interval. BeginShutdown stops them. A copy among peers
+// every source a reload adds later, each asking its source at once and then
+// every refresh_interval. BeginShutdown stops them. An instance among peers
 // (UsePeers) does not call it: RunPeers starts and stops the loops as the
-// copy comes to lead and stops leading.
+// instance comes to lead and stops leading.
 func (a *Allocator) StartDiscovery() { a.setDiscovering(true) }
 
 // setDiscovering starts the refresh loops, or stops them, keeping what the

@@ -18,7 +18,7 @@ import (
 // liveness, the snapshot's age and the failures, so it stays observable and
 // a cluster without a leader shows, while the allocation, the members and
 // the discovery sources are in the leader's metrics only, and a Prometheus
-// scraping every copy keeps one series of each.
+// scraping every instance keeps one series of each.
 func (a *Allocator) WriteMetrics(w io.Writer) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

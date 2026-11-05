@@ -194,7 +194,7 @@ func TestAMemberViewIsBounded(t *testing.T) {
 func TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader(t *testing.T) {
 	leader, follower, _ := leaderAndFollower(t)
 	leaderOnly(leader, follower)
-	for _, c := range []*peerCopy{leader, follower} {
+	for _, c := range []*peerInstance{leader, follower} {
 		if _, err := c.a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115"})); err != nil {
 			t.Fatal(err)
 		}

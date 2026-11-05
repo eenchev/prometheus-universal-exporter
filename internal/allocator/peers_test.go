@@ -12,14 +12,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// The copies' addresses are ordered by address and then port, IPv4 before
+// The instances' addresses are ordered by address and then port, IPv4 before
 // IPv6, numerically rather than as text, so 10.0.0.9 comes before 10.0.0.10
-// on every copy; the leader is the lowest of the live copies and this one.
-// A copy whose own address is not known follows only a copy that
-// discovers: the lowest that knows its own address, or else the lowest
-// instance of those that do not, unless it leads itself and its own
-// instance is lower; with none discovering it leads.
-func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
+// on every instance; the leader is the lowest of the live instances and this
+// one. An instance whose own address is not known follows only an instance
+// that discovers: the lowest that knows its own address, or else the lowest
+// instance of those that do not, unless it leads itself and its own instance
+// is lower; with none discovering it leads.
+func TestPeersAreOrderedAndTheLowestLiveInstanceLeads(t *testing.T) {
 	addrs := []netip.AddrPort{
 		netip.MustParseAddrPort("[fd00::1]:9116"),
 		netip.MustParseAddrPort("10.0.0.10:9116"),
@@ -45,7 +45,7 @@ func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
 	peer := func(spec string) livePeer {
 		addr, rest, _ := strings.Cut(spec, " ")
 		flags, instance, _ := strings.Cut(rest, ":")
-		return livePeer{netip.MustParseAddrPort(addr), peerAnswer{Instance: instance, Discovering: strings.Contains(flags, "d"), AddressKnown: strings.Contains(flags, "k")}}
+		return livePeer{netip.MustParseAddrPort(addr), peerAnswer{ID: instance, Discovering: strings.Contains(flags, "d"), AddressKnown: strings.Contains(flags, "k")}}
 	}
 	for what, c := range map[string]struct {
 		self        netip.AddrPort
@@ -59,7 +59,8 @@ func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
 		"lower than every live peer":   {self, "m", false, []string{"10.0.0.11:9116 dk:a", "[fd00::1]:9116 k:b"}, "10.0.0.10:9116", true},
 		"a live peer lower":            {self, "m", false, []string{"10.0.0.9:9116 k:z", "10.0.0.11:9116 dk:a"}, "10.0.0.9:9116", false},
 		"unknown, and no peer is live": {unknown, "m", false, nil, "invalid AddrPort", true},
-		// A copy of unknown address follows no copy that does not discover.
+		// An instance of unknown address follows no instance that does not
+		// discover.
 		"unknown, no peer discovers":                        {unknown, "m", false, []string{"10.0.0.9:9116 k:a", "10.0.0.11:9116 :b"}, "invalid AddrPort", true},
 		"unknown, a ranked peer discovers":                  {unknown, "a", true, []string{"10.0.0.9:9116 d:b", "10.0.0.11:9116 dk:z"}, "10.0.0.11:9116", false},
 		"unknown, a lower instance discovers":               {unknown, "m", true, []string{"10.0.0.9:9116 d:z", "10.0.0.11:9116 d:b"}, "10.0.0.11:9116", false},
@@ -79,7 +80,7 @@ func TestPeersAreOrderedAndTheLowestLiveCopyLeads(t *testing.T) {
 
 // --peers names a name resolved to every address it has, IPv4 addresses
 // mapped into IPv6 written as IPv4, or an IP address taken as it is; the
-// copy's own address is among them whether or not the name gives it, and a
+// instance's own address is among them whether or not the name gives it, and a
 // lookup that fails keeps the addresses the name gave last.
 func TestPeersAreResolvedEveryRound(t *testing.T) {
 	var answer []string
@@ -119,7 +120,7 @@ func TestPeersAreResolvedEveryRound(t *testing.T) {
 }
 
 // --peers and --peers.self are read strictly: an entry needs a host and a
-// port, and this copy's address is an IP address, taking the listen
+// port, and this instance's address is an IP address, taking the listen
 // address's port when it names none.
 func TestPeerFlagsAreParsed(t *testing.T) {
 	if got, err := ParsePeers("pue-allocator:9116, 10.0.0.5:9116,[fd00::1]:9116"); err != nil || !slices.Equal(got, []string{"pue-allocator:9116", "10.0.0.5:9116", "[fd00::1]:9116"}) {

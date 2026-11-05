@@ -67,21 +67,21 @@ func jobTargets(a *Allocator, job string) []string {
 	return out
 }
 
-// sortedPair is two copies, the lower address first.
-func sortedPair(a, b *peerCopy) (low, high *peerCopy) {
-	copies := []*peerCopy{a, b}
-	sort.Slice(copies, func(i, j int) bool { return comparePeers(copies[i].addr, copies[j].addr) < 0 })
-	return copies[0], copies[1]
+// sortedPair is two instances, the lower address first.
+func sortedPair(a, b *peerInstance) (low, high *peerInstance) {
+	instances := []*peerInstance{a, b}
+	sort.Slice(instances, func(i, j int) bool { return comparePeers(instances[i].addr, instances[j].addr) < 0 })
+	return instances[0], instances[1]
 }
 
-func hasLine(t *testing.T, c *peerCopy, line string) {
+func hasLine(t *testing.T, c *peerInstance, line string) {
 	t.Helper()
 	if metrics := c.metrics(t); !strings.Contains(metrics, line) {
 		t.Errorf("the metrics of %s have no %q:\n%s", c.addr, line, metrics)
 	}
 }
 
-// Two copies, each reading input files of its own, as two pods of one
+// Two instances, each reading input files of its own, as two pods of one
 // ConfigMap do, reload a new probe job at different moments, the leader
 // first. The follower's fetch in between finds a source it does not have
 // yet, holds other targets than the leader's snapshot, and its snapshot
@@ -93,8 +93,8 @@ func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 	srv := stableSD(t)
 	pa := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
 	pb := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
-	ca, cb := newPeerCopy(t, pa, nil), newPeerCopy(t, pb, nil)
-	paths := map[*peerCopy]Paths{ca: pa, cb: pb}
+	ca, cb := newPeerInstance(t, pa, nil), newPeerInstance(t, pb, nil)
+	paths := map[*peerInstance]Paths{ca: pa, cb: pb}
 	leader, follower := sortedPair(ca, cb)
 	usePeers(leader, follower)
 	leader.round()
@@ -102,7 +102,7 @@ func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 	testutil.WaitFor(t, "the leader to discover", func() bool { return len(jobTargets(leader.a, "websites")) == 1 })
 	follower.round()
 
-	reload := func(c *peerCopy) {
+	reload := func(c *peerInstance) {
 		t.Helper()
 		if err := os.WriteFile(paths[c].ProbeTargets, []byte(twoJobs(srv.URL, true)), 0o600); err != nil {
 			t.Fatal(err)
@@ -165,8 +165,8 @@ func TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain(t *testing.T) {
 	}
 }
 
-// ownLoops counts the sources the copy runs a refresh loop of.
-func ownLoops(c *peerCopy) int {
+// ownLoops counts the sources the instance runs a refresh loop of.
+func ownLoops(c *peerInstance) int {
 	c.a.dmu.Lock()
 	defer c.a.dmu.Unlock()
 	n := 0
@@ -178,7 +178,7 @@ func ownLoops(c *peerCopy) int {
 	return n
 }
 
-// During a rolling update that changes a source's settings, a new copy
+// During a rolling update that changes a source's settings, a new instance
 // following a leader of the old input files takes the leader's targets of
 // that source, matched by its kind, owner and name, rather than nothing,
 // and asks no source itself.
@@ -187,8 +187,8 @@ func TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader(t *testing.T) {
 	old := twoJobs(srv.URL, false)
 	changed := strings.Replace(old, "refresh_interval: 1h", "refresh_interval: 30m", 1)
 	pa, pb := writeInputs(t, testConfig, "", old), writeInputs(t, testConfig, "", old)
-	ca, cb := newPeerCopy(t, pa, nil), newPeerCopy(t, pb, nil)
-	paths := map[*peerCopy]Paths{ca: pa, cb: pb}
+	ca, cb := newPeerInstance(t, pa, nil), newPeerInstance(t, pb, nil)
+	paths := map[*peerInstance]Paths{ca: pa, cb: pb}
 	leader, follower := sortedPair(ca, cb)
 	if err := os.WriteFile(paths[follower].ProbeTargets, []byte(changed), 0o600); err != nil {
 		t.Fatal(err)
@@ -218,10 +218,10 @@ func TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt(t *testing.T) {
 	srv := stableSD(t)
 	pa := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
 	pb := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
-	ca, cb := newPeerCopy(t, pa, nil), newPeerCopy(t, pb, nil)
-	paths := map[*peerCopy]Paths{ca: pa, cb: pb}
+	ca, cb := newPeerInstance(t, pa, nil), newPeerInstance(t, pb, nil)
+	paths := map[*peerInstance]Paths{ca: pa, cb: pb}
 	leader, follower := sortedPair(ca, cb)
-	reload := func(c *peerCopy) {
+	reload := func(c *peerInstance) {
 		t.Helper()
 		if err := os.WriteFile(paths[c].ProbeTargets, []byte(twoJobs(srv.URL, true)), 0o600); err != nil {
 			t.Fatal(err)
@@ -290,7 +290,7 @@ func TestASnapshotWritesAGroupsLabelsOnce(t *testing.T) {
         file_sd: {files: ["` + file + `"], refresh_interval: 1h}
 `
 	p := writeInputs(t, testConfig, "", probes)
-	leader, follower := sortedPair(newPeerCopy(t, p, nil), newPeerCopy(t, p, nil))
+	leader, follower := sortedPair(newPeerInstance(t, p, nil), newPeerInstance(t, p, nil))
 	usePeers(leader, follower)
 	leader.round()
 	follower.round()
@@ -316,14 +316,14 @@ func TestASnapshotWritesAGroupsLabelsOnce(t *testing.T) {
 	}
 	hasLine(t, follower, "pue_allocator_snapshot_age_seconds 0\n")
 	if got, want := follower.a.maxSnapshotBytes(), 16<<20; got != want {
-		t.Errorf("a snapshot of a copy of one source may be %d bytes, want %d", got, want)
+		t.Errorf("a snapshot of an instance of one source may be %d bytes, want %d", got, want)
 	}
 	if got, want := New(nil, Options{Logger: testutil.QuietLogger(t)}).maxSnapshotBytes(), 16<<20; got != want {
-		t.Errorf("a snapshot of a copy of no source may be %d bytes, want %d", got, want)
+		t.Errorf("a snapshot of an instance of no source may be %d bytes, want %d", got, want)
 	}
 	two := New(mustLoad(t, peerInputs(t, newSDServer(t))), Options{Logger: testutil.QuietLogger(t)})
 	if got, want := two.maxSnapshotBytes(), 32<<20; got != want {
-		t.Errorf("a snapshot of a copy of two sources may be %d bytes, want %d", got, want)
+		t.Errorf("a snapshot of an instance of two sources may be %d bytes, want %d", got, want)
 	}
 }
 
@@ -333,7 +333,7 @@ func fakeLeader(t *testing.T, body string, delay time.Duration) netip.AddrPort {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == PeerPath {
-			fmt.Fprint(w, `{"instance":"leader","discovering":true,"address_known":true}`)
+			fmt.Fprint(w, `{"id":"leader","discovering":true,"address_known":true}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -352,7 +352,7 @@ func fakeLeader(t *testing.T, body string, delay time.Duration) netip.AddrPort {
 
 // followFake makes c follow the leader at addr, c's own address being
 // above any the test listens on.
-func followFake(c *peerCopy, addr netip.AddrPort) {
+func followFake(c *peerInstance, addr netip.AddrPort) {
 	c.a.UsePeers(PeerOptions{Peers: []string{addr.String()}, Self: netip.MustParseAddrPort("127.255.255.254:1"),
 		Token: func() (string, error) { return peerToken, nil }})
 }
@@ -363,9 +363,9 @@ func followFake(c *peerCopy, addr netip.AddrPort) {
 func TestASnapshotMayTakeLongerThanACheck(t *testing.T) {
 	srv := stableSD(t)
 	p := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
-	c := newPeerCopy(t, p, nil)
+	c := newPeerInstance(t, p, nil)
 	id, _ := json.Marshal(mustLoad(t, p).sources[0].identity())
-	body := `{"instance":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":[{"targets":["slow.example:80"],"labels":null}]}}}`
+	body := `{"id":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":[{"targets":["slow.example:80"],"labels":null}]}}}`
 	followFake(c, fakeLeader(t, body, PeerTimeout+500*time.Millisecond))
 	c.round()
 	if got := jobTargets(c.a, "websites"); !slices.Equal(got, []string{"https://slow.example:80/health"}) {
@@ -391,8 +391,8 @@ func TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks(t *testing.T) {
 		"an empty target":       `[{"targets":["ok.example:80",""]}]`,
 		"no label name":         `[{"targets":["ok.example:80"],"labels":{"bad name":"x"}}]`,
 	} {
-		c := newPeerCopy(t, p, nil)
-		body := `{"instance":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":` + groups + `}}}`
+		c := newPeerInstance(t, p, nil)
+		body := `{"id":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":` + groups + `}}}`
 		followFake(c, fakeLeader(t, body, 0))
 		c.round()
 		if got := jobTargets(c.a, "websites"); len(got) != 0 {
@@ -405,15 +405,15 @@ func TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks(t *testing.T) {
 	}
 }
 
-// Two copies whose --peers name only the other, neither given --peers.self,
-// cannot place themselves among their peers. Each follows only a copy that
+// Two instances whose --peers name only the other, neither given --peers.self,
+// cannot place themselves among their peers. Each follows only an instance that
 // discovers, so they settle on one leader, even when their rounds run
 // together and both may begin to lead in the same round, rather than each
 // following the other with neither discovering; each logs once that its own address is missing.
-func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
+func TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 	for _, together := range []bool{false, true} {
 		p := writeInputs(t, testConfig, "", twoJobs(stableSD(t).URL, false))
-		a, b := newPeerCopy(t, p, nil), newPeerCopy(t, p, nil)
+		a, b := newPeerInstance(t, p, nil), newPeerInstance(t, p, nil)
 		token := func() (string, error) { return peerToken, nil }
 		a.a.UsePeers(PeerOptions{Peers: []string{b.addr.String()}, Token: token})
 		b.a.UsePeers(PeerOptions{Peers: []string{a.addr.String()}, Token: token})
@@ -429,7 +429,7 @@ func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 			}
 		}
 		if a.discovering() == b.discovering() {
-			t.Fatalf("rounds together %v: the copies discover %v and %v, want one leader", together, a.discovering(), b.discovering())
+			t.Fatalf("rounds together %v: the instances discover %v and %v, want one leader", together, a.discovering(), b.discovering())
 		}
 		leader, follower := a, b
 		if b.discovering() {
@@ -441,8 +441,8 @@ func TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 		if got := jobTargets(follower.a, "websites"); !slices.Equal(got, want) {
 			t.Errorf("rounds together %v: the follower serves %v", together, got)
 		}
-		for _, c := range []*peerCopy{a, b} {
-			const missing = "no address of --peers answers as this copy"
+		for _, c := range []*peerInstance{a, b} {
+			const missing = "no address of --peers answers as this instance"
 			if n := strings.Count(c.logs.String(), missing); n != 1 {
 				t.Errorf("rounds together %v: logged %q %d times, want once:\n%s", together, missing, n, c.logs.String())
 			}

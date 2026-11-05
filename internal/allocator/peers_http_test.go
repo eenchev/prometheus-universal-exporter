@@ -25,7 +25,7 @@ import (
 )
 
 // sdServer is an http_sd server whose answers differ from one request to
-// the next, as a source's do when it changes between two copies' refreshes:
+// the next, as a source's do when it changes between two instances' refreshes:
 // the first request of each path is answered with the "first" target, and
 // every later one with the "later" target, once release is closed.
 type sdServer struct {
@@ -86,9 +86,9 @@ func (b *syncBuffer) String() string {
 	return b.b.String()
 }
 
-// peerCopy is one allocator copy served over HTTP, with its token, on a
+// peerInstance is one allocator instance served over HTTP, with its token, on a
 // clock of the test's own.
-type peerCopy struct {
+type peerInstance struct {
 	a      *Allocator
 	clock  *fakeClock
 	server *httptest.Server
@@ -123,11 +123,12 @@ discovered_targets:
 	return writeInputs(t, testConfig, static, probes)
 }
 
-// newPeerCopy starts an allocator copy of p, its member list formed of r1
-// and r2, serving its API on ln, or on a port of its own when ln is nil.
-func newPeerCopy(t *testing.T, p Paths, ln net.Listener) *peerCopy {
+// newPeerInstance starts an allocator instance of p, its member list formed
+// of r1 and r2, serving its API on ln, or on a port of its own when ln is
+// nil.
+func newPeerInstance(t *testing.T, p Paths, ln net.Listener) *peerInstance {
 	t.Helper()
-	c := &peerCopy{clock: newFakeClock(), logs: &syncBuffer{}}
+	c := &peerInstance{clock: newFakeClock(), logs: &syncBuffer{}}
 	c.a = New(mustLoad(t, p), Options{Settle: 15 * time.Second, Clock: c.clock, Logger: slog.New(slog.NewJSONHandler(c.logs, nil))})
 	beat(t, c.a, "r1", "r2")
 	keepBeating(t, c.a, c.clock, 20*time.Second, "r1", "r2")
@@ -157,28 +158,28 @@ func newPeerCopy(t *testing.T, p Paths, ln net.Listener) *peerCopy {
 	return c
 }
 
-// usePeers makes each copy a peer of every copy, each knowing its own
+// usePeers makes each instance a peer of every instance, each knowing its own
 // address.
-func usePeers(copies ...*peerCopy) {
+func usePeers(instances ...*peerInstance) {
 	var list []string
-	for _, c := range copies {
+	for _, c := range instances {
 		list = append(list, c.addr.String())
 	}
-	for _, c := range copies {
+	for _, c := range instances {
 		c.a.UsePeers(PeerOptions{Peers: list, Self: c.addr, Token: func() (string, error) { return peerToken, nil }})
 	}
 }
 
-// round runs a round of the copy's peers, and waits for the snapshot fetch
+// round runs a round of the instance's peers, and waits for the snapshot fetch
 // it started, which runs beside it, to end.
-func (c *peerCopy) round() {
+func (c *peerInstance) round() {
 	c.a.peers.round(context.Background())
 	if f := c.a.peers.fetch; f != nil {
 		<-f.done
 	}
 }
 
-func (c *peerCopy) metrics(t *testing.T) string {
+func (c *peerInstance) metrics(t *testing.T) string {
 	t.Helper()
 	var b bytes.Buffer
 	if err := c.a.WriteMetrics(&b); err != nil {
@@ -187,14 +188,14 @@ func (c *peerCopy) metrics(t *testing.T) string {
 	return b.String()
 }
 
-func (c *peerCopy) discovering() bool {
+func (c *peerInstance) discovering() bool {
 	c.a.dmu.Lock()
 	defer c.a.dmu.Unlock()
 	return c.a.discovering
 }
 
-// probeTargets are the targets the copy serves for the probe job.
-func (c *peerCopy) probeTargets(t *testing.T) []string {
+// probeTargets are the targets the instance serves for the probe job.
+func (c *peerInstance) probeTargets(t *testing.T) []string {
 	t.Helper()
 	groups, err := c.a.SD("websites")
 	if err != nil {
@@ -207,20 +208,20 @@ func (c *peerCopy) probeTargets(t *testing.T) []string {
 	return out
 }
 
-func serves(c *peerCopy, t *testing.T, target string) bool {
+func serves(c *peerInstance, t *testing.T, target string) bool {
 	return slices.Equal(c.probeTargets(t), []string{"https://" + target + "-probes.example:9100/health"})
 }
 
-// leaderAndFollower are two copies of the same input files, peers of each
+// leaderAndFollower are two instances of the same input files, peers of each
 // other, once the leader, the lower address, has discovered and the
 // follower has taken its snapshot.
-func leaderAndFollower(t *testing.T) (leader, follower *peerCopy, srv *sdServer) {
+func leaderAndFollower(t *testing.T) (leader, follower *peerInstance, srv *sdServer) {
 	t.Helper()
 	srv = newSDServer(t)
 	p := peerInputs(t, srv)
-	copies := []*peerCopy{newPeerCopy(t, p, nil), newPeerCopy(t, p, nil)}
-	sort.Slice(copies, func(i, j int) bool { return comparePeers(copies[i].addr, copies[j].addr) < 0 })
-	leader, follower = copies[0], copies[1]
+	instances := []*peerInstance{newPeerInstance(t, p, nil), newPeerInstance(t, p, nil)}
+	sort.Slice(instances, func(i, j int) bool { return comparePeers(instances[i].addr, instances[j].addr) < 0 })
+	leader, follower = instances[0], instances[1]
 	usePeers(leader, follower)
 	leader.round()
 	follower.round()
@@ -231,7 +232,7 @@ func leaderAndFollower(t *testing.T) (leader, follower *peerCopy, srv *sdServer)
 	return leader, follower, srv
 }
 
-// Of two copies with the same sources, only the leader, the lower address,
+// Of two instances with the same sources, only the leader, the lower address,
 // asks them; the follower takes what the leader found from its snapshot, so
 // both serve the same service discovery answers and the same bundles, of
 // the same generations, though the sources would have answered the
@@ -261,7 +262,7 @@ func TestAFollowerServesTheLeadersDiscoveredTargets(t *testing.T) {
 	if follower.discovering() || !leader.discovering() {
 		t.Errorf("the follower discovers %v and the leader %v", follower.discovering(), leader.discovering())
 	}
-	for c, want := range map[*peerCopy][]string{
+	for c, want := range map[*peerInstance][]string{
 		leader:   {"pue_allocator_is_leader 1\n", fmt.Sprintf("pue_allocator_leader{peer=%q} 1\n", leader.addr), "pue_allocator_peers 2\n", "pue_allocator_snapshot_age_seconds 0\n"},
 		follower: {"pue_allocator_is_leader 0\n", fmt.Sprintf("pue_allocator_leader{peer=%q} 1\n", leader.addr), "pue_allocator_peers 2\n", "pue_allocator_leader_changes_total 0\n"},
 	} {
@@ -280,7 +281,7 @@ func TestAFollowerServesTheLeadersDiscoveredTargets(t *testing.T) {
 // When the leader shuts down, the follower leads at its next round, starts
 // asking the sources, and serves the targets of the snapshot it took last
 // until they answer: there is no moment without them.
-func TestTheNextCopyLeadsWhenTheLeaderShutsDown(t *testing.T) {
+func TestTheNextInstanceLeadsWhenTheLeaderShutsDown(t *testing.T) {
 	leader, follower, srv := leaderAndFollower(t)
 	leader.a.BeginShutdown()
 	follower.round()
@@ -343,17 +344,17 @@ func TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot(t *testing.T) {
 			t.Fatalf("after %d failed checks the follower serves %v, want the snapshot's target", i, follower.probeTargets(t))
 		}
 	}
-	if !strings.Contains(follower.logs.String(), "an allocator copy stopped answering") {
+	if !strings.Contains(follower.logs.String(), "an allocator instance stopped answering") {
 		t.Errorf("the leader's loss is not logged:\n%s", follower.logs.String())
 	}
 }
 
 // The peer endpoints are the API's: without its token they answer 401, and
-// a copy of another token is never counted live, so it leads alone.
+// an instance of another token is never counted live, so it leads alone.
 func TestThePeerEndpointsNeedTheToken(t *testing.T) {
 	srv := newSDServer(t)
 	p := peerInputs(t, srv)
-	c := newPeerCopy(t, p, nil)
+	c := newPeerInstance(t, p, nil)
 	for _, path := range []string{PeerPath, SnapshotPath} {
 		for token, want := range map[string]int{"": http.StatusUnauthorized, "wrong": http.StatusUnauthorized, peerToken: http.StatusOK} {
 			req, _ := http.NewRequest(http.MethodGet, c.server.URL+path, nil)
@@ -371,14 +372,14 @@ func TestThePeerEndpointsNeedTheToken(t *testing.T) {
 		}
 	}
 
-	other := newPeerCopy(t, p, nil)
+	other := newPeerInstance(t, p, nil)
 	list := []string{c.addr.String(), other.addr.String()}
 	c.a.UsePeers(PeerOptions{Peers: list, Self: c.addr, Token: func() (string, error) { return "wrong", nil }})
 	other.a.UsePeers(PeerOptions{Peers: list, Self: other.addr, Token: func() (string, error) { return "wrong", nil }})
 	c.round()
 	other.round()
 	if !c.discovering() || !other.discovering() {
-		t.Error("a copy counted a peer live that refused its token")
+		t.Error("an instance counted a peer live that refused its token")
 	}
 	if !strings.Contains(c.metrics(t), "pue_allocator_peer_failures_total{request=\"check\"} 1\n") {
 		t.Errorf("the refused check is not counted:\n%s", c.metrics(t))
@@ -404,17 +405,18 @@ func listenPair(t *testing.T) (low, high net.Listener) {
 	return nil, nil
 }
 
-// Copies given only a name, which resolves to all of them, find their own
+// Instances given only a name, which resolves to all of them, find their own
 // address by asking each, the one answering with their own instance being
-// themselves; a copy that comes to lead without ever having followed, as a
-// new copy of the lowest address does, starts from another copy's snapshot,
-// so it serves the discovered targets before its own sources answer.
-func TestCopiesFindThemselvesAmongTheAddressesOfTheirName(t *testing.T) {
+// themselves; an instance that comes to lead without ever having followed, as
+// a new instance of the lowest address does, starts from another instance's
+// snapshot, so it serves the discovered targets before its own sources
+// answer.
+func TestInstancesFindThemselvesAmongTheAddressesOfTheirName(t *testing.T) {
 	srv := newSDServer(t)
 	p := peerInputs(t, srv)
 	lowLn, highLn := listenPair(t)
 	port := lowLn.Addr().(*net.TCPAddr).Port
-	high := newPeerCopy(t, p, highLn)
+	high := newPeerInstance(t, p, highLn)
 	opts := PeerOptions{
 		Peers: []string{fmt.Sprintf("allocators.test:%d", port)},
 		Token: func() (string, error) { return peerToken, nil },
@@ -426,30 +428,30 @@ func TestCopiesFindThemselvesAmongTheAddressesOfTheirName(t *testing.T) {
 		},
 	}
 	high.a.UsePeers(opts)
-	// Nothing listens on 127.0.0.1 yet: the copy there has not started.
+	// Nothing listens on 127.0.0.1 yet: the instance there has not started.
 	_ = lowLn.Close()
 	high.round()
 	if !high.discovering() || high.a.peers.self != high.addr {
-		t.Fatalf("alone, the copy at %s discovers %v and takes itself for %v", high.addr, high.discovering(), high.a.peers.self)
+		t.Fatalf("alone, the instance at %s discovers %v and takes itself for %v", high.addr, high.discovering(), high.a.peers.self)
 	}
-	testutil.WaitFor(t, "the lone copy to discover", func() bool { return serves(high, t, "first") })
+	testutil.WaitFor(t, "the lone instance to discover", func() bool { return serves(high, t, "first") })
 
 	lowLn, err := net.Listen("tcp", lowLn.Addr().String())
 	if err != nil {
 		t.Skipf("cannot listen again on %s: %v", lowLn.Addr(), err)
 	}
-	low := newPeerCopy(t, p, lowLn)
+	low := newPeerInstance(t, p, lowLn)
 	low.a.UsePeers(opts)
 	low.round()
 	if low.a.peers.self != low.addr || !low.discovering() {
-		t.Fatalf("the copy at %s takes itself for %v and discovers %v, want itself, leading", low.addr, low.a.peers.self, low.discovering())
+		t.Fatalf("the instance at %s takes itself for %v and discovers %v, want itself, leading", low.addr, low.a.peers.self, low.discovering())
 	}
 	// Its own sources' answer is held, so what it serves is the snapshot.
 	if !serves(low, t, "first") {
-		t.Errorf("the new leader serves %v, want the targets of the other copy's snapshot", low.probeTargets(t))
+		t.Errorf("the new leader serves %v, want the targets of the other instance's snapshot", low.probeTargets(t))
 	}
 	high.round()
 	if high.discovering() || !strings.Contains(high.metrics(t), fmt.Sprintf("pue_allocator_leader{peer=%q} 1\n", low.addr)) {
-		t.Errorf("the copy at %s does not follow the lower one:\n%s", high.addr, high.metrics(t))
+		t.Errorf("the instance at %s does not follow the lower one:\n%s", high.addr, high.metrics(t))
 	}
 }

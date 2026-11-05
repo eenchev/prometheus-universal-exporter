@@ -30315,31 +30315,31 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheURLIsWhereTheRedirectsLed` (fetch): a redirect to `/app;jsessionid=…?code=…&state=x` is `$url` `/app;jsessionid=<redacted>?code=<redacted>&state=x`.
 - `TestASessionInThePathAndACodeInTheQueryAreMaskedWhereverShown` (exporter): through `/probe`, a label of `$url` after such a redirect, and the recipe's `$url | split("?")[0] | split(";")[0]`, hold no secret; a debug probe's report holds none; a failed probe's log line names its target with `;jsessionid=<redacted>?ticket=<redacted>&lang=en`.
 
-## 34.267 Allocator copies with discovery: peers and a leader
+## 34.267 Allocator instances with discovery: peers and a leader
 
-- `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator): addresses order IPv4 before IPv6, by the address numerically (`10.0.0.9` before `10.0.0.10`) and then by port; the leader is the copy itself alone or when lower than every live peer, the lowest live peer otherwise; for a copy of unknown address see § 34.268.
-- `TestPeersAreResolvedEveryRound` (allocator): a name resolves to every address it has, an IPv4-mapped one as IPv4, an IP entry is taken without a lookup, the copy's own `--peers.self` is among them, duplicates are taken once, and a failed lookup keeps the addresses of the last.
+- `TestPeersAreOrderedAndTheLowestLiveInstanceLeads` (allocator): addresses order IPv4 before IPv6, by the address numerically (`10.0.0.9` before `10.0.0.10`) and then by port; the leader is the instance itself alone or when lower than every live peer, the lowest live peer otherwise; for an instance of unknown address see § 34.268.
+- `TestPeersAreResolvedEveryRound` (allocator): a name resolves to every address it has, an IPv4-mapped one as IPv4, an IP entry is taken without a lookup, the instance's own `--peers.self` is among them, duplicates are taken once, and a failed lookup keeps the addresses of the last.
 - `TestPeerFlagsAreParsed` (allocator): `--peers` entries need a host and a port from 1 to 65535; `--peers.self` takes an IP address with the listen address's port, or `ip:port`, and refuses a name, port 0 and an address without a port beside a listen address of none.
-- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): of two copies served over HTTP with the token, whose http_sd sources answer each request differently, only the lower address asks them (each once); the follower serves the same service discovery answer and bundles of the same generations and files for each member and a joining one, its shares holding the leader's discovered static target; the metrics say who leads (`pue_allocator_is_leader`, `pue_allocator_leader{peer}`, `pue_allocator_peers 2`), and the follower counts no refresh.
-- `TestTheNextCopyLeadsWhenTheLeaderShutsDown` (allocator): once the leader shuts down, its `/v1/peer` answering `503`, the follower leads at its next round, serves the snapshot's targets while its own sources' answer is held, and then what they found; `pue_allocator_leader_changes_total` is 1.
+- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): of two instances served over HTTP with the token, whose http_sd sources answer each request differently, only the lower address asks them (each once); the follower serves the same service discovery answer and bundles of the same generations and files for each member and a joining one, its shares holding the leader's discovered static target; the metrics say who leads (`pue_allocator_is_leader`, `pue_allocator_leader{peer}`, `pue_allocator_peers 2`), and the follower counts no refresh.
+- `TestTheNextInstanceLeadsWhenTheLeaderShutsDown` (allocator): once the leader shuts down, its `/v1/peer` answering `503`, the follower leads at its next round, serves the snapshot's targets while its own sources' answer is held, and then what they found; `pue_allocator_leader_changes_total` is 1.
 - `TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot` (allocator): a follower whose snapshot fetches fail keeps the snapshot's targets and does not discover, counts each failure, shows the snapshot's age (8s after four 2s rounds), logs once and again when a fetch succeeds; a leader that stops answering stays the leader for two failed checks and is replaced at the third, the new leader still serving the snapshot's targets.
-- `TestThePeerEndpointsNeedTheToken` (allocator): `/v1/peer` and `/v1/peer/snapshot` answer `401` without the token or with another; copies sending a wrong token never count each other live, and each leads alone.
-- `TestCopiesFindThemselvesAmongTheAddressesOfTheirName` (allocator): two copies at 127.0.0.1 and 127.0.0.2 of one port, given only a name resolving to both, find their own address by its answer; the copy of the higher address leads while the lower does not answer, and the lower, once up, leads from the higher's snapshot before its own sources answer, the higher then following it.
+- `TestThePeerEndpointsNeedTheToken` (allocator): `/v1/peer` and `/v1/peer/snapshot` answer `401` without the token or with another; instances sending a wrong token never count each other live, and each leads alone.
+- `TestInstancesFindThemselvesAmongTheAddressesOfTheirName` (allocator): two instances at 127.0.0.1 and 127.0.0.2 of one port, given only a name resolving to both, find their own address by its answer; the instance of the higher address leads while the lower does not answer, and the lower, once up, leads from the higher's snapshot before its own sources answer, the higher then following it.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator) takes a `--peers` entry without a port, an empty entry, `--peers.self` without `--peers`, and a name as `--peers.self`; `TestVersionAndHelp` lists `-peers` and `-peers.self`.
 - `TestChartRunsAllocatorPeersWithDiscovery` (repository): SPECIFICATION-CHART.md § 34.29.
 
 ## 34.268 Fixes to allocator peers
 
-- `TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater` (allocator): two copies of input files of their own reload a new probe job, the leader first; the follower's fetches in between leave its snapshot age growing (8s after four 2s rounds) and log the difference once; after its own reload its next fetch, naming the digest of what it holds, takes the new job's targets, the bundles' generations are equal, the age is 0 and the agreement is logged.
+- `TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater` (allocator): two instances of input files of their own reload a new probe job, the leader first; the follower's fetches in between leave its snapshot age growing (8s after four 2s rounds) and log the difference once; after its own reload its next fetch, naming the digest of what it holds, takes the new job's targets, the bundles' generations are equal, the age is 0 and the agreement is logged.
 - `TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain` (allocator): a follower that led while the leader's checks failed, its own sources finding other targets, serves the leader's targets again at its first round of following.
 - `TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader` (allocator): a follower whose source differs from the leader's only in its `refresh_interval` serves the leader's targets of it and runs no refresh loop itself.
 - `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
-- `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for a copy of one source or none, 32 MiB for one of two.
+- `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for an instance of one source or none, 32 MiB for one of two.
 - `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
 - `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
-- `TestCopiesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two copies whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
-- `TestPeersAreOrderedAndTheLowestLiveCopyLeads` (allocator), changed: a copy of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own instance is lower.
-- `TestACopyAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
+- `TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two instances whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
+- `TestPeersAreOrderedAndTheLowestLiveInstanceLeads` (allocator), changed: an instance of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own id is lower.
+- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
 
 ## 34.269 Fixes to address families and masking
 
@@ -30353,14 +30353,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.270 Allocator status page and leader-only metrics
 
-- `TestTheStatusShowsTheMembersAndTheSpread` (allocator): with three members, one reporting its current bundle, one none, and one an id holding HTML, `/v1/status` gives the copy's address, version, revision, readiness and 20s of uptime, no peers, the members with their addresses, generations and whether each is up to date, and per member static and probe counts equal to `pue_allocator_assigned`'s, by job, with totals of 30 static and 2 probe targets, the average and the imbalance; `/` is HTML with the icon, the theme script and picker, the refresh controls (Off chosen, `?refresh=30s` choosing 30s), the bars and the id escaped, its fragment has no bar, and `?format=json` is answered `400`.
+- `TestTheStatusShowsTheMembersAndTheSpread` (allocator): with three members, one reporting its current bundle, one none, and one an id holding HTML, `/v1/status` gives the instance's address, version, revision, readiness and 20s of uptime, no peers, the members with their addresses, generations and whether each is up to date, and per member static and probe counts equal to `pue_allocator_assigned`'s, by job, with totals of 30 static and 2 probe targets, the average and the imbalance; `/` is HTML with the icon, the theme script and picker, the refresh controls (Off chosen, `?refresh=30s` choosing 30s), the bars and the id escaped, its fragment has no bar, and `?format=json` is answered `400`.
 - `TestTheStatusPageTakesTheTokenAsBasicAuth` (allocator): `/`, `/v1/status` and `/metrics` answer `401` with a `Basic` challenge without the token, `200` with the token as Basic auth's password of any user name or as a bearer token, `401` with another password or the token in the URL; the bundle, service discovery and peer endpoints and a heartbeat answer `401` to Basic auth, without a `Basic` challenge; `/healthz` and `/ready` stay open.
-- `TestThePeersStatusAgreesWithTheMetrics` (allocator): a leader's and a follower's status give their roles, the leader's address, the follower's snapshot taken and held, the copies with the leader live, discovering and last checked, and every source `ok` with its target, from the leader's own discovery or the follower's snapshot; each of the status's peer series is a line of `/metrics`, `pue_allocator_peer_up{peer}` is `1` on each; once the leader's checks fail three times the follower's `pue_allocator_peer_up` of it is `0`, it leads, the leader is down with three failures, and its page shows the series escaped and the copy down.
-- `TestTheStatusNamesTheCopysAddressAndBuild` (cmd/pue-allocator): `run`'s `/v1/status` names its `--web.listen-address` and the build's version and revision, ready, without peers.
+- `TestThePeersStatusAgreesWithTheMetrics` (allocator): a leader's and a follower's status give their roles, the leader's address, the follower's snapshot taken and held, the instances with the leader live, discovering and last checked, and every source `ok` with its target, from the leader's own discovery or the follower's snapshot; each of the status's peer series is a line of `/metrics`, `pue_allocator_peer_up{peer}` is `1` on each; once the leader's checks fail three times the follower's `pue_allocator_peer_up` of it is `0`, it leads, the leader is down with three failures, and its page shows the series escaped and the instance down.
+- `TestTheStatusNamesTheInstanceByItsAddressAndBuild` (cmd/pue-allocator): `run`'s `/v1/status` names its `--web.listen-address` and the build's version and revision, ready, without peers.
 - `TestALeaderOnlyFollowerServesThePeersPartAlone` (allocator): with `--peers.leader-only` a follower's `/metrics` has the seven peer families and no other, `pue_allocator_is_leader 0` and the leader's `pue_allocator_leader{peer}`, while the leader's has the members, the assignments, the sources and the generations too; the follower's `/v1/status` has `"partial":true` and `"members":null`, no spread or sources, and its page names the leader and leaves out the members, targets and sources the leader's page has; once the leader's checks fail three times the follower leads and serves the whole of both.
 - `TestTheLeaderOnlyFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--peers` of its own address and `--peers.leader-only` leads, and its status says `leader_only`, not partial, with the members.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--peers.leader-only` without `--peers` exits 2; `TestVersionAndHelp`, changed: the help lists `-peers.leader-only`.
-- `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
+- `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the instance lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
 - `TestTheFirstMemberListWaitsTheConfiguredHeartbeatInterval` (allocator): without a settle time, with `--heartbeat.interval` 4s the first member list has not formed 1ms before 4s after the start and has at 4s, and with 30s it has not formed before 30s, past the default 10s.
 - `TestAMemberIsDroppedAfterThreeConfiguredHeartbeatIntervals` (allocator): with a 2s interval and a 5s settle time, a member silent since its last heartbeat is still live 1ms before 6s, three intervals, and not at 6s; it stays in the member list until 5s after that and leaves it then.
 - `TestTheHeartbeatReplySaysTheHeartbeatInterval` (allocator): with a 2.5s interval the heartbeat answer has `heartbeat_interval_seconds` 2.5, and a heartbeat refused for `--members.max` 1 is answered `429` with `Retry-After: 8`, the 7.5s member TTL rounded up.
@@ -30370,7 +30370,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--heartbeat.interval` of `999ms`, `2m1s` or `0s` exits 2 saying it must be from 1s to 2m; `TestVersionAndHelp`, changed: the help lists `-heartbeat.interval` with its default 10s.
 - `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient): a client started with an hour's interval whose allocator answers `heartbeat_interval_seconds` 1 sends its next heartbeat about a second after the first, and its interval in force is 1s.
 - `TestABogusHeartbeatIntervalIsKeptWithinTheBounds` (allocclient): an announced 0.001 or -5 seconds is taken as 1s, 121 or 1e300 as 2m, and 2.5 as 2.5s.
-- `TestTheShortestIntervalOfTheCopiesIsTaken` (allocclient): heartbeating three copies, the interval is 10s while none says one, 3s when they say 7, 3 and none, 7s once the copy saying 3 is down, and stays 7s while every copy is down and while the only copy answering says none.
+- `TestTheShortestIntervalOfTheInstancesIsTaken` (allocclient): heartbeating three instances, the interval is 10s while none says one, 3s when they say 7, 3 and none, 7s once the instance saying 3 is down, and stays 7s while every instance is down and while the only instance answering says none.
 - `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: the heartbeat replies say the default 10s interval, which the test takes out of them so its replicas keep heartbeating every 20ms.
 - `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded up, an empty interval counting as 10s: 25 by default, 20 with 5s, 60 with 30s, 4 with settle 0s and 1.5s, 240 with 15s and 2m, 21 with 20s and 1s; `allocator.heartbeatInterval` renders `--heartbeat.interval` with its value, and nothing when empty.
 - `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.heartbeatInterval` of `soon` is refused by the schema and the template, and `999ms`, `2m1s` and `0s` by the template, saying it must be a Go duration from 1s to 2m.
@@ -30378,22 +30378,25 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMemberViewIsBounded` (allocator): a member owning 1205 static targets has 1000 listed of 1205 matching, the page saying the first 1000 are listed and 205 more left out, and `?filter=t12` lists all 15 of its matches, `t1204`, beyond the bound, included.
 - `TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader` (allocator): under `--peers.leader-only` the follower's view of a member it heard from is `partial` with the leader's address and no lists, its page names the leader with a notice and has no filter box nor targets, and the leader's view of the same member is whole.
 - `TestAnHTTPSDFailureMasksTheURLsToken` (allocator): of two `http_sd` sources whose URLs carry an `access_token`, one answering `503` and one unreachable, neither the status page, `/v1/status` nor the log shows the token, and the status's and the log's failure texts give the URLs with `access_token=<redacted>` and the other query parameter kept; an `ftp` URL with the token is refused at load without it.
-- `TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers` (allocclient): beside an allocator copy that never answers, one answering a 1s interval hears the replica at least 4 times in 4.5s, never more than 1.5s apart; heartbeats to the hung copy are given up on within 1.5s, and every lookup of the addresses is bounded by at most the 1s interval.
-- `TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy` (allocclient): a client started with an hour's interval, of two copies one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
+- `TestAHungInstanceDoesNotDelayTheHeartbeatsToTheOthers` (allocclient): beside an allocator instance that never answers, one answering a 1s interval hears the replica at least 4 times in 4.5s, never more than 1.5s apart; heartbeats to the hung instance are given up on within 1.5s, and every lookup of the addresses is bounded by at most the 1s interval.
+- `TestAnAnnouncedIntervalReachesTheScheduleOfEveryInstance` (allocclient): a client started with an hour's interval, of two instances one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
 - `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
-- `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): a copy with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; a copy with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
+- `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): an instance with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; an instance with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
 - `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat, before the allocator said an interval, leaves `interval_seconds` out, and the one after the reply saying 1 says 1.
 - `TestAMemberViewOfAGoneMemberSaysSo` (allocator): the fragment of r2's view lists its targets; once r2 has stopped long enough to be forgotten, its fragment answers `200` with the as-of line and the notice that the allocator knows no member r2, no table and no frame, its page `200` with the filter form `hidden` and the script hiding it on that notice, the JSON `404`, and r1's page has its filter shown.
 - `TestTheFilterBoxMatchesWhatTheAllocatorMatches` (allocator): a static row's `data-match` is its name, target, collector, moved-to (empty) and labels in name order, and a probe row's its target, job and collector, joined by line feeds; the script matches `data-match`, not the row's text, and the hint says both match the same fields; the allocator matches no target for `30s`, `alphahttp` or `demoteam`; `?filter=%20` and `%20%20` are no filter, matching every target, unechoed.
 - `TestTheMemberViewListsItsTargets` (allocator), changed: the page of an unknown member answers `200`, its JSON still `404`.
-- `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the copy it reaches, heartbeats a copy whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
-- `TestAReplicaSaysNoIntervalUntilACopyDoes` (allocclient): a client started with the default interval, and one with 4s, leave `interval_seconds` out of their heartbeats while the allocator says no interval, also in the heartbeat answered with the first 5s, and say 5 in every heartbeat after it, also once the allocator says none again.
-- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): a copy with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; a copy hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
+- `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the instance it reaches, heartbeats an instance whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
+- `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient): a client started with the default interval, and one with 4s, leave `interval_seconds` out of their heartbeats while the allocator says no interval, also in the heartbeat answered with the first 5s, and say 5 in every heartbeat after it, also once the allocator says none again.
+- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): an instance with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; an instance hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
 - `TestAWrappedLabelKeepsTheNameOnItsFirstLine` (allocator): the member view's style makes a label an inline flex box, not an inline block, beside the phone layout's grid of name and value on one baseline, so a label that wraps keeps the cell's name on its first line.
 
 ## 34.271 Allocator pages say instance
 
 - `TestTheAllocatorPagesSayInstance` (allocator): the page of an allocator without `--peers`, a leader's page and fragment, a `--peers.leader-only` follower's page and the member views of both have no `copy` or `copies` in their visible text, scripts, styles and code left out; each page has the heading `This instance` and the row `Instance ID`, whose label goes on two lines at a width of 400px or less; without peers it says this instance asks its discovery sources itself; the leader's has the `Instance` column, `(this instance)`, the `ID` beside an address, `This instance leads: it asks the discovery sources, and the other instances take what it finds.` and `2 live instances`; the follower's notice and its member view's say `This instance follows the leader`, its page `Below are this instance and its peers.` and `This instance follows <leader>:`. The bar names the allocator `Prometheus Universal Exporter · Target Allocator` on the leader's page and, as a link back, on its member view.
+- `TestTheAllocatorsAnswersSayInstance` (allocator): a follower's `/v1/status` has `instance.id`, its own process's id, `peers.live_instances` 2 and `peers.instances`, the leader's and its own, each with its `id`; the leader's `/v1/peer` has exactly the keys `id`, `discovering` and `address_known`, its `id` the leader's, and its `/v1/peer/snapshot` an `id`; no key of the three, at any depth, has `cop` in it; and no `# HELP` line of `/metrics`, of an allocator without `--peers`, of the leader or of the follower, says `copy` or `copies`.
+- `TestTheFlagHelpSaysInstance` (cmd/pue-allocator): `-h` says `copy` or `copies` on no line, and `--peers`'s help says `List every instance, this one included`.
+- The allocator's tests that named an allocator process a copy are renamed for an instance, with what they check unchanged: `TestPeersAreOrderedAndTheLowestLiveInstanceLeads`, `TestTheNextInstanceLeadsWhenTheLeaderShutsDown`, `TestInstancesFindThemselvesAmongTheAddressesOfTheirName`, `TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader`, `TestAnInstanceAmongPeersAnswers503BeforeItStops`, `TestTheStatusNamesTheInstanceByItsAddressAndBuild`, `TestTheShortestIntervalOfTheInstancesIsTaken`, `TestAHungInstanceDoesNotDelayTheHeartbeatsToTheOthers`, `TestAnAnnouncedIntervalReachesTheScheduleOfEveryInstance` and `TestAReplicaSaysNoIntervalUntilAnInstanceDoes`; `TestThePeersStatusAgreesWithTheMetrics` reads `instance`, `instances` and `live_instances`, and the peers' tests look for the log lines as they now read (`an allocator instance stopped answering`, `no address of --peers answers as this instance`).
 
 # 35. Documentation requirements
 
@@ -33350,7 +33353,7 @@ and Prometheus the probe targets of its probe targets file, each pointed at a
 replica. What the two sides exchange MUST be the types, paths, timings and
 functions of `internal/allocapi`. It MUST keep nothing on disk: the same input
 files and heartbeats MUST give the same bundles and answers. What discovery
-sources find is input too, so copies with a discovery source MUST run as
+sources find is input too, so instances with a discovery source MUST run as
 peers (**Peers** below), of which only the leader asks the sources, and the
 chart MUST run them so (SPECIFICATION-CHART.md § 33.10c).
 
@@ -33499,60 +33502,61 @@ then keeping them and being counted; a source of a new name or kind MUST
 start with nothing found.
 
 **Peers.** With `--peers`, `host:port` entries, comma-separated, each with a
-host and a decimal port from 1 to 65535 (anything else MUST exit 2), a copy
-MUST, at its start and then every `PeerInterval` (2s), resolve each entry to
-every address its host has (an IP address taken as it is, an IPv4-mapped
-IPv6 address as IPv4; a lookup that fails keeping the addresses of the last,
-logged once while its text stays the same) and ask every address but its own
-at `GET /v1/peer` with the API's bearer token within `PeerTimeout` (1s),
-without a proxy. `--peers.self`, only with `--peers` (exit 2 otherwise),
-MUST be an IP address, taking the port of `--web.listen-address`, or an IP
-address and a port, and is the copy's own address, a peer even when no entry
-resolves to it; without it, the address whose answer names the copy's own
-process (a random instance made at its start) MUST be taken for its own. A
-copy MUST be live once it has answered, until `PeerFailures` (3) checks in a
-row have failed, and MUST stop being live at once when it answers `503`,
-which `/v1/peer` MUST answer from the first `SIGTERM` or `SIGINT`, the copy
-then serving its API on, as it does during a shutdown otherwise, for
-`PeerShutdownDelay` (`PeerInterval` and `PeerTimeout`, 3s) before its server
-shuts down, so every peer's next check gets the `503` rather than a refused
-connection; and otherwise its process's instance, whether it discovers, and
-whether it knows its own address (`true` without `--peers`). The leader of a
-copy that knows its own address MUST be the lowest of the live copies and
-the copy itself, ordered by `netip.AddrPort.Compare` (IPv4 before IPv6, then
-by the address's bytes, then by port). A copy that does not know its own
-address MUST NOT follow a copy that does not discover: it MUST follow the
-lowest live copy that discovers and knows its own address, else the live
-copy of the lowest instance among those that discover, unless it discovers
-itself and its own instance is lower, and lead when no live copy discovers;
-it MUST log an error once when its own address is still not known after
-`PeerFailures` rounds. `--peers`'s help MUST say to list every copy, this
-one included. Only the leader MUST run the discovery sources' refresh loops;
-a follower MUST stop them, keeping what they found, and fetch the leader's
-`GET /v1/peer/snapshot` with the token every round, which MUST answer every
-source of the copy's input files, whether it has answered and what it last
-found, by the source's identity (the kind of its owner, the owner, its kind
-and its name, not its settings), its targets written as target groups, each
-run of targets of the same labels one group with its labels once, as a
-file_sd or http_sd answer gives them, with an `ETag` of its digest and `304`
-to an `If-None-Match` naming it; the follower MUST fetch it within
-`SnapshotTimeout` (30s), its client having no shorter timeout of its own,
-beside its rounds rather than within them, one fetch at a time (a round
-that finds the fetch of the same leader still running MUST NOT start
-another), so a leader that hangs while it writes its snapshot MUST NOT
-delay any check; a fetch MUST be cancelled, and MUST put nothing in force
-nor count as a failure, once the copy follows another copy, leads or shuts
-down; and take a body of at most 16 MiB for each of its own sources (16 MiB with
-none), and MUST name in `If-None-Match` the digest of what it holds itself,
-computed as the leader's is, never the `ETag` it was last given, so any
-difference, of a reload that reached one copy first or of the follower's own
-sources while it led, is answered with the snapshot. The follower MUST put
-each source the snapshot holds in force as that source's answer would be, so
-the copies' bundle generations and service discovery answers are equal,
-after the same checks (no empty target, no label of no label name) and the
-same bound, its own `max_targets` of the source or
-`--discovery.max-targets`: a source's targets refused MUST be the source's
-failure, logged and counted in
+host and a decimal port from 1 to 65535 (anything else MUST exit 2), an
+instance MUST, at its start and then every `PeerInterval` (2s), resolve each
+entry to every address its host has (an IP address taken as it is, an
+IPv4-mapped IPv6 address as IPv4; a lookup that fails keeping the addresses
+of the last, logged once while its text stays the same) and ask every
+address but its own at `GET /v1/peer` with the API's bearer token within
+`PeerTimeout` (1s), without a proxy. `--peers.self`, only with `--peers`
+(exit 2 otherwise), MUST be an IP address, taking the port of
+`--web.listen-address`, or an IP address and a port, and is the instance's
+own address, a peer even when no entry resolves to it; without it, the
+address whose answer names the instance's own process (a random instance
+made at its start) MUST be taken for its own. A instance MUST be live once
+it has answered, until `PeerFailures` (3) checks in a row have failed, and
+MUST stop being live at once when it answers `503`, which `/v1/peer` MUST
+answer from the first `SIGTERM` or `SIGINT`, the instance then serving its
+API on, as it does during a shutdown otherwise, for `PeerShutdownDelay`
+(`PeerInterval` and `PeerTimeout`, 3s) before its server shuts down, so
+every peer's next check gets the `503` rather than a refused connection; and
+otherwise its process's id (`id`), whether it discovers, and whether it
+knows its own address (`true` without `--peers`). The leader of a instance
+that knows its own address MUST be the lowest of the live instances and the
+instance itself, ordered by `netip.AddrPort.Compare` (IPv4 before IPv6, then
+by the address's bytes, then by port). An instance that does not know its
+own address MUST NOT follow an instance that does not discover: it MUST
+follow the lowest live instance that discovers and knows its own address,
+else the live instance of the lowest id among those that discover, unless it
+discovers itself and its own id is lower, and lead when no live instance
+discovers; it MUST log an error once when its own address is still not known
+after `PeerFailures` rounds. `--peers`'s help MUST say to list every
+instance, this one included. Only the leader MUST run the discovery sources'
+refresh loops; a follower MUST stop them, keeping what they found, and fetch
+the leader's `GET /v1/peer/snapshot` with the token every round, which MUST
+answer every source of the instance's input files, whether it has answered
+and what it last found, by the source's identity (the kind of its owner, the
+owner, its kind and its name, not its settings), its targets written as
+target groups, each run of targets of the same labels one group with its
+labels once, as a file_sd or http_sd answer gives them, with an `ETag` of
+its digest and `304` to an `If-None-Match` naming it; the follower MUST
+fetch it within `SnapshotTimeout` (30s), its client having no shorter
+timeout of its own, beside its rounds rather than within them, one fetch at
+a time (a round that finds the fetch of the same leader still running MUST
+NOT start another), so a leader that hangs while it writes its snapshot MUST
+NOT delay any check; a fetch MUST be cancelled, and MUST put nothing in
+force nor count as a failure, once the instance follows another instance,
+leads or shuts down; and take a body of at most 16 MiB for each of its own
+sources (16 MiB with none), and MUST name in `If-None-Match` the digest of
+what it holds itself, computed as the leader's is, never the `ETag` it was
+last given, so any difference, of a reload that reached one instance first
+or of the follower's own sources while it led, is answered with the
+snapshot. The follower MUST put each source the snapshot holds in force as
+that source's answer would be, so the instances' bundle generations and
+service discovery answers are equal, after the same checks (no empty target,
+no label of no label name) and the same bound, its own `max_targets` of the
+source or `--discovery.max-targets`: a source's targets refused MUST be the
+source's failure, logged and counted in
 `pue_allocator_discovery_refreshes_total{result="failure"}` once while its
 text stays the same, the source keeping what the follower holds, and MUST
 keep what it holds of a source that has not answered on the leader. A source
@@ -33562,29 +33566,28 @@ says the leader holds what the follower does), and only then stopped. A
 follower that, having taken the snapshot, still holds something else MUST
 NOT count it as taken for its snapshot's age, and MUST log so once after
 `PeerFailures` such fetches in a row and once when the two agree again. A
-copy that comes to lead MUST start the loops with what its sources hold, the
-snapshot it took last, so no discovered target leaves the bundles until each
-source answers; one that leads without ever having taken a snapshot MUST
-first take that of the lowest other live copy, if any, starting the loops
-once that fetch ends, whether it succeeded or not. A follower whose
+instance that comes to lead MUST start the loops with what its sources hold,
+the snapshot it took last, so no discovered target leaves the bundles until
+each source answers; one that leads without ever having taken a snapshot
+MUST first take that of the lowest other live instance, if any, starting the
+loops once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
 failure, and log once after `PeerFailures` failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
-copy MUST ask its sources itself, from its start. With
-`--peers.leader-only`, only with `--peers` (exit 2 otherwise), a copy that
-does not lead, before its first round included, MUST answer `/metrics`
+instance MUST ask its sources itself, from its start. With
+`--peers.leader-only`, only with `--peers` (exit 2 otherwise), an instance
+that does not lead, before its first round included, MUST answer `/metrics`
 with `200` and the families of the peers alone (`pue_allocator_peers`,
-`pue_allocator_peer_up`, `pue_allocator_is_leader`,
-`pue_allocator_leader`, `pue_allocator_leader_changes_total`,
-`pue_allocator_snapshot_age_seconds` and
-`pue_allocator_peer_failures_total`), and no other family; `/v1/status`
+`pue_allocator_peer_up`, `pue_allocator_is_leader`, `pue_allocator_leader`,
+`pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
+and `pue_allocator_peer_failures_total`), and no other family; `/v1/status`
 with `partial` true and `members`, `spread` and `sources` `null`; and `/`
-with this instance and its peers alone, naming the leader's address. The copy
-that leads MUST serve the whole of each, so the copies' allocation is in one
-copy's metrics. `docs/ALLOCATOR.md` MUST
-describe the peers, their flags, timings and metrics, and that a network
-split gives each side a leader, the targets then flipping between the two
-until it heals.
+with this instance and its peers alone, naming the leader's address. The
+instance that leads MUST serve the whole of each, so the instances'
+allocation is in one instance's metrics. `docs/ALLOCATOR.md` MUST describe
+the peers, their flags, timings and metrics, and that a network split gives
+each side a leader, the targets then flipping between the two until it
+heals.
 
 **Schemas.** The repository MUST publish the JSON Schemas of the
 allocator's own files in `configs/`, generated from the structs the
@@ -33696,70 +33699,73 @@ time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
 one, so a browser prompts; the token MUST NOT be taken from the URL. The
 allocator MUST serve plain HTTP only.
 
-**Status page.** `GET /v1/status` MUST answer the copy's status as JSON:
-its address among its peers when known, else `--web.listen-address`, its
-instance, the build's version and revision, its start and uptime, and
-whether it is ready; with `--peers` (else `null`) its role, the leader,
-the live copies, the leader changes, the snapshot's age, whether it has
-taken one and holds the leader's targets, its check and snapshot failures,
-every address of its peers, its own included, with liveness, the last
-answer's discovering and address-known, the last check and the failures in
-a row, and the series of the peers' metric families exactly as `/metrics`
+**Status page.** `GET /v1/status` MUST answer the instance's status as JSON,
+calling an allocator process an instance and its process's id its `id`, no
+key saying copy: under `instance` its address among its peers when known,
+else `--web.listen-address`, its `id`, the build's version and revision, its
+start and uptime, and whether it is ready; under `peers`, with `--peers`
+(else `null`), its role, the leader, the live instances (`live_instances`),
+the leader changes, the snapshot's age, whether it has taken one and holds
+the leader's targets, its check and snapshot failures, every address of its
+peers, its own included (`instances`), with liveness, the last answer's
+`id`, discovering and address-known, the last check and the failures in a
+row, and the series of the peers' metric families exactly as `/metrics`
 writes them; the heartbeat interval and the member TTL in seconds; every
 member known with its address, last heartbeat, whether it is late (live,
 with its last heartbeat more than one and a half heartbeat intervals old,
-which the page MUST mark), whether
-it is live, in the member list and shutting down, the generation it
-reports, the one it is to have, a refusal it reports and the static targets
-it keeps draining; the spread, per member of the member list and per other
-live member a probe is routed to, of the static targets it owns as
-`pue_allocator_assigned` counts them, those it drains, and the probe targets
-routed to it by job and in all, with the totals, the average per member and
-the imbalance (the most a member has divided by the average, `0` with no
-target); and every discovery source with its kind, owner, source kind,
-result (`ok`, `failing` with its error, or `pending`), targets, last
-refresh and last success, and whether what it holds came from the copy's
-own discovery or the leader's snapshot. `GET /` MUST render the same as an
-HTML page framed as the exporter's pages are (§ 42.14a: the bar, naming
-it `Prometheus Universal Exporter · Target Allocator`, with the theme picker, the logo as its icon, the same `Content-Security-Policy`,
-`X-Frame-Options: DENY` and `Cache-Control: no-store`), every value escaped,
-calling each allocator process an instance and never a copy (`This instance`,
-the peers' `Instance` column, `(this instance)`, `live instances`) and its
-process's random id its `Instance ID` (`ID` beside each peer's address),
-with a bar of each member's targets drawn in CSS alone, and the exporter's
-status page's refresh controls, `?refresh=` keeping the interval and
-`?format=fragment` answering the content alone, without the bar; another
-`format` MUST be answered `400`. Each member's id in the members and in the
-spread MUST link to its view, `GET /?member=<id>`, framed as the page is,
-with a link back to it and refreshed as it is: the member as the members
-have it; the static targets it owns as `pue_allocator_assigned` counts them,
-by name, with collector, target, labels (one written `""` left out) and
-interval; those it keeps draining with the member each moved to and how
-much longer it drains; and the probe targets routed to it, counted by job
-and listed with job and collector, in file order of the jobs and by target.
-A target MUST be shown as `fetch.DisplayTarget` shows it for its
-collector, credentials withheld, and a static target's `params` and
-`request` MUST NOT be shown. `?filter=<text>` MUST cut each list to the
-targets whose name, target, collector, a label as `name=value`, job or
-member moved to holds the text, in any case, before each list is cut to
-its first 1000 (`MemberViewLimit`), each text on its own; a filter MUST be
-trimmed of spaces, and one of spaces alone MUST be no filter; each list MUST say how many it holds,
-how many match and, cut short, how many are left out. The page MUST have a
-filter box, outside the content a refresh swaps, that hides as it is typed
-the rows none of whose texts `?filter=` matches holds it, which each row
-MUST carry joined by line feeds (`data-match`), not the row's text, with
-plain JavaScript, and submits `?filter=`. At a phone's width each row's
-cells MUST stack, each beside its name, the name on the value's first line,
-also when the value's first label wraps. `GET /v1/status?member=<id>` MUST answer the same as JSON
+which the page MUST mark), whether it is live, in the member list and
+shutting down, the generation it reports, the one it is to have, a refusal
+it reports and the static targets it keeps draining; the spread, per member
+of the member list and per other live member a probe is routed to, of the
+static targets it owns as `pue_allocator_assigned` counts them, those it
+drains, and the probe targets routed to it by job and in all, with the
+totals, the average per member and the imbalance (the most a member has
+divided by the average, `0` with no target); and every discovery source with
+its kind, owner, source kind, result (`ok`, `failing` with its error, or
+`pending`), targets, last refresh and last success, and whether what it
+holds came from the instance's own discovery or the leader's snapshot. `GET
+/` MUST render the same as an HTML page framed as the exporter's pages are
+(§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target
+Allocator`, with the theme picker, the logo as its icon, the same
+`Content-Security-Policy`, `X-Frame-Options: DENY` and `Cache-Control:
+no-store`), every value escaped, calling each allocator process an instance
+and never a copy (`This instance`, the peers' `Instance` column, `(this
+instance)`, `live instances`) and its process's random id its `Instance ID`
+(`ID` beside each peer's address), with a bar of each member's targets drawn
+in CSS alone, and the exporter's status page's refresh controls, `?refresh=`
+keeping the interval and `?format=fragment` answering the content alone,
+without the bar; another `format` MUST be answered `400`. Each member's id
+in the members and in the spread MUST link to its view, `GET /?member=<id>`,
+framed as the page is, with a link back to it and refreshed as it is: the
+member as the members have it; the static targets it owns as
+`pue_allocator_assigned` counts them, by name, with collector, target,
+labels (one written `""` left out) and interval; those it keeps draining
+with the member each moved to and how much longer it drains; and the probe
+targets routed to it, counted by job and listed with job and collector, in
+file order of the jobs and by target. A target MUST be shown as
+`fetch.DisplayTarget` shows it for its collector, credentials withheld, and
+a static target's `params` and `request` MUST NOT be shown. `?filter=<text>`
+MUST cut each list to the targets whose name, target, collector, a label as
+`name=value`, job or member moved to holds the text, in any case, before
+each list is cut to its first 1000 (`MemberViewLimit`), each text on its
+own; a filter MUST be trimmed of spaces, and one of spaces alone MUST be no
+filter; each list MUST say how many it holds, how many match and, cut short,
+how many are left out. The page MUST have a filter box, outside the content
+a refresh swaps, that hides as it is typed the rows none of whose texts
+`?filter=` matches holds it, which each row MUST carry joined by line feeds
+(`data-match`), not the row's text, with plain JavaScript, and submits
+`?filter=`. At a phone's width each row's cells MUST stack, each beside its
+name, the name on the value's first line, also when the value's first label
+wraps. `GET /v1/status?member=<id>` MUST answer the same as JSON
 (`allocator.MemberView`). A member the allocator does not know MUST be
 answered `404` as JSON, and the page and its fragment MUST answer `200`
 saying so, the filter box hidden, so a view refreshing itself shows the
-member gone; an empty `member` MUST be answered `400` on both. A follower under
-`--peers.leader-only` MUST NOT serve a member's targets: its view names the
-leader and its JSON is `partial`, with the leader's address. Both take the
-token as the status page does. `docs/ALLOCATOR.md` MUST describe the page,
-the member's view, the JSON and how a browser gives the token, and the
-chart README how to reach a pod's page and find the leader's.
+member gone; an empty `member` MUST be answered `400` on both. A follower
+under `--peers.leader-only` MUST NOT serve a member's targets: its view
+names the leader and its JSON is `partial`, with the leader's address. Both
+take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
+the page, the member's view, the JSON and how a browser gives the token, and
+the chart README how to reach a pod's page and find the leader's.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
@@ -33772,15 +33778,16 @@ members, by kind, divided by the number of members; `0` with no member),
 `kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
 `pue_allocator_discovery_refreshes_total{result}` and
 `pue_allocator_discovery_last_success_timestamp_seconds`, and with
-`--peers` `pue_allocator_peers` (the live copies, itself included),
+`--peers` `pue_allocator_peers` (the live instances, itself included),
 `pue_allocator_peer_up{peer}` (`1` for each other address of the peers
 that is live, `0` for one that is not),
 `pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
 address, `self` while it leads without knowing its own),
 `pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
-(since the copy last held what the leader's snapshot holds, having fetched
+(since the instance last held what the leader's snapshot holds, having fetched
 it, or the start before the first time; `0` while it leads) and `pue_allocator_peer_failures_total{request}` (`check` or
-`snapshot`). `/healthz` MUST answer `200`; `/ready`
+`snapshot`). The families' `HELP` texts, like the flags' help, MUST call an
+allocator process an instance, never a copy. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 
@@ -33808,7 +33815,7 @@ at once, every heartbeat interval, and at once after each bundle it
 put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
 when it is an IP address. Each address MUST be heartbeated on a schedule
-of its own, so a copy that is slow to answer or hangs delays no heartbeat
+of its own, so an instance that is slow to answer or hangs delays no heartbeat
 to another; a heartbeat to one address, and the lookup of the addresses,
 made at once and every heartbeat interval, MUST be given up on after 5
 seconds or the heartbeat interval, whichever is shorter, and a lookup that
@@ -33841,7 +33848,7 @@ interval the shortest of them, each first brought within `1s` and `2m` (one
 below, a negative one included, taken as `1s`, one above as `2m`), and the
 next heartbeat to every address MUST follow that interval after the last
 one to it, and the next lookup of the addresses that interval after the
-last lookup ended, at once when that is past; when none says one, because every copy failed or none sends the
+last lookup ended, at once when that is past; when none says one, because every instance failed or none sends the
 field, the interval MUST stay as it is.
 
 The exporter MUST ask for its bundle with `GET

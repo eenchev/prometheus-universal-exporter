@@ -110,10 +110,10 @@ type Heartbeat struct {
 	// why; its last good bundle stays in force.
 	Refused *Refusal `json:"refused,omitempty"`
 	// IntervalSeconds is the heartbeat interval the replica was heartbeating
-	// at when it built the heartbeat, in seconds, once a copy of the
+	// at when it built the heartbeat, in seconds, once an instance of the
 	// allocator has said one, and left out before: the default a replica
-	// starts with is no copy's. A copy of the allocator that has just
-	// started, with an interval shorter than the copies before it said,
+	// starts with is no instance's. An instance of the allocator that has just
+	// started, with an interval shorter than the instances before it said,
 	// learns from it how long the replicas it has not heard from yet may
 	// take to reach it, and forms its first member list no sooner.
 	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
@@ -132,7 +132,7 @@ type HeartbeatReply struct {
 	Generation string `json:"generation"`
 	// HeartbeatIntervalSeconds is the allocator's heartbeat interval, in
 	// seconds, which the replica heartbeats at from its next heartbeat on.
-	// A replica that hears it from several copies of the allocator takes
+	// A replica that hears it from several instances of the allocator takes
 	// the shortest, so it is heard often enough by each; one that hears
 	// none, from an allocator that does not say it, keeps the interval it
 	// has.

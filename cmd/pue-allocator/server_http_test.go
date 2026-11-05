@@ -90,11 +90,11 @@ func TestALongPollOutlastsTheReadTimeout(t *testing.T) {
 	}
 }
 
-// A copy among peers that is sent SIGTERM keeps serving for
+// An instance among peers that is sent SIGTERM keeps serving for
 // allocator.PeerShutdownDelay, its /v1/peer and /ready answering 503, so
-// its peers see it is shutting down at their next check and the next copy
+// its peers see it is shutting down at their next check and the next instance
 // leads at once, rather than finding its listener closed; then it exits 0.
-func TestACopyAmongPeersAnswers503BeforeItStops(t *testing.T) {
+func TestAnInstanceAmongPeersAnswers503BeforeItStops(t *testing.T) {
 	dir := t.TempDir()
 	conf := testutil.WriteIn(t, dir, "config.yaml", `collectors:
   - name: demo

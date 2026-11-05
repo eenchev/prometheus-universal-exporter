@@ -6828,11 +6828,11 @@ the paths the configuration names.
 
 The exporter heartbeats to the allocator at the interval the allocator says
 in its heartbeat answers, its `--heartbeat.interval`, 10 seconds until an
-answer says one and when the copies answering differ, the shortest
+answer says one and when the instances answering differ, the shortest
 ([Members and allocation](ALLOCATOR.md#members-and-allocation)); the exporter
 has no setting of it. It heartbeats to every address
-the URL's host name resolves to, so two copies of the allocator behind a
-headless Service both hear it, each on a schedule of its own, so a copy
+the URL's host name resolves to, so two instances of the allocator behind a
+headless Service both hear it, each on a schedule of its own, so an instance
 that hangs delays only the heartbeats to itself; each heartbeat says which bundle generation it
 has in force, and whether it refused the last one. It asks for its bundle with
 a request the allocator holds for up to 30 seconds until the bundle changes.

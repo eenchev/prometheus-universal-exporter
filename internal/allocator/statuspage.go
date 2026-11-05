@@ -774,7 +774,7 @@ const statusContent = `{{define "content"}}
 {{- with .Spread}}{{if .Jobs}}
 
 <h2>Probe jobs</h2>
-<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is half again as many as the evenest split would give a member.</p>
+<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
 <form class="filter jobs" id="jobs" role="search" hidden>
 <label for="jobs-filter">Filter: job, collector or source</label>
 <input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
@@ -795,7 +795,7 @@ const statusContent = `{{define "content"}}
 <td class="num" data-value="{{.Min}}">{{.Min}}</td>
 <td class="num" data-value="{{.Average}}">{{average .Average}}</td>
 <td class="num" data-value="{{.Max}}">{{.Max}}</td>
-<td class="num" data-value="{{.Imbalance}}">{{if .Uneven}}<span class="bad" title="Max is half again as many as the evenest split would give a member">{{imbalance .Imbalance}}</span>{{else}}{{imbalance .Imbalance}}{{end}}</td>
+<td class="num" data-value="{{.Imbalance}}">{{if .Uneven}}<span class="bad" title="Max is further above Avg than hashing puts a member's targets by chance">{{imbalance .Imbalance}}</span>{{else}}{{imbalance .Imbalance}}{{end}}</td>
 {{- else}}
 <td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td><td class="num" data-value="0"><span class="muted">–</span></td>
 {{- end}}

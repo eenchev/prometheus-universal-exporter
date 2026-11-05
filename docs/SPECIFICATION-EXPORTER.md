@@ -33793,8 +33793,10 @@ with no target); each probe job, in file order, with its collector, its
 targets, the members it is routed among (`routing`), each with the targets
 of the job routed to it, 0 included, the fewest, the average and the most of
 those, the imbalance (the most divided by the average, `0` with no target),
-uneven when the most is at least 1.5 times the targets divided by the
-members rounded up, and its discovery sources with their result; and every
+uneven when the most is above the average by 3 targets or more and by 3
+or more standard deviations of a member's count, √(targets × (1 −
+1/members) ÷ members), so the noise of hashing a few targets is not
+marked, and its discovery sources with their result; and every
 discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
 `pending`), targets, the interval it is asked at

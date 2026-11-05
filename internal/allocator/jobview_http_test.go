@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -75,11 +76,11 @@ func jobViewOf(t *testing.T, h http.Handler, query string) JobView {
 // The status's spread has a row of each probe job: its collector, its
 // targets, the members it is routed among with the targets of each, the
 // fewest, the mean and the most a member has, the imbalance, marked uneven
-// against the evenest split, and its sources; the members' rows count each
-// job's targets among their probe targets. The page's targets table has
-// fixed columns, a probe job no longer one of its own, and the probe jobs
-// have a table of their own, sortable and filtered as it is typed, the
-// order and the filter kept over a refresh.
+// where hashing would seldom put as many on one member, and its sources;
+// the members' rows count each job's targets among their probe targets.
+// The page's targets table has fixed columns, a probe job no longer one of
+// its own, and the probe jobs have a table of their own, sortable and
+// filtered as it is typed, the order and the filter kept over a refresh.
 func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 	a := jobAllocator(t)
 	h := a.Handler("")
@@ -104,9 +105,9 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 			probe[m.Member] += m.Targets
 		}
 		avg := float64(j.Targets) / 3
-		evenest := (j.Targets + 2) / 3
+		above := float64(most) - avg
 		if sum != j.Targets || j.Min != least || j.Max != most || j.Average != avg || j.Imbalance != float64(most)/avg ||
-			j.Uneven != (float64(most) >= 1.5*float64(evenest)) {
+			j.Uneven != (above >= 3 && above >= 3*math.Sqrt(float64(j.Targets)*2/9)) {
 			t.Errorf("%s: %+v", j.Job, j)
 		}
 	}
@@ -152,7 +153,7 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 		t.Error("the targets table still has a column of each probe job")
 	}
 	for _, j := range sp.Jobs {
-		mark := fmt.Sprintf(`<span class="bad" title="Max is half again as many as the evenest split would give a member">%s</span>`, imbalance(j.Imbalance))
+		mark := fmt.Sprintf(`<span class="bad" title="Max is further above Avg than hashing puts a member&#39;s targets by chance">%s</span>`, imbalance(j.Imbalance))
 		_, row, _ := strings.Cut(page, `<a href="?job=`+j.Job+`"`)
 		row, _, _ = strings.Cut(row, "</tr>")
 		if strings.Contains(row, mark) != j.Uneven {

@@ -73,8 +73,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   leader, the members and their bundles, how the targets are spread over
   the members, with the average and the imbalance, a table of the probe
   jobs, each with its targets, the members it is routed among, the fewest,
-  average and most a member has, the imbalance, marked where uneven, and
-  its discovery sources, sortable by any column and with a filter box, and
+  average and most a member has, the imbalance, marked where the most is
+  further above the average than hashing puts targets by chance, and its
+  discovery sources, sortable by any column and with a filter box, and
   the discovery sources, refreshing itself as the exporter's status page
   does and writing a duration as it does, `1m` and `1h30s`; and the same
   as JSON at `/v1/status`. Each member links to its own

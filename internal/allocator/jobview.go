@@ -270,7 +270,7 @@ const jobContent = `{{define "content"}}
 
 <h2>Members <span class="count">{{len $sp.Members}}</span></h2>
 {{- if $sp.Members}}
-<p>The job's probes are routed among {{len $sp.Members}} member{{if ne (len $sp.Members) 1}}s{{end}}: {{$sp.Min}} to {{$sp.Max}} targets each, {{average $sp.Average}} on average, the most {{if $sp.Uneven}}<span class="bad">{{imbalance $sp.Imbalance}}</span>{{else}}{{imbalance $sp.Imbalance}}{{end}} the average.</p>
+<p>The job's probes are routed among {{len $sp.Members}} member{{if ne (len $sp.Members) 1}}s{{end}}: {{$sp.Min}} to {{$sp.Max}} targets each, {{average $sp.Average}} on average, the most {{if $sp.Uneven}}<span class="bad" title="the most is further above the average than hashing puts a member's targets by chance">{{imbalance $sp.Imbalance}}</span>{{else}}{{imbalance $sp.Imbalance}}{{end}} the average.</p>
 <div class="scroll">
 <table class="spread job-members">
 <thead><tr><th>Member</th><th class="num">Targets</th><th>Share</th></tr></thead>

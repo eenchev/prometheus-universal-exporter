@@ -950,13 +950,21 @@ its instance ID. It shows
   routed among are those service discovery may route its targets to
   ([Service discovery](#service-discovery)), so one given none of its
   targets counts, with 0, and Min shows it. The imbalance is marked where
-  the most is half again as many as the evenest split would give a member,
-  the targets divided by the members and rounded up: a job of 2 targets over
-  3 members cannot do better than `1.50×`, so the average alone would mark
-  every small job. A click on a column's heading sorts the table by it, a
-  second the other way, and a filter box above it hides, as it is typed, the
-  jobs whose name, collector and sources' names do not hold its text, in any
-  case; a refresh keeps the order, the filter and the caret;
+  the most is further above the average than hashing puts a member's
+  targets by chance: by 3 targets or more, and by 3 or more standard
+  deviations of a member's count, √(targets × (1 − 1/members) ÷ members).
+  Hashing spreads a few targets unevenly as often as not, 3 over 3 members
+  all on one in one placement of nine, so the imbalance alone says little
+  of a small job: of random placements the mark falls on none of 2 targets
+  over 2 members or 3 over 3, 1.6% of 4 over 4, 1.7% of 8 over 4, 0.4% of
+  6 over 3, 1.6% of 20 over 4, 1.1% of 100 over 4 and 1.8% of 1000 over 10,
+  never on a member only one or two over the evenest split, the targets
+  divided by the members and rounded up, and on every job of 4 targets or
+  more over 4 members that has all of them on one. A click on a column's
+  heading sorts the table by it, a second the other way, and a filter box
+  above it hides, as it is typed, the jobs whose name, collector and
+  sources' names do not hold its text, in any case; a refresh keeps the
+  order, the filter and the caret;
 - the discovery sources: each one's kind, owner, result, with the error
   while it fails, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,

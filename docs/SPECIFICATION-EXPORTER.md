@@ -30383,6 +30383,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
 - `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): a copy with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; a copy with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
 - `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat says `interval_seconds` 3600 and the one after the reply saying 1 says 1.
+- `TestAMemberViewOfAGoneMemberSaysSo` (allocator): the fragment of r2's view lists its targets; once r2 has stopped long enough to be forgotten, its fragment answers `200` with the as-of line and the notice that the allocator knows no member r2, no table and no frame, its page `200` with the filter form `hidden` and the script hiding it on that notice, the JSON `404`, and r1's page has its filter shown.
+- `TestTheFilterBoxMatchesWhatTheAllocatorMatches` (allocator): a static row's `data-match` is its name, target, collector, moved-to (empty) and labels in name order, and a probe row's its target, job and collector, joined by line feeds; the script matches `data-match`, not the row's text, and the hint says both match the same fields; the allocator matches no target for `30s`, `alphahttp` or `demoteam`; `?filter=%20` and `%20%20` are no filter, matching every target, unechoed.
+- `TestTheMemberViewListsItsTargets` (allocator), changed: the page of an unknown member answers `200`, its JSON still `404`.
 
 # 35. Documentation requirements
 
@@ -33727,13 +33730,17 @@ collector, credentials withheld, and a static target's `params` and
 `request` MUST NOT be shown. `?filter=<text>` MUST cut each list to the
 targets whose name, target, collector, a label as `name=value`, job or
 member moved to holds the text, in any case, before each list is cut to
-its first 1000 (`MemberViewLimit`); each list MUST say how many it holds,
+its first 1000 (`MemberViewLimit`), each text on its own; a filter MUST be
+trimmed of spaces, and one of spaces alone MUST be no filter; each list MUST say how many it holds,
 how many match and, cut short, how many are left out. The page MUST have a
 filter box, outside the content a refresh swaps, that hides as it is typed
-the rows whose text does not hold it, with plain JavaScript, and submits
-`?filter=`. `GET /v1/status?member=<id>` MUST answer the same as JSON
+the rows none of whose texts `?filter=` matches holds it, which each row
+MUST carry joined by line feeds (`data-match`), not the row's text, with
+plain JavaScript, and submits `?filter=`. `GET /v1/status?member=<id>` MUST answer the same as JSON
 (`allocator.MemberView`). A member the allocator does not know MUST be
-answered `404`, and an empty `member` `400`, on both. A follower under
+answered `404` as JSON, and the page and its fragment MUST answer `200`
+saying so, the filter box hidden, so a view refreshing itself shows the
+member gone; an empty `member` MUST be answered `400` on both. A follower under
 `--peers.leader-only` MUST NOT serve a member's targets: its view names the
 leader and its JSON is `partial`, with the leader's address. Both take the
 token as the status page does. `docs/ALLOCATOR.md` MUST describe the page,

@@ -731,7 +731,7 @@ changes, so a rotated token is the one required from the next request. A
 file that is empty or missing at the start stops the allocator; one that
 becomes empty or unreadable later refuses every request with `401` until it
 holds a token again, logged once. A browser cannot send a bearer token, so
-`GET` of the status page, `/v1/status` and `/metrics`, what a person reads,
+`GET` and `HEAD` of the status page, `/v1/status` and `/metrics`, what a person reads,
 also takes the token as the password of HTTP Basic auth, of any user name,
 and their `401` asks for it, so the browser prompts; no other endpoint takes
 Basic auth, since a browser sends the credentials it was given with any
@@ -929,10 +929,14 @@ password as `redacted`, and the values of query and path parameters whose
 names read as credentials', such as `token` or `access_token`, as
 `<redacted>`; a static target's `params` and `request` block are not shown
 at all. A filter box above the lists hides, as it is typed, the rows that
-do not hold its text, in any case, in their name, target, collector, labels,
-job or the member they moved to, with no page load; Search all, or Enter,
+do not hold its text, in any case, in their name, target, collector, a
+label as `name=value`, job or the member they moved to, each on its own, so
+text running across two of them, or in another column, as an interval,
+matches nothing, with no page load; Search all, or Enter,
 asks the allocator with `?filter=<text>`, which applies the same match to
-every target of the member before the bound below. Each list holds at most
+every target of the member before the bound below. A filter of spaces
+alone is no filter. On a phone each row's cells stack, each beside its
+name. Each list holds at most
 1000 targets, so a member of a share of tens of thousands stays a page a
 browser draws at once; a list cut short says how many are left out, and
 the filter finds them. The view refreshes itself as the page does, the
@@ -944,7 +948,10 @@ same as JSON: `generated_at`, `member`, `filter`, `limit` (1000),
 and `drains_for_seconds`), and `probes` (`jobs`, each with `job`,
 `collector` and `targets`; `total`, `matching` and `list`, each with `job`,
 `collector` and `target`). A member the allocator does not know is
-answered `404`, and `?member=` without an id `400`. Under
+answered `404` as JSON, and the page, and its fragment, say so with `200`,
+so a view left open, refreshing itself, of a member that has gone shows
+that it has, its filter box hidden; `?member=` without an id is answered
+`400`. Under
 `--peers.leader-only` a follower serves no member's view, as it serves no
 members: the page names the leader, whose page has it, and the JSON is
 `partial` with the leader's address.

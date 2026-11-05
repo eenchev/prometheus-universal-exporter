@@ -62,17 +62,18 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 	s := a.Status()
 	frame := pageFrame{Version: s.Copy.Version, Revision: s.Copy.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
 	page, content := statusPageTemplate, statusContentTemplate
-	code := http.StatusOK
 	if query.Has("member") {
 		member := query.Get("member")
 		if member == "" {
 			http.Error(w, "the member parameter names a member; / without it is the whole status", http.StatusBadRequest)
 			return
 		}
+		// A member the allocator does not know is a page that says so,
+		// answered 200 as its fragment is: a view left open, refreshing
+		// itself, of a member that has gone then shows that it has, where
+		// a 404 would be a failed refresh over the gone member's targets.
+		// The JSON answers 404.
 		view, known := a.MemberView(member, query.Get("filter"))
-		if !known {
-			code = http.StatusNotFound
-		}
 		frame.Member = &memberPage{MemberView: view, Known: known}
 		frame.Content = frame.Member
 		frame.JSON += "?" + url.Values{"member": {member}}.Encode()
@@ -101,7 +102,6 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", pagekit.Policy)
-	w.WriteHeader(code)
 	_, _ = w.Write(body.Bytes())
 }
 
@@ -217,7 +217,7 @@ func shortGeneration(g string) string {
 	return g
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration, "listNote": listNote}
+var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration, "listNote": listNote, "match": matchText}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
 // the exporter's status page draws them, numbers right-aligned in figures
@@ -247,16 +247,20 @@ table.facts td { overflow-wrap: anywhere; }
 .bad { color: var(--bad); font-weight: 600; }
 .good { color: var(--good); }
 .muted { color: var(--muted); }
-code.gen, code.flag { white-space: nowrap; }
+code.gen, code.flag, p.notice code { white-space: nowrap; }
 p.notice { margin: 16px 0 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; background: var(--panel); }
 :root { --bar-static: #c2410c; --bar-probe: #2563eb; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; } }
 :root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; }
 td.bar { width: 32%; min-width: 120px; }
 /* On the first line of the row, beside the counts, however the member's
-   id wraps: 12px centred in a 21px line. */
-.bar-track { position: relative; display: flex; gap: 2px; height: 12px; margin-top: 5px; }
-.bar-track span { display: block; height: 100%; min-width: 0; }
+   id wraps: 12px centred in a 21px line. A segment's width is its share
+   of the track exactly, so the bars of two rows compare at every edge: the
+   2px between two segments is a border of the later one, in the page's
+   colour, inside its width rather than a gap beside it. */
+.bar-track { position: relative; display: flex; height: 12px; margin-top: 5px; }
+.bar-track span { display: block; box-sizing: border-box; height: 100%; min-width: 0; }
+.bar-track span + span { border-left: 2px solid var(--bg); }
 .bar-track span:first-child { border-radius: 2px 0 0 2px; }
 .bar-track span:last-of-type { border-radius: 0 4px 4px 0; }
 .seg-static { background: var(--bar-static); }
@@ -323,15 +327,15 @@ var statusFrame = `<!DOCTYPE html>
 <noscript><button type="submit">Apply</button></noscript>
 <span id="refresh-state" class="muted" role="status" aria-live="polite"></span>
 </form>
-{{- with .Member}}{{if .Static}}
-<form class="filter" id="filter" method="get" role="search">
+{{- with .Member}}{{if not .Partial}}
+<form class="filter" id="filter" method="get" role="search"{{if not .Known}} hidden{{end}}>
 <input type="hidden" name="member" value="{{.Member}}">
 {{- if $.Refresh.Seconds}}
 <input type="hidden" name="refresh" value="{{$.Refresh.Interval}}">
 {{- end}}
 <label for="target-filter">Filter: name, target, collector, label or job</label>
 <span class="filter-row"><input id="target-filter" name="filter" type="search" value="{{.Filter}}" autocomplete="off" spellcheck="false"><button type="submit">Search all</button></span>
-<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the member{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}.</span>
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the member{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. Both match a target's name, target, collector, labels, probe job and the member it moved to.</span>
 </form>
 {{- end}}{{end}}
 <div id="status-content">
@@ -362,10 +366,12 @@ var statusFrame = `<!DOCTYPE html>
   }
   asOf();
   // A member's view filters its tables' rows as the filter is typed,
-  // matching a row's text in any case, and counts the rows left; the
-  // filter is outside the content, so a refresh keeps what was typed and
-  // filters the new rows again. Search all asks the allocator, which
-  // filters every target, those beyond a list's bound included.
+  // matching in any case the texts the allocator's filter matches, which
+  // each row carries in data-match, one a line, and counts the rows left;
+  // the filter is outside the content, so a refresh keeps what was typed
+  // and filters the new rows again. Search all asks the allocator, which
+  // filters every target, those beyond a list's bound included. The
+  // filter is hidden while the allocator knows no such member.
   const filter = $("target-filter");
   function filterRows() {
     if (!filter) return;
@@ -374,7 +380,7 @@ var statusFrame = `<!DOCTYPE html>
       let shown = 0;
       const rows = table.tBodies[0].rows;
       for (const row of rows) {
-        const hit = needle === "" || row.textContent.toLowerCase().includes(needle);
+        const hit = needle === "" || (row.dataset.match || "").toLowerCase().includes(needle);
         row.hidden = !hit;
         if (hit) shown++;
       }
@@ -384,6 +390,7 @@ var statusFrame = `<!DOCTYPE html>
       if (none) none.hidden = shown > 0;
       table.hidden = shown === 0;
     }
+    $("filter").hidden = content.querySelector("#unknown-member") !== null;
   }
   if (filter) {
     filter.addEventListener("input", filterRows);

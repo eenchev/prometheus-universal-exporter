@@ -1,6 +1,7 @@
 package allocator
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -108,6 +109,9 @@ type MemberProbeTarget struct {
 // allocator knows no such member, and it is not a follower leaving the
 // members to its leader.
 func (a *Allocator) MemberView(member, filter string) (view MemberView, known bool) {
+	// A filter of spaces alone is no filter: it matches every target, and
+	// the view does not say it cut the lists to it.
+	filter = strings.TrimSpace(filter)
 	now := a.clock.Now()
 	view = MemberView{GeneratedAt: now.UTC().Format(time.RFC3339), Member: member, Filter: filter, Limit: MemberViewLimit}
 	a.mu.Lock()
@@ -201,7 +205,7 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		}
 		view.Probes.Total = len(routed)
 		for _, t := range routed {
-			if match(t.Target, t.Job, t.Collector) {
+			if match(t.matchTexts()...) {
 				view.Probes.Matching++
 				if len(view.Probes.List) < MemberViewLimit {
 					view.Probes.List = append(view.Probes.List, t)
@@ -217,17 +221,44 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 func (l *MemberStaticList) add(targets []MemberStaticTarget, match func(...string) bool) {
 	l.Total = len(targets)
 	for _, t := range targets {
-		texts := []string{t.Name, t.Target, t.Collector, t.MovedTo}
-		for name, value := range t.Labels {
-			texts = append(texts, name+"="+value)
-		}
-		if match(texts...) {
+		if match(t.matchTexts()...) {
 			l.Matching++
 			if len(l.List) < MemberViewLimit {
 				l.List = append(l.List, t)
 			}
 		}
 	}
+}
+
+// matchTexts are the texts of a static target a filter is matched against:
+// its name, target, collector, the member it moved to and each label as
+// name=value, in name order.
+func (t *MemberStaticTarget) matchTexts() []string {
+	texts := []string{t.Name, t.Target, t.Collector, t.MovedTo}
+	for _, name := range slices.Sorted(maps.Keys(t.Labels)) {
+		texts = append(texts, name+"="+t.Labels[name])
+	}
+	return texts
+}
+
+// matchTexts are the texts of a probe target a filter is matched against:
+// its target, job and collector.
+func (t *MemberProbeTarget) matchTexts() []string { return []string{t.Target, t.Job, t.Collector} }
+
+// matchText is a row's data-match, which the filter box matches as it is
+// typed: the texts the allocator's filter matches of the row's target,
+// joined by line feeds. A search input drops line breaks from what is
+// typed, so the box matches no text running across two of them, and it
+// matches what the allocator matches and nothing else, an interval or
+// a drain time not among them.
+func matchText(target any) string {
+	switch t := target.(type) {
+	case MemberStaticTarget:
+		return strings.Join(t.matchTexts(), "\n")
+	case MemberProbeTarget:
+		return strings.Join(t.matchTexts(), "\n")
+	}
+	return ""
 }
 
 // matcher is whether any of a target's texts holds filter, in any case;
@@ -266,7 +297,11 @@ type memberPage struct {
 // memberStyle is the member view's own style, after statusStyle: its way
 // back and its filter, and the target tables, which on a phone stack each
 // row's cells under one another, each named, rather than scroll sideways,
-// so a long target wraps in the width there is.
+// so a long target wraps in the width there is. A named cell is then two
+// columns, its name and its value (span.v), so the value starts on the
+// name's line however long its first unbreakable run, and its lines wrap
+// in its own column; a hanging indent would move a run longer than the
+// line's rest to the line below.
 const memberStyle = `
 p.back { margin: 0 0 4px; font-size: 14px; }
 .member-id { overflow-wrap: anywhere; }
@@ -276,6 +311,7 @@ form.filter .filter-row { display: flex; gap: 8px; }
 form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
 form.filter button { flex: none; height: 34px; padding: 0 12px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 form.filter .muted { font-size: 13px; }
+form.filter[hidden] { display: none; }
 h2 .count { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 p.note { margin: 0 0 8px; font-size: 14px; }
 p.note:empty { display: none; }
@@ -293,10 +329,10 @@ table.jobs { width: auto; min-width: 50%; margin-bottom: 12px; }
   table.targets[hidden], table.targets tr[hidden] { display: none; }
   table.targets thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   table.targets tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
-  table.targets td { border: 0; padding: 1px 0 1px 92px; text-indent: -92px; min-width: 0; text-align: left; white-space: normal; }
-  table.targets td[data-label]::before { content: attr(data-label); display: inline-block; width: 92px; text-indent: 0; color: var(--muted); font-size: 13px; }
-  table.targets td.id { padding-left: 0; text-indent: 0; }
-  table.targets td.id::before { display: none; }
+  table.targets td { border: 0; padding: 1px 0; min-width: 0; text-align: left; white-space: normal; }
+  table.targets td[data-label] { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: baseline; }
+  table.targets td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 13px; }
+  table.targets td > .v { overflow-wrap: anywhere; }
   table.jobs { width: 100%; }
 }
 `
@@ -307,7 +343,7 @@ const memberContent = `{{define "content"}}
 {{- if .Partial}}
 <p class="notice">This copy {{if .Leader}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members and their targets are on the leader's page, this member's at <code>/?member=…</code> there.</p>
 {{- else if not .Known}}
-<p class="notice">The allocator knows no member <strong>{{.Member}}</strong>: no replica of that id has heartbeated, or it stopped long enough ago to be forgotten.</p>
+<p class="notice" id="unknown-member">The allocator knows no member <strong>{{.Member}}</strong>: no replica of that id has heartbeated, or it stopped long enough ago to be forgotten.</p>
 {{- else}}
 {{- with .Status}}
 
@@ -329,7 +365,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target">{{template "target" .Target}}</td><td data-label="Collector">{{.Collector}}</td><td class="labels" data-label="Labels">{{template "labels" .Labels}}</td><td class="num" data-label="Interval">{{.Interval}}</td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{.Interval}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -345,7 +381,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Moved to</th><th class="num">Drains for</th></tr></thead>
 <tbody>
 {{- range .Draining.List}}
-<tr><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target">{{template "target" .Target}}</td><td data-label="Collector">{{.Collector}}</td><td class="moved" data-label="Moved to">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</td><td class="num" data-label="Drains for">{{age .DrainsForSeconds}}</td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -370,7 +406,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Target</th><th>Probe job</th><th>Collector</th></tr></thead>
 <tbody>
 {{- range .Probes.List}}
-<tr><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job">{{.Job}}</td><td data-label="Collector">{{.Collector}}</td></tr>
+<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job"><span class="v">{{.Job}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>

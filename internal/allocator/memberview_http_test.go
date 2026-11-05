@@ -157,7 +157,7 @@ func TestTheMemberViewListsItsTargets(t *testing.T) {
 	}
 	requireIn(t, ask(h, "/?member=r1&filter=nothing-holds-this", basic).Body.String(), `None of the `, `holds “nothing-holds-this”.`)
 
-	for path, code := range map[string]int{"/?member=nobody": http.StatusNotFound, StatusPath + "?member=nobody": http.StatusNotFound, "/?member=": http.StatusBadRequest, StatusPath + "?member=": http.StatusBadRequest} {
+	for path, code := range map[string]int{"/?member=nobody": http.StatusOK, StatusPath + "?member=nobody": http.StatusNotFound, "/?member=": http.StatusBadRequest, StatusPath + "?member=": http.StatusBadRequest} {
 		if rec := ask(h, path, basic); rec.Code != code {
 			t.Errorf("%s answered %d, want %d", path, rec.Code, code)
 		}
@@ -211,5 +211,81 @@ func TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader(t *testing.T) {
 	}
 	if lv := memberViewOf(t, leader.a.Handler(""), "member=r1", ""); lv.Partial || lv.Status == nil || lv.Static == nil {
 		t.Errorf("the leader's view is %+v", lv)
+	}
+}
+
+// A member's view left open, refreshing itself, of a member that has gone
+// shows that it has: the fragment of a member the allocator no longer knows
+// is answered 200, as the page is, with the notice in place of the lists,
+// so the refresh swaps it in rather than failing over the gone member's
+// targets; the page hides its filter then, and the JSON answers 404.
+func TestAMemberViewOfAGoneMemberSaysSo(t *testing.T) {
+	p := writeInputs(t, testConfig, staticTargets(10), "")
+	clock := newFakeClock()
+	a := New(mustLoad(t, p), Options{Settle: 15 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	beat(t, a, "r1", "r2")
+	keepBeating(t, a, clock, 20*time.Second, "r1", "r2")
+	h := a.Handler("")
+	if rec := ask(h, "/?member=r2&format=fragment", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="owned"`) {
+		t.Fatalf("r2's fragment answered %d: %s", rec.Code, rec.Body)
+	}
+	// r2 stops: it leaves the live members after the TTL, the member list
+	// the settle time after, and is forgotten then.
+	keepBeating(t, a, clock, allocapi.MemberTTL(allocapi.DefaultHeartbeatInterval)+20*time.Second, "r1")
+	rec := ask(h, "/?member=r2&format=fragment", "")
+	fragment := rec.Body.String()
+	if rec.Code != http.StatusOK || strings.Contains(fragment, `id="owned"`) || strings.Contains(fragment, "<html") {
+		t.Errorf("the fragment of the gone r2 answered %d: %s", rec.Code, fragment)
+	}
+	requireIn(t, fragment, `<p class="meta" id="as-of">`, `<p class="notice" id="unknown-member">The allocator knows no member <strong>r2</strong>`)
+	page := ask(h, "/?member=r2", "")
+	if page.Code != http.StatusOK {
+		t.Errorf("the page of the gone r2 answered %d", page.Code)
+	}
+	requireIn(t, page.Body.String(), `<form class="filter" id="filter" method="get" role="search" hidden>`, `$("filter").hidden = content.querySelector("#unknown-member") !== null;`)
+	if rec := ask(h, StatusPath+"?member=r2", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("the JSON of the gone r2 answered %d, want 404", rec.Code)
+	}
+	if page := ask(h, "/?member=r1", "").Body.String(); !strings.Contains(page, `<form class="filter" id="filter" method="get" role="search">`) {
+		t.Error("r1's view has no filter shown")
+	}
+}
+
+// The filter box matches what the allocator's filter matches: each row
+// carries those texts, a line each, in data-match, which the box matches
+// in place of the row's text, so text the allocator does not match, as an
+// interval, or running across two cells, matches no row in the box either.
+// A filter of spaces alone is no filter.
+func TestTheFilterBoxMatchesWhatTheAllocatorMatches(t *testing.T) {
+	static := "interval: 30s\ntargets:\n  - name: alpha\n    collector: demo\n    target: http://a.example/m\n    labels: {team: ops, zone: eu}\n"
+	probes := "probe_jobs:\n  - name: websites\n    collector: demo\n    targets: [https://w.example/health]\n"
+	p := writeInputs(t, testConfig, static, probes)
+	a, _ := settledAllocator(t, mustLoad(t, p), "r1")
+	h := a.Handler("")
+	page := ask(h, "/?member=r1", "").Body.String()
+	requireIn(t, page,
+		"<tr data-match=\"alpha\nhttp://a.example/m\ndemo\n\nteam=ops\nzone=eu\">",
+		"<tr data-match=\"https://w.example/health\nwebsites\ndemo\">",
+		`(row.dataset.match || "").toLowerCase().includes(needle)`,
+		"Both match a target's name, target, collector, labels, probe job and the member it moved to.")
+	if strings.Contains(page, "row.textContent") {
+		t.Error("the filter box matches a row's text")
+	}
+	// What the allocator matches, the box matches: of each, the texts the
+	// row's data-match holds.
+	for _, q := range []string{"30s", "alphahttp", "demoteam"} {
+		if v := memberViewOf(t, h, "member=r1&filter="+q, ""); v.Static.Matching != 0 {
+			t.Errorf("the allocator's filter %q matches %d static targets", q, v.Static.Matching)
+		}
+	}
+	for _, q := range []string{"%20", "%20%20"} {
+		v := memberViewOf(t, h, "member=r1&filter="+q, "")
+		if v.Filter != "" || v.Static.Matching != 1 || v.Probes.Matching != 1 {
+			t.Errorf("?filter=%s: filter %q, %d and %d matching", q, v.Filter, v.Static.Matching, v.Probes.Matching)
+		}
+		if page := ask(h, "/?member=r1&filter="+q, "").Body.String(); strings.Contains(page, "Only those holding") || strings.Contains(page, `value=" `) {
+			t.Errorf("?filter=%s is echoed as a filter", q)
+		}
 	}
 }

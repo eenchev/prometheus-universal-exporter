@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,21 @@ func TestVersionAndHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 10s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") {
 		t.Errorf("-h does not give the defaults of the listen address, the settle time, the heartbeat interval and the member bound:\n%s", stdout.String())
+	}
+}
+
+// The help of the allocator's flags calls an allocator process an instance,
+// as its pages, its answers and its docs do, never a copy.
+func TestTheFlagHelpSaysInstance(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("-h exited %d", code)
+	}
+	if m := regexp.MustCompile(`(?i).*\bcop(y|ies)\b.*`).FindAllString(stdout.String(), -1); len(m) > 0 {
+		t.Errorf("-h says copy:\n%s", strings.Join(m, "\n"))
+	}
+	if !strings.Contains(stdout.String(), "List every instance, this one included") {
+		t.Errorf("-h does not tell to list every instance in --peers:\n%s", stdout.String())
 	}
 }
 

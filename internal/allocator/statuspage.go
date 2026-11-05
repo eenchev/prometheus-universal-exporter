@@ -60,7 +60,7 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := a.Status()
-	frame := pageFrame{Version: s.Copy.Version, Revision: s.Copy.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
+	frame := pageFrame{Version: s.Instance.Version, Revision: s.Instance.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
 	page, content := statusPageTemplate, statusContentTemplate
 	if query.Has("member") {
 		member := query.Get("member")
@@ -272,12 +272,16 @@ td.bar { width: 32%; min-width: 120px; }
 .legend b { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
 .legend b.avg { width: 0; height: 14px; border-radius: 0; border-left: 2px solid var(--fg); }
 @media (max-width: 640px) { td.bar { min-width: 90px; } }
+/* On a phone the label is "Instance" over "ID", so the column is no wider
+   than its other labels and the instance ID keeps the room it has beside
+   them, rather than its last character wrapping alone onto a line. */
+@media (max-width: 400px) { table.facts th.wraps { white-space: normal; overflow-wrap: normal; width: 1px; } }
 `
 
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · allocator</span>{{end}}
+{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
 <span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 
@@ -465,28 +469,28 @@ const statusParts = `
 const statusContent = `{{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
 {{- if .Partial}}{{with .Peers}}
-<p class="notice">This copy {{if eq .Role "follower"}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members, the spread of the targets and the discovery sources are on the leader's page, and in the leader's metrics. Below are this copy and its peers.</p>
+<p class="notice">This instance {{if eq .Role "follower"}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members, the spread of the targets and the discovery sources are on the leader's page, and in the leader's metrics. Below are this instance and its peers.</p>
 {{- end}}{{end}}
 
-<h2>This copy</h2>
+<h2>This instance</h2>
 <table class="facts">
-<tr><th>Address</th><td>{{.Copy.Address}}</td></tr>
-<tr><th>Instance</th><td><code>{{.Copy.Instance}}</code></td></tr>
-<tr><th>Started</th><td>{{.Copy.StartedAt}} <span class="muted">(up {{age .Copy.UptimeSeconds}})</span></td></tr>
-<tr><th>Ready</th><td>{{if .Copy.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
-<tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveCopies 1}} of {{.LiveCopies}} live copies{{else}}, the only live copy{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this copy asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
+<tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
+<tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
+<tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
+<tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
+<tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
 {{- with .Peers}}
 
 <h2>Peers</h2>
-<p>{{if eq .Role "leader"}}This copy leads: it asks the discovery sources, and the other copies take what it finds.{{else if eq .Role "follower"}}This copy follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This copy has not yet checked its peers.{{end}} {{.LiveCopies}} live cop{{if eq .LiveCopies 1}}y{{else}}ies{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This copy does not know its own address: list every copy in <code class="flag">--peers</code>, or give <code class="flag">--peers.self</code>.</span>{{end}}</p>
+<p>{{if eq .Role "leader"}}This instance leads: it asks the discovery sources, and the other instances take what it finds.{{else if eq .Role "follower"}}This instance follows {{.Leader}}: it takes the leader's discovered targets from its snapshot.{{else}}This instance has not yet checked its peers.{{end}} {{.LiveInstances}} live instance{{if ne .LiveInstances 1}}s{{end}}, {{.LeaderChanges}} leader change{{if ne .LeaderChanges 1}}s{{end}}.{{if not .AddressKnown}} <span class="bad">This instance does not know its own address: list every instance in <code class="flag">--peers</code>, or give <code class="flag">--peers.self</code>.</span>{{end}}</p>
 <div class="scroll">
 <table>
-<thead><tr><th>Copy</th><th>Role</th><th>Live</th><th>Discovering</th><th>Address known</th><th class="num">Last check</th><th class="num">Failures</th></tr></thead>
+<thead><tr><th>Instance</th><th>Role</th><th>Live</th><th>Discovering</th><th>Address known</th><th class="num">Last check</th><th class="num">Failures</th></tr></thead>
 <tbody>
-{{- range .Copies}}
+{{- range .Instances}}
 <tr>
-<td class="id">{{.Address}}{{if .Self}} <span class="muted">(this copy)</span>{{end}}{{if .Instance}}<br><span class="muted">instance</span> <code>{{.Instance}}</code>{{end}}</td>
+<td class="id">{{.Address}}{{if .Self}} <span class="muted">(this instance)</span>{{end}}{{if .ID}}<br><span class="muted">ID</span> <code>{{.ID}}</code>{{end}}</td>
 <td>{{if .Leader}}<strong>leader</strong>{{else}}follower{{end}}</td>
 <td>{{if .Live}}<span class="good">live</span>{{else}}<span class="bad">down</span>{{end}}</td>
 <td>{{if .Discovering}}yes{{else}}<span class="muted">no</span>{{end}}</td>
@@ -499,7 +503,7 @@ const statusContent = `{{define "content"}}
 </table>
 </div>
 <table class="facts">
-<tr><th>Leader's targets</th><td>{{if eq .Role "leader"}}this copy's own discovery{{else if .HoldsLeaderState}}<span class="good">held</span>, the snapshot fetched {{age .SnapshotAgeSeconds}} ago{{else if .SnapshotTaken}}<span class="bad">not held</span>: the input files differ from the leader's in their discovery sources, last agreed {{age .SnapshotAgeSeconds}} ago{{else}}<span class="bad">not yet fetched</span> ({{age .SnapshotAgeSeconds}} since the start){{end}}</td></tr>
+<tr><th>Leader's targets</th><td>{{if eq .Role "leader"}}this instance's own discovery{{else if .HoldsLeaderState}}<span class="good">held</span>, the snapshot fetched {{age .SnapshotAgeSeconds}} ago{{else if .SnapshotTaken}}<span class="bad">not held</span>: the input files differ from the leader's in their discovery sources, last agreed {{age .SnapshotAgeSeconds}} ago{{else}}<span class="bad">not yet fetched</span> ({{age .SnapshotAgeSeconds}} since the start){{end}}</td></tr>
 <tr><th>Snapshot fetches</th><td>{{if .SnapshotFailuresInARow}}<span class="bad">{{.SnapshotFailuresInARow}} failed in a row</span>; {{end}}{{.SnapshotFailures}} failed in all, and {{.CheckFailures}} checks</td></tr>
 </table>
 <h3>Leader election metrics</h3>
@@ -589,7 +593,7 @@ const statusContent = `{{define "content"}}
 <td>{{if eq .Result "ok"}}<span class="good">ok</span>{{else if eq .Result "failing"}}<span class="bad">failing</span>{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{else}}<span class="muted">not answered yet</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
-<td>{{if eq .From "own"}}this copy's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
+<td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
 </tr>
 {{- end}}
 </tbody>

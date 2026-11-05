@@ -30,13 +30,13 @@ func TestAHangingSnapshotDoesNotDelayFailover(t *testing.T) {
 				http.Error(w, "the allocator is shutting down", http.StatusServiceUnavailable)
 				return
 			}
-			fmt.Fprint(w, `{"instance":"leader","discovering":true,"address_known":true}`)
+			fmt.Fprint(w, `{"id":"leader","discovering":true,"address_known":true}`)
 			return
 		}
 		fetches.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"instance":"leader",`)
+		fmt.Fprint(w, `{"id":"leader",`)
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 		cancelled <- struct{}{}
@@ -44,7 +44,7 @@ func TestAHangingSnapshotDoesNotDelayFailover(t *testing.T) {
 	t.Cleanup(srv.Close)
 	leader := netip.MustParseAddrPort(srv.Listener.Addr().String())
 
-	c := newPeerCopy(t, writeInputs(t, testConfig, "", twoJobs(stableSD(t).URL, false)), nil)
+	c := newPeerInstance(t, writeInputs(t, testConfig, "", twoJobs(stableSD(t).URL, false)), nil)
 	followFake(c, leader)
 	round := func(when string) {
 		t.Helper()
@@ -70,7 +70,7 @@ func TestAHangingSnapshotDoesNotDelayFailover(t *testing.T) {
 	round("the leader shutting down")
 	hasLine(t, c, "pue_allocator_is_leader 1\n")
 	if !c.discovering() {
-		t.Error("the copy leads but does not ask its sources")
+		t.Error("the instance leads but does not ask its sources")
 	}
 	select {
 	case <-cancelled:

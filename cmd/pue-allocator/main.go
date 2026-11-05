@@ -57,9 +57,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
-	peerList := flags.String("peers", "", "Optional allocator copies to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every copy, this one included, so each finds its own address among them. The live copy of the lowest address leads and alone asks the discovery sources; the others serve what it found")
-	peerSelf := flags.String("peers.self", "", "This copy's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the copy finds itself among the peers' addresses by asking them")
-	peerLeaderOnly := flags.Bool("peers.leader-only", false, "With --peers, only the leader serves the whole of /metrics and of the status page; a follower serves the peers' metrics and its own peer state alone, so a Prometheus scraping every copy has one copy's series of the allocation")
+	peerList := flags.String("peers", "", "Optional allocator instances to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every instance, this one included, so each finds its own address among them. The live instance of the lowest address leads and alone asks the discovery sources; the others serve what it found")
+	peerSelf := flags.String("peers.self", "", "This instance's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the instance finds itself among the peers' addresses by asking them")
+	peerLeaderOnly := flags.Bool("peers.leader-only", false, "With --peers, only the leader serves the whole of /metrics and of the status page; a follower serves the peers' metrics and its own peer state alone, so a Prometheus scraping every instance has one instance's series of the allocation")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
 	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
@@ -113,7 +113,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case *peerSelf != "":
 		return commandLineError(stderr, errors.New("--peers.self is given without --peers"))
 	case *peerLeaderOnly:
-		return commandLineError(stderr, errors.New("--peers.leader-only is given without --peers: a copy without peers is its own leader and serves everything"))
+		return commandLineError(stderr, errors.New("--peers.leader-only is given without --peers: an instance without peers is its own leader and serves everything"))
 	}
 	if *showVersion {
 		b := exporter.BuildVersion()
@@ -156,8 +156,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if token != nil {
 			peerOptions.Token = token.Token
 		}
-		// The peers decide whether this copy asks the sources; RunPeers
-		// starts once the API listens, so a copy asking its own address
+		// The peers decide whether this instance asks the sources; RunPeers
+		// starts once the API listens, so an instance asking its own address
 		// finds itself.
 		alloc.UsePeers(*peerOptions)
 	} else {
@@ -206,10 +206,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		alloc.BeginShutdown()
 		if peerOptions != nil {
 			// The peers check /v1/peer every PeerInterval: serving on, with
-			// 503 there, until each has checked lets the next copy lead at
+			// 503 there, until each has checked lets the next instance lead at
 			// once, where a closed listener would only be counted out after
 			// PeerFailures refused checks.
-			logger.Info("answering the peers that this copy shuts down before stopping the server", "delay", allocator.PeerShutdownDelay.String())
+			logger.Info("answering the peers that this instance shuts down before stopping the server", "delay", allocator.PeerShutdownDelay.String())
 			time.Sleep(allocator.PeerShutdownDelay)
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

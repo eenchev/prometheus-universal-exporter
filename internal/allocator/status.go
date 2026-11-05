@@ -12,21 +12,22 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 )
 
-// The status of an allocator copy, for people who have no Prometheus to ask
-// or want it all on one page: the copy itself, its peers and the leader,
-// the members, how the targets are spread over them, and the discovery
-// sources. StatusPath serves it as JSON, and the status page (statuspage.go)
-// renders the same. It is built from what the allocator already keeps for
-// its work and its metrics, so the page and /metrics never disagree.
+// The status of an allocator instance, for people who have no Prometheus to
+// ask or want it all on one page: the instance itself, its peers and the
+// leader, the members, how the targets are spread over them, and the
+// discovery sources. StatusPath serves it as JSON, and the status page
+// (statuspage.go) renders the same. It is built from what the allocator
+// already keeps for its work and its metrics, so the page and /metrics never
+// disagree.
 
 // Status is the answer at StatusPath.
 type Status struct {
 	// GeneratedAt is when the status was taken, RFC 3339 in UTC.
-	GeneratedAt string     `json:"generated_at"`
-	Copy        CopyStatus `json:"copy"`
+	GeneratedAt string         `json:"generated_at"`
+	Instance    InstanceStatus `json:"instance"`
 	// Peers is nil without --peers.
 	Peers *PeersStatus `json:"peers"`
-	// Partial says the copy follows under --peers.leader-only: it leaves
+	// Partial says the instance follows under --peers.leader-only: it leaves
 	// the members, the spread and the discovery sources to the leader, and
 	// Members, Spread and Sources are nil.
 	Partial bool           `json:"partial"`
@@ -35,40 +36,40 @@ type Status struct {
 	Sources []SourceStatus `json:"sources"`
 }
 
-// CopyStatus is the copy answering.
-type CopyStatus struct {
-	// Address is the copy's address among its peers when it is known, and
-	// else its --web.listen-address.
+// InstanceStatus is the instance answering.
+type InstanceStatus struct {
+	// Address is the instance's address among its peers when it is known, and
+	// else its --web.listen-address. ID is its process's id (newInstanceID).
 	Address  string `json:"address"`
-	Instance string `json:"instance"`
+	ID       string `json:"id"`
 	Version  string `json:"version"`
 	Revision string `json:"revision"`
-	// StartedAt is when the copy started, RFC 3339 in UTC, and
+	// StartedAt is when the instance started, RFC 3339 in UTC, and
 	// UptimeSeconds how long ago.
 	StartedAt     string  `json:"started_at"`
 	UptimeSeconds float64 `json:"uptime_seconds"`
-	// Ready is what /ready answers: false once the copy shuts down.
+	// Ready is what /ready answers: false once the instance shuts down.
 	Ready bool `json:"ready"`
 }
 
-// PeersStatus is the copy's part among its peers.
+// PeersStatus is the instance's part among its peers.
 type PeersStatus struct {
 	// Role is leader or follower, or deciding before the first round.
 	Role string `json:"role"`
 	// LeaderOnly is --peers.leader-only.
 	LeaderOnly bool `json:"leader_only"`
-	// Leader is the leader's address, "self" while this copy leads
+	// Leader is the leader's address, "self" while this instance leads
 	// without knowing its own, "" before the first round.
 	Leader string `json:"leader"`
-	// Discovering says this copy asks its discovery sources, and
+	// Discovering says this instance asks its discovery sources, and
 	// AddressKnown that it knows its own address.
 	Discovering  bool `json:"discovering"`
 	AddressKnown bool `json:"address_known"`
-	// LiveCopies are the live copies, this one included.
-	LiveCopies    int    `json:"live_copies"`
+	// LiveInstances are the live instances, this one included.
+	LiveInstances int    `json:"live_instances"`
 	LeaderChanges uint64 `json:"leader_changes"`
 	// SnapshotAgeSeconds is pue_allocator_snapshot_age_seconds;
-	// SnapshotTaken says the copy has fetched a snapshot, and
+	// SnapshotTaken says the instance has fetched a snapshot, and
 	// HoldsLeaderState that it leads, or held what the leader's snapshot
 	// holds after its last fetch.
 	SnapshotAgeSeconds float64 `json:"snapshot_age_seconds"`
@@ -79,9 +80,9 @@ type PeersStatus struct {
 	SnapshotFailuresInARow int    `json:"snapshot_failures_in_a_row"`
 	CheckFailures          uint64 `json:"check_failures"`
 	SnapshotFailures       uint64 `json:"snapshot_failures"`
-	// Copies are every address of the peers, this copy's included, in the
-	// order the leader is chosen by.
-	Copies []PeerStatus `json:"copies"`
+	// Instances are every address of the peers, this instance's included,
+	// in the order the leader is chosen by.
+	Instances []PeerStatus `json:"instances"`
 	// Metrics are the series of the peers' families in /metrics, as
 	// /metrics has them.
 	Metrics []MetricSample `json:"metrics"`
@@ -90,18 +91,18 @@ type PeersStatus struct {
 // PeerStatus is one address of the peers.
 type PeerStatus struct {
 	Address string `json:"address"`
-	// Self says it is this copy, and Leader that it is the leader.
+	// Self says it is this instance, and Leader that it is the leader.
 	Self   bool `json:"self"`
 	Leader bool `json:"leader"`
-	// Live says the copy answered and has not failed PeerFailures checks
-	// in a row since; this copy is always live.
+	// Live says the instance answered and has not failed PeerFailures
+	// checks in a row since; this instance is always live.
 	Live bool `json:"live"`
-	// Instance, Discovering and AddressKnown are the copy's last answer.
-	Instance     string `json:"instance,omitempty"`
+	// ID, Discovering and AddressKnown are the instance's last answer.
+	ID           string `json:"id,omitempty"`
 	Discovering  bool   `json:"discovering"`
 	AddressKnown bool   `json:"address_known"`
 	// LastCheck is when it was last checked, RFC 3339 in UTC, and
-	// LastCheckAgeSeconds how long ago; "" and 0 for this copy.
+	// LastCheckAgeSeconds how long ago; "" and 0 for this instance.
 	LastCheck           string  `json:"last_check,omitempty"`
 	LastCheckAgeSeconds float64 `json:"last_check_age_seconds,omitempty"`
 	// Failures are the checks in a row it failed.
@@ -218,12 +219,12 @@ type SourceStatus struct {
 	LastRefresh           string  `json:"last_refresh,omitempty"`
 	LastRefreshAgeSeconds float64 `json:"last_refresh_age_seconds,omitempty"`
 	LastSuccess           string  `json:"last_success,omitempty"`
-	// From is own when what it holds is this copy's own discovery, snapshot
+	// From is own when what it holds is this instance's own discovery, snapshot
 	// when it came from the leader's snapshot, "" before either.
 	From string `json:"from,omitempty"`
 }
 
-// Status is the status of the allocator now. A copy that does not lead
+// Status is the status of the allocator now. An instance that does not lead
 // under --peers.leader-only gives its own part and its peers' alone
 // (Partial).
 func (a *Allocator) Status() Status {
@@ -239,12 +240,12 @@ func (a *Allocator) Status() Status {
 	}
 	a.mu.Unlock()
 
-	s.Copy = CopyStatus{Address: a.address, Instance: a.instance, Version: a.version, Revision: a.revision,
+	s.Instance = InstanceStatus{Address: a.address, ID: a.id, Version: a.version, Revision: a.revision,
 		StartedAt: a.started.UTC().Format(time.RFC3339), UptimeSeconds: ageSeconds(now.Sub(a.started).Seconds()), Ready: ready}
 	if s.Peers != nil {
-		for _, c := range s.Peers.Copies {
+		for _, c := range s.Peers.Instances {
 			if c.Self {
-				s.Copy.Address = c.Address
+				s.Instance.Address = c.Address
 			}
 		}
 	}
@@ -445,7 +446,7 @@ func (a *Allocator) sourcesStatus(now time.Time) []SourceStatus {
 	return out
 }
 
-// peersStatusLocked is the copy's part among its peers, nil without
+// peersStatusLocked is the instance's part among its peers, nil without
 // --peers. Called under a.mu, as writePeerMetrics, which writes the
 // metrics from it.
 func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
@@ -459,8 +460,8 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := &PeersStatus{Role: "deciding", LeaderOnly: p.o.LeaderOnly, Discovering: discovering, AddressKnown: p.self.IsValid(),
-		LiveCopies: 1, LeaderChanges: p.leaderChanges, SnapshotTaken: p.took, SnapshotFailuresInARow: p.snapshotFails,
-		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Copies: []PeerStatus{}}
+		LiveInstances: 1, LeaderChanges: p.leaderChanges, SnapshotTaken: p.took, SnapshotFailuresInARow: p.snapshotFails,
+		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Instances: []PeerStatus{}}
 	if p.decided {
 		st.Role = "follower"
 		if p.leading {
@@ -485,29 +486,29 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 		c := PeerStatus{Address: addr.String(), Self: ps.self, Leader: p.decided && addr == p.leader, Failures: ps.fails}
 		if ps.self {
 			selfListed = true
-			c.Live, c.Instance, c.Discovering, c.AddressKnown = true, a.instance, discovering, true
+			c.Live, c.ID, c.Discovering, c.AddressKnown = true, a.id, discovering, true
 			c.Leader = leading
 		} else {
-			c.Live, c.Instance, c.Discovering, c.AddressKnown = ps.live, ps.answer.Instance, ps.answer.Discovering, ps.answer.AddressKnown
+			c.Live, c.ID, c.Discovering, c.AddressKnown = ps.live, ps.answer.ID, ps.answer.Discovering, ps.answer.AddressKnown
 			if ps.live {
-				st.LiveCopies++
+				st.LiveInstances++
 			}
 			if !ps.checked.IsZero() {
 				c.LastCheck = ps.checked.UTC().Format(time.RFC3339)
 				c.LastCheckAgeSeconds = ageSeconds(now.Sub(ps.checked).Seconds())
 			}
 		}
-		st.Copies = append(st.Copies, c)
+		st.Instances = append(st.Instances, c)
 	}
 	if !selfListed {
-		// A copy that does not know its own address is listed too, so the
+		// An instance that does not know its own address is listed too, so the
 		// list always shows it.
-		st.Copies = append(st.Copies, PeerStatus{Address: addrText(p.self), Self: true, Leader: leading, Live: true,
-			Instance: a.instance, Discovering: discovering, AddressKnown: p.self.IsValid()})
+		st.Instances = append(st.Instances, PeerStatus{Address: addrText(p.self), Self: true, Leader: leading, Live: true,
+			ID: a.id, Discovering: discovering, AddressKnown: p.self.IsValid()})
 	}
-	sort.Slice(st.Copies, func(i, j int) bool {
-		x, errX := netip.ParseAddrPort(st.Copies[i].Address)
-		y, errY := netip.ParseAddrPort(st.Copies[j].Address)
+	sort.Slice(st.Instances, func(i, j int) bool {
+		x, errX := netip.ParseAddrPort(st.Instances[i].Address)
+		y, errY := netip.ParseAddrPort(st.Instances[j].Address)
 		if errX != nil || errY != nil {
 			return errX == nil
 		}
@@ -526,10 +527,10 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 // writePeerFamilies writes the metrics of the peers from st, family
 // writing each family's HELP and TYPE.
 func writePeerFamilies(b *strings.Builder, family func(name, kind, help string), st *PeersStatus) {
-	family("pue_allocator_peers", "gauge", "Allocator copies live among the peers, this one included.")
-	fmt.Fprintf(b, "pue_allocator_peers %d\n", st.LiveCopies)
-	family("pue_allocator_peer_up", "gauge", "1 for each other allocator copy among the peers that is live, by its address, 0 for one that has stopped answering.")
-	for _, c := range st.Copies {
+	family("pue_allocator_peers", "gauge", "Allocator instances live among the peers, this one included.")
+	fmt.Fprintf(b, "pue_allocator_peers %d\n", st.LiveInstances)
+	family("pue_allocator_peer_up", "gauge", "1 for each other allocator instance among the peers that is live, by its address, 0 for one that has stopped answering.")
+	for _, c := range st.Instances {
 		if c.Self {
 			continue
 		}
@@ -539,8 +540,8 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 		}
 		fmt.Fprintf(b, "pue_allocator_peer_up{peer=\"%s\"} %d\n", escape(c.Address), up)
 	}
-	family("pue_allocator_is_leader", "gauge", "1 while this allocator copy leads its peers and asks the discovery sources, 0 while it follows the leader.")
-	family("pue_allocator_leader", "gauge", "1, with the address of the copy this one takes for the leader; self when it leads and its own address is not known.")
+	family("pue_allocator_is_leader", "gauge", "1 while this allocator instance leads its peers and asks the discovery sources, 0 while it follows the leader.")
+	family("pue_allocator_leader", "gauge", "1, with the address of the instance this one takes for the leader; self when it leads and its own address is not known.")
 	isLeader := 0
 	if st.Role == "leader" {
 		isLeader = 1
@@ -549,9 +550,9 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 	if st.Leader != "" {
 		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(st.Leader))
 	}
-	family("pue_allocator_leader_changes_total", "counter", "Changes of the copy this one takes for the leader, after the first choice.")
+	family("pue_allocator_leader_changes_total", "counter", "Changes of the instance this one takes for the leader, after the first choice.")
 	fmt.Fprintf(b, "pue_allocator_leader_changes_total %d\n", st.LeaderChanges)
-	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
+	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this instance last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
 	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(st.SnapshotAgeSeconds, 'f', -1, 64))
 	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
 	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", st.CheckFailures, st.SnapshotFailures)

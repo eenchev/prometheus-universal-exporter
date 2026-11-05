@@ -1,6 +1,6 @@
 // Package allocclient is the exporter's side of the target allocator
 // (internal/allocapi): in allocator mode (--allocator.url) it heartbeats to
-// every copy of the allocator, long-polls the allocator for its bundle,
+// every instance of the allocator, long-polls the allocator for its bundle,
 // writes a new bundle into the cache directory where the configuration
 // manager loads it, and has the manager reload it.
 //
@@ -34,7 +34,7 @@ import (
 )
 
 // The stages a sync with the allocator can fail at, the stage label of
-// http_exporter_allocator_sync_errors_total: a heartbeat to one copy of the
+// http_exporter_allocator_sync_errors_total: a heartbeat to one instance of the
 // allocator, the fetch of the bundle, or writing it into the cache directory.
 const (
 	StageHeartbeat = "heartbeat"
@@ -59,7 +59,7 @@ const (
 	DefaultMaxBackoff = 30 * time.Second
 )
 
-// heartbeatTimeout bounds one heartbeat to one copy of the allocator, and a
+// heartbeatTimeout bounds one heartbeat to one instance of the allocator, and a
 // lookup of the allocator's addresses, when the heartbeat interval is not
 // shorter (heartbeatBound); bundleGrace bounds how much longer than its
 // wait a bundle request may take.
@@ -140,8 +140,8 @@ type Event struct {
 
 // The kinds of Event.
 const (
-	// EventHeartbeat is a heartbeat sent to one copy of the allocator, or a
-	// lookup of the copies' addresses that failed; Err is the failure.
+	// EventHeartbeat is a heartbeat sent to one instance of the allocator, or a
+	// lookup of the instances' addresses that failed; Err is the failure.
 	EventHeartbeat = "heartbeat"
 	// EventInstalled is a new bundle put in force.
 	EventInstalled = "installed"
@@ -204,11 +204,11 @@ type Client struct {
 	// address's schedule takes it at once.
 	interval        time.Duration
 	intervalChanged chan struct{}
-	// told is set once a copy of the allocator has announced an interval.
-	// Until then the interval in force is Options' default, which no copy
+	// told is set once an instance of the allocator has announced an interval.
+	// Until then the interval in force is Options' default, which no instance
 	// said, and a heartbeat leaves it out (allocapi.Heartbeat's
-	// IntervalSeconds): it would tell a copy that has just started
-	// nothing of how long the replicas told the copies' interval take to
+	// IntervalSeconds): it would tell an instance that has just started
+	// nothing of how long the replicas told the instances' interval take to
 	// reach it.
 	told bool
 	// announced is, for each address the allocator's host resolves to whose
@@ -217,7 +217,7 @@ type Client struct {
 	// again.
 	announced map[string]time.Duration
 	// sending holds, for each allocator address, the slot of the heartbeat
-	// on its way there, one at a time: a copy of the allocator keeps the
+	// on its way there, one at a time: an instance of the allocator keeps the
 	// last heartbeat it hears, so the one ShuttingDown sends must not be
 	// overtaken by one built before it. A slot is kept once made, for an
 	// address that comes back; there are as many as addresses ever seen.
@@ -385,7 +385,7 @@ func (c *Client) logAttrs(key logKey, more ...any) []any {
 
 // forgetAddresses drops what was logged for heartbeats to addresses the
 // allocator's host no longer resolves to, and the intervals they said: a
-// copy of the allocator that is gone neither recovers nor fails again, and
+// instance of the allocator that is gone neither recovers nor fails again, and
 // has no say in the interval.
 func (c *Client) forgetAddresses(addrs []string) {
 	c.mu.Lock()
@@ -422,21 +422,22 @@ func (c *Client) authorize(req *http.Request) error {
 
 // heartbeatLoop looks up the allocator's addresses at once, then every
 // heartbeat interval, counted from when the lookup before ended, and at once
-// after a bundle was put in force or refused, and runs a heartbeat schedule of its own for each address
-// (heartbeatAddress) until ctx ends. A copy of the allocator that is slow to
-// answer, or hangs, so delays only the heartbeats to itself: every other
-// copy goes on hearing the replica each interval, where one round waiting
-// for every copy would let a hung one make the replica late to all of them.
-// An address the host no longer resolves to has its schedule stopped; a
-// lookup that fails keeps those of the addresses it resolved to last.
+// after a bundle was put in force or refused, and runs a heartbeat schedule
+// of its own for each address (heartbeatAddress) until ctx ends. An instance
+// of the allocator that is slow to answer, or hangs, so delays only the
+// heartbeats to itself: every other instance goes on hearing the replica each
+// interval, where one round waiting for every instance would let a hung one
+// make the replica late to all of them. An address the host no longer
+// resolves to has its schedule stopped; a lookup that fails keeps those of
+// the addresses it resolved to last.
 //
 // An interval that changes takes effect at once here too, as it does for
 // the heartbeats: the next lookup follows the new interval after the last,
 // at once when that is past. A replica told a shorter interval says it to
-// every copy it heartbeats, and a copy of the allocator that has just
+// every instance it heartbeats, and an instance of the allocator that has just
 // started is told it by them, and waits no longer for the replicas to reach
 // it (the allocator's firstSettle); a lookup still on the old, longer interval would find
-// that copy only up to the old interval after its start, by when it may
+// that instance only up to the old interval after its start, by when it may
 // have formed its first member list of the replicas that happened to look
 // up sooner.
 func (c *Client) heartbeatLoop(ctx context.Context) {
@@ -493,10 +494,10 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// heartbeatAddress heartbeats the allocator copy at addr at once, then every
-// heartbeat interval, counted from when the heartbeat before was sent, and
-// at once on now, until ctx ends. An interval that changes takes effect at
-// once: the next heartbeat follows the new interval after the last.
+// heartbeatAddress heartbeats the allocator instance at addr at once, then
+// every heartbeat interval, counted from when the heartbeat before was sent,
+// and at once on now, until ctx ends. An interval that changes takes effect
+// at once: the next heartbeat follows the new interval after the last.
 func (c *Client) heartbeatAddress(ctx context.Context, addr string, now <-chan struct{}) {
 	for {
 		sent := time.Now()
@@ -531,9 +532,9 @@ func (c *Client) heartbeatInterval() time.Duration {
 	return c.interval
 }
 
-// heartbeatBound bounds a heartbeat to one copy, and a lookup of the copies'
-// addresses: heartbeatTimeout, or the heartbeat interval when that is
-// shorter, so one that hangs is given up on by the time the next is due.
+// heartbeatBound bounds a heartbeat to one instance, and a lookup of the
+// instances' addresses: heartbeatTimeout, or the heartbeat interval when that
+// is shorter, so one that hangs is given up on by the time the next is due.
 func (c *Client) heartbeatBound() time.Duration {
 	return min(heartbeatTimeout, c.heartbeatInterval())
 }
@@ -553,18 +554,18 @@ func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 	return len(addrs) > 0 && !slices.Contains(results, false)
 }
 
-// heartbeatOne sends a heartbeat to the allocator copy at addr, built once
-// the one before to addr is back, and takes its reply. A reply naming a
+// heartbeatOne sends a heartbeat to the allocator instance at addr, built
+// once the one before to addr is back, and takes its reply. A reply naming a
 // generation other than the last the bundle loop has seen, by the time the
 // reply is in, wakes the bundle loop from its wait. The interval the reply
 // says, kept within allocapi's bounds, or none, becomes addr's say in the
-// interval in force, which is the shortest any copy whose last heartbeat
-// was answered says (takeAnnounced): every copy then hears the replica
-// within its own interval, which a longer one would not ensure. A copy that
-// fails loses its say, and when no copy says one the interval stays as it
-// is, so a copy that cannot be reached for a while does not take back what
-// the others said. sent is false when ctx ended before this heartbeat's
-// turn came, and nothing was sent.
+// interval in force, which is the shortest any instance whose last heartbeat
+// was answered says (takeAnnounced): every instance then hears the replica
+// within its own interval, which a longer one would not ensure. An instance
+// that fails loses its say, and when no instance says one the interval stays
+// as it is, so an instance that cannot be reached for a while does not take
+// back what the others said. sent is false when ctx ended before this
+// heartbeat's turn came, and nothing was sent.
 func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	slot := c.sending[addr]
@@ -841,7 +842,7 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 
 // notSettledError is the allocator's 503 answer with Retry-After: it has
 // no member list yet, so it cannot tell this replica's share, and says when
-// to ask again. A copy of the allocator that has just started answers so
+// to ask again. An instance of the allocator that has just started answers so
 // for its settle time, while the replica keeps the bundle it has.
 type notSettledError struct {
 	after time.Duration

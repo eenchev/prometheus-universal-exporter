@@ -85,18 +85,18 @@ func fetchStatus(t *testing.T, address string) allocator.Status {
 	return s
 }
 
-// The status names the copy by its --web.listen-address and the build's
+// The status names the instance by its --web.listen-address and the build's
 // version and revision, which run hands the allocator.
-func TestTheStatusNamesTheCopysAddressAndBuild(t *testing.T) {
+func TestTheStatusNamesTheInstanceByItsAddressAndBuild(t *testing.T) {
 	address := startRun(t)
 	s := fetchStatus(t, address)
 	b := exporter.BuildVersion()
-	if s.Copy.Address != address || s.Copy.Version != b.Version || s.Copy.Revision != b.Revision || !s.Copy.Ready || s.Peers != nil {
-		t.Errorf("the copy is %+v, peers %v; want %s, %s, %s", s.Copy, s.Peers, address, b.Version, b.Revision)
+	if s.Instance.Address != address || s.Instance.Version != b.Version || s.Instance.Revision != b.Revision || !s.Instance.Ready || s.Peers != nil {
+		t.Errorf("the instance is %+v, peers %v; want %s, %s, %s", s.Instance, s.Peers, address, b.Version, b.Revision)
 	}
 }
 
-// With --peers.leader-only, a copy alone among its peers leads and serves
+// With --peers.leader-only, an instance alone among its peers leads and serves
 // the whole of /metrics and of the status; the flag reaches the allocator.
 func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -107,7 +107,7 @@ func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
 	_ = ln.Close()
 	startRunAt(t, address, "--peers="+address, "--peers.leader-only")
 	var s allocator.Status
-	testutil.WaitFor(t, "the copy to lead", func() bool {
+	testutil.WaitFor(t, "the instance to lead", func() bool {
 		s = fetchStatus(t, address)
 		return s.Peers != nil && s.Peers.Role == "leader"
 	})

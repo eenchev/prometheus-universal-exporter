@@ -1658,10 +1658,10 @@ allocator calls no API, so `serviceAccount.automount` decides its token as
 before.
 
 With any discovery source, in a probe job or in the `discovered_targets` of
-`allocator.staticTargets.data`, the allocator's pods run as peers. Each copy
+`allocator.staticTargets.data`, the allocator's pods run as peers. Each instance
 asking its sources on its own timer could hold different targets for a
 refresh interval, or for as long as one cannot reach a source, and the
-exporter pods, which heartbeat every copy and fetch their bundle from
+exporter pods, which heartbeat every instance and fetch their bundle from
 whichever answers, would flip between them, as would Prometheus's service
 discovery answers. So each pod is run with
 `--peers=<fullname>-allocator.<namespace>.svc:9116`, the headless Service
@@ -1678,7 +1678,7 @@ allocator's own pods, which check each other and fetch the leader's targets.
 A network split that keeps the pods from reaching each other gives each
 side a leader, and the targets can then flip between the two until it
 heals. See
-[Copies with discovery](../../docs/ALLOCATOR.md#copies-with-discovery).
+[Instances with discovery](../../docs/ALLOCATOR.md#instances-with-discovery).
 
 Every pod serves the same allocation, so with
 `allocator.serviceMonitor.enabled` Prometheus has the series of the
@@ -1792,7 +1792,7 @@ NetworkPolicy also lets its pods reach the allocator.
 
 ### The allocator's status page
 
-Each allocator pod serves a status page at `/` on its port 9116: the copy,
+Each allocator pod serves a status page at `/` on its port 9116: the instance,
 its peers and which pod leads, the members, how the targets are spread over
 them, and the discovery sources
 ([Status page](../../docs/ALLOCATOR.md#status-page)). The chart exposes the

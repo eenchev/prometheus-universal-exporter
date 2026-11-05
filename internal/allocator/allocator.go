@@ -145,10 +145,10 @@ type Allocator struct {
 	maxDiscovered    int
 	discovering      bool
 	discoveryStopped bool
-	// instance names the allocator's process, for a copy to know itself
+	// id names the allocator's process, for an instance to know itself
 	// among its peers; peers are those, nil without --peers.
-	instance string
-	peers    *peers
+	id    string
+	peers *peers
 	// address, version and revision are Options'.
 	address, version, revision string
 }
@@ -185,7 +185,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		sources:           map[string]*sourceState{},
 		base:              in,
 		maxDiscovered:     opts.MaxDiscoveredTargets,
-		instance:          newInstance(),
+		id:                newInstanceID(),
 		address:           opts.Address,
 		version:           opts.Version,
 		revision:          opts.Revision,
@@ -418,22 +418,22 @@ func (a *Allocator) settleDue(now time.Time) bool {
 	return !now.Before(a.proposedAt.Add(a.settle))
 }
 
-// firstSettle is the earliest the first member list takes effect: the
-// settle time after the start, or a heartbeat interval, the copy's own or
-// the longest a replica heard from said it was heartbeating at, when that
-// is longer. A copy started with an interval shorter than the copies before
-// it hears each replica only at the replica's next heartbeat on the old
-// interval, which reaches it within that interval of its start (the
-// replica looks up the copies' addresses every interval). The first
-// heartbeat of a replica the copies before told the old interval says it,
+// firstSettle is the earliest the first member list takes effect: the settle
+// time after the start, or a heartbeat interval, the instance's own or the
+// longest a replica heard from said it was heartbeating at, when that is
+// longer. An instance started with an interval shorter than the instances
+// before it hears each replica only at the replica's next heartbeat on the
+// old interval, which reaches it within that interval of its start (the
+// replica looks up the instances' addresses every interval). The first
+// heartbeat of a replica the instances before told the old interval says it,
 // as each was told the same, so the first list waits for the others too,
 // rather than forming of those that happened to come first and changing as
-// each of the rest arrives. A replica not told an interval yet, one that
-// has just started, says none: the default it heartbeats at is no copy's,
-// and says nothing of how long the others take, so it does not count here.
-// The wait so covers the old interval when a replica told it is heard
-// before the copy's own interval and the settle time have passed; replicas
-// that started after the copy, heard alone until then, form the first list
+// each of the rest arrives. A replica not told an interval yet, one that has
+// just started, says none: the default it heartbeats at is no instance's, and
+// says nothing of how long the others take, so it does not count here. The
+// wait so covers the old interval when a replica told it is heard before the
+// instance's own interval and the settle time have passed; replicas that
+// started after the instance, heard alone until then, form the first list
 // alone, and it changes as the others arrive.
 func (a *Allocator) firstSettle() time.Time {
 	return a.started.Add(max(a.settle, a.heartbeatInterval, a.longestHeard))

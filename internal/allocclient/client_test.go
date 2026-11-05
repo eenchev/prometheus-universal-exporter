@@ -653,7 +653,7 @@ func (r *redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // A heartbeat goes to every address the allocator URL's host name resolves
 // to, at the URL's port, each with the URL's host as its Host header, so two
-// copies of the allocator behind one name both hear it; the bundle request
+// instances of the allocator behind one name both hear it; the bundle request
 // goes to the URL as it is.
 func TestHeartbeatsGoToEveryAddressTheHostResolvesTo(t *testing.T) {
 	a := newFakeAllocator(t)
@@ -1176,7 +1176,7 @@ func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
 
 // The client heartbeats at the interval the allocator's reply says from the
 // heartbeat after it on, though it started with another, and each heartbeat
-// built after the reply says it; the first, before any copy said one, says
+// built after the reply says it; the first, before any instance said one, says
 // none.
 func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	a := newFakeAllocator(t)
@@ -1198,20 +1198,20 @@ func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	}
 }
 
-// A replica says no interval_seconds until a copy of the allocator has said
-// an interval: the one it starts with is the client's default, or Options',
-// no copy's, and a copy that has just started would take it for the
-// interval the replicas told by the copies before it heartbeat at. Once a
-// copy has said one, every heartbeat says the interval in force, also
-// while no copy says one any more.
-func TestAReplicaSaysNoIntervalUntilACopyDoes(t *testing.T) {
+// A replica says no interval_seconds until an instance of the allocator has
+// said an interval: the one it starts with is the client's default, or
+// Options', no instance's, and an instance that has just started would take
+// it for the interval the replicas told by the instances before it heartbeat
+// at. Once a instance has said one, every heartbeat says the interval in
+// force, also while no instance says one any more.
+func TestAReplicaSaysNoIntervalUntilAnInstanceDoes(t *testing.T) {
 	for _, configured := range []time.Duration{0, 4 * time.Second} {
 		a := newFakeAllocator(t)
 		c := newTestClient(t, a, t.TempDir(), func(o *Options) { o.HeartbeatInterval = configured })
 		for range 2 {
 			c.heartbeat(context.Background())
 			if hb := a.nextHeartbeat(t); hb.IntervalSeconds != 0 {
-				t.Errorf("started with %s, before any copy said an interval a heartbeat said interval_seconds %v", configured, hb.IntervalSeconds)
+				t.Errorf("started with %s, before any instance said an interval a heartbeat said interval_seconds %v", configured, hb.IntervalSeconds)
 			}
 		}
 		a.mu.Lock()
@@ -1227,7 +1227,7 @@ func TestAReplicaSaysNoIntervalUntilACopyDoes(t *testing.T) {
 		for range 2 {
 			c.heartbeat(context.Background())
 			if hb := a.nextHeartbeat(t); hb.IntervalSeconds != 5 {
-				t.Errorf("started with %s, after a copy said 5s a heartbeat said interval_seconds %v, want 5", configured, hb.IntervalSeconds)
+				t.Errorf("started with %s, after an instance said 5s a heartbeat said interval_seconds %v, want 5", configured, hb.IntervalSeconds)
 			}
 		}
 	}
@@ -1252,14 +1252,14 @@ func TestABogusHeartbeatIntervalIsKeptWithinTheBounds(t *testing.T) {
 	}
 }
 
-// copies is the allocator's copies at their addresses, as a transport: each
-// answers a heartbeat with the reply or the status its address has.
-type copies struct {
+// instances is the allocator's instances at their addresses, as a transport:
+// each answers a heartbeat with the reply or the status its address has.
+type instances struct {
 	mu      sync.Mutex
 	replies map[string]string
 }
 
-func (c *copies) RoundTrip(req *http.Request) (*http.Response, error) {
+func (c *instances) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		_ = req.Body.Close()
 	}
@@ -1275,19 +1275,19 @@ func (c *copies) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
-func (c *copies) set(replies map[string]string) {
+func (c *instances) set(replies map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.replies = replies
 }
 
-// With several copies of the allocator the client heartbeats at the
-// shortest interval those that answered say, so each hears it within its
-// own; a copy that says none, from a release without it, or does not answer
+// With several instances of the allocator the client heartbeats at the
+// shortest interval those that answered say, so each hears it within its own;
+// an instance that says none, from a release without it, or does not answer
 // changes nothing, and a client told nothing heartbeats every 10s.
-func TestTheShortestIntervalOfTheCopiesIsTaken(t *testing.T) {
+func TestTheShortestIntervalOfTheInstancesIsTaken(t *testing.T) {
 	a := newFakeAllocator(t)
-	transport := &copies{}
+	transport := &instances{}
 	c := newTestClient(t, a, t.TempDir(), func(o *Options) {
 		o.URL = "http://pue-allocator.monitoring.svc:9116"
 		o.Transport = transport
@@ -1301,11 +1301,11 @@ func TestTheShortestIntervalOfTheCopiesIsTaken(t *testing.T) {
 		replies map[string]string
 		want    time.Duration
 	}{
-		{"no copy says an interval", map[string]string{"10.1.0.4": `{"generation":""}`, "10.1.0.5": `{"generation":""}`}, 10 * time.Second},
-		{"three copies, one saying none", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.5": `{"heartbeat_interval_seconds":3}`, "10.1.0.6": `{}`}, 3 * time.Second},
-		{"the copy saying 3s down", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.6": `{}`}, 7 * time.Second},
-		{"every copy down", map[string]string{}, 7 * time.Second},
-		{"a copy saying none alone", map[string]string{"10.1.0.6": `{}`}, 7 * time.Second},
+		{"no instance says an interval", map[string]string{"10.1.0.4": `{"generation":""}`, "10.1.0.5": `{"generation":""}`}, 10 * time.Second},
+		{"three instances, one saying none", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.5": `{"heartbeat_interval_seconds":3}`, "10.1.0.6": `{}`}, 3 * time.Second},
+		{"the instance saying 3s down", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.6": `{}`}, 7 * time.Second},
+		{"every instance down", map[string]string{}, 7 * time.Second},
+		{"an instance saying none alone", map[string]string{"10.1.0.6": `{}`}, 7 * time.Second},
 	} {
 		transport.set(step.replies)
 		c.heartbeat(context.Background())
@@ -1315,18 +1315,18 @@ func TestTheShortestIntervalOfTheCopiesIsTaken(t *testing.T) {
 	}
 }
 
-// hungCopy is a transport of two allocator copies: the one at hung takes
+// hungInstance is a transport of two allocator instances: the one at hung takes
 // every heartbeat and never answers, until the request is given up on; the
 // other answers at once with a 1s interval, and notes when it heard each.
 // A bundle request is answered 503.
-type hungCopy struct {
+type hungInstance struct {
 	hung  string
 	mu    sync.Mutex
 	heard []time.Time
 	given []time.Duration
 }
 
-func (h *hungCopy) RoundTrip(req *http.Request) (*http.Response, error) {
+func (h *hungInstance) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		_ = req.Body.Close()
 	}
@@ -1350,13 +1350,13 @@ func (h *hungCopy) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
-// A copy of the allocator that hangs delays only the heartbeats to itself:
-// at a 1s interval, a member TTL of 3s, the copy beside it hears the
-// replica every second, and each heartbeat to the hung copy, and each
-// lookup of the copies' addresses, is given up on within the interval
+// An instance of the allocator that hangs delays only the heartbeats to itself:
+// at a 1s interval, a member TTL of 3s, the instance beside it hears the
+// replica every second, and each heartbeat to the hung instance, and each
+// lookup of the instances' addresses, is given up on within the interval
 // rather than after 5s.
-func TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers(t *testing.T) {
-	transport := &hungCopy{hung: "10.1.0.4"}
+func TestAHungInstanceDoesNotDelayTheHeartbeatsToTheOthers(t *testing.T) {
+	transport := &hungInstance{hung: "10.1.0.4"}
 	var mu sync.Mutex
 	var lookups []time.Duration
 	c := startClient(t, newFakeAllocator(t), func(o *Options) {
@@ -1380,33 +1380,33 @@ func TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers(t *testing.T) {
 	heard, given := append([]time.Time(nil), transport.heard...), append([]time.Duration(nil), transport.given...)
 	transport.mu.Unlock()
 	if len(heard) < 4 {
-		t.Fatalf("the copy that answers heard %d heartbeats in 4.5s at a 1s interval", len(heard))
+		t.Fatalf("the instance that answers heard %d heartbeats in 4.5s at a 1s interval", len(heard))
 	}
 	for i := 1; i < len(heard); i++ {
 		// A heartbeat late by over half an interval leaves too little of the
 		// 3s TTL; a starved CPU accounts for the half.
 		if gap := heard[i].Sub(heard[i-1]); gap > 1500*time.Millisecond {
-			t.Errorf("the copy that answers heard heartbeat %d %s after the one before", i+1, gap)
+			t.Errorf("the instance that answers heard heartbeat %d %s after the one before", i+1, gap)
 		}
 	}
 	if len(given) == 0 {
-		t.Error("no heartbeat to the hung copy was given up on in 4.5s")
+		t.Error("no heartbeat to the hung instance was given up on in 4.5s")
 	}
 	for _, d := range given {
 		if d > 1500*time.Millisecond {
-			t.Errorf("a heartbeat to the hung copy was given up on after %s, more than the 1s interval", d)
+			t.Errorf("a heartbeat to the hung instance was given up on after %s, more than the 1s interval", d)
 		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	for _, d := range lookups {
 		if d > time.Second {
-			t.Errorf("a lookup of the copies' addresses was bounded by %s, more than the 1s interval", d)
+			t.Errorf("a lookup of the instances' addresses was bounded by %s, more than the 1s interval", d)
 		}
 	}
 }
 
-// slowAnnouncer is a transport of two allocator copies: the one at
+// slowAnnouncer is a transport of two allocator instances: the one at
 // announcer answers heartbeats after 200ms saying a 1s interval, the other
 // at once saying none, noting how many it heard. A bundle request is
 // answered 503.
@@ -1433,11 +1433,11 @@ func (s *slowAnnouncer) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
-// An interval one copy says takes effect at once for the heartbeats to every
-// copy, though each has a schedule of its own: the copy that says none, and
-// whose schedule waited the hour the client started with, is heartbeated
-// every second from then on.
-func TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy(t *testing.T) {
+// An interval one instance says takes effect at once for the heartbeats to
+// every instance, though each has a schedule of its own: the instance that
+// says none, and whose schedule waited the hour the client started with, is
+// heartbeated every second from then on.
+func TestAnAnnouncedIntervalReachesTheScheduleOfEveryInstance(t *testing.T) {
 	transport := &slowAnnouncer{announcer: "10.1.0.4"}
 	c := startClient(t, newFakeAllocator(t), func(o *Options) {
 		o.URL = "http://pue-allocator.monitoring.svc:9116"
@@ -1449,14 +1449,14 @@ func TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy(t *testing.T) {
 		t.Errorf("the interval in force is %s, want 1s", got)
 	}
 	if n := transport.heard.Load(); n < 3 {
-		t.Errorf("the copy saying no interval heard %d heartbeats in 3.5s, want one each second", n)
+		t.Errorf("the instance saying no interval heard %d heartbeats in 3.5s, want one each second", n)
 	}
 }
 
 // A lookup of the allocator's addresses that fails is counted and logged as
 // a heartbeat failure, and the addresses it resolved to last are
 // heartbeated still: a name server that is down for a while does not make
-// the replica fall silent to copies that are up.
+// the replica fall silent to instances that are up.
 func TestAFailedLookupHeartbeatsTheAddressesResolvedLast(t *testing.T) {
 	a := newFakeAllocator(t)
 	port := a.server.URL[strings.LastIndex(a.server.URL, ":")+1:]
@@ -1489,7 +1489,7 @@ func TestAFailedLookupHeartbeatsTheAddressesResolvedLast(t *testing.T) {
 	}
 }
 
-// firstHeard is a transport of allocator copies that answer every heartbeat
+// firstHeard is a transport of allocator instances that answer every heartbeat
 // at once saying a 1s interval, noting when each address first heard one
 // and the interval that heartbeat said. A bundle request is answered 503.
 type firstHeard struct {
@@ -1518,11 +1518,12 @@ func (f *firstHeard) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // A replica on a 4s interval, standing in for the longer interval of the
-// copies before a rollout, is told 1s by the copy it reaches, and from then
-// on looks up the copies' addresses every second, as it heartbeats: a copy
-// whose address appears 300ms after the start is heartbeated within about
-// a second, saying 1s, not at the lookup the old interval had set, 4s in.
-// A copy told 1s waits no longer than that for the replicas to reach it.
+// instances before a rollout, is told 1s by the instance it reaches, and from
+// then on looks up the instances' addresses every second, as it heartbeats:
+// an instance whose address appears 300ms after the start is heartbeated
+// within about a second, saying 1s, not at the lookup the old interval had
+// set, 4s in. An instance told 1s waits no longer than that for the replicas
+// to reach it.
 func TestTheLookupFollowsAShortenedInterval(t *testing.T) {
 	transport := &firstHeard{at: map[string]time.Time{}, said: map[string]float64{}}
 	var second atomic.Bool
@@ -1545,14 +1546,14 @@ func TestTheLookupFollowsAShortenedInterval(t *testing.T) {
 	defer transport.mu.Unlock()
 	at, ok := transport.at["10.1.0.5"]
 	if !ok {
-		t.Fatal("the copy appearing at 0.3s heard no heartbeat in 4.8s")
+		t.Fatal("the instance appearing at 0.3s heard no heartbeat in 4.8s")
 	}
 	// The lookup is due 1s after the one at the start; a starved CPU
 	// accounts for the rest of the 2s.
 	if found := at.Sub(start); found > 2*time.Second {
-		t.Errorf("the copy appearing at 0.3s was first heartbeated %s after the start, at a 1s interval", found.Round(time.Millisecond))
+		t.Errorf("the instance appearing at 0.3s was first heartbeated %s after the start, at a 1s interval", found.Round(time.Millisecond))
 	}
 	if said := transport.said["10.1.0.5"]; said != 1 {
-		t.Errorf("the first heartbeat to the new copy said interval_seconds %v, want 1", said)
+		t.Errorf("the first heartbeat to the new instance said interval_seconds %v, want 1", said)
 	}
 }

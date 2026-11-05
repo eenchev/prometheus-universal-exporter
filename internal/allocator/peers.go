@@ -21,37 +21,37 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Copies of the allocator that discover run as peers (--peers): they find
-// each other by a DNS name or a list, take the live copy of the lowest
+// Instances of the allocator that discover run as peers (--peers): they find
+// each other by a DNS name or a list, take the live instance of the lowest
 // address for their leader, and only the leader asks the discovery sources.
-// Every other copy, a follower, takes what the leader found from its
+// Every other instance, a follower, takes what the leader found from its
 // snapshot (SnapshotPath) in place of asking the sources itself, so every
-// copy expands the same input files with the same discovered targets, and
+// instance expands the same input files with the same discovered targets, and
 // serves the same bundles, of the same generations, and the same service
-// discovery answers. See "Copies with discovery" in docs/ALLOCATOR.md.
+// discovery answers. See "Instances with discovery" in docs/ALLOCATOR.md.
 
-// The paths copies ask each other on, under the API's token.
+// The paths instances ask each other on, under the API's token.
 const (
-	// PeerPath answers whether the copy is up, and which process it is.
+	// PeerPath answers whether the instance is up, and which process it is.
 	PeerPath = "/v1/peer"
-	// SnapshotPath answers what the copy's discovery sources found.
+	// SnapshotPath answers what the instance's discovery sources found.
 	SnapshotPath = "/v1/peer/snapshot"
 )
 
-// The timings of the peers. Every PeerInterval a copy resolves its peers,
-// asks each at PeerPath within PeerTimeout and, as a follower, fetches the
-// leader's snapshot within SnapshotTimeout: a snapshot holds what every
+// The timings of the peers. Every PeerInterval an instance resolves its
+// peers, asks each at PeerPath within PeerTimeout and, as a follower, fetches
+// the leader's snapshot within SnapshotTimeout: a snapshot holds what every
 // source found, which may be megabytes where a check is a few bytes, and a
 // fetch cut short would leave the follower on its last snapshot for as long
-// as the snapshot stays that large. The fetch runs beside the rounds, one
-// at a time (snapshotFetch), so a leader that hangs while it writes its
-// snapshot delays no check: the follower goes on checking every
-// PeerInterval, and leads, or follows another copy, as soon as the checks
-// say so, which cancels the fetch. A copy that answered stays live until PeerFailures
-// checks in a row have failed, so one slow answer does not move the
-// leader; one that answers it is shutting down stops being live at once.
-// A follower whose snapshot fetches fail PeerFailures times in a row says
-// so, once, and keeps serving the snapshot it fetched last.
+// as the snapshot stays that large. The fetch runs beside the rounds, one at
+// a time (snapshotFetch), so a leader that hangs while it writes its snapshot
+// delays no check: the follower goes on checking every PeerInterval, and
+// leads, or follows another instance, as soon as the checks say so, which
+// cancels the fetch. An instance that answered stays live until PeerFailures
+// checks in a row have failed, so one slow answer does not move the leader;
+// one that answers it is shutting down stops being live at once. A follower
+// whose snapshot fetches fail PeerFailures times in a row says so, once, and
+// keeps serving the snapshot it fetched last.
 const (
 	PeerInterval    = 2 * time.Second
 	PeerTimeout     = time.Second
@@ -59,15 +59,15 @@ const (
 	PeerFailures    = 3
 )
 
-// PeerShutdownDelay is how long a copy among peers keeps serving after
+// PeerShutdownDelay is how long an instance among peers keeps serving after
 // BeginShutdown, its PeerPath answering 503, before its server stops: a
 // round of every peer and its check, so each peer sees it is shutting
-// down and the next copy leads at once.
+// down and the next instance leads at once.
 const PeerShutdownDelay = PeerInterval + PeerTimeout
 
 // maxSnapshotBytes bounds a snapshot's body: what every source found, a
 // source's own answer being bounded at maxDiscoveryAnswerBytes, so that
-// bound for each of the copy's sources, and for one when it has none.
+// bound for each of the instance's sources, and for one when it has none.
 func (a *Allocator) maxSnapshotBytes() int {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
@@ -76,24 +76,24 @@ func (a *Allocator) maxSnapshotBytes() int {
 
 // PeerOptions are the settings of the peers.
 type PeerOptions struct {
-	// Peers are the copies, each a host:port: a name resolved to all its
+	// Peers are the instances, each a host:port: a name resolved to all its
 	// addresses every PeerInterval, as the chart's headless Service's, or
 	// an IP address. ParsePeers reads --peers into them.
 	Peers []string
-	// Self is this copy's address as its peers reach it. Left zero, the
-	// copy finds itself among the addresses it resolved by asking them:
+	// Self is this instance's address as its peers reach it. Left zero, the
+	// instance finds itself among the addresses it resolved by asking them:
 	// the one answering with its own instance is itself.
 	Self netip.AddrPort
-	// Token gives the bearer token sent to the peers, the copies sharing
+	// Token gives the bearer token sent to the peers, the instances sharing
 	// the API's; nil sends none.
 	Token func() (string, error)
 	// Resolve looks a peer's host name up; net.DefaultResolver.LookupHost
 	// when nil.
 	Resolve func(ctx context.Context, host string) ([]string, error)
-	// LeaderOnly is --peers.leader-only: only the leader serves the whole
-	// of /metrics and of the status; a follower serves the peers' part of
-	// each alone, so the copies' allocation is in one copy's metrics, not
-	// in every copy's.
+	// LeaderOnly is --peers.leader-only: only the leader serves the whole of
+	// /metrics and of the status; a follower serves the peers' part of each
+	// alone, so the instances' allocation is in one instance's metrics, not
+	// in every instance's.
 	LeaderOnly bool
 	// Client asks the peers; one of no proxy when nil. Each request is
 	// bounded by PeerTimeout, or SnapshotTimeout for a snapshot, through
@@ -118,7 +118,7 @@ func ParsePeers(raw string) ([]string, error) {
 
 // ParseSelf reads --peers.self: an IP address, taking the port of
 // listenAddress, or an IP address and a port. A name is refused, since a
-// copy is told from its peers by the addresses its peers' names resolve to.
+// instance is told from its peers by the addresses its peers' names resolve to.
 func ParseSelf(raw, listenAddress string) (netip.AddrPort, error) {
 	if addr, err := netip.ParseAddr(raw); err == nil {
 		_, port, err := net.SplitHostPort(listenAddress)
@@ -135,10 +135,10 @@ func ParseSelf(raw, listenAddress string) (netip.AddrPort, error) {
 	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), nil
 }
 
-// comparePeers orders the copies' addresses, the leader being the live
-// copy of the lowest: IPv4 addresses before IPv6, each by its bytes, then
-// by port. The order is total and every copy computes it alike from the
-// same addresses, so copies that see the same live peers agree on their
+// comparePeers orders the instances' addresses, the leader being the live
+// instance of the lowest: IPv4 addresses before IPv6, each by its bytes, then
+// by port. The order is total and every instance computes it alike from the
+// same addresses, so instances that see the same live peers agree on their
 // leader.
 func comparePeers(a, b netip.AddrPort) int { return a.Compare(b) }
 
@@ -148,21 +148,22 @@ type livePeer struct {
 	answer peerAnswer
 }
 
-// chooseLeader is the leader among this copy, of the address self, its
-// process instance, discovering while it does, and the live peers others,
-// in order. leading says the leader is this copy.
+// chooseLeader is the leader among this instance, of the address self, its
+// process id, discovering while it does, and the live peers others, in
+// order. leading says the leader is this instance.
 //
-// A copy that knows its address takes the lowest of its own and the
+// An instance that knows its address takes the lowest of its own and the
 // others'. One that does not cannot place itself among them, as when
 // --peers leaves its own address out or it cannot reach itself; were it
-// to follow the lowest other, two such copies would follow each other and
-// neither would discover. It follows only a copy that discovers, the
-// lowest that knows its own address, which leads by the order alone, and
-// else the lowest instance among those that do not, keeping on leading
-// itself when its own instance is lower still; with no copy discovering
-// it leads. Two copies of unknown addresses so settle on one leader, the
-// lower instance, even when both begin to lead in the same round.
-func chooseLeader(self netip.AddrPort, instance string, discovering bool, others []livePeer) (leader netip.AddrPort, leading bool) {
+// to follow the lowest other, two such instances would follow each other
+// and neither would discover. It follows only an instance that discovers,
+// the lowest that knows its own address, which leads by the order alone,
+// and else the one of the lowest id among those that do not, keeping on
+// leading itself when its own id is lower still; with no instance
+// discovering it leads. Two instances of unknown addresses so settle on
+// one leader, the one of the lower id, even when both begin to lead in the
+// same round.
+func chooseLeader(self netip.AddrPort, id string, discovering bool, others []livePeer) (leader netip.AddrPort, leading bool) {
 	if self.IsValid() {
 		if len(others) == 0 || comparePeers(self, others[0].addr) < 0 {
 			return self, true
@@ -176,31 +177,31 @@ func chooseLeader(self netip.AddrPort, instance string, discovering bool, others
 		case !o.answer.Discovering:
 		case o.answer.AddressKnown:
 			return o.addr, false
-		case unranked == nil || o.answer.Instance < unranked.answer.Instance:
+		case unranked == nil || o.answer.ID < unranked.answer.ID:
 			unranked = o
 		}
 	}
-	if unranked == nil || (discovering && instance < unranked.answer.Instance) {
+	if unranked == nil || (discovering && id < unranked.answer.ID) {
 		return netip.AddrPort{}, true
 	}
 	return unranked.addr, false
 }
 
-// peerState is what a copy knows of one of its peers.
+// peerState is what an instance knows of one of its peers.
 type peerState struct {
 	// live says the peer answered and has not failed PeerFailures checks in
 	// a row since; fails counts the checks it failed in a row.
 	live  bool
 	fails int
-	// self says the address is this copy's own.
+	// self says the address is this instance's own.
 	self bool
 	// answer is the peer's last answer, and checked when it was last
-	// checked, whatever the check's outcome; zero for this copy.
+	// checked, whatever the check's outcome; zero for this instance.
 	answer  peerAnswer
 	checked time.Time
 }
 
-// peers runs a copy's part among its peers.
+// peers runs an instance's part among its peers.
 type peers struct {
 	a *Allocator
 	o PeerOptions
@@ -216,23 +217,23 @@ type peers struct {
 
 	mu    sync.Mutex
 	known map[netip.AddrPort]*peerState
-	// self is this copy's address, invalid until it is known. rounds
+	// self is this instance's address, invalid until it is known. rounds
 	// counts the rounds, and selfMissing says the address was still not
 	// known after PeerFailures of them, which is logged once.
 	self        netip.AddrPort
 	rounds      int
 	selfMissing bool
 	// decided says a leader has been chosen; leader is it, invalid when it
-	// is this copy and its address is not known, and leading says it is
-	// this copy.
+	// is this instance and its address is not known, and leading says it is
+	// this instance.
 	decided bool
 	leader  netip.AddrPort
 	leading bool
-	// took says the copy has fetched a snapshot. snapshotAt is when it
+	// took says the instance has fetched a snapshot. snapshotAt is when it
 	// last held what the leader's snapshot holds, after taking it or
 	// finding it the same as its own; zero before the first time.
 	// snapshotFails counts fetches that failed in a row, and stale says
-	// that was logged; differ counts fetches in a row after which the copy
+	// that was logged; differ counts fetches in a row after which the instance
 	// still held something else, and differLogged says that was logged.
 	took          bool
 	snapshotAt    time.Time
@@ -244,7 +245,7 @@ type peers struct {
 	checkFailures, snapshotFailures, leaderChanges uint64
 }
 
-// UsePeers makes the allocator a copy among peers: RunPeers then decides
+// UsePeers makes the allocator an instance among peers: RunPeers then decides
 // whether it asks its discovery sources or takes the leader's snapshot.
 // Called before RunPeers and before the API is served; StartDiscovery is
 // not called then.
@@ -254,7 +255,7 @@ func (a *Allocator) UsePeers(o PeerOptions) {
 	}
 	if o.Client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
-		// The copies reach each other inside their network, never through
+		// The instances reach each other inside their network, never through
 		// a proxy the environment names for the discovery sources.
 		transport.Proxy = nil
 		o.Client = &http.Client{Transport: transport,
@@ -287,9 +288,9 @@ func (a *Allocator) RunPeers(ctx context.Context) {
 	}
 }
 
-// newInstance names the allocator's process, so a copy that asks its own
-// address knows it is itself.
-func newInstance() string {
+// newInstanceID names the allocator's process, so an instance that asks
+// its own address knows it is itself.
+func newInstanceID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
@@ -297,7 +298,7 @@ func newInstance() string {
 
 // resolve is the addresses of the peers: every address each entry resolves
 // to, an entry whose lookup fails keeping those it resolved to last, and
-// this copy's own when it is known.
+// this instance's own when it is known.
 func (p *peers) resolve(ctx context.Context) []netip.AddrPort {
 	seen := map[netip.AddrPort]bool{}
 	if p.o.Self.IsValid() {
@@ -346,20 +347,20 @@ func (p *peers) resolve(ctx context.Context) []netip.AddrPort {
 
 // peerAnswer is the answer at PeerPath.
 type peerAnswer struct {
-	// Instance names the copy's process.
-	Instance string `json:"instance"`
-	// Discovering says the copy asks its discovery sources itself: it
+	// ID is the instance's process's id (newInstanceID).
+	ID string `json:"id"`
+	// Discovering says the instance asks its discovery sources itself: it
 	// leads, or runs without peers.
 	Discovering bool `json:"discovering"`
-	// AddressKnown says the copy knows its own address, and so leads by
+	// AddressKnown says the instance knows its own address, and so leads by
 	// the order of the addresses alone, or runs without peers and never
-	// follows: a copy that does not know its own follows such a copy
-	// first (chooseLeader).
+	// follows: an instance that does not know its own follows such an
+	// instance first (chooseLeader).
 	AddressKnown bool `json:"address_known"`
 }
 
 // errShuttingDown is a peer's answer that it is shutting down.
-var errShuttingDown = errors.New("the copy is shutting down")
+var errShuttingDown = errors.New("the instance is shutting down")
 
 // get asks addr for path, with the token, If-None-Match etag when not "",
 // within timeout, reading the body included.
@@ -420,8 +421,8 @@ func (p *peers) check(ctx context.Context, addr netip.AddrPort) (peerAnswer, err
 		return peerAnswer{}, fmt.Errorf("%s answered %s: %s", PeerPath, resp.Status, firstLine(body))
 	}
 	var answer peerAnswer
-	if err := json.Unmarshal(body, &answer); err != nil || answer.Instance == "" {
-		return peerAnswer{}, fmt.Errorf("%s answered no allocator's instance", PeerPath)
+	if err := json.Unmarshal(body, &answer); err != nil || answer.ID == "" {
+		return peerAnswer{}, fmt.Errorf("%s answered no instance ID", PeerPath)
 	}
 	return answer, nil
 }
@@ -477,14 +478,14 @@ func (p *peers) round(ctx context.Context) {
 			st.checked = now
 		}
 		switch {
-		case addr == self || r.answer.Instance == p.a.instance:
+		case addr == self || r.answer.ID == p.a.id:
 			st.self, st.live, st.fails = true, false, 0
 			if !p.self.IsValid() {
 				p.self, self = addr, addr
 			}
 		case r.err == nil:
 			if !st.live && st.fails >= PeerFailures {
-				p.a.logger.Info("an allocator copy answers again", "peer", addr.String())
+				p.a.logger.Info("an allocator instance answers again", "peer", addr.String())
 			}
 			st.live, st.fails, st.answer = true, 0, r.answer
 		default:
@@ -495,7 +496,7 @@ func (p *peers) round(ctx context.Context) {
 			}
 			if st.live && st.fails >= PeerFailures {
 				st.live = false
-				p.a.logger.Warn("an allocator copy stopped answering; it is no longer among the live copies", "peer", addr.String(), "error", r.err)
+				p.a.logger.Warn("an allocator instance stopped answering; it is no longer among the live instances", "peer", addr.String(), "error", r.err)
 			}
 		}
 	}
@@ -503,7 +504,7 @@ func (p *peers) round(ctx context.Context) {
 	p.rounds++
 	if !self.IsValid() && p.rounds >= PeerFailures && !p.selfMissing {
 		p.selfMissing = true
-		p.a.logger.Error("no address of --peers answers as this copy, so it cannot place itself among its peers: list every copy in --peers, this one included, or give --peers.self; meanwhile it follows only a copy that discovers", "peers", strings.Join(p.o.Peers, ","))
+		p.a.logger.Error("no address of --peers answers as this instance, so it cannot place itself among its peers: list every instance in --peers, this one included, or give --peers.self; meanwhile it follows only an instance that discovers", "peers", strings.Join(p.o.Peers, ","))
 	}
 
 	var others []livePeer
@@ -512,8 +513,8 @@ func (p *peers) round(ctx context.Context) {
 			others = append(others, livePeer{addr, st.answer})
 		}
 	}
-	leader, leading := chooseLeader(self, p.a.instance, discovering, others)
-	// Leading, a copy whose own address became known has not changed
+	leader, leading := chooseLeader(self, p.a.id, discovering, others)
+	// Leading, an instance whose own address became known has not changed
 	// leader.
 	changed := !p.decided || leading != p.leading || (!leading && leader != p.leader)
 	if changed && p.decided {
@@ -525,18 +526,18 @@ func (p *peers) round(ctx context.Context) {
 
 	if changed {
 		if leading {
-			p.a.logger.Info("this allocator copy leads: it asks the discovery sources, and the other copies take what it finds", "self", addrText(self), "live_peers", len(others))
+			p.a.logger.Info("this allocator instance leads: it asks the discovery sources, and the other instances take what it finds", "self", addrText(self), "live_peers", len(others))
 		} else {
-			p.a.logger.Info("this allocator copy follows: it takes the discovered targets of the leader in place of asking the discovery sources", "leader", leader.String(), "self", addrText(self))
+			p.a.logger.Info("this allocator instance follows: it takes the discovered targets of the leader in place of asking the discovery sources", "leader", leader.String(), "self", addrText(self))
 		}
 	}
 	if leading {
 		if !wasLeading && !hadSnapshot && len(others) > 0 {
-			// A copy that leads before it ever followed, as a new copy of
-			// the lowest address does, starts from what another copy has,
-			// so its discovered targets do not leave the bundles until its
-			// sources first answer; it asks them once the fetch ends,
-			// whether it took the snapshot or not.
+			// An instance that leads before it ever followed, as a new
+			// instance of the lowest address does, starts from what another
+			// instance has, so its discovered targets do not leave the
+			// bundles until its sources first answer; it asks them once the
+			// fetch ends, whether it took the snapshot or not.
 			p.stopFetch()
 			p.startFetch(ctx, others[0].addr, true)
 			return
@@ -560,7 +561,7 @@ func (p *peers) round(ctx context.Context) {
 
 // snapshotFetch is a fetch of a peer's snapshot, which runs beside the
 // rounds so that a peer slow to write it, or hanging, delays no check.
-// seed says it is the fetch of a copy coming to lead (round), which asks
+// seed says it is the fetch of an instance coming to lead (round), which asks
 // its sources once it ends.
 type snapshotFetch struct {
 	addr   netip.AddrPort
@@ -579,7 +580,7 @@ func (f *snapshotFetch) running() bool {
 }
 
 // stopFetch cancels the fetch running, if one is, and waits for it to end,
-// so what it fetched from a copy that no longer leads is never put in
+// so what it fetched from an instance that no longer leads is never put in
 // force after the round moves on. A fetch cancelled ends at once.
 func (p *peers) stopFetch() {
 	if f := p.fetch; f != nil {
@@ -599,7 +600,7 @@ func (p *peers) startFetch(ctx context.Context, addr netip.AddrPort, seed bool) 
 		agreed, err := p.fetchSnapshot(ctx, addr)
 		switch {
 		case ctx.Err() != nil:
-			// Cancelled: the copy no longer follows addr, or shuts down.
+			// Cancelled: the instance no longer follows addr, or shuts down.
 		case seed:
 			// A failure leaves the new leader to its sources.
 			p.mu.Lock()
@@ -628,7 +629,7 @@ func (p *peers) fetchFailed(addr netip.AddrPort, err error) {
 		if !p.snapshotAt.IsZero() {
 			since = p.snapshotAt.UTC().Format(time.RFC3339)
 		}
-		p.a.logger.Warn("the leader's discovered targets cannot be fetched; this copy keeps serving those it took last", "leader", addr.String(), "last_snapshot", since, "error", err)
+		p.a.logger.Warn("the leader's discovered targets cannot be fetched; this instance keeps serving those it took last", "leader", addr.String(), "last_snapshot", since, "error", err)
 	}
 }
 
@@ -639,13 +640,13 @@ func addrText(addr netip.AddrPort) string {
 	return addr.String()
 }
 
-// peerSnapshot is the answer at SnapshotPath: every source of the copy's
+// peerSnapshot is the answer at SnapshotPath: every source of the instance's
 // input files, by its identity (sourceSpec.identity), with what it found.
-// The identity leaves the source's settings out, so copies whose input
+// The identity leaves the source's settings out, so instances whose input
 // files differ only in a source's settings, as old and new pods during a
 // rolling update do, still take each other's targets of it.
 type peerSnapshot struct {
-	Instance    string                    `json:"instance"`
+	ID          string                    `json:"id"`
 	Discovering bool                      `json:"discovering"`
 	Sources     map[string]snapshotSource `json:"sources"`
 }
@@ -663,11 +664,11 @@ type snapshotSource struct {
 
 // fetchSnapshot takes addr's snapshot and puts what it found in force
 // (takeSnapshot). The fetch names in
-// If-None-Match the digest of what this copy holds, not of the snapshot it
-// took last, so a 304 says the copy holds what the leader does: whatever
+// If-None-Match the digest of what this instance holds, not of the snapshot it
+// took last, so a 304 says the instance holds what the leader does: whatever
 // made the two differ since, a reload that came to one first or the
-// copy's own sources answering while it led, the next fetch is answered
-// with the snapshot and corrects it. agreed says the copy holds what the
+// instance's own sources answering while it led, the next fetch is answered
+// with the snapshot and corrects it. agreed says the instance holds what the
 // snapshot holds once it is taken.
 func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed bool, err error) {
 	_, held := p.a.snapshotOf()
@@ -678,9 +679,9 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
-		// The leader holds what this copy does, so it has every source
-		// this copy has: any this copy asked itself, the leader lacking it,
-		// is the leader's to ask now.
+		// The leader holds what this instance does, so it has every source
+		// this instance has: any this instance asked itself, the leader
+		// lacking it, is the leader's to ask now.
 		p.a.takeSnapshot(nil)
 		return true, nil
 	case http.StatusOK:
@@ -694,7 +695,7 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 		return false, err
 	}
 	if len(raw) > limit {
-		return false, fmt.Errorf("the snapshot is larger than %d bytes, %d for each of this copy's discovery sources", limit, maxDiscoveryAnswerBytes)
+		return false, fmt.Errorf("the snapshot is larger than %d bytes, %d for each of this instance's discovery sources", limit, maxDiscoveryAnswerBytes)
 	}
 	var s peerSnapshot
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -706,8 +707,8 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 }
 
 // fetched notes a snapshot fetched from the leader addr, after which the
-// copy holds what it holds when agreed. Only then is the snapshot's age
-// reset: a copy whose input files have a source the leader's lack, or
+// instance holds what it holds when agreed. Only then is the snapshot's age
+// reset: an instance whose input files have a source the leader's lack, or
 // lack one the leader's have, as while a changed ConfigMap reaches one
 // pod before the other, holds other targets, and its age grows, and is
 // logged once after PeerFailures fetches in a row, until the two agree.
@@ -720,7 +721,7 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	p.took, p.snapshotFails, p.stale = true, 0, false
 	if agreed {
 		if p.differLogged {
-			p.a.logger.Info("this copy holds the leader's discovered targets again", "leader", addr.String())
+			p.a.logger.Info("this instance holds the leader's discovered targets again", "leader", addr.String())
 		}
 		p.snapshotAt, p.differ, p.differLogged = p.a.clock.Now(), 0, false
 		return
@@ -732,21 +733,21 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 		if !p.snapshotAt.IsZero() {
 			since = p.snapshotAt.UTC().Format(time.RFC3339)
 		}
-		p.a.logger.Warn("this copy's discovered targets differ from the leader's snapshot, which it fetches: their input files differ in their discovery sources", "leader", addr.String(), "last_agreed", since)
+		p.a.logger.Warn("this instance's discovered targets differ from the leader's snapshot, which it fetches: their input files differ in their discovery sources", "leader", addr.String(), "last_agreed", since)
 	}
 }
 
 // takeSnapshot puts what the leader's snapshot holds of each source in
 // force in place of what the source found here, as an answer of the source
 // would be. A source the leader has that has not answered there keeps what
-// this copy holds, so a leader that has not yet heard from a source does
+// this instance holds, so a leader that has not yet heard from a source does
 // not take its targets away. A source the snapshot does not have at all,
 // one the leader's input files lack, as a new source does while a changed
-// ConfigMap has not yet reached the leader's pod, is asked by this copy
+// ConfigMap has not yet reached the leader's pod, is asked by this instance
 // itself, from a refresh loop of its own, until the snapshot has it:
-// taking nothing of it would leave its targets out of this copy's bundles
+// taking nothing of it would leave its targets out of this instance's bundles
 // meanwhile.
-// A nil snap stands for a snapshot of what this copy holds.
+// A nil snap stands for a snapshot of what this instance holds.
 func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 	changed := false
 	a.dmu.Lock()
@@ -758,13 +759,13 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		}
 		if !has {
 			if s.cancel == nil && !a.discoveryStopped {
-				a.logger.Info("the leader's snapshot has no such discovery source; this copy asks it itself until the snapshot has it", attrs...)
+				a.logger.Info("the leader's snapshot has no such discovery source; this instance asks it itself until the snapshot has it", attrs...)
 				a.startSource(s)
 			}
 			continue
 		}
 		if s.cancel != nil && !a.discovering {
-			a.logger.Info("the leader's snapshot has the discovery source this copy asked itself; it takes the leader's targets of it again", attrs...)
+			a.logger.Info("the leader's snapshot has the discovery source this instance asked itself; it takes the leader's targets of it again", attrs...)
 			s.cancel()
 			s.cancel = nil
 		}
@@ -772,7 +773,7 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 			continue
 		}
 		// Checked and bounded as the source's own answer is, by this
-		// copy's max_targets or --discovery.max-targets: a leader of other
+		// instance's max_targets or --discovery.max-targets: a leader of other
 		// settings, or no allocator at all, does not put more in force.
 		found, err := flatten(got.Groups, nil, s.limit)
 		if err == nil {
@@ -798,12 +799,12 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 }
 
 // snapshotOf is the allocator's snapshot and its digest, the ETag it is
-// served with and the If-None-Match a follower names: copies that hold the
+// served with and the If-None-Match a follower names: instances that hold the
 // same discovered targets have the same digest.
 func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
-	s := peerSnapshot{Instance: a.instance, Discovering: a.discovering, Sources: map[string]snapshotSource{}}
+	s := peerSnapshot{ID: a.id, Discovering: a.discovering, Sources: map[string]snapshotSource{}}
 	digest := map[string]string{}
 	for _, src := range a.sources {
 		id := src.spec.identity()
@@ -820,7 +821,7 @@ func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 
 func (a *Allocator) servePeer(w http.ResponseWriter, _ *http.Request) {
 	if !a.Ready() {
-		// A copy shutting down is no candidate for leader any more: its
+		// An instance shutting down is no candidate for leader any more: its
 		// peers stop counting it at once rather than after PeerFailures
 		// checks.
 		http.Error(w, "the allocator is shutting down", http.StatusServiceUnavailable)
@@ -835,7 +836,7 @@ func (a *Allocator) servePeer(w http.ResponseWriter, _ *http.Request) {
 		known = p.self.IsValid()
 		p.mu.Unlock()
 	}
-	writeJSON(w, peerAnswer{Instance: a.instance, Discovering: discovering, AddressKnown: known})
+	writeJSON(w, peerAnswer{ID: a.id, Discovering: discovering, AddressKnown: known})
 }
 
 func (a *Allocator) serveSnapshot(w http.ResponseWriter, r *http.Request) {

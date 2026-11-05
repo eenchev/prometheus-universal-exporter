@@ -422,10 +422,10 @@ func TestARefusalIsLoggedAgainAfterOneIsOver(t *testing.T) {
 	}
 }
 
-// A copy started with a shorter --heartbeat.interval, 5s, than the copies
-// before it said, 40s, hears each replica first at the replica's next
-// heartbeat on the old interval. The first replica's heartbeat says 40s, so
-// the first member list waits 40s after the start, by which every replica
+// An instance started with a shorter --heartbeat.interval, 5s, than the
+// instances before it said, 40s, hears each replica first at the replica's
+// next heartbeat on the old interval. The first replica's heartbeat says 40s,
+// so the first member list waits 40s after the start, by which every replica
 // has been heard, rather than forming after the settle time of those heard
 // first and changing as the rest arrive.
 func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) {
@@ -480,11 +480,11 @@ func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) 
 		beat(t, b, "r1")
 	}
 	if got := effective(b); got != nil {
-		t.Errorf("115s after the start of a copy told 1e9s the member list formed: %v", got)
+		t.Errorf("115s after the start of an instance told 1e9s the member list formed: %v", got)
 	}
 	clock.Advance(5 * time.Second)
 	if got := effective(b); !slices.Equal(got, []string{"r1"}) {
-		t.Errorf("2m after the start of a copy told 1e9s the member list is %v, want [r1]", got)
+		t.Errorf("2m after the start of an instance told 1e9s the member list is %v, want [r1]", got)
 	}
 }
 
@@ -524,16 +524,17 @@ func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	if got := effective(a); !slices.Equal(got, []string{"fresh", "old1", "old2"}) || memberChanges(a) != 0 {
 		t.Errorf("40s after the start got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
 	}
-	// A copy that hears only heartbeats saying none waits its own interval.
+	// An instance that hears only heartbeats saying none waits its own
+	// interval.
 	b := New(nil, Options{Settle: time.Second, HeartbeatInterval: 5 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
 	t.Cleanup(b.BeginShutdown)
 	at(b, 0, "fresh")
 	clock.Advance(4999 * time.Millisecond)
 	if got := effective(b); got != nil {
-		t.Fatalf("1ms before its 5s interval a copy formed the first member list %v", got)
+		t.Fatalf("1ms before its 5s interval an instance formed the first member list %v", got)
 	}
 	clock.Advance(time.Millisecond)
 	if got := effective(b); !slices.Equal(got, []string{"fresh"}) {
-		t.Errorf("at its 5s interval a copy hearing no interval has the member list %v, want [fresh]", got)
+		t.Errorf("at its 5s interval an instance hearing no interval has the member list %v, want [fresh]", got)
 	}
 }

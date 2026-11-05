@@ -53,19 +53,19 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   recipe checks a WebSocket endpoint's handshake with an `http` collector,
   its request carrying the upgrade's headers and a rule comparing the
   `Sec-WebSocket-Accept` it answers with.
-- Allocator copies with a discovery source run side by side as peers:
-  `pue-allocator --peers` names every copy, itself included, a name
-  resolving to all of them or a list, and `--peers.self` the copy's own
-  address. The live copy of the lowest address leads and alone asks the
+- Allocator instances with a discovery source run side by side as peers:
+  `pue-allocator --peers` names every instance, itself included, a name
+  resolving to all of them or a list, and `--peers.self` the instance's own
+  address. The live instance of the lowest address leads and alone asks the
   discovery sources; the others fetch what it found every 2 seconds, beside
   their checks of the leader so a leader that hangs while it answers does
-  not hold them up, and serve the same bundles and targets, and when it goes, telling the others
-  for 3 seconds before it stops, the next copy leads at once from the
-  targets it took last. New metrics say which copy leads, which copies are
-  up (`pue_allocator_peer_up{peer}`) and how long a follower has not held
-  the leader's targets
-  ([Copies with discovery](docs/ALLOCATOR.md#copies-with-discovery)).
-- `pue-allocator` serves a status page at `/`: the copy, its peers and the
+  not hold them up, and serve the same bundles and targets, and when it
+  goes, telling the others for 3 seconds before it stops, the next instance
+  leads at once from the targets it took last. New metrics say which
+  instance leads, which instances are up (`pue_allocator_peer_up{peer}`) and
+  how long a follower has not held the leader's targets ([Instances with
+  discovery](docs/ALLOCATOR.md#instances-with-discovery)).
+- `pue-allocator` serves a status page at `/`: the instance, its peers and the
   leader, the members and their bundles, how the targets are spread over
   the members, with the average and the imbalance, and the discovery
   sources, refreshing itself as the exporter's status page does; and the
@@ -78,9 +78,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   which the page, `/v1/status` and `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
 - `pue-allocator --peers.leader-only`: only the leader serves the whole of
-  `/metrics` and of the status page, and the other copies the peers'
+  `/metrics` and of the status page, and the other instances the peers'
   metrics and their own peer state alone, so a Prometheus scraping every
-  copy has one copy's series of the allocation; the chart's
+  instance has one instance's series of the allocation; the chart's
   `allocator.leaderOnly` sets it with a discovery source
   ([Leader-only metrics](docs/ALLOCATOR.md#leader-only-metrics)).
 - The chart runs `allocator.replicas` allocator pods, 2 by default, with a
@@ -89,18 +89,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `pue-allocator --heartbeat.interval`, 10s by default, from 1s to 2m: how
   often the replicas heartbeat, which the allocator says in every heartbeat
   answer (`heartbeat_interval_seconds`) and the exporter heartbeats at from
-  its next heartbeat on, the shortest when copies of the allocator differ; a
-  member is dropped after three intervals, where the interval was fixed at
-  10s and the member TTL at 30s. The exporter heartbeats each copy on a
-  schedule of its own, giving up on a heartbeat after 5s or the interval
-  when that is shorter, so a copy that hangs makes the replica late to no
-  other, and looks up the copies' addresses at the interval in force, a
-  new one taking effect at once. Each heartbeat says the interval the
-  replica heartbeats at (`interval_seconds`), once a copy has said one, and
-  a copy's first member list waits the longest any says, so a copy started
-  with a shorter interval than the copies before it hears the replicas on
-  the old interval first. The status page shows both and marks a
-  member whose heartbeat is overdue
+  its next heartbeat on, the shortest when instances of the allocator
+  differ; a member is dropped after three intervals, where the interval was
+  fixed at 10s and the member TTL at 30s. The exporter heartbeats each
+  instance on a schedule of its own, giving up on a heartbeat after 5s or
+  the interval when that is shorter, so an instance that hangs makes the
+  replica late to no other, and looks up the instances' addresses at the
+  interval in force, a new one taking effect at once. Each heartbeat says
+  the interval the replica heartbeats at (`interval_seconds`), once an
+  instance has said one, and an instance's first member list waits the
+  longest any says, so an instance started with a shorter interval than the
+  instances before it hears the replicas on the old interval first. The
+  status page shows both and marks a member whose heartbeat is overdue
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - The chart's `allocator.heartbeatInterval` sets the allocator's
   `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
@@ -110,7 +110,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 - An exporter in allocator mode whose lookup of the allocator's addresses
   failed sent no heartbeat until one succeeded, and fell out of the member
-  list after the member TTL though every copy was up. It now heartbeats the
+  list after the member TTL though every instance was up. It now heartbeats the
   addresses it resolved to last
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - `pue-allocator` logged an `http_sd` source's failure, and refused a

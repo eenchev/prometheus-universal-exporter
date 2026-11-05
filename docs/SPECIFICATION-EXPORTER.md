@@ -30374,6 +30374,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: the heartbeat replies say the default 10s interval, which the test takes out of them so its replicas keep heartbeating every 20ms.
 - `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded up, an empty interval counting as 10s: 25 by default, 20 with 5s, 60 with 30s, 4 with settle 0s and 1.5s, 240 with 15s and 2m, 21 with 20s and 1s; `allocator.heartbeatInterval` renders `--heartbeat.interval` with its value, and nothing when empty.
 - `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.heartbeatInterval` of `soon` is refused by the schema and the template, and `999ms`, `2m1s` and `0s` by the template, saying it must be a Go duration from 1s to 2m.
+- `TestTheMemberViewListsItsTargets` (allocator): with 40 static targets, a quarter with a user, a password and a `token` in their URL, two probe jobs whose targets carry an `access_token`, and members r1 and r2 joined by r3, `/?member=r1` and `/v1/status?member=r1` answer `401` with a `Basic` challenge without the token; r1's view counts the static, draining and probe targets the spread counts for it, lists by name the static targets `allocapi.Owner` gives it with collector, interval and labels, `""` left out, the draining ones moved to r3 with up to 30s left, and the probe jobs in file order with the spread's counts; the page has its title, the bar's home and JSON links, the way back, the filter box with the member, the three tables, a link to r3's view and the targets redacted, neither it nor the JSON shows `hunter2`, a token or an access token, the fragment is the content alone, without the filter box, and the status page links r1 to its view; `?filter=T0` lists only names starting `t0`, every count but the matching ones kept, and no probe target, `?filter=apis` the apis job's probe targets alone, and a filter nothing holds says so; an unknown member is answered `404` on both, with a notice and the way back on the page, and an empty `member` `400`.
+- `TestAMemberViewIsBounded` (allocator): a member owning 1205 static targets has 1000 listed of 1205 matching, the page saying the first 1000 are listed and 205 more left out, and `?filter=t12` lists all 15 of its matches, `t1204`, beyond the bound, included.
+- `TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader` (allocator): under `--peers.leader-only` the follower's view of a member it heard from is `partial` with the leader's address and no lists, its page names the leader with a notice and has no filter box nor targets, and the leader's view of the same member is whole.
 
 # 35. Documentation requirements
 
@@ -33699,9 +33702,31 @@ theme picker, the logo as its icon, the same `Content-Security-Policy`,
 with a bar of each member's targets drawn in CSS alone, and the exporter's
 status page's refresh controls, `?refresh=` keeping the interval and
 `?format=fragment` answering the content alone, without the bar; another
-`format` MUST be answered `400`. `docs/ALLOCATOR.md` MUST describe the page,
-the JSON and how a browser gives the token, and the chart README how to
-reach a pod's page and find the leader's.
+`format` MUST be answered `400`. Each member's id in the members and in the
+spread MUST link to its view, `GET /?member=<id>`, framed as the page is,
+with a link back to it and refreshed as it is: the member as the members
+have it; the static targets it owns as `pue_allocator_assigned` counts them,
+by name, with collector, target, labels (one written `""` left out) and
+interval; those it keeps draining with the member each moved to and how
+much longer it drains; and the probe targets routed to it, counted by job
+and listed with job and collector, in file order of the jobs and by target.
+A target MUST be shown as `fetch.DisplayTarget` shows it for its
+collector, credentials withheld, and a static target's `params` and
+`request` MUST NOT be shown. `?filter=<text>` MUST cut each list to the
+targets whose name, target, collector, a label as `name=value`, job or
+member moved to holds the text, in any case, before each list is cut to
+its first 1000 (`MemberViewLimit`); each list MUST say how many it holds,
+how many match and, cut short, how many are left out. The page MUST have a
+filter box, outside the content a refresh swaps, that hides as it is typed
+the rows whose text does not hold it, with plain JavaScript, and submits
+`?filter=`. `GET /v1/status?member=<id>` MUST answer the same as JSON
+(`allocator.MemberView`). A member the allocator does not know MUST be
+answered `404`, and an empty `member` `400`, on both. A follower under
+`--peers.leader-only` MUST NOT serve a member's targets: its view names the
+leader and its JSON is `partial`, with the leader's address. Both take the
+token as the status page does. `docs/ALLOCATOR.md` MUST describe the page,
+the member's view, the JSON and how a browser gives the token, and the
+chart README how to reach a pod's page and find the leader's.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,

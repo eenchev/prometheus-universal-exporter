@@ -889,6 +889,46 @@ the first visit: give any user name, and the token as the password
 ([API](#api)). On Kubernetes, reach the page through `kubectl port-forward`
 ([On Kubernetes](#on-kubernetes)).
 
+### A member's targets
+
+A member's id in the members and in the spread links to its view,
+`GET /?member=<id>`: what that one exporter replica has, to answer "which
+targets does this pod scrape?" without reading its bundle. It shows the
+member as the members do, then
+
+- the static targets it owns, by name, each with its target, collector,
+  labels and interval;
+- the static targets it keeps draining, each with the member it moved to,
+  which links to that member's view, and how much longer it drains;
+- the probe targets service discovery routes to it, counted by probe job,
+  then each with its job and collector.
+
+The counts are the spread's for the member. A target is shown as the
+exporter's pages show it, its credentials withheld: a URL's user and
+password as `redacted`, and the values of query and path parameters whose
+names read as credentials', such as `token` or `access_token`, as
+`<redacted>`; a static target's `params` and `request` block are not shown
+at all. A filter box above the lists hides, as it is typed, the rows that
+do not hold its text, in any case, in their name, target, collector, labels,
+job or the member they moved to, with no page load; Search all, or Enter,
+asks the allocator with `?filter=<text>`, which applies the same match to
+every target of the member before the bound below. Each list holds at most
+1000 targets, so a member of a share of tens of thousands stays a page a
+browser draws at once; a list cut short says how many are left out, and
+the filter finds them. The view refreshes itself as the page does, the
+filter kept, and its bar's JSON link is `GET /v1/status?member=<id>`, the
+same as JSON: `generated_at`, `member`, `filter`, `limit` (1000),
+`partial`, `leader`, `status` (the member as `members.list` has it),
+`static` and `draining` (`total`, `matching` and `list`, each with `name`,
+`collector`, `target`, `labels`, `interval`, and while draining `moved_to`
+and `drains_for_seconds`), and `probes` (`jobs`, each with `job`,
+`collector` and `targets`; `total`, `matching` and `list`, each with `job`,
+`collector` and `target`). A member the allocator does not know is
+answered `404`, and `?member=` without an id `400`. Under
+`--peers.leader-only` a follower serves no member's view, as it serves no
+members: the page names the leader, whose page has it, and the JSON is
+`partial` with the leader's address.
+
 ## Metrics
 
 | Metric | Type | Meaning |

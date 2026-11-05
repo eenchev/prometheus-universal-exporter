@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 // the exporter's pages are (pagekit): the same bar with its theme picker,
 // the same icon, and the same refresh controls, which fetch the page's
 // content again, ?format=fragment, and swap it in. Every value is escaped by
-// html/template, and the script writes text with textContent alone.
+// html/template, and the script writes text with textContent alone. With
+// ?member=<id> it is that member's view instead (memberview.go), in the
+// same frame.
 
 // StatusPath is where the status is served as JSON.
 const StatusPath = "/v1/status"
@@ -25,8 +28,17 @@ const StatusPath = "/v1/status"
 // statusDocs is where the page points for documentation.
 const statusDocs = "https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/ALLOCATOR.md"
 
-func (a *Allocator) serveStatus(w http.ResponseWriter, _ *http.Request) {
-	body, err := json.Marshal(a.Status())
+func (a *Allocator) serveStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("member") {
+		a.serveMemberView(w, r)
+		return
+	}
+	writeStatusJSON(w, a.Status())
+}
+
+// writeStatusJSON answers v as JSON, which no cache keeps.
+func writeStatusJSON(w http.ResponseWriter, v any) {
+	body, err := json.Marshal(v)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -37,21 +49,49 @@ func (a *Allocator) serveStatus(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
+// serveStatusPage answers the status page, or with ?member=<id> the
+// member's view; with ?format=fragment its content alone, which the page's
+// refresh swaps in.
 func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
-	format := r.URL.Query().Get("format")
+	query := r.URL.Query()
+	format := query.Get("format")
 	if format != "" && format != "html" && format != "fragment" {
 		http.Error(w, "the format parameter is html or fragment; "+StatusPath+" serves the status as JSON", http.StatusBadRequest)
 		return
 	}
-	page := statusPageOf(a.Status())
-	t := statusPageTemplate
-	if format == "fragment" {
-		t = statusContentTemplate
+	s := a.Status()
+	frame := pageFrame{Version: s.Copy.Version, Revision: s.Copy.Revision, Docs: statusDocs, JSON: StatusPath[1:]}
+	page, content := statusPageTemplate, statusContentTemplate
+	code := http.StatusOK
+	if query.Has("member") {
+		member := query.Get("member")
+		if member == "" {
+			http.Error(w, "the member parameter names a member; / without it is the whole status", http.StatusBadRequest)
+			return
+		}
+		view, known := a.MemberView(member, query.Get("filter"))
+		if !known {
+			code = http.StatusNotFound
+		}
+		frame.Member = &memberPage{MemberView: view, Known: known}
+		frame.Content = frame.Member
+		frame.JSON += "?" + url.Values{"member": {member}}.Encode()
+		page, content = memberPageTemplate, memberContentTemplate
 	} else {
-		page.Refresh = pagekit.NewRefreshControl(0, r.URL.Query().Get("refresh"))
+		frame.Content = statusPageOf(s)
+	}
+	t := page
+	if format == "fragment" {
+		t = content
+	} else {
+		frame.Refresh = pagekit.NewRefreshControl(0, query.Get("refresh"))
+	}
+	var data any = frame
+	if format == "fragment" {
+		data = frame.Content
 	}
 	var body bytes.Buffer
-	if err := t.Execute(&body, page); err != nil {
+	if err := t.Execute(&body, data); err != nil {
 		a.logger.Error("rendering the status page failed", "error", err)
 		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)
 		return
@@ -61,16 +101,30 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", pagekit.Policy)
+	w.WriteHeader(code)
 	_, _ = w.Write(body.Bytes())
+}
+
+// pageFrame is what frames a page's content: the bar, the heading, the
+// refresh controls and, on a member's view, its way back and its filter.
+type pageFrame struct {
+	Version, Revision string
+	Refresh           pagekit.RefreshControl
+	Docs              string
+	// JSON is where the bar's JSON link points, relative to the page.
+	JSON string
+	// Member is the member's view, nil on the status page.
+	Member *memberPage
+	// Content is what the content template renders: a statusPage, or
+	// Member.
+	Content any
 }
 
 // statusPage is what the page's template renders: the status, with the
 // spread laid out for its table and bars.
 type statusPage struct {
 	Status
-	Refresh pagekit.RefreshControl
-	Docs    string
-	View    spreadView
+	View spreadView
 }
 
 // spreadView is the spread as the table shows it: a row of each member,
@@ -95,7 +149,7 @@ type spreadRow struct {
 }
 
 func statusPageOf(s Status) statusPage {
-	page := statusPage{Status: s, Docs: statusDocs}
+	page := statusPage{Status: s}
 	sp := s.Spread
 	if sp == nil {
 		return page
@@ -163,7 +217,7 @@ func shortGeneration(g string) string {
 	return g
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration}
+var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "gen": shortGeneration, "listNote": listNote}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
 // the exporter's status page draws them, numbers right-aligned in figures
@@ -219,20 +273,32 @@ td.bar { width: 32%; min-width: 120px; }
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-<span class="home" aria-current="page">Prometheus Universal Exporter · allocator</span>
-<span class="pages"><a href="v1/status">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
+{{if .Member}}<a class="home" href="./">Prometheus Universal Exporter · allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · allocator</span>{{end}}
+<span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 
-var statusContentTemplate = template.Must(template.New("content").Funcs(statusFuncs).Parse(statusContent))
+// statusTemplate is a page of the frame and the content content
+// defines, and contentTemplate its content alone, which a refresh fetches.
+func statusTemplate(content string) (page, contentTemplate *template.Template) {
+	contentTemplate = template.Must(template.New("content").Funcs(statusFuncs).Parse(statusParts + content))
+	page = template.Must(template.Must(template.New("page").Funcs(statusFuncs).Parse(statusParts + content)).Parse(statusFrame))
+	return page, contentTemplate
+}
 
-var statusPageTemplate = template.Must(template.Must(template.New("status").Funcs(statusFuncs).Parse(statusContent)).Parse(`<!DOCTYPE html>
+var (
+	statusPageTemplate, statusContentTemplate = statusTemplate(statusContent)
+	memberPageTemplate, memberContentTemplate = statusTemplate(memberContent)
+)
+
+// statusFrame frames a page's content (pageFrame).
+var statusFrame = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Status · pue-allocator</title>
+<title>{{with .Member}}Member {{.Member}}{{else}}Status{{end}} · pue-allocator</title>
 ` + pagekit.Icon + "\n" + pagekit.ThemeHead + `
-<style>` + pagekit.Style + pagekit.RefreshStyle + statusStyle + `</style>
+<style>` + pagekit.Style + pagekit.RefreshStyle + statusStyle + memberStyle + `</style>
 {{- if .Refresh.Seconds}}
 <noscript><meta http-equiv="refresh" content="{{.Refresh.Seconds}}"></noscript>
 {{- end}}
@@ -240,8 +306,13 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
 <body>
 <main>
 ` + statusChrome + `
+{{- with .Member}}
+<p class="back"><a href="./">← Allocator status</a></p>
+<h1>Member <span class="member-id">{{.Member}}</span></h1>
+{{- else}}
 <h1>Allocator status</h1>
-<p class="meta">Version {{.Copy.Version}}, revision {{.Copy.Revision}}</p>
+{{- end}}
+<p class="meta">Version {{.Version}}, revision {{.Revision}}</p>
 <form class="refresh" id="refresh" method="get">
 <a class="button" id="refresh-now" href="">Refresh</a>
 <label>Auto-refresh <select name="refresh" id="refresh-every">
@@ -252,8 +323,19 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
 <noscript><button type="submit">Apply</button></noscript>
 <span id="refresh-state" class="muted" role="status" aria-live="polite"></span>
 </form>
+{{- with .Member}}{{if .Static}}
+<form class="filter" id="filter" method="get" role="search">
+<input type="hidden" name="member" value="{{.Member}}">
+{{- if $.Refresh.Seconds}}
+<input type="hidden" name="refresh" value="{{$.Refresh.Interval}}">
+{{- end}}
+<label for="target-filter">Filter: name, target, collector, label or job</label>
+<span class="filter-row"><input id="target-filter" name="filter" type="search" value="{{.Filter}}" autocomplete="off" spellcheck="false"><button type="submit">Search all</button></span>
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the member{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}.</span>
+</form>
+{{- end}}{{end}}
 <div id="status-content">
-{{- template "content" .}}
+{{- template "content" .Content}}
 </div>
 <script>
 "use strict";
@@ -279,6 +361,41 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
     state.textContent = "As of " + clock(Date.parse(dataAt) || refreshedAt);
   }
   asOf();
+  // A member's view filters its tables' rows as the filter is typed,
+  // matching a row's text in any case, and counts the rows left; the
+  // filter is outside the content, so a refresh keeps what was typed and
+  // filters the new rows again. Search all asks the allocator, which
+  // filters every target, those beyond a list's bound included.
+  const filter = $("target-filter");
+  function filterRows() {
+    if (!filter) return;
+    const needle = filter.value.trim().toLowerCase();
+    for (const table of content.querySelectorAll("table.targets")) {
+      let shown = 0;
+      const rows = table.tBodies[0].rows;
+      for (const row of rows) {
+        const hit = needle === "" || row.textContent.toLowerCase().includes(needle);
+        row.hidden = !hit;
+        if (hit) shown++;
+      }
+      const count = content.querySelector('[data-rows-of="' + table.id + '"]');
+      if (count) count.textContent = shown === rows.length || shown === 0 ? "" : shown + " of the " + rows.length + " rows below match.";
+      const none = content.querySelector('[data-none-of="' + table.id + '"]');
+      if (none) none.hidden = shown > 0;
+      table.hidden = shown === 0;
+    }
+  }
+  if (filter) {
+    filter.addEventListener("input", filterRows);
+    $("filter").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const url = new URL(location.href);
+      if (filter.value.trim() === "") url.searchParams.delete("filter");
+      else url.searchParams.set("filter", filter.value.trim());
+      location.assign(url);
+    });
+    filterRows();
+  }
   async function refresh() {
     if (inFlight) return;
     inFlight = true;
@@ -291,6 +408,7 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
       content.innerHTML = await response.text();
       refreshedAt = Date.now();
       asOf();
+      filterRows();
     } catch (error) {
       state.className = "bad";
       state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data as of " + clock(Date.parse(dataAt) || refreshedAt);
@@ -324,7 +442,17 @@ var statusPageTemplate = template.Must(template.Must(template.New("status").Func
 </main>
 </body>
 </html>
-`))
+`
+
+// statusParts are what the status page and a member's view both show of
+// a member (MemberStatus): how long ago its last heartbeat came, marked
+// when one is overdue, the bundle it has in force beside the one it is to
+// have, and its state.
+const statusParts = `
+{{- define "heartbeat"}}{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}{{end}}
+{{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
+{{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{end}}
+`
 
 // statusContent is the page's content, which a refresh swaps in.
 const statusContent = `{{define "content"}}
@@ -390,11 +518,11 @@ const statusContent = `{{define "content"}}
 <tbody>
 {{- range .List}}
 <tr>
-<td class="id"><strong>{{.ID}}</strong></td>
+<td class="id"><a href="?member={{.ID}}" title="the targets of {{.ID}}"><strong>{{.ID}}</strong></a></td>
 <td>{{.Address}}</td>
-<td class="num">{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}</td>
-<td>{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}</td>
-<td>{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}</td>
+<td class="num">{{template "heartbeat" .}}</td>
+<td>{{template "bundle" .}}</td>
+<td>{{template "state" .}}</td>
 <td class="num">{{.Draining}}</td>
 </tr>
 {{- end}}
@@ -414,7 +542,7 @@ const statusContent = `{{define "content"}}
 {{- $avg := .AveragePct}}
 {{- range .Members}}
 <tr>
-<td class="id"><strong>{{.Member}}</strong></td>
+<td class="id"><a href="?member={{.Member}}" title="the targets of {{.Member}}"><strong>{{.Member}}</strong></a></td>
 <td class="num">{{count .Static}}</td>
 <td class="num">{{count .Draining}}</td>
 {{- range .Jobs}}<td class="num">{{count .}}</td>{{end}}

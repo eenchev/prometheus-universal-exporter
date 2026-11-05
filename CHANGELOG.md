@@ -69,9 +69,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   leader, the members and their bundles, how the targets are spread over
   the members, with the average and the imbalance, and the discovery
   sources, refreshing itself as the exporter's status page does; and the
-  same as JSON at `/v1/status`. A browser gives `--web.token-file`'s token
-  as the password of Basic auth, which the page, `/v1/status` and
-  `/metrics` take beside the bearer token
+  same as JSON at `/v1/status`. Each member links to its own view,
+  `/?member=<id>` and `/v1/status?member=<id>`: the static targets it owns
+  and drains, with where they moved, and the probe targets routed to it by
+  job, credentials withheld, with a filter box and at most 1000 targets a
+  list ([A member's targets](docs/ALLOCATOR.md#a-members-targets)). A
+  browser gives `--web.token-file`'s token as the password of Basic auth,
+  which the page, `/v1/status` and `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
 - `pue-allocator --peers.leader-only`: only the leader serves the whole of
   `/metrics` and of the status page, and the other copies the peers'

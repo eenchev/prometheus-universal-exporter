@@ -94,3 +94,13 @@ func TestTheStatusSaysHowOftenTheInputsAreRead(t *testing.T) {
 		requireIn(t, ask(a.Handler(""), "/", "").Body.String(), c.want, "A changed member list holds for 15s before targets move.")
 	}
 }
+
+// The discovery sources table keeps a source's name and kind, its owner and
+// where its targets came from on one line each, so a long error in the
+// result cell takes the width instead of breaking them over several lines.
+func TestTheSourcesTableKeepsItsShortCellsOnOneLine(t *testing.T) {
+	a := New(mustLoad(t, writeInputs(t, testConfig, staticTargets(2), "")), Options{Settle: 15 * time.Second, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	page := ask(a.Handler(""), "/", "").Body.String()
+	requireIn(t, page, "table.sources td:first-child, table.sources td:nth-child(2), table.sources td:last-child { white-space: nowrap; }")
+}

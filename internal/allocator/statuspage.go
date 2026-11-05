@@ -283,6 +283,10 @@ th { background: var(--panel); white-space: nowrap; }
 td { overflow-wrap: normal; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.id { overflow-wrap: anywhere; min-width: 9em; }
+/* A source's name and kind, its owner and where its targets came from are
+   short phrases that read badly broken over lines; the result, with its
+   error, takes the width that is left. */
+table.sources td:first-child, table.sources td:nth-child(2), table.sources td:last-child { white-space: nowrap; }
 tfoot td { background: var(--panel); }
 /* Scrolled sideways, as on a phone, the spread keeps each row's member in
    view beside its counts and bar. */
@@ -776,7 +780,7 @@ const statusContent = `{{define "content"}}
 <h2>Discovery sources</h2>
 {{- if .Sources}}
 <div class="scroll">
-<table>
+<table class="sources">
 <thead><tr><th>Source</th><th>Owner</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
 <tbody>
 {{- range .Sources}}

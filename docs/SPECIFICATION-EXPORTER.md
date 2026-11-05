@@ -30410,6 +30410,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheIntervalFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--config.watch-interval=45s`, `--settle=3s` and `--discovery.refresh-interval=7s` and a probe job of a `file_sd` source without `refresh_interval` and one of `2m` gives a status of a 45s watch interval, a 3s settle time and sources asked every 7 and 120 seconds.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
+- `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
 
 # 35. Documentation requirements
 

@@ -122,10 +122,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   replica late to no other, and looks up the instances' addresses at the
   interval in force, a new one taking effect at once. Each heartbeat says
   the longest interval the instances the replica finds said
-  (`interval_seconds`), once one has said one, and an instance's first
-  member list waits the longest any says, so an instance started with a
-  shorter interval than the instances before it hears the replicas on the
-  old interval first, also when the first it hears started after it. The
+  (`interval_seconds`), once one has said one, each instance told apart by
+  the name its answer carries (`instance`), so instances answering one
+  address in turn keep their own say; an instance's first member list waits
+  the longest any says after the first heartbeat it hears, so an instance
+  started with a shorter interval than the instances before it hears the
+  replicas on the old interval first, also when the lookups find it late
+  and when the first it hears started after it. The
   status page shows both and marks a member whose heartbeat is overdue
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - The chart's `allocator.heartbeatInterval` sets the allocator's

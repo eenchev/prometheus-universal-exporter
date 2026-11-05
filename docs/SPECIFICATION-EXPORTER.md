@@ -30434,6 +30434,14 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change.
 - `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient) still passes unchanged: with one instance the longest said is the one in force.
 
+## 34.274 Fixes from the review of the allocator's jobs and polish: heartbeats and settings
+
+- `TestInstancesAnsweringOneAddressInTurnDoNotFlipTheInterval` (allocclient), the reviewer's scenario: two instances answering one address in turn, `p` saying 2s and `q` 4s, give a 2s interval in force, at most 6 heartbeats in 5s, every heartbeat from the third on saying `interval_seconds` 4, and one log line of a changed interval; keyed by the address, the heartbeats ran back to back and every answer logged a change.
+- `TestWhatAnInstanceSaidIsKeptForTheMemberTTLAndHeartbeatsEarlyOnlyWhenItGrows` (allocclient): with `p` saying 1s and `q` 2s at two addresses, on a clock of the test's own, the first 1s and then 2s heartbeat every instance at once; `q`'s address gone gives 1s and no early heartbeat; `q` back within the interval gives 2s and no early heartbeat, and back an interval later an early one; `q` failing at an address that keeps resolving keeps its 2s for 1ms less than 6s, the member TTL of 2s, and loses it at 6s.
+- `TestTheHeartbeatEndpoint` (allocator), changed: the answer before the member list formed is `{"generation":"","heartbeat_interval_seconds":10,"instance":"<id>"}`, with the instance's id.
+- `TestTheFirstMemberListWaitsTheOldIntervalAfterTheFirstHeartbeat` (allocator), the reviewer's rollout scenario on a clock of the test's own: an instance of a 5s interval and a 1s settle time first heard 30s after its start from `r1` saying 40s, and from `r2` saying 40s at 65s, has no member list 1ms before 70s and `[r1 r2]` as its first at 70s; counted from the start, the list formed of `r1` alone at 40s.
+- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator), changed: the heartbeat saying none, the first, at 1s starts the count of the 40s said after it, so the list has not formed at 40s and forms at 41s.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33667,14 +33675,17 @@ MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
-not changed for `--settle`, and MUST NOT form before a member is live nor
-before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
-is the longest `interval_seconds` a heartbeat heard before it formed said,
-brought within `1s` and `2m`, 0 when none said one; a heartbeat without
-`interval_seconds`, or with 0, MUST NOT change `I`. Since a replica says the
-longest interval the instances it finds said (§ 42.14e), `I` covers the
-replicas still on an older, longer interval for as long as an instance that
-said it is found. A member
+not changed for `--settle`, and MUST NOT form before a member is live,
+before `max(--settle, --heartbeat.interval)` after the start, nor before
+`I` after the first heartbeat heard, where `I` is the longest
+`interval_seconds` a heartbeat heard before it formed said, brought within
+`1s` and `2m`, 0 when none said one; a heartbeat without
+`interval_seconds`, or with 0, MUST NOT change `I`, but counts as any other
+for the first heartbeat heard. The first heartbeat comes once a replica has
+found the instance, which a rollout's lookups do only some time after its
+start, and since a replica says the longest interval the instances it finds
+said (§ 42.14e), `I` after it covers the replicas still on an older, longer
+interval for as long as an instance that said it is found. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33705,8 +33716,9 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed, and `heartbeat_interval_seconds`, the
-heartbeat interval in seconds, in every answer; a heartbeat without `member`, a
+before the member list has formed, `heartbeat_interval_seconds`, the
+heartbeat interval in seconds, and `instance`, a random name of the
+allocator's process made at its start, in every answer; a heartbeat without `member`, a
 `host:port` `advertise` with a host and a decimal port from 1 to 65535, an
 `instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
 `400`, a body over 64 KiB `413`, and one refused for
@@ -33914,12 +33926,19 @@ process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one, and
 `interval_seconds`, once a reply has said a `heartbeat_interval_seconds`
 other than 0, and MUST leave `interval_seconds` out before. `interval_seconds`
-MUST be the longest of the intervals the last answer of each address the
-allocator's host resolved to last said, each brought within `1s` and `2m`,
-an address's kept while its heartbeats fail and dropped when it no longer
-resolves; when none of them says one, it MUST stay as it is. When it
-changes, the first time it is set included, a heartbeat MUST be sent to
-every address at once, not at the next turn of the interval; on that signal the
+MUST be the longest of the intervals the last answer of each instance of
+the allocator said, each brought within `1s` and `2m`, an instance being
+the reply's `instance`, or the address answered at for a reply without
+one; an instance's MUST be kept while heartbeats to its address fail, and
+dropped when its address no longer resolves or its last answer is the
+member TTL (`allocapi.MemberTTL`) of the longest of them, or of the
+interval in force when that is longer, old; when none of them says one, it
+MUST stay as it is. When it grows to an interval longer than any it was
+before, the first time it is set included, a heartbeat MUST be sent to
+every address at once, not at the next turn of the interval; when it grows
+to one it was before, the same MUST happen only when the last time was at
+least an interval ago, and when it shrinks it MUST wait for the next turn.
+On the shutdown signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`
@@ -33933,14 +33952,17 @@ for a heartbeat, for each address, until it changes or ends.
 
 The heartbeat interval MUST be `allocapi.DefaultHeartbeatInterval`, 10
 seconds, at the start, and the exporter MUST NOT have a setting of it. Of
-the addresses whose last heartbeat was answered without error, those whose
-reply said a `heartbeat_interval_seconds` other than 0 MUST make the
-interval the shortest of them, each first brought within `1s` and `2m` (one
+the instances, as for `interval_seconds`, not dropped, whose last answer
+came without error and with no heartbeat to its address failing since,
+those whose reply said a `heartbeat_interval_seconds` other than 0 MUST make
+the interval the shortest of them, each first brought within `1s` and `2m` (one
 below, a negative one included, taken as `1s`, one above as `2m`), and the
 next heartbeat to every address MUST follow that interval after the last
 one to it, and the next lookup of the addresses that interval after the
 last lookup ended, at once when that is past; when none says one, because every instance failed or none sends the
-field, the interval MUST stay as it is.
+field, the interval MUST stay as it is. A change of the interval MUST be
+logged, and only a change: instances answering one address in turn with
+different intervals change nothing while each keeps its say.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`

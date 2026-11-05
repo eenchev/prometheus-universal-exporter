@@ -669,32 +669,46 @@ A change to the live members takes effect once it has held for `--settle`: a
 replica that restarts and is back within it keeps its share, and nothing
 moves. The first member list forms once the live members have not changed
 for `--settle`, each replica heard from for the first time starting the wait
-again, and no sooner than `--settle` or a heartbeat interval, whichever is
-longer, after the allocator started, so a restarted allocator has heard from
-every replica before it hands out shares. The heartbeat interval there is
-the longest of the allocator's own and those its replicas say in their
-heartbeats. An instance started with a shorter `--heartbeat.interval` than
-the instances before it said, as during a rollout that shortens it, hears a
-replica first at the replica's next lookup of the instances' addresses on
-the old interval, so every replica has reached it within the old interval
-of its start, and the first member list waits that long. A replica
-heartbeats every instance at the shortest interval they say, so each hears
-it often enough, and says in its heartbeats the longest: the last interval
-each instance its lookup finds said, an instance's kept while its
-heartbeats fail and dropped once its address is gone. While an instance
-from before the rollout is still found, every replica says the old
-interval, a replica that started after the new instance among them, and
-the first list waits for the replicas still on it whichever replica it
-hears first. A replica that has not been told an interval yet, as one that
-has just started, says none, as the 10s it heartbeats at until then is no
-instance's, and its heartbeat does not change the wait; when the instances'
-first answers tell it one, it heartbeats every instance again at once, saying
-the longest, rather than at its next turn. What is left: a replica started
-once no instance from before is found any more has no one to learn the old
-interval from, and says the new one; if the new instance hears only such
-replicas before its own interval and `--settle` have passed, they form the
-first list by themselves, and it changes as the replicas still on the old
-interval arrive. A rollout that keeps an old instance until a new one is
+again, and no sooner than `--settle` or the allocator's own heartbeat
+interval, whichever is longer, after the allocator started, so a restarted
+allocator has heard from every replica before it hands out shares. Nor does
+it form sooner than the longest interval the replicas say in their
+heartbeats after the first heartbeat came. An instance started with a
+shorter `--heartbeat.interval` than the instances before it said, as during
+a rollout that shortens it, is heard by a replica first at the replica's
+next lookup of the instances' addresses on the old interval after the
+instance could be found, which is later than its start: a headless Service
+lists it once it is ready, and the lookups see it some time after that. The
+first heartbeat comes once a replica has found it, so within the old
+interval after the first heartbeat every replica on the old interval has
+found it and heartbeated it at once, and the first member list waits that
+long. A replica heartbeats every instance at the shortest interval they say,
+so each hears it often enough, and says in its heartbeats the longest: the
+last interval each instance it heard from said, an instance's kept while
+its heartbeats fail, and dropped once its address is gone or once it has
+not answered for the member TTL of the longest interval said. A replica
+tells the instances apart by the name each answer carries
+([API](#api)), not by the address it reached them at, so instances that
+answer one address in turn, as behind a Service's ClusterIP or a load
+balancer, each keep their say, rather than the address's changing at every
+answer. While an instance from before the rollout is still found, every
+replica says the old interval, a replica that started after the new
+instance among them, and the first list waits for the replicas still on it
+whichever replica it hears first. A replica that has not been told an
+interval yet, as one that has just started, says none, as the 10s it
+heartbeats at until then is no instance's, and its heartbeat does not
+change the interval waited for, though as any heartbeat it starts the
+wait's count from the first heartbeat; when the instances' first answers
+tell it one, it heartbeats every instance again at once, saying the
+longest, rather than at its next turn. It does so whenever the longest
+grows past any it said before; when it comes back to one it said before, as
+when an instance that was not heard for a while answers again, at most once
+an interval, and when it shrinks at the next turn. What is left: a replica
+started once no instance from before is found any more has no one to learn
+the old interval from, and says the new one; if the new instance hears only
+such replicas before its own interval and `--settle` have passed, they form
+the first list by themselves, and it changes as the replicas still on the
+old interval arrive. A rollout that keeps an old instance until a new one is
 ready, as the chart's does, finds an old instance throughout.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
@@ -800,11 +814,12 @@ one it heartbeats at, the shortest; it is left out until an instance has
 said one, and the first member list waits for it ([Members and
 allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
-`429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
-the generation of the member's bundle, or `""` while the member list has not
-formed, and `--heartbeat.interval` in seconds. A replica whose bundle
-differs fetches it, and heartbeats at the interval from its next heartbeat
-on ([Members and allocation](#members-and-allocation)).
+`429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10,
+"instance": "…"}`: the generation of the member's bundle, or `""` while the
+member list has not formed, `--heartbeat.interval` in seconds, and the name
+of the instance that answered, random and made at its start. A replica
+whose bundle differs fetches it, and heartbeats at the interval from its
+next heartbeat on ([Members and allocation](#members-and-allocation)).
 
 ### Bundles
 

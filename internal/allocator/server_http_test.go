@@ -186,7 +186,8 @@ func TestALongPollEndsWith304(t *testing.T) {
 }
 
 // The heartbeat endpoint takes a heartbeat as JSON and answers with the
-// generation of the member's bundle, "" before the member list has formed;
+// generation of the member's bundle, "" before the member list has formed,
+// and the instance that answered, which the replica keys what it was told by;
 // what is no heartbeat is refused.
 func TestTheHeartbeatEndpoint(t *testing.T) {
 	p := writeInputs(t, testConfig, staticTargets(5), "")
@@ -194,7 +195,7 @@ func TestTheHeartbeatEndpoint(t *testing.T) {
 	a := New(mustLoad(t, p), Options{Clock: clock, Logger: testutil.QuietLogger(t)})
 	url := serve(t, a, "")
 	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`)
-	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"generation":"","heartbeat_interval_seconds":10}` {
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"generation":"","heartbeat_interval_seconds":10,"instance":"`+a.id+`"}` {
 		t.Errorf("before the member list formed: got %s %s", resp.Status, body)
 	}
 	clock.Advance(allocapi.DefaultHeartbeatInterval)

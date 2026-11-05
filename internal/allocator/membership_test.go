@@ -492,8 +492,9 @@ func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) 
 // its heartbeats, and they do not change how long the first member list
 // waits: heard first, it holds the list back neither for the 10s the
 // client starts with nor at all, and a replica heard after it whose first
-// heartbeat says the old 40s makes the list wait 40s, of the both of them
-// and the one heard later.
+// heartbeat says the old 40s makes the list wait 40s after the first
+// heartbeat, fresh's, which says the instance could be found by then, of the
+// both of them and the one heard later.
 func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	clock := newFakeClock()
 	at := func(a *Allocator, interval time.Duration, members ...string) {
@@ -521,8 +522,12 @@ func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	}
 	clock.Advance(2 * time.Second)
 	at(a, 5*time.Second, "fresh", "old1", "old2")
+	if got := effective(a); got != nil {
+		t.Fatalf("the first member list formed of %v 39s after the first heartbeat", got)
+	}
+	clock.Advance(time.Second)
 	if got := effective(a); !slices.Equal(got, []string{"fresh", "old1", "old2"}) || memberChanges(a) != 0 {
-		t.Errorf("40s after the start got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
+		t.Errorf("40s after the first heartbeat got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
 	}
 	// An instance that hears only heartbeats saying none waits its own
 	// interval.

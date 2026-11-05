@@ -672,21 +672,30 @@ for `--settle`, each replica heard from for the first time starting the wait
 again, and no sooner than `--settle` or a heartbeat interval, whichever is
 longer, after the allocator started, so a restarted allocator has heard from
 every replica before it hands out shares. The heartbeat interval there is
-the longest of the allocator's own and those its replicas say, in each
-heartbeat, they were heartbeating at: an instance started with a shorter
-`--heartbeat.interval` than the instances before it said, as during a
-rollout that shortens it, hears a replica first at the replica's next
-heartbeat on the old interval, and a replica looks up the instances'
-addresses every interval, so every replica has reached it within the old
-interval of its start; its first heartbeat says that interval, and the first
-member list waits it. A replica that has not been told an interval yet, as
-one that has just started, says none, as the 10s it heartbeats at until then
-is no instance's, and its heartbeat does not change the wait. So the first
-list waits the old interval when a replica told it reaches the instance
-before the instance's own interval and `--settle` have passed, as one
-heartbeating every interval does; replicas started after the instance and
-heard alone until then form the first list by themselves, and it changes as
-the others arrive.
+the longest of the allocator's own and those its replicas say in their
+heartbeats. An instance started with a shorter `--heartbeat.interval` than
+the instances before it said, as during a rollout that shortens it, hears a
+replica first at the replica's next lookup of the instances' addresses on
+the old interval, so every replica has reached it within the old interval
+of its start, and the first member list waits that long. A replica
+heartbeats every instance at the shortest interval they say, so each hears
+it often enough, and says in its heartbeats the longest: the last interval
+each instance its lookup finds said, an instance's kept while its
+heartbeats fail and dropped once its address is gone. While an instance
+from before the rollout is still found, every replica says the old
+interval, a replica that started after the new instance among them, and
+the first list waits for the replicas still on it whichever replica it
+hears first. A replica that has not been told an interval yet, as one that
+has just started, says none, as the 10s it heartbeats at until then is no
+instance's, and its heartbeat does not change the wait; when the instances'
+first answers tell it one, it heartbeats every instance again at once, saying
+the longest, rather than at its next turn. What is left: a replica started
+once no instance from before is found any more has no one to learn the old
+interval from, and says the new one; if the new instance hears only such
+replicas before its own interval and `--settle` have passed, they form the
+first list by themselves, and it changes as the replicas still on the old
+interval arrive. A rollout that keeps an old instance until a new one is
+ready, as the chart's does, finds an old instance throughout.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
 is refused for the other. A shorter interval finds a replica that has
@@ -785,9 +794,11 @@ it is shutting down is remembered for the member TTL after its last heartbeat, t
 not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
-having reported none. `interval_seconds` is the interval the replica was
-heartbeating at when it sent the heartbeat, left out until an instance of the
-allocator has said one, which the first member list waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
+having reported none. `interval_seconds` is the longest heartbeat interval the instances of the
+allocator the replica finds last said to it, which may be longer than the
+one it heartbeats at, the shortest; it is left out until an instance has
+said one, and the first member list waits for it ([Members and
+allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
 the generation of the member's bundle, or `""` while the member list has not

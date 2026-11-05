@@ -30430,6 +30430,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), changed: a recovered error's age is `(35m ago)`, an age matched as hours, minutes and seconds each left out when zero; `TestTheStatusPageShowsTheJSONsValuesEscaped` finds a row's interval as the page writes it.
 - `TestAJobViewHidesTheSourceLabelsUnlessAsked` (allocator): of a job of two targets a `file_sd` source finds, each with `namespace` and `__meta_zone`, `/v1/status?job=pods` has both labels of each and its `?filter=__meta_zone=ams` matches one; the page without `?meta=1` has the *Show source labels* box unticked, `namespace=shop`, no `__meta_zone`, the script setting and deleting `meta`, the hint saying the labels shown, and Search all of `ams` and `__meta` lists none and of `namespace=shop` one; with `?meta=1` the box is ticked, both `__meta_zone` labels are shown and in the rows' `data-match`, and Search all of `ams` lists one; the fragment has the source labels with `?meta=1` and not without; a job whose file lists every target and a member's view have no box.
 - `TestTheJobViewListsItsTargets` (allocator), changed: the hint says the filters match the labels shown.
+- `TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest` (allocclient): a client finding two instances, one saying 2s and one 4s, has 2s in force; each instance hears a heartbeat saying `interval_seconds` 4 within a second of the start, at once rather than at the interval's turn, none before it saying anything but none or 2, and every one after it saying 4, at least two in the 4s left.
+- `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change.
+- `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient) still passes unchanged: with one instance the longest said is the one in force.
 
 # 35. Documentation requirements
 
@@ -33668,7 +33671,10 @@ not changed for `--settle`, and MUST NOT form before a member is live nor
 before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
 is the longest `interval_seconds` a heartbeat heard before it formed said,
 brought within `1s` and `2m`, 0 when none said one; a heartbeat without
-`interval_seconds`, or with 0, MUST NOT change `I`. A member
+`interval_seconds`, or with 0, MUST NOT change `I`. Since a replica says the
+longest interval the instances it finds said (§ 42.14e), `I` covers the
+replicas still on an older, longer interval for as long as an instance that
+said it is found. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33906,9 +33912,14 @@ generation with its error until a later bundle is put in force,
 random name made once at the exporter's start, the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one, and
-`interval_seconds`, the heartbeat interval in force when it was built, once a
-reply has said a `heartbeat_interval_seconds` other than 0, and MUST
-leave `interval_seconds` out before; on that signal the
+`interval_seconds`, once a reply has said a `heartbeat_interval_seconds`
+other than 0, and MUST leave `interval_seconds` out before. `interval_seconds`
+MUST be the longest of the intervals the last answer of each address the
+allocator's host resolved to last said, each brought within `1s` and `2m`,
+an address's kept while its heartbeats fail and dropped when it no longer
+resolves; when none of them says one, it MUST stay as it is. When it
+changes, the first time it is set included, a heartbeat MUST be sent to
+every address at once, not at the next turn of the interval; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`

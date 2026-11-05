@@ -204,18 +204,27 @@ type Client struct {
 	// address's schedule takes it at once.
 	interval        time.Duration
 	intervalChanged chan struct{}
-	// told is set once an instance of the allocator has announced an interval.
-	// Until then the interval in force is Options' default, which no instance
-	// said, and a heartbeat leaves it out (allocapi.Heartbeat's
-	// IntervalSeconds): it would tell an instance that has just started
-	// nothing of how long the replicas told the instances' interval take to
-	// reach it.
-	told bool
+	// reported is the interval the heartbeats say (allocapi.Heartbeat's
+	// IntervalSeconds): the longest of those announced, while one is, where
+	// interval is the shortest, and 0 until an instance of the allocator has
+	// announced one, a heartbeat leaving it out until then. Options' default
+	// is no instance's interval, and would tell an instance that has just
+	// started nothing of how long the replicas take to reach it. The
+	// longest, not the interval in force, is what such an instance needs:
+	// while an instance before it still announces a longer interval, the
+	// replicas it has not reached yet may still be on that one, and find the
+	// new instance only at their next lookup on it.
+	reported time.Duration
 	// announced is, for each address the allocator's host resolves to whose
 	// last heartbeat was answered, the interval that answer said, 0 for
 	// none: an address whose heartbeat failed has no say until it answers
 	// again.
 	announced map[string]time.Duration
+	// lastSaid is, for each address the allocator's host resolves to, the
+	// interval its last answer said, 0 for none, kept while its heartbeats
+	// fail: an instance that is slow or restarting still has replicas on
+	// the interval it said, which reported is to cover.
+	lastSaid map[string]time.Duration
 	// sending holds, for each allocator address, the slot of the heartbeat
 	// on its way there, one at a time: an instance of the allocator keeps the
 	// last heartbeat it hears, so the one ShuttingDown sends must not be
@@ -279,7 +288,7 @@ func New(o Options) (*Client, error) {
 			return t.C, t.Stop
 		},
 		inForce: o.Generation, seen: o.Generation, interval: o.HeartbeatInterval, intervalChanged: make(chan struct{}),
-		announced: map[string]time.Duration{}, sending: map[string]chan struct{}{},
+		announced: map[string]time.Duration{}, lastSaid: map[string]time.Duration{}, sending: map[string]chan struct{}{},
 		syncErrors: map[string]uint64{StageHeartbeat: 0, StageFetch: 0, StageWrite: 0},
 		lastLogged: map[logKey]string{},
 	}, nil
@@ -400,6 +409,11 @@ func (c *Client) forgetAddresses(addrs []string) {
 			delete(c.announced, addr)
 		}
 	}
+	for addr := range c.lastSaid {
+		if !slices.Contains(addrs, addr) {
+			delete(c.lastSaid, addr)
+		}
+	}
 	c.takeAnnounced()
 }
 
@@ -433,13 +447,11 @@ func (c *Client) authorize(req *http.Request) error {
 //
 // An interval that changes takes effect at once here too, as it does for
 // the heartbeats: the next lookup follows the new interval after the last,
-// at once when that is past. A replica told a shorter interval says it to
-// every instance it heartbeats, and an instance of the allocator that has just
-// started is told it by them, and waits no longer for the replicas to reach
-// it (the allocator's firstSettle); a lookup still on the old, longer interval would find
-// that instance only up to the old interval after its start, by when it may
-// have formed its first member list of the replicas that happened to look
-// up sooner.
+// at once when that is past. A replica told a shorter interval looks up,
+// and so finds an instance of the allocator that has just started, within
+// it; an instance that has just started waits for the longest interval the
+// replicas it hears say (the allocator's firstSettle), which covers those
+// still on an older, longer one (reported).
 func (c *Client) heartbeatLoop(ctx context.Context) {
 	type schedule struct {
 		now  chan struct{}
@@ -564,7 +576,8 @@ func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 // within its own interval, which a longer one would not ensure. An instance
 // that fails loses its say, and when no instance says one the interval stays
 // as it is, so an instance that cannot be reached for a while does not take
-// back what the others said. sent is false when ctx ended before this
+// back what the others said. Its say in the interval the heartbeats say, the
+// longest, is kept until its address no longer resolves. sent is false when ctx ended before this
 // heartbeat's turn came, and nothing was sent.
 func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
@@ -583,10 +596,7 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
-	if c.told {
-		hb.IntervalSeconds = c.interval.Seconds()
-	}
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds()}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)
@@ -608,8 +618,9 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 		delete(c.announced, addr)
 	case reply.HeartbeatIntervalSeconds != 0:
 		c.announced[addr] = allocapi.ClampHeartbeatInterval(reply.HeartbeatIntervalSeconds)
+		c.lastSaid[addr] = c.announced[addr]
 	default:
-		c.announced[addr] = 0
+		c.announced[addr], c.lastSaid[addr] = 0, 0
 	}
 	c.takeAnnounced()
 	c.mu.Unlock()
@@ -620,21 +631,32 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	return true
 }
 
-// takeAnnounced makes the shortest interval announced the interval in
-// force, when any is, and from then on the heartbeats say it (told).
-// Called under mu.
+// takeAnnounced makes the shortest interval announced by the instances
+// whose last heartbeat was answered the interval in force, and the longest
+// the last answer of each instance the host resolves to said the one the
+// heartbeats say (reported), when any is. When the one they say changes,
+// the replica's first being told one among those changes, every instance
+// is heartbeated at once (beat), not at its next turn on the interval: the
+// heartbeats a new replica sent before it heard any instance said none,
+// and an instance that has just started would otherwise form its first
+// member list of the replicas that came first before it hears from them
+// how long the others may take. Called under mu.
 func (c *Client) takeAnnounced() {
+	var longest time.Duration
+	for _, d := range c.lastSaid {
+		longest = max(longest, d)
+	}
+	if longest != 0 && longest != c.reported {
+		c.reported = longest
+		signal(c.beat)
+	}
 	var shortest time.Duration
 	for _, d := range c.announced {
 		if d != 0 && (shortest == 0 || d < shortest) {
 			shortest = d
 		}
 	}
-	if shortest == 0 {
-		return
-	}
-	c.told = true
-	if shortest == c.interval {
+	if shortest == 0 || shortest == c.interval {
 		return
 	}
 	c.o.Logger.Info("heartbeating at the interval the target allocator says", "interval", shortest.String(), "was", c.interval.String())

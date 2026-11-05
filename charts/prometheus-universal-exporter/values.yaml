@@ -867,6 +867,13 @@ allocator:
   # zero or more; empty leaves the flag out and the allocator's default, 15s,
   # in force.
   settle: 15s
+  # How often the exporter pods heartbeat to the allocator
+  # (--heartbeat.interval), which the allocator tells them in every
+  # heartbeat reply; a pod not heard from for three intervals stops being a
+  # member, and its targets move once --settle has passed. A Go duration
+  # from 1s to 2m; empty leaves the flag out and the allocator's default,
+  # 10s, in force.
+  heartbeatInterval: ""
   # How many live members the allocator takes (--members.max): the heartbeat
   # of a new pod beyond them is refused until one stops heartbeating. A whole
   # number from 1; keep it above the most exporter pods the autoscaler runs.

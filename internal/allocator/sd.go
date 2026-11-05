@@ -108,7 +108,7 @@ func (a *Allocator) routing(j *ProbeJob) []string {
 	now := a.clock.Now()
 	var base, all []string
 	for name, m := range a.members {
-		if !live(m, now) {
+		if !a.live(m, now) {
 			continue
 		}
 		all = append(all, name)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -133,7 +134,7 @@ func (a *Allocator) serveHeartbeat(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrTooManyMembers):
 		// Retry-After is the member TTL: the soonest a silent member can
 		// have freed its place.
-		w.Header().Set("Retry-After", strconv.Itoa(int(allocapi.MemberTTL/time.Second)))
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(a.memberTTL.Seconds()))))
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
 	case err != nil:

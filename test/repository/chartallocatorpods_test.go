@@ -82,17 +82,36 @@ func TestChartSchedulesTheAllocatorByItsOwnValues(t *testing.T) {
 }
 
 // /ready answers as soon as an allocator has read its inputs, but its first
-// member list takes effect max(settle, 10s) after it starts, and the exporter
-// pods hear of it at their next heartbeat, 10s on. The Deployment's
-// minReadySeconds covers both, so a rollout does not count a new allocator
-// available while it hands out nothing; an empty settle is the allocator's
-// default, 15s.
+// member list takes effect max(settle, heartbeat interval) after it starts,
+// and the exporter pods hear of it at their next heartbeat, a heartbeat
+// interval on. The Deployment's minReadySeconds covers both, so a rollout
+// does not count a new allocator available while it hands out nothing; an
+// empty settle is the allocator's default, 15s, and an empty
+// heartbeatInterval its 10s. allocator.heartbeatInterval is the allocator's
+// --heartbeat.interval, left out when empty.
 func TestChartHoldsANewAllocatorUnavailableUntilItAllocates(t *testing.T) {
 	helm := requireHelm(t)
-	for settle, want := range map[string]string{"": "25", "15s": "25", "0s": "20", "1.5s": "20", "500ms": "20", "1m30.5s": "101", "2m": "130", "10s1ms": "21"} {
-		docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-string", "allocator.settle="+settle)
-		if got := text(path(manifest(t, docs, allocatorDeployment), "spec", "minReadySeconds")); got != want {
-			t.Errorf("with settle %q the allocator's minReadySeconds is %q, want %s", settle, got, want)
+	for _, c := range []struct{ settle, interval, want string }{
+		{"", "", "25"}, {"15s", "", "25"}, {"0s", "", "20"}, {"1.5s", "", "20"}, {"500ms", "", "20"}, {"1m30.5s", "", "101"}, {"2m", "", "130"}, {"10s1ms", "", "21"},
+		{"", "10s", "25"}, {"", "5s", "20"}, {"", "30s", "60"}, {"0s", "1.5s", "4"}, {"15s", "2m", "240"}, {"20s", "1s", "21"},
+	} {
+		docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-string", "allocator.settle="+c.settle, "--set-string", "allocator.heartbeatInterval="+c.interval)
+		deployment := manifest(t, docs, allocatorDeployment)
+		if got := text(path(deployment, "spec", "minReadySeconds")); got != c.want {
+			t.Errorf("with settle %q and heartbeat interval %q the allocator's minReadySeconds is %q, want %s", c.settle, c.interval, got, c.want)
+		}
+		args := scalars(path(deployment, "spec", "template", "spec", "containers", "0", "args"))
+		flags := 0
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--heartbeat.interval") {
+				flags++
+				if arg != "--heartbeat.interval="+c.interval {
+					t.Errorf("with heartbeat interval %q the allocator has %s", c.interval, arg)
+				}
+			}
+		}
+		if want := map[bool]int{true: 0, false: 1}[c.interval == ""]; flags != want {
+			t.Errorf("with heartbeat interval %q the allocator has %d --heartbeat.interval flags, want %d: %v", c.interval, flags, want, args)
 		}
 	}
 }

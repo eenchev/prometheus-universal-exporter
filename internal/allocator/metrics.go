@@ -31,7 +31,7 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 		_, err := io.WriteString(w, b.String())
 		return err
 	}
-	family("pue_allocator_members", "gauge", "Members in the member list allocation uses: the replicas heard from within the member TTL, once the list has held for the settle time.")
+	family("pue_allocator_members", "gauge", "Members in the member list allocation uses: the replicas heard from within three heartbeat intervals (--heartbeat.interval), once the list has held for the settle time.")
 	fmt.Fprintf(&b, "pue_allocator_members %d\n", len(a.effective))
 
 	static, probes := 0, 0

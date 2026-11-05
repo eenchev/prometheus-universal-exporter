@@ -30361,6 +30361,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheLeaderOnlyFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--peers` of its own address and `--peers.leader-only` leads, and its status says `leader_only`, not partial, with the members.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--peers.leader-only` without `--peers` exits 2; `TestVersionAndHelp`, changed: the help lists `-peers.leader-only`.
 - `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
+- `TestTheFirstMemberListWaitsTheConfiguredHeartbeatInterval` (allocator): without a settle time, with `--heartbeat.interval` 4s the first member list has not formed 1ms before 4s after the start and has at 4s, and with 30s it has not formed before 30s, past the default 10s.
+- `TestAMemberIsDroppedAfterThreeConfiguredHeartbeatIntervals` (allocator): with a 2s interval and a 5s settle time, a member silent since its last heartbeat is still live 1ms before 6s, three intervals, and not at 6s; it stays in the member list until 5s after that and leaves it then.
+- `TestTheHeartbeatReplySaysTheHeartbeatInterval` (allocator): with a 2.5s interval the heartbeat answer has `heartbeat_interval_seconds` 2.5, and a heartbeat refused for `--members.max` 1 is answered `429` with `Retry-After: 8`, the 7.5s member TTL rounded up.
+- `TestTheHeartbeatEndpoint` (allocator), changed: the answer before the member list formed is `{"generation":"","heartbeat_interval_seconds":10}`.
+- `TestTheStatusMarksAMemberLateByTheConfiguredInterval` (allocator): with a 4s interval `/v1/status` gives `heartbeat_interval_seconds` 4 and `member_ttl_seconds` 12; a member whose last heartbeat is 6s old is not late, at 7s it is late and still live while one heard from at 6s is not, and the page says "The replicas heartbeat every 4s; a member not heard from for 12s stops being live." and marks the 7s age as an overdue heartbeat.
+- `TestTheHeartbeatIntervalFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--heartbeat.interval=2500ms` gives a status of a 2.5s interval and a 7.5s member TTL, and a heartbeat answer of `heartbeat_interval_seconds` 2.5.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--heartbeat.interval` of `999ms`, `2m1s` or `0s` exits 2 saying it must be from 1s to 2m; `TestVersionAndHelp`, changed: the help lists `-heartbeat.interval` with its default 10s.
+- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient): a client started with an hour's interval whose allocator answers `heartbeat_interval_seconds` 1 sends its next heartbeat about a second after the first, and its interval in force is 1s.
+- `TestABogusHeartbeatIntervalIsKeptWithinTheBounds` (allocclient): an announced 0.001 or -5 seconds is taken as 1s, 121 or 1e300 as 2m, and 2.5 as 2.5s.
+- `TestTheShortestIntervalOfTheCopiesIsTaken` (allocclient): heartbeating three copies, the interval is 10s while none says one, 3s when they say 7, 3 and none, 7s once the copy saying 3 is down, and stays 7s while every copy is down and while the only copy answering says none.
+- `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: the heartbeat replies say the default 10s interval, which the test takes out of them so its replicas keep heartbeating every 20ms.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded up, an empty interval counting as 10s: 25 by default, 20 with 5s, 60 with 30s, 4 with settle 0s and 1.5s, 240 with 15s and 2m, 21 with 20s and 1s; `allocator.heartbeatInterval` renders `--heartbeat.interval` with its value, and nothing when empty.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.heartbeatInterval` of `soon` is refused by the schema and the template, and `999ms`, `2m1s` and `0s` by the template, saying it must be a Go duration from 1s to 2m.
 
 # 35. Documentation requirements
 
@@ -33569,22 +33582,28 @@ job's of the chart's values schema included (SPECIFICATION-CHART.md
 § 33.10c), when an example of `docs/ALLOCATOR.md` does not validate against
 its schema, and when a schema accepts any of a set of invalid files.
 
-**Members.** A member MUST be live while its last heartbeat is younger than
-`allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
+**Members.** The allocator MUST take its heartbeat interval from
+`--heartbeat.interval` (default `10s`), and MUST refuse one below `1s` or
+above `2m` as a command-line error; the member TTL MUST be three intervals
+(`allocapi.MemberTTL`), and no other setting of either MUST exist, on the
+allocator or on the exporter. `--heartbeat.interval` MUST NOT be checked
+against `--settle`: the two are independent. It MUST NOT change the timings of the
+peers either, which check each other every `PeerInterval` whatever it is. A member MUST be live while its last heartbeat is younger than
+the member TTL and did not say `shutting_down`; one that did MUST stop
 being live at once. A heartbeat whose `sequence` is not greater than that of
 the last heartbeat applied of its member with the same `instance`, or whose
 `instance` is the one its member's current `instance` replaced, MUST be
 answered as any other and change nothing; a heartbeat of another `instance`
 MUST be applied whatever its `sequence`. A member not live MUST be kept,
 with its `instance` and `sequence`, until its last heartbeat is
-`allocapi.MemberTTL` old, so a heartbeat arriving after the one saying
+the member TTL old, so a heartbeat arriving after the one saying
 `shutting_down` does not make it live again. A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
-before `max(--settle, allocapi.HeartbeatInterval)` after the start. A member
+before `max(--settle, --heartbeat.interval)` after the start. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33615,11 +33634,12 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed; a heartbeat without `member`, a
+before the member list has formed, and `heartbeat_interval_seconds`, the
+heartbeat interval in seconds, in every answer; a heartbeat without `member`, a
 `host:port` `advertise` with a host and a decimal port from 1 to 65535, an
 `instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
 `400`, a body over 64 KiB `413`, and one refused for
-`--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
+`--members.max` `429` with `Retry-After` of the member TTL in seconds, rounded up. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
 until the member list has formed; with `wait=<duration>` (at most `60s`) a
@@ -33658,7 +33678,10 @@ taken one and holds the leader's targets, its check and snapshot failures,
 every address of its peers, its own included, with liveness, the last
 answer's discovering and address-known, the last check and the failures in
 a row, and the series of the peers' metric families exactly as `/metrics`
-writes them; every member known with its address, last heartbeat, whether
+writes them; the heartbeat interval and the member TTL in seconds; every
+member known with its address, last heartbeat, whether it is late (live,
+with its last heartbeat more than one and a half heartbeat intervals old,
+which the page MUST mark), whether
 it is live, in the member list and shutting down, the generation it
 reports, the one it is to have, a refusal it reports and the static targets
 it keeps draining; the spread, per member of the member list and per other
@@ -33723,7 +33746,7 @@ nor link-local, IPv4 before IPv6, with the listen port; an
 the bundle's configuration leaves out (§ 42.1).
 
 The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
-at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
+at once, every heartbeat interval, and at once after each bundle it
 put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
 when it is an IP address. A heartbeat MUST carry the member, the advertised
@@ -33743,6 +33766,16 @@ is. With `--allocator.token-file`, every request
 MUST carry `Authorization: Bearer <token>`, the file read again for each.
 A failure repeated at every try MUST be logged once, for each stage and,
 for a heartbeat, for each address, until it changes or ends.
+
+The heartbeat interval MUST be `allocapi.DefaultHeartbeatInterval`, 10
+seconds, at the start, and the exporter MUST NOT have a setting of it. When
+the replies to a heartbeat that answered without error say a
+`heartbeat_interval_seconds` other than 0, the interval MUST become the
+shortest of them, each first brought within `1s` and `2m` (one below, a
+negative one included, taken as `1s`, one above as `2m`), and the next
+heartbeat MUST follow that interval after this one; when none says one,
+because every copy failed or none sends the field, the interval MUST stay
+as it is.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`

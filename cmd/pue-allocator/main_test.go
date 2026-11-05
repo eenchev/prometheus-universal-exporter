@@ -22,6 +22,9 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		"stray":                                       `unexpected argument "stray"`,
 		"--settle=-1s":                                "--settle must not be negative",
 		"--members.max=0":                             "--members.max must be 1 or more",
+		"--heartbeat.interval=999ms":                  "--heartbeat.interval must be from 1s to 2m, got 999ms",
+		"--heartbeat.interval=2m1s":                   "--heartbeat.interval must be from 1s to 2m, got 2m1s",
+		"--heartbeat.interval=0s":                     "--heartbeat.interval must be from 1s to 2m, got 0s",
 		"--discovery.max-targets=0":                   "--discovery.max-targets must be 1 or more",
 		"--config.watch-interval=-1s":                 "--config.watch-interval must not be negative",
 		"--log.level=verbose":                         `--log.level "verbose" is not a level`,
@@ -53,13 +56,13 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") {
-		t.Errorf("-h does not give the defaults of the listen address, the settle time and the member bound:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 10s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") {
+		t.Errorf("-h does not give the defaults of the listen address, the settle time, the heartbeat interval and the member bound:\n%s", stdout.String())
 	}
 }
 

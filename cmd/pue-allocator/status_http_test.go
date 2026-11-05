@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -111,5 +113,24 @@ func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
 	})
 	if !s.Peers.LeaderOnly || s.Partial || s.Members == nil {
 		t.Errorf("the leader's status is %+v, peers %+v", s, s.Peers)
+	}
+}
+
+// --heartbeat.interval reaches the allocator, which says it in its status
+// and in every heartbeat reply.
+func TestTheHeartbeatIntervalFlagReachesTheAllocator(t *testing.T) {
+	address := startRun(t, "--heartbeat.interval=2500ms")
+	if s := fetchStatus(t, address); s.Members == nil || s.Members.HeartbeatIntervalSeconds != 2.5 || s.Members.MemberTTLSeconds != 7.5 {
+		t.Errorf("the members are %+v, want a heartbeat interval of 2.5s and a member TTL of 7.5s", s.Members)
+	}
+	resp, err := http.Post("http://"+address+allocapi.HeartbeatPath, "application/json",
+		strings.NewReader(`{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var reply allocapi.HeartbeatReply
+	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil || reply.HeartbeatIntervalSeconds != 2.5 {
+		t.Errorf("the heartbeat reply is %+v, %v; want a heartbeat interval of 2.5 seconds", reply, err)
 	}
 }

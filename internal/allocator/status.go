@@ -123,6 +123,11 @@ type MembersStatus struct {
 	// the live members.
 	InList int `json:"in_list"`
 	Live   int `json:"live"`
+	// HeartbeatIntervalSeconds is --heartbeat.interval, and
+	// MemberTTLSeconds how long a member is live after its last heartbeat,
+	// three intervals.
+	HeartbeatIntervalSeconds float64 `json:"heartbeat_interval_seconds"`
+	MemberTTLSeconds         float64 `json:"member_ttl_seconds"`
 	// List is every member known, by id.
 	List []MemberStatus `json:"list"`
 }
@@ -136,6 +141,10 @@ type MemberStatus struct {
 	// LastHeartbeatAgeSeconds how long ago.
 	LastHeartbeat           string  `json:"last_heartbeat"`
 	LastHeartbeatAgeSeconds float64 `json:"last_heartbeat_age_seconds"`
+	// Late says it is live but its last heartbeat is more than one and a
+	// half heartbeat intervals old: one is overdue, and it stops being
+	// live when its TTL runs out.
+	Late bool `json:"late"`
 	// Live says it is heard from within the member TTL and not shutting
 	// down; InList that it is in the member list.
 	Live         bool `json:"live"`
@@ -252,7 +261,8 @@ func ageSeconds(d float64) float64 {
 
 // membersStatusLocked is the members. Called under a.mu.
 func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
-	out := &MembersStatus{Formed: a.settled, List: []MemberStatus{}}
+	out := &MembersStatus{Formed: a.settled, List: []MemberStatus{},
+		HeartbeatIntervalSeconds: a.heartbeatInterval.Seconds(), MemberTTLSeconds: a.memberTTL.Seconds()}
 	if a.settled {
 		out.InList = len(a.effective)
 	}
@@ -262,13 +272,14 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 	}
 	for id, m := range a.members {
 		ms := MemberStatus{ID: id, Address: m.advertise, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
-			LastHeartbeatAgeSeconds: ageSeconds(now.Sub(m.lastSeen).Seconds()), Live: live(m, now),
+			LastHeartbeatAgeSeconds: ageSeconds(now.Sub(m.lastSeen).Seconds()), Live: a.live(m, now),
 			InList: a.settled && contains(a.effective, id), ShuttingDown: m.shuttingDown, Generation: m.generation,
 			Refused: a.refusals[id], Draining: draining[id]}
 		if b := a.bundleLocked(id); b != nil {
 			ms.Current = b.Generation
 		}
 		ms.UpToDate = ms.Current != "" && ms.Generation == ms.Current
+		ms.Late = ms.Live && now.Sub(m.lastSeen) > a.heartbeatInterval*3/2
 		if ms.Live {
 			out.Live++
 		}

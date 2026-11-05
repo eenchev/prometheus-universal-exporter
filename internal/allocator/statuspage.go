@@ -382,7 +382,7 @@ const statusContent = `{{define "content"}}
 {{- with .Members}}
 
 <h2>Members</h2>
-<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}}</p>
+<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}} The replicas heartbeat every {{age .HeartbeatIntervalSeconds}}; a member not heard from for {{age .MemberTTLSeconds}} stops being live.</p>
 {{- if .List}}
 <div class="scroll">
 <table>
@@ -392,7 +392,7 @@ const statusContent = `{{define "content"}}
 <tr>
 <td class="id"><strong>{{.ID}}</strong></td>
 <td>{{.Address}}</td>
-<td class="num">{{age .LastHeartbeatAgeSeconds}} ago</td>
+<td class="num">{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}</td>
 <td>{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}</td>
 <td>{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}</td>
 <td class="num">{{.Draining}}</td>

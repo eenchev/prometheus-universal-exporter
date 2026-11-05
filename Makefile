@@ -488,6 +488,13 @@ helm-test: helm-version
 	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]' >/dev/null 2>&1; then \
 		echo "helm template accepted a probe monitor beside the allocator" >&2; \
 		exit 1; \
+	fi; \
+	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set allocator.heartbeatInterval=30s)"; \
+	echo "$$out" | grep -q -- '- "--heartbeat.interval=30s"'; \
+	echo "$$out" | grep -q 'minReadySeconds: 60'; \
+	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set allocator.heartbeatInterval=3m >/dev/null 2>&1; then \
+		echo "helm template accepted an allocator heartbeat interval over 2m" >&2; \
+		exit 1; \
 	fi
 	@# Autoscaling on the exporter's own load and, with the allocator, on
 	@# the static targets per pod, as Pods metrics; the second without the

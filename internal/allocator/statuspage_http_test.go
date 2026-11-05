@@ -129,6 +129,32 @@ func TestTheStatusShowsTheMembersAndTheSpread(t *testing.T) {
 	}
 }
 
+// The status says the heartbeat interval and the member TTL of it, and
+// marks a live member late once its last heartbeat is more than one and a
+// half of the configured intervals old, as the page shows.
+func TestTheStatusMarksAMemberLateByTheConfiguredInterval(t *testing.T) {
+	clock := newFakeClock()
+	a := New(nil, Options{HeartbeatInterval: 4 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	beat(t, a, "r1", "r2")
+	clock.Advance(6 * time.Second)
+	beat(t, a, "r1")
+	h := a.Handler("")
+	if s := statusOf(t, h, ""); s.Members.List[1].Late {
+		t.Errorf("r2 is late at 1.5 heartbeat intervals: %+v", s.Members.List[1])
+	}
+	clock.Advance(time.Second)
+	s := statusOf(t, h, "")
+	if s.Members.HeartbeatIntervalSeconds != 4 || s.Members.MemberTTLSeconds != 12 {
+		t.Errorf("the members say a heartbeat interval of %v and a member TTL of %v, want 4 and 12", s.Members.HeartbeatIntervalSeconds, s.Members.MemberTTLSeconds)
+	}
+	if r1, r2 := s.Members.List[0], s.Members.List[1]; r1.Late || !r2.Late || !r2.Live {
+		t.Errorf("want r2 alone late and still live: %+v, %+v", r1, r2)
+	}
+	requireIn(t, ask(h, "/", "").Body.String(), "The replicas heartbeat every 4s; a member not heard from for 12s stops being live.",
+		`<span class="bad" title="a heartbeat is overdue">7s ago</span>`)
+}
+
 func metricsOf(t *testing.T, a *Allocator) string {
 	t.Helper()
 	var b strings.Builder

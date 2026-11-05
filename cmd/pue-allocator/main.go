@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
@@ -53,6 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
+	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	peerList := flags.String("peers", "", "Optional allocator copies to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every copy, this one included, so each finds its own address among them. The live copy of the lowest address leads and alone asks the discovery sources; the others serve what it found")
@@ -85,6 +87,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *settle < 0 {
 		return commandLineError(stderr, fmt.Errorf("--settle must not be negative, got %s", *settle))
+	}
+	if *heartbeatInterval < allocapi.MinHeartbeatInterval || *heartbeatInterval > allocapi.MaxHeartbeatInterval {
+		return commandLineError(stderr, fmt.Errorf("--heartbeat.interval must be from 1s to 2m, got %s", *heartbeatInterval))
 	}
 	if *maxMembers < 1 {
 		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
@@ -145,7 +150,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	build := exporter.BuildVersion()
-	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
+	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, HeartbeatInterval: *heartbeatInterval, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
 		Address: *listenAddress, Version: build.Version, Revision: build.Revision})
 	if peerOptions != nil {
 		if token != nil {
@@ -172,7 +177,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "heartbeat_interval", heartbeatInterval.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
 		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {

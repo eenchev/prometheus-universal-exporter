@@ -83,8 +83,14 @@ type heartbeatLog struct {
 	pulse *pulse
 	mu    sync.Mutex
 	heard map[string]heard
+	// announced is the heartbeat interval the last reply said, in seconds.
+	announced float64
 }
 
+// wrap notes each heartbeat and the interval its reply says, and takes the
+// interval out of the reply: a replica would heartbeat at it, a second at
+// the least, where the test needs one every few milliseconds of real time
+// to move the allocator's clock on without waiting.
 func (l *heartbeatLog) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != allocapi.HeartbeatPath {
@@ -94,7 +100,23 @@ func (l *heartbeatLog) wrap(next http.Handler) http.Handler {
 		at := l.clock.Now()
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		next.ServeHTTP(w, r)
+		rec := httptest.NewRecorder()
+		next.ServeHTTP(rec, r)
+		var reply allocapi.HeartbeatReply
+		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &reply) == nil {
+			l.mu.Lock()
+			l.announced = reply.HeartbeatIntervalSeconds
+			l.mu.Unlock()
+			reply.HeartbeatIntervalSeconds = 0
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(reply)
+		} else {
+			for k, v := range rec.Header() {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+		}
 		var hb allocapi.Heartbeat
 		if json.Unmarshal(body, &hb) != nil {
 			return
@@ -224,8 +246,8 @@ func (e *endToEnd) startReplica(name string) *replica {
 // clock goes, ten seconds at a time.
 func (e *endToEnd) advance(d time.Duration, live ...string) {
 	e.t.Helper()
-	for step := time.Duration(0); step < d; step += allocapi.HeartbeatInterval {
-		e.clock.Advance(min(allocapi.HeartbeatInterval, d-step))
+	for step := time.Duration(0); step < d; step += allocapi.DefaultHeartbeatInterval {
+		e.clock.Advance(min(allocapi.DefaultHeartbeatInterval, d-step))
 		now := e.clock.Now()
 		e.pulse.until(e.t, fmt.Sprintf("%v heartbeat after the clock moved", live), func() bool {
 			for _, name := range live {
@@ -347,6 +369,12 @@ func TestTheAllocatorAndItsReplicasEndToEnd(t *testing.T) {
 		_, ok3 := e.log.last("r3")
 		return ok1 && ok2 && ok3
 	})
+	e.log.mu.Lock()
+	announced := e.log.announced
+	e.log.mu.Unlock()
+	if announced != allocapi.DefaultHeartbeatInterval.Seconds() {
+		t.Errorf("the heartbeat replies say an interval of %v seconds, want %v", announced, allocapi.DefaultHeartbeatInterval.Seconds())
+	}
 	for _, r := range []*replica{r1, r2, r3} {
 		if code, body := r.get(t, "/ready"); code != http.StatusServiceUnavailable {
 			t.Errorf("%s was ready before the member list formed: %d %s", r.name, code, body)

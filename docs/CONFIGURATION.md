@@ -6826,7 +6826,11 @@ such as CA files, descriptor sets, `known_hosts` and credential files, are not
 in the bundle: they are mounted on the exporter as without the allocator, at
 the paths the configuration names.
 
-The exporter heartbeats to the allocator every 10 seconds, to every address
+The exporter heartbeats to the allocator at the interval the allocator says
+in its heartbeat answers, its `--heartbeat.interval`, 10 seconds until an
+answer says one and when the copies answering differ, the shortest
+([Members and allocation](ALLOCATOR.md#members-and-allocation)); the exporter
+has no setting of it. It heartbeats to every address
 the URL's host name resolves to, so two copies of the allocator behind a
 headless Service both hear it; each heartbeat says which bundle generation it
 has in force, and whether it refused the last one. It asks for its bundle with

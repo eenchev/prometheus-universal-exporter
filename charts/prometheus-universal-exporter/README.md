@@ -1531,9 +1531,10 @@ allocator:
   and by default spread over nodes where they can. A new allocator pod counts
   as available `minReadySeconds` after it is ready: its `/ready` answers once
   it has read its files, but its first member list takes effect
-  `max(allocator.settle, 10s)` after it starts and the exporter pods hear of
-  it at their next heartbeat, 10s later, so `minReadySeconds` is that sum,
-  25 seconds with the default `settle`, and a rollout does not replace the
+  `max(allocator.settle, allocator.heartbeatInterval)` after it starts and
+  the exporter pods hear of it at their next heartbeat, a heartbeat interval
+  later, so `minReadySeconds` is that sum, 25 seconds with the default
+  `settle` and `heartbeatInterval`, and a rollout does not replace the
   old allocators before a new one hands out targets. The allocator mounts the configuration
   — `config.data`, or your ConfigMap with `config.enabled: false` — and two
   ConfigMaps of its own, `<fullname>-allocator-static-targets` from
@@ -1748,7 +1749,8 @@ allocator refuses.
 | `allocator.replicas` | empty: `2` | Allocator pods, from 1. They keep no state. With a discovery source they are peers, run with `--peers` and `--peers.self`: the leader alone asks the sources and the others serve what it found. |
 | `allocator.image` | the exporter's | `repository`, `tag`, `pullPolicy`; each empty field takes `image`'s. |
 | `allocator.resources` | 50m/64Mi, 500m/256Mi | The allocator's requests and limits. |
-| `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 10s)` plus 10 seconds. |
+| `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, heartbeatInterval)` plus `heartbeatInterval`. |
+| `allocator.heartbeatInterval` | `""`: `10s` | `--heartbeat.interval`: how often the exporter pods heartbeat, which the allocator tells them in every heartbeat answer, so the exporter pods have no setting of their own; a pod not heard from for three intervals stops being a member, and its targets move `settle` after that. A Go duration from `1s` to `2m`; anything else fails rendering. Empty leaves the flag out and the allocator's default, `10s`, in force. A shorter interval finds a pod that has stopped sooner, for more heartbeats. It also sets the Deployment's `minReadySeconds`. |
 | `allocator.maxMembers` | `1000` | `--members.max`: how many live members the allocator takes; the heartbeat of a new pod beyond them is refused until one stops heartbeating. Keep it above the most exporter pods the autoscaler runs. |
 | `allocator.logLevel` | `info` | `debug`, `info`, `warn` or `error`. |
 | `allocator.leaderOnly` | `false` | With a discovery source, where the pods are peers: `--peers.leader-only`, only the leader serves the whole of `/metrics` and of the status page, and the other pods the peers' metrics alone, so the ServiceMonitor has one pod's series of the allocation. `true` without a discovery source fails rendering. |
@@ -1871,7 +1873,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `heartbeatInterval`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `probes` | array | `[]` | Prometheus Operator `Probe` resources, one per entry, whose prober is the exporter's Service at `/probe`: `name` a unique DNS-1123 label, `collector` (required, and one `config.data` defines), `targets` (URLs) or `ingress` (`selector`, `namespaceSelector`) but not both, `targetLabels` (with `targets` only), `interval` and `scrapeTimeout`, `jobName`, `labels`, `annotations`, `relabelings`, `metricRelabelings`, `params` without `collector` or `target`, and `auth` as a monitor's; see [Uptime probes](#uptime-probes). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |

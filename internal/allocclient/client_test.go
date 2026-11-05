@@ -36,6 +36,9 @@ type fakeAllocator struct {
 	retryAfter string
 	// noWait answers a request naming the generation held 304 at once.
 	noWait bool
+	// announce is the heartbeat interval heartbeat replies say, in seconds;
+	// 0 says none.
+	announce float64
 	// heartbeats and bundleRequests are what the allocator was sent.
 	heartbeats     chan sentHeartbeat
 	bundleRequests chan *http.Request
@@ -69,9 +72,9 @@ func (a *fakeAllocator) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.mu.Lock()
-		generation := a.bundle.Generation
+		generation, announce := a.bundle.Generation, a.announce
 		a.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{Generation: generation})
+		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{Generation: generation, HeartbeatIntervalSeconds: announce})
 	case allocapi.BundlePath:
 		select {
 		case a.bundleRequests <- r.Clone(context.Background()):
@@ -1167,5 +1170,106 @@ func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
 	restarted.heartbeat(context.Background())
 	if hb := a.nextHeartbeat(t); hb.Instance == "" || hb.Instance == c.instance || hb.Sequence != 1 {
 		t.Errorf("the restarted client's first heartbeat: instance %q (the old one's %q) sequence %d, want a new instance and sequence 1", hb.Instance, c.instance, hb.Sequence)
+	}
+}
+
+// The client heartbeats at the interval the allocator's reply says from the
+// heartbeat after it on, though it started with another.
+func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
+	a := newFakeAllocator(t)
+	a.mu.Lock()
+	a.announce = 1
+	a.mu.Unlock()
+	c := startClient(t, a, nil)
+	first := a.nextHeartbeat(t)
+	start := time.Now()
+	second := a.nextHeartbeat(t)
+	if second.Sequence != first.Sequence+1 || time.Since(start) > 20*time.Second {
+		t.Errorf("the heartbeat after the first came %s later with sequence %d", time.Since(start), second.Sequence)
+	}
+	if got := c.heartbeatInterval(); got != time.Second {
+		t.Errorf("the heartbeat interval in force is %s, want 1s", got)
+	}
+}
+
+// An interval the allocator says outside allocapi's bounds is taken as the
+// nearest bound, so a bogus reply can make the client neither heartbeat
+// without pause nor fall silent.
+func TestABogusHeartbeatIntervalIsKeptWithinTheBounds(t *testing.T) {
+	a := newFakeAllocator(t)
+	c := newTestClient(t, a, t.TempDir(), nil)
+	for announce, want := range map[float64]time.Duration{0.001: allocapi.MinHeartbeatInterval, -5: allocapi.MinHeartbeatInterval,
+		1e300: allocapi.MaxHeartbeatInterval, 121: allocapi.MaxHeartbeatInterval, 2.5: 2500 * time.Millisecond} {
+		a.mu.Lock()
+		a.announce = announce
+		a.mu.Unlock()
+		c.heartbeat(context.Background())
+		a.nextHeartbeat(t)
+		if got := c.heartbeatInterval(); got != want {
+			t.Errorf("announced %v seconds: the interval in force is %s, want %s", announce, got, want)
+		}
+	}
+}
+
+// copies is the allocator's copies at their addresses, as a transport: each
+// answers a heartbeat with the reply or the status its address has.
+type copies struct {
+	mu      sync.Mutex
+	replies map[string]string
+}
+
+func (c *copies) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	c.mu.Lock()
+	reply, ok := c.replies[req.URL.Hostname()]
+	c.mu.Unlock()
+	rec := httptest.NewRecorder()
+	if ok {
+		_, _ = io.WriteString(rec, reply)
+	} else {
+		http.Error(rec, "down", http.StatusServiceUnavailable)
+	}
+	return rec.Result(), nil
+}
+
+func (c *copies) set(replies map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.replies = replies
+}
+
+// With several copies of the allocator the client heartbeats at the
+// shortest interval those that answered say, so each hears it within its
+// own; a copy that says none, from a release without it, or does not answer
+// changes nothing, and a client told nothing heartbeats every 10s.
+func TestTheShortestIntervalOfTheCopiesIsTaken(t *testing.T) {
+	a := newFakeAllocator(t)
+	transport := &copies{}
+	c := newTestClient(t, a, t.TempDir(), func(o *Options) {
+		o.URL = "http://pue-allocator.monitoring.svc:9116"
+		o.Transport = transport
+		o.HeartbeatInterval = 0
+		o.Resolve = func(context.Context, string) ([]string, error) {
+			return []string{"10.1.0.4", "10.1.0.5", "10.1.0.6"}, nil
+		}
+	})
+	for _, step := range []struct {
+		what    string
+		replies map[string]string
+		want    time.Duration
+	}{
+		{"no copy says an interval", map[string]string{"10.1.0.4": `{"generation":""}`, "10.1.0.5": `{"generation":""}`}, 10 * time.Second},
+		{"three copies, one saying none", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.5": `{"heartbeat_interval_seconds":3}`, "10.1.0.6": `{}`}, 3 * time.Second},
+		{"the copy saying 3s down", map[string]string{"10.1.0.4": `{"heartbeat_interval_seconds":7}`, "10.1.0.6": `{}`}, 7 * time.Second},
+		{"every copy down", map[string]string{}, 7 * time.Second},
+		{"a copy saying none alone", map[string]string{"10.1.0.6": `{}`}, 7 * time.Second},
+	} {
+		transport.set(step.replies)
+		c.heartbeat(context.Background())
+		if got := c.heartbeatInterval(); got != step.want {
+			t.Errorf("%s: the interval in force is %s, want %s", step.what, got, step.want)
+		}
 	}
 }

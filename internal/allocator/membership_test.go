@@ -50,8 +50,8 @@ func beat(t *testing.T, a *Allocator, members ...string) {
 // members heartbeating at each.
 func keepBeating(t *testing.T, a *Allocator, clock *fakeClock, d time.Duration, members ...string) {
 	t.Helper()
-	for step := time.Duration(0); step < d; step += allocapi.HeartbeatInterval {
-		clock.Advance(min(allocapi.HeartbeatInterval, d-step))
+	for step := time.Duration(0); step < d; step += allocapi.DefaultHeartbeatInterval {
+		clock.Advance(min(allocapi.DefaultHeartbeatInterval, d-step))
 		beat(t, a, members...)
 	}
 }
@@ -96,14 +96,68 @@ func TestTheFirstMemberListFormsAfterTheSettleTime(t *testing.T) {
 func TestTheFirstMemberListWaitsAHeartbeatInterval(t *testing.T) {
 	a, clock := membershipAllocator(t, 0)
 	beat(t, a, "r1")
-	clock.Advance(allocapi.HeartbeatInterval / 2)
+	clock.Advance(allocapi.DefaultHeartbeatInterval / 2)
 	beat(t, a, "r2")
 	if got := effective(a); got != nil {
 		t.Fatalf("the member list formed before a heartbeat interval: %v", got)
 	}
-	clock.Advance(allocapi.HeartbeatInterval / 2)
+	clock.Advance(allocapi.DefaultHeartbeatInterval / 2)
 	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
 		t.Fatalf("got the member list %v, want [r1 r2]", got)
+	}
+}
+
+// The first member list waits the heartbeat interval configured, not the
+// default one: a shorter one forms it sooner, and a longer one later, so a
+// replica heartbeating at the longer interval is heard first.
+func TestTheFirstMemberListWaitsTheConfiguredHeartbeatInterval(t *testing.T) {
+	for _, interval := range []time.Duration{4 * time.Second, 30 * time.Second} {
+		clock := newFakeClock()
+		a := New(nil, Options{HeartbeatInterval: interval, Clock: clock, Logger: testutil.QuietLogger(t)})
+		beat(t, a, "r1")
+		clock.Advance(interval - time.Millisecond)
+		if got := effective(a); got != nil {
+			t.Errorf("%s: the member list formed before a heartbeat interval: %v", interval, got)
+		}
+		clock.Advance(time.Millisecond)
+		if got := effective(a); !slices.Equal(got, []string{"r1"}) {
+			t.Errorf("%s: got the member list %v a heartbeat interval after the start, want [r1]", interval, got)
+		}
+		a.BeginShutdown()
+	}
+}
+
+// A member is live for three of the configured heartbeat intervals after
+// its last heartbeat, and no longer: with a 2s interval it stops being live
+// at 6s, not at the default 30s, and the member list loses it the settle
+// time after that.
+func TestAMemberIsDroppedAfterThreeConfiguredHeartbeatIntervals(t *testing.T) {
+	clock := newFakeClock()
+	a := New(nil, Options{Settle: 5 * time.Second, HeartbeatInterval: 2 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	beat(t, a, "r1", "r2")
+	clock.Advance(5 * time.Second)
+	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
+		t.Fatalf("got the member list %v, want [r1 r2]", got)
+	}
+	beat(t, a, "r1", "r2")
+	clock.Advance(6*time.Second - time.Millisecond)
+	if live, _ := isLive(a, "r2"); !live {
+		t.Fatal("r2 stopped being live before three heartbeat intervals")
+	}
+	beat(t, a, "r1")
+	clock.Advance(time.Millisecond)
+	if live, _ := isLive(a, "r2"); live {
+		t.Fatal("r2 is still live three heartbeat intervals after its last heartbeat")
+	}
+	clock.Advance(5*time.Second - time.Millisecond)
+	beat(t, a, "r1")
+	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
+		t.Fatalf("r2 left the member list before the settle time: %v", got)
+	}
+	clock.Advance(time.Millisecond)
+	if got := effective(a); !slices.Equal(got, []string{"r1"}) {
+		t.Fatalf("got the member list %v, want [r1]", got)
 	}
 }
 
@@ -133,7 +187,7 @@ func TestASilentMemberLeavesAfterTheTTLAndTheSettleTime(t *testing.T) {
 	a, clock := membershipAllocator(t, 15*time.Second)
 	beat(t, a, "r1", "r2")
 	keepBeating(t, a, clock, 20*time.Second, "r1", "r2")
-	keepBeating(t, a, clock, allocapi.MemberTTL+10*time.Second, "r1")
+	keepBeating(t, a, clock, allocapi.MemberTTL(allocapi.DefaultHeartbeatInterval)+10*time.Second, "r1")
 	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
 		t.Fatalf("the silent member left before its TTL and the settle time: %v", got)
 	}
@@ -186,7 +240,7 @@ func TestAShuttingDownHeartbeatOfAStrangerAddsNothing(t *testing.T) {
 	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r2", Advertise: "r2:9115", ShuttingDown: true})); err != nil {
 		t.Fatal(err)
 	}
-	clock.Advance(allocapi.HeartbeatInterval)
+	clock.Advance(allocapi.DefaultHeartbeatInterval)
 	if got := effective(a); !slices.Equal(got, []string{"r1"}) {
 		t.Fatalf("got the member list %v, want [r1]", got)
 	}
@@ -259,7 +313,7 @@ func TestNewMembersBeyondTheBoundAreRefused(t *testing.T) {
 	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r4", Advertise: "r4:9115", ShuttingDown: true})); err != nil {
 		t.Errorf("the shutting-down heartbeat of a stranger was refused: %v", err)
 	}
-	keepBeating(t, a, clock, allocapi.MemberTTL, "r1")
+	keepBeating(t, a, clock, allocapi.MemberTTL(allocapi.DefaultHeartbeatInterval), "r1")
 	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
 		t.Fatalf("got the member list %v before the settle time, want [r1 r2]", got)
 	}
@@ -287,7 +341,7 @@ func isLive(a *Allocator, name string) (bool, string) {
 	if m == nil {
 		return false, ""
 	}
-	return live(m, a.clock.Now()), m.advertise
+	return a.live(m, a.clock.Now()), m.advertise
 }
 
 // A heartbeat that reaches the allocator after a later one of the same

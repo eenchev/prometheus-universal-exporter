@@ -53,6 +53,7 @@ pue-allocator \
 | `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. The status page, `/v1/status` and `/metrics` also take it as the password of Basic auth, for a browser ([Status page](#status-page)). |
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move. |
+| `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
 | `--peers` | none | The allocator copies to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every copy, this one included, so each finds its own address among them. The copies are then peers, of which only the leader asks the discovery sources ([Copies with discovery](#copies-with-discovery)). |
@@ -617,9 +618,20 @@ alone is its own leader.
 
 ## Members and allocation
 
-A replica in allocator mode heartbeats to the allocator every 10s with its
-id, the address Prometheus should send its probes to, and the generation of
-the bundle it has in force. A heartbeat the replica gave up waiting for can
+A replica in allocator mode heartbeats to the allocator every heartbeat
+interval with its id, the address Prometheus should send its probes to, and
+the generation of the bundle it has in force. The interval is the
+allocator's `--heartbeat.interval`, 10s by default, and only the allocator's:
+every heartbeat answer says it, and the replica heartbeats at it from the
+next heartbeat on, so the two sides cannot disagree, and the exporter has no
+setting of it. Until an answer says one, as before its first, the replica
+heartbeats every 10s. It keeps an interval said outside `1s` to `2m` within
+them, so a bogus answer can neither make it heartbeat without pause nor
+fall silent. A replica heartbeats every copy of the allocator
+([On Kubernetes](#on-kubernetes)); when the copies say different intervals,
+as during a rollout that changes it, it takes the shortest, so each copy
+hears it within its own interval, and a copy that does not answer, or says
+none, changes nothing. A heartbeat the replica gave up waiting for can
 still reach the allocator after a later one, so each carries the name of the
 replica's process, random and made at its start, and a sequence number
 counting that process's heartbeats from 1: the allocator applies a heartbeat
@@ -627,8 +639,10 @@ only when its sequence is greater than that of the last it applied of the
 same process, and so a late heartbeat neither undoes a later one nor puts a
 replica that said it is shutting down back among the live members. A
 restarted replica, a new process of the same id, is taken at its first
-heartbeat, and a late heartbeat of the process it replaced is not. The replicas heard from within the last 30s, and
-not shutting down, are the live members; a replica that says it is shutting
+heartbeat, and a late heartbeat of the process it replaced is not. The
+replicas heard from within the member TTL, three heartbeat intervals (30s
+by default), and not shutting down, are the live members, so a replica
+outlives two heartbeats lost in a row; a replica that says it is shutting
 down stops being live at once, so no probe is routed to it any more, and
 leaves the member list as any other change does, after `--settle`.
 
@@ -638,17 +652,32 @@ moves. The first member list forms once the live members have not changed
 for `--settle`, each replica heard from for the first time starting the wait
 again, and no sooner than `--settle` or a heartbeat interval, whichever is
 longer, after the allocator started, so a restarted allocator has heard from
-every replica before it hands out shares. Until then the bundle and service
+every replica before it hands out shares.
+
+`--heartbeat.interval` and `--settle` are independent, and no value of one
+is refused for the other. A shorter interval finds a replica that has
+stopped sooner, at the cost of more heartbeats: a replica whose heartbeats
+stop leaves the live members after the member TTL, and its static targets
+move `--settle` after that. A replica that restarts under the same id
+within the member TTL is never missed, whatever `--settle` is; `--settle`
+is what keeps a replica that is gone for longer, but back within it, from
+moving its share. An interval longer than `--settle` makes the first member
+list wait the interval rather than `--settle`. The copies of the allocator
+check each other every 2s whatever the interval
+([Copies with discovery](#copies-with-discovery)): it is the replicas'
+timing alone. Until then the bundle and service
 discovery endpoints answer `503`, and replicas and Prometheus keep what they
 have.
 
 The allocator takes `--members.max` live members, 1000 by default. A heartbeat
 names any member it likes, so without a bound every new name would add one;
 beyond it the heartbeat of a member the allocator does not know is answered
-`429`, with `Retry-After: 30`, logged once while the allocator stays full, and
+`429`, with `Retry-After` the member TTL in whole seconds, 30 by default,
+logged once while the allocator stays full, and
 counted in `pue_allocator_members_refused_total`. The members it has keep
 heartbeating, and a replica whose heartbeats stop frees its place when its
-30s run out, though it stays in the member list until `--settle` after that.
+member TTL runs out, though it stays in the member list until `--settle`
+after that.
 
 Every target, static or probe, belongs to the member with the highest
 rendezvous score, the first 8 bytes of SHA-256 of the member's id, a NUL and
@@ -693,7 +722,7 @@ must not be one of them. The token is never taken from the URL.
 
 | Endpoint | Caller | Answer |
 | --- | --- | --- |
-| `POST /v1/heartbeat` | replica | The generation of the bundle the replica is to have. |
+| `POST /v1/heartbeat` | replica | The generation of the bundle the replica is to have, and the heartbeat interval. |
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another copy | `{"instance": "…", "discovering": true, "address_known": true}`: the copy's process, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
@@ -718,15 +747,17 @@ to 65535, `instance`, the replica process's name of 1 to 64 bytes, and
 heartbeat whose sequence is not greater than the last applied of its member
 and instance, or whose instance is the one its member's current instance
 replaced, is answered as any other but changes nothing. A member that said
-it is shutting down is remembered for 30s after its last heartbeat, though
+it is shutting down is remembered for the member TTL after its last heartbeat, though
 not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
 having reported none. A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
-`429`. The answer is `{"generation": "…"}`, the generation of the
-member's bundle, or `""` while the member list has not formed. A replica
-whose bundle differs fetches it.
+`429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
+the generation of the member's bundle, or `""` while the member list has not
+formed, and `--heartbeat.interval` in seconds. A replica whose bundle
+differs fetches it, and heartbeats at the interval from its next heartbeat
+on ([Members and allocation](#members-and-allocation)).
 
 ### Bundles
 
@@ -811,7 +842,9 @@ to ask. It shows
   the checks it failed in a row; how old the copy's snapshot is and whether
   it holds the leader's discovered targets; and the series of the peers'
   metrics as `/metrics` has them ([Metrics](#metrics));
-- the members: each one's address, how long ago its last heartbeat came,
+- the members: the heartbeat interval and the member TTL; each one's
+  address, how long ago its last heartbeat came, marked when a heartbeat is
+  overdue, more than one and a half intervals after the last,
   the bundle it has in force beside the one it is to have, a refusal it
   reports, whether it is in the member list, joining, silent or shutting
   down, and the static targets it keeps draining;
@@ -840,8 +873,9 @@ its `address`, `self`, `leader`, `live`, `instance`, `discovering`,
 `address_known`, `last_check` and `failures`, and `metrics`, each a
 `series` and its `value`); `partial`, true on a follower under
 `--peers.leader-only`, whose `members`, `spread` and `sources` are `null`;
-`members` (`formed`, `in_list`, `live` and
-`list`, each with `id`, `address`, `last_heartbeat`, `live`, `in_list`,
+`members` (`formed`, `in_list`, `live`, `heartbeat_interval_seconds`,
+`member_ttl_seconds` and
+`list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`, `in_list`,
 `shutting_down`, `generation`, `current`, `up_to_date`, `refused` and
 `draining`); `spread` (`jobs`, and `members`, `total`, `average` and
 `imbalance`, each with `static`, `draining`, `probe`, `probe_jobs` by job

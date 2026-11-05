@@ -82,6 +82,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - The chart runs `allocator.replicas` allocator pods, 2 by default, with a
   discovery source too, as peers of the allocator's headless Service, rolled
   out one at a time, where it ran one pod and refused more.
+- `pue-allocator --heartbeat.interval`, 10s by default, from 1s to 2m: how
+  often the replicas heartbeat, which the allocator says in every heartbeat
+  answer (`heartbeat_interval_seconds`) and the exporter heartbeats at from
+  its next heartbeat on, the shortest when copies of the allocator differ; a
+  member is dropped after three intervals, where the interval was fixed at
+  10s and the member TTL at 30s. The status page shows both and marks a
+  member whose heartbeat is overdue
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+- The chart's `allocator.heartbeatInterval` sets the allocator's
+  `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
+  follows it.
 
 ### Fixed
 

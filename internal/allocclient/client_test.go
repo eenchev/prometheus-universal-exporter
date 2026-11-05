@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1271,5 +1272,179 @@ func TestTheShortestIntervalOfTheCopiesIsTaken(t *testing.T) {
 		if got := c.heartbeatInterval(); got != step.want {
 			t.Errorf("%s: the interval in force is %s, want %s", step.what, got, step.want)
 		}
+	}
+}
+
+// hungCopy is a transport of two allocator copies: the one at hung takes
+// every heartbeat and never answers, until the request is given up on; the
+// other answers at once with a 1s interval, and notes when it heard each.
+// A bundle request is answered 503.
+type hungCopy struct {
+	hung  string
+	mu    sync.Mutex
+	heard []time.Time
+	given []time.Duration
+}
+
+func (h *hungCopy) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	rec := httptest.NewRecorder()
+	if req.URL.Path != allocapi.HeartbeatPath {
+		http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
+		return rec.Result(), nil
+	}
+	if req.URL.Hostname() == h.hung {
+		start := time.Now()
+		<-req.Context().Done()
+		h.mu.Lock()
+		h.given = append(h.given, time.Since(start))
+		h.mu.Unlock()
+		return nil, req.Context().Err()
+	}
+	h.mu.Lock()
+	h.heard = append(h.heard, time.Now())
+	h.mu.Unlock()
+	_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":1}`)
+	return rec.Result(), nil
+}
+
+// A copy of the allocator that hangs delays only the heartbeats to itself:
+// at a 1s interval, a member TTL of 3s, the copy beside it hears the
+// replica every second, and each heartbeat to the hung copy, and each
+// lookup of the copies' addresses, is given up on within the interval
+// rather than after 5s.
+func TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers(t *testing.T) {
+	transport := &hungCopy{hung: "10.1.0.4"}
+	var mu sync.Mutex
+	var lookups []time.Duration
+	c := startClient(t, newFakeAllocator(t), func(o *Options) {
+		o.URL = "http://pue-allocator.monitoring.svc:9116"
+		o.Transport = transport
+		o.HeartbeatInterval = time.Second
+		o.Resolve = func(ctx context.Context, _ string) ([]string, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				mu.Lock()
+				lookups = append(lookups, time.Until(deadline))
+				mu.Unlock()
+			}
+			return []string{"10.1.0.4", "10.1.0.5"}, nil
+		}
+	})
+	time.Sleep(4500 * time.Millisecond)
+	if got := c.heartbeatInterval(); got != time.Second {
+		t.Errorf("the interval in force is %s, want 1s", got)
+	}
+	transport.mu.Lock()
+	heard, given := append([]time.Time(nil), transport.heard...), append([]time.Duration(nil), transport.given...)
+	transport.mu.Unlock()
+	if len(heard) < 4 {
+		t.Fatalf("the copy that answers heard %d heartbeats in 4.5s at a 1s interval", len(heard))
+	}
+	for i := 1; i < len(heard); i++ {
+		// A heartbeat late by over half an interval leaves too little of the
+		// 3s TTL; a starved CPU accounts for the half.
+		if gap := heard[i].Sub(heard[i-1]); gap > 1500*time.Millisecond {
+			t.Errorf("the copy that answers heard heartbeat %d %s after the one before", i+1, gap)
+		}
+	}
+	if len(given) == 0 {
+		t.Error("no heartbeat to the hung copy was given up on in 4.5s")
+	}
+	for _, d := range given {
+		if d > 1500*time.Millisecond {
+			t.Errorf("a heartbeat to the hung copy was given up on after %s, more than the 1s interval", d)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, d := range lookups {
+		if d > time.Second {
+			t.Errorf("a lookup of the copies' addresses was bounded by %s, more than the 1s interval", d)
+		}
+	}
+}
+
+// slowAnnouncer is a transport of two allocator copies: the one at
+// announcer answers heartbeats after 200ms saying a 1s interval, the other
+// at once saying none, noting how many it heard. A bundle request is
+// answered 503.
+type slowAnnouncer struct {
+	announcer string
+	heard     atomic.Int32
+}
+
+func (s *slowAnnouncer) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	rec := httptest.NewRecorder()
+	switch {
+	case req.URL.Path != allocapi.HeartbeatPath:
+		http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
+	case req.URL.Hostname() == s.announcer:
+		time.Sleep(200 * time.Millisecond)
+		_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":1}`)
+	default:
+		s.heard.Add(1)
+		_, _ = io.WriteString(rec, `{}`)
+	}
+	return rec.Result(), nil
+}
+
+// An interval one copy says takes effect at once for the heartbeats to every
+// copy, though each has a schedule of its own: the copy that says none, and
+// whose schedule waited the hour the client started with, is heartbeated
+// every second from then on.
+func TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy(t *testing.T) {
+	transport := &slowAnnouncer{announcer: "10.1.0.4"}
+	c := startClient(t, newFakeAllocator(t), func(o *Options) {
+		o.URL = "http://pue-allocator.monitoring.svc:9116"
+		o.Transport = transport
+		o.Resolve = func(context.Context, string) ([]string, error) { return []string{"10.1.0.4", "10.1.0.5"}, nil }
+	})
+	time.Sleep(3500 * time.Millisecond)
+	if got := c.heartbeatInterval(); got != time.Second {
+		t.Errorf("the interval in force is %s, want 1s", got)
+	}
+	if n := transport.heard.Load(); n < 3 {
+		t.Errorf("the copy saying no interval heard %d heartbeats in 3.5s, want one each second", n)
+	}
+}
+
+// A lookup of the allocator's addresses that fails is counted and logged as
+// a heartbeat failure, and the addresses it resolved to last are
+// heartbeated still: a name server that is down for a while does not make
+// the replica fall silent to copies that are up.
+func TestAFailedLookupHeartbeatsTheAddressesResolvedLast(t *testing.T) {
+	a := newFakeAllocator(t)
+	port := a.server.URL[strings.LastIndex(a.server.URL, ":")+1:]
+	var failing atomic.Bool
+	c := newTestClient(t, a, t.TempDir(), func(o *Options) {
+		o.URL = "http://allocator.test:" + port
+		o.Resolve = func(context.Context, string) ([]string, error) {
+			if failing.Load() {
+				return nil, errors.New("no name server")
+			}
+			return []string{"127.0.0.1"}, nil
+		}
+	})
+	c.heartbeat(context.Background())
+	a.nextHeartbeat(t)
+	failing.Store(true)
+	c.heartbeat(context.Background())
+	if hb := a.nextHeartbeat(t); hb.Sequence != 2 {
+		t.Errorf("the heartbeat after the failed lookup has sequence %d, want 2", hb.Sequence)
+	}
+	if st := c.Status(); st.SyncErrors[StageHeartbeat] != 1 {
+		t.Errorf("status %+v, want the failed lookup counted", st)
+	}
+	fresh := newTestClient(t, a, t.TempDir(), func(o *Options) {
+		o.URL = "http://allocator.test:" + port
+		o.Resolve = func(context.Context, string) ([]string, error) { return nil, errors.New("no name server") }
+	})
+	if fresh.heartbeat(context.Background()) {
+		t.Error("a heartbeat without an address resolved was sent")
 	}
 }

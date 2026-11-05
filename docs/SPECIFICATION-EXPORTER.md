@@ -30378,6 +30378,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMemberViewIsBounded` (allocator): a member owning 1205 static targets has 1000 listed of 1205 matching, the page saying the first 1000 are listed and 205 more left out, and `?filter=t12` lists all 15 of its matches, `t1204`, beyond the bound, included.
 - `TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader` (allocator): under `--peers.leader-only` the follower's view of a member it heard from is `partial` with the leader's address and no lists, its page names the leader with a notice and has no filter box nor targets, and the leader's view of the same member is whole.
 - `TestAnHTTPSDFailureMasksTheURLsToken` (allocator): of two `http_sd` sources whose URLs carry an `access_token`, one answering `503` and one unreachable, neither the status page, `/v1/status` nor the log shows the token, and the status's and the log's failure texts give the URLs with `access_token=<redacted>` and the other query parameter kept; an `ftp` URL with the token is refused at load without it.
+- `TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers` (allocclient): beside an allocator copy that never answers, one answering a 1s interval hears the replica at least 4 times in 4.5s, never more than 1.5s apart; heartbeats to the hung copy are given up on within 1.5s, and every lookup of the addresses is bounded by at most the 1s interval.
+- `TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy` (allocclient): a client started with an hour's interval, of two copies one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
+- `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
 
 # 35. Documentation requirements
 
@@ -33779,7 +33782,12 @@ The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
 at once, every heartbeat interval, and at once after each bundle it
 put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
-when it is an IP address. A heartbeat MUST carry the member, the advertised
+when it is an IP address. Each address MUST be heartbeated on a schedule
+of its own, so a copy that is slow to answer or hangs delays no heartbeat
+to another; a heartbeat to one address, and the lookup of the addresses,
+made at once and every heartbeat interval, MUST be given up on after 5
+seconds or the heartbeat interval, whichever is shorter, and a lookup that
+fails MUST keep the addresses it resolved to last. A heartbeat MUST carry the member, the advertised
 address, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force,
 `shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
@@ -33787,8 +33795,8 @@ random name made once at the exporter's start, and the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
-`--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
-built once the one before is back, so no heartbeat without `shutting_down`
+`--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
+built once the one before to it is back, so no heartbeat without `shutting_down`
 can reach the allocator after the one with it: a heartbeat on its way at
 the signal MUST be waited for, within the 2 seconds, and when it is not
 back by then the heartbeat with `shutting_down` MUST follow as soon as it
@@ -33798,14 +33806,14 @@ A failure repeated at every try MUST be logged once, for each stage and,
 for a heartbeat, for each address, until it changes or ends.
 
 The heartbeat interval MUST be `allocapi.DefaultHeartbeatInterval`, 10
-seconds, at the start, and the exporter MUST NOT have a setting of it. When
-the replies to a heartbeat that answered without error say a
-`heartbeat_interval_seconds` other than 0, the interval MUST become the
-shortest of them, each first brought within `1s` and `2m` (one below, a
-negative one included, taken as `1s`, one above as `2m`), and the next
-heartbeat MUST follow that interval after this one; when none says one,
-because every copy failed or none sends the field, the interval MUST stay
-as it is.
+seconds, at the start, and the exporter MUST NOT have a setting of it. Of
+the addresses whose last heartbeat was answered without error, those whose
+reply said a `heartbeat_interval_seconds` other than 0 MUST make the
+interval the shortest of them, each first brought within `1s` and `2m` (one
+below, a negative one included, taken as `1s`, one above as `2m`), and the
+next heartbeat to every address MUST follow that interval after the last
+one to it; when none says one, because every copy failed or none sends the
+field, the interval MUST stay as it is.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`

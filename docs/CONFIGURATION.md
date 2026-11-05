@@ -6832,7 +6832,8 @@ answer says one and when the copies answering differ, the shortest
 ([Members and allocation](ALLOCATOR.md#members-and-allocation)); the exporter
 has no setting of it. It heartbeats to every address
 the URL's host name resolves to, so two copies of the allocator behind a
-headless Service both hear it; each heartbeat says which bundle generation it
+headless Service both hear it, each on a schedule of its own, so a copy
+that hangs delays only the heartbeats to itself; each heartbeat says which bundle generation it
 has in force, and whether it refused the last one. It asks for its bundle with
 a request the allocator holds for up to 30 seconds until the bundle changes.
 A new bundle is written beside the one in force, checked as a reload would

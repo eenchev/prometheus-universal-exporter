@@ -633,7 +633,12 @@ setting of it. Until an answer says one, as before its first, the replica
 heartbeats every 10s. It keeps an interval said outside `1s` to `2m` within
 them, so a bogus answer can neither make it heartbeat without pause nor
 fall silent. A replica heartbeats every copy of the allocator
-([On Kubernetes](#on-kubernetes)); when the copies say different intervals,
+([On Kubernetes](#on-kubernetes)), each on a schedule of its own: a copy
+that is slow to answer, or hangs, delays only the heartbeats to itself, and
+the others hear the replica every interval. A heartbeat to a copy, and the
+lookup of the copies' addresses, made every interval, are given up on after
+5s, or the interval when that is shorter; a lookup that fails keeps the
+addresses it resolved to last. When the copies say different intervals,
 as during a rollout that changes it, it takes the shortest, so each copy
 hears it within its own interval, and a copy that does not answer, or says
 none, changes nothing. A heartbeat the replica gave up waiting for can

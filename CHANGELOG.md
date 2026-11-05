@@ -91,7 +91,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   answer (`heartbeat_interval_seconds`) and the exporter heartbeats at from
   its next heartbeat on, the shortest when copies of the allocator differ; a
   member is dropped after three intervals, where the interval was fixed at
-  10s and the member TTL at 30s. The status page shows both and marks a
+  10s and the member TTL at 30s. The exporter heartbeats each copy on a
+  schedule of its own, giving up on a heartbeat after 5s or the interval
+  when that is shorter, so a copy that hangs makes the replica late to no
+  other. The status page shows both and marks a
   member whose heartbeat is overdue
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - The chart's `allocator.heartbeatInterval` sets the allocator's
@@ -100,6 +103,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- An exporter in allocator mode whose lookup of the allocator's addresses
+  failed sent no heartbeat until one succeeded, and fell out of the member
+  list after the member TTL though every copy was up. It now heartbeats the
+  addresses it resolved to last
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - `pue-allocator` logged an `http_sd` source's failure, and refused a
   `url` that is not an `http` or `https` URL, with the URL as written, a
   token in its query, `?access_token=…`, shown in clear. The values of query

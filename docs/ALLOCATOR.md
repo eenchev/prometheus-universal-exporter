@@ -1148,7 +1148,12 @@ IP, so the pods are peers and only the leader asks the sources
 ([Instances with discovery](#instances-with-discovery)), and the allocator's
 NetworkPolicy admits the allocator's own pods; they are rolled out as any
 Deployment is, one at a time, under a disruption budget of
-`maxUnavailable: 1`. The configuration (`config.data`)
+`maxUnavailable: 1`. A new pod counts as available `max(allocator.settle,
+2m)` plus `allocator.heartbeatInterval` after it is ready, by when it has
+formed its first member list and the replicas have heard of it, whatever
+interval the old pods said, up to the 2m that bounds it ([Members and
+allocation](#members-and-allocation)), so a rollout does not replace the
+last old pod before a new one hands out targets, also with one pod. The configuration (`config.data`)
 and `allocator.staticTargets.data` and `allocator.probeJobs`, the static
 targets and the probe jobs, are mounted into the allocator only; a change to
 them rolls the allocator, and reaches the replicas as a new bundle without a

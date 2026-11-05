@@ -902,12 +902,15 @@ whole number from 1 to 2147483647. `allocator.heartbeatInterval` MUST be a
 Go duration from 1s to 2m, the allocator's bounds, or rendering MUST fail;
 the exporter pods MUST NOT be given a heartbeat setting of their own, since
 they take the allocator's from its heartbeat answers. Its `minReadySeconds` MUST be
-`max(allocator.settle, allocator.heartbeatInterval)` plus
-`allocator.heartbeatInterval`, each rounded up to whole seconds, an empty
-settle counting as the allocator's 15s and an empty interval as its 10s:
-`/ready` answers once the allocator has read its inputs, but its first member
-list takes effect that maximum after it starts and the exporter pods hear of it
-at their next heartbeat, a heartbeat interval on, so a rollout counting a new pod available at once
+`max(allocator.settle, 2m)` plus `allocator.heartbeatInterval`, each rounded
+up to whole seconds, an empty settle counting as the allocator's 15s and an
+empty interval as its 10s, whatever `allocator.replicas` is: `/ready`
+answers once the allocator has read its inputs, but its first member list
+takes effect no sooner than `max(settle, interval)` after it starts nor than
+the interval the exporter pods say after the first heartbeat, which during a
+rollout that shortens the interval is the old pods' one, up to 2m, which the
+chart cannot know, and the exporter pods hear of it at their next heartbeat,
+a heartbeat interval on, so a rollout counting a new pod available sooner
 could replace every old allocator before a new one hands out a target. Its
 pods MUST be scheduled by `allocator.nodeSelector`, `allocator.tolerations`,
 `allocator.affinity`, `allocator.priorityClassName` and
@@ -1987,13 +1990,13 @@ are skipped and the text checks of the templates still run:
      with it skipped (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - `allocator.heartbeatInterval` renders `--heartbeat.interval` with its
      value and nothing when empty; the Deployment's `minReadySeconds` is
-     `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded
-     up, 25 with both empty, 60 with `30s`, 4 with `settle: 0s` and `1.5s`
-     (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
+     `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with
+     both empty, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 310 with
+     `settle: 5m` (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
      `heartbeatInterval` that is no duration fails with the values schema
      and with it skipped, and one under `1s` or over `2m` with the template
      (`TestChartRefusesWhatTheAllocatorCannotRunWith`); `make helm-test`
-     renders `30s` and refuses `3m`.
+     renders `30s`, with `minReadySeconds: 150`, and refuses `3m`.
    - `allocator.configWatchInterval` renders `--config.watch-interval` and
      `allocator.discoveryRefreshInterval` `--discovery.refresh-interval`
      with their values, `0s` included for the first, and nothing when empty

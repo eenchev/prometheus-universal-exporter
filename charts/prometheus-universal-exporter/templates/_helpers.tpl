@@ -1350,18 +1350,25 @@ true
 {{- end }}
 {{- /* The allocator Deployment's minReadySeconds. /ready answers 200 once the
        allocator has read its inputs, but its first member list takes effect
-       max(settle, heartbeat interval) after it starts (internal/allocator
-       firstSettle), and the exporter pods learn of it at their next
-       heartbeat, a heartbeat interval later. Until then the new pod hands
-       out no targets, so a rollout that took it for available at once could
-       replace every old pod before any new one allocates. Empty settle and
-       heartbeatInterval are the allocator's defaults, 15s and 10s. */ -}}
+       no sooner than max(settle, its heartbeat interval) after it starts,
+       nor sooner than the longest interval the exporter pods say after the
+       first of them heartbeats it (internal/allocator firstSettle), and the
+       exporter pods learn of it at their next heartbeat, a heartbeat
+       interval later. Until then the new pod hands out no targets, so a
+       rollout that took it for available sooner could replace every old pod
+       before any new one allocates. The interval the exporter pods say is
+       the old pods' during a rollout that changes it, which the chart
+       cannot know: 2m, the most any allocator says, covers every one, so
+       minReadySeconds is max(settle, 2m) plus the heartbeat interval, with
+       one pod as with several, since each old pod is replaced once the new
+       one before it is available. Empty settle and heartbeatInterval are the
+       allocator's defaults, 15s and 10s. */ -}}
 {{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
 {{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
 {{- $interval := .Values.allocator.heartbeatInterval | default "" | toString | default "10s" -}}
 {{- $settleSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $settle) 1000) | int64 -}}
 {{- $intervalSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) 1000) | int64 -}}
-{{- add (max $settleSeconds $intervalSeconds) $intervalSeconds -}}
+{{- add (max $settleSeconds 120) $intervalSeconds -}}
 {{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}

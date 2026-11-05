@@ -133,7 +133,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - The chart's `allocator.heartbeatInterval` sets the allocator's
   `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
-  follows it.
+  is `max(allocator.settle, 2m)` plus it, so a new allocator pod counts as
+  available only once its first member list has formed and reached the
+  exporter pods, also during a rollout that shortens the interval, whose
+  old value the chart cannot know.
 
 ### Fixed
 

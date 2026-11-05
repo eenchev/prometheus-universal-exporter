@@ -1530,12 +1530,20 @@ allocator:
   `priorityClassName` and `topologySpreadConstraints`, not the exporter's,
   and by default spread over nodes where they can. A new allocator pod counts
   as available `minReadySeconds` after it is ready: its `/ready` answers once
-  it has read its files, but its first member list takes effect
-  `max(allocator.settle, allocator.heartbeatInterval)` after it starts and
-  the exporter pods hear of it at their next heartbeat, a heartbeat interval
-  later, so `minReadySeconds` is that sum, 25 seconds with the default
-  `settle` and `heartbeatInterval`, and a rollout does not replace the
-  old allocators before a new one hands out targets. The allocator mounts the configuration
+  it has read its files, but its first member list takes effect no sooner
+  than `max(allocator.settle, allocator.heartbeatInterval)` after it starts,
+  nor sooner than the interval the exporter pods heartbeat the old pods at
+  after the first of them finds it, and the exporter pods hear of it at
+  their next heartbeat, a heartbeat interval later. The chart cannot know
+  the old pods' interval when a rollout changes `heartbeatInterval`, so
+  `minReadySeconds` is `max(allocator.settle, 2m)`, 2m being the longest
+  interval an allocator says, plus `allocator.heartbeatInterval`: 130
+  seconds with the default `settle` and `heartbeatInterval`, with one pod as
+  with several, and a rollout does not replace the old allocators before a
+  new one hands out targets, also when it shortens the interval. The rest of
+  the 2m covers the time the exporter pods' lookups take to find the new
+  pod when the old interval was shorter; the old pods keep serving
+  meanwhile. The allocator mounts the configuration
   — `config.data`, or your ConfigMap with `config.enabled: false` — and two
   ConfigMaps of its own, `<fullname>-allocator-static-targets` from
   `allocator.staticTargets.data` and `<fullname>-allocator-probe-targets` from
@@ -1749,8 +1757,8 @@ allocator refuses.
 | `allocator.replicas` | empty: `2` | Allocator pods, from 1. They keep no state. With a discovery source they are peers, run with `--peers` and `--peers.self`: the leader alone asks the sources and the others serve what it found. |
 | `allocator.image` | the exporter's | `repository`, `tag`, `pullPolicy`; each empty field takes `image`'s. |
 | `allocator.resources` | 50m/64Mi, 500m/256Mi | The allocator's requests and limits. |
-| `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, heartbeatInterval)` plus `heartbeatInterval`. |
-| `allocator.heartbeatInterval` | `""`: `10s` | `--heartbeat.interval`: how often the exporter pods heartbeat, which the allocator tells them in every heartbeat answer, so the exporter pods have no setting of their own; a pod not heard from for three intervals stops being a member, and its targets move `settle` after that. A Go duration from `1s` to `2m`; anything else fails rendering. Empty leaves the flag out and the allocator's default, `10s`, in force. A shorter interval finds a pod that has stopped sooner, for more heartbeats. It also sets the Deployment's `minReadySeconds`. |
+| `allocator.settle` | `15s` | `--settle`: how long a changed member list holds before targets move, so a pod restarting quickly keeps its share. Empty leaves the flag out. It also sets the Deployment's `minReadySeconds`, `max(settle, 2m)` plus `heartbeatInterval`. |
+| `allocator.heartbeatInterval` | `""`: `10s` | `--heartbeat.interval`: how often the exporter pods heartbeat, which the allocator tells them in every heartbeat answer, so the exporter pods have no setting of their own; a pod not heard from for three intervals stops being a member, and its targets move `settle` after that. A Go duration from `1s` to `2m`; anything else fails rendering. Empty leaves the flag out and the allocator's default, `10s`, in force. A shorter interval finds a pod that has stopped sooner, for more heartbeats. It also sets the Deployment's `minReadySeconds`, `max(settle, 2m)` plus the interval. |
 | `allocator.configWatchInterval` | `""`: `60s` | `--config.watch-interval`: how often the allocator reads the configuration and the target ConfigMaps again for changes, which reach the exporter pods at once after; the kubelet takes up to about a minute more to update a mounted ConfigMap. A Go duration of zero or more, `0s` reading them once at the start; anything else fails rendering. Empty leaves the flag out. |
 | `allocator.discoveryRefreshInterval` | `""`: each kind's own | `--discovery.refresh-interval`: how often the allocator asks a discovery source that sets no `refresh_interval`, whatever its kind. A Go duration of `1s` or more; anything else fails rendering. Empty leaves the flag out and each kind its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. [How fast changes reach the exporters](../../docs/ALLOCATOR.md#how-fast-changes-reach-the-exporters) lists every delay and its setting, Prometheus's `allocator.scrapeConfig.refreshInterval` among them. |
 | `allocator.maxMembers` | `1000` | `--members.max`: how many live members the allocator takes; the heartbeat of a new pod beyond them is refused until one stops heartbeating. Keep it above the most exporter pods the autoscaler runs. |

@@ -872,7 +872,9 @@ allocator:
   # heartbeat reply; a pod not heard from for three intervals stops being a
   # member, and its targets move once --settle has passed. A Go duration
   # from 1s to 2m; empty leaves the flag out and the allocator's default,
-  # 10s, in force.
+  # 10s, in force. The allocator Deployment's minReadySeconds is
+  # max(settle, 2m) plus it: a new pod's first member list waits for the
+  # interval the old pods said, up to 2m, which the chart cannot know.
   heartbeatInterval: ""
   # How often the allocator reads its input files again for changes
   # (--config.watch-interval): the configuration and the static and probe

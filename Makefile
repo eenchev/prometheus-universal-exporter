@@ -491,7 +491,7 @@ helm-test: helm-version
 	fi; \
 	out="$$(helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set allocator.heartbeatInterval=30s)"; \
 	echo "$$out" | grep -q -- '- "--heartbeat.interval=30s"'; \
-	echo "$$out" | grep -q 'minReadySeconds: 60'; \
+	echo "$$out" | grep -q 'minReadySeconds: 150'; \
 	if helm template test charts/prometheus-universal-exporter --set allocator.enabled=true --set allocator.heartbeatInterval=3m >/dev/null 2>&1; then \
 		echo "helm template accepted an allocator heartbeat interval over 2m" >&2; \
 		exit 1; \

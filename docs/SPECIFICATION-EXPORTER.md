@@ -30441,6 +30441,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheHeartbeatEndpoint` (allocator), changed: the answer before the member list formed is `{"generation":"","heartbeat_interval_seconds":10,"instance":"<id>"}`, with the instance's id.
 - `TestTheFirstMemberListWaitsTheOldIntervalAfterTheFirstHeartbeat` (allocator), the reviewer's rollout scenario on a clock of the test's own: an instance of a 5s interval and a 1s settle time first heard 30s after its start from `r1` saying 40s, and from `r2` saying 40s at 65s, has no member list 1ms before 70s and `[r1 r2]` as its first at 70s; counted from the start, the list formed of `r1` alone at 40s.
 - `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator), changed: the heartbeat saying none, the first, at 1s starts the count of the 40s said after it, so the list has not formed at 40s and forms at 41s.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, 2m)` plus the heartbeat interval, 130 with both empty, 125 with `5s`, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 121 with `20s` and `1s`, 131 with `settle: 2m0.5s` and 310 with `5m`, so a lone allocator pod replaced during a rollout that shortens the interval from up to 2m is not counted available before its first member list forms; `make helm-test` checks 150 for `30s`.
 
 # 35. Documentation requirements
 

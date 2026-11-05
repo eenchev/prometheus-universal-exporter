@@ -344,7 +344,7 @@ table.jobs { width: auto; min-width: 50%; margin-bottom: 12px; }
 const memberContent = `{{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
 {{- if .Partial}}
-<p class="notice">This copy {{if .Leader}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members and their targets are on the leader's page, this member's at <code>/?member=…</code> there.</p>
+<p class="notice">This instance {{if .Leader}}follows the leader, <strong>{{.Leader}}</strong>{{else}}has not yet chosen its leader{{end}}, and runs with <code class="flag">--peers.leader-only</code>: the members and their targets are on the leader's page, this member's at <code>/?member=…</code> there.</p>
 {{- else if not .Known}}
 <p class="notice" id="unknown-member">The allocator knows no member <strong>{{.Member}}</strong>: no replica of that id has heartbeated, or it stopped long enough ago to be forgotten.</p>
 {{- else}}

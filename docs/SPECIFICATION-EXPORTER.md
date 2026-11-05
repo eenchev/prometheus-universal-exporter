@@ -30391,6 +30391,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): a copy with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; a copy hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
 - `TestAWrappedLabelKeepsTheNameOnItsFirstLine` (allocator): the member view's style makes a label an inline flex box, not an inline block, beside the phone layout's grid of name and value on one baseline, so a label that wraps keeps the cell's name on its first line.
 
+## 34.271 Allocator pages say instance
+
+- `TestTheAllocatorPagesSayInstance` (allocator): the page of an allocator without `--peers`, a leader's page and fragment, a `--peers.leader-only` follower's page and the member views of both have no `copy` or `copies` in their visible text, scripts, styles and code left out; each page has the heading `This instance` and the row `Instance ID`, whose label goes on two lines at a width of 400px or less; without peers it says this instance asks its discovery sources itself; the leader's has the `Instance` column, `(this instance)`, the `ID` beside an address, `This instance leads: it asks the discovery sources, and the other instances take what it finds.` and `2 live instances`; the follower's notice and its member view's say `This instance follows the leader`, its page `Below are this instance and its peers.` and `This instance follows <leader>:`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -33575,7 +33579,7 @@ with `200` and the families of the peers alone (`pue_allocator_peers`,
 `pue_allocator_snapshot_age_seconds` and
 `pue_allocator_peer_failures_total`), and no other family; `/v1/status`
 with `partial` true and `members`, `spread` and `sources` `null`; and `/`
-with the copy and its peers alone, naming the leader's address. The copy
+with this instance and its peers alone, naming the leader's address. The copy
 that leads MUST serve the whole of each, so the copies' allocation is in one
 copy's metrics. `docs/ALLOCATOR.md` MUST
 describe the peers, their flags, timings and metrics, and that a network
@@ -33719,6 +33723,9 @@ own discovery or the leader's snapshot. `GET /` MUST render the same as an
 HTML page framed as the exporter's pages are (§ 42.14a: the bar with the
 theme picker, the logo as its icon, the same `Content-Security-Policy`,
 `X-Frame-Options: DENY` and `Cache-Control: no-store`), every value escaped,
+calling each allocator process an instance and never a copy (`This instance`,
+the peers' `Instance` column, `(this instance)`, `live instances`) and its
+process's random id its `Instance ID` (`ID` beside each peer's address),
 with a bar of each member's targets drawn in CSS alone, and the exporter's
 status page's refresh controls, `?refresh=` keeping the interval and
 `?format=fragment` answering the content alone, without the bar; another

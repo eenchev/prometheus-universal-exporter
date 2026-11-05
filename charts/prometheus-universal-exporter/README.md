@@ -1792,7 +1792,7 @@ NetworkPolicy also lets its pods reach the allocator.
 
 ### The allocator's status page
 
-Each allocator pod serves a status page at `/` on its port 9116: the copy,
+Each allocator pod serves a status page at `/` on its port 9116: the instance,
 its peers and which pod leads, the members, how the targets are spread over
 them, and the discovery sources
 ([Status page](../../docs/ALLOCATOR.md#status-page)). The chart exposes the

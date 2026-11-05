@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -366,4 +367,54 @@ func TestALeaderOnlyFollowerServesThePeersPartAlone(t *testing.T) {
 	if fs := statusOf(t, follower.a.Handler(""), ""); fs.Partial || fs.Members == nil {
 		t.Errorf("the follower that came to lead gives %+v", fs)
 	}
+}
+
+// visibleText is the text a reader of page sees: its markup, scripts,
+// styles and code left out, so a JSON key or a flag shown as code does not
+// count.
+func visibleText(page string) string {
+	for _, el := range []string{"script", "style", "code"} {
+		page = regexp.MustCompile(`(?s)<`+el+`\b.*?</`+el+`>`).ReplaceAllString(page, " ")
+	}
+	return regexp.MustCompile(`(?s)<[^>]*>`).ReplaceAllString(page, " ")
+}
+
+// The pages call an allocator process an instance, never a copy, and its
+// random process id the instance ID: on the leader's page and fragment,
+// on a page with no --peers, on a --peers.leader-only follower's page and
+// on the member views of both.
+func TestTheAllocatorPagesSayInstance(t *testing.T) {
+	alone := New(mustLoad(t, writeInputs(t, testConfig, staticTargets(3), testProbes)), Options{Settle: time.Second, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	t.Cleanup(alone.BeginShutdown)
+	leader, follower, _ := leaderAndFollower(t)
+	leaderOnly(leader, follower)
+	for _, c := range []*peerCopy{leader, follower} {
+		if _, err := c.a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "r1:9115"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pages := map[string]string{
+		"alone":             ask(alone.Handler(""), "/", "").Body.String(),
+		"leader":            ask(leader.a.Handler(""), "/", "").Body.String(),
+		"leader's fragment": ask(leader.a.Handler(""), "/?format=fragment", "").Body.String(),
+		"follower":          ask(follower.a.Handler(""), "/", "").Body.String(),
+		"leader's view":     ask(leader.a.Handler(""), "/?member=r1", "").Body.String(),
+		"follower's view":   ask(follower.a.Handler(""), "/?member=r1", "").Body.String(),
+	}
+	for name, page := range pages {
+		if text := strings.ToLower(visibleText(page)); strings.Contains(text, "copy") || strings.Contains(text, "copies") {
+			t.Errorf("the %s page says copy:\n%s", name, text)
+		}
+	}
+	for _, name := range []string{"alone", "leader", "leader's fragment", "follower"} {
+		requireIn(t, pages[name], "<h2>This instance</h2>", `<tr><th class="wraps">Instance ID</th>`)
+	}
+	requireIn(t, pages["alone"], "off: this instance asks its discovery sources itself")
+	// On a phone the longer label goes on two lines rather than pushing the
+	// ID's last character onto a line of its own.
+	requireIn(t, pages["alone"], `@media (max-width: 400px) { table.facts th.wraps { white-space: normal; overflow-wrap: normal; width: 1px; } }`)
+	requireIn(t, pages["leader"], "<th>Instance</th><th>Role</th>", `<span class="muted">(this instance)</span>`, `<br><span class="muted">ID</span> <code>`,
+		"This instance leads: it asks the discovery sources, and the other instances take what it finds.", "2 live instances", "leader</span> of 2 live instances")
+	requireIn(t, pages["follower"], `<p class="notice">This instance follows the leader`, "Below are this instance and its peers.", "This instance follows "+leader.addr.String()+":")
+	requireIn(t, pages["follower's view"], `<p class="notice">This instance follows the leader`)
 }

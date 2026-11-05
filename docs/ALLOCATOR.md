@@ -615,7 +615,7 @@ shows as a gap of a scrape or two and a counter starting again from the new
 leader's count. Before its first check a copy counts as a follower.
 
 A follower's [status page](#status-page) is likewise short: it names the
-leader by its address and shows the copy itself and its peers, with the
+leader by its address and shows the instance itself and its peers, with the
 peers' series, and leaves the members, the spread and the discovery sources
 to the leader's page; `/v1/status` gives `"partial": true` with `members`,
 `spread` and `sources` `null`. The flag is refused without `--peers`: a copy
@@ -858,18 +858,20 @@ scrape_configs:
 
 ## Status page
 
-`GET /` is a page for a person: what this copy holds, without a Prometheus
-to ask. It shows
+`GET /` is a page for a person: what this instance holds, without a Prometheus
+to ask. The page calls each allocator process an instance, and the random
+id its process takes at its start, the `instance` of `/v1/status`, its
+instance ID. It shows
 
-- this copy: its address (among its peers, or `--web.listen-address`), its
-  process's instance, version and revision, when it started and whether it
+- this instance: its address (among its peers, or `--web.listen-address`),
+  its instance ID, version and revision, when it started and whether it
   is ready;
-- with `--peers`, whether it leads or follows, which copy leads, and
+- with `--peers`, whether it leads or follows, which instance leads, and
   whether it runs with `--peers.leader-only`, and
-  every copy its peers' addresses give, itself included, with whether it is
-  live, discovers and knows its own address, when it was last checked and
-  the checks it failed in a row; how old the copy's snapshot is and whether
-  it holds the leader's discovered targets; and the series of the peers'
+  every instance its peers' addresses give, itself included, with its ID,
+  whether it is live, discovers and knows its own address, when it was last
+  checked and the checks it failed in a row; how old the instance's
+  snapshot is and whether it holds the leader's discovered targets; and the series of the peers'
   metrics as `/metrics` has them ([Metrics](#metrics));
 - the members: the heartbeat interval and the member TTL; each one's
   address, how long ago its last heartbeat came, marked when a heartbeat is
@@ -884,7 +886,7 @@ to ask. It shows
   divided by the average, `1.00×` for targets spread evenly;
 - the discovery sources: each one's kind, owner, result, with the error
   while it fails, its targets, when it was last refreshed, and whether what
-  it holds is this copy's own discovery or the leader's snapshot.
+  it holds is this instance's own discovery or the leader's snapshot.
 
 The page refreshes itself as the exporter's status page does: Refresh, and
 an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as

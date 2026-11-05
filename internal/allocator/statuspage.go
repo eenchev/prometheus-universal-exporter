@@ -96,12 +96,19 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 		// A job the probe targets file does not have is a page that says
 		// so, answered 200, as a gone member's is: a view left open over a
 		// reload that renamed the job then shows it. The JSON answers 404.
-		view, known := a.JobView(job, query.Get("filter"))
+		// ?meta=1 shows the targets' source labels, which the page leaves
+		// out otherwise (jobview.go); the URL keeps it, so a refresh, which
+		// fetches the URL's fragment, keeps it too.
+		sourceLabels := query.Get("meta") == "1"
+		view, known := a.JobView(job, query.Get("filter"), sourceLabels)
 		frame.Job = jobPageOf(view, known)
 		frame.Content = frame.Job
 		frame.JSON += "?" + url.Values{"job": {job}}.Encode()
 		if !view.Partial {
-			frame.Filter = &filterForm{Param: "job", Value: job, Text: view.Filter, Hidden: !known, Limit: view.Limit}
+			// Only a discovered target has source labels: a job whose
+			// file lists every target has no box for them.
+			frame.Filter = &filterForm{Param: "job", Value: job, Text: view.Filter, Hidden: !known, Limit: view.Limit,
+				SourceLabelsBox: len(view.Sources) > 0, SourceLabels: sourceLabels}
 		}
 		page, content = jobPageTemplate, jobContentTemplate
 	default:
@@ -155,10 +162,14 @@ type pageFrame struct {
 // what is typed, and sent with the view's own parameter, Param=Value, member
 // or job. Text is the filter in force, Limit the bound of a list, and
 // Hidden hides the form while the allocator knows no such member or job.
+// SourceLabelsBox puts a Show source labels box in the form, on the view
+// of a job with discovery sources alone, and SourceLabels ticks it
+// (?meta=1).
 type filterForm struct {
-	Param, Value, Text string
-	Limit              int
-	Hidden             bool
+	Param, Value, Text            string
+	Limit                         int
+	Hidden                        bool
+	SourceLabelsBox, SourceLabels bool
 }
 
 // statusPage is what the page's template renders: the status, with the
@@ -419,7 +430,10 @@ var statusFrame = `<!DOCTYPE html>
 <label for="target-filter">Filter: target, member or label</label>
 {{- end}}
 <span class="filter-row"><input id="target-filter" name="filter" type="search" value="{{.Text}}" autocomplete="off" spellcheck="false"><button type="submit">Search all</button></span>
-<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else}}Both match a target, the member it is routed to and its labels.{{end}}</span>
+{{- if .SourceLabelsBox}}
+<label class="check" for="source-labels"><input id="source-labels" name="meta" value="1" type="checkbox"{{if .SourceLabels}} checked{{end}}>Show source labels <span class="muted">(names starting with <code>__</code>)</span></label>
+{{- end}}
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else}}Both match a target, the member it is routed to and the labels shown.{{end}}</span>
 </form>
 {{- end}}
 <div id="status-content">
@@ -476,6 +490,22 @@ var statusFrame = `<!DOCTYPE html>
       table.hidden = shown === 0;
     }
     $("filter").hidden = content.querySelector("#unknown-member, #unknown-job") !== null;
+  }
+  // A job's view's Show source labels box puts ?meta=1 in the URL, or
+  // takes it out, and refreshes the content at once: the allocator writes
+  // the rows with or without the targets' source labels, and their
+  // data-match with them, so the filter matches what is shown. A refresh
+  // fetches the URL's fragment, so it keeps the choice, as a bookmark does.
+  // Without JavaScript the box goes with Search all.
+  const sourceLabels = $("source-labels");
+  if (sourceLabels) {
+    sourceLabels.addEventListener("change", () => {
+      const url = new URL(location.href);
+      if (sourceLabels.checked) url.searchParams.set("meta", "1");
+      else url.searchParams.delete("meta");
+      history.replaceState(null, "", url);
+      refresh();
+    });
   }
   if (filter) {
     filter.addEventListener("input", filterRows);

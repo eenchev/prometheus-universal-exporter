@@ -228,7 +228,7 @@ func TestTheJobViewListsItsTargets(t *testing.T) {
 	requireIn(t, page, "<title>Probe job websites · pue-allocator</title>", `<a class="home" href="./">`, `<p class="back"><a href="./">← Allocator status</a></p>`,
 		`<h1>Probe job <span class="member-id">websites</span></h1>`, `<a href="v1/status?job=websites">JSON</a>`,
 		`<input type="hidden" name="job" value="websites">`, `<label for="target-filter">Filter: target, member or label</label>`,
-		"looks through every target of the job, beyond the 1000 a list shows. Both match a target, the member it is routed to and its labels.",
+		"looks through every target of the job, beyond the 1000 a list shows. Both match a target, the member it is routed to and the labels shown.",
 		`<tr><th>Collector</th><td>demo</td></tr>`, `<span class="label">team=web</span>`, `<span class="label">api_key=&lt;redacted&gt;</span>`, `<span class="label">timeout=10s</span>`,
 		"none: the probe targets file lists every target", `<table class="spread job-members">`, `<table class="targets" id="job-targets">`,
 		fmt.Sprintf(`<a href="?member=%s">%s</a>`, v.Targets.List[0].Member, v.Targets.List[0].Member), "Targets <span class=\"count\">6</span>")

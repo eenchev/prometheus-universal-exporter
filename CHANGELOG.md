@@ -85,8 +85,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Each probe job links to its own view, `/?job=<name>` and
   `/v1/status?job=<name>`: its collector, labels, params (credentials
   withheld) and sources, the targets each member has with a bar, and each
-  target with the member it is routed to and its labels, filtered and
-  bounded as a member's ([A probe job's
+  target with the member it is routed to and its labels, its source
+  labels (`__meta_…`) left out unless *Show source labels* (`?meta=1`) asks
+  for them, filtered and bounded as a member's ([A probe job's
   targets](docs/ALLOCATOR.md#a-probe-jobs-targets)). A
   browser gives `--web.token-file`'s token as the password of Basic auth,
   which the page, `/v1/status` and `/metrics` take beside the bearer token

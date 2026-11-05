@@ -30428,6 +30428,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheAllocatorPagesWriteDurationsWithoutZeroUnits` (allocator): an allocator of a 1m heartbeat interval, a 2m settle time and a 1h watch interval, 74s after its start, has `(up 1m14s)`, `read again every 1h for changes` and `heartbeat every 1m; a member not heard from for 3m stops being live. A changed member list holds for 2m` on its page; a `file_sd` source's default 1m is `1m` in the sources table and `refreshed every 1m` on its job's view, and a static target's own 1m interval is `1m` on its member's view and `1m0s` in the view's JSON; no page has `m0s` or `h0m`.
 - `TestTheStatusPageWritesDurationsWithoutZeroUnits` (exporter): the status page writes a static target's 1m interval as `1m`, the metrics export's 1m, the log export's 2h and the trace export's 1h0m30s intervals as `every 1m`, `every 2h` and `every 1h30s`, and the trace threshold of 1m as `took 1m or longer` and `threshold 1m`, with no `m0s` or `h0m`; the JSON keeps `1m0s`, `2h0m0s`, `1h0m30s` and `1m0s`.
 - `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), changed: a recovered error's age is `(35m ago)`, an age matched as hours, minutes and seconds each left out when zero; `TestTheStatusPageShowsTheJSONsValuesEscaped` finds a row's interval as the page writes it.
+- `TestAJobViewHidesTheSourceLabelsUnlessAsked` (allocator): of a job of two targets a `file_sd` source finds, each with `namespace` and `__meta_zone`, `/v1/status?job=pods` has both labels of each and its `?filter=__meta_zone=ams` matches one; the page without `?meta=1` has the *Show source labels* box unticked, `namespace=shop`, no `__meta_zone`, the script setting and deleting `meta`, the hint saying the labels shown, and Search all of `ams` and `__meta` lists none and of `namespace=shop` one; with `?meta=1` the box is ticked, both `__meta_zone` labels are shown and in the rows' `data-match`, and Search all of `ams` lists one; the fragment has the source labels with `?meta=1` and not without; a job whose file lists every target and a member's view have no box.
+- `TestTheJobViewListsItsTargets` (allocator), changed: the hint says the filters match the labels shown.
 
 # 35. Documentation requirements
 
@@ -33826,10 +33828,18 @@ is routed among, linked to their views, with the targets of the job each
 has, as the spread counts them, and a bar, the most first; and its targets
 by target, each shown as `fetch.DisplayTarget` shows it, with the member
 `SD` routes it to, linked, and the labels its source gave it but those the
-job sets or takes away. `?filter=` MUST cut the targets to those whose
-target, member or a label as `name=value` holds the text, before the first
-1000. `GET /v1/status?job=<name>` MUST answer the same as JSON
-(`allocator.JobView`); a job the probe targets file does not have MUST be
+job sets or takes away. The page MUST leave out a target's source labels,
+those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
+them; a job with discovery sources MUST have a *Show source labels* box by
+its filter that puts `?meta=1` in the URL, or takes it out, and refreshes
+the content, so a refresh, which fetches the URL's fragment, keeps the
+choice. `?filter=` MUST cut the targets to those whose target, member or a
+label shown as `name=value` holds the text, before the first 1000, and a
+row's `data-match`, which the box filters by as it is typed, MUST hold the
+same, so a source label left out matches neither. `GET
+/v1/status?job=<name>` MUST answer the same as JSON
+(`allocator.JobView`), but with every label of a target, which its filter
+matches; a job the probe targets file does not have MUST be
 answered `404` as JSON and `200` saying so on the page and its fragment, the
 filter box hidden; an empty `job` MUST be answered `400` on both; a follower
 under `--peers.leader-only` MUST name the leader and answer `partial`. All

@@ -25,6 +25,20 @@ import (
 // as one in its value masked (fetch.RedactText), as the exporter's status
 // page shows a probe's params: a probe targets file may carry an API key
 // as a param.
+//
+// A discovered target carries its source's labels whose names start with
+// __, as __meta_kubernetes_namespace, for the job's relabeling: a dozen or
+// more a target, they bury the labels the target is shown with. The page
+// leaves them out unless asked for them, ?meta=1, and its filter then
+// matches only the labels shown, as a row's data-match does; the JSON
+// keeps them all.
+//
+// A discovered target carries its source's labels whose names start with
+// __, as __meta_kubernetes_namespace, for the job's relabeling: often a
+// dozen a target, they bury the labels the target is shown with. The page
+// leaves them out unless asked for them, ?meta=1, and its filter then
+// matches only the labels shown, as a row's data-match does; the JSON
+// keeps them all.
 
 // JobView is the answer at StatusPath?job=<name>.
 type JobView struct {
@@ -72,14 +86,18 @@ type JobTarget struct {
 	// Member is the member it is routed to, "" while there is none.
 	Member string `json:"member"`
 	// Labels are those its discovery source gave it, but those the job
-	// sets or takes away: the job's own are the view's Labels.
+	// sets or takes away: the job's own are the view's Labels. Those whose
+	// names start with __, its source labels, are left out of the page's
+	// view unless asked for (JobView).
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // JobView is the view of the probe job named job, its targets cut to
-// filter; known is false when the probe targets file has no such job, and
-// the instance is not a follower leaving the members to its leader.
-func (a *Allocator) JobView(job, filter string) (view JobView, known bool) {
+// filter, with their source labels, those whose names start with __, when
+// sourceLabels is set and else without them, the filter then not matching
+// them either; known is false when the probe targets file has no such job,
+// and the instance is not a follower leaving the members to its leader.
+func (a *Allocator) JobView(job, filter string, sourceLabels bool) (view JobView, known bool) {
 	filter = strings.TrimSpace(filter)
 	now := a.clock.Now()
 	view = JobView{GeneratedAt: now.UTC().Format(time.RFC3339), Job: job, Filter: filter, Limit: MemberViewLimit}
@@ -103,7 +121,7 @@ func (a *Allocator) JobView(job, filter string) (view JobView, known bool) {
 	for _, target := range j.Targets {
 		t := JobTarget{Target: fetch.DisplayTarget(collector, target), Member: owners[target]}
 		for name, value := range j.labelsOf[target] {
-			if _, set := j.Labels[name]; !set {
+			if _, set := j.Labels[name]; !set && (sourceLabels || !isSourceLabel(name)) {
 				if t.Labels == nil {
 					t.Labels = map[string]string{}
 				}
@@ -150,6 +168,10 @@ func (a *Allocator) JobView(job, filter string) (view JobView, known bool) {
 	return view, true
 }
 
+// isSourceLabel is whether a discovered target's label is one of its
+// source's, its name starting with __, as __meta_kubernetes_namespace.
+func isSourceLabel(name string) bool { return strings.HasPrefix(name, "__") }
+
 // shownParam is a probe job's param as its view shows it: withheld when
 // its name reads as a credential's, and else with what reads as one in it
 // masked.
@@ -171,15 +193,16 @@ func (t *JobTarget) matchTexts() []string {
 	return texts
 }
 
-// serveJobView answers StatusPath?job=<name> with the job's view as JSON:
-// 400 without a name, 404 for a job the probe targets file does not have.
+// serveJobView answers StatusPath?job=<name> with the job's view as JSON,
+// every label of a target kept: 400 without a name, 404 for a job the probe
+// targets file does not have.
 func (a *Allocator) serveJobView(w http.ResponseWriter, r *http.Request) {
 	job := r.URL.Query().Get("job")
 	if job == "" {
 		http.Error(w, "the job parameter names a probe job; "+StatusPath+" without it serves the whole status", http.StatusBadRequest)
 		return
 	}
-	view, known := a.JobView(job, r.URL.Query().Get("filter"))
+	view, known := a.JobView(job, r.URL.Query().Get("filter"), true)
 	if !known {
 		http.Error(w, "the probe targets file has no probe job "+strconv.Quote(job), http.StatusNotFound)
 		return

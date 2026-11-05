@@ -1045,14 +1045,24 @@ this site?" without asking service discovery. It shows
   it to, which links to that member's view, and the labels its discovery
   source gave it, but those the job's own labels set or take away.
 
+A discovered target's source labels, those whose names start with `__`,
+such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
+often a dozen a target, and the page leaves them out. *Show source labels*,
+under the filter of a job with discovery sources, shows them: it puts
+`?meta=1` in the URL, or takes it out, and refreshes the content, so the
+auto-refresh and a bookmark keep the choice. The filter, as it is typed and
+with Search all, matches the labels shown and no other: while the source
+labels are left out, `__meta_zone=ams` matches nothing.
+
 The counts are the spread's for the job. A target is shown with its
 credentials withheld as on a member's view, and a param whose name reads
 as a credential's, such as `api_key` or `token`, as `<redacted>`; any other
 param is shown as written, with what reads as a credential in its value
 masked. The filter box, Search all (`?filter=<text>`), the bound of 1000
 targets and the refresh are a member's view's; the filter matches a
-target, its member and its labels as `name=value`. Its bar's JSON link is
-`GET /v1/status?job=<name>`, the same as JSON: `generated_at`, `job`,
+target, its member and its labels shown as `name=value`. Its bar's JSON
+link is `GET /v1/status?job=<name>`, the same as JSON, with every label of
+a target, its source labels included, which its `?filter=` matches: `generated_at`, `job`,
 `filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
 `spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
 `params`, `sources` (as the status's `sources` have them) and `targets`

@@ -319,6 +319,10 @@ form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding:
 form.filter button { flex: none; height: 34px; padding: 0 12px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 form.filter .muted { font-size: 13px; }
 form.filter[hidden] { display: none; }
+/* The Show source labels box under the filter, its box on the line of its
+   text and level with the search box's left edge. */
+form.filter label.check { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; font-weight: normal; }
+form.filter label.check input { margin: 0; align-self: center; }
 h2 .count { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 p.note { margin: 0 0 8px; font-size: 14px; }
 p.note:empty { display: none; }

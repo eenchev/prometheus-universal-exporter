@@ -673,7 +673,13 @@ that shortens it, hears a replica first at the replica's next heartbeat on
 the old interval, and a replica looks up the copies' addresses every
 interval, so every replica has reached it within the old interval of its
 start; its first heartbeat says that interval, and the first member list
-waits it.
+waits it. A replica that has not been told an interval yet, as one that
+has just started, says none, as the 10s it heartbeats at until then is no
+copy's, and its heartbeat does not change the wait. So the first list waits
+the old interval when a replica told it reaches the copy before the copy's
+own interval and `--settle` have passed, as one heartbeating every
+interval does; replicas started after the copy and heard alone until then
+form the first list by themselves, and it changes as the others arrive.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
 is refused for the other. A shorter interval finds a replica that has
@@ -773,8 +779,8 @@ not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
 having reported none. `interval_seconds` is the interval the replica was
-heartbeating at when it sent the heartbeat, which the first member list
-waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
+heartbeating at when it sent the heartbeat, left out until a copy of the
+allocator has said one, which the first member list waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
 the generation of the member's bundle, or `""` while the member list has not

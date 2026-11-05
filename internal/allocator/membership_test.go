@@ -487,3 +487,53 @@ func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) 
 		t.Errorf("2m after the start of a copy told 1e9s the member list is %v, want [r1]", got)
 	}
 }
+
+// A replica that has just started, not told an interval yet, says none in
+// its heartbeats, and they do not change how long the first member list
+// waits: heard first, it holds the list back neither for the 10s the
+// client starts with nor at all, and a replica heard after it whose first
+// heartbeat says the old 40s makes the list wait 40s, of the both of them
+// and the one heard later.
+func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
+	clock := newFakeClock()
+	at := func(a *Allocator, interval time.Duration, members ...string) {
+		t.Helper()
+		for _, name := range members {
+			if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: name, Advertise: name + ":9115", IntervalSeconds: interval.Seconds()})); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a := New(nil, Options{Settle: time.Second, HeartbeatInterval: 5 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	clock.Advance(time.Second)
+	at(a, 0, "fresh")
+	clock.Advance(2 * time.Second)
+	at(a, 40*time.Second, "old1")
+	for range 7 {
+		clock.Advance(5 * time.Second)
+		at(a, 5*time.Second, "fresh", "old1")
+	}
+	// 38s after the start, old2 is heard on the old interval.
+	at(a, 40*time.Second, "old2")
+	if got := effective(a); got != nil {
+		t.Fatalf("the first member list formed of %v before 40s", got)
+	}
+	clock.Advance(2 * time.Second)
+	at(a, 5*time.Second, "fresh", "old1", "old2")
+	if got := effective(a); !slices.Equal(got, []string{"fresh", "old1", "old2"}) || memberChanges(a) != 0 {
+		t.Errorf("40s after the start got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
+	}
+	// A copy that hears only heartbeats saying none waits its own interval.
+	b := New(nil, Options{Settle: time.Second, HeartbeatInterval: 5 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(b.BeginShutdown)
+	at(b, 0, "fresh")
+	clock.Advance(4999 * time.Millisecond)
+	if got := effective(b); got != nil {
+		t.Fatalf("1ms before its 5s interval a copy formed the first member list %v", got)
+	}
+	clock.Advance(time.Millisecond)
+	if got := effective(b); !slices.Equal(got, []string{"fresh"}) {
+		t.Errorf("at its 5s interval a copy hearing no interval has the member list %v, want [fresh]", got)
+	}
+}

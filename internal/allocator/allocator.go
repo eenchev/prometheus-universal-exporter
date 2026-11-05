@@ -76,7 +76,8 @@ type Allocator struct {
 	heartbeatInterval, memberTTL time.Duration
 	// longestHeard is the longest interval a heartbeat said its replica was
 	// heartbeating at (allocapi.Heartbeat.IntervalSeconds) before the first
-	// member list formed, kept within allocapi's bounds (firstSettle).
+	// member list formed, kept within allocapi's bounds; a heartbeat that
+	// says none is no say (firstSettle).
 	longestHeard time.Duration
 	// maxMembers bounds the live members; full says a heartbeat was
 	// refused for it since the last new member was taken, so the refusals
@@ -423,10 +424,17 @@ func (a *Allocator) settleDue(now time.Time) bool {
 // is longer. A copy started with an interval shorter than the copies before
 // it hears each replica only at the replica's next heartbeat on the old
 // interval, which reaches it within that interval of its start (the
-// replica looks up the copies' addresses every interval); a heartbeat of
-// any replica says the old interval, as each replica was told the same, so
-// the first list waits for the others too, rather than forming of those
-// that happened to come first and changing as each of the rest arrives.
+// replica looks up the copies' addresses every interval). The first
+// heartbeat of a replica the copies before told the old interval says it,
+// as each was told the same, so the first list waits for the others too,
+// rather than forming of those that happened to come first and changing as
+// each of the rest arrives. A replica not told an interval yet, one that
+// has just started, says none: the default it heartbeats at is no copy's,
+// and says nothing of how long the others take, so it does not count here.
+// The wait so covers the old interval when a replica told it is heard
+// before the copy's own interval and the settle time have passed; replicas
+// that started after the copy, heard alone until then, form the first list
+// alone, and it changes as the others arrive.
 func (a *Allocator) firstSettle() time.Time {
 	return a.started.Add(max(a.settle, a.heartbeatInterval, a.longestHeard))
 }

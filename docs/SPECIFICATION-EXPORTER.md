@@ -30382,11 +30382,13 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy` (allocclient): a client started with an hour's interval, of two copies one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
 - `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
 - `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): a copy with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; a copy with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
-- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat says `interval_seconds` 3600 and the one after the reply saying 1 says 1.
+- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat, before the allocator said an interval, leaves `interval_seconds` out, and the one after the reply saying 1 says 1.
 - `TestAMemberViewOfAGoneMemberSaysSo` (allocator): the fragment of r2's view lists its targets; once r2 has stopped long enough to be forgotten, its fragment answers `200` with the as-of line and the notice that the allocator knows no member r2, no table and no frame, its page `200` with the filter form `hidden` and the script hiding it on that notice, the JSON `404`, and r1's page has its filter shown.
 - `TestTheFilterBoxMatchesWhatTheAllocatorMatches` (allocator): a static row's `data-match` is its name, target, collector, moved-to (empty) and labels in name order, and a probe row's its target, job and collector, joined by line feeds; the script matches `data-match`, not the row's text, and the hint says both match the same fields; the allocator matches no target for `30s`, `alphahttp` or `demoteam`; `?filter=%20` and `%20%20` are no filter, matching every target, unechoed.
 - `TestTheMemberViewListsItsTargets` (allocator), changed: the page of an unknown member answers `200`, its JSON still `404`.
 - `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the copy it reaches, heartbeats a copy whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
+- `TestAReplicaSaysNoIntervalUntilACopyDoes` (allocclient): a client started with the default interval, and one with 4s, leave `interval_seconds` out of their heartbeats while the allocator says no interval, also in the heartbeat answered with the first 5s, and say 5 in every heartbeat after it, also once the allocator says none again.
+- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): a copy with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; a copy hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
 
 # 35. Documentation requirements
 
@@ -33622,7 +33624,8 @@ its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
 before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
 is the longest `interval_seconds` a heartbeat heard before it formed said,
-brought within `1s` and `2m`, 0 when none said one. A member
+brought within `1s` and `2m`, 0 when none said one; a heartbeat without
+`interval_seconds`, or with 0, MUST NOT change `I`. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33806,7 +33809,9 @@ generation with its error until a later bundle is put in force,
 random name made once at the exporter's start, the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one, and
-`interval_seconds`, the heartbeat interval in force when it was built; on that signal the
+`interval_seconds`, the heartbeat interval in force when it was built, once a
+reply has said a `heartbeat_interval_seconds` other than 0, and MUST
+leave `interval_seconds` out before; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`

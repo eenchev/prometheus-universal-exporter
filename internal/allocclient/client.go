@@ -204,6 +204,13 @@ type Client struct {
 	// address's schedule takes it at once.
 	interval        time.Duration
 	intervalChanged chan struct{}
+	// told is set once a copy of the allocator has announced an interval.
+	// Until then the interval in force is Options' default, which no copy
+	// said, and a heartbeat leaves it out (allocapi.Heartbeat's
+	// IntervalSeconds): it would tell a copy that has just started
+	// nothing of how long the replicas told the copies' interval take to
+	// reach it.
+	told bool
 	// announced is, for each address the allocator's host resolves to whose
 	// last heartbeat was answered, the interval that answer said, 0 for
 	// none: an address whose heartbeat failed has no say until it answers
@@ -575,7 +582,10 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.interval.Seconds()}
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
+	if c.told {
+		hb.IntervalSeconds = c.interval.Seconds()
+	}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)
@@ -610,7 +620,8 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 }
 
 // takeAnnounced makes the shortest interval announced the interval in
-// force, when any is. Called under mu.
+// force, when any is, and from then on the heartbeats say it (told).
+// Called under mu.
 func (c *Client) takeAnnounced() {
 	var shortest time.Duration
 	for _, d := range c.announced {
@@ -618,7 +629,11 @@ func (c *Client) takeAnnounced() {
 			shortest = d
 		}
 	}
-	if shortest == 0 || shortest == c.interval {
+	if shortest == 0 {
+		return
+	}
+	c.told = true
+	if shortest == c.interval {
 		return
 	}
 	c.o.Logger.Info("heartbeating at the interval the target allocator says", "interval", shortest.String(), "was", c.interval.String())

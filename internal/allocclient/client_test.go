@@ -1176,7 +1176,8 @@ func TestHeartbeatsCarryTheInstanceAndASequence(t *testing.T) {
 
 // The client heartbeats at the interval the allocator's reply says from the
 // heartbeat after it on, though it started with another, and each heartbeat
-// says the interval it was sent at.
+// built after the reply says it; the first, before any copy said one, says
+// none.
 func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	a := newFakeAllocator(t)
 	a.mu.Lock()
@@ -1192,8 +1193,43 @@ func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 	if got := c.heartbeatInterval(); got != time.Second {
 		t.Errorf("the heartbeat interval in force is %s, want 1s", got)
 	}
-	if first.IntervalSeconds != 3600 || second.IntervalSeconds != 1 {
-		t.Errorf("the heartbeats said the intervals %v and %v, want 3600 and 1", first.IntervalSeconds, second.IntervalSeconds)
+	if first.IntervalSeconds != 0 || second.IntervalSeconds != 1 {
+		t.Errorf("the heartbeats said the intervals %v and %v, want none and 1", first.IntervalSeconds, second.IntervalSeconds)
+	}
+}
+
+// A replica says no interval_seconds until a copy of the allocator has said
+// an interval: the one it starts with is the client's default, or Options',
+// no copy's, and a copy that has just started would take it for the
+// interval the replicas told by the copies before it heartbeat at. Once a
+// copy has said one, every heartbeat says the interval in force, also
+// while no copy says one any more.
+func TestAReplicaSaysNoIntervalUntilACopyDoes(t *testing.T) {
+	for _, configured := range []time.Duration{0, 4 * time.Second} {
+		a := newFakeAllocator(t)
+		c := newTestClient(t, a, t.TempDir(), func(o *Options) { o.HeartbeatInterval = configured })
+		for range 2 {
+			c.heartbeat(context.Background())
+			if hb := a.nextHeartbeat(t); hb.IntervalSeconds != 0 {
+				t.Errorf("started with %s, before any copy said an interval a heartbeat said interval_seconds %v", configured, hb.IntervalSeconds)
+			}
+		}
+		a.mu.Lock()
+		a.announce = 5
+		a.mu.Unlock()
+		c.heartbeat(context.Background())
+		if hb := a.nextHeartbeat(t); hb.IntervalSeconds != 0 {
+			t.Errorf("started with %s, the heartbeat answered with the first interval said interval_seconds %v, built before", configured, hb.IntervalSeconds)
+		}
+		a.mu.Lock()
+		a.announce = 0
+		a.mu.Unlock()
+		for range 2 {
+			c.heartbeat(context.Background())
+			if hb := a.nextHeartbeat(t); hb.IntervalSeconds != 5 {
+				t.Errorf("started with %s, after a copy said 5s a heartbeat said interval_seconds %v, want 5", configured, hb.IntervalSeconds)
+			}
+		}
 	}
 }
 

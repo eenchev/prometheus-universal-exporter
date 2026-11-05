@@ -100,6 +100,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- `pue-allocator` logged an `http_sd` source's failure, and refused a
+  `url` that is not an `http` or `https` URL, with the URL as written, a
+  token in its query, `?access_token=…`, shown in clear. The values of query
+  parameters whose names read as credentials' are now masked there, as a
+  target is in a log line, and on the new status page; a `url` that is no
+  URL at all is no longer shown ([Sources](docs/ALLOCATOR.md#sources)).
 - `$url`, a target in a log line, the static targets endpoint's `target`
   label, the OTLP `target` attribute, a debug report and an error showed a
   session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code` and

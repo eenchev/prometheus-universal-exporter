@@ -352,6 +352,11 @@ Bearer`, read again at every refresh; `tls` is the exporter's `tls` block
 (`ca_file`, `cert_file`, `key_file`, `server_name`, `insecure_skip_verify`),
 for an `https` URL only: a `tls` block, even an empty one, beside an `http`
 URL is refused at load, since the request would never use it. Redirects are not followed, and an answer that is not `200` fails.
+A failure's text, as the log, the status page and `/v1/status` show it,
+gives the URL with the values of query parameters whose names read as
+credentials' masked, `?access_token=<redacted>`, as the exporter's logs show
+a target ([Logging](LOGGING.md#repeated-failures)); a `url` refused at load
+is shown so too, and one that is no URL at all not at all.
 
 **`kubernetes`** lists the `discovery.k8s.io/v1` EndpointSlices of the
 cluster the allocator runs in, every `refresh_interval`, `30s` by default,

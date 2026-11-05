@@ -30377,6 +30377,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheMemberViewListsItsTargets` (allocator): with 40 static targets, a quarter with a user, a password and a `token` in their URL, two probe jobs whose targets carry an `access_token`, and members r1 and r2 joined by r3, `/?member=r1` and `/v1/status?member=r1` answer `401` with a `Basic` challenge without the token; r1's view counts the static, draining and probe targets the spread counts for it, lists by name the static targets `allocapi.Owner` gives it with collector, interval and labels, `""` left out, the draining ones moved to r3 with up to 30s left, and the probe jobs in file order with the spread's counts; the page has its title, the bar's home and JSON links, the way back, the filter box with the member, the three tables, a link to r3's view and the targets redacted, neither it nor the JSON shows `hunter2`, a token or an access token, the fragment is the content alone, without the filter box, and the status page links r1 to its view; `?filter=T0` lists only names starting `t0`, every count but the matching ones kept, and no probe target, `?filter=apis` the apis job's probe targets alone, and a filter nothing holds says so; an unknown member is answered `404` on both, with a notice and the way back on the page, and an empty `member` `400`.
 - `TestAMemberViewIsBounded` (allocator): a member owning 1205 static targets has 1000 listed of 1205 matching, the page saying the first 1000 are listed and 205 more left out, and `?filter=t12` lists all 15 of its matches, `t1204`, beyond the bound, included.
 - `TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader` (allocator): under `--peers.leader-only` the follower's view of a member it heard from is `partial` with the leader's address and no lists, its page names the leader with a notice and has no filter box nor targets, and the leader's view of the same member is whole.
+- `TestAnHTTPSDFailureMasksTheURLsToken` (allocator): of two `http_sd` sources whose URLs carry an `access_token`, one answering `503` and one unreachable, neither the status page, `/v1/status` nor the log shows the token, and the status's and the log's failure texts give the URLs with `access_token=<redacted>` and the other query parameter kept; an `ftp` URL with the token is refused at load without it.
 
 # 35. Documentation requirements
 
@@ -33393,7 +33394,11 @@ from the directory of the file naming them, read again at every refresh.
 asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
 optional `bearer_token_file` read again at every refresh and a `tls` block
 (only for `https`: a written one, even empty, with an `http` URL MUST be
-refused at load), without following redirects. Both MUST read a list of
+refused at load), without following redirects. The text of an `http_sd`
+failure, logged, on the status page and in `/v1/status`, and of a `url` refused at load MUST give the URL with the values of
+query parameters whose names read as credentials' masked
+(`MaskCredentialQueryValues`), and a `url` that does not parse MUST NOT be
+shown. Both MUST read a list of
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and

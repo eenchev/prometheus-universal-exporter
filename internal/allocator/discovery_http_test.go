@@ -5,6 +5,9 @@ package allocator
 import (
 	"bytes"
 	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -12,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -284,6 +288,58 @@ func TestAFailingSourceLeavesTheRest(t *testing.T) {
 	groups, err := a.SD("websites")
 	if err != nil || len(groups) != 1 || groups[0].Labels["__param_target"] != "https://shop.example" {
 		t.Errorf("got %v, %v; want the written target alone", groups, err)
+	}
+}
+
+// A token in an http_sd URL's query is masked in what a failure of the
+// source shows: on the status page, in /v1/status and in the log, whether
+// the server answered with an error or could not be reached, and in the
+// error of a URL refused at load.
+func TestAnHTTPSDFailureMasksTheURLsToken(t *testing.T) {
+	const secret = "SEKRET-sd-token"
+	sd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(sd.Close)
+	probes := `probe_jobs:
+  - name: websites
+    collector: demo
+    targets: [https://shop.example]
+    discovery:
+      - name: answers
+        http_sd:
+          url: ` + sd.URL + `/sd?access_token=` + secret + `&zone=eu
+      - name: unreachable
+        http_sd:
+          url: http://127.0.0.1:1/sd?access_token=` + secret + `
+`
+	p := writeInputs(t, testConfig, "", probes)
+	clock := newFakeClock()
+	logs := &syncBuffer{}
+	a := New(mustLoad(t, p), Options{Settle: 15 * time.Second, Clock: clock, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	t.Cleanup(a.BeginShutdown)
+	beat(t, a, "r1")
+	keepBeating(t, a, clock, 20*time.Second, "r1")
+	a.refreshDiscovery(context.Background())
+	page := ask(a.Handler(""), "/", "").Body.String()
+	status := ask(a.Handler(""), StatusPath, "").Body.String()
+	for what, text := range map[string]string{"the page": page, StatusPath: status, "the log": logs.String()} {
+		if strings.Contains(text, secret) {
+			t.Errorf("%s shows the token: %s", what, text)
+		}
+	}
+	sources := statusOf(t, a.Handler(""), "").Sources
+	if len(sources) != 2 {
+		t.Fatalf("got the sources %v", sources)
+	}
+	for i, want := range []string{"/sd?access_token=" + fetch.Redacted + "&zone=eu answered 503", "127.0.0.1:1/sd?access_token=" + fetch.Redacted} {
+		if !strings.Contains(sources[i].Error, want) || !strings.Contains(logs.String(), want) {
+			t.Errorf("the status or the log lacks %q: %q\n%s", want, sources[i].Error, logs)
+		}
+	}
+	bad := strings.Replace(probes, sd.URL, "ftp://sd.example", 1)
+	if _, err := LoadInputs(writeInputs(t, testConfig, "", bad)); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("a refused http_sd.url is shown with its token: %v", err)
 	}
 }
 

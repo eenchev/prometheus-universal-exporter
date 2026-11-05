@@ -187,6 +187,30 @@ func (d *DiscoveryConfig) refresh() time.Duration {
 	return def
 }
 
+// refreshText names the interval refresh is, and where it comes from, for a
+// refusal of a setting that has to fit in it: a source that sets no
+// refresh_interval has none of its own to be told of.
+func (d *DiscoveryConfig) refreshText() string {
+	var set model.Duration
+	switch {
+	case d.FileSD != nil:
+		set = d.FileSD.RefreshInterval
+	case d.HTTPSD != nil:
+		set = d.HTTPSD.RefreshInterval
+	case d.Kubernetes != nil:
+		set = d.Kubernetes.RefreshInterval
+	case d.DNSSD != nil:
+		set = d.DNSSD.RefreshInterval
+	}
+	switch {
+	case set != 0:
+		return fmt.Sprintf("its refresh_interval %s", d.refresh())
+	case d.defaultRefresh > 0:
+		return fmt.Sprintf("the default refresh interval %s (--discovery.refresh-interval)", d.refresh())
+	}
+	return fmt.Sprintf("%s's default refresh interval %s", d.kind(), d.refresh())
+}
+
 // reservedTargetLabels are what a discovery source's labels may not set:
 // job is the scrape configuration's, instance the allocator's (a probe's
 // target) or Prometheus's, and static_target the static targets endpoint's.
@@ -251,11 +275,11 @@ func (d *DiscoveryConfig) check(base string) error {
 	case d.FileSD != nil:
 		return d.FileSD.check(base)
 	case d.HTTPSD != nil:
-		return d.HTTPSD.check(base, d.refresh())
+		return d.HTTPSD.check(base, d.refresh(), d.refreshText())
 	case d.DNSSD != nil:
-		return d.DNSSD.check(d.refresh())
+		return d.DNSSD.check(d.refresh(), d.refreshText())
 	default:
-		return d.Kubernetes.check(d.refresh())
+		return d.Kubernetes.check(d.refresh(), d.refreshText())
 	}
 }
 
@@ -280,7 +304,7 @@ func (f *FileSDConfig) check(base string) error {
 	return nil
 }
 
-func (h *HTTPSDConfig) check(base string, refresh time.Duration) error {
+func (h *HTTPSDConfig) check(base string, refresh time.Duration, refreshText string) error {
 	u, err := url.Parse(h.URL)
 	if err != nil {
 		// Not a URL, so a token in it cannot be found to mask: the text,
@@ -293,7 +317,7 @@ func (h *HTTPSDConfig) check(base string, refresh time.Duration) error {
 	if u.User != nil {
 		return errors.New("http_sd.url must not carry credentials; give a bearer_token_file")
 	}
-	if err := checkTimeout("http_sd", h.Timeout, refresh); err != nil {
+	if err := checkTimeout("http_sd", h.Timeout, refresh, refreshText); err != nil {
 		return err
 	}
 	if err := fetch.CheckClientTLSKeys(h.TLS); err != nil {
@@ -309,7 +333,7 @@ func (h *HTTPSDConfig) check(base string, refresh time.Duration) error {
 	return nil
 }
 
-func (k *KubernetesConfig) check(refresh time.Duration) error {
+func (k *KubernetesConfig) check(refresh time.Duration, refreshText string) error {
 	if k.AllNamespaces && len(k.Namespaces) > 0 {
 		return errors.New("kubernetes sets both namespaces and all_namespaces; list namespaces, or take them all")
 	}
@@ -334,10 +358,10 @@ func (k *KubernetesConfig) check(refresh time.Duration) error {
 	default:
 		return fmt.Errorf("kubernetes.address_type %q must be IPv4, IPv6 or any", k.AddressType)
 	}
-	return checkTimeout("kubernetes", k.Timeout, refresh)
+	return checkTimeout("kubernetes", k.Timeout, refresh, refreshText)
 }
 
-func (n *DNSSDConfig) check(refresh time.Duration) error {
+func (n *DNSSDConfig) check(refresh time.Duration, refreshText string) error {
 	if len(n.Names) == 0 {
 		return errors.New("dns_sd.names must not be empty")
 	}
@@ -375,7 +399,7 @@ func (n *DNSSDConfig) check(refresh time.Duration) error {
 		}
 		n.Server = server
 	}
-	return checkTimeout("dns_sd", n.Timeout, refresh)
+	return checkTimeout("dns_sd", n.Timeout, refresh, refreshText)
 }
 
 // dnsSDName reads a name of dns_sd.names: a DNS name, such as
@@ -447,12 +471,14 @@ func (d *DiscoveryConfig) timeout() time.Duration {
 	return min(DefaultDiscoveryTimeout, d.refresh())
 }
 
-func checkTimeout(kind string, set model.Duration, refresh time.Duration) error {
+// checkTimeout refuses a timeout set longer than refresh, the interval the
+// source is asked at, which refreshText names.
+func checkTimeout(kind string, set model.Duration, refresh time.Duration, refreshText string) error {
 	switch {
 	case set < 0:
 		return fmt.Errorf("%s.timeout must not be negative", kind)
 	case time.Duration(set) > refresh:
-		return fmt.Errorf("%s.timeout %s is longer than its refresh_interval %s", kind, time.Duration(set), refresh)
+		return fmt.Errorf("%s.timeout %s is longer than %s", kind, time.Duration(set), refreshText)
 	}
 	return nil
 }

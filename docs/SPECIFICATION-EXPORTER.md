@@ -30443,6 +30443,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator), changed: the heartbeat saying none, the first, at 1s starts the count of the 40s said after it, so the list has not formed at 40s and forms at 41s.
 - `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, 2m)` plus the heartbeat interval, 130 with both empty, 125 with `5s`, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 121 with `20s` and `1s`, 131 with `settle: 2m0.5s` and 310 with `5m`, so a lone allocator pod replaced during a rollout that shortens the interval from up to 2m is not counted available before its first member list forms; `make helm-test` checks 150 for `30s`.
 - `TestAFollowerShowsTheLeadersRefreshInterval` (allocator): during a rolling update that changes an `http_sd` source's `refresh_interval` from 1h to 30m, the new follower of an old leader shows `refresh_interval_seconds` 3600, from the snapshot, holds the leader's snapshot digest, and shows 1200 after the leader's interval changes to 20m; it showed its own 1800 before.
+- `TestASourceWithoutARefreshIntervalTakesTheDefault` (allocator), changed: the `dns_sd` `timeout` of 10s under a `--discovery.refresh-interval` of 5s is refused with `dns_sd.timeout 10s is longer than the default refresh interval 5s (--discovery.refresh-interval)`, where it said `its refresh_interval 5s`, which the source does not set.
+- `TestDNSSDIsCheckedAtLoad` (allocator), changed: a `dns_sd` `timeout` of 31s with no `refresh_interval` is refused as `longer than dns_sd's default refresh interval 30s`, and one of 11s with a `refresh_interval` of 10s as `longer than its refresh_interval 10s`; `TestDiscoveryIsCheckedAtLoad` (allocator), changed: a `kubernetes` one of 31s as `longer than kubernetes's default refresh interval 30s`.
 
 # 35. Documentation requirements
 
@@ -33453,7 +33455,11 @@ and a source that sets none MUST be asked every `--discovery.refresh-interval`
 when that is given (at least `1s`, else exit 2), whatever its kind, and
 else every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and
 `dns_sd`; a
-`timeout` written longer than it MUST be refused, and one left out MUST be
+`timeout` written longer than it MUST be refused, the refusal naming the
+interval as the source's `refresh_interval` when it sets one, as `the
+default refresh interval <d> (--discovery.refresh-interval)` when it came
+from that flag, and as `<kind>'s default refresh interval <d>` else, and
+one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
 from the directory of the file naming them, read again at every refresh.

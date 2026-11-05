@@ -69,7 +69,7 @@ func TestASourceWithoutARefreshIntervalTakesTheDefault(t *testing.T) {
 		t.Fatalf("a timeout of 10s under dns_sd's 30s is refused: %v", err)
 	}
 	timed.DiscoveryRefresh = 5 * time.Second
-	if _, err := LoadInputs(timed); err == nil || !strings.Contains(err.Error(), "dns_sd.timeout 10s is longer than its refresh_interval 5s") {
+	if _, err := LoadInputs(timed); err == nil || !strings.Contains(err.Error(), "dns_sd.timeout 10s is longer than the default refresh interval 5s (--discovery.refresh-interval)") {
 		t.Errorf("a timeout over the default interval of 5s is not refused: %v", err)
 	}
 }

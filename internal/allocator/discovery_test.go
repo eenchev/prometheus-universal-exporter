@@ -123,7 +123,7 @@ func TestDiscoveryIsCheckedAtLoad(t *testing.T) {
 		"no port":              {func(d *DiscoveryConfig) { d.Kubernetes.Port = "" }, "kubernetes.port"},
 		"a bad namespace":      {func(d *DiscoveryConfig) { d.Kubernetes.Namespaces = []string{"Prod"} }, "namespaces"},
 		"both namespace ways":  {func(d *DiscoveryConfig) { d.Kubernetes.Namespaces, d.Kubernetes.AllNamespaces = []string{"a"}, true }, "all_namespaces"},
-		"a long timeout":       {func(d *DiscoveryConfig) { d.Kubernetes.Timeout = 31e9 }, "longer than its refresh_interval"},
+		"a long timeout":       {func(d *DiscoveryConfig) { d.Kubernetes.Timeout = 31e9 }, "kubernetes.timeout 31s is longer than kubernetes's default refresh interval 30s"},
 		"a short refresh":      {func(d *DiscoveryConfig) { d.Kubernetes.RefreshInterval = 1e8 }, "under the least"},
 		"an address type":      {func(d *DiscoveryConfig) { d.Kubernetes.AddressType = "ipv4" }, "address_type"},
 		"a relative URL": {func(d *DiscoveryConfig) {

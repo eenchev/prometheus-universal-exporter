@@ -272,7 +272,8 @@ type SourceStatus struct {
 	Targets int `json:"targets"`
 	// RefreshIntervalSeconds is how often it is asked: its
 	// refresh_interval, or --discovery.refresh-interval for a source that
-	// sets none, or its kind's default.
+	// sets none, or its kind's default; for what a follower took from the
+	// leader's snapshot (From snapshot), the leader's, who asks it.
 	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds"`
 	// LastRefresh is when it was last asked or taken from the leader's
 	// snapshot, LastSuccess when that last succeeded, RFC 3339 in UTC, ""
@@ -503,7 +504,7 @@ func (a *Allocator) sourcesStatus(now time.Time) []SourceStatus {
 	out := make([]SourceStatus, 0, len(a.sources))
 	for _, s := range a.sources {
 		st := SourceStatus{Name: s.spec.cfg.Name, Kind: s.spec.kind, Owner: s.spec.owner, Type: s.spec.cfg.kind(),
-			RefreshIntervalSeconds: s.spec.cfg.refresh().Seconds()}
+			RefreshIntervalSeconds: s.interval().Seconds()}
 		switch {
 		case s.lastErr != "":
 			st.Result, st.Error = "failing", s.lastErr

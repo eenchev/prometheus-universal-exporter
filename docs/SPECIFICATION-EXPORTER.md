@@ -30442,6 +30442,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheFirstMemberListWaitsTheOldIntervalAfterTheFirstHeartbeat` (allocator), the reviewer's rollout scenario on a clock of the test's own: an instance of a 5s interval and a 1s settle time first heard 30s after its start from `r1` saying 40s, and from `r2` saying 40s at 65s, has no member list 1ms before 70s and `[r1 r2]` as its first at 70s; counted from the start, the list formed of `r1` alone at 40s.
 - `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator), changed: the heartbeat saying none, the first, at 1s starts the count of the 40s said after it, so the list has not formed at 40s and forms at 41s.
 - `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, 2m)` plus the heartbeat interval, 130 with both empty, 125 with `5s`, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 121 with `20s` and `1s`, 131 with `settle: 2m0.5s` and 310 with `5m`, so a lone allocator pod replaced during a rollout that shortens the interval from up to 2m is not counted available before its first member list forms; `make helm-test` checks 150 for `30s`.
+- `TestAFollowerShowsTheLeadersRefreshInterval` (allocator): during a rolling update that changes an `http_sd` source's `refresh_interval` from 1h to 30m, the new follower of an old leader shows `refresh_interval_seconds` 3600, from the snapshot, holds the leader's snapshot digest, and shows 1200 after the leader's interval changes to 20m; it showed its own 1800 before.
 
 # 35. Documentation requirements
 
@@ -33787,8 +33788,11 @@ discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
 `pending`), targets, the interval it is asked at
 (`refresh_interval_seconds`: its `refresh_interval`, else
-`--discovery.refresh-interval`, else its kind's default), which the page
-MUST show, last refresh and last success, and whether what it
+`--discovery.refresh-interval`, else its kind's default; for a source whose
+targets a follower took from the leader's snapshot, the leader's interval of
+it, which the snapshot MUST carry per source and its digest MUST cover, so a
+follower names the leader's interval it took and is told of a change of
+it), which the page MUST show, last refresh and last success, and whether what it
 holds came from the instance's own discovery or the leader's snapshot. `GET
 /` MUST render the same as an HTML page framed as the exporter's pages are
 (§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target

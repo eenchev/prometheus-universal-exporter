@@ -98,7 +98,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `allocator.discoveryRefreshInterval`, and the allocator's
   `--config.watch-interval` from the new `allocator.configWatchInterval`.
   The status page shows how often the input files are read, the settle
-  time and each source's interval, and the allocator docs list every delay
+  time and each source's interval, on a follower the leader's, who asks it,
+  and the allocator docs list every delay
   between a change and the exporters with the setting of each ([How fast
   changes reach the
   exporters](docs/ALLOCATOR.md#how-fast-changes-reach-the-exporters)).

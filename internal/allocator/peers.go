@@ -660,6 +660,11 @@ type peerSnapshot struct {
 type snapshotSource struct {
 	Answered bool          `json:"answered"`
 	Groups   []TargetGroup `json:"groups,omitempty"`
+	// RefreshIntervalSeconds is how often the source is asked
+	// (sourceState.interval), which a follower shows for what it took of
+	// it. It is part of the digest: a follower names the leader's interval
+	// it took, so it is told of a change of it, as of the targets.
+	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds,omitempty"`
 }
 
 // fetchSnapshot takes addr's snapshot and puts what it found in force
@@ -786,6 +791,12 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		}
 		a.sourceAnswered(s)
 		s.fromSnapshot = true
+		// One beyond what a duration holds, which no allocator says, is
+		// none.
+		s.leaderRefresh = 0
+		if x := got.RefreshIntervalSeconds; x > 0 && x < 1e9 {
+			s.leaderRefresh = time.Duration(x * float64(time.Second))
+		}
 		if s.ok && sameDiscovered(s.found, found) {
 			continue
 		}
@@ -808,7 +819,7 @@ func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 	digest := map[string]string{}
 	for _, src := range a.sources {
 		id := src.spec.identity()
-		entry := snapshotSource{Answered: src.ok}
+		entry := snapshotSource{Answered: src.ok, RefreshIntervalSeconds: src.interval().Seconds()}
 		if src.ok {
 			entry.Groups = groupsOf(src.found)
 		}

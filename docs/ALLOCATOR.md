@@ -783,7 +783,7 @@ must not be one of them. The token is never taken from the URL.
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another instance | `{"id": "…", "discovering": true, "address_known": true}`: the instance's process id, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /` | a person | The [status page](#status-page). |
 | `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
@@ -996,7 +996,10 @@ routed among by id, each with its `member` and `targets`, `min`, `average`,
 `name`, `type` and `result`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
 `ok`, `failing` or `pending`, `error`, `targets`,
 `refresh_interval_seconds`, `last_refresh`,
-`last_success` and `from`, `own` or `snapshot`). Times are RFC 3339 in UTC,
+`last_success` and `from`, `own` or `snapshot`). A follower's
+`refresh_interval_seconds` of a source it takes from the leader's snapshot
+is the leader's, who asks the source, not its own setting of it, as during
+a rolling update that changes it. Times are RFC 3339 in UTC,
 each with its age in seconds beside it.
 
 With `--web.token-file` a browser asks for a user name and a password on

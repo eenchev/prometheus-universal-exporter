@@ -4,6 +4,8 @@ import (
 	"html/template"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
 // A page cell of free text — an error, which can quote a whole URL or a
@@ -44,7 +46,7 @@ func clipLong(kind, text string) longText {
 }
 
 // pageFuncs are the functions the pages' templates may call.
-var pageFuncs = template.FuncMap{"long": clipLong, "lastError": statusLastError}
+var pageFuncs = template.FuncMap{"long": clipLong, "lastError": statusLastError, "duration": pagekit.DurationText}
 
 // longTemplate writes a cell's text, {{template "long" (long "error" .Err)}}.
 // The summary's label says what it does, since its text is only the start

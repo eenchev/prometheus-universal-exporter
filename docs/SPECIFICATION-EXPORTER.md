@@ -3708,8 +3708,8 @@ this order, without cycles:
    files, and their schemas.
 9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
 10. `pagekit`: what the HTML pages of the exporter and of the target
-   allocator share: the stylesheet, the theme, the icon and the refresh
-   controls.
+   allocator share: the stylesheet, the theme, the icon, the refresh
+   controls and how a duration is written.
 11. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
 12. `allocator`: the target allocator (§ 42.14d).
@@ -8469,6 +8469,15 @@ Recommended behavior:
   (`img-src data:`) and which needs no request. The copy the build embeds
   MUST be checked against `docs/logo.svg` by a test, so the two cannot
   drift apart.
+- Every HTML page the exporter and the target allocator serve MUST write a
+  duration it shows — an interval configured, a threshold, an age, how long
+  something took — in Go's form with every unit that is zero left out:
+  `1m`, `1m30s`, `2h` and `1h30s`, never `1m0s`, `2h0m0s` or `1h0m30s`; a
+  fraction of a second MUST be kept (`1m0.5s`), one under a second MUST be
+  written as Go writes it (`500ms`), and none as `0s`. One helper
+  (`pagekit.Duration`) MUST write them for both programs. The JSON answers
+  MUST keep their values as they are: seconds as numbers, and a duration
+  held as a string, as a static target's `interval`, in Go's form (`1m0s`).
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests. Both endpoints are what `--healthcheck` asks (§ 30).
@@ -30101,7 +30110,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted`: a static target that failed and then succeeded keeps its error with `last_error_recovered` true, and its row shows it under the label "Earlier failure, recovered since", the error in a muted block and `at <time> (<age> ago)` under it; a target whose last scrape failed has `last_error_recovered` false and its error shown as before, unlabelled, with `at <time>` alone. `TestTheStatusPagesOTLPJSON` and `TestTheRecentProbesJSONShape` still pass unchanged: without a last error the field is left out.
 - `TestTheRecentProbesShowARecoveredErrorMuted`: of the recent probes, a collector and target whose latest probe succeeded after a failed one has its error shown as recovered and `last_error_recovered` true; one whose latest probe failed has it shown as before and false.
 - `TestTheOTLPExportsRecoveredErrorIsShownMuted`: the OTLP export's Last error is shown as before while the last export failed, `last_error_recovered` false, and as recovered, with the JSON's `otlp.last_error_recovered` true, once an export got through after it.
-- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m0s ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted`: the log and trace exports' Last error rows are shown as before after a failed export and as recovered, `(35m ago)` for a failure 35 minutes before, once an export of each got through; `last_error_recovered` of `otlp.logs` and `otlp.traces` follows.
 
 ## 34.255 Fixes from the 2026-11-02 audit: what spans carry, whole traces, export intervals, and the debug page's credentials and times
 
@@ -30411,6 +30420,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
 - `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
+
+## 34.273 Allocator polish: durations, source labels, the first member list
+
+- `TestADurationLeavesOutItsZeroUnits` (pagekit): `pagekit.Duration` writes 0 as `0s`, 500ms, 1.5ms and 1.5s as Go does, 1m, 1m30s, 1m0.5s, 10m, 1m14s, 1h, 2h, 1h30s, 1h10m, 1h10m1s, 1h0.5s, 100h, -1m and -1h30s with every zero unit left out.
+- `TestADurationTextIsWrittenAsADuration` (pagekit): `pagekit.DurationText` writes `1m0s`, `2h0m0s` and `1h0m30s` as `1m`, `2h` and `1h30s`, keeps `30s` and `500ms`, and gives `never` and the empty text as they are.
+- `TestTheAllocatorPagesWriteDurationsWithoutZeroUnits` (allocator): an allocator of a 1m heartbeat interval, a 2m settle time and a 1h watch interval, 74s after its start, has `(up 1m14s)`, `read again every 1h for changes` and `heartbeat every 1m; a member not heard from for 3m stops being live. A changed member list holds for 2m` on its page; a `file_sd` source's default 1m is `1m` in the sources table and `refreshed every 1m` on its job's view, and a static target's own 1m interval is `1m` on its member's view and `1m0s` in the view's JSON; no page has `m0s` or `h0m`.
+- `TestTheStatusPageWritesDurationsWithoutZeroUnits` (exporter): the status page writes a static target's 1m interval as `1m`, the metrics export's 1m, the log export's 2h and the trace export's 1h0m30s intervals as `every 1m`, `every 2h` and `every 1h30s`, and the trace threshold of 1m as `took 1m or longer` and `threshold 1m`, with no `m0s` or `h0m`; the JSON keeps `1m0s`, `2h0m0s`, `1h0m30s` and `1m0s`.
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), changed: a recovered error's age is `(35m ago)`, an age matched as hours, minutes and seconds each left out when zero; `TestTheStatusPageShowsTheJSONsValuesEscaped` finds a row's interval as the page writes it.
+- `TestAJobViewHidesTheSourceLabelsUnlessAsked` (allocator): of a job of two targets a `file_sd` source finds, each with `namespace` and `__meta_zone`, `/v1/status?job=pods` has both labels of each and its `?filter=__meta_zone=ams` matches one; the page without `?meta=1` has the *Show source labels* box unticked, `namespace=shop`, no `__meta_zone`, the script setting and deleting `meta`, the hint saying the labels shown, and Search all of `ams` and `__meta` lists none and of `namespace=shop` one; with `?meta=1` the box is ticked, both `__meta_zone` labels are shown and in the rows' `data-match`, and Search all of `ams` lists one; the fragment has the source labels with `?meta=1` and not without; a job whose file lists every target and a member's view have no box.
+- `TestTheJobViewListsItsTargets` (allocator), changed: the hint says the filters match the labels shown.
+- `TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest` (allocclient): a client finding two instances, one saying 2s and one 4s, has 2s in force; each instance hears a heartbeat saying `interval_seconds` 4 within a second of the start, at once rather than at the interval's turn, none before it saying anything but none or 2, and every one after it saying 4, at least two in the 4s left.
+- `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change.
+- `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient) still passes unchanged: with one instance the longest said is the one in force.
 
 # 35. Documentation requirements
 
@@ -33649,7 +33671,10 @@ not changed for `--settle`, and MUST NOT form before a member is live nor
 before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
 is the longest `interval_seconds` a heartbeat heard before it formed said,
 brought within `1s` and `2m`, 0 when none said one; a heartbeat without
-`interval_seconds`, or with 0, MUST NOT change `I`. A member
+`interval_seconds`, or with 0, MUST NOT change `I`. Since a replica says the
+longest interval the instances it finds said (§ 42.14e), `I` covers the
+replicas still on an older, longer interval for as long as an instance that
+said it is found. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33809,10 +33834,18 @@ is routed among, linked to their views, with the targets of the job each
 has, as the spread counts them, and a bar, the most first; and its targets
 by target, each shown as `fetch.DisplayTarget` shows it, with the member
 `SD` routes it to, linked, and the labels its source gave it but those the
-job sets or takes away. `?filter=` MUST cut the targets to those whose
-target, member or a label as `name=value` holds the text, before the first
-1000. `GET /v1/status?job=<name>` MUST answer the same as JSON
-(`allocator.JobView`); a job the probe targets file does not have MUST be
+job sets or takes away. The page MUST leave out a target's source labels,
+those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
+them; a job with discovery sources MUST have a *Show source labels* box by
+its filter that puts `?meta=1` in the URL, or takes it out, and refreshes
+the content, so a refresh, which fetches the URL's fragment, keeps the
+choice. `?filter=` MUST cut the targets to those whose target, member or a
+label shown as `name=value` holds the text, before the first 1000, and a
+row's `data-match`, which the box filters by as it is typed, MUST hold the
+same, so a source label left out matches neither. `GET
+/v1/status?job=<name>` MUST answer the same as JSON
+(`allocator.JobView`), but with every label of a target, which its filter
+matches; a job the probe targets file does not have MUST be
 answered `404` as JSON and `200` saying so on the page and its fragment, the
 filter box hidden; an empty `job` MUST be answered `400` on both; a follower
 under `--peers.leader-only` MUST name the leader and answer `partial`. All
@@ -33879,9 +33912,14 @@ generation with its error until a later bundle is put in force,
 random name made once at the exporter's start, the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one, and
-`interval_seconds`, the heartbeat interval in force when it was built, once a
-reply has said a `heartbeat_interval_seconds` other than 0, and MUST
-leave `interval_seconds` out before; on that signal the
+`interval_seconds`, once a reply has said a `heartbeat_interval_seconds`
+other than 0, and MUST leave `interval_seconds` out before. `interval_seconds`
+MUST be the longest of the intervals the last answer of each address the
+allocator's host resolved to last said, each brought within `1s` and `2m`,
+an address's kept while its heartbeats fail and dropped when it no longer
+resolves; when none of them says one, it MUST stay as it is. When it
+changes, the first time it is set included, a heartbeat MUST be sent to
+every address at once, not at the next turn of the interval; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`

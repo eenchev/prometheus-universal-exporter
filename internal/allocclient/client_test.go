@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1202,8 +1203,8 @@ func TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays(t *testing.T) {
 // said an interval: the one it starts with is the client's default, or
 // Options', no instance's, and an instance that has just started would take
 // it for the interval the replicas told by the instances before it heartbeat
-// at. Once a instance has said one, every heartbeat says the interval in
-// force, also while no instance says one any more.
+// at. Once an instance has said one, every heartbeat says the longest said,
+// also while no instance says one any more.
 func TestAReplicaSaysNoIntervalUntilAnInstanceDoes(t *testing.T) {
 	for _, configured := range []time.Duration{0, 4 * time.Second} {
 		a := newFakeAllocator(t)
@@ -1555,5 +1556,95 @@ func TestTheLookupFollowsAShortenedInterval(t *testing.T) {
 	}
 	if said := transport.said["10.1.0.5"]; said != 1 {
 		t.Errorf("the first heartbeat to the new instance said interval_seconds %v, want 1", said)
+	}
+}
+
+// saidAt is a heartbeat an instance heard: when, and the interval it said.
+type saidAt struct {
+	at   time.Duration
+	said float64
+}
+
+// twoIntervals is a transport of two allocator instances, the one at
+// 10.1.0.4 saying a 2s interval and the one at 10.1.0.5 4s, noting each
+// heartbeat each heard, since start. A bundle request is answered 503.
+type twoIntervals struct {
+	start time.Time
+	mu    sync.Mutex
+	heard map[string][]saidAt
+}
+
+func (f *twoIntervals) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	if req.URL.Path != allocapi.HeartbeatPath {
+		http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
+		return rec.Result(), nil
+	}
+	var hb allocapi.Heartbeat
+	b, _ := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	_ = json.Unmarshal(b, &hb)
+	host := req.URL.Hostname()
+	f.mu.Lock()
+	f.heard[host] = append(f.heard[host], saidAt{time.Since(f.start), hb.IntervalSeconds})
+	f.mu.Unlock()
+	interval := map[string]string{"10.1.0.4": "2", "10.1.0.5": "4"}[host]
+	_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":`+interval+`}`)
+	return rec.Result(), nil
+}
+
+// A replica told 2s by one instance and 4s by another heartbeats each
+// every 2s, the shortest, and says 4s, the longest, to both: an instance
+// that has just started, with an interval shorter than the instances before
+// it said, waits that long for the replicas still on the longer one. Its
+// first heartbeats, sent before any instance answered, say none, or 2s
+// while the 4s instance's answer is on its way; each change of what it says
+// is sent to every instance at once, not at the next turn of the interval,
+// so an instance that heard none first hears the longest within moments.
+func TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest(t *testing.T) {
+	transport := &twoIntervals{start: time.Now(), heard: map[string][]saidAt{}}
+	c := startClient(t, newFakeAllocator(t), func(o *Options) {
+		o.URL = "http://pue-allocator.monitoring.svc:9116"
+		o.Transport = transport
+		o.HeartbeatInterval = 0
+		o.Resolve = func(context.Context, string) ([]string, error) {
+			return []string{"10.1.0.4", "10.1.0.5"}, nil
+		}
+	})
+	time.Sleep(5 * time.Second)
+	if got := c.heartbeatInterval(); got != 2*time.Second {
+		t.Errorf("the interval in force is %s, want 2s, the shortest said", got)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	for _, host := range []string{"10.1.0.4", "10.1.0.5"} {
+		heard := transport.heard[host]
+		longest := slices.IndexFunc(heard, func(h saidAt) bool { return h.said == 4 })
+		if longest < 0 {
+			t.Errorf("%s heard no heartbeat saying 4s, the longest said, in 5s: %v", host, heard)
+			continue
+		}
+		// The heartbeat saying it follows the replies at once; a starved
+		// CPU accounts for the rest of the second, half the interval.
+		if heard[longest].at > time.Second {
+			t.Errorf("%s first heard 4s %s after the start, at the interval's turn rather than at once: %v", host, heard[longest].at.Round(time.Millisecond), heard)
+		}
+		for _, h := range heard[:longest] {
+			if h.said != 0 && h.said != 2 {
+				t.Errorf("%s heard interval_seconds %v before 4, which no instance said: %v", host, h.said, heard)
+			}
+		}
+		later := 0
+		for _, h := range heard[longest+1:] {
+			if h.said != 4 {
+				t.Errorf("%s heard interval_seconds %v after 4, want 4, the longest said: %v", host, h.said, heard)
+				break
+			}
+			later++
+		}
+		// Every 2s after it: 2 in the 4s left, where 4s would give 1.
+		if later < 2 {
+			t.Errorf("%s heard %d heartbeats in the 4s after the first saying 4s, want 2 at 2s: %v", host, later, heard)
+		}
 	}
 }

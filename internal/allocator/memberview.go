@@ -72,8 +72,10 @@ type MemberStaticTarget struct {
 	Target string `json:"target"`
 	// Labels are the target's own labels, a label written "" left out, as
 	// the exporter leaves it out.
-	Labels   map[string]string `json:"labels,omitempty"`
-	Interval string            `json:"interval"`
+	Labels map[string]string `json:"labels,omitempty"`
+	// Interval is the target's interval as Go writes it, 1m0s; the page
+	// writes it as it writes every duration (pagekit.Duration), 1m.
+	Interval string `json:"interval"`
 	// MovedTo is, for a target draining, the member that owns it now, and
 	// DrainsForSeconds how much longer the member keeps it.
 	MovedTo          string  `json:"moved_to,omitempty"`
@@ -317,6 +319,10 @@ form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding:
 form.filter button { flex: none; height: 34px; padding: 0 12px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 form.filter .muted { font-size: 13px; }
 form.filter[hidden] { display: none; }
+/* The Show source labels box under the filter, its box on the line of its
+   text and level with the search box's left edge. */
+form.filter label.check { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; font-weight: normal; }
+form.filter label.check input { margin: 0; align-self: center; }
 h2 .count { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 p.note { margin: 0 0 8px; font-size: 14px; }
 p.note:empty { display: none; }
@@ -370,7 +376,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{.Interval}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>

@@ -672,21 +672,30 @@ for `--settle`, each replica heard from for the first time starting the wait
 again, and no sooner than `--settle` or a heartbeat interval, whichever is
 longer, after the allocator started, so a restarted allocator has heard from
 every replica before it hands out shares. The heartbeat interval there is
-the longest of the allocator's own and those its replicas say, in each
-heartbeat, they were heartbeating at: an instance started with a shorter
-`--heartbeat.interval` than the instances before it said, as during a
-rollout that shortens it, hears a replica first at the replica's next
-heartbeat on the old interval, and a replica looks up the instances'
-addresses every interval, so every replica has reached it within the old
-interval of its start; its first heartbeat says that interval, and the first
-member list waits it. A replica that has not been told an interval yet, as
-one that has just started, says none, as the 10s it heartbeats at until then
-is no instance's, and its heartbeat does not change the wait. So the first
-list waits the old interval when a replica told it reaches the instance
-before the instance's own interval and `--settle` have passed, as one
-heartbeating every interval does; replicas started after the instance and
-heard alone until then form the first list by themselves, and it changes as
-the others arrive.
+the longest of the allocator's own and those its replicas say in their
+heartbeats. An instance started with a shorter `--heartbeat.interval` than
+the instances before it said, as during a rollout that shortens it, hears a
+replica first at the replica's next lookup of the instances' addresses on
+the old interval, so every replica has reached it within the old interval
+of its start, and the first member list waits that long. A replica
+heartbeats every instance at the shortest interval they say, so each hears
+it often enough, and says in its heartbeats the longest: the last interval
+each instance its lookup finds said, an instance's kept while its
+heartbeats fail and dropped once its address is gone. While an instance
+from before the rollout is still found, every replica says the old
+interval, a replica that started after the new instance among them, and
+the first list waits for the replicas still on it whichever replica it
+hears first. A replica that has not been told an interval yet, as one that
+has just started, says none, as the 10s it heartbeats at until then is no
+instance's, and its heartbeat does not change the wait; when the instances'
+first answers tell it one, it heartbeats every instance again at once, saying
+the longest, rather than at its next turn. What is left: a replica started
+once no instance from before is found any more has no one to learn the old
+interval from, and says the new one; if the new instance hears only such
+replicas before its own interval and `--settle` have passed, they form the
+first list by themselves, and it changes as the replicas still on the old
+interval arrive. A rollout that keeps an old instance until a new one is
+ready, as the chart's does, finds an old instance throughout.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
 is refused for the other. A shorter interval finds a replica that has
@@ -785,9 +794,11 @@ it is shutting down is remembered for the member TTL after its last heartbeat, t
 not live, so a late heartbeat of it is still known for one. A replica
 reports a refused bundle until it puts a later one in force; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
-having reported none. `interval_seconds` is the interval the replica was
-heartbeating at when it sent the heartbeat, left out until an instance of the
-allocator has said one, which the first member list waits for ([Members and allocation](#members-and-allocation)). A body over 64 KiB
+having reported none. `interval_seconds` is the longest heartbeat interval the instances of the
+allocator the replica finds last said to it, which may be longer than the
+one it heartbeats at, the shortest; it is left out until an instance has
+said one, and the first member list waits for it ([Members and
+allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
 the generation of the member's bundle, or `""` while the member list has not
@@ -937,6 +948,12 @@ its instance ID. It shows
   and whether what
   it holds is this instance's own discovery or the leader's snapshot.
 
+The page writes a duration, an interval or an age, as the exporter's pages
+do: Go's form with every unit that is zero left out, `1m`, `1m30s`, `2h`
+and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. The JSON
+keeps its values: seconds as numbers, and a static target's `interval` as
+Go writes it, `1m0s`.
+
 The page refreshes itself as the exporter's status page does: Refresh, and
 an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
 `?refresh=30s`, fetching the page's content again (`?format=fragment`) and
@@ -1039,14 +1056,24 @@ this site?" without asking service discovery. It shows
   it to, which links to that member's view, and the labels its discovery
   source gave it, but those the job's own labels set or take away.
 
+A discovered target's source labels, those whose names start with `__`,
+such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
+often a dozen a target, and the page leaves them out. *Show source labels*,
+under the filter of a job with discovery sources, shows them: it puts
+`?meta=1` in the URL, or takes it out, and refreshes the content, so the
+auto-refresh and a bookmark keep the choice. The filter, as it is typed and
+with Search all, matches the labels shown and no other: while the source
+labels are left out, `__meta_zone=ams` matches nothing.
+
 The counts are the spread's for the job. A target is shown with its
 credentials withheld as on a member's view, and a param whose name reads
 as a credential's, such as `api_key` or `token`, as `<redacted>`; any other
 param is shown as written, with what reads as a credential in its value
 masked. The filter box, Search all (`?filter=<text>`), the bound of 1000
 targets and the refresh are a member's view's; the filter matches a
-target, its member and its labels as `name=value`. Its bar's JSON link is
-`GET /v1/status?job=<name>`, the same as JSON: `generated_at`, `job`,
+target, its member and its labels shown as `name=value`. Its bar's JSON
+link is `GET /v1/status?job=<name>`, the same as JSON, with every label of
+a target, its source labels included, which its `?filter=` matches: `generated_at`, `job`,
 `filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
 `spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
 `params`, `sources` (as the status's `sources` have them) and `targets`

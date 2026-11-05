@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -174,7 +175,9 @@ func TestTheStatusPageShowsTheJSONsValuesEscaped(t *testing.T) {
 		t.Errorf("the page has no summary line:\n%s", body)
 	}
 	for _, row := range page.Rows {
-		for _, value := range []string{row.Name, row.Collector, row.Target, row.Interval, row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.Backoff} {
+		// The interval, Go's 1m0s in the JSON, is written as the page
+		// writes a duration, 1m.
+		for _, value := range []string{row.Name, row.Collector, row.Target, pagekit.DurationText(row.Interval), row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.Backoff} {
 			if value != "" && !strings.Contains(body, templateEscaped(value)) {
 				t.Errorf("the page does not show %q of the row %s", value, row.Name)
 			}

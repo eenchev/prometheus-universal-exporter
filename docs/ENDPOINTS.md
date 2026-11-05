@@ -64,6 +64,12 @@ refused. It has three sections:
 While the last OTLP export failed, a line at the top of the page says so,
 with the failed exports in a row and whether they made the exporter unready.
 
+The page writes a duration — an interval, the trace threshold, an age, how
+long a scrape took — as Go does with every unit that is zero left out:
+`1m`, `1m30s`, `2h` and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and
+`1h0m30s`; one under a second as `500ms`, and none as `0s`. The JSON keeps
+Go's form, `"interval": "1m0s"`, and its ages and durations in seconds.
+
 An error, a target, a static target's labels or a probe's parameters
 longer than 160 characters or three lines shows as its start, ending in `…`,
 with *Show all* under it, so one long error does not make its table as tall
@@ -82,7 +88,7 @@ whose last scrape succeeded, of a collector and target whose latest probe
 succeeded, or of the OTLP, log or trace export whose last export got
 through — is shown muted under the label *Earlier failure, recovered
 since*, with when it was and how long ago, as
-`at 2026-11-02T07:58:39Z (35m0s ago)`; its *Show all* works as any other's.
+`at 2026-11-02T07:58:39Z (35m ago)`; its *Show all* works as any other's.
 An error of what is still failing is shown as before. In the JSON,
 `last_error_recovered` beside `last_error` says which: `true` for an error a
 later success put behind, `false` for one of what is still failing; it is left

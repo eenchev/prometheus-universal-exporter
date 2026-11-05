@@ -1,8 +1,6 @@
 package pagekit
 
 import (
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -44,23 +42,12 @@ func RefreshOf(value string) (time.Duration, bool) {
 }
 
 // RefreshText is d as a page and its URL write it, as Grafana does: 30s,
-// 1m, 1h30m; off for 0.
+// 1m, 1h30m, which is as Duration writes it; off for 0.
 func RefreshText(d time.Duration) string {
 	if d <= 0 {
 		return "off"
 	}
-	var b strings.Builder
-	for _, unit := range []struct {
-		size time.Duration
-		name string
-	}{{time.Hour, "h"}, {time.Minute, "m"}, {time.Second, "s"}} {
-		if n := d / unit.size; n > 0 {
-			b.WriteString(strconv.FormatInt(int64(n), 10))
-			b.WriteString(unit.name)
-			d -= n * unit.size
-		}
-	}
-	return b.String()
+	return Duration(d)
 }
 
 // RefreshControl is a page's refresh controls: the interval in force, from

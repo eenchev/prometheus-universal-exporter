@@ -57,18 +57,68 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `pue-allocator --peers` names every copy, itself included, a name
   resolving to all of them or a list, and `--peers.self` the copy's own
   address. The live copy of the lowest address leads and alone asks the
-  discovery sources; the others fetch what it found every 2 seconds and
-  serve the same bundles and targets, and when it goes, telling the others
+  discovery sources; the others fetch what it found every 2 seconds, beside
+  their checks of the leader so a leader that hangs while it answers does
+  not hold them up, and serve the same bundles and targets, and when it goes, telling the others
   for 3 seconds before it stops, the next copy leads at once from the
-  targets it took last. New metrics say which copy leads and how long a
-  follower has not held the leader's targets
+  targets it took last. New metrics say which copy leads, which copies are
+  up (`pue_allocator_peer_up{peer}`) and how long a follower has not held
+  the leader's targets
   ([Copies with discovery](docs/ALLOCATOR.md#copies-with-discovery)).
+- `pue-allocator` serves a status page at `/`: the copy, its peers and the
+  leader, the members and their bundles, how the targets are spread over
+  the members, with the average and the imbalance, and the discovery
+  sources, refreshing itself as the exporter's status page does; and the
+  same as JSON at `/v1/status`. Each member links to its own view,
+  `/?member=<id>` and `/v1/status?member=<id>`: the static targets it owns
+  and drains, with where they moved, and the probe targets routed to it by
+  job, credentials withheld, with a filter box and at most 1000 targets a
+  list ([A member's targets](docs/ALLOCATOR.md#a-members-targets)). A
+  browser gives `--web.token-file`'s token as the password of Basic auth,
+  which the page, `/v1/status` and `/metrics` take beside the bearer token
+  ([Status page](docs/ALLOCATOR.md#status-page)).
+- `pue-allocator --peers.leader-only`: only the leader serves the whole of
+  `/metrics` and of the status page, and the other copies the peers'
+  metrics and their own peer state alone, so a Prometheus scraping every
+  copy has one copy's series of the allocation; the chart's
+  `allocator.leaderOnly` sets it with a discovery source
+  ([Leader-only metrics](docs/ALLOCATOR.md#leader-only-metrics)).
 - The chart runs `allocator.replicas` allocator pods, 2 by default, with a
   discovery source too, as peers of the allocator's headless Service, rolled
   out one at a time, where it ran one pod and refused more.
+- `pue-allocator --heartbeat.interval`, 10s by default, from 1s to 2m: how
+  often the replicas heartbeat, which the allocator says in every heartbeat
+  answer (`heartbeat_interval_seconds`) and the exporter heartbeats at from
+  its next heartbeat on, the shortest when copies of the allocator differ; a
+  member is dropped after three intervals, where the interval was fixed at
+  10s and the member TTL at 30s. The exporter heartbeats each copy on a
+  schedule of its own, giving up on a heartbeat after 5s or the interval
+  when that is shorter, so a copy that hangs makes the replica late to no
+  other, and looks up the copies' addresses at the interval in force, a
+  new one taking effect at once. Each heartbeat says the interval the
+  replica heartbeats at (`interval_seconds`), once a copy has said one, and
+  a copy's first member list waits the longest any says, so a copy started
+  with a shorter interval than the copies before it hears the replicas on
+  the old interval first. The status page shows both and marks a
+  member whose heartbeat is overdue
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+- The chart's `allocator.heartbeatInterval` sets the allocator's
+  `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
+  follows it.
 
 ### Fixed
 
+- An exporter in allocator mode whose lookup of the allocator's addresses
+  failed sent no heartbeat until one succeeded, and fell out of the member
+  list after the member TTL though every copy was up. It now heartbeats the
+  addresses it resolved to last
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+- `pue-allocator` logged an `http_sd` source's failure, and refused a
+  `url` that is not an `http` or `https` URL, with the URL as written, a
+  token in its query, `?access_token=…`, shown in clear. The values of query
+  parameters whose names read as credentials' are now masked there, as a
+  target is in a log line, and on the new status page; a `url` that is no
+  URL at all is no longer shown ([Sources](docs/ALLOCATOR.md#sources)).
 - `$url`, a target in a log line, the static targets endpoint's `target`
   label, the OTLP `target` attribute, a debug report and an error showed a
   session id in the URL's path, `/app;jsessionid=…`, and OAuth's `code` and

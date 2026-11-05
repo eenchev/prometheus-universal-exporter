@@ -59,8 +59,10 @@ const (
 	DefaultMaxBackoff = 30 * time.Second
 )
 
-// heartbeatTimeout bounds one heartbeat to one copy of the allocator, and
-// bundleGrace how much longer than its wait a bundle request may take.
+// heartbeatTimeout bounds one heartbeat to one copy of the allocator, and a
+// lookup of the allocator's addresses, when the heartbeat interval is not
+// shorter (heartbeatBound); bundleGrace bounds how much longer than its
+// wait a bundle request may take.
 const (
 	heartbeatTimeout = 5 * time.Second
 	bundleGrace      = 15 * time.Second
@@ -108,7 +110,9 @@ type Options struct {
 	// Resolve gives the addresses the allocator URL's host name resolves
 	// to; net.DefaultResolver.LookupHost by default.
 	Resolve func(ctx context.Context, host string) ([]string, error)
-	// HeartbeatInterval is allocapi.HeartbeatInterval by default.
+	// HeartbeatInterval is the interval heartbeated at until an allocator
+	// says its own, allocapi.DefaultHeartbeatInterval by default. The
+	// exporter has no setting of it: the allocator's is the one in force.
 	HeartbeatInterval time.Duration
 	// Wait is DefaultWait by default.
 	Wait time.Duration
@@ -136,8 +140,8 @@ type Event struct {
 
 // The kinds of Event.
 const (
-	// EventHeartbeat is a heartbeat sent to every copy of the allocator;
-	// Err joins the failures.
+	// EventHeartbeat is a heartbeat sent to one copy of the allocator, or a
+	// lookup of the copies' addresses that failed; Err is the failure.
 	EventHeartbeat = "heartbeat"
 	// EventInstalled is a new bundle put in force.
 	EventInstalled = "installed"
@@ -175,10 +179,6 @@ type Client struct {
 	// wake asks the bundle loop to stop waiting for Retry-After or after an
 	// answer without a change, and beat the heartbeat loop to heartbeat now.
 	wake, beat chan struct{}
-	// sending is held by the heartbeat being sent, one at a time: the
-	// allocator keeps the last heartbeat it hears, so the one ShuttingDown
-	// sends must not be overtaken by one built before it.
-	sending chan struct{}
 	// instance names this process in its heartbeats, and sequence is the
 	// last heartbeat's number (allocapi.Heartbeat): a heartbeat given up
 	// on may still reach the allocator after the next, which then knows
@@ -198,11 +198,38 @@ type Client struct {
 	// still names the bundle before, for as long as the reload's end
 	// takes; the next heartbeat, sent at once, names the new one.
 	inForce, seen string
-	refused       *allocapi.Refusal
-	shuttingDown  bool
-	lastSync      time.Time
-	syncErrors    map[string]uint64
-	refusedTotal  uint64
+	// interval is the heartbeat interval in force: Options' at the start,
+	// then the shortest of those announced holds, while one does.
+	// intervalChanged is closed, and made anew, when it changes, so each
+	// address's schedule takes it at once.
+	interval        time.Duration
+	intervalChanged chan struct{}
+	// told is set once a copy of the allocator has announced an interval.
+	// Until then the interval in force is Options' default, which no copy
+	// said, and a heartbeat leaves it out (allocapi.Heartbeat's
+	// IntervalSeconds): it would tell a copy that has just started
+	// nothing of how long the replicas told the copies' interval take to
+	// reach it.
+	told bool
+	// announced is, for each address the allocator's host resolves to whose
+	// last heartbeat was answered, the interval that answer said, 0 for
+	// none: an address whose heartbeat failed has no say until it answers
+	// again.
+	announced map[string]time.Duration
+	// sending holds, for each allocator address, the slot of the heartbeat
+	// on its way there, one at a time: a copy of the allocator keeps the
+	// last heartbeat it hears, so the one ShuttingDown sends must not be
+	// overtaken by one built before it. A slot is kept once made, for an
+	// address that comes back; there are as many as addresses ever seen.
+	sending map[string]chan struct{}
+	// known are the addresses the allocator's host resolved to last, which
+	// a failed lookup keeps heartbeating.
+	known        []string
+	refused      *allocapi.Refusal
+	shuttingDown bool
+	lastSync     time.Time
+	syncErrors   map[string]uint64
+	refusedTotal uint64
 	// lastLogged is the last error logged for each stage and allocator
 	// address, so an error repeated at every try is logged once, until it
 	// changes or ends: with several addresses failing, each has its own.
@@ -229,7 +256,7 @@ func New(o Options) (*Client, error) {
 		o.Resolve = net.DefaultResolver.LookupHost
 	}
 	if o.HeartbeatInterval <= 0 {
-		o.HeartbeatInterval = allocapi.HeartbeatInterval
+		o.HeartbeatInterval = allocapi.DefaultHeartbeatInterval
 	}
 	if o.Wait <= 0 {
 		o.Wait = DefaultWait
@@ -245,13 +272,14 @@ func New(o Options) (*Client, error) {
 	}
 	return &Client{
 		o: o, base: base, client: &http.Client{Transport: o.Transport},
-		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1), sending: make(chan struct{}, 1),
+		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1),
 		instance: rand.Text(),
 		newTimer: func(d time.Duration) (<-chan time.Time, func() bool) {
 			t := time.NewTimer(d)
 			return t.C, t.Stop
 		},
-		inForce: o.Generation, seen: o.Generation,
+		inForce: o.Generation, seen: o.Generation, interval: o.HeartbeatInterval, intervalChanged: make(chan struct{}),
+		announced: map[string]time.Duration{}, sending: map[string]chan struct{}{},
 		syncErrors: map[string]uint64{StageHeartbeat: 0, StageFetch: 0, StageWrite: 0},
 		lastLogged: map[logKey]string{},
 	}, nil
@@ -356,8 +384,9 @@ func (c *Client) logAttrs(key logKey, more ...any) []any {
 }
 
 // forgetAddresses drops what was logged for heartbeats to addresses the
-// allocator's host no longer resolves to: a copy of the allocator that is
-// gone neither recovers nor fails again.
+// allocator's host no longer resolves to, and the intervals they said: a
+// copy of the allocator that is gone neither recovers nor fails again, and
+// has no say in the interval.
 func (c *Client) forgetAddresses(addrs []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -366,6 +395,12 @@ func (c *Client) forgetAddresses(addrs []string) {
 			delete(c.lastLogged, key)
 		}
 	}
+	for addr := range c.announced {
+		if !slices.Contains(addrs, addr) {
+			delete(c.announced, addr)
+		}
+	}
+	c.takeAnnounced()
 }
 
 // authorize sets the bearer token from the token file on req.
@@ -385,142 +420,298 @@ func (c *Client) authorize(req *http.Request) error {
 	return nil
 }
 
-// heartbeatLoop heartbeats at once, then every HeartbeatInterval, and at
-// once again after a bundle was put in force or refused, until ctx ends.
+// heartbeatLoop looks up the allocator's addresses at once, then every
+// heartbeat interval, counted from when the lookup before ended, and at once
+// after a bundle was put in force or refused, and runs a heartbeat schedule of its own for each address
+// (heartbeatAddress) until ctx ends. A copy of the allocator that is slow to
+// answer, or hangs, so delays only the heartbeats to itself: every other
+// copy goes on hearing the replica each interval, where one round waiting
+// for every copy would let a hung one make the replica late to all of them.
+// An address the host no longer resolves to has its schedule stopped; a
+// lookup that fails keeps those of the addresses it resolved to last.
+//
+// An interval that changes takes effect at once here too, as it does for
+// the heartbeats: the next lookup follows the new interval after the last,
+// at once when that is past. A replica told a shorter interval says it to
+// every copy it heartbeats, and a copy of the allocator that has just
+// started is told it by them, and waits no longer for the replicas to reach
+// it (the allocator's firstSettle); a lookup still on the old, longer interval would find
+// that copy only up to the old interval after its start, by when it may
+// have formed its first member list of the replicas that happened to look
+// up sooner.
 func (c *Client) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(c.o.HeartbeatInterval)
-	defer ticker.Stop()
+	type schedule struct {
+		now  chan struct{}
+		stop context.CancelFunc
+	}
+	schedules := map[string]*schedule{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	// last is when the lookup before ended, the zero time before the first,
+	// so the first is made at once.
+	var last time.Time
 	for {
-		c.heartbeat(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		case <-c.beat:
+		beat := false
+		for waiting := true; waiting; {
+			c.mu.Lock()
+			next, changed := last.Add(c.interval), c.intervalChanged
+			c.mu.Unlock()
+			timer := time.NewTimer(time.Until(next))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				waiting = false
+			case <-c.beat:
+				timer.Stop()
+				beat, waiting = true, false
+			case <-changed:
+				timer.Stop()
+			}
+		}
+		addrs := c.lookup(ctx)
+		last = time.Now()
+		for addr, s := range schedules {
+			if !slices.Contains(addrs, addr) {
+				s.stop()
+				delete(schedules, addr)
+			}
+		}
+		for _, addr := range addrs {
+			if s := schedules[addr]; s != nil {
+				if beat {
+					signal(s.now)
+				}
+				continue
+			}
+			sctx, stop := context.WithCancel(ctx)
+			s := &schedule{now: make(chan struct{}, 1), stop: stop}
+			schedules[addr] = s
+			wg.Go(func() { c.heartbeatAddress(sctx, addr, s.now) })
 		}
 	}
 }
 
+// heartbeatAddress heartbeats the allocator copy at addr at once, then every
+// heartbeat interval, counted from when the heartbeat before was sent, and
+// at once on now, until ctx ends. An interval that changes takes effect at
+// once: the next heartbeat follows the new interval after the last.
+func (c *Client) heartbeatAddress(ctx context.Context, addr string, now <-chan struct{}) {
+	for {
+		sent := time.Now()
+		if !c.heartbeatOne(ctx, addr) {
+			return
+		}
+		for waiting := true; waiting; {
+			c.mu.Lock()
+			next, changed := sent.Add(c.interval), c.intervalChanged
+			c.mu.Unlock()
+			timer := time.NewTimer(time.Until(next))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				waiting = false
+			case <-now:
+				timer.Stop()
+				waiting = false
+			case <-changed:
+				timer.Stop()
+			}
+		}
+	}
+}
+
+// heartbeatInterval is the heartbeat interval in force.
+func (c *Client) heartbeatInterval() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.interval
+}
+
+// heartbeatBound bounds a heartbeat to one copy, and a lookup of the copies'
+// addresses: heartbeatTimeout, or the heartbeat interval when that is
+// shorter, so one that hangs is given up on by the time the next is due.
+func (c *Client) heartbeatBound() time.Duration {
+	return min(heartbeatTimeout, c.heartbeatInterval())
+}
+
 // heartbeat sends one heartbeat to every address the allocator URL's host
-// resolves to, at once, and waits for them: two copies of the allocator
-// behind one name both hear every replica. A reply naming a generation
-// other than the last the bundle loop has seen, by the time the replies are
-// in, wakes the bundle loop from its wait. One heartbeat is sent at a time,
-// built once the one before is back; sent is false when ctx ended before
-// this one's turn came, and nothing was sent.
+// resolves to, at once, and waits for them: ShuttingDown's, and a test's.
+// sent is false when there was no address to send to, or ctx ended before
+// the turn of one of them came (heartbeatOne).
 func (c *Client) heartbeat(ctx context.Context) (sent bool) {
+	addrs := c.lookup(ctx)
+	results := make([]bool, len(addrs))
+	var wg sync.WaitGroup
+	for i, addr := range addrs {
+		wg.Go(func() { results[i] = c.heartbeatOne(ctx, addr) })
+	}
+	wg.Wait()
+	return len(addrs) > 0 && !slices.Contains(results, false)
+}
+
+// heartbeatOne sends a heartbeat to the allocator copy at addr, built once
+// the one before to addr is back, and takes its reply. A reply naming a
+// generation other than the last the bundle loop has seen, by the time the
+// reply is in, wakes the bundle loop from its wait. The interval the reply
+// says, kept within allocapi's bounds, or none, becomes addr's say in the
+// interval in force, which is the shortest any copy whose last heartbeat
+// was answered says (takeAnnounced): every copy then hears the replica
+// within its own interval, which a longer one would not ensure. A copy that
+// fails loses its say, and when no copy says one the interval stays as it
+// is, so a copy that cannot be reached for a while does not take back what
+// the others said. sent is false when ctx ended before this heartbeat's
+// turn came, and nothing was sent.
+func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
+	c.mu.Lock()
+	slot := c.sending[addr]
+	if slot == nil {
+		slot = make(chan struct{}, 1)
+		c.sending[addr] = slot
+	}
+	c.mu.Unlock()
 	select {
-	case c.sending <- struct{}{}:
+	case slot <- struct{}{}:
 	case <-ctx.Done():
 		return false
 	}
-	defer func() { <-c.sending }()
+	defer func() { <-slot }()
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
 		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused}
+	if c.told {
+		hb.IntervalSeconds = c.interval.Seconds()
+	}
 	c.mu.Unlock()
+	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)
+	if err == nil {
+		reply, err = c.heartbeatTo(ctx, addr, body, c.heartbeatBound())
+	}
 	if err != nil {
-		c.failed(StageHeartbeat, "", err)
-		c.event(Event{Kind: EventHeartbeat, Err: err})
-		return true
+		c.failed(StageHeartbeat, addr, err)
+	} else {
+		c.recovered(StageHeartbeat, addr)
 	}
-	addrs, err := c.addresses(ctx)
-	if err != nil {
-		err = fmt.Errorf("resolving the allocator's host %s: %w", c.base.Hostname(), err)
-		c.failed(StageHeartbeat, "", err)
-		c.event(Event{Kind: EventHeartbeat, Err: err})
-		return true
-	}
-	c.recovered(StageHeartbeat, "")
-	c.forgetAddresses(addrs)
-	errs := make([]error, len(addrs))
-	replies := make([]string, len(addrs))
-	var wg sync.WaitGroup
-	for i, addr := range addrs {
-		wg.Go(func() { replies[i], errs[i] = c.heartbeatTo(ctx, addr, body) })
-	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			c.failed(StageHeartbeat, addrs[i], err)
-		} else {
-			c.recovered(StageHeartbeat, addrs[i])
-		}
-	}
-	all := errors.Join(errs...)
 	// What the bundle loop has seen is read now, not when the heartbeat
-	// went out: a bundle it fetched while the replies were on their way is
-	// no news, and waking it for one would ask again without waiting.
+	// went out: a bundle it fetched while the reply was on its way is no
+	// news, and waking it for one would ask again without waiting.
 	c.mu.Lock()
 	seen, inForce := c.seen, c.inForce
-	c.mu.Unlock()
-	for _, generation := range replies {
-		if generation != "" && generation != seen && generation != inForce {
-			signal(c.wake)
-			break
-		}
+	switch {
+	case err != nil:
+		delete(c.announced, addr)
+	case reply.HeartbeatIntervalSeconds != 0:
+		c.announced[addr] = allocapi.ClampHeartbeatInterval(reply.HeartbeatIntervalSeconds)
+	default:
+		c.announced[addr] = 0
 	}
-	c.event(Event{Kind: EventHeartbeat, Err: all})
+	c.takeAnnounced()
+	c.mu.Unlock()
+	if generation := reply.Generation; err == nil && generation != "" && generation != seen && generation != inForce {
+		signal(c.wake)
+	}
+	c.event(Event{Kind: EventHeartbeat, Err: err})
 	return true
 }
 
-// addresses are the addresses the allocator URL's host resolves to, or the
-// host itself when it is an IP address.
-func (c *Client) addresses(ctx context.Context) ([]string, error) {
+// takeAnnounced makes the shortest interval announced the interval in
+// force, when any is, and from then on the heartbeats say it (told).
+// Called under mu.
+func (c *Client) takeAnnounced() {
+	var shortest time.Duration
+	for _, d := range c.announced {
+		if d != 0 && (shortest == 0 || d < shortest) {
+			shortest = d
+		}
+	}
+	if shortest == 0 {
+		return
+	}
+	c.told = true
+	if shortest == c.interval {
+		return
+	}
+	c.o.Logger.Info("heartbeating at the interval the target allocator says", "interval", shortest.String(), "was", c.interval.String())
+	c.interval = shortest
+	close(c.intervalChanged)
+	c.intervalChanged = make(chan struct{})
+}
+
+// lookup is the addresses the allocator URL's host resolves to, or the host
+// itself when it is an IP address. A lookup is bounded as a heartbeat is
+// (heartbeatBound); one that fails is counted and logged as a heartbeat
+// failure, and gives the addresses resolved last, none before the first.
+func (c *Client) lookup(ctx context.Context) []string {
 	host := c.base.Hostname()
 	if net.ParseIP(host) != nil {
-		return []string{host}, nil
+		return []string{host}
 	}
-	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.heartbeatBound())
 	defer cancel()
 	addrs, err := c.o.Resolve(ctx, host)
 	if err == nil && len(addrs) == 0 {
 		err = errors.New("no addresses")
 	}
-	return addrs, err
+	if err != nil {
+		err = fmt.Errorf("resolving the allocator's host %s: %w", host, err)
+		c.failed(StageHeartbeat, "", err)
+		c.event(Event{Kind: EventHeartbeat, Err: err})
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.known
+	}
+	c.recovered(StageHeartbeat, "")
+	c.forgetAddresses(addrs)
+	c.mu.Lock()
+	c.known = addrs
+	c.mu.Unlock()
+	return addrs
 }
 
 // heartbeatTo sends the heartbeat body to the allocator at addr, with the
-// URL's host as the Host header, and returns the generation its reply names.
-func (c *Client) heartbeatTo(ctx context.Context, addr string, body []byte) (string, error) {
+// URL's host as the Host header, within timeout, and returns its reply.
+func (c *Client) heartbeatTo(ctx context.Context, addr string, body []byte, timeout time.Duration) (allocapi.HeartbeatReply, error) {
+	var reply allocapi.HeartbeatReply
 	port := c.base.Port()
 	if port == "" {
 		port = "80"
 	}
 	u := *c.base.JoinPath(allocapi.HeartbeatPath)
 	u.Host = net.JoinHostPort(addr, port)
-	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return reply, err
 	}
 	req.Host = c.base.Host
 	req.Header.Set("Content-Type", "application/json")
 	if err := c.authorize(req); err != nil {
-		return "", err
+		return reply, err
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("heartbeat to %s: %w", u.Host, err)
+		return reply, fmt.Errorf("heartbeat to %s: %w", u.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
 	if err != nil {
-		return "", fmt.Errorf("heartbeat to %s: %w", u.Host, err)
+		return reply, fmt.Errorf("heartbeat to %s: %w", u.Host, err)
 	}
 	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("heartbeat to %s: the allocator answered %s: %s", u.Host, resp.Status, firstLine(raw))
+		return reply, fmt.Errorf("heartbeat to %s: the allocator answered %s: %s", u.Host, resp.Status, firstLine(raw))
 	}
-	var reply allocapi.HeartbeatReply
 	if len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &reply); err != nil {
-			return "", fmt.Errorf("heartbeat to %s: the allocator's reply is not a heartbeat reply: %w", u.Host, err)
+			return reply, fmt.Errorf("heartbeat to %s: the allocator's reply is not a heartbeat reply: %w", u.Host, err)
 		}
 	}
-	return reply.Generation, nil
+	return reply, nil
 }
 
 // retryAfter is a Retry-After header of seconds as a duration, 0 when it is

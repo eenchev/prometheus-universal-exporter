@@ -269,8 +269,13 @@ func (f *FileSDConfig) check(base string) error {
 
 func (h *HTTPSDConfig) check(base string, refresh time.Duration) error {
 	u, err := url.Parse(h.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("http_sd.url %q must be an absolute http or https URL", h.URL)
+	if err != nil {
+		// Not a URL, so a token in it cannot be found to mask: the text,
+		// shown with a refused reload, is left out.
+		return errors.New("http_sd.url must be an absolute http or https URL; it is not a URL")
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("http_sd.url %q must be an absolute http or https URL", fetch.RedactURL(u, fetch.MaskCredentialQueryValues))
 	}
 	if u.User != nil {
 		return errors.New("http_sd.url must not carry credentials; give a bearer_token_file")

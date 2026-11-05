@@ -169,7 +169,14 @@ func usePeers(copies ...*peerCopy) {
 	}
 }
 
-func (c *peerCopy) round() { c.a.peers.round(context.Background()) }
+// round runs a round of the copy's peers, and waits for the snapshot fetch
+// it started, which runs beside it, to end.
+func (c *peerCopy) round() {
+	c.a.peers.round(context.Background())
+	if f := c.a.peers.fetch; f != nil {
+		<-f.done
+	}
+}
 
 func (c *peerCopy) metrics(t *testing.T) string {
 	t.Helper()

@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -201,7 +202,7 @@ func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string, timeout
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.URL, nil)
 	if err != nil {
-		return nil, err
+		return nil, redactSDError(err)
 	}
 	req.Header.Set("Accept", "application/json")
 	// As Prometheus sends it, so the server may tell how fresh to be.
@@ -215,18 +216,34 @@ func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string, timeout
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redactSDError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("%s answered %s", h.URL, resp.Status)
+		return nil, fmt.Errorf("%s answered %s", fetch.RedactURL(req.URL, fetch.MaskCredentialQueryValues), resp.Status)
 	}
 	raw, err := readBounded(resp.Body, "the answer")
 	if err != nil {
 		return nil, err
 	}
 	return parseGroupsJSON(raw)
+}
+
+// redactSDError is err with the URL of each *url.Error in its chain shown
+// as a log line shows a target, the values of query parameters whose names
+// read as credentials masked: an http_sd URL may carry a token in its
+// query (http_sd.url refuses userinfo, not a query), and a failure's text
+// is logged and shown on the status page and in /v1/status. The URL of the
+// *url.Error is masked as it stands, the one the request was made to.
+func redactSDError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	shown := *urlErr
+	shown.URL = fetch.RedactURLString(urlErr.URL, fetch.MaskCredentialQueryValues)
+	return &shown
 }
 
 // readToken reads a bearer token file, refusing an empty one.

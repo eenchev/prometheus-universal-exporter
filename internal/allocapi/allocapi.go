@@ -33,13 +33,42 @@ const (
 	SDPathPrefix = "/v1/sd/"
 )
 
-// The timings both sides keep to: a replica heartbeats every
-// HeartbeatInterval, and the allocator drops a member it has not heard from
-// for MemberTTL.
+// The timings both sides keep to. The allocator has one heartbeat interval,
+// its --heartbeat.interval, DefaultHeartbeatInterval unless set, and says it
+// in every HeartbeatReply; a replica heartbeats at the interval it was last
+// told, DefaultHeartbeatInterval until then. The allocator drops a member it
+// has not heard from for MemberTTL of its interval, TTLIntervals intervals,
+// so a member outlives two heartbeats lost in a row. The interval is one
+// setting, the allocator's, so the replicas cannot heartbeat more slowly
+// than the allocator expects.
 const (
-	HeartbeatInterval = 10 * time.Second
-	MemberTTL         = 30 * time.Second
+	DefaultHeartbeatInterval = 10 * time.Second
+	// MinHeartbeatInterval and MaxHeartbeatInterval bound the interval:
+	// the allocator refuses one outside them, and a replica takes an
+	// announced one outside them as the nearest bound, so a bogus answer
+	// can neither make it heartbeat without pause nor fall silent for
+	// longer than any allocator waits.
+	MinHeartbeatInterval = time.Second
+	MaxHeartbeatInterval = 2 * time.Minute
+	TTLIntervals         = 3
 )
+
+// MemberTTL is how long an allocator heartbeating at interval waits for a
+// member's heartbeat before it drops the member.
+func MemberTTL(interval time.Duration) time.Duration { return TTLIntervals * interval }
+
+// ClampHeartbeatInterval is seconds, an announced heartbeat interval, as a
+// duration between MinHeartbeatInterval and MaxHeartbeatInterval: one
+// below them, NaN included, is the least, and one above them the most.
+func ClampHeartbeatInterval(seconds float64) time.Duration {
+	if !(seconds >= MinHeartbeatInterval.Seconds()) {
+		return MinHeartbeatInterval
+	}
+	if seconds > MaxHeartbeatInterval.Seconds() {
+		return MaxHeartbeatInterval
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
 
 // The files of a bundle that have a fixed place.
 const (
@@ -47,7 +76,8 @@ const (
 	StaticTargetsFile = "static-targets.yaml"
 )
 
-// Heartbeat is what a replica sends to HeartbeatPath every HeartbeatInterval.
+// Heartbeat is what a replica sends to HeartbeatPath every heartbeat
+// interval.
 type Heartbeat struct {
 	// Member is the replica's id: its pod name, or --allocator.member.
 	Member string `json:"member"`
@@ -68,7 +98,7 @@ type Heartbeat struct {
 	Instance string `json:"instance"`
 	Sequence uint64 `json:"sequence"`
 	// ShuttingDown is set from the first signal on: the replica stops being
-	// live at once rather than a MemberTTL after its heartbeats stop, so no
+	// live at once rather than a member TTL after its heartbeats stop, so no
 	// probe is routed to it any more, and it leaves the member list, and
 	// its static targets move, once the live members have held for the
 	// allocator's settle time.
@@ -79,6 +109,14 @@ type Heartbeat struct {
 	// Refused names the bundle generation the replica could not load, and
 	// why; its last good bundle stays in force.
 	Refused *Refusal `json:"refused,omitempty"`
+	// IntervalSeconds is the heartbeat interval the replica was heartbeating
+	// at when it built the heartbeat, in seconds, once a copy of the
+	// allocator has said one, and left out before: the default a replica
+	// starts with is no copy's. A copy of the allocator that has just
+	// started, with an interval shorter than the copies before it said,
+	// learns from it how long the replicas it has not heard from yet may
+	// take to reach it, and forms its first member list no sooner.
+	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
 }
 
 // Refusal is a bundle a replica would not load.
@@ -92,6 +130,13 @@ type HeartbeatReply struct {
 	// Generation is the generation of the bundle the allocator now holds
 	// for the member; a replica whose bundle differs fetches it.
 	Generation string `json:"generation"`
+	// HeartbeatIntervalSeconds is the allocator's heartbeat interval, in
+	// seconds, which the replica heartbeats at from its next heartbeat on.
+	// A replica that hears it from several copies of the allocator takes
+	// the shortest, so it is heard often enough by each; one that hears
+	// none, from an allocator that does not say it, keeps the interval it
+	// has.
+	HeartbeatIntervalSeconds float64 `json:"heartbeat_interval_seconds,omitempty"`
 }
 
 // Bundle is what BundlePath answers for one member.

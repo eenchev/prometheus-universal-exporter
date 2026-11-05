@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -23,7 +24,8 @@ const maxHeartbeatBytes = 64 << 10
 
 // Handler serves the allocator's API. With a token, every endpoint but
 // /healthz and /ready answers 401 to a request whose Authorization header is
-// not "Bearer <token>".
+// not "Bearer <token>"; what a person reads in a browser, which cannot send
+// a bearer token, takes the token as Basic auth's password too (browsable).
 func (a *Allocator) Handler(token string) http.Handler {
 	if token == "" {
 		return a.handler(nil)
@@ -47,6 +49,8 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 	api.HandleFunc("GET /metrics", a.serveMetrics)
 	api.HandleFunc("GET "+PeerPath, a.servePeer)
 	api.HandleFunc("GET "+SnapshotPath, a.serveSnapshot)
+	api.HandleFunc("GET /{$}", a.serveStatusPage)
+	api.HandleFunc("GET "+StatusPath, a.serveStatus)
 	mux := http.NewServeMux()
 	mux.Handle("/", authorized(token, api))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -65,19 +69,54 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 // authorized refuses a request without the token, when there is one, and
 // every request while the token cannot be had. The token is compared in
 // constant time.
+//
+// A browser cannot send a bearer token, so the requests a person makes to
+// read the allocator, GET or HEAD of the status page, the status and
+// /metrics (browsable), also take the token as the password of Basic auth,
+// of any user name, and their 401 asks for it, so the browser prompts. Only
+// those: a browser sends Basic credentials it was given with any request to
+// the allocator, a page of another site's included, and none of them
+// changes anything, nor can another site read their answers. The token is
+// never taken from the URL, which logs and browser history keep.
 func authorized(token func() (string, error), next http.Handler) http.Handler {
 	if token == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		current, err := token()
-		if err != nil || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+current)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="pue-allocator"`)
-			http.Error(w, "this endpoint needs the allocator's bearer token in the Authorization header", http.StatusUnauthorized)
+		if err == nil && (subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+current)) == 1 ||
+			browsable(r) && basicToken(r, current)) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="pue-allocator"`)
+		if browsable(r) {
+			w.Header().Add("WWW-Authenticate", `Basic realm="pue-allocator", charset="UTF-8"`)
+			http.Error(w, "this page needs the allocator's token: as the password of Basic auth, of any user name, or as a bearer token in the Authorization header", http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, "this endpoint needs the allocator's bearer token in the Authorization header", http.StatusUnauthorized)
 	})
+}
+
+// browsable says r reads what a person reads in a browser: the status page,
+// the status or /metrics.
+func browsable(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	switch r.URL.Path {
+	case "/", StatusPath, "/metrics":
+		return true
+	}
+	return false
+}
+
+// basicToken says r carries Basic auth whose password is token, compared in
+// constant time; the user name is not looked at.
+func basicToken(r *http.Request, token string) bool {
+	_, password, ok := r.BasicAuth()
+	return ok && subtle.ConstantTimeCompare([]byte(password), []byte(token)) == 1
 }
 
 func (a *Allocator) serveHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +134,7 @@ func (a *Allocator) serveHeartbeat(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrTooManyMembers):
 		// Retry-After is the member TTL: the soonest a silent member can
 		// have freed its place.
-		w.Header().Set("Retry-After", strconv.Itoa(int(allocapi.MemberTTL/time.Second)))
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(a.memberTTL.Seconds()))))
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
 	case err != nil:

@@ -1337,25 +1337,31 @@ true
 true
 {{- end -}}
 {{- end }}
-{{- /* The allocator Deployment's minReadySeconds. /ready answers 200 once the
-       allocator has read its inputs, but its first member list takes effect
-       max(settle, 10s) after it starts (internal/allocator firstSettle), and
-       the exporter pods learn of it at their next heartbeat, 10s later. Until
-       then the new pod hands out no targets, so a rollout that took it for
-       available at once could replace every old pod before any new one
-       allocates. The settle is a Go duration, fractions and ms, us and ns
-       included; empty is the allocator's default, 15s. */ -}}
-{{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
-{{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
+{{- /* A Go duration, fractions and ms, us and ns included, in milliseconds,
+       as a float; "" is 0. */ -}}
+{{- define "prometheus-universal-exporter.goDurationMilliseconds" -}}
 {{- $factor := dict "h" 3600000.0 "m" 60000.0 "s" 1000.0 "ms" 1.0 "us" 0.001 "ns" 0.000001 -}}
 {{- $milliseconds := 0.0 -}}
-{{- range $part := regexFindAll "[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)" $settle -1 -}}
+{{- range $part := regexFindAll "[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)" (toString .) -1 -}}
 {{- $unit := regexFind "(ns|us|ms|s|m|h)$" $part -}}
 {{- $milliseconds = addf $milliseconds (mulf (trimSuffix $unit $part | float64) (get $factor $unit)) -}}
 {{- end -}}
-{{- $seconds := ceil (divf $milliseconds 1000) | int64 -}}
-{{- if lt $seconds 10 -}}{{- $seconds = 10 -}}{{- end -}}
-{{- add $seconds 10 -}}
+{{- $milliseconds -}}
+{{- end }}
+{{- /* The allocator Deployment's minReadySeconds. /ready answers 200 once the
+       allocator has read its inputs, but its first member list takes effect
+       max(settle, heartbeat interval) after it starts (internal/allocator
+       firstSettle), and the exporter pods learn of it at their next
+       heartbeat, a heartbeat interval later. Until then the new pod hands
+       out no targets, so a rollout that took it for available at once could
+       replace every old pod before any new one allocates. Empty settle and
+       heartbeatInterval are the allocator's defaults, 15s and 10s. */ -}}
+{{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
+{{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
+{{- $interval := .Values.allocator.heartbeatInterval | default "" | toString | default "10s" -}}
+{{- $settleSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $settle) 1000) | int64 -}}
+{{- $intervalSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) 1000) | int64 -}}
+{{- add (max $settleSeconds $intervalSeconds) $intervalSeconds -}}
 {{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}
@@ -1385,6 +1391,13 @@ true
 {{- $settle := $allocator.settle | default "" | toString -}}
 {{- if and $settle (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) -}}
 {{- fail (printf "allocator.settle %q must be a Go duration of zero or more, for example \"15s\"" $settle) -}}
+{{- end -}}
+{{- $interval := $allocator.heartbeatInterval | default "" | toString -}}
+{{- if $interval -}}
+{{- $milliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" $interval | float64 -}}
+{{- if or (not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $interval)) (lt $milliseconds 1000.0) (gt $milliseconds 120000.0) -}}
+{{- fail (printf "allocator.heartbeatInterval %q must be a Go duration from 1s to 2m, for example \"10s\"" $interval) -}}
+{{- end -}}
 {{- end -}}
 {{- if not (has ($allocator.logLevel | default "info") (list "debug" "info" "warn" "error")) -}}
 {{- fail (printf "allocator.logLevel %q must be debug, info, warn or error" (toString $allocator.logLevel)) -}}

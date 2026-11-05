@@ -197,7 +197,7 @@ func TestRefusedFilesLeaveTheLastGoodOnesInForce(t *testing.T) {
 	clock := newFakeClock()
 	a := New(mustLoad(t, p), Options{Clock: clock})
 	beat(t, a, "r1")
-	clock.Advance(allocapi.HeartbeatInterval)
+	clock.Advance(allocapi.DefaultHeartbeatInterval)
 	before := a.Bundle("r1").Generation
 	testutil.WriteIn(t, filepath.Dir(p.Config), filepath.Base(p.StaticTargets), "interval: 30s\ntargets:\n  - collector: nope\n    target: http://x\n")
 	for range 3 {

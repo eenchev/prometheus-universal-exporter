@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
 // The bar at the top of the pages (pagechrome.go).
@@ -186,10 +188,10 @@ func TestEveryPageOffersTheThemeAndSetsItBeforeItIsDrawn(t *testing.T) {
 // each, so the browser's own controls match.
 func TestThePagesStyleHasBothThemesChosen(t *testing.T) {
 	requireContains(t, pageStyle,
-		":root { color-scheme: light dark; "+lightColours+" }",
+		":root { color-scheme: light dark; "+pagekit.LightColours+" }",
 		`:root[data-theme="light"] { color-scheme: light; }`,
-		`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; `+darkColours+` } }`,
-		`:root[data-theme="dark"] { color-scheme: dark; `+darkColours+` }`,
+		`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; `+pagekit.DarkColours+` } }`,
+		`:root[data-theme="dark"] { color-scheme: dark; `+pagekit.DarkColours+` }`,
 		`header.site label.theme[hidden] { display: none; }`,
 	)
 	if strings.Count(pageStyle, "prefers-color-scheme") != 1 {

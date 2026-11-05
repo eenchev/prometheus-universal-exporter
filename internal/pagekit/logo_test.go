@@ -1,4 +1,4 @@
-package exporter
+package pagekit
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ func TestThePagesIconIsTheProjectsLogo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(logoSVG, logo) {
-		t.Error("internal/exporter/logo.svg differs from docs/logo.svg; copy docs/logo.svg over it")
+	if !bytes.Equal(Logo, logo) {
+		t.Error("internal/pagekit/logo.svg differs from docs/logo.svg; copy docs/logo.svg over it")
 	}
 }

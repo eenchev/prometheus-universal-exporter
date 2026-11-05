@@ -1,6 +1,11 @@
 {{- if and .Values.allocator .Values.allocator.enabled }}
 {{- $allocator := .Values.allocator }}
 {{- $image := $allocator.image | default dict }}
+{{- /* --peers.leader-only is a peers' flag, and the copies are peers only
+       with a discovery source: the allocator would refuse it without. */}}
+{{- if and $allocator.leaderOnly (not (include "prometheus-universal-exporter.allocatorDiscovers" .)) }}
+{{- fail "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source, so the allocator's pods are no peers and each serves everything: set it false, or add a discovery source" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -108,6 +113,9 @@ spec:
             {{- with $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
             {{- end }}
+            {{- with $allocator.heartbeatInterval }}
+            - {{ printf "--heartbeat.interval=%s" . | quote }}
+            {{- end }}
             {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
                    taken for unset. */}}
             - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}
@@ -118,6 +126,12 @@ spec:
                    Service lists it. */}}
             - {{ printf "--peers=%s.%s.svc:9116" (include "prometheus-universal-exporter.allocatorFullname" .) (include "prometheus-universal-exporter.namespace" .) | quote }}
             - "--peers.self=$(POD_IP)"
+            {{- if $allocator.leaderOnly }}
+            {{- /* Only the leader serves the allocation's metrics, so the
+                   ServiceMonitor, which scrapes every pod, gets one pod's
+                   series of it; the followers serve the peers' families. */}}
+            - "--peers.leader-only"
+            {{- end }}
           env:
             - name: POD_IP
               valueFrom:

@@ -3707,9 +3707,12 @@ this order, without cycles:
 8. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
 9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
-10. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+10. `pagekit`: what the HTML pages of the exporter and of the target
+   allocator share: the stylesheet, the theme, the icon and the refresh
+   controls.
+11. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-11. `allocator`: the target allocator (§ 42.14d).
+12. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.
@@ -29819,7 +29822,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.239 The pages' icon, the debug page's playground, and long texts and aligned controls on the pages
 
-- `TestThePagesIconIsTheProjectsLogo`: `internal/exporter/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
+- `TestThePagesIconIsTheProjectsLogo`: `internal/pagekit/logo.svg`, which the build embeds, is `docs/logo.svg` byte for byte.
 - `TestEveryPageHasTheLogoAsItsIcon`: `/`, `/collectors`, `/debug` and the status page each have one `<link rel="icon">`, in the head, an `image/svg+xml` `data:` URL whose base64 decodes to `docs/logo.svg` byte for byte, and a `Content-Security-Policy` with `img-src data:`.
 - `TestTheDebugPageCallsItsWrittenCollectorThePlayground`: `/debug` and `/debug?collector=rooms` list the written collector as *Playground*, label it `Playground: the YAML of a collector, which runs` (`Playground, a copy of <name>: …` after *Edit a copy*), say the playground never runs Python and that *Edit a copy* makes the playground a copy, and say nowhere `written on this page`, `written here` or `The one written`.
 - `TestTheDebugPageHasNoRunAsYouType`: the page has *Run* and its click handler, and no *Run as you type*, no switch, no `id="live"` and no timer.
@@ -30347,6 +30350,46 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAnEscapedSemicolonSeparatesPathParameters` (fetch): after `%3B` or `%3b` a credential's path parameter, `jsessionid`, `JSESSIONID`, `token` and an escaped `%6Asessionid`, is masked in a target as a log line shows it, an error's and a label's, the escape kept as written; `%3Bv=2`, a trailing `%3B` and a segment `token%3B=…` are kept.
 - `TestTheDebugReportsURLIsTheRulesURLWithItsQueryMasked` (fetch): the debug report's `$url` is `$url` with every query value but a configured pair's masked, its path's `%6A`, `%3B` and `%2F` as `$url` has them; a URL without a query, `<redacted>` and `""` are shown as they are.
 - `TestTheDebugReportShowsTheURLTheRulesRead` (exporter): after a redirect to `/x;%6Asessionid=…/app%3Bjsessionid=…?lang=en`, a label of `$url` is `/x;%6Asessionid=<redacted>/app%3Bjsessionid=<redacted>?lang=en` and a debug probe's report shows the same `$url` with `lang=<redacted>`; neither holds the session.
+
+## 34.270 Allocator status page and leader-only metrics
+
+- `TestTheStatusShowsTheMembersAndTheSpread` (allocator): with three members, one reporting its current bundle, one none, and one an id holding HTML, `/v1/status` gives the copy's address, version, revision, readiness and 20s of uptime, no peers, the members with their addresses, generations and whether each is up to date, and per member static and probe counts equal to `pue_allocator_assigned`'s, by job, with totals of 30 static and 2 probe targets, the average and the imbalance; `/` is HTML with the icon, the theme script and picker, the refresh controls (Off chosen, `?refresh=30s` choosing 30s), the bars and the id escaped, its fragment has no bar, and `?format=json` is answered `400`.
+- `TestTheStatusPageTakesTheTokenAsBasicAuth` (allocator): `/`, `/v1/status` and `/metrics` answer `401` with a `Basic` challenge without the token, `200` with the token as Basic auth's password of any user name or as a bearer token, `401` with another password or the token in the URL; the bundle, service discovery and peer endpoints and a heartbeat answer `401` to Basic auth, without a `Basic` challenge; `/healthz` and `/ready` stay open.
+- `TestThePeersStatusAgreesWithTheMetrics` (allocator): a leader's and a follower's status give their roles, the leader's address, the follower's snapshot taken and held, the copies with the leader live, discovering and last checked, and every source `ok` with its target, from the leader's own discovery or the follower's snapshot; each of the status's peer series is a line of `/metrics`, `pue_allocator_peer_up{peer}` is `1` on each; once the leader's checks fail three times the follower's `pue_allocator_peer_up` of it is `0`, it leads, the leader is down with three failures, and its page shows the series escaped and the copy down.
+- `TestTheStatusNamesTheCopysAddressAndBuild` (cmd/pue-allocator): `run`'s `/v1/status` names its `--web.listen-address` and the build's version and revision, ready, without peers.
+- `TestALeaderOnlyFollowerServesThePeersPartAlone` (allocator): with `--peers.leader-only` a follower's `/metrics` has the seven peer families and no other, `pue_allocator_is_leader 0` and the leader's `pue_allocator_leader{peer}`, while the leader's has the members, the assignments, the sources and the generations too; the follower's `/v1/status` has `"partial":true` and `"members":null`, no spread or sources, and its page names the leader and leaves out the members, targets and sources the leader's page has; once the leader's checks fail three times the follower leads and serves the whole of both.
+- `TestTheLeaderOnlyFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--peers` of its own address and `--peers.leader-only` leads, and its status says `leader_only`, not partial, with the members.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--peers.leader-only` without `--peers` exits 2; `TestVersionAndHelp`, changed: the help lists `-peers.leader-only`.
+- `TestAHangingSnapshotDoesNotDelayFailover` (allocator): a follower whose leader writes the start of its snapshot and then hangs ends each round at once, the fetch running beside it; a second round while the fetch runs starts no other fetch; once the leader answers `503` the next round, again at once, makes the copy lead and ask its sources, cancels the hanging fetch and counts no snapshot failure for it.
+- `TestTheFirstMemberListWaitsTheConfiguredHeartbeatInterval` (allocator): without a settle time, with `--heartbeat.interval` 4s the first member list has not formed 1ms before 4s after the start and has at 4s, and with 30s it has not formed before 30s, past the default 10s.
+- `TestAMemberIsDroppedAfterThreeConfiguredHeartbeatIntervals` (allocator): with a 2s interval and a 5s settle time, a member silent since its last heartbeat is still live 1ms before 6s, three intervals, and not at 6s; it stays in the member list until 5s after that and leaves it then.
+- `TestTheHeartbeatReplySaysTheHeartbeatInterval` (allocator): with a 2.5s interval the heartbeat answer has `heartbeat_interval_seconds` 2.5, and a heartbeat refused for `--members.max` 1 is answered `429` with `Retry-After: 8`, the 7.5s member TTL rounded up.
+- `TestTheHeartbeatEndpoint` (allocator), changed: the answer before the member list formed is `{"generation":"","heartbeat_interval_seconds":10}`.
+- `TestTheStatusMarksAMemberLateByTheConfiguredInterval` (allocator): with a 4s interval `/v1/status` gives `heartbeat_interval_seconds` 4 and `member_ttl_seconds` 12; a member whose last heartbeat is 6s old is not late, at 7s it is late and still live while one heard from at 6s is not, and the page says "The replicas heartbeat every 4s; a member not heard from for 12s stops being live." and marks the 7s age as an overdue heartbeat.
+- `TestTheHeartbeatIntervalFlagReachesTheAllocator` (cmd/pue-allocator): `run` with `--heartbeat.interval=2500ms` gives a status of a 2.5s interval and a 7.5s member TTL, and a heartbeat answer of `heartbeat_interval_seconds` 2.5.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--heartbeat.interval` of `999ms`, `2m1s` or `0s` exits 2 saying it must be from 1s to 2m; `TestVersionAndHelp`, changed: the help lists `-heartbeat.interval` with its default 10s.
+- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient): a client started with an hour's interval whose allocator answers `heartbeat_interval_seconds` 1 sends its next heartbeat about a second after the first, and its interval in force is 1s.
+- `TestABogusHeartbeatIntervalIsKeptWithinTheBounds` (allocclient): an announced 0.001 or -5 seconds is taken as 1s, 121 or 1e300 as 2m, and 2.5 as 2.5s.
+- `TestTheShortestIntervalOfTheCopiesIsTaken` (allocclient): heartbeating three copies, the interval is 10s while none says one, 3s when they say 7, 3 and none, 7s once the copy saying 3 is down, and stays 7s while every copy is down and while the only copy answering says none.
+- `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: the heartbeat replies say the default 10s interval, which the test takes out of them so its replicas keep heartbeating every 20ms.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded up, an empty interval counting as 10s: 25 by default, 20 with 5s, 60 with 30s, 4 with settle 0s and 1.5s, 240 with 15s and 2m, 21 with 20s and 1s; `allocator.heartbeatInterval` renders `--heartbeat.interval` with its value, and nothing when empty.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.heartbeatInterval` of `soon` is refused by the schema and the template, and `999ms`, `2m1s` and `0s` by the template, saying it must be a Go duration from 1s to 2m.
+- `TestTheMemberViewListsItsTargets` (allocator): with 40 static targets, a quarter with a user, a password and a `token` in their URL, two probe jobs whose targets carry an `access_token`, and members r1 and r2 joined by r3, `/?member=r1` and `/v1/status?member=r1` answer `401` with a `Basic` challenge without the token; r1's view counts the static, draining and probe targets the spread counts for it, lists by name the static targets `allocapi.Owner` gives it with collector, interval and labels, `""` left out, the draining ones moved to r3 with up to 30s left, and the probe jobs in file order with the spread's counts; the page has its title, the bar's home and JSON links, the way back, the filter box with the member, the three tables, a link to r3's view and the targets redacted, neither it nor the JSON shows `hunter2`, a token or an access token, the fragment is the content alone, without the filter box, and the status page links r1 to its view; `?filter=T0` lists only names starting `t0`, every count but the matching ones kept, and no probe target, `?filter=apis` the apis job's probe targets alone, and a filter nothing holds says so; an unknown member is answered `404` on both, with a notice and the way back on the page, and an empty `member` `400`.
+- `TestAMemberViewIsBounded` (allocator): a member owning 1205 static targets has 1000 listed of 1205 matching, the page saying the first 1000 are listed and 205 more left out, and `?filter=t12` lists all 15 of its matches, `t1204`, beyond the bound, included.
+- `TestALeaderOnlyFollowerLeavesTheMemberViewToTheLeader` (allocator): under `--peers.leader-only` the follower's view of a member it heard from is `partial` with the leader's address and no lists, its page names the leader with a notice and has no filter box nor targets, and the leader's view of the same member is whole.
+- `TestAnHTTPSDFailureMasksTheURLsToken` (allocator): of two `http_sd` sources whose URLs carry an `access_token`, one answering `503` and one unreachable, neither the status page, `/v1/status` nor the log shows the token, and the status's and the log's failure texts give the URLs with `access_token=<redacted>` and the other query parameter kept; an `ftp` URL with the token is refused at load without it.
+- `TestAHungCopyDoesNotDelayTheHeartbeatsToTheOthers` (allocclient): beside an allocator copy that never answers, one answering a 1s interval hears the replica at least 4 times in 4.5s, never more than 1.5s apart; heartbeats to the hung copy are given up on within 1.5s, and every lookup of the addresses is bounded by at most the 1s interval.
+- `TestAnAnnouncedIntervalReachesTheScheduleOfEveryCopy` (allocclient): a client started with an hour's interval, of two copies one answering after 200ms with a 1s interval and one at once with none, heartbeats the latter at least 3 times in 3.5s, and its interval in force is 1s.
+- `TestAFailedLookupHeartbeatsTheAddressesResolvedLast` (allocclient): after a lookup that fails the heartbeat goes to the address resolved before, with the next sequence, and the failure is counted under `heartbeat`; a client whose first lookup fails sends none.
+- `TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt` (allocator): a copy with a 5s interval and a 15s settle time whose first replica's first heartbeat, 1s after its start, says `interval_seconds` 40 and its next ones 5 has no member list 26s and 39s after the start, the other two replicas heard at 30s, and at 40s has the first list of all three; a copy with a 5s interval told 1e9 seconds has none at 115s and its list at 2m.
+- `TestTheClientHeartbeatsAtTheIntervalTheAllocatorSays` (allocclient), extended: the first heartbeat, before the allocator said an interval, leaves `interval_seconds` out, and the one after the reply saying 1 says 1.
+- `TestAMemberViewOfAGoneMemberSaysSo` (allocator): the fragment of r2's view lists its targets; once r2 has stopped long enough to be forgotten, its fragment answers `200` with the as-of line and the notice that the allocator knows no member r2, no table and no frame, its page `200` with the filter form `hidden` and the script hiding it on that notice, the JSON `404`, and r1's page has its filter shown.
+- `TestTheFilterBoxMatchesWhatTheAllocatorMatches` (allocator): a static row's `data-match` is its name, target, collector, moved-to (empty) and labels in name order, and a probe row's its target, job and collector, joined by line feeds; the script matches `data-match`, not the row's text, and the hint says both match the same fields; the allocator matches no target for `30s`, `alphahttp` or `demoteam`; `?filter=%20` and `%20%20` are no filter, matching every target, unechoed.
+- `TestTheMemberViewListsItsTargets` (allocator), changed: the page of an unknown member answers `200`, its JSON still `404`.
+- `TestTheLookupFollowsAShortenedInterval` (allocclient): a client on a 4s interval, told 1s by the copy it reaches, heartbeats a copy whose address appears 300ms after its start within 2s of the start, the heartbeat saying `interval_seconds` 1.
+- `TestAReplicaSaysNoIntervalUntilACopyDoes` (allocclient): a client started with the default interval, and one with 4s, leave `interval_seconds` out of their heartbeats while the allocator says no interval, also in the heartbeat answered with the first 5s, and say 5 in every heartbeat after it, also once the allocator says none again.
+- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator): a copy with a 5s interval and a 1s settle time hearing a replica without `interval_seconds` 1s after its start and one saying 40 at 3s has no member list 38s after the start, the third replica heard then saying 40, and at 40s has the first list of all three; a copy hearing only a replica without `interval_seconds` has no list 1ms before 5s and has it at 5s.
+- `TestAWrappedLabelKeepsTheNameOnItsFirstLine` (allocator): the member view's style makes a label an inline flex box, not an inline block, beside the phone layout's grid of name and value on one baseline, so a label that wraps keeps the cell's name on its first line.
 
 # 35. Documentation requirements
 
@@ -33363,7 +33406,11 @@ from the directory of the file naming them, read again at every refresh.
 asked with `GET` and `X-Prometheus-Refresh-Interval-Seconds`, with an
 optional `bearer_token_file` read again at every refresh and a `tls` block
 (only for `https`: a written one, even empty, with an `http` URL MUST be
-refused at load), without following redirects. Both MUST read a list of
+refused at load), without following redirects. The text of an `http_sd`
+failure, logged, on the status page and in `/v1/status`, and of a `url` refused at load MUST give the URL with the values of
+query parameters whose names read as credentials' masked
+(`MaskCredentialQueryValues`), and a `url` that does not parse MUST NOT be
+shown. Both MUST read a list of
 `{targets, labels}` groups strictly, refusing an empty target and a label
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
@@ -33486,7 +33533,12 @@ run of targets of the same labels one group with its labels once, as a
 file_sd or http_sd answer gives them, with an `ETag` of its digest and `304`
 to an `If-None-Match` naming it; the follower MUST fetch it within
 `SnapshotTimeout` (30s), its client having no shorter timeout of its own,
-and take a body of at most 16 MiB for each of its own sources (16 MiB with
+beside its rounds rather than within them, one fetch at a time (a round
+that finds the fetch of the same leader still running MUST NOT start
+another), so a leader that hangs while it writes its snapshot MUST NOT
+delay any check; a fetch MUST be cancelled, and MUST put nothing in force
+nor count as a failure, once the copy follows another copy, leads or shuts
+down; and take a body of at most 16 MiB for each of its own sources (16 MiB with
 none), and MUST name in `If-None-Match` the digest of what it holds itself,
 computed as the leader's is, never the `ETag` it was last given, so any
 difference, of a reload that reached one copy first or of the follower's own
@@ -33509,11 +33561,23 @@ NOT count it as taken for its snapshot's age, and MUST log so once after
 copy that comes to lead MUST start the loops with what its sources hold, the
 snapshot it took last, so no discovered target leaves the bundles until each
 source answers; one that leads without ever having taken a snapshot MUST
-first take that of the lowest other live copy, if any. A follower whose
+first take that of the lowest other live copy, if any, starting the loops
+once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
 failure, and log once after `PeerFailures` failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
-copy MUST ask its sources itself, from its start. `docs/ALLOCATOR.md` MUST
+copy MUST ask its sources itself, from its start. With
+`--peers.leader-only`, only with `--peers` (exit 2 otherwise), a copy that
+does not lead, before its first round included, MUST answer `/metrics`
+with `200` and the families of the peers alone (`pue_allocator_peers`,
+`pue_allocator_peer_up`, `pue_allocator_is_leader`,
+`pue_allocator_leader`, `pue_allocator_leader_changes_total`,
+`pue_allocator_snapshot_age_seconds` and
+`pue_allocator_peer_failures_total`), and no other family; `/v1/status`
+with `partial` true and `members`, `spread` and `sources` `null`; and `/`
+with the copy and its peers alone, naming the leader's address. The copy
+that leads MUST serve the whole of each, so the copies' allocation is in one
+copy's metrics. `docs/ALLOCATOR.md` MUST
 describe the peers, their flags, timings and metrics, and that a network
 split gives each side a leader, the targets then flipping between the two
 until it heals.
@@ -33538,22 +33602,31 @@ job's of the chart's values schema included (SPECIFICATION-CHART.md
 § 33.10c), when an example of `docs/ALLOCATOR.md` does not validate against
 its schema, and when a schema accepts any of a set of invalid files.
 
-**Members.** A member MUST be live while its last heartbeat is younger than
-`allocapi.MemberTTL` and did not say `shutting_down`; one that did MUST stop
+**Members.** The allocator MUST take its heartbeat interval from
+`--heartbeat.interval` (default `10s`), and MUST refuse one below `1s` or
+above `2m` as a command-line error; the member TTL MUST be three intervals
+(`allocapi.MemberTTL`), and no other setting of either MUST exist, on the
+allocator or on the exporter. `--heartbeat.interval` MUST NOT be checked
+against `--settle`: the two are independent. It MUST NOT change the timings of the
+peers either, which check each other every `PeerInterval` whatever it is. A member MUST be live while its last heartbeat is younger than
+the member TTL and did not say `shutting_down`; one that did MUST stop
 being live at once. A heartbeat whose `sequence` is not greater than that of
 the last heartbeat applied of its member with the same `instance`, or whose
 `instance` is the one its member's current `instance` replaced, MUST be
 answered as any other and change nothing; a heartbeat of another `instance`
 MUST be applied whatever its `sequence`. A member not live MUST be kept,
 with its `instance` and `sequence`, until its last heartbeat is
-`allocapi.MemberTTL` old, so a heartbeat arriving after the one saying
+the member TTL old, so a heartbeat arriving after the one saying
 `shutting_down` does not make it live again. A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`), so a member live again within it keeps
 its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live nor
-before `max(--settle, allocapi.HeartbeatInterval)` after the start. A member
+before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
+is the longest `interval_seconds` a heartbeat heard before it formed said,
+brought within `1s` and `2m`, 0 when none said one; a heartbeat without
+`interval_seconds`, or with 0, MUST NOT change `I`. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33584,11 +33657,12 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed; a heartbeat without `member`, a
+before the member list has formed, and `heartbeat_interval_seconds`, the
+heartbeat interval in seconds, in every answer; a heartbeat without `member`, a
 `host:port` `advertise` with a host and a decimal port from 1 to 65535, an
 `instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
 `400`, a body over 64 KiB `413`, and one refused for
-`--members.max` `429` with `Retry-After` of `allocapi.MemberTTL` in seconds. `GET /v1/bundle?member=<id>`
+`--members.max` `429` with `Retry-After` of the member TTL in seconds, rounded up. `GET /v1/bundle?member=<id>`
 MUST answer the bundle as JSON with its generation, quoted, as `ETag`, `304`
 when `If-None-Match` names that generation, and `503` with `Retry-After`
 until the member list has formed; with `wait=<duration>` (at most `60s`) a
@@ -33611,8 +33685,74 @@ unreadable token file MUST stop the start. The file MUST be read again when
 its modification time or size changes, so a rotated token is required from
 the next request; a file that is empty or cannot be read after a change MUST
 refuse every such request with `401` until it holds a token, the failure
-logged once while it stays the same. The allocator MUST serve plain HTTP
-only.
+logged once while it stays the same. `GET` and `HEAD` of `/`,
+`/v1/status` and `/metrics`, and no other request, MUST also take the token
+as the password of HTTP Basic auth, of any user name, compared in constant
+time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
+one, so a browser prompts; the token MUST NOT be taken from the URL. The
+allocator MUST serve plain HTTP only.
+
+**Status page.** `GET /v1/status` MUST answer the copy's status as JSON:
+its address among its peers when known, else `--web.listen-address`, its
+instance, the build's version and revision, its start and uptime, and
+whether it is ready; with `--peers` (else `null`) its role, the leader,
+the live copies, the leader changes, the snapshot's age, whether it has
+taken one and holds the leader's targets, its check and snapshot failures,
+every address of its peers, its own included, with liveness, the last
+answer's discovering and address-known, the last check and the failures in
+a row, and the series of the peers' metric families exactly as `/metrics`
+writes them; the heartbeat interval and the member TTL in seconds; every
+member known with its address, last heartbeat, whether it is late (live,
+with its last heartbeat more than one and a half heartbeat intervals old,
+which the page MUST mark), whether
+it is live, in the member list and shutting down, the generation it
+reports, the one it is to have, a refusal it reports and the static targets
+it keeps draining; the spread, per member of the member list and per other
+live member a probe is routed to, of the static targets it owns as
+`pue_allocator_assigned` counts them, those it drains, and the probe targets
+routed to it by job and in all, with the totals, the average per member and
+the imbalance (the most a member has divided by the average, `0` with no
+target); and every discovery source with its kind, owner, source kind,
+result (`ok`, `failing` with its error, or `pending`), targets, last
+refresh and last success, and whether what it holds came from the copy's
+own discovery or the leader's snapshot. `GET /` MUST render the same as an
+HTML page framed as the exporter's pages are (§ 42.14a: the bar with the
+theme picker, the logo as its icon, the same `Content-Security-Policy`,
+`X-Frame-Options: DENY` and `Cache-Control: no-store`), every value escaped,
+with a bar of each member's targets drawn in CSS alone, and the exporter's
+status page's refresh controls, `?refresh=` keeping the interval and
+`?format=fragment` answering the content alone, without the bar; another
+`format` MUST be answered `400`. Each member's id in the members and in the
+spread MUST link to its view, `GET /?member=<id>`, framed as the page is,
+with a link back to it and refreshed as it is: the member as the members
+have it; the static targets it owns as `pue_allocator_assigned` counts them,
+by name, with collector, target, labels (one written `""` left out) and
+interval; those it keeps draining with the member each moved to and how
+much longer it drains; and the probe targets routed to it, counted by job
+and listed with job and collector, in file order of the jobs and by target.
+A target MUST be shown as `fetch.DisplayTarget` shows it for its
+collector, credentials withheld, and a static target's `params` and
+`request` MUST NOT be shown. `?filter=<text>` MUST cut each list to the
+targets whose name, target, collector, a label as `name=value`, job or
+member moved to holds the text, in any case, before each list is cut to
+its first 1000 (`MemberViewLimit`), each text on its own; a filter MUST be
+trimmed of spaces, and one of spaces alone MUST be no filter; each list MUST say how many it holds,
+how many match and, cut short, how many are left out. The page MUST have a
+filter box, outside the content a refresh swaps, that hides as it is typed
+the rows none of whose texts `?filter=` matches holds it, which each row
+MUST carry joined by line feeds (`data-match`), not the row's text, with
+plain JavaScript, and submits `?filter=`. At a phone's width each row's
+cells MUST stack, each beside its name, the name on the value's first line,
+also when the value's first label wraps. `GET /v1/status?member=<id>` MUST answer the same as JSON
+(`allocator.MemberView`). A member the allocator does not know MUST be
+answered `404` as JSON, and the page and its fragment MUST answer `200`
+saying so, the filter box hidden, so a view refreshing itself shows the
+member gone; an empty `member` MUST be answered `400` on both. A follower under
+`--peers.leader-only` MUST NOT serve a member's targets: its view names the
+leader and its JSON is `partial`, with the leader's address. Both take the
+token as the status page does. `docs/ALLOCATOR.md` MUST describe the page,
+the member's view, the JSON and how a browser gives the token, and the
+chart README how to reach a pod's page and find the leader's.
 
 **Metrics and health.** `/metrics` MUST expose `pue_allocator_members`,
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
@@ -33626,6 +33766,8 @@ members, by kind, divided by the number of members; `0` with no member),
 `pue_allocator_discovery_refreshes_total{result}` and
 `pue_allocator_discovery_last_success_timestamp_seconds`, and with
 `--peers` `pue_allocator_peers` (the live copies, itself included),
+`pue_allocator_peer_up{peer}` (`1` for each other address of the peers
+that is live, `0` for one that is not),
 `pue_allocator_is_leader`, `pue_allocator_leader{peer}` (the leader's
 address, `self` while it leads without knowing its own),
 `pue_allocator_leader_changes_total`, `pue_allocator_snapshot_age_seconds`
@@ -33655,19 +33797,27 @@ nor link-local, IPv4 before IPv6, with the listen port; an
 the bundle's configuration leaves out (§ 42.1).
 
 The exporter MUST heartbeat (`POST /v1/heartbeat`, an `allocapi.Heartbeat`)
-at once, every `allocapi.HeartbeatInterval`, and at once after each bundle it
+at once, every heartbeat interval, and at once after each bundle it
 put in force or refused, to every address the URL's host resolves to, each at
 the URL's port with the URL's host as its `Host` header, or to the host alone
-when it is an IP address. A heartbeat MUST carry the member, the advertised
+when it is an IP address. Each address MUST be heartbeated on a schedule
+of its own, so a copy that is slow to answer or hangs delays no heartbeat
+to another; a heartbeat to one address, and the lookup of the addresses,
+made at once and every heartbeat interval, MUST be given up on after 5
+seconds or the heartbeat interval, whichever is shorter, and a lookup that
+fails MUST keep the addresses it resolved to last. A heartbeat MUST carry the member, the advertised
 address, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force,
 `shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
-random name made once at the exporter's start, and the `sequence`, 1 for the
+random name made once at the exporter's start, the `sequence`, 1 for the
 process's first heartbeat and one more for each heartbeat built after it, so
-that a heartbeat given up on and arriving late is known for an old one; on that signal the
+that a heartbeat given up on and arriving late is known for an old one, and
+`interval_seconds`, the heartbeat interval in force when it was built, once a
+reply has said a `heartbeat_interval_seconds` other than 0, and MUST
+leave `interval_seconds` out before; on that signal the
 exporter MUST send one at once, bounded by 2 seconds, before
-`--web.shutdown-delay` begins. Heartbeats MUST be sent one at a time, each
-built once the one before is back, so no heartbeat without `shutting_down`
+`--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
+built once the one before to it is back, so no heartbeat without `shutting_down`
 can reach the allocator after the one with it: a heartbeat on its way at
 the signal MUST be waited for, within the 2 seconds, and when it is not
 back by then the heartbeat with `shutting_down` MUST follow as soon as it
@@ -33675,6 +33825,17 @@ is. With `--allocator.token-file`, every request
 MUST carry `Authorization: Bearer <token>`, the file read again for each.
 A failure repeated at every try MUST be logged once, for each stage and,
 for a heartbeat, for each address, until it changes or ends.
+
+The heartbeat interval MUST be `allocapi.DefaultHeartbeatInterval`, 10
+seconds, at the start, and the exporter MUST NOT have a setting of it. Of
+the addresses whose last heartbeat was answered without error, those whose
+reply said a `heartbeat_interval_seconds` other than 0 MUST make the
+interval the shortest of them, each first brought within `1s` and `2m` (one
+below, a negative one included, taken as `1s`, one above as `2m`), and the
+next heartbeat to every address MUST follow that interval after the last
+one to it, and the next lookup of the addresses that interval after the
+last lookup ended, at once when that is past; when none says one, because every copy failed or none sends the
+field, the interval MUST stay as it is.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`

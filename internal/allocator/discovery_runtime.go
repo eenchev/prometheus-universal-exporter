@@ -27,6 +27,11 @@ type sourceState struct {
 	successes uint64
 	failures  uint64
 	lastGood  time.Time
+	// refreshed is when the source was last asked here, or its targets
+	// last taken from the leader's snapshot, whatever came of it, and
+	// fromSnapshot says what the source holds came from the snapshot.
+	refreshed    time.Time
+	fromSnapshot bool
 }
 
 // fetch asks the source once; logger takes what is logged on the way.
@@ -91,6 +96,7 @@ func (a *Allocator) syncSources(in *Inputs) {
 			// failure is logged and counted, even one of the same text.
 			s.found, s.ok = old.found, old.ok
 			s.successes, s.failures, s.lastGood = old.successes, old.failures, old.lastGood
+			s.refreshed, s.fromSnapshot = old.refreshed, old.fromSnapshot
 		}
 		a.sources[spec.key] = s
 		if a.discovering {
@@ -183,13 +189,15 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 	}
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
+	s.refreshed = a.clock.Now()
 	if err != nil {
 		a.sourceFailed(s, err)
 		return false
 	}
 	a.sourceAnswered(s)
 	s.successes++
-	s.lastGood = a.clock.Now()
+	s.lastGood = s.refreshed
+	s.fromSnapshot = false
 	if s.ok && sameDiscovered(s.found, found) {
 		return false
 	}

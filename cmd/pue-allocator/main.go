@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
@@ -45,18 +46,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("pue-allocator", flag.ContinueOnError)
 	// Every line on stderr stays JSON, as the exporter's do.
 	flags.SetOutput(io.Discard)
-	listenAddress := flags.String("web.listen-address", ":9116", "Address on which to expose the allocator's API, metrics and health endpoints")
+	listenAddress := flags.String("web.listen-address", ":9116", "Address on which to expose the allocator's API, status page, metrics and health endpoints")
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the configuration the replicas are served, with the collector files it lists, which must be relative paths inside its directory")
 	staticTargetsFile := flags.String("static-targets-file", "", "Optional static target file, split among the replicas; a target's shard_key, when set, is hashed in place of its name")
 	probeTargetsFile := flags.String("probe-targets-file", "", "Optional probe targets file of probe_jobs, served to Prometheus at /v1/sd/<job>")
-	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry")
+	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry; the status page, /v1/status and /metrics also take it as Basic auth's password, for a browser")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
+	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	peerList := flags.String("peers", "", "Optional allocator copies to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every copy, this one included, so each finds its own address among them. The live copy of the lowest address leads and alone asks the discovery sources; the others serve what it found")
 	peerSelf := flags.String("peers.self", "", "This copy's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the copy finds itself among the peers' addresses by asking them")
+	peerLeaderOnly := flags.Bool("peers.leader-only", false, "With --peers, only the leader serves the whole of /metrics and of the status page; a follower serves the peers' metrics and its own peer state alone, so a Prometheus scraping every copy has one copy's series of the allocation")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
 	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
@@ -85,6 +88,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *settle < 0 {
 		return commandLineError(stderr, fmt.Errorf("--settle must not be negative, got %s", *settle))
 	}
+	if *heartbeatInterval < allocapi.MinHeartbeatInterval || *heartbeatInterval > allocapi.MaxHeartbeatInterval {
+		return commandLineError(stderr, fmt.Errorf("--heartbeat.interval must be from 1s to 2m, got %s", *heartbeatInterval))
+	}
 	if *maxMembers < 1 {
 		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
 	}
@@ -92,19 +98,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))
 	}
 	var peerOptions *allocator.PeerOptions
-	if *peerList != "" {
+	switch {
+	case *peerList != "":
 		entries, err := allocator.ParsePeers(*peerList)
 		if err != nil {
 			return commandLineError(stderr, err)
 		}
-		peerOptions = &allocator.PeerOptions{Peers: entries}
+		peerOptions = &allocator.PeerOptions{Peers: entries, LeaderOnly: *peerLeaderOnly}
 		if *peerSelf != "" {
 			if peerOptions.Self, err = allocator.ParseSelf(*peerSelf, *listenAddress); err != nil {
 				return commandLineError(stderr, err)
 			}
 		}
-	} else if *peerSelf != "" {
+	case *peerSelf != "":
 		return commandLineError(stderr, errors.New("--peers.self is given without --peers"))
+	case *peerLeaderOnly:
+		return commandLineError(stderr, errors.New("--peers.leader-only is given without --peers: a copy without peers is its own leader and serves everything"))
 	}
 	if *showVersion {
 		b := exporter.BuildVersion()
@@ -140,7 +149,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("invalid input files; exiting", "error", err)
 		return 1
 	}
-	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger})
+	build := exporter.BuildVersion()
+	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, HeartbeatInterval: *heartbeatInterval, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
+		Address: *listenAddress, Version: build.Version, Revision: build.Revision})
 	if peerOptions != nil {
 		if token != nil {
 			peerOptions.Token = token.Token
@@ -164,10 +175,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer ticker.Stop()
 		go alloc.WatchLoop(watchDone, ticker.C, paths)
 	}
-	logger.Info("starting allocator", append([]any{"version", exporter.BuildVersion().Version, "address", *listenAddress,
+	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
-		"watch_interval", watchInterval.String(), "settle", settle.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
-		"peers", *peerList, "peers_self", *peerSelf}, inputs.LogAttrs()...)...)
+		"watch_interval", watchInterval.String(), "settle", settle.String(), "heartbeat_interval", heartbeatInterval.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "token", token != nil,
+		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {
 		handler = alloc.HandlerReading(token)

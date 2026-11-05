@@ -194,10 +194,10 @@ func TestTheHeartbeatEndpoint(t *testing.T) {
 	a := New(mustLoad(t, p), Options{Clock: clock, Logger: testutil.QuietLogger(t)})
 	url := serve(t, a, "")
 	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`)
-	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"generation":""}` {
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"generation":"","heartbeat_interval_seconds":10}` {
 		t.Errorf("before the member list formed: got %s %s", resp.Status, body)
 	}
-	clock.Advance(allocapi.HeartbeatInterval)
+	clock.Advance(allocapi.DefaultHeartbeatInterval)
 	resp, body = post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":2,"generation":"x"}`)
 	var reply allocapi.HeartbeatReply
 	if err := json.Unmarshal([]byte(body), &reply); err != nil || resp.StatusCode != http.StatusOK || reply.Generation != a.Bundle("r1").Generation {
@@ -217,6 +217,25 @@ func TestTheHeartbeatEndpoint(t *testing.T) {
 	}
 	if resp, _ = get(t, url+"/v1/heartbeat"); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("GET /v1/heartbeat: got %s, want 405", resp.Status)
+	}
+}
+
+// Every heartbeat reply says the allocator's heartbeat interval, in seconds,
+// the configured one as well as the default; and a heartbeat refused for
+// the member bound is asked to come back after the member TTL of it, three
+// intervals, in whole seconds rounded up.
+func TestTheHeartbeatReplySaysTheHeartbeatInterval(t *testing.T) {
+	p := writeInputs(t, testConfig, "", "")
+	a := New(mustLoad(t, p), Options{HeartbeatInterval: 2500 * time.Millisecond, MaxMembers: 1, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+	url := serve(t, a, "")
+	resp, body := post(t, url+"/v1/heartbeat", `{"member":"r1","advertise":"10.0.0.1:9115","instance":"i","sequence":1}`)
+	var reply allocapi.HeartbeatReply
+	if err := json.Unmarshal([]byte(body), &reply); err != nil || resp.StatusCode != http.StatusOK || reply.HeartbeatIntervalSeconds != 2.5 {
+		t.Errorf("got %s %s, want a reply saying a heartbeat interval of 2.5 seconds", resp.Status, body)
+	}
+	resp, body = post(t, url+"/v1/heartbeat", `{"member":"r2","advertise":"10.0.0.2:9115","instance":"i","sequence":1}`)
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "8" {
+		t.Errorf("a member beyond the bound: got %s, Retry-After %q, %q; want 429 with Retry-After 8", resp.Status, resp.Header.Get("Retry-After"), body)
 	}
 }
 
@@ -250,7 +269,7 @@ func TestServiceDiscoveryAnswersEveryProbeAtItsMember(t *testing.T) {
 	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "10.0.0.1:9115"})); err != nil {
 		t.Fatal(err)
 	}
-	clock.Advance(allocapi.HeartbeatInterval)
+	clock.Advance(allocapi.DefaultHeartbeatInterval)
 	resp, body := get(t, url+"/v1/sd/websites")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("got %s %s", resp.Status, resp.Header.Get("Content-Type"))

@@ -43,7 +43,11 @@ const (
 // leader's snapshot within SnapshotTimeout: a snapshot holds what every
 // source found, which may be megabytes where a check is a few bytes, and a
 // fetch cut short would leave the follower on its last snapshot for as long
-// as the snapshot stays that large. A copy that answered stays live until PeerFailures
+// as the snapshot stays that large. The fetch runs beside the rounds, one
+// at a time (snapshotFetch), so a leader that hangs while it writes its
+// snapshot delays no check: the follower goes on checking every
+// PeerInterval, and leads, or follows another copy, as soon as the checks
+// say so, which cancels the fetch. A copy that answered stays live until PeerFailures
 // checks in a row have failed, so one slow answer does not move the
 // leader; one that answers it is shutting down stops being live at once.
 // A follower whose snapshot fetches fail PeerFailures times in a row says
@@ -86,6 +90,11 @@ type PeerOptions struct {
 	// Resolve looks a peer's host name up; net.DefaultResolver.LookupHost
 	// when nil.
 	Resolve func(ctx context.Context, host string) ([]string, error)
+	// LeaderOnly is --peers.leader-only: only the leader serves the whole
+	// of /metrics and of the status; a follower serves the peers' part of
+	// each alone, so the copies' allocation is in one copy's metrics, not
+	// in every copy's.
+	LeaderOnly bool
 	// Client asks the peers; one of no proxy when nil. Each request is
 	// bounded by PeerTimeout, or SnapshotTimeout for a snapshot, through
 	// its context, so Client needs no timeout of its own, which would cut
@@ -185,8 +194,10 @@ type peerState struct {
 	fails int
 	// self says the address is this copy's own.
 	self bool
-	// answer is the peer's last answer.
-	answer peerAnswer
+	// answer is the peer's last answer, and checked when it was last
+	// checked, whatever the check's outcome; zero for this copy.
+	answer  peerAnswer
+	checked time.Time
 }
 
 // peers runs a copy's part among its peers.
@@ -198,6 +209,10 @@ type peers struct {
 	// round touches them.
 	resolved   map[string][]netip.AddrPort
 	resolveErr map[string]string
+	// fetch is the snapshot fetch running beside the rounds, or the last
+	// one, which has ended; nil before the first. Only the round touches
+	// it.
+	fetch *snapshotFetch
 
 	mu    sync.Mutex
 	known map[netip.AddrPort]*peerState
@@ -253,8 +268,10 @@ func (a *Allocator) UsePeers(o PeerOptions) {
 }
 
 // RunPeers runs the peers' rounds, the first at once and then every
-// PeerInterval, until ctx ends or the allocator shuts down.
+// PeerInterval, until ctx ends or the allocator shuts down, which ends a
+// snapshot fetch still running too.
 func (a *Allocator) RunPeers(ctx context.Context) {
+	defer a.peers.stopFetch()
 	for {
 		a.peers.round(ctx)
 		timer := time.NewTimer(PeerInterval)
@@ -446,6 +463,7 @@ func (p *peers) round(ctx context.Context) {
 	discovering := p.a.discovering
 	p.a.dmu.Unlock()
 
+	now := p.a.clock.Now()
 	p.mu.Lock()
 	known := make(map[netip.AddrPort]*peerState, len(addrs))
 	for i, addr := range addrs {
@@ -455,6 +473,9 @@ func (p *peers) round(ctx context.Context) {
 		}
 		known[addr] = st
 		r := results[i]
+		if addr != self {
+			st.checked = now
+		}
 		switch {
 		case addr == self || r.answer.Instance == p.a.instance:
 			st.self, st.live, st.fails = true, false, 0
@@ -514,29 +535,100 @@ func (p *peers) round(ctx context.Context) {
 			// A copy that leads before it ever followed, as a new copy of
 			// the lowest address does, starts from what another copy has,
 			// so its discovered targets do not leave the bundles until its
-			// sources first answer. A failure leaves it to its sources.
-			_, _ = p.fetchSnapshot(ctx, others[0].addr)
+			// sources first answer; it asks them once the fetch ends,
+			// whether it took the snapshot or not.
+			p.stopFetch()
+			p.startFetch(ctx, others[0].addr, true)
+			return
 		}
+		if f := p.fetch; f != nil && f.seed && f.running() {
+			return
+		}
+		p.stopFetch()
 		p.a.setDiscovering(true)
 		return
 	}
+	if f := p.fetch; f != nil && !f.seed && f.addr == leader && f.running() {
+		// One fetch at a time: the leader's snapshot is still on its way.
+		p.a.setDiscovering(false)
+		return
+	}
+	p.stopFetch()
 	p.a.setDiscovering(false)
-	agreed, err := p.fetchSnapshot(ctx, leader)
-	if err == nil {
-		p.fetched(leader, agreed)
-	} else if ctx.Err() == nil {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.snapshotFails++
-		p.snapshotFailures++
-		if p.snapshotFails >= PeerFailures && !p.stale {
-			p.stale = true
-			since := "never"
-			if !p.snapshotAt.IsZero() {
-				since = p.snapshotAt.UTC().Format(time.RFC3339)
+	p.startFetch(ctx, leader, false)
+}
+
+// snapshotFetch is a fetch of a peer's snapshot, which runs beside the
+// rounds so that a peer slow to write it, or hanging, delays no check.
+// seed says it is the fetch of a copy coming to lead (round), which asks
+// its sources once it ends.
+type snapshotFetch struct {
+	addr   netip.AddrPort
+	seed   bool
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func (f *snapshotFetch) running() bool {
+	select {
+	case <-f.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// stopFetch cancels the fetch running, if one is, and waits for it to end,
+// so what it fetched from a copy that no longer leads is never put in
+// force after the round moves on. A fetch cancelled ends at once.
+func (p *peers) stopFetch() {
+	if f := p.fetch; f != nil {
+		f.cancel()
+		<-f.done
+	}
+}
+
+// startFetch fetches addr's snapshot beside the rounds.
+func (p *peers) startFetch(ctx context.Context, addr netip.AddrPort, seed bool) {
+	ctx, cancel := context.WithCancel(ctx)
+	f := &snapshotFetch{addr: addr, seed: seed, cancel: cancel, done: make(chan struct{})}
+	p.fetch = f
+	go func() {
+		defer close(f.done)
+		defer cancel()
+		agreed, err := p.fetchSnapshot(ctx, addr)
+		switch {
+		case ctx.Err() != nil:
+			// Cancelled: the copy no longer follows addr, or shuts down.
+		case seed:
+			// A failure leaves the new leader to its sources.
+			p.mu.Lock()
+			leading := p.leading
+			p.mu.Unlock()
+			if leading {
+				p.a.setDiscovering(true)
 			}
-			p.a.logger.Warn("the leader's discovered targets cannot be fetched; this copy keeps serving those it took last", "leader", leader.String(), "last_snapshot", since, "error", err)
+		case err == nil:
+			p.fetched(addr, agreed)
+		default:
+			p.fetchFailed(addr, err)
 		}
+	}()
+}
+
+// fetchFailed notes a failed fetch of the leader addr's snapshot.
+func (p *peers) fetchFailed(addr netip.AddrPort, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.snapshotFails++
+	p.snapshotFailures++
+	if p.snapshotFails >= PeerFailures && !p.stale {
+		p.stale = true
+		since := "never"
+		if !p.snapshotAt.IsZero() {
+			since = p.snapshotAt.UTC().Format(time.RFC3339)
+		}
+		p.a.logger.Warn("the leader's discovered targets cannot be fetched; this copy keeps serving those it took last", "leader", addr.String(), "last_snapshot", since, "error", err)
 	}
 }
 
@@ -686,11 +778,13 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		if err == nil {
 			err = checkGroups(got.Groups)
 		}
+		s.refreshed = a.clock.Now()
 		if err != nil {
 			a.sourceFailed(s, fmt.Errorf("the leader's snapshot of it is refused: %w", err))
 			continue
 		}
 		a.sourceAnswered(s)
+		s.fromSnapshot = true
 		if s.ok && sameDiscovered(s.found, found) {
 			continue
 		}
@@ -757,46 +851,7 @@ func (a *Allocator) serveSnapshot(w http.ResponseWriter, r *http.Request) {
 // writePeerMetrics writes the metrics of the peers, when there are.
 // Called under a.mu.
 func (a *Allocator) writePeerMetrics(b *strings.Builder, family func(name, kind, help string)) {
-	p := a.peers
-	if p == nil {
-		return
+	if st := a.peersStatusLocked(a.clock.Now()); st != nil {
+		writePeerFamilies(b, family, st)
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	live := 1
-	for _, st := range p.known {
-		if st.live && !st.self {
-			live++
-		}
-	}
-	family("pue_allocator_peers", "gauge", "Allocator copies live among the peers, this one included.")
-	fmt.Fprintf(b, "pue_allocator_peers %d\n", live)
-	family("pue_allocator_is_leader", "gauge", "1 while this allocator copy leads its peers and asks the discovery sources, 0 while it follows the leader.")
-	family("pue_allocator_leader", "gauge", "1, with the address of the copy this one takes for the leader; self when it leads and its own address is not known.")
-	isLeader := 0
-	if p.decided && p.leading {
-		isLeader = 1
-	}
-	fmt.Fprintf(b, "pue_allocator_is_leader %d\n", isLeader)
-	if p.decided {
-		leader := "self"
-		if p.leader.IsValid() {
-			leader = p.leader.String()
-		}
-		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(leader))
-	}
-	family("pue_allocator_leader_changes_total", "counter", "Changes of the copy this one takes for the leader, after the first choice.")
-	fmt.Fprintf(b, "pue_allocator_leader_changes_total %d\n", p.leaderChanges)
-	family("pue_allocator_snapshot_age_seconds", "gauge", "Seconds since this copy last held the discovered targets of the leader's snapshot, having fetched it, or since its start before the first time; 0 while it leads.")
-	age := 0.0
-	if !p.decided || !p.leading {
-		since := p.snapshotAt
-		if since.IsZero() {
-			since = a.started
-		}
-		age = max(a.clock.Now().Sub(since).Seconds(), 0)
-	}
-	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(age, 'f', -1, 64))
-	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
-	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", p.checkFailures, p.snapshotFailures)
 }

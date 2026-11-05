@@ -49,10 +49,19 @@ type Options struct {
 	// Clock is the allocator's time; the wall clock when nil. Tests give
 	// one of their own.
 	Clock Clock
+	// HeartbeatInterval is how often the replicas are to heartbeat, which
+	// every heartbeat reply says; a member not heard from for
+	// allocapi.MemberTTL of it is dropped. 0 takes
+	// allocapi.DefaultHeartbeatInterval; the command line keeps it within
+	// allocapi's bounds.
+	HeartbeatInterval time.Duration
 	// MaxDiscoveredTargets bounds the targets of one discovery source's
 	// answer, for a source that sets no max_targets; 0 takes
 	// DefaultMaxDiscoveredTargets.
 	MaxDiscoveredTargets int
+	// Address is --web.listen-address, Version and Revision the build's,
+	// which the status shows (Status).
+	Address, Version, Revision string
 }
 
 // Allocator holds the inputs in force, the members, the member list that
@@ -62,6 +71,14 @@ type Allocator struct {
 	clock  Clock
 	logger *slog.Logger
 	settle time.Duration
+	// heartbeatInterval is Options.HeartbeatInterval, and memberTTL the
+	// member TTL of it.
+	heartbeatInterval, memberTTL time.Duration
+	// longestHeard is the longest interval a heartbeat said its replica was
+	// heartbeating at (allocapi.Heartbeat.IntervalSeconds) before the first
+	// member list formed, kept within allocapi's bounds; a heartbeat that
+	// says none is no say (firstSettle).
+	longestHeard time.Duration
 	// maxMembers bounds the live members; full says a heartbeat was
 	// refused for it since the last new member was taken, so the refusals
 	// are logged once while the allocator stays full.
@@ -132,6 +149,8 @@ type Allocator struct {
 	// among its peers; peers are those, nil without --peers.
 	instance string
 	peers    *peers
+	// address, version and revision are Options'.
+	address, version, revision string
 }
 
 type member struct {
@@ -150,22 +169,26 @@ type drainKey struct{ target, member string }
 // New returns an allocator serving in.
 func New(in *Inputs, opts Options) *Allocator {
 	a := &Allocator{
-		clock:         opts.Clock,
-		logger:        opts.Logger,
-		settle:        opts.Settle,
-		maxMembers:    opts.MaxMembers,
-		inputs:        in,
-		members:       map[string]*member{},
-		draining:      map[drainKey]time.Time{},
-		bundles:       map[string]*allocapi.Bundle{},
-		collectorsOf:  map[string]map[string]bool{},
-		changed:       make(chan struct{}),
-		stopping:      make(chan struct{}),
-		refusals:      map[string]string{},
-		sources:       map[string]*sourceState{},
-		base:          in,
-		maxDiscovered: opts.MaxDiscoveredTargets,
-		instance:      newInstance(),
+		clock:             opts.Clock,
+		logger:            opts.Logger,
+		settle:            opts.Settle,
+		heartbeatInterval: opts.HeartbeatInterval,
+		maxMembers:        opts.MaxMembers,
+		inputs:            in,
+		members:           map[string]*member{},
+		draining:          map[drainKey]time.Time{},
+		bundles:           map[string]*allocapi.Bundle{},
+		collectorsOf:      map[string]map[string]bool{},
+		changed:           make(chan struct{}),
+		stopping:          make(chan struct{}),
+		refusals:          map[string]string{},
+		sources:           map[string]*sourceState{},
+		base:              in,
+		maxDiscovered:     opts.MaxDiscoveredTargets,
+		instance:          newInstance(),
+		address:           opts.Address,
+		version:           opts.Version,
+		revision:          opts.Revision,
 	}
 	if a.clock == nil {
 		a.clock = realClock{}
@@ -173,6 +196,10 @@ func New(in *Inputs, opts Options) *Allocator {
 	if a.logger == nil {
 		a.logger = slog.Default()
 	}
+	if a.heartbeatInterval <= 0 {
+		a.heartbeatInterval = allocapi.DefaultHeartbeatInterval
+	}
+	a.memberTTL = allocapi.MemberTTL(a.heartbeatInterval)
 	if a.maxMembers <= 0 {
 		a.maxMembers = DefaultMaxMembers
 	}
@@ -211,6 +238,9 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.settled && hb.IntervalSeconds != 0 {
+		a.longestHeard = max(a.longestHeard, allocapi.ClampHeartbeatInterval(hb.IntervalSeconds))
+	}
 	m := a.members[hb.Member]
 	if (m != nil && m.stale(hb)) || (m == nil && hb.ShuttingDown) {
 		return a.replyLocked(hb.Member), nil
@@ -257,9 +287,10 @@ func (m *member) stale(hb allocapi.Heartbeat) bool {
 	return hb.Instance == m.retired
 }
 
-// replyLocked is the answer to a heartbeat of member.
+// replyLocked is the answer to a heartbeat of member, which also tells the
+// replica the heartbeat interval.
 func (a *Allocator) replyLocked(member string) allocapi.HeartbeatReply {
-	reply := allocapi.HeartbeatReply{}
+	reply := allocapi.HeartbeatReply{HeartbeatIntervalSeconds: a.heartbeatInterval.Seconds()}
 	if b := a.bundleLocked(member); b != nil {
 		reply.Generation = b.Generation
 	}
@@ -323,7 +354,7 @@ func (a *Allocator) liveCount() int {
 	now := a.clock.Now()
 	n := 0
 	for _, m := range a.members {
-		if live(m, now) {
+		if a.live(m, now) {
 			n++
 		}
 	}
@@ -332,8 +363,8 @@ func (a *Allocator) liveCount() int {
 
 // live reports whether m counts as a member at now: heard from within the
 // member TTL, and not shutting down.
-func live(m *member, now time.Time) bool {
-	return !m.shuttingDown && now.Sub(m.lastSeen) < allocapi.MemberTTL
+func (a *Allocator) live(m *member, now time.Time) bool {
+	return !m.shuttingDown && now.Sub(m.lastSeen) < a.memberTTL
 }
 
 // update brings the member list, the draining targets and the bundles up to
@@ -343,9 +374,9 @@ func (a *Allocator) update() {
 	now := a.clock.Now()
 	var liveMembers []string
 	for name, m := range a.members {
-		if live(m, now) {
+		if a.live(m, now) {
 			liveMembers = append(liveMembers, name)
-		} else if !slices.Contains(a.effective, name) && now.Sub(m.lastSeen) >= allocapi.MemberTTL {
+		} else if !slices.Contains(a.effective, name) && now.Sub(m.lastSeen) >= a.memberTTL {
 			// A member shutting down is kept for the member TTL, though
 			// not live: a heartbeat it sent before, arriving late, is then
 			// known for what it is rather than taken as a new member's.
@@ -376,8 +407,7 @@ func (a *Allocator) update() {
 
 // settleDue reports whether the proposed member list takes effect at now:
 // it differs from the effective one, has held for the settle time, and, for
-// the first one, is not empty and comes a heartbeat interval or more after
-// the start.
+// the first one, is not empty and comes no sooner than firstSettle.
 func (a *Allocator) settleDue(now time.Time) bool {
 	if a.settled && slices.Equal(a.proposed, a.effective) {
 		return false
@@ -388,9 +418,25 @@ func (a *Allocator) settleDue(now time.Time) bool {
 	return !now.Before(a.proposedAt.Add(a.settle))
 }
 
-// firstSettle is the earliest the first member list takes effect.
+// firstSettle is the earliest the first member list takes effect: the
+// settle time after the start, or a heartbeat interval, the copy's own or
+// the longest a replica heard from said it was heartbeating at, when that
+// is longer. A copy started with an interval shorter than the copies before
+// it hears each replica only at the replica's next heartbeat on the old
+// interval, which reaches it within that interval of its start (the
+// replica looks up the copies' addresses every interval). The first
+// heartbeat of a replica the copies before told the old interval says it,
+// as each was told the same, so the first list waits for the others too,
+// rather than forming of those that happened to come first and changing as
+// each of the rest arrives. A replica not told an interval yet, one that
+// has just started, says none: the default it heartbeats at is no copy's,
+// and says nothing of how long the others take, so it does not count here.
+// The wait so covers the old interval when a replica told it is heard
+// before the copy's own interval and the settle time have passed; replicas
+// that started after the copy, heard alone until then, form the first list
+// alone, and it changes as the others arrive.
 func (a *Allocator) firstSettle() time.Time {
-	return a.started.Add(max(a.settle, allocapi.HeartbeatInterval))
+	return a.started.Add(max(a.settle, a.heartbeatInterval, a.longestHeard))
 }
 
 // takeEffect makes the proposed member list the effective one. A static
@@ -501,8 +547,8 @@ func (a *Allocator) schedule() {
 		}
 	}
 	for _, m := range a.members {
-		if live(m, now) {
-			consider(m.lastSeen.Add(allocapi.MemberTTL))
+		if a.live(m, now) {
+			consider(m.lastSeen.Add(a.memberTTL))
 		}
 	}
 	if !a.settled || !slices.Equal(a.proposed, a.effective) {
@@ -607,7 +653,7 @@ func (a *Allocator) remember() {
 	}
 	now := a.clock.Now()
 	for _, m := range a.members {
-		if live(m, now) && m.generation != "" {
+		if a.live(m, now) && m.generation != "" {
 			keep[m.generation] = true
 		}
 	}

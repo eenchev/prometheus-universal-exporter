@@ -52,11 +52,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	probeTargetsFile := flags.String("probe-targets-file", "", "Optional probe targets file of probe_jobs, served to Prometheus at /v1/sd/<job>")
 	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry; the status page, /v1/status and /metrics also take it as Basic auth's password, for a browser")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
-	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes; 0 reads them once")
+	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes, at most 24h; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
 	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
-	discoveryRefresh := flags.Duration("discovery.refresh-interval", 0, "How often to ask a discovery source that sets no refresh_interval, 1s or more; 0 leaves each kind its own default: 1m for file_sd and http_sd, 30s for kubernetes and dns_sd")
+	discoveryRefresh := flags.Duration("discovery.refresh-interval", 0, "How often to ask a discovery source that sets no refresh_interval, from 1s to 24h; 0 leaves each kind its own default: 1m for file_sd and http_sd, 30s for kubernetes and dns_sd")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
 	peerList := flags.String("peers", "", "Optional allocator instances to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every instance, this one included, so each finds its own address among them. The live instance of the lowest address leads and alone asks the discovery sources; the others serve what it found")
 	peerSelf := flags.String("peers.self", "", "This instance's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the instance finds itself among the peers' addresses by asking them")
@@ -83,8 +83,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandLineError(stderr, err)
 	}
-	if *watchInterval < 0 {
-		return commandLineError(stderr, fmt.Errorf("--config.watch-interval must not be negative, got %s; 0 reads the files once", *watchInterval))
+	if *watchInterval < 0 || *watchInterval > allocator.MaxWatchInterval {
+		return commandLineError(stderr, fmt.Errorf("--config.watch-interval must be from 0 to 24h, got %s; 0 reads the files once", *watchInterval))
 	}
 	if *settle < 0 {
 		return commandLineError(stderr, fmt.Errorf("--settle must not be negative, got %s", *settle))
@@ -95,8 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *maxMembers < 1 {
 		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
 	}
-	if *discoveryRefresh != 0 && *discoveryRefresh < allocator.MinDiscoveryRefresh {
-		return commandLineError(stderr, fmt.Errorf("--discovery.refresh-interval must be %s or more, or 0 for each kind's own default, got %s", allocator.MinDiscoveryRefresh, *discoveryRefresh))
+	if *discoveryRefresh != 0 && (*discoveryRefresh < allocator.MinDiscoveryRefresh || *discoveryRefresh > allocator.MaxDiscoveryRefresh) {
+		return commandLineError(stderr, fmt.Errorf("--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got %s", *discoveryRefresh))
 	}
 	if *maxDiscovered < 1 {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))

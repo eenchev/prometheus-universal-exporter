@@ -1376,6 +1376,13 @@ true
 true
 {{- end -}}
 {{- end }}
+{{- /* A duration setting of the allocator as text: "" when unset (null),
+       and any other value as written, so an integer 0 is "0", not unset. */ -}}
+{{- define "prometheus-universal-exporter.allocatorDuration" -}}
+{{- if not (kindIs "invalid" .) -}}
+{{- toString . -}}
+{{- end -}}
+{{- end }}
 {{- /* The allocator's settings, and what the exporter cannot do beside it.
        The values schema refuses the same; this stands where it is skipped. */ -}}
 {{- define "prometheus-universal-exporter.validateAllocator" -}}
@@ -1406,14 +1413,20 @@ true
 {{- fail (printf "allocator.heartbeatInterval %q must be a Go duration from 1s to 2m, for example \"10s\"" $interval) -}}
 {{- end -}}
 {{- end -}}
-{{- $watch := $allocator.configWatchInterval | default "" | toString -}}
-{{- if and $watch (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $watch)) -}}
-{{- fail (printf "allocator.configWatchInterval %q must be a Go duration of zero or more, for example \"1m\"; 0 reads the input files once" $watch) -}}
+{{- /* An unset value is empty; any other is taken as written, an integer 0
+       that --skip-schema-validation lets through included, which `default`
+       would take for unset. At most 24h, the flags' bound: a duration no
+       Go duration holds passes the pattern and would stop the allocator's
+       start. */ -}}
+{{- $watch := include "prometheus-universal-exporter.allocatorDuration" $allocator.configWatchInterval -}}
+{{- if and $watch (or (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $watch)) (gt (include "prometheus-universal-exporter.goDurationMilliseconds" $watch | float64) 86400000.0)) -}}
+{{- fail (printf "allocator.configWatchInterval %q must be a Go duration from 0 to 24h, for example \"1m\"; 0 reads the input files once" $watch) -}}
 {{- end -}}
-{{- $refresh := $allocator.discoveryRefreshInterval | default "" | toString -}}
+{{- $refresh := include "prometheus-universal-exporter.allocatorDuration" $allocator.discoveryRefreshInterval -}}
 {{- if $refresh -}}
-{{- if or (not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $refresh)) (lt (include "prometheus-universal-exporter.goDurationMilliseconds" $refresh | float64) 1000.0) -}}
-{{- fail (printf "allocator.discoveryRefreshInterval %q must be a Go duration of 1s or more, for example \"30s\"" $refresh) -}}
+{{- $milliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" $refresh | float64 -}}
+{{- if or (not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $refresh)) (lt $milliseconds 1000.0) (gt $milliseconds 86400000.0) -}}
+{{- fail (printf "allocator.discoveryRefreshInterval %q must be a Go duration from 1s to 24h, for example \"30s\"" $refresh) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (has ($allocator.logLevel | default "info") (list "debug" "info" "warn" "error")) -}}

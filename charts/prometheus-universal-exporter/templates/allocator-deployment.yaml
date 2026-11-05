@@ -118,10 +118,10 @@ spec:
             {{- end }}
             {{- /* Empty leaves the allocator's default; 0, which reads the
                    files once, is a value of its own, not taken for unset. */}}
-            {{- if not (eq ($allocator.configWatchInterval | default "" | toString) "") }}
-            - {{ printf "--config.watch-interval=%s" (toString $allocator.configWatchInterval) | quote }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.configWatchInterval }}
+            - {{ printf "--config.watch-interval=%s" . | quote }}
             {{- end }}
-            {{- with $allocator.discoveryRefreshInterval }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.discoveryRefreshInterval }}
             - {{ printf "--discovery.refresh-interval=%s" . | quote }}
             {{- end }}
             {{- /* Unset takes the allocator's default, 1000; 0 is refused, not

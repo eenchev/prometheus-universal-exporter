@@ -881,13 +881,13 @@ allocator:
   # target ConfigMaps, which the kubelet updates in the pod within about a
   # minute of a change. An exporter pod gets a changed bundle at once, by
   # its long poll, so this and the kubelet's sync are what a change of
-  # config.data or the targets waits for. A Go duration of zero or more, 0
+  # config.data or the targets waits for. A Go duration from 0 to 24h, 0
   # reading the files once at the start; empty leaves the flag out and the
   # allocator's default, 60s, in force.
   configWatchInterval: ""
   # How often the allocator asks a discovery source that sets no
   # refresh_interval (--discovery.refresh-interval), the delay before a
-  # target a source adds or drops is served. A Go duration of 1s or more;
+  # target a source adds or drops is served. A Go duration from 1s to 24h;
   # empty leaves the flag out and each kind its own default: 1m for file_sd
   # and http_sd, 30s for kubernetes and dns_sd.
   discoveryRefreshInterval: ""

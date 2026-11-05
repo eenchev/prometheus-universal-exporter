@@ -893,10 +893,14 @@ mounted file, `--log.level`
 from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
 empty, `--heartbeat.interval` from `allocator.heartbeatInterval` unless it
 is empty, `--config.watch-interval` from `allocator.configWatchInterval`
-unless it is empty (a Go duration of zero or more, `0s` reading the input
-files once, or rendering MUST fail), `--discovery.refresh-interval` from
-`allocator.discoveryRefreshInterval` unless it is empty (a Go duration of
-`1s` or more, the allocator's bound, or rendering MUST fail), and
+unless it is empty (a Go duration from zero to `24h`, the allocator's bound,
+`0s` reading the input files once, or rendering MUST fail),
+`--discovery.refresh-interval` from `allocator.discoveryRefreshInterval`
+unless it is empty (a Go duration from `1s` to `24h`, the allocator's
+bounds, or rendering MUST fail), each taken as written when it is not
+`null`, so that an integer `0`, which only a skipped values schema lets
+through, is the text `0` and not taken for empty, and a duration longer than
+any Go duration holds fails rendering rather than the allocator's start, and
 `--members.max` from `allocator.maxMembers`, 1000 by default, a
 whole number from 1 to 2147483647. `allocator.heartbeatInterval` MUST be a
 Go duration from 1s to 2m, the allocator's bounds, or rendering MUST fail;
@@ -1999,11 +2003,15 @@ are skipped and the text checks of the templates still run:
      renders `30s`, with `minReadySeconds: 150`, and refuses `3m`.
    - `allocator.configWatchInterval` renders `--config.watch-interval` and
      `allocator.discoveryRefreshInterval` `--discovery.refresh-interval`
-     with their values, `0s` included for the first, and nothing when empty
+     with their values, `0s` included for the first, `24h` and `1440m`
+     included, an integer `0` of the first with the values schema skipped
+     as `--config.watch-interval=0`, and nothing when empty
      (`TestChartSetsHowOftenTheAllocatorLooksForChanges`); a value of either
-     that is no duration fails with the values schema and with it skipped,
-     and a `discoveryRefreshInterval` under `1s`, `0s` included, with the
-     template (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+     that is no duration, the integer `30` included, fails with the values
+     schema and with it skipped, a `discoveryRefreshInterval` under `1s`,
+     `0s` and the integer `0` included, and either over `24h`, `24h0m1s`,
+     `1441m` and `99999999h`, which no Go duration holds, with the template
+     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - The allocator's Role allows only `list` on EndpointSlices
      (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
    - Every example query of an allocator metric in `docs/*.md` and the chart

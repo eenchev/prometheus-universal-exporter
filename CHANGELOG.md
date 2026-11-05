@@ -93,10 +93,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   which the page, `/v1/status` and `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
 - `pue-allocator --discovery.refresh-interval`: how often a discovery source
-  that sets no `refresh_interval` is asked, whatever its kind; left out,
-  each kind keeps its own default. The chart sets it from
+  that sets no `refresh_interval` is asked, whatever its kind, from 1s to
+  24h; left out, each kind keeps its own default. The chart sets it from
   `allocator.discoveryRefreshInterval`, and the allocator's
-  `--config.watch-interval` from the new `allocator.configWatchInterval`.
+  `--config.watch-interval`, now at most 24h too, from the new
+  `allocator.configWatchInterval`, refusing at rendering a value over 24h.
   The status page shows how often the input files are read, the settle
   time and each source's interval, on a follower the leader's, who asks it,
   and the allocator docs list every delay

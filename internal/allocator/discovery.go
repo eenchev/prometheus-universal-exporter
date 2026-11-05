@@ -128,6 +128,13 @@ const (
 	// MinDiscoveryRefresh is the shortest refresh_interval taken, and the
 	// shortest --discovery.refresh-interval.
 	MinDiscoveryRefresh = time.Second
+	// MaxDiscoveryRefresh is the longest --discovery.refresh-interval, and
+	// MaxWatchInterval the longest --config.watch-interval: a day is longer
+	// than anyone waits for a change, and bounding them gives the chart a
+	// bound to check, so a value no duration holds fails rendering rather
+	// than the allocator's start.
+	MaxDiscoveryRefresh = 24 * time.Hour
+	MaxWatchInterval    = 24 * time.Hour
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
 	// a page of a Kubernetes listing.
 	maxDiscoveryAnswerBytes = 16 << 20

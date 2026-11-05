@@ -30446,6 +30446,9 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestASourceWithoutARefreshIntervalTakesTheDefault` (allocator), changed: the `dns_sd` `timeout` of 10s under a `--discovery.refresh-interval` of 5s is refused with `dns_sd.timeout 10s is longer than the default refresh interval 5s (--discovery.refresh-interval)`, where it said `its refresh_interval 5s`, which the source does not set.
 - `TestDNSSDIsCheckedAtLoad` (allocator), changed: a `dns_sd` `timeout` of 31s with no `refresh_interval` is refused as `longer than dns_sd's default refresh interval 30s`, and one of 11s with a `refresh_interval` of 10s as `longer than its refresh_interval 10s`; `TestDiscoveryIsCheckedAtLoad` (allocator), changed: a `kubernetes` one of 31s as `longer than kubernetes's default refresh interval 30s`.
 - `TestAMemberShuttingDownLeavesAtOnce` (allocator), changed: a member whose heartbeat says it is shutting down is still in the member list 1ms before the settle time after it, and gone at the settle time, without its TTL, as the delay table of `docs/ALLOCATOR.md` now says beside a replica gone without a word, which leaves after its TTL and the settle time (`TestASilentMemberLeavesAfterTheTTLAndTheSettleTime`).
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--config.watch-interval` of `-1s` or `25h` exits 2 with `--config.watch-interval must be from 0 to 24h`, and `--discovery.refresh-interval` of `999ms`, `-1s` or `24h0m0.001s` with `--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default`.
+- `TestChartSetsHowOftenTheAllocatorLooksForChanges` (repository), changed: `24h` and `1440m` render, and with the values schema skipped an integer `0` of `allocator.configWatchInterval` renders `--config.watch-interval=0`, where `default` took it for empty and left the flag out.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.configWatchInterval` of `24h0m1s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start, and of the integer `30`, and `allocator.discoveryRefreshInterval` of `1441m`, `99999999h` or the integer `0`, fail rendering with the schema and with it skipped, each saying `must be a Go duration from 0 to 24h` or `from 1s to 24h`.
 
 # 35. Documentation requirements
 
@@ -33436,7 +33439,8 @@ names. The allocator MUST NOT expand `${NAME}`
 references. Invalid inputs at the start MUST exit 1; files that change while
 the start reads them MUST be read again after a pause of 1 second, up to 5
 reads in all, and exit 1 only then. The files MUST be read
-again every `--config.watch-interval` (`0` reads them once); a change MUST be
+again every `--config.watch-interval` (`0` reads them once; from `0` to
+`24h`, else exit 2); a change MUST be
 put in force only when all are accepted, the last good inputs staying in
 force otherwise, and one refusal MUST be logged and counted
 (`pue_allocator_reloads_total{result="failure"}`) once while its text
@@ -33453,7 +33457,7 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
 and a source that sets none MUST be asked every `--discovery.refresh-interval`
-when that is given (at least `1s`, else exit 2), whatever its kind, and
+when that is given (from `1s` to `24h`, else exit 2), whatever its kind, and
 else every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and
 `dns_sd`; a
 `timeout` written longer than it MUST be refused, the refusal naming the

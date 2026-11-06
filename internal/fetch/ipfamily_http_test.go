@@ -223,7 +223,7 @@ func TestTheIPFamilyIsCheckedAndRefusedWhereItCannotHold(t *testing.T) {
 		t.Errorf("ip_family beside proxy_url: %v", err)
 	}
 	httpCollector(t, func(x *model.Collector) { x.Request.ProxyURL, x.Request.IPFamily = model.ProxyDirect, "ip6" })
-	socketed := model.Collector{Name: "docker", Request: model.RequestConfig{Type: RequestTypeHTTP, IPFamily: "ip4", Own: HTTPConfig{UnixSocket: "/run/docker.sock"}}}
+	socketed := model.Collector{Name: "docker", Request: model.RequestConfig{Type: RequestTypeHTTP, IPFamily: "ip4", UnixSocket: "/run/docker.sock", Own: HTTPConfig{}}}
 	if err := ValidateRequest(&socketed); err == nil || !strings.Contains(err.Error(), "request.ip_family does not apply to a collector whose requests go to request.unix_socket") {
 		t.Errorf("ip_family beside unix_socket: %v", err)
 	}

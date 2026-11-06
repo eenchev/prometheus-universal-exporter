@@ -1160,8 +1160,8 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
   length and the limit. The schema leaves the length to the exporter, since
   it differs from system to system. Linux's abstract sockets, written with a
   leading `@`, are not absolute paths and are refused. It is the
-  `http` type's alone: another type's collector that sets it is refused, as
-  any key of another type is.
+  `http` type's and the [`tcp`](TCP.md#over-a-unix-socket) type's: another
+  type's collector that sets it is refused, as any key of another type is.
 - **The URL keeps its meaning**: its host is the `Host` header, its path and
   query are the request's, joined with `path` and `query` as usual. The host
   is never looked up or dialed; any name will do, such as `http://docker` or
@@ -1218,6 +1218,74 @@ podSecurityContext:
 Access to Docker's socket is control of the node's containers: give it to
 an exporter whose `/probe` only those you trust can reach, and prefer a
 read-only socket proxy in front of it where you have one.
+
+### FastCGI
+
+An `http` collector can speak FastCGI to its target in place of HTTP, for an
+application that answers on a FastCGI port or socket alone: PHP-FPM's status
+and ping pages, which PHP-FPM serves to its FastCGI clients and to no
+browser, or any FastCGI application's own status script.
+
+```yaml
+collectors:
+  - name: php_fpm
+    request:
+      type: http
+      fastcgi: {}                 # the status page needs no document root
+      path: /status
+      query: {json: ""}
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: phpfpm_active_processes
+        expression: '."active processes"'
+      - name: phpfpm_listen_queue
+        expression: '."listen queue"'
+```
+
+A probe of `target=http://php-fpm:9000` asks PHP-FPM on port 9000 for
+`/status?json`, as `cgi-fcgi -bind -connect php-fpm:9000` does with
+`SCRIPT_NAME=/status SCRIPT_FILENAME=/status QUERY_STRING=json`; PHP-FPM
+answers its status when `pm.status_path` is `/status`. With
+[`unix_socket`](#over-a-unix-socket), such as `/run/php/php-fpm.sock`, the
+request goes to the socket and the URL's host only names it.
+
+- **The request is the collector's**: its URL's path is the script,
+  `SCRIPT_NAME`, and with `document_root` before it its file,
+  `SCRIPT_FILENAME` (the path alone without one); its query is
+  `QUERY_STRING`; its method `REQUEST_METHOD`; each header an `HTTP_`
+  parameter (`X-Pool` is `HTTP_X_POOL`), `Content-Type` and the body's
+  length `CONTENT_TYPE` and `CONTENT_LENGTH`; its body the application's
+  stdin. `Proxy` is sent as no parameter, since `HTTP_PROXY` sets a proxy
+  in many applications. `GATEWAY_INTERFACE`, `SERVER_NAME`, `SERVER_PORT`,
+  `REQUEST_URI`, `DOCUMENT_URI`, `DOCUMENT_ROOT`, `SERVER_ADDR` and
+  `REMOTE_ADDR` are set too.
+- **`params`** adds parameters, or replaces those above by name, such as
+  `SCRIPT_FILENAME: /usr/share/php/status.php`. A name is letters, digits
+  and `_`, not starting with a digit; a value holds no placeholder and no
+  control character.
+- **The answer is read as an HTTP answer.** The application's `Status`
+  header is the status, `200` without one, so `accept_status`, retries,
+  decoders and rules read it as they read an HTTP server's; what the
+  application wrote to its stderr before its headers, PHP-FPM's `Primary
+  script unknown` for a path it has no script for, is the
+  `X-Fastcgi-Stderr` header, its first 4 KiB, which a jq rule reads as
+  `$headers["x-fastcgi-stderr"]`.
+- **Plaintext, to the application.** A target is an `http://` URL; the port
+  is the application's FastCGI port, `80` when the URL names none. `https`
+  targets, `tls`, `proxy_url`, `proxy_basic_auth_file` and `login` are
+  refused beside `fastcgi`, and the environment's proxy does not apply.
+  `allowed_targets` and `denied_targets` hold the connection as they hold an
+  HTTP request's.
+- **One connection a request.** The application closes the connection once
+  it has answered, as a FastCGI client that does not ask it to keep it open
+  is answered.
+- **Errors.** A target that answers no FastCGI record, such as an HTTP
+  server, fails the request: `the answer is no FastCGI record, version 72; is
+  the target a FastCGI application's port?`. An application that closes the
+  connection before it ended the request fails it too.
 
 ## Retries
 

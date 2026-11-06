@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -396,6 +397,9 @@ func normalizeFormats(x *model.Collector) error {
 	if err := checkGraphiteResponse(x); err != nil {
 		return err
 	}
+	if err := checkBinaryResponse(x); err != nil {
+		return err
+	}
 	// A decoder the transform can never read would fail every scrape.
 	if err := transform.CheckDecoder(x); err != nil {
 		return err
@@ -416,8 +420,75 @@ func checkSQLFormats(x *model.Collector) error {
 	default:
 		return fmt.Errorf("collector %q transforms with %s, which cannot read the rows of a statement; use csv, which reads a column by name, one series a row, or jq, yq or python, which read the rows as a list of objects", x.Name, x.Transform.Type)
 	}
-	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) {
+	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) || r.Binary.Set() {
 		return fmt.Errorf("collector %q sets response settings, which apply to the body of a response, and a sql collector's rows have none; leave the response block out", x.Name)
+	}
+	return nil
+}
+
+// checkBinaryResponse checks response.binary and the binary decoder, which
+// reads a body by it alone (decode/binary.go): the decoder needs a layout,
+// a layout is for the decoder, chosen by decoder.type, since no answer is
+// told binary by its content, and its document is JSON-like, which jq, yq
+// and python read. Each field has a type; a field that is in the document
+// has a name no other field has, and a skip, which is in none, has none; a
+// string and a skip have a length of bytes, a cstring may have one, the
+// most bytes it reads, and a number none; count, for a list of numbers, is
+// at most model.MaxBinaryCount, and nothing is negative.
+func checkBinaryResponse(x *model.Collector) error {
+	b := x.Response.Binary
+	switch {
+	case b.Set() && x.Decoder.Type != "binary":
+		return fmt.Errorf("collector %q sets response.binary, the layout of the binary decoder, but its decoder is %s; set decoder.type to binary", x.Name, cmp.Or(x.Decoder.Type, "chosen by the transform or the answer"))
+	case x.Decoder.Type != "binary":
+		return nil
+	case len(b.Fields) == 0:
+		return fmt.Errorf("collector %q decodes with binary and response.binary.fields is empty; list the fields the answer holds, in order, such as - {name: registers, type: u16, count: 2}", x.Name)
+	case len(b.Fields) > model.MaxBinaryFields:
+		return fmt.Errorf("collector %q response.binary has %d fields, more than the %d it may have", x.Name, len(b.Fields), model.MaxBinaryFields)
+	case b.ByteOrder != "" && !slices.Contains(model.BinaryByteOrders, b.ByteOrder):
+		return fmt.Errorf("collector %q response.binary.byte_order is %q; want big or little, in lower case", x.Name, b.ByteOrder)
+	}
+	switch x.Transform.Type {
+	case "jq", "yq", "python":
+	default:
+		return fmt.Errorf("collector %q decodes a binary answer, which a %s transform cannot read; use jq, yq or python, whose rules read the fields by name, as in path: .registers[0]", x.Name, x.Transform.Type)
+	}
+	names := map[string]int{}
+	for i, f := range b.Fields {
+		at := fmt.Sprintf("collector %q response.binary.fields[%d]", x.Name, i)
+		if !slices.Contains(model.BinaryTypes, f.Type) {
+			return fmt.Errorf("%s type is %q; want one of %s, in lower case", at, f.Type, strings.Join(model.BinaryTypes, ", "))
+		}
+		switch {
+		case f.Type == "skip" && f.Name != "":
+			return fmt.Errorf("%s is a skip and has the name %q; a skip passes bytes over and is in no document, so leave its name out", at, f.Name)
+		case f.Type != "skip" && f.Name == "":
+			return fmt.Errorf("%s has no name; name the field the rules read it by", at)
+		case f.Offset != nil && *f.Offset < 0:
+			return fmt.Errorf("%s offset is %d; it is the byte the field starts at, from 0", at, *f.Offset)
+		case f.ByteOrder != "" && !slices.Contains(model.BinaryByteOrders, f.ByteOrder):
+			return fmt.Errorf("%s byte_order is %q; want big or little, in lower case", at, f.ByteOrder)
+		case f.Count < 0 || f.Count > model.MaxBinaryCount:
+			return fmt.Errorf("%s count is %d; it is how many values the field holds, from 1 to %d, or left out for one", at, f.Count, model.MaxBinaryCount)
+		case f.Length < 0:
+			return fmt.Errorf("%s length is %d; it is how many bytes the field is", at, f.Length)
+		}
+		textual := f.Type == "string" || f.Type == "cstring" || f.Type == "skip"
+		switch {
+		case (f.Type == "string" || f.Type == "skip") && f.Length == 0:
+			return fmt.Errorf("%s is a %s and has no length; write how many bytes it is", at, f.Type)
+		case !textual && f.Length != 0:
+			return fmt.Errorf("%s is a %s, whose length is its type's, and sets length; leave length out, or write count for several of them", at, f.Type)
+		case textual && f.Count != 0:
+			return fmt.Errorf("%s is a %s and sets count; count is for a list of numbers", at, f.Type)
+		}
+		if f.Name != "" {
+			if j, ok := names[f.Name]; ok {
+				return fmt.Errorf("%s has the name %q of fields[%d]; each field is a member of the document, so name them apart", at, f.Name, j)
+			}
+			names[f.Name] = i
+		}
 	}
 	return nil
 }

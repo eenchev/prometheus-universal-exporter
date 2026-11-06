@@ -273,6 +273,9 @@ func TestADecoderTheTransformCannotReadIsRefused(t *testing.T) {
 		if transformType == "python" {
 			c.Transform.Script, c.Metrics = `metric(name="m", value=1)`, nil
 		}
+		if decoder == "binary" {
+			c.Response.Binary.Fields = []model.BinaryField{{Name: "x", Type: "u8"}}
+		}
 		return &model.Config{Collectors: []model.Collector{c}}
 	}
 	for _, pair := range []struct{ decoder, transform, reads, readBy string }{
@@ -281,11 +284,11 @@ func TestADecoderTheTransformCannotReadIsRefused(t *testing.T) {
 		{"json", "csv", "it reads csv; set decoder.type to csv", "jq, yq or python"},
 		{"json", "xpath", "it reads xml or html; set decoder.type to one of them", "jq, yq or python"},
 		{"json", "prometheus", "it reads prometheus; set decoder.type to prometheus", "jq, yq or python"},
-		{"text", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini or none; set decoder.type to one of them, give the transform a pre_script that leaves its rules a mapping or a list", "regex or python"},
-		{"csv", "yq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini or none", "csv or python"},
+		{"text", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini, binary or none; set decoder.type to one of them, give the transform a pre_script that leaves its rules a mapping or a list", "regex or python"},
+		{"csv", "yq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini, binary or none", "csv or python"},
 		{"xml", "css", "it reads html", "xpath or python"},
 		{"html", "regex", "it reads text", "xpath, css or python"},
-		{"prometheus", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini or none", "python or prometheus"},
+		{"prometheus", "jq", "it reads json, yaml, graphite, ndjson, logfmt, toml, ini, binary or none", "python or prometheus"},
 		{"ndjson", "regex", "it reads text; set decoder.type to text", "jq, yq or python"},
 		{"logfmt", "csv", "it reads csv; set decoder.type to csv", "jq, yq or python"},
 		{"toml", "xpath", "it reads xml or html; set decoder.type to one of them", "jq, yq or python"},

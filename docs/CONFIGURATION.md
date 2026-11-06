@@ -88,7 +88,7 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `none` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
@@ -128,8 +128,11 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `none`
-and `auto`; `none` reads no body (see [No decoder](#no-decoder)). The `graphite` decoder reads
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`,
+`none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)), and
+`binary` reads the answer of a binary protocol by the layout of
+`response.binary` (see [Binary answers](#binary-answers)), and is never
+chosen by `auto`. The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
 see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
 Lines, key=value log lines, TOML and INI files into a document jq, yq and
@@ -362,6 +365,59 @@ each key written before the first section to its value: `.pool.active` and
   member of the document, so the scrape fails naming both lines, as it does
   over a line that is none of these: `INI decode: line 2: neither a section,
   a key = value nor a comment`.
+
+### Binary answers
+
+`decoder.type: binary` reads the answer of a binary protocol — a Modbus TCP
+read over [`tcp`](TCP.md#binary-protocols), a game server's UDP query, a
+device's status frame over HTTP — by a layout the collector writes in
+`response.binary`. The document is a mapping of each field's name to its
+value, so a `jq` or `yq` rule reads `.registers[0]` and a [Python
+script](PYTHON.md#what-data-is) `data["registers"][0]`; no other transform
+reads it, and the rules never take bytes apart themselves.
+
+```yaml
+decoder:
+  type: binary
+response:
+  binary:
+    byte_order: big          # the default, as network protocols write numbers
+    fields:
+      - {name: transaction, type: u16}
+      - {type: skip, length: 4}         # the protocol id and the length
+      - {name: unit, type: u8}
+      - {name: function, type: u8}
+      - {name: bytes, type: u8}
+      - {name: registers, type: u16, count: 2}
+transform:
+  type: jq
+metrics:
+  - name: inverter_power_watts
+    expression: .registers[0]
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `byte_order` | `big` | The byte order of a field's numbers when the field sets none: `big` or `little`. |
+| `fields` | — | **Required** with the decoder, at most 1,000: the fields, read in order. |
+| `fields[].name` | — | **Required** but for a `skip`: the field's member of the document, unique. A `skip` has no name. |
+| `fields[].type` | — | **Required.** `u8`, `u16`, `u32`, `u64`: unsigned integers of 1, 2, 4 and 8 bytes; `i8` to `i64`: two's complement ones; `f32`, `f64`: IEEE 754 floats; `string`: `length` bytes of text; `cstring`: text up to a NUL byte; `skip`: `length` bytes passed over. |
+| `fields[].offset` | after the field before | The byte the field starts at, counted from 0 at the start of the answer. A layout may jump ahead, or back to read bytes again. |
+| `fields[].count` | one value | Numbers only: the field is a list of this many values, one after another, as a run of registers is; at most 65,536. |
+| `fields[].length` | — | **Required** for `string` and `skip`: how many bytes. For a `cstring`, the most bytes its NUL is looked for in. No number takes it. |
+| `fields[].byte_order` | the layout's | The field's own byte order, `big` or `little`. |
+
+An integer is a number of the document as the `json` decoder makes a whole
+number, and so is a float; a `u64` past 2^63 is a float, and loses its last
+bits. A `cstring` is the text before its NUL, which is read and not kept. A
+`string` or `cstring` that holds bytes that are not UTF-8 has each of them
+read as U+FFFD, since a document holds text. Bytes after the last field are
+left unread, as an answer longer than its layout often is; a field that runs
+past the end of the answer fails the scrape in the `decode` stage, naming it:
+`binary decode: response.binary field "registers" needs 4 bytes from byte 9,
+and the answer is 11 bytes`. No charset is applied to a binary answer, and
+`response.binary` beside any other decoder is refused when the configuration
+loads, as a layout without the decoder and the decoder without a layout are.
 
 ### Character encodings
 
@@ -2661,6 +2717,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `rate_limit` | none | The most requests a second sent to one origin of its targets, `requests_per_second`, greater than 0, and how many at once after a pause, `burst`, 1 by default; every attempt, page, redirect and login request counts, and a request whose turn would come past its deadline fails at once. Each collector has its own limit for an origin; the top-level [`rate_limits`](REQUESTS.md#rate-limits-per-host) limit a host for every collector together, in addition. See [Rate limiting](REQUESTS.md#rate-limiting). |
 | `proxy_url` | the environment's | The proxy every request of the collector, its login's included, goes through instead of the one `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` name: `http://host:port`, `https://host:port` or `socks5://host:port`, without credentials; `direct` for none. See [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy). |
 | `proxy_basic_auth_file` | none | With `proxy_url`: the files the `username` and the `password` sent to the proxy are read from, at every request. |
+| `fastcgi` | none | Send the requests to a FastCGI application, such as PHP-FPM's status page, in place of an HTTP server, `{}` or with `document_root` and `params`. Not with `proxy_url`, `login` or `tls`. See [FastCGI](REQUESTS.md#fastcgi). |
 | `unix_socket` | none | The absolute path of a Unix domain socket every request of the collector, its login's included, is sent over in place of a TCP connection to the URL's host, as `curl --unix-socket` does, such as `/var/run/docker.sock`; the URL's host is still the `Host` header and its path and query the request's. Not with `proxy_url`; no probe parameter, static target or `defaults` sets it. See [Over a Unix socket](REQUESTS.md#over-a-unix-socket). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
@@ -2744,9 +2801,12 @@ is required: `send` is the text written once the connection is made, and
 closes the connection without one; `greeting` is the pattern a server that
 speaks first must greet with, `starttls`, `smtp`, `imap`, `pop3` or `ftp`,
 begins TLS after the greeting as that protocol asks for it, and `document`
-answers a JSON document of the exchange; `tls`, `max_response_bytes`,
-`allowed_targets` and `denied_targets` apply too. The answer is a body, read
-by any decoder; its table is in [Text protocols over TCP](TCP.md#a-collector).
+answers a JSON document of the exchange; `send_hex` writes binary bytes in
+place of `send`, `answer_bytes` ends an answer of a known length, `udp`
+sends one datagram and reads one back, and `unix_socket` makes the exchange
+over a Unix socket; `tls`, `max_response_bytes`, `allowed_targets` and
+`denied_targets` apply too. The answer is a body, read by any decoder,
+`binary` among them; its table is in [Text protocols over TCP](TCP.md#a-collector).
 
 For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
 `searches` is required, each search with its `name`, `base`, `scope`,

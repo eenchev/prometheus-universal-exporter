@@ -169,7 +169,7 @@ func TestSentencesNameTheRequestTypesThatTakeAKey(t *testing.T) {
 var decoderNames = map[string]string{
 	"json": "JSON", "ndjson": "NDJSON", "yaml": "YAML", "toml": "TOML", "ini": "INI",
 	"xml": "XML", "csv": "CSV", "html": "HTML", "logfmt": "logfmt",
-	"prometheus": "Prometheus", "text": "plain text", "graphite": "Graphite",
+	"prometheus": "Prometheus", "text": "plain text", "graphite": "Graphite", "binary": "binary",
 }
 
 // Spec § 1, the chart README's opening and the comment on

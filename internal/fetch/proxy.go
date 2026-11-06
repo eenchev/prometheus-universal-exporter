@@ -45,6 +45,9 @@ import (
 func withProxy(settings TransportSettings, c *model.Collector) TransportSettings {
 	settings.proxy = c.Request.ProxyURL
 	settings.socket = CollectorPolicy(c).UnixSocket
+	if collectorFastCGI != nil && c.Request.Type == RequestTypeHTTP {
+		settings.fastcgi = collectorFastCGI(c)
+	}
 	if files := c.Request.ProxyBasicAuthFile; files != nil {
 		settings.proxyAuth = *files
 	}

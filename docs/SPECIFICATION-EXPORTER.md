@@ -28,7 +28,7 @@ The exporter MUST:
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
 - Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -1029,7 +1029,8 @@ and the source MUST list the opt-in types.
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 | `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
 | `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
-| `unix_socket` | none | The absolute path of the Unix domain socket every request of the collector is sent over in place of a TCP connection to the URL's host (§ 42.15b). The `http` type's alone. |
+| `fastcgi` | none | Send the requests as FastCGI requests to the URL's host and port, or `unix_socket`, in place of HTTP (§ 42.15b). |
+| `unix_socket` | none | The absolute path of the Unix domain socket every request of the collector is sent over in place of a TCP connection to the URL's host (§ 42.15b). The `http` type's and `tcp`'s (§ 5, `tcp`), and of the request's common part. |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
@@ -2760,8 +2761,37 @@ types at build time): only a build asked for it carries it. Its keys:
 | `document` | `false` | `true`: the answer is a JSON document of the exchange in place of the server's text. |
 | `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: TLS is begun on the plaintext connection, after the greeting, by that protocol's request for it. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS, from the start, or, with `starttls`, once begun. |
+| `send_hex` | none | `send` as pairs of hexadecimal digits, blanks between them or none; no placeholder. At most 64 KiB of bytes. |
+| `answer_bytes` | none | How many bytes the answer is; reading stops once that many came. |
+| `udp` | `false` | `true`: one UDP datagram is sent and the first back is the answer. |
+| `unix_socket` | none | The absolute path of a Unix stream socket the exchange is made over; of the common part, as `http`'s. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
+- `send_hex` MUST be refused at load beside `send`, with a placeholder, with
+  a character that is no hexadecimal digit or blank (naming it), with an odd
+  number of digits, with no digit, and past 64 KiB of bytes; a scrape MUST
+  write its bytes as `send` is written, and its `http_method` MUST be
+  `SEND`. `answer_bytes` MUST be refused below 0 and beside `terminator`; a
+  scrape of it MUST read exactly that many bytes, the answer ending there
+  though the server keeps the connection open, MUST fail, saying how many
+  bytes came, when the server closes the connection sooner, and MUST fail as
+  a limit exceeded before reading when the length is past the response
+  limit.
+- `udp: true` MUST be refused at load without `send` or `send_hex`, and
+  beside `greeting`, `terminator`, `answer_bytes`, `tls`, `starttls` and
+  `unix_socket`. A scrape MUST send one datagram on a socket connected to
+  the target's address, through the target policy as a TCP connection is,
+  and MUST take the first datagram read as the answer, a datagram past the
+  response limit failing the scrape as a limit exceeded; a port answered
+  with ICMP port unreachable MUST fail the scrape when the refusal comes,
+  not at the deadline. Its `url` label MUST be `udp://host:port`.
+- `unix_socket` MUST be checked as `http`'s is (§ 42.15b), MUST be settable by no probe parameter, static target or
+  `defaults` block, and its scrape MUST connect to the socket rather than
+  the target, the target being a host with a port or without, held by the
+  target lists to its name as written, never looked up. The `url` label
+  MUST be `unix://` and the socket's path, `tls+unix://` with TLS, and a
+  probe's caller MUST be told the socket's path withheld when the connection
+  fails.
 - `greeting`, `send` and `terminator` written `""` MUST be the keys left
   out. Any of them longer than 64 KiB, a placeholder in `terminator` or
   `greeting`, a `greeting` Go's `regexp` does not compile, `terminator` with
@@ -3309,6 +3339,37 @@ headerless response. Omitting response configuration MUST NOT weaken validation:
 decode failures and transform/input incompatibilities remain collector-level
 errors controlled by `error_handling`; `metric.error_mode` applies after a
 response has been decoded and an individual metric is being extracted.
+
+### 6.0b The binary decoder
+
+`decoder.type: binary` MUST read a body by `response.binary`, its fields in
+order, into a mapping of each field's name to its value, for `jq`, `yq` and
+`python` alone; `auto` MUST never choose it, and no charset MUST be applied
+to the body it reads.
+
+- A field MUST start at its `offset`, from 0 at the start of the body, or
+  else at the byte after the field before it. `u8` to `u64` and `i8` to
+  `i64` MUST be read as unsigned and two's complement integers of their
+  size, `f32` and `f64` as IEEE 754 floats, in the field's `byte_order`, or
+  the layout's, `big` when neither is written; an integer MUST be an int of
+  the document, but a `u64` past what an int holds, which MUST be a float.
+  With `count` the field MUST be a list of that many values read one after
+  another. `string` MUST be `length` bytes and `cstring` the bytes up to a
+  NUL, within `length` bytes when it is written, the NUL read and not kept,
+  each byte that is no UTF-8 read as U+FFFD; `skip` MUST pass `length`
+  bytes over and be in no document. Bytes after the last field MUST be left
+  unread.
+- A field that runs past the end of the body, and a `cstring` whose NUL does
+  not come within the body or its `length`, MUST fail the decode naming the
+  field, quoted, the byte it starts at and the bytes the body has.
+- At load MUST be refused: `response.binary` beside another decoder, or with
+  the decoder left to the response; the decoder with no field, with more than
+  1,000, or with a transform other than `jq`, `yq` and `python`; a
+  `byte_order` other than `big` and `little`; a field of another type, of no
+  name but a `skip`, a `skip` with a name, a name another field has, a
+  negative `offset`, `count` or `length`, a `count` above 65,536 or on a
+  `string`, `cstring` or `skip`, a `string` or `skip` without `length`, and a
+  number with one.
 
 ### 6.0a NDJSON, logfmt, TOML and INI
 
@@ -30868,6 +30929,23 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheViewsShowEachTargetsWeight` (allocator): a member's view has Capacity among its facts and a Weight column, right-aligned, in its owned, draining and probe tables (`big` weighing 50), and its probe jobs table the weight of each job's targets (`probes.jobs[].weight`, 2 a target); the status page's probe jobs table has Weight after Targets (4 for two targets of 2); a job's view says its weight, 4 (2 a target), has a Weight column in its members' table and its targets', and gives `job_weight` 2 and no `weight_label`.
 - `TestTheSourcesTableShowsTheWeightsThatFellBack` (allocator): two sources whose owners' `weight_label` gave two of three targets no weight each say `2 weights fell back` beside their result, and the job's view says its weight, 8, and that each target's comes from `__meta_pue_weight`, else the job's 0.5.
 
+## 34.279 UDP, Unix sockets and binary protocols for tcp, the binary decoder, and FastCGI
+
+- `TestATCPCollectorSpeaksUDP` (fetch, tcp): `udp` sends `stats\r\n` as one datagram and takes the echo back as the body, labelled `udp://`; `send_hex` sends `ff ff ff ff 54 53 6f 75 72 63 65 00`, written over two lines, as its bytes, method `SEND`; a datagram of 101 bytes fails a limit of 100 as a limit exceeded and fits a limit of 101; a port nothing listens on fails with connection refused within 3s.
+- `TestATCPCollectorSpeaksOverAUnixSocket` (fetch, tcp): `unix_socket` makes the exchange over the socket for the targets `haproxy` and `haproxy:9999`, labelled `unix://` and the path; `allowed_targets: [haproxy]` lets `haproxy` through and refuses `other`; a socket that is not there fails with its path in the error and none in what the caller is told; without `unix_socket` a target without a port is refused.
+- `TestATCPAnswerEndsAtAnswerBytes` (fetch, tcp): a Modbus TCP read written in `send_hex` with blanks inside it gets the 13 bytes of `answer_bytes` though the server keeps the connection open; a server that closes after 5 bytes fails, saying so and the 13.
+- `TestTCPTransportAndBinaryKeysAreChecked` (fetch, tcp): `udp` without anything to send, with `terminator`, `greeting`, `starttls` and `unix_socket`, a relative `unix_socket`, `send` beside `send_hex`, a `send_hex` with `g`, an odd number of digits, nothing but blanks or a placeholder, a negative `answer_bytes` and one beside `terminator` are each refused, naming what is wrong.
+- `TestTheBinaryDecoderReadsTheLayout` (decode): a Modbus TCP answer is read into its fields with a skip, an offset, a count and an i16, and its first two bytes again little-endian; a little-endian layout reads an f32, a cstring, a string holding a byte that is no UTF-8 as U+FFFD, an i64 of -1 and a u64 of 2^64-1 as a float.
+- `TestTheBinaryDecoderRefusesAShortAnswer` (decode): a u32 of 3 bytes, a count, a string and a skip past the end, an offset at the end, and a cstring with no NUL in the body or in its length fail naming the field, its start and the body's length; a charset the answer declares is not applied.
+- `TestTheBinaryLayoutIsCheckedAtLoad` (config): the decoder with no fields, the layout beside json or no decoder, a regex transform, a bad `byte_order`, type, field `byte_order`, a field without a name, a named skip, a skip or string without `length`, a number with one, a cstring with `count`, a name twice, a negative offset or count and a count above 65,536 are refused; python and a field of every type are taken.
+- `TestAnHTTPCollectorSpeaksFastCGI` (fetch, http): a POST of `hello` to `/status?full=` with an `X-Pool` header reaches a `net/http/fcgi` application with its path, query, method, header and body, and `SCRIPT_FILENAME` and `DOCUMENT_URI` `/status`, and its JSON answer comes back with its `Content-Type` and status 200; the application's 404 is the status, `document_root: /srv/www` makes `SCRIPT_FILENAME` `/srv/www/missing`, and `params` replace `SERVER_NAME` and add `APP_ENV` and a value of 200 bytes.
+- `TestFastCGIGoesOverAUnixSocket` (fetch, http): `fastcgi` with `unix_socket` asks the application on the socket for `http://php-fpm/ping` and reads `pong`.
+- `TestFastCGIStderrAndWhatIsNoFastCGI` (fetch, http): an application that writes `Primary script unknown` to stderr and a `Status: 404 Not Found` answer is answered 404 with its body and `X-Fastcgi-Stderr`; its parameters are `SCRIPT_NAME`, `SCRIPT_FILENAME` and `REQUEST_URI` `/nope.php`, `REQUEST_METHOD` `GET`, an empty `QUERY_STRING`, `GATEWAY_INTERFACE` `CGI/1.1`, the port as `SERVER_PORT`, and no `CONTENT_LENGTH`; an HTTP server's answer fails as no FastCGI record; an `https` target is refused.
+- `TestFastCGIKeysAreChecked` (fetch, http): `fastcgi` beside `proxy_url`, `tls` and `login`, a relative `document_root`, a parameter named `9X`, one with a placeholder and one with a line break are refused.
+- `TestSchemaAndExporterAgreeOnBinaryKeysWrittenEmpty` (test/repository): `response.binary.byte_order` and a field's `byte_order`, `""` the key left out, and a field's `type`, required, get one verdict from the schema and the exporter; `request.fastcgi.params{}` is a row of the http table.
+- `TestDecoderListsNameEveryDecoder` (test/repository), changed: `binary` is named in spec § 1, the chart README and the comment on `model.DecoderConfig`.
+- `TestARequestGoesOverTheCollectorsUnixSocket` and the other `unix_socket` tests (fetch, http), changed: `unix_socket` is of the request's common part, `model.RequestConfig.UnixSocket`, rather than of the http type's own keys.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -34483,6 +34561,37 @@ target and no `defaults` block MAY set it, and its path MUST NOT be held to
 `allowed_targets` and `denied_targets` (§ 26.1). A failure to reach it MUST
 name its path in the exporter's log, and the path MUST be withheld from a
 probe's caller (§ 25).
+
+An `http` collector MAY speak FastCGI to its target, `request.fastcgi`, a
+block of `document_root` and `params`, `{}` written with neither. Its every
+request, its retries, pages and followed redirects, MUST then be sent as a
+FastCGI responder's request (FastCGI 1.0, `FCGI_KEEP_CONN` unset) on a
+connection of its own to the URL's host and port, 80 without one, or to
+`unix_socket`, through the pool's dialer and so the target policy: the
+parameters MUST be `GATEWAY_INTERFACE` `CGI/1.1`, `REQUEST_METHOD`,
+`REQUEST_URI`, `SCRIPT_NAME` and `DOCUMENT_URI` the URL's path,
+`SCRIPT_FILENAME` the path joined to `document_root`, the path alone
+without one, `DOCUMENT_ROOT`, `QUERY_STRING`, `SERVER_NAME`, `SERVER_PORT`,
+`SERVER_ADDR`, `REMOTE_ADDR`, `CONTENT_LENGTH` with a body, `CONTENT_TYPE`
+from its header, each header but `Content-Type`, `Content-Length` and
+`Proxy` as `HTTP_` and its name in upper case with `_` for `-`, and each of
+`params` in place of one of the same name, a length of 128 or more written
+in four bytes; the body MUST be the request's stdin. The application's
+stdout MUST be read as a CGI response: its `Status` header the status, 200
+without one, a `Status` that is no HTTP status failing the request, its
+other headers and body the answer's; the first 4 KiB of what it wrote to
+stderr before its headers MUST be the answer's `X-Fastcgi-Stderr` header,
+control characters as blanks. An answer that is no FastCGI record MUST fail
+the request, saying so; an end of the connection before `FCGI_END_REQUEST`
+and an end with a status other than complete MUST fail it. No proxy, the
+environment's included, MUST apply; `request.fastcgi` beside `proxy_url`,
+`proxy_basic_auth_file`, `login` or `tls`, a `document_root` that is not
+absolute or holds a placeholder, and a parameter whose name is no CGI
+variable's (letters, digits and `_`, not starting with a digit) or whose
+value holds a placeholder or a control character MUST be refused when the
+configuration loads, and a target that is not an `http://` URL when it is
+checked. `request.fastcgi` MUST be part of the pool's settings, so a pool of
+HTTP connections never carries a FastCGI request.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

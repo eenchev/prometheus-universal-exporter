@@ -142,12 +142,26 @@ type TransportSettings struct {
 	// verified again on every probe, where a kept connection would answer
 	// with the certificate and the address of the probe that made it.
 	newConnections bool
+	// fastcgi is the http collector's request.fastcgi, written as one value
+	// (fastcgiKey), "" for none: the pool's http requests are FastCGI
+	// requests (fastcgi.go), which a pool of HTTP connections must not
+	// carry, nor one of another document root or other parameters.
+	fastcgi string
 	// ipFamily is the collector's request.ip_family (ipfamily.go): the
 	// family every connection of the pool is made over, "" for Go's own
 	// choice. A connection made over one family must not carry a request
 	// that asked for the other.
 	ipFamily string
 }
+
+// collectorFastCGI is a collector's request.fastcgi as the transport's
+// settings hold it, and registerFastCGI makes a transport send its http
+// requests as FastCGI requests, dialing with dial; both nil in a build
+// without the http type, whose file sets them (fastcgi.go).
+var (
+	collectorFastCGI func(*model.Collector) string
+	registerFastCGI  func(t *http.Transport, key string, dial func(ctx context.Context, network, address string) (net.Conn, error))
+)
 
 type cachedTransport struct {
 	stamp     string
@@ -203,6 +217,11 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 			return dialer.DialContext(ctx, "unix", socket)
 		}
 	}
+	if settings.fastcgi != "" {
+		// FastCGI is spoken to the application itself, never through a
+		// proxy, the environment's included (fastcgi.go).
+		proxy, proxyURL = nil, nil
+	}
 	// Every connection is checked against the allowed_targets and
 	// denied_targets of the request that made it (targetpolicy.go).
 	dial := policyDialer(dialTo)
@@ -222,6 +241,9 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 	}
 	if settings.newConnections {
 		transport.DisableKeepAlives = true
+	}
+	if settings.fastcgi != "" && registerFastCGI != nil {
+		registerFastCGI(transport, settings.fastcgi, dial)
 	}
 	if proxyURL != nil && proxyURL.Scheme == "https" {
 		transport.DialTLSContext = proxyTLSDialer(dial, handshakeTimeout())

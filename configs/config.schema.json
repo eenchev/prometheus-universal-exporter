@@ -650,7 +650,7 @@
             "additionalProperties": false,
             "properties": {
               "type": {
-                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None.",
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None. binary reads the answer of a binary protocol by the layout of response.binary, never chosen by auto.",
                 "enum": [
                   "auto",
                   "json",
@@ -665,6 +665,7 @@
                   "logfmt",
                   "toml",
                   "ini",
+                  "binary",
                   "none",
                   ""
                 ],
@@ -2097,6 +2098,11 @@
                 },
                 "type": "array"
               },
+              "answer_bytes": {
+                "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "api_server": {
                 "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster.",
                 "pattern": "^$|^https://[^/?#@]+(/[^?#]*)?$",
@@ -2406,6 +2412,35 @@
                 "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores.",
                 "pattern": "^$|^https?://[^/?#@]+/?$",
                 "type": "string"
+              },
+              "fastcgi": {
+                "additionalProperties": false,
+                "description": "http: send the requests to a FastCGI application, such as PHP-FPM, in place of an HTTP server: the URL's host and port, 80 by default, or unix_socket, are where; its path is the script, SCRIPT_NAME; its query, headers and body are QUERY_STRING, HTTP_ parameters and the request's stdin. The CGI answer is read as an HTTP answer, its Status header the status. http:// targets alone; not with proxy_url, login or tls. {} sends the request as it is. See docs/REQUESTS.md#fastcgi.",
+                "properties": {
+                  "document_root": {
+                    "description": "The absolute path of the directory the application's scripts are in, SCRIPT_FILENAME being it and the URL's path; left out, SCRIPT_FILENAME is the path, as PHP-FPM's status page asks.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "params": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "CGI parameters sent beside those made of the request, each in place of one of the same name, such as SCRIPT_FILENAME: /usr/share/php/status.php. No placeholder.",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
               },
               "field_selector": {
                 "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out.",
@@ -3819,6 +3854,14 @@
                   "boolean"
                 ]
               },
+              "send_hex": {
+                "description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "server": {
                 "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
                 "not": {
@@ -3975,8 +4018,12 @@
                 ],
                 "type": "string"
               },
+              "udp": {
+                "description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp.",
+                "type": "boolean"
+              },
               "unix_socket": {
-                "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket.",
+                "description": "http and tcp: the absolute path of a Unix domain socket the requests are sent over in place of a connection to the target's host, such as /var/run/docker.sock. http: every request of the collector, its login's, redirects' and pages' included, as curl --unix-socket sends it; the URL's host still names the Host header and the TLS server name, and its path and query are sent as usual; not with proxy_url. tcp: the exchange, the target naming the service in labels alone. No probe parameter, static target or defaults block sets it. See docs/REQUESTS.md#over-a-unix-socket and docs/TCP.md#over-a-unix-socket.",
                 "pattern": "^$|^/",
                 "type": "string"
               },
@@ -4015,6 +4062,88 @@
           "response": {
             "additionalProperties": false,
             "properties": {
+              "binary": {
+                "additionalProperties": false,
+                "description": "binary decoder, required with it: the layout a binary answer is read by, its fields in order, into a document of each field's name and value for a jq, yq or python transform. See docs/CONFIGURATION.md#binary-answers.",
+                "properties": {
+                  "byte_order": {
+                    "description": "binary decoder: the byte order of the numbers of a field that sets none: big, the default, as network protocols write them, or little.",
+                    "enum": [
+                      "big",
+                      "little",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "fields": {
+                    "description": "binary decoder: the fields, read in order, each from the byte after the one before it unless it sets offset. A field past the end of the answer fails the decode; bytes after the last are left unread.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "byte_order": {
+                          "description": "The field's byte order, big or little, in place of the layout's.",
+                          "enum": [
+                            "big",
+                            "little",
+                            ""
+                          ],
+                          "type": "string"
+                        },
+                        "count": {
+                          "description": "Numbers only: the field is a list of this many values of its type, one after another, such as a run of registers; left out, one value and no list.",
+                          "maximum": 65536,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "length": {
+                          "description": "string and skip, required: how many bytes; cstring: the most bytes read for its NUL; no number takes it.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "name": {
+                          "description": "The field's name in the document, unique, such as registers; required but for a skip, which has none.",
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "offset": {
+                          "description": "The byte the field starts at, from 0 at the start of the answer; left out, right after the field before it.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "type": {
+                          "description": "Required. u8, u16, u32, u64: unsigned integers of 1, 2, 4 and 8 bytes; i8 to i64 two's complement ones; f32, f64: IEEE 754 floats; string: length bytes of text; cstring: text up to a NUL byte; skip: length bytes passed over.",
+                          "enum": [
+                            "u8",
+                            "i8",
+                            "u16",
+                            "i16",
+                            "u32",
+                            "i32",
+                            "u64",
+                            "i64",
+                            "f32",
+                            "f64",
+                            "string",
+                            "cstring",
+                            "skip"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1000,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
               "charset": {
                 "description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings.",
                 "type": [

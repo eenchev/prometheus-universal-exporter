@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"net"
 	"strings"
 	"testing"
@@ -13,7 +14,8 @@ import (
 // explicitly, is a command-line error naming both, at a start and with
 // --dry-run alike; so is a flag of allocator mode without --allocator.url,
 // --allocator.url without --allocator.cache-dir, a URL that is not a plain
-// http one, and an --allocator.advertise that is not host:port.
+// http one, an --allocator.advertise that is not host:port, and an
+// --allocator.capacity outside 0.1 to 100 or of more than three decimals.
 func TestAllocatorModeCommandLineErrors(t *testing.T) {
 	dir := t.TempDir()
 	mode := []string{"--allocator.url=http://pue-allocator:8080", "--allocator.cache-dir=" + dir}
@@ -30,6 +32,12 @@ func TestAllocatorModeCommandLineErrors(t *testing.T) {
 		{[]string{"--allocator.url=http://pue-allocator:8080"}, "--allocator.url needs --allocator.cache-dir"},
 		{[]string{"--allocator.url=https://pue-allocator", "--allocator.cache-dir=" + dir}, "must be the allocator's http:// URL"},
 		{append(mode, "--allocator.advertise=10.0.0.1"), "must be host:port"},
+		{[]string{"--allocator.capacity=2"}, "--allocator.capacity is only read in allocator mode"},
+		{append(mode, "--allocator.capacity=0.09"), "--allocator.capacity must be from 0.1 to 100 with at most three decimals, got 0.09"},
+		{append(mode, "--allocator.capacity=100.5"), "--allocator.capacity must be from 0.1 to 100 with at most three decimals, got 100.5"},
+		{append(mode, "--allocator.capacity=1.0001"), "--allocator.capacity must be from 0.1 to 100 with at most three decimals, got 1.0001"},
+		{append(mode, "--allocator.capacity=0"), "--allocator.capacity must be from 0.1 to 100"},
+		{append(mode, "--allocator.capacity=NaN"), "--allocator.capacity must be from 0.1 to 100"},
 	} {
 		out := runCLI(t, c.args...)
 		if out.code != 2 || !strings.Contains(out.stderr, c.want) || out.stdout != "" {
@@ -95,5 +103,17 @@ func TestTheDefaultAdvertisedAddress(t *testing.T) {
 	interfaceAddrs = func() ([]net.Addr, error) { return nil, errors.New("no interfaces") }
 	if _, err := defaultAdvertise(":8080"); err == nil {
 		t.Error("an error listing the addresses was not reported")
+	}
+}
+
+// --allocator.capacity from 0.1 to 100 is taken as given, for the client to
+// say in every heartbeat.
+func TestTheAllocatorCapacityIsTaken(t *testing.T) {
+	for _, capacity := range []float64{0.1, 1, 2.5, 100} {
+		f := allocatorFlags{url: "http://pue-allocator:8080", cacheDir: t.TempDir(), member: "m", advertise: "10.0.0.1:9115", capacity: capacity}
+		mode, err := f.setUp(flag.NewFlagSet("test", flag.ContinueOnError), ":9115")
+		if err != nil || mode.capacity != capacity {
+			t.Errorf("%v: got %+v, %v", capacity, mode, err)
+		}
 	}
 }

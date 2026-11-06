@@ -55,6 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes, at most 24h; 0 reads them once")
 	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move, at most 1h; a replica back within it keeps its share")
 	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
+	balanceFactor := flags.Float64("allocation.balance-factor", allocator.DefaultBalanceFactor, "How far above its fair share of the targets' weight, the total times its part of the members' capacity, a member's load may go before a target that hashes to it goes to the next member, from 1 to 10 with at most three decimals; 1 holds every member to its fair share, 10 lets hashing alone place the targets of up to 10 members")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	discoveryRefresh := flags.Duration("discovery.refresh-interval", 0, "How often to ask a discovery source that sets no refresh_interval, from 1s to 24h; 0 leaves each kind its own default: 1m for file_sd and http_sd, 30s for kubernetes and dns_sd")
 	maxDiscovered := flags.Int("discovery.max-targets", allocator.DefaultMaxDiscoveredTargets, "How many targets one answer of a discovery source may hold, for a source that sets no max_targets; an answer with more is refused and the source keeps its last good targets")
@@ -98,6 +99,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *maxMembers < 1 {
 		return commandLineError(stderr, fmt.Errorf("--members.max must be 1 or more, got %d", *maxMembers))
+	}
+	if err := allocator.CheckBalanceFactor(*balanceFactor); err != nil {
+		return commandLineError(stderr, err)
 	}
 	if *discoveryRefresh != 0 && (*discoveryRefresh < allocator.MinDiscoveryRefresh || *discoveryRefresh > allocator.MaxDiscoveryRefresh) {
 		return commandLineError(stderr, fmt.Errorf("--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got %s", *discoveryRefresh))
@@ -173,7 +177,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	build := exporter.BuildVersion()
 	alloc := allocator.New(inputs, allocator.Options{Settle: *settle, HeartbeatInterval: *heartbeatInterval, MaxMembers: *maxMembers, MaxDiscoveredTargets: *maxDiscovered, Logger: logger,
-		Address: *listenAddress, Version: build.Version, Revision: build.Revision, WatchInterval: *watchInterval})
+		Address: *listenAddress, Version: build.Version, Revision: build.Revision, WatchInterval: *watchInterval, BalanceFactor: *balanceFactor})
 	if peerOptions != nil {
 		if token != nil {
 			peerOptions.Token = token.Token

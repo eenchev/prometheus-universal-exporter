@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,10 @@ import (
 // targets the allocator hands Prometheus through HTTP service discovery,
 // each already pointed at the replica that probes it.
 type ProbeFile struct {
-	Jobs []ProbeJob `yaml:"probe_jobs"`
+	// DefaultWeight is the weight of a job that sets none; 1 when left
+	// out.
+	DefaultWeight *float64   `yaml:"default_weight"`
+	Jobs          []ProbeJob `yaml:"probe_jobs"`
 }
 
 // ProbeJob is one /v1/sd/<name> answer: targets probed with one collector.
@@ -45,9 +49,20 @@ type ProbeJob struct {
 	// standing for it, such as https://{{address}}/health; the address as
 	// it is without one.
 	TargetTemplate string `yaml:"target_template"`
+	// Weight is the weight of each of the job's targets; the file's
+	// default_weight when left out.
+	Weight *float64 `yaml:"weight"`
+	// WeightLabel names the label of a discovery source a discovered
+	// target's own weight is read from; the job's weight when the label
+	// gives none.
+	WeightLabel string `yaml:"weight_label"`
 	// labelsOf are the labels each discovered target brings from its
 	// source, by target; nil for a job as the file wrote it.
 	labelsOf map[string]map[string]string
+	// weight is Weight, or the default, in thousandths, and weightOf the
+	// weights a discovered target's weight_label gave, by target.
+	weight   int64
+	weightOf map[string]int64
 }
 
 // The values of a probe job's shard_key.
@@ -64,8 +79,9 @@ const (
 // YAML anchors, which rest catches so that any other key can be refused by
 // name. Everything below the top level is decoded strictly.
 type probeDocument struct {
-	Jobs []ProbeJob     `yaml:"probe_jobs"`
-	Rest map[string]any `yaml:",inline"`
+	DefaultWeight *float64       `yaml:"default_weight"`
+	Jobs          []ProbeJob     `yaml:"probe_jobs"`
+	Rest          map[string]any `yaml:",inline"`
 }
 
 // parseProbeFile reads a probe targets file's text.
@@ -88,7 +104,7 @@ func parseProbeFile(path string, raw []byte) (*ProbeFile, error) {
 			return nil, fmt.Errorf("probe targets file %s: %q is not allowed; the file holds probe_jobs, and x- keys of its own for YAML anchors", path, key)
 		}
 	}
-	return &ProbeFile{Jobs: doc.Jobs}, nil
+	return &ProbeFile{DefaultWeight: doc.DefaultWeight, Jobs: doc.Jobs}, nil
 }
 
 var (
@@ -108,6 +124,14 @@ func checkProbeFile(f *ProbeFile, c *model.Config, base string, defaultRefresh t
 	if len(f.Jobs) == 0 {
 		return errors.New("probe_jobs must not be empty")
 	}
+	defaultWeight := int64(milli)
+	if f.DefaultWeight != nil {
+		w, reason := weightMilli(*f.DefaultWeight)
+		if reason != "" {
+			return fmt.Errorf("default_weight %s is not a weight; %s", formatWeight(*f.DefaultWeight), weightRule)
+		}
+		defaultWeight = w
+	}
 	seen := map[string]bool{}
 	for i := range f.Jobs {
 		job := &f.Jobs[i]
@@ -120,6 +144,20 @@ func checkProbeFile(f *ProbeFile, c *model.Config, base string, defaultRefresh t
 		seen[job.Name] = true
 		if err := checkProbeJob(job, c, base, defaultRefresh); err != nil {
 			return fmt.Errorf("probe job %q: %w", job.Name, err)
+		}
+		job.weight = defaultWeight
+		if job.Weight != nil {
+			w, reason := weightMilli(*job.Weight)
+			if reason != "" {
+				return fmt.Errorf("probe job %q: weight %s is not a weight; %s", job.Name, formatWeight(*job.Weight), weightRule)
+			}
+			job.weight = w
+		}
+		switch {
+		case job.WeightLabel != "" && !labelName.MatchString(job.WeightLabel):
+			return fmt.Errorf("probe job %q: weight_label %q is not a label name; name the discovered label a target's weight is read from, such as __meta_pue_weight", job.Name, job.WeightLabel)
+		case job.WeightLabel != "" && len(job.Discovery) == 0:
+			return fmt.Errorf("probe job %q: weight_label is set without discovery, whose targets' labels it reads", job.Name)
 		}
 	}
 	return nil
@@ -196,6 +234,9 @@ func checkProbeJob(job *ProbeJob, c *model.Config, base string, defaultRefresh t
 	}
 	return nil
 }
+
+// formatWeight writes a weight a file gave, for a message.
+func formatWeight(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
 
 // shardKeyOf is what the probe of target in job is allocated by.
 func shardKeyOf(job *ProbeJob, target string) string {

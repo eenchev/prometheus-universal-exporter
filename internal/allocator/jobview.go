@@ -54,6 +54,10 @@ type JobView struct {
 	Spread *JobSpread `json:"spread"`
 	// ShardKey is what a target is allocated by, target or address.
 	ShardKey string `json:"shard_key,omitempty"`
+	// JobWeight is the job's weight, a target's but for one weighed by
+	// its WeightLabel, the job's weight_label.
+	JobWeight   float64 `json:"job_weight,omitempty"`
+	WeightLabel string  `json:"weight_label,omitempty"`
 	// Labels are the job's labels, a label written "" left out, and
 	// Params its params, shown as described above.
 	Labels map[string]string `json:"labels"`
@@ -83,6 +87,9 @@ type JobTarget struct {
 	// names start with __, its source labels, are left out of the page's
 	// view unless asked for (JobView).
 	Labels map[string]string `json:"labels,omitempty"`
+	// Weight is the target's weight: its own from the job's weight_label,
+	// or the job's.
+	Weight float64 `json:"weight"`
 }
 
 // JobView is the view of the probe job named job, its targets cut to
@@ -105,14 +112,14 @@ func (a *Allocator) JobView(job, filter string, sourceLabels bool) (view JobView
 		a.mu.Unlock()
 		return view, false
 	}
-	spread, owners := a.jobSpreadLocked(j)
+	spread, owners, _ := a.jobSpreadLocked(j)
 	collector := model.CollectorByName(a.inputs.Config, j.Collector)
 	if collector == nil {
 		collector = &model.Collector{}
 	}
 	var targets []JobTarget
 	for _, target := range j.Targets {
-		t := JobTarget{Target: fetch.DisplayTarget(collector, target), Member: owners[target]}
+		t := JobTarget{Target: fetch.DisplayTarget(collector, target), Member: owners[target], Weight: float64(j.weightOfTarget(target)) / milli}
 		for name, value := range j.labelsOf[target] {
 			if _, set := j.Labels[name]; !set && (sourceLabels || !isSourceLabel(name)) {
 				if t.Labels == nil {
@@ -123,6 +130,8 @@ func (a *Allocator) JobView(job, filter string, sourceLabels bool) (view JobView
 		}
 		targets = append(targets, t)
 	}
+	view.JobWeight = float64(j.weightOfTarget("")) / milli
+	view.WeightLabel = j.WeightLabel
 	view.ShardKey = j.ShardKey
 	if view.ShardKey == "" {
 		view.ShardKey = ShardKeyTarget
@@ -255,6 +264,7 @@ const jobContent = `{{define "content"}}
 <table class="facts">
 <tr><th>Collector</th><td>{{$sp.Collector}}</td></tr>
 <tr><th>Targets</th><td>{{$sp.Targets}}{{if .Sources}} <span class="muted">(those discovered included)</span>{{end}}</td></tr>
+<tr><th>Weight</th><td>{{weight $sp.Weight}}{{if .WeightLabel}} <span class="muted">(each target's from its label <code>{{.WeightLabel}}</code>, else the job's {{weight .JobWeight}})</span>{{else}} <span class="muted">({{weight .JobWeight}} a target)</span>{{end}}</td></tr>
 <tr><th>Shard key</th><td>{{.ShardKey}}</td></tr>
 <tr><th>Labels</th><td>{{template "labels" .Labels}}</td></tr>
 <tr><th>Params</th><td>{{template "labels" .Params}}</td></tr>
@@ -266,13 +276,14 @@ const jobContent = `{{define "content"}}
 <p>The job's probes are routed among {{len $sp.Members}} member{{if ne (len $sp.Members) 1}}s{{end}}: {{$sp.Min}} to {{$sp.Max}} targets each, {{average $sp.Average}} on average, the most {{if $sp.Uneven}}<span class="bad" title="the most is further above the average than hashing puts a member's targets by chance">{{imbalance $sp.Imbalance}}</span>{{else}}{{imbalance $sp.Imbalance}}{{end}} the average.</p>
 <div class="scroll">
 <table class="spread job-members">
-<thead><tr><th>Member</th><th class="num">Targets</th><th>Share</th></tr></thead>
+<thead><tr><th>Member</th><th class="num">Targets</th><th class="num">Weight</th><th>Share</th></tr></thead>
 <tbody>
 {{- $avg := .AveragePct}}
 {{- range .Bars}}
 <tr>
 <td class="id"><a href="?member={{.Member}}" title="the targets of {{.Member}}"><strong>{{.Member}}</strong></a></td>
 <td class="num">{{.Targets}}</td>
+<td class="num">{{weight .Weight}}</td>
 <td class="bar"><div class="bar-track" role="img" aria-label="{{.Text}}">{{if .Targets}}<span class="seg-probe" style="width: {{.Pct}}%" title="{{.Text}}"></span>{{end}}<i class="avg" style="left: {{$avg}}%" title="the average per member"></i></div></td>
 </tr>
 {{- end}}
@@ -289,10 +300,10 @@ const jobContent = `{{define "content"}}
 {{- if .Targets.List}}
 <div class="scroll">
 <table class="targets" id="job-targets">
-<thead><tr><th>Target</th><th>Member</th><th>Labels</th></tr></thead>
+<thead><tr><th>Target</th><th>Member</th><th>Labels</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Targets.List}}
-<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td class="moved" data-label="Member"><span class="v">{{if .Member}}<a href="?member={{.Member}}">{{.Member}}</a>{{else}}<span class="muted">none yet</span>{{end}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td class="moved" data-label="Member"><span class="v">{{if .Member}}<a href="?member={{.Member}}">{{.Member}}</a>{{else}}<span class="muted">none yet</span>{{end}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>

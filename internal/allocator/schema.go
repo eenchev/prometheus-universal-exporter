@@ -47,6 +47,16 @@ func staticTargetsSchema() map[string]any {
 	schema := config.StaticTargetsSchema()
 	properties := schema["properties"].(map[string]any)
 	delete(properties["targets"].(map[string]any), "minItems")
+	// A target of the allocator's file may weigh more or less than 1; the
+	// copies keep the exporter's target, which the entries are made from
+	// below, as it is.
+	targets := maps.Clone(properties["targets"].(map[string]any))
+	item := maps.Clone(targets["items"].(map[string]any))
+	itemProperties := maps.Clone(item["properties"].(map[string]any))
+	item["properties"], targets["items"] = itemProperties, item
+	itemProperties[weightKey] = weightSchema("The target's weight against the other targets: how much of a member it takes. Defaults to default_weight.")
+	properties["targets"] = targets
+	properties[defaultWeightKey] = weightSchema("The weight of a target or a discovered_targets entry that sets none. Defaults to 1.")
 	properties[config.DiscoveredTargetsKey] = map[string]any{
 		"type":        "array",
 		"minItems":    1,
@@ -85,6 +95,8 @@ func discoveredEntrySchema(target map[string]any) map[string]any {
 	discovery["minItems"] = 1
 	properties["discovery"] = discovery
 	properties["target_template"] = targetTemplateSchema()
+	properties[weightKey] = weightSchema("The weight of each target the entry makes, unless weight_label gives one of its own. Defaults to the file's default_weight.")
+	properties[weightLabelKey] = weightLabelSchema()
 	properties["shard_key"] = map[string]any{
 		"type":        "string",
 		"enum":        config.OptionalEnum([]string{ShardKeyAddress}),
@@ -103,6 +115,9 @@ func probeTargetsSchema() map[string]any {
 	job := properties["probe_jobs"].(map[string]any)["items"].(map[string]any)
 	job["properties"].(map[string]any)["discovery"] = discoveryListSchema()
 	job["properties"].(map[string]any)["target_template"] = targetTemplateSchema()
+	job["properties"].(map[string]any)[weightKey] = weightSchema("The weight of each of the job's targets, unless weight_label gives one of its own. Defaults to the file's default_weight.")
+	job["properties"].(map[string]any)[weightLabelKey] = weightLabelSchema()
+	properties[defaultWeightKey] = weightSchema("The weight of a job that sets none. Defaults to 1.")
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = config.SchemaID(ProbeTargetsSchemaFile)
 	config.AllowExtensionKeys(schema)
@@ -136,6 +151,29 @@ func probeTargetsSchemaRules() map[string]map[string]any {
 		"probe_jobs[].params":    {"propertyNames": paramNames, "description": "Probe parameters sent on every probe, as __param_<name> labels: timeout, path, param_<name> and the others the collector's request type takes, checked as a probe checks them. Not target, collector or debug."},
 		"probe_jobs[].labels":    {"propertyNames": labelNames, "description": "Labels on every target of the job; one written \"\" is left out. Not instance, which the allocator sets, nor a name starting with __."},
 		"probe_jobs[].shard_key": {"enum": config.OptionalEnum([]string{ShardKeyTarget, ShardKeyAddress}), "description": "What a probe is allocated by: target, the default, its target as written, or address, the host and port it reaches."},
+	}
+}
+
+// weightSchema describes a weight (weightMilli): a number above 0 and at
+// most MaxWeight. That it has at most three decimals is checked at load
+// alone: a schema's multipleOf of 0.001 is worked out in floating point by
+// the validators of editors, which then refuse 0.3, 0.3 / 0.001 not being
+// a whole number in binary.
+func weightSchema(description string) map[string]any {
+	return map[string]any{
+		"type":             "number",
+		"exclusiveMinimum": 0,
+		"maximum":          MaxWeight,
+		"description":      description + " A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+	}
+}
+
+// weightLabelSchema describes a weight_label.
+func weightLabelSchema() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"pattern":     config.OptionalPattern(labelName.String()),
+		"description": "A label of the discovery sources, such as __meta_pue_weight, whose value is a discovered target's weight; a value that is missing or no weight leaves the target the weight above, and a change of less than 20% from the weight in force is ignored.",
 	}
 }
 

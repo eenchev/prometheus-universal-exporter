@@ -56,12 +56,13 @@ func onOneMember(t *testing.T, members []string, prefix string, n int) []string 
 // The status page and the job's view mark a job of 4 targets all on one
 // member of 4 and leave unmarked one of 3 all on one member, which hashing
 // gives one job in 16, and which the rule of half again the evenest split
-// marked.
+// marked. The largest balance factor leaves the targets where hashing puts
+// them, as the default would not for so few.
 func TestThePagesMarkOnlyAJobHashingWouldSeldomSpreadSo(t *testing.T) {
 	members := []string{"r1", "r2", "r3", "r4"}
 	probes := fmt.Sprintf("probe_jobs:\n  - name: skewed\n    collector: demo\n    targets: [%s]\n  - name: few\n    collector: demo\n    targets: [%s]\n",
 		strings.Join(onOneMember(t, members, "s", 4), ", "), strings.Join(onOneMember(t, members, "f", 3), ", "))
-	a, _ := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), probes)), members...)
+	a, _ := settledAllocatorWith(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), probes)), Options{BalanceFactor: MaxBalanceFactor}, members...)
 	t.Cleanup(a.BeginShutdown)
 	h := a.Handler("")
 	jobs := map[string]JobSpread{}

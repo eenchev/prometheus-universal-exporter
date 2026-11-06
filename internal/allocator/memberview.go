@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -80,6 +79,8 @@ type MemberStaticTarget struct {
 	// DrainsForSeconds how much longer the member keeps it.
 	MovedTo          string  `json:"moved_to,omitempty"`
 	DrainsForSeconds float64 `json:"drains_for_seconds,omitempty"`
+	// Weight is the target's weight.
+	Weight float64 `json:"weight"`
 }
 
 // MemberProbeList is the probe targets routed to a member: Jobs counts
@@ -92,11 +93,12 @@ type MemberProbeList struct {
 	List     []MemberProbeTarget `json:"list"`
 }
 
-// MemberProbeJob is one probe job's count.
+// MemberProbeJob is one probe job's count, and its targets' weight.
 type MemberProbeJob struct {
-	Job       string `json:"job"`
-	Collector string `json:"collector"`
-	Targets   int    `json:"targets"`
+	Job       string  `json:"job"`
+	Collector string  `json:"collector"`
+	Targets   int     `json:"targets"`
+	Weight    float64 `json:"weight"`
 }
 
 // MemberProbeTarget is one probe target routed to a member, shown as the
@@ -105,6 +107,8 @@ type MemberProbeTarget struct {
 	Job       string `json:"job"`
 	Collector string `json:"collector"`
 	Target    string `json:"target"`
+	// Weight is the target's weight.
+	Weight float64 `json:"weight"`
 }
 
 // MemberView is member's view, cut to filter; known is false when the
@@ -166,23 +170,27 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		return st
 	}
 	if in.Targets != nil && len(a.effective) > 0 {
+		plan := a.currentPlan()
 		var owned []MemberStaticTarget
 		for i := range in.Targets.Targets {
-			if owner, _ := allocapi.Owner(a.effective, in.shardKeys[i]); owner == member {
-				owned = append(owned, static(&in.Targets.Targets[i]))
+			if plan.owner[in.shardKeys[i]] == member {
+				st := static(&in.Targets.Targets[i])
+				st.Weight = float64(in.staticWeight(i)) / milli
+				owned = append(owned, st)
 			}
 		}
 		sort.Slice(owned, func(i, j int) bool { return owned[i].Name < owned[j].Name })
 		view.Static.add(owned, match)
 		var draining []MemberStaticTarget
-		for key, until := range a.draining {
+		for key, d := range a.draining {
 			i, ok := in.targetIndex[key.target]
 			if key.member != member || !ok {
 				continue
 			}
 			st := static(&in.Targets.Targets[i])
+			st.Weight = float64(in.staticWeight(i)) / milli
 			st.MovedTo = a.ownerOf(key.target)
-			st.DrainsForSeconds = ageSeconds(until.Sub(now).Seconds())
+			st.DrainsForSeconds = ageSeconds(d.until.Sub(now).Seconds())
 			draining = append(draining, st)
 		}
 		sort.Slice(draining, func(i, j int) bool { return draining[i].Name < draining[j].Name })
@@ -193,15 +201,18 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		for i := range in.Probes.Jobs {
 			j := &in.Probes.Jobs[i]
 			job := MemberProbeJob{Job: j.Name, Collector: j.Collector}
-			pool := a.routing(j)
+			owners := a.routeJob(j)
 			var targets []MemberProbeTarget
 			for _, target := range j.Targets {
-				if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil && owner == member {
-					targets = append(targets, MemberProbeTarget{Job: j.Name, Collector: j.Collector, Target: shown(j.Collector, target)})
+				if owners[target] == member {
+					targets = append(targets, MemberProbeTarget{Job: j.Name, Collector: j.Collector, Target: shown(j.Collector, target), Weight: float64(j.weightOfTarget(target)) / milli})
 				}
 			}
 			sort.Slice(targets, func(i, j int) bool { return targets[i].Target < targets[j].Target })
 			job.Targets = len(targets)
+			for _, t := range targets {
+				job.Weight += t.Weight
+			}
 			view.Probes.Jobs = append(view.Probes.Jobs, job)
 			routed = append(routed, targets...)
 		}
@@ -369,6 +380,7 @@ const memberContent = `{{define "content"}}
 <tr><th>State</th><td>{{template "state" .}}</td></tr>
 <tr><th>Last heartbeat</th><td>{{template "heartbeat" .}}</td></tr>
 <tr><th>Bundle in force</th><td>{{template "bundle" .}}</td></tr>
+<tr><th>Capacity</th><td>{{template "capacity" .}}</td></tr>
 </table>
 {{- end}}
 <p>{{.Static.Total}} static target{{if ne .Static.Total 1}}s{{end}} owned, {{.Draining.Total}} draining and {{.Probes.Total}} probe target{{if ne .Probes.Total 1}}s{{end}} routed to this member.{{if .Filter}} Only those holding “{{.Filter}}” are listed.{{end}}</p>
@@ -378,10 +390,10 @@ const memberContent = `{{define "content"}}
 {{- if .Static.List}}
 <div class="scroll">
 <table class="targets" id="owned">
-<thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th></tr></thead>
+<thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -394,10 +406,10 @@ const memberContent = `{{define "content"}}
 {{- if .Draining.List}}
 <div class="scroll">
 <table class="targets" id="draining">
-<thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Moved to</th><th class="num">Drains for</th></tr></thead>
+<thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Moved to</th><th class="num">Drains for</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Draining.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -407,10 +419,10 @@ const memberContent = `{{define "content"}}
 <h2>Probe targets routed <span class="count">{{.Probes.Total}}</span></h2>
 {{- if .Probes.Jobs}}
 <table class="jobs">
-<thead><tr><th>Probe job</th><th>Collector</th><th class="num">Targets</th></tr></thead>
+<thead><tr><th>Probe job</th><th>Collector</th><th class="num">Targets</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Probes.Jobs}}
-<tr><td class="id"><a href="?job={{.Job}}" title="the probe job {{.Job}}">{{.Job}}</a></td><td>{{.Collector}}</td><td class="num">{{.Targets}}</td></tr>
+<tr><td class="id"><a href="?job={{.Job}}" title="the probe job {{.Job}}">{{.Job}}</a></td><td>{{.Collector}}</td><td class="num">{{.Targets}}</td><td class="num">{{weight .Weight}}</td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -419,10 +431,10 @@ const memberContent = `{{define "content"}}
 {{- if .Probes.List}}
 <div class="scroll">
 <table class="targets" id="probes">
-<thead><tr><th>Target</th><th>Probe job</th><th>Collector</th></tr></thead>
+<thead><tr><th>Target</th><th>Probe job</th><th>Collector</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Probes.List}}
-<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job"><span class="v"><a href="?job={{.Job}}">{{.Job}}</a></span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="target id">{{template "target" .Target}}</td><td data-label="Probe job"><span class="v"><a href="?job={{.Job}}">{{.Job}}</a></span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>

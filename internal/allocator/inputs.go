@@ -62,6 +62,12 @@ type Inputs struct {
 	// targetIndex their places by name.
 	shardKeys   []string
 	targetIndex map[string]int
+	// weights are the static targets' weights, in file order, in
+	// thousandths (weights.go).
+	weights []int64
+	// fallbacks are the discovered targets whose weight_label gave no
+	// weight, which take their entry's or job's weight (expand).
+	fallbacks []weightFallback
 	// digest identifies the files as read (snapshot.digest) and, once
 	// discovered targets are added (expand), what was discovered.
 	digest string
@@ -101,8 +107,13 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	}
 	var stripped []byte
 	var entries *yaml.Node
+	var weights staticWeights
 	if p.StaticTargets != "" {
 		stripped, entries = splitDiscovered(before.staticTargets)
+		stripped, weights, err = stripStaticWeights(stripped)
+		if err != nil {
+			return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
+		}
 		targets, err := config.ParseStaticTargets(p.StaticTargets, stripped)
 		if err == nil && entries != nil {
 			err = config.ValidateDiscoveringStaticTargets(targets)
@@ -139,7 +150,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 			return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
 		}
 		if entries != nil {
-			if in.entries, err = readDiscoveredEntries(entries, in.static.head, conf, filepath.Dir(p.StaticTargets), p.DiscoveryRefresh); err != nil {
+			if in.entries, err = readDiscoveredEntries(entries, in.static.head, conf, filepath.Dir(p.StaticTargets), p.DiscoveryRefresh, weights.defaultWeight); err != nil {
 				return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
 			}
 		}
@@ -152,6 +163,11 @@ func LoadInputs(p Paths) (*Inputs, error) {
 			}
 			in.shardKeys = append(in.shardKeys, key)
 			in.targetIndex[t.Name] = i
+			w := weights.defaultWeight
+			if i < len(weights.targets) {
+				w = weights.targets[i]
+			}
+			in.weights = append(in.weights, w)
 		}
 	}
 	in.sources = in.discoverySources()
@@ -239,7 +255,7 @@ func takeSnapshot(p Paths) (*snapshot, error) {
 				return nil, fmt.Errorf("collector file %s is outside the configuration's directory %s; the bundle carries a collector file at its path relative to it, so keep the file inside it", match, base)
 			}
 			name := filepath.ToSlash(rel)
-			if name == allocapi.ConfigFile || name == allocapi.StaticTargetsFile {
+			if name == allocapi.ConfigFile || name == allocapi.StaticTargetsFile || name == allocapi.AllocationFile {
 				return nil, fmt.Errorf("collector file %s would be %s in the bundle, which is the bundle's own file of that name; rename the collector file", match, name)
 			}
 			if top, _, _ := strings.Cut(name, "/"); strings.HasPrefix(top, "..") {
@@ -293,6 +309,9 @@ func checkCollectorEntries(entries []string) error {
 		}
 		if matched, err := path.Match(clean, allocapi.StaticTargetsFile); err == nil && matched {
 			return fmt.Errorf("collector_files entry %q would also match %s, the replica's share of the static targets, which lies beside the configuration in the bundle; narrow the entry, for example to a directory of collector files", entry, allocapi.StaticTargetsFile)
+		}
+		if matched, err := path.Match(clean, allocapi.AllocationFile); err == nil && matched {
+			return fmt.Errorf("collector_files entry %q would also match %s, the settings the allocator placed the targets by, which lies beside the configuration in the bundle; narrow the entry, for example to a directory of collector files", entry, allocapi.AllocationFile)
 		}
 		if top, rest, nested := strings.Cut(clean, "/"); nested && rest != "" && mayMatchDotDot(top) {
 			return fmt.Errorf("collector_files entry %q begins with %q, which on the replicas could also match the cache directory's own names beginning with \"..\"; begin the entry with a directory's name, such as collectors/*.yaml", entry, top)

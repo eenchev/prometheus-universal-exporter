@@ -1,7 +1,6 @@
 package allocator
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,40 +17,33 @@ import (
 )
 
 // rollout is a transport of three allocator instances: two from before a
-// rollout, which answer every heartbeat saying their 3s interval and every
-// other request 503, and a new one at newAddress, the allocator under test,
-// whose handler answers it. Each heartbeat the new one hears is sent on
-// heard once handled.
+// rollout, which answer every heartbeat saying their 3s interval, and a new
+// one at newAddress, which answers saying its 1s. Every other request is
+// answered 503. Each heartbeat the new one is sent is sent on heard.
 type rollout struct {
-	handler http.Handler
-	heard   chan allocapi.Heartbeat
+	heard chan allocapi.Heartbeat
 }
 
 const newAddress = "10.1.0.3"
 
 func (r *rollout) RoundTrip(req *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
-	if req.URL.Hostname() != newAddress {
-		if req.Body != nil {
-			_ = req.Body.Close()
-		}
-		if req.URL.Path == allocapi.HeartbeatPath {
-			_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":3}`)
-		} else {
-			http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
-		}
-		return rec.Result(), nil
-	}
 	var body []byte
 	if req.Body != nil {
 		body, _ = io.ReadAll(req.Body)
 		_ = req.Body.Close()
 	}
-	inner := req.Clone(req.Context())
-	inner.Body = io.NopCloser(bytes.NewReader(body))
-	r.handler.ServeHTTP(rec, inner)
+	if req.URL.Path != allocapi.HeartbeatPath {
+		http.Error(rec, "no bundle here", http.StatusServiceUnavailable)
+		return rec.Result(), nil
+	}
+	if req.URL.Hostname() != newAddress {
+		_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":3}`)
+		return rec.Result(), nil
+	}
+	_, _ = io.WriteString(rec, `{"heartbeat_interval_seconds":1}`)
 	var hb allocapi.Heartbeat
-	if req.URL.Path == allocapi.HeartbeatPath && json.Unmarshal(body, &hb) == nil {
+	if json.Unmarshal(body, &hb) == nil {
 		select {
 		case r.heard <- hb:
 		default:
@@ -78,11 +70,59 @@ func (noReloads) ReloadReplacing(string, string, func() (func() error, error)) e
 // interval, which reach it at their next lookup on it, and its first member
 // list holds all three, and does not change as they arrive; heard 1s, it
 // formed at 1s of the fresh replica alone.
+//
+// The replica's client runs on the real clock, so it is run only until it
+// says what it says; the new instance, on a fake clock, is then sent the
+// heartbeats it would send, saying that, one each fake second.
 func TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval(t *testing.T) {
+	said := freshReplicaSays(t)
+	if said != 3 {
+		t.Errorf("the fresh replica heartbeating at 1s said interval_seconds %v, want 3, the longest an instance said", said)
+	}
+
 	clock := newFakeClock()
 	a := New(nil, Options{Settle: time.Second, HeartbeatInterval: time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
 	t.Cleanup(a.BeginShutdown)
-	transport := &rollout{handler: a.Handler(""), heard: make(chan allocapi.Heartbeat, 64)}
+	at := func(interval float64, members ...string) {
+		t.Helper()
+		for _, name := range members {
+			if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: name, Advertise: name + ":9115", IntervalSeconds: interval})); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The fresh replica heartbeats every 1s from the start, saying what it
+	// said.
+	at(said, "fresh")
+	clock.Advance(time.Second)
+	at(said, "fresh")
+	clock.Advance(500 * time.Millisecond)
+	if got := effective(a); got != nil {
+		t.Errorf("1.5s after the start the first member list formed, %v, though a replica said 3s", got)
+	}
+	// The replicas on the old interval reach the new instance; the fresh
+	// one heartbeats on.
+	at(3, "old1", "old2")
+	clock.Advance(500 * time.Millisecond)
+	at(said, "fresh")
+	clock.Advance(500 * time.Millisecond)
+	at(3, "old1", "old2")
+	clock.Advance(500 * time.Millisecond)
+	at(said, "fresh")
+	clock.Advance(500 * time.Millisecond)
+	if got, want := effective(a), []string{"fresh", "old1", "old2"}; !slices.Equal(got, want) || memberChanges(a) != 0 {
+		t.Errorf("3.5s after the start the member list is %v after %d changes, want %v formed once", got, memberChanges(a), want)
+	}
+}
+
+// freshReplicaSays is the interval_seconds a replica's client, finding the
+// three instances of a rollout, says to the new one once every instance has
+// answered: 3, or the last it said in 10s when it never says that. Until
+// every instance has answered a heartbeat may say less, or none, sent before
+// any answered.
+func freshReplicaSays(t *testing.T) float64 {
+	t.Helper()
+	transport := &rollout{heard: make(chan allocapi.Heartbeat, 64)}
 	client, err := allocclient.New(allocclient.Options{
 		URL: "http://pue-allocator.monitoring.svc:9116", CacheDir: t.TempDir(), Member: "fresh", Advertise: "fresh:9115",
 		Manager: noReloads{}, Logger: testutil.QuietLogger(t), Transport: transport,
@@ -99,57 +139,20 @@ func TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval(t *testing.T) {
 		defer close(done)
 		client.Run(ctx)
 	}()
-	t.Cleanup(func() {
+	defer func() {
 		cancel()
 		<-done
-	})
-	// next is the fresh replica's next heartbeat the new instance handles.
-	next := func() allocapi.Heartbeat {
-		t.Helper()
-		for len(transport.heard) > 0 {
-			<-transport.heard
-		}
+	}()
+	timeout := time.After(10 * time.Second)
+	var said float64
+	for {
 		select {
 		case hb := <-transport.heard:
-			return hb
-		case <-time.After(10 * time.Second):
-			t.Fatal("the fresh replica did not heartbeat the new instance in 10s")
-			return allocapi.Heartbeat{}
-		}
-	}
-	// Its first heartbeat may say none, sent before any instance answered;
-	// the one after it says what the instances it heard said, at once.
-	deadline := time.Now().Add(5 * time.Second)
-	hb := next()
-	for hb.IntervalSeconds == 0 && time.Now().Before(deadline) {
-		hb = next()
-	}
-	if hb.IntervalSeconds != 3 {
-		t.Errorf("the fresh replica heartbeating at 1s said interval_seconds %v, want 3, the longest an instance said", hb.IntervalSeconds)
-	}
-
-	old := func() {
-		t.Helper()
-		for _, name := range []string{"old1", "old2"} {
-			if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: name, Advertise: name + ":9115", IntervalSeconds: 3})); err != nil {
-				t.Fatal(err)
+			if said = hb.IntervalSeconds; said == 3 {
+				return said
 			}
+		case <-timeout:
+			return said
 		}
-	}
-	clock.Advance(1500 * time.Millisecond)
-	if got := effective(a); got != nil {
-		t.Errorf("1.5s after the start the first member list formed, %v, though a replica said 3s", got)
-	}
-	// The replicas on the old interval reach the new instance; the fresh
-	// one heartbeats on, each heartbeat handled before the clock moves on.
-	old()
-	next()
-	clock.Advance(time.Second)
-	next()
-	old()
-	clock.Advance(time.Second)
-	next()
-	if got, want := effective(a), []string{"fresh", "old1", "old2"}; !slices.Equal(got, want) || memberChanges(a) != 0 {
-		t.Errorf("3.5s after the start the member list is %v after %d changes, want %v formed once", got, memberChanges(a), want)
 	}
 }

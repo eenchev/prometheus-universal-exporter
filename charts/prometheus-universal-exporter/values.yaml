@@ -172,6 +172,12 @@ server:
   # uncompressed. Empty keeps the exporter's default, 1, and leaves the flag
   # out.
   gzipLevel: ""
+  # With allocator.enabled, the exporter pods' share of the allocator's
+  # targets' weight against the other members' (--allocator.capacity): from
+  # 0.1 to 100 with at most three decimals, such as 2 for pods of twice the
+  # resources. Empty keeps the exporter's default, 1, and leaves the flag
+  # out. See docs/ALLOCATOR.md#weights-and-capacity.
+  allocatorCapacity: ""
   # The status page's auto-refresh when its URL gives none with ?refresh=
   # (--web.status-refresh): off, or whole hours, minutes and seconds from 5s
   # to 24h, such as 30s or 1m. Empty keeps the exporter's default, off, and
@@ -895,6 +901,14 @@ allocator:
   # of a new pod beyond them is refused until one stops heartbeating. A whole
   # number from 1; keep it above the most exporter pods the autoscaler runs.
   maxMembers: 1000
+  # How far above its fair share of the targets' weight a member's load may
+  # go before a target its hash gives it goes to the next member
+  # (--allocation.balance-factor): 1 holds every member to its fair share
+  # and moves the most targets when the members change, 10 lets hashing
+  # place everything for up to 10 members. A number from 1 to 10 with at
+  # most three decimals; empty leaves the flag out and the allocator's
+  # default, 1.25, in force.
+  balanceFactor: ""
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
   # With a discovery source, where the pods are peers: only the leader

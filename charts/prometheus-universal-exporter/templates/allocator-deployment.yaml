@@ -140,6 +140,9 @@ spec:
             {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
                    taken for unset. */}}
             - {{ printf "--members.max=%s" (include "prometheus-universal-exporter.wholeNumber" (list "allocator.maxMembers" (ternary 1000 $allocator.maxMembers (kindIs "invalid" $allocator.maxMembers)) 1 2147483647)) | quote }}
+            {{- with include "prometheus-universal-exporter.allocatorBalanceFactor" . }}
+            - {{ printf "--allocation.balance-factor=%s" . | quote }}
+            {{- end }}
             {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
             {{- /* The instances find each other by the headless Service's name,
                    the one the exporter pods heartbeat to, and each knows

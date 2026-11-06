@@ -44,7 +44,7 @@ const DiscoveredTargetsKey = "discovered_targets"
 // without a word.
 func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) {
 	var err error
-	if err = refuseDiscoveredTargets(b); err != nil {
+	if err = refuseAllocatorKeys(b); err != nil {
 		return nil, err
 	}
 	if err = refuseNotScalarKeys(b); err != nil {
@@ -65,19 +65,43 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	return &f, nil
 }
 
-// refuseDiscoveredTargets refuses a document whose top level has
-// discovered_targets. A document that is no YAML mapping is left to the
-// decoder, which says what is wrong with it.
-func refuseDiscoveredTargets(b []byte) error {
+// refuseAllocatorKeys refuses a document with a key only the target
+// allocator reads, naming the allocator, rather than as an unknown key:
+// discovered_targets and default_weight at its top level, and weight and
+// weight_label on a target written under targets. A document that is no
+// YAML mapping is left to the decoder, which says what is wrong with it,
+// as is a key merged in from an anchor.
+func refuseAllocatorKeys(b []byte) error {
 	var doc yaml.Node
 	_ = yaml.Unmarshal(b, &doc)
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil
 	}
 	root := doc.Content[0]
+	weighted := func(key *yaml.Node) error {
+		return fmt.Errorf("line %d: %s is read by the target allocator (pue-allocator --static-targets-file), which places the targets on the replicas by their weights; the exporter scrapes every target of its file, so leave %s out, or run the exporter with the allocator", key.Line, key.Value, key.Value)
+	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == DiscoveredTargetsKey {
-			return fmt.Errorf("line %d: %s is read by the target allocator (pue-allocator --static-targets-file), which discovers the targets and hands each replica its share of them as written targets; the exporter discovers no targets, so list them under targets, or run the exporter with the allocator", root.Content[i].Line, DiscoveredTargetsKey)
+		key, value := root.Content[i], root.Content[i+1]
+		switch key.Value {
+		case DiscoveredTargetsKey:
+			return fmt.Errorf("line %d: %s is read by the target allocator (pue-allocator --static-targets-file), which discovers the targets and hands each replica its share of them as written targets; the exporter discovers no targets, so list them under targets, or run the exporter with the allocator", key.Line, DiscoveredTargetsKey)
+		case "default_weight":
+			return weighted(key)
+		case "targets":
+			if value.Kind != yaml.SequenceNode {
+				continue
+			}
+			for _, t := range value.Content {
+				if t.Kind != yaml.MappingNode {
+					continue
+				}
+				for j := 0; j+1 < len(t.Content); j += 2 {
+					if k := t.Content[j]; k.Value == "weight" || k.Value == "weight_label" {
+						return weighted(k)
+					}
+				}
+			}
 		}
 	}
 	return nil

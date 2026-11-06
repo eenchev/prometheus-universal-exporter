@@ -94,8 +94,11 @@ type Options struct {
 	URL string
 	// CacheDir is where bundles are written (cache.go).
 	CacheDir string
-	// Member and Advertise are what the heartbeats say of this replica.
+	// Member and Advertise are what the heartbeats say of this replica,
+	// and Capacity its --allocator.capacity, which they say too; 0 says
+	// none, which the allocator takes for allocapi.DefaultCapacity.
 	Member, Advertise string
+	Capacity          float64
 	// TokenFile, when set, holds the bearer token sent with every request,
 	// read again for each, so a rotated Secret is used from the next.
 	TokenFile string
@@ -612,7 +615,7 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds()}
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)

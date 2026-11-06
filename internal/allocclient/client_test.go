@@ -1648,3 +1648,19 @@ func TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest(t *testing.T) {
 		}
 	}
 }
+
+// Every heartbeat says the replica's capacity, and one of a client given
+// none says none, which the allocator takes for 1.
+func TestHeartbeatsCarryTheCapacity(t *testing.T) {
+	a := newFakeAllocator(t)
+	c := newTestClient(t, a, t.TempDir(), func(o *Options) { o.Capacity = 2.5 })
+	c.heartbeat(context.Background())
+	if hb := a.nextHeartbeat(t); hb.Capacity != 2.5 {
+		t.Errorf("the heartbeat says the capacity %v, want 2.5", hb.Capacity)
+	}
+	plain := newTestClient(t, a, t.TempDir(), nil)
+	plain.heartbeat(context.Background())
+	if hb := a.nextHeartbeat(t); hb.Capacity != 0 {
+		t.Errorf("a client of no capacity says %v", hb.Capacity)
+	}
+}

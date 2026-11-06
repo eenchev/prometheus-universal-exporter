@@ -136,7 +136,7 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 
 	page := ask(h, "/", "").Body.String()
 	requireIn(t, page,
-		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>`,
+		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>`,
 		"<h2>Probe jobs</h2>", `<table class="spread" id="probe-jobs">`,
 		`<th class="num" data-sort="num">Imbalance</th>`,
 		`<a href="?job=websites" title="the targets of the probe job websites"><strong>websites</strong></a>`,

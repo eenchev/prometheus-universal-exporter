@@ -4,8 +4,6 @@ import (
 	"errors"
 	"slices"
 	"sort"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 )
 
 // SDGroup is one target group of Prometheus's HTTP service discovery.
@@ -42,8 +40,9 @@ var (
 // none is, among all live members; and among those, to the members whose
 // heartbeat reports a bundle whose configuration has the job's collector,
 // when any does, so a collector just added draws no "unknown collector"
-// answers while its bundle spreads. The member is the one allocapi.Owner
-// chooses for the target's shard key among them.
+// answers while its bundle spreads. The member is the one the placement
+// gives the target's shard key (placement.go), when it is among them, and
+// else the one of them routeJob places the key on.
 func (a *Allocator) SD(job string) ([]SDGroup, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -56,8 +55,9 @@ func (a *Allocator) SD(job string) ([]SDGroup, error) {
 		return nil, ErrNotSettled
 	}
 	groups := make([]SDGroup, 0, len(j.Targets))
+	owners := a.routeJob(j)
 	for _, target := range j.Targets {
-		owner, _ := allocapi.Owner(pool, shardKeyOf(j, target))
+		owner := owners[target]
 		found := j.labelsOf[target]
 		labels := make(map[string]string, len(found)+len(j.Labels)+len(j.Params)+5)
 		// A discovered target's labels give way to the job's, and a job

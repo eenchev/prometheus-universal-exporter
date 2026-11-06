@@ -26658,7 +26658,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
   stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
 - The exporter refuses a static target file with `discovered_targets`,
-  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`).
+  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`), and one
+  with `default_weight` at its top level or `weight` or `weight_label` on a
+  target, naming the allocator, which places the targets by their weights,
+  rather than as an unknown key (`TestTheExporterRefusesTheAllocatorsWeights`).
 - `--discovery.max-targets=0` exits 2, and `-h` lists the flag with its
   default, 10000 (`TestAMalformedCommandLineExits2`, `TestVersionAndHelp`).
 - The chart renders no allocator ServiceAccount or RBAC without a
@@ -30433,7 +30436,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAJobViewHidesTheSourceLabelsUnlessAsked` (allocator): of a job of two targets a `file_sd` source finds, each with `namespace` and `__meta_zone`, `/v1/status?job=pods` has both labels of each and its `?filter=__meta_zone=ams` matches one; the page without `?meta=1` has the *Show source labels* box unticked, `namespace=shop`, no `__meta_zone`, the script setting and deleting `meta`, the hint saying the labels shown, and Search all of `ams` and `__meta` lists none and of `namespace=shop` one; with `?meta=1` the box is ticked, both `__meta_zone` labels are shown and in the rows' `data-match`, and Search all of `ams` lists one; the fragment has the source labels with `?meta=1` and not without; a job whose file lists every target and a member's view have no box.
 - `TestTheJobViewListsItsTargets` (allocator), changed: the hint says the filters match the labels shown.
 - `TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest` (allocclient): a client finding two instances, one saying 2s and one 4s, has 2s in force; each instance hears a heartbeat saying `interval_seconds` 4 within a second of the start, at once rather than at the interval's turn, none before it saying anything but none or 2, and every one after it saying 4, at least two in the 4s left.
-- `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change.
+- `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change. The replica's client, on the real clock, runs only until it says what it says to the new instance; the new instance runs on a fake clock and is sent the heartbeats the replica would send, saying that, so no real heartbeat lands between a clock step and a check.
 - `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient) still passes unchanged: with one instance the longest said is the one in force.
 
 ## 34.274 Fixes from the review of the allocator's jobs and polish: heartbeats and settings
@@ -30818,6 +30821,52 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheLongestSettleIsNoCommandLineError` (cmd/pue-allocator): `--settle` of `0`, `0s`, `1h`, `60m` and `3600s` is no command-line error, the start going on to the missing configuration and exiting 1.
 - `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (chart, test/repository), extended: `allocator.settle` of `1h`, `60m` and `3600s` renders `--settle` with its value and `minReadySeconds` 3610, 3720 with a `2m` heartbeat interval and 3601 with `1s`; with the values schema skipped an integer `0` renders `--settle=0`, where `with` took it for empty and left the flag out, and `minReadySeconds` 130.
 - `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: `allocator.settle` of `2h`, `1h0m0.001s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start or ran it with a settle time over an hour, fails rendering with the template, and `soon` and the integer `30` with the values schema, each with the schema and with it skipped saying `must be a Go duration from 0 to 1h`.
+
+## 34.278 Weighted allocation
+
+- `TestPlacementIsDeterministic` (allocator): 500 weighted units over 7 members of capacities 2, 1, 0.5, 3 and 1, at a balance factor of 1, are placed alike in five shuffled orders.
+- `TestUnweightedPlacementOfManyTargetsIsRendezvousHashing` (allocator): 1000 units of weight 1 over 5 members of capacity 1 are each placed on `allocapi.Owner`'s member at the default factor.
+- `TestThePlacementKeepsEveryMemberWithinItsBound` (allocator): 400 weighted units over 6 members of capacities apart keep every member within the factor times its fair share at 1.1, 1.25 and 2, within a unit above it at 1, every unit placed and the loads adding up to the total.
+- `TestAHeavyUnitGoesToTheLeastLoadedMemberAndIsKept` (allocator): a unit of weight 100 among 30 of weight 1 over capacities 1, 1 and 2 is placed, on the member least loaded for its capacity by the units before it in the pass, and is reported heavy on it; every other unit is placed.
+- `TestAMembersWeightFollowsItsCapacity` (allocator): of 3000 weighted units, members of capacity 2, 1, 1 and 0.5 get 2, 1, 1 and 0.5 times a capacity 1 member's weight within 10%, and within 15% at a factor of 10.
+- `TestFewMembers` (allocator): no member places nothing, one member takes the whole weight with no heavy unit, and two take it all within their bounds.
+- `TestAMemberJoiningOrLeavingMovesLittle` (allocator): a sixth member joining five moves at most 1.5 times a sixth of 1000 weighted units' weight, and its leaving at most 1.5 times what it held.
+- `TestTheWeightedScore` (allocator): of members of one capacity the best score is `allocapi.Owner`'s for 200 keys; the fixed-point log2 agrees with `math.Log2` within 1e-8 from 1 to 2^63; equal scores rank by the hash, and capacity 3 at -log2 h of 2 beats capacity 1 at 1.
+- `TestTheBalanceFactorsBounds` (allocator): 1, 1.25, 1.001 and 10 are taken; 0, 0.999, 10.001, 1.0005, NaN and +Inf are refused.
+- `TestAWeightLabelsValue` (allocator): a weight label of `2`, `0.5`, `0.001`, `1.005`, `1000` and `1e2` gives that weight in thousandths; missing or empty is `missing`, `heavy` and `NaN` `not_a_number`, `0`, `-1`, `1000.001` and `+Inf` `out_of_range`, `1.0005` and `0.0004` `too_many_decimals`.
+- `TestADiscoveredWeightIsHeldWithinTwentyPercent` (allocator): against a weight in force of 10, `11` and `8.1` are held at 10, `12` and `8` taken; a value in force that is no weight, a label now missing and a new value that is no weight are taken as they are; the new answer's labels are not changed, and an owner without `weight_label` holds nothing.
+- `TestTheStaticTargetFilesWeightsAreTakenOut` (allocator): `default_weight` and the targets' `weight`, one merged in from an `x-` anchor, are taken out and read (0.5, 4, 2.5); a file without weights comes back byte for byte; `default_weight` 0 or `'2'`, a target's weight of 1001, 1.0001, `.nan` or a list, and a written target's `weight_label`, are refused naming the target by place and name.
+- `TestWeightsAreCheckedAtLoad` (allocator): weights in every place a file takes them load, read in thousandths; a `default_weight` of 0, a target's weight of text, of 1000.5 or of 0.0001, a written target's `weight_label`, an entry's weight of `.inf` or `weight_label` `a-b`, a probe file's `default_weight` of -1, a job's weight of 1001 or `'2'`, a job's `weight_label` `9w`, and a job's `weight_label` without discovery are refused, naming the file and the target, entry or job.
+- `TestASharesStaticTargetsCarryNoWeight` (allocator): a member's share of a file with `default_weight` 2 and a target of weight 5 has no `weight`, loads with the exporter's loader, and the status gives the member 2 static targets weighing 7.
+- `TestADiscoveredWeightFallsBackOnItsOwnersWeight` (allocator): a static entry of weight 3 and a probe job of weight 0.5, both with `weight_label`, keep every discovered target; one labelled 7 weighs 7, and one missing, not a number, 0 or of four decimals weighs its owner's; `pue_allocator_weight_label_fallbacks_total` counts each by kind, owner and reason, each source and reason is logged once, and each source shows 4 `weight_fallbacks`; the same answer again counts and logs nothing, and a target that stops falling back and falls back again is counted and logged again.
+- `TestAWaveringWeightLabelMovesNothing` (allocator): a discovered weight of 10 moving to 11, 8.5, 11.9 and 9 leaves the weight in force at 10 and every bundle's generation as it was; 12 is taken.
+- `TestStaticAndProbeTargetsShareTheMembersLoad` (allocator): 40 static targets of weights 1 to 5 and 40 probes of weight 2 over 3 members give a spread of static weight 120, probe weight 80 and capacity 3; each member's static and probe weight is within 1.25 times its fair share of 66.67, with its load ratio, not overloaded, and `/metrics` gives each member's `pue_allocator_assigned_weight` by kind, `pue_allocator_member_capacity` 1 and `pue_allocator_member_load_ratio`, and `pue_allocator_overloaded_members` 0.
+- `TestAShardKeyGroupStaysTogether` (allocator): 30 static targets of six shard keys and weights 1 to 4 over 4 members have every target of a key in one member's share.
+- `TestAHeavyUnitIsLoggedOnceAndShown` (allocator): a target of weight 50 among 10 of weight 1 and 2 probes is logged once across a member joining, listed in `spread.heavy` with its shard key, weight and member, in that member's share, and the member is the one overloaded, its load ratio above 1.25.
+- `TestAMemberAWholeUnitPutsOverItsBoundIsNotOverloaded` (allocator): 3 targets of weight 1 over 2 members at the default balance factor and 11 over 2 at a balance factor of 1 leave a member a unit over its bound and count no member overloaded, in the status, its members or `pue_allocator_overloaded_members`; a target of weight 5 among four of weight 1 over 2 members at a balance factor of 1 counts one.
+- `TestADrainingTargetWeighsOnItsNewOwner` (allocator): after a third member joins, it owns weight and drains none; the draining weight is the spread's `total_weight.draining` and above 0, the static weight stays 60, and each old member's static weight is the weight of what its view lists as owned, each with its weight.
+- `TestAHeartbeatsCapacity` (allocator): a heartbeat's capacity of 1000, 0.001, -5, 0, 2.5 and 1.0004 is shown as 100, 0.1, 0.1, 1, 2.5 and 1; a member's capacity changed to 3 moves nothing before `--settle` and then gives it about three times the weight of a member of capacity 1, its `capacity_in_list` 3.
+- `TestTheBalanceFactorIsInTheGeneration` (allocator): two instances of the same inputs and capacities, heartbeats heard in other orders, serve the same generations; a factor of 10 serves other generations, a factor of 2 adds `allocation.yaml` saying `balance_factor: 2` to a bundle the replica loads, and the default adds none.
+- `TestACollectorFileCannotBeTheAllocationFile` (allocator): a `collector_files` entry `allocation.yaml` and `a*.yaml` with a collector file `allocation.yaml` are refused, naming the file.
+- `TestCapacityMilli` (allocapi): 0 and 1 are 1000 thousandths, 2.5 2500, 1.2345 1235; 0.0999, -3 and NaN are 100, 1e9 and +Inf 100000; a heartbeat of no capacity has no `capacity` key.
+- `TestHeartbeatsCarryTheCapacity` (allocclient): a client of capacity 2.5 says it in its heartbeat, and one of none says 0.
+- `TestAllocatorModeCommandLineErrors` (exporter), extended: `--allocator.capacity` without `--allocator.url` exits 2 as allocator-only, and 0.09, 100.5, 1.0001, 0 and NaN exit 2 naming the bounds.
+- `TestTheAllocatorCapacityIsTaken` (exporter): `--allocator.capacity` of 0.1, 1, 2.5 and 100 is taken as given.
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), extended: `--allocation.balance-factor` of 0.99, 10.5, 1.2345 and NaN exits 2 naming the bounds; `TestVersionAndHelp`, extended: `-h` lists it with its default 1.25.
+- `TestTheMetricsDescribeTheAllocation` (allocator), changed: the expected static targets of each member are the weighted placement's, static and probe targets together, where they were `allocapi.Owner`'s of the static targets alone.
+- `TestThePagesMarkOnlyAJobHashingWouldSeldomSpreadSo` (allocator), changed: runs at a balance factor of 10, so the targets lie where hashing puts them, which the bound would even out.
+- `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: runs at a balance factor of 10, so a member joining moves only what it takes and one leaving only its own, which the bound breaks for 30 targets over a few members by what the probes' random port hashes to.
+- `TestAFollowerDrainsWhatTheLeaderDrains` (allocator): a leader whose static source answers before its probe source, the follower having taken neither answer, moves the static target when the probe target comes and drains it on the member that had it; the follower, taking both answers from one snapshot, drains it there too, and the two serve the same bundles, of the same generations, with the same snapshot digest at once, and again once 30s have passed, the target no longer draining on either.
+- `TestAFollowerThatFoundTheSameTargetsTakesTheLeadersDrains` (allocator): two instances that discovered alone, the leader's static source answering first and the follower's probe source first, find the same targets, the leader draining one and the follower none; once they are peers the follower's fetch is answered with the snapshot, its digest covering the drains, and the two serve the same bundles.
+- `TestAFollowerListsTheLeadersDrainOfATargetItDrainsItself` (allocator): a follower draining a target on m1 for 30s for a member list that changed takes a leader's snapshot draining it there for 10s for a change of the discovered targets: it lists the drain in its snapshot, whose digest is the leader's, keeps it draining for 30s, and once the leader's drain leaves the snapshot drains it as its own, until 30s, listed no more.
+- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): its bundles are compared right after the follower took the snapshot again, whichever of the leader's sources answered first; 50 runs, and 50 under the race detector, pass.
+- `TestTheAllocatorsSchemasDeclareTheDecodersKeys` (test/repository), changed: the probe targets file has `default_weight` beside `probe_jobs`, and an entry `weight` and `weight_label`; `TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses`, extended: weights of 0, over 1000 or of text, a `weight_label` that is no label name and a `default_weight` of 0 or -1 are refused by both schemas, the weights of every place are taken, and the exporter's static target schema refuses `weight`.
+- `TestChartSetsTheAllocatorCapacity` (chart, test/repository): `server.allocatorCapacity` of 2, 0.1, 100, 1.25 and `"2.5"` renders `--allocator.capacity` with it beside `allocator.enabled`, empty, null and unset render none; set without `allocator.enabled`, of 0.05, 100.5, 1.0001 or a word, and `--allocator.capacity` in `extraArgs`, fail rendering naming `server.allocatorCapacity`, with the values schema and with it skipped.
+- `TestChartProbeJobsTakeWeights` (chart, test/repository): a probe job's `weight` and `weight_label` reach the probe targets file as written, and a weight of 0 fails rendering; `TestChartProbeJobKeysAreTheAllocatorsKeys`, extended by the keys.
+- `TestChartSetsTheBalanceFactor` (chart, test/repository): `allocator.balanceFactor` of 1, 1.5, 10, 2.125, `"3"` and `"1.25"` renders `--allocation.balance-factor` with it on the allocator's pods; empty, null and unset render none; 0.99, 10.5, 11, 1.0001, 0, -2 and a word fail rendering naming `allocator.balanceFactor`, with the values schema and with it skipped.
+- `TestTheTargetsTableShowsWeightsAndCapacities` (allocator): a target of weight 50, 10 of weight 1 and two probes of weight 2 over r1 of capacity 2, r2 and r3: the Targets table's heading is Member, Static, Draining, Probe, Total, Weight, Draining weight, Capacity, Fair share and Share, the Members table has Capacity before Draining, r1's 2; the page says the weight 64 over a capacity of 4 and the highest load ratio, the balance factor 1.25, one member overloaded and why, and warns of the unit `big`, weighing 50, on its member, against the fair share 32.0; each member's row has its weight, marked when overloaded, its draining weight, capacity and fair share, its bar's static segment as wide as its static weight of the most a member weighs or a fair share comes to, and its fair share marked; the total row adds them up and the imbalance row's weight is the highest load ratio; a capacity heartbeated as 3 before `--settle` shows `1 → 3`.
+- `TestTheViewsShowEachTargetsWeight` (allocator): a member's view has Capacity among its facts and a Weight column, right-aligned, in its owned, draining and probe tables (`big` weighing 50), and its probe jobs table the weight of each job's targets (`probes.jobs[].weight`, 2 a target); the status page's probe jobs table has Weight after Targets (4 for two targets of 2); a job's view says its weight, 4 (2 a target), has a Weight column in its members' table and its targets', and gives `job_weight` 2 and no `weight_label`.
+- `TestTheSourcesTableShowsTheWeightsThatFellBack` (allocator): two sources whose owners' `weight_label` gave two of three targets no weight each say `2 weights fell back` beside their result, and the job's view says its weight, 8, and that each target's comes from `__meta_pue_weight`, else the job's 0.5.
 
 ## 42.1 OTLP export
 
@@ -33665,7 +33714,22 @@ source or `--discovery.max-targets`: a source's targets refused MUST be the
 source's failure, logged and counted in
 `pue_allocator_discovery_refreshes_total{result="failure"}` once while its
 text stays the same, the source keeping what the follower holds, and MUST
-keep what it holds of a source that has not answered on the leader. A source
+keep what it holds of a source that has not answered on the leader. The
+snapshot MUST list, as `draining`, the static targets the instance drains
+because a change of the discovered targets moved them, each with its member
+and the seconds left, and its digest MUST cover each such target and member
+but not the seconds; it MUST be taken under the lock under which an answer
+of a source is put in force, so it never holds an answer without the drains
+the answer made. A follower taking a snapshot MUST drain those in place of
+the drains of discovered targets it holds, even when the discovered targets
+stay the same, keeping a target it drains for a member list or input files
+that changed for the longer of the two, listed in its own snapshot and its
+digest as the leader's drain while the leader's snapshot lists it (so a
+follower holding the leader's targets and drains MUST NOT be told apart from
+the leader by its own drain of one of them) and as its own drain after that,
+and leaving out a drain on a member
+not in its member list, of a target it lacks, or of one that member owns
+there. A source
 of the follower's that the snapshot lacks MUST be asked by the follower
 itself, from a refresh loop of its own, until a snapshot has it (or a `304`
 says the leader holds what the follower does), and only then stopped. A
@@ -33756,16 +33820,45 @@ and add nothing, logged once until a new member is taken again and counted;
 a member no longer live MUST no longer count against the bound. Time
 MUST be read through an injectable clock, so tests move it by hand.
 
-**Allocation.** Every target MUST be owned by `allocapi.Owner` over the
-member list: a static target by its `shard_key`, or its name; a probe target
+**Allocation.** Every target MUST be placed on a member of the member list by
+its shard key: a static target by its `shard_key`, or its name; a probe target
 by its target, or with `shard_key: address` by the host and port it reaches
 (a URL's host, `:80` or `:443` added for `http`/`https` without a port,
-compared without case; anything else as written). A static target whose
+compared without case; anything else as written). The placement MUST be the
+weighted placement of `docs/ALLOCATOR.md` "Weights and capacity": the targets
+of one shard key, static and probe of every job, MUST be one unit, placed on
+one member and weighing the sum of their weights; static and probe units MUST
+be placed in one pass over the same members, a member's load being both;
+the units MUST be taken in the order of the first 8 bytes of SHA-256 of
+`unit`, a NUL and the key, and each MUST go to the member of the highest
+weighted rendezvous score, its capacity over `-ln h` with `h` from
+`allocapi.Score`, whose load with the unit is at most
+`--allocation.balance-factor` times its fair share (the total weight times
+its capacity over the members' capacity, rounded down), and when none has
+room to the member of the least load for its capacity, the higher score
+first; no unit MUST ever be left out. Of members of one capacity the order
+MUST be `allocapi.Owner`'s. Weights, capacities and the factor MUST be held
+in thousandths, and every sum, comparison and logarithm MUST be integer
+arithmetic, ties broken by the hash and then the member's name, never by the
+order of a map, so two instances of the same inputs and members MUST place
+alike. `--allocation.balance-factor` MUST default to `1.25` and MUST be
+refused as a command-line error outside `1` to `10` or with more than three
+decimals; the bound MUST apply with or without weights and capacities. A
+unit heavier than the fair share of the member of the largest capacity MUST
+be logged once while it stays so and listed in `/v1/status` `spread.heavy`.
+A probe whose placed member is not among the members it is routed among
+(**API** below) MUST be placed among those, in the same order and by the same
+rule, over the loads of the placement. A static target whose
 owner changes while its old owner stays in the member list MUST stay in the
 old owner's share for one of its intervals, its own or the file's, and then
-leave it, whether a change of the member list or a reload of the input
-files changed its owner (its `shard_key` changed, say); a static target a
-reload removes MUST leave every share at once.
+leave it, whether a change of the member list, a reload of the input files
+or a change of the discovered targets changed its owner (its `shard_key`
+changed, say); a static target a reload removes MUST leave every share at
+once. A follower MUST NOT work out the drains of a change of the discovered
+targets it takes from the leader's snapshot: it MUST drain those the
+snapshot lists, each for what is left of it there (**Peers** above), so
+the instances serve identical bundles once the follower has taken the
+snapshot, whatever order the leader's sources answered in.
 
 **Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
 configuration at `config.yaml` and every collector file at its path
@@ -33773,8 +33866,45 @@ relative to the configuration's directory, as written, and, when its share
 is not empty, `static-targets.yaml`, a static target file of the file's
 top-level keys but `targets` and `x-` keys, and of the share, draining
 targets included, in file order, each with its name written out and with
-aliases and merge keys replaced by what they stand for. A member not in the
-member list MUST get the configuration alone.
+aliases and merge keys replaced by what they stand for, `weight` and
+`default_weight` taken out. A member not in the member list MUST get the
+configuration alone. With `--allocation.balance-factor` other than `1.25`
+every bundle MUST also carry `allocation.yaml` (`allocapi.AllocationFile`)
+saying `balance_factor`, so instances of different factors serve bundles of
+different generations; a collector file whose path relative to the
+configuration's directory is `allocation.yaml`, and a `collector_files`
+entry that matches it, MUST be refused at load.
+
+**Weights.** A static target's `weight`, the static target file's and the
+probe targets file's top-level `default_weight`, a `discovered_targets`
+entry's and a probe job's `weight` MUST each be a YAML number above 0 and at
+most 1000 (`MaxWeight`) with at most three decimals, and anything else MUST
+be refused at load naming the file and the target, entry or job; a target,
+entry or job without one MUST weigh its file's `default_weight`, else 1. A
+written target's `weight_label`, a `weight_label` that is no label name, and
+a probe job's without `discovery` MUST be refused. The allocator MUST take
+`weight` and `default_weight` out of the static target file before the
+exporter's loader reads it, and a share MUST carry neither; a file without
+them MUST be read as written. A discovered target of an owner with
+`weight_label` MUST weigh the value of that label of its source when it is
+a weight, and its owner's weight otherwise (`missing`, `not_a_number`,
+`out_of_range`, `too_many_decimals`), never left out for it; such a fallback
+MUST be logged once for each kind, owner, source and reason while any
+target falls back for it, and counted in
+`pue_allocator_weight_label_fallbacks_total{kind,owner,reason}` as each
+target begins to. A discovered weight within 20% of the weight in force for
+the target at its address, both weights, MUST be replaced by the weight in
+force in what the source keeps, so followers take it from the leader's
+snapshot and every instance places alike. The schemas MUST declare
+`weight`, `default_weight` and `weight_label`, a weight as a number above 0
+and at most 1000; they MUST NOT say `multipleOf`, which editors work out in
+floating point.
+
+**Capacity.** A heartbeat's `capacity` MUST be taken in thousandths
+(`allocapi.CapacityMilli`): 1 when it says none, `0.1` for one below it,
+NaN included, and `100` for one above. A member's capacity MUST be part of
+the member list: a changed capacity MUST take effect as a change of the
+live members does, once it has held for `--settle`.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
@@ -33836,14 +33966,21 @@ member known with its address, last heartbeat, whether it is late (live,
 with its last heartbeat more than one and a half heartbeat intervals old,
 which the page MUST mark), whether it is live, in the member list and
 shutting down, the generation it reports, the one it is to have, a refusal
-it reports and the static targets it keeps draining; the spread, per member
+it reports, the static targets it keeps draining, the capacity its last
+heartbeat said and the one the member list places by; the spread, per member
 of the member list and per other live member a probe is routed to, of the
 static targets it owns as `pue_allocator_assigned` counts them, those it
 drains, and the probe targets routed to it, with the totals, the average per
 member and the imbalance (the most a member has divided by the average, `0`
-with no target); each probe job, in file order, with its collector, its
-targets, the members it is routed among (`routing`), each with the targets
-of the job routed to it, 0 included, the fewest, the average and the most of
+with no target), and as much of their weight (`weight`, `total_weight`), a
+moved static target's on its new owner and on the member draining it only
+as draining, with each member's capacity, fair share, load ratio and whether
+it is overloaded, the members' capacity, the balance factor, the highest load
+ratio, the members overloaded and the units heavier than a fair share
+(`heavy`); each probe job, in file order, with its collector, its
+targets and their weight, the members it is routed among (`routing`), each
+with the targets of the job routed to it, 0 included, and their weight, the
+fewest, the average and the most of
 those, the imbalance (the most divided by the average, `0` with no target),
 uneven when the most is above the average by 3 targets or more and by 3
 or more standard deviations of a member's count, √(targets × (1 −
@@ -33851,7 +33988,8 @@ or more standard deviations of a member's count, √(targets × (1 −
 marked, and its discovery sources with their result; and every
 discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
-`pending`), targets, the interval it is asked at
+`pending`), the targets whose weight fell back on their owner's
+(`weight_fallbacks`), which the page MUST show beside the result, targets, the interval it is asked at
 (`refresh_interval_seconds`: its `refresh_interval`, else
 `--discovery.refresh-interval`, else its kind's default; for a source whose
 targets a follower took from the leader's snapshot, the leader's interval of
@@ -33867,11 +34005,19 @@ Allocator`, with the theme picker, the logo as its icon, the same
 no-store`), every value escaped, calling each allocator process an instance
 and never a copy (`This instance`, the peers' `Instance` column, `(this
 instance)`, `live instances`) and its process's random id its `Instance ID`
-(`ID` beside each peer's address), with a bar of each member's targets drawn
-in CSS alone, the members' table's columns fixed (member, static, draining,
-probe, total and the bar, never a column per probe job), a probe jobs table
+(`ID` beside each peer's address), with each member's capacity in the
+members table, one its heartbeats changed shown as the one in the list, an
+arrow and the new one until it takes effect, the spread's table's columns
+fixed (member, static, draining, probe, total, weight, draining weight,
+capacity, fair share and the bar, never a column per probe job), its weight
+the static and probe weight the member is placed by, its draining weight
+apart, its bar drawn in CSS alone of the static, draining and probe weight
+with the member's fair share marked on it, the imbalance of the weight the
+highest load ratio, an overloaded member's weight marked with a sentence
+saying how many are and why, and each heavy unit named, with its shard key,
+weight and member, in a warning above the table; a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
-members, min, average, max, the imbalance, marked where uneven, and the
+their weight, members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its
 heading and the other way at a second, numbers by value, text with the
 numbers in it by theirs and in any case (`job2` before `job10`), and ties in
@@ -33886,10 +34032,12 @@ in the members and in the spread MUST link to its view, `GET /?member=<id>`,
 framed as the page is, with a link back to it and refreshed as it is: the
 member as the members have it; the static targets it owns as
 `pue_allocator_assigned` counts them, by name, with collector, target,
-labels (one written `""` left out) and interval; those it keeps draining
-with the member each moved to and how much longer it drains; and the probe
-targets routed to it, counted by job and listed with job and collector, in
-file order of the jobs and by target. A target MUST be shown as
+labels (one written `""` left out), interval and weight; those it keeps
+draining with the member each moved to, how much longer it drains and its
+weight; and the probe targets routed to it, counted and weighed by job and
+listed with job, collector and weight, in file order of the jobs and by
+target; each weight in a column of its own, right-aligned, and the member's
+capacity among its facts. A target MUST be shown as
 `fetch.DisplayTarget` shows it for its collector, credentials withheld, and
 a static target's `params` and `request` MUST NOT be shown. `?filter=<text>`
 MUST cut each list to the targets whose name, target, collector, a label as
@@ -33912,16 +34060,17 @@ under `--peers.leader-only` MUST NOT serve a member's targets: its view
 names the leader and its JSON is `partial`, with the leader's address. A
 member's view MUST link each probe job's name to the job's view. Each probe
 job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
-member's view is: the job's collector, targets, shard key, labels (one
+member's view is: the job's collector, targets, their weight with the job's
+weight or its `weight_label` (`job_weight`, `weight_label`), shard key, labels (one
 written `""` left out), params, a param whose name reads as a credential's
 (`fetch.CredentialName`) as `<redacted>` and any other through
 `fetch.RedactText`, and discovery sources with their result and refresh
 interval, a failing one's error on a line of its own; the members it
 is routed among, linked to their views, with the targets of the job each
-has, as the spread counts them, and a bar, the most first; and its targets
-by target, each shown as `fetch.DisplayTarget` shows it, with the member
-`SD` routes it to, linked, and the labels its source gave it but those the
-job sets or takes away. The page MUST leave out a target's source labels,
+has, as the spread counts them, their weight and a bar, the most first; and
+its targets by target, each shown as `fetch.DisplayTarget` shows it, with
+the member `SD` routes it to, linked, the labels its source gave it but
+those the job sets or takes away, and its weight, right-aligned. The page MUST leave out a target's source labels,
 those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
 them; a job with discovery sources MUST have a *Show source labels* box by
 its filter that puts `?meta=1` in the URL, or takes it out, and refreshes
@@ -33948,6 +34097,18 @@ the chart README how to reach a pod's page and find the leader's.
 `pue_allocator_targets{kind}`, `pue_allocator_assigned{member,kind}`,
 `pue_allocator_targets_per_member{kind}` (the targets allocated to the
 members, by kind, divided by the number of members; `0` with no member),
+`pue_allocator_assigned_weight{member,kind}` (the weight of what
+`pue_allocator_assigned` counts, a moved static target on its new owner
+alone), `pue_allocator_member_capacity{member}`,
+`pue_allocator_member_load_ratio{member}` (a member's static and probe
+weight over its fair share), `pue_allocator_overloaded_members` (the members
+whose weight is above the balance factor times their fair share because a
+unit is too heavy for any member's room: still above it without their
+lightest unit, or filled by one unit above it alone; a member above it by
+less than its lightest unit, as whole units and bounds rounded down leave
+one at a balance factor near 1, MUST NOT be counted, nor marked overloaded
+in the status or on the status page),
+`pue_allocator_weight_label_fallbacks_total{kind,owner,reason}`,
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
 `pue_allocator_member_changes_total`,
@@ -33983,7 +34144,10 @@ default to the host name, and `--allocator.advertise` to the
 `--web.listen-address` host when it is one address that is neither loopback
 nor unspecified, else to the host's first address that is neither loopback
 nor link-local, IPv4 before IPv6, with the listen port; an
-`--allocator.advertise` that is not `host:port` MUST be refused. The
+`--allocator.advertise` that is not `host:port` MUST be refused.
+`--allocator.capacity` MUST default to 1, MUST be refused as a command-line
+error outside `0.1` to `100` or with more than three decimals, and MUST be
+said as `capacity` in every heartbeat. The
 `--allocator.member` name MUST be the value of `otlp.exporter_instance` that
 the bundle's configuration leaves out (§ 42.1).
 

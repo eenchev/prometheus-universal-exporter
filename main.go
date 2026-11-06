@@ -114,6 +114,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&allocator.member, "allocator.member", "", "This replica's name in the allocator's member list; the host name, such as the pod's name, when left out")
 	flags.StringVar(&allocator.advertise, "allocator.advertise", "", "host:port the allocator tells Prometheus to send this replica's probes to; the listen address's host, or else the host's first address that is not a loopback one, with the listen port, when left out")
 	flags.StringVar(&allocator.tokenFile, "allocator.token-file", "", "File holding the bearer token sent to the allocator, read again for every request")
+	flags.Float64Var(&allocator.capacity, "allocator.capacity", 1, "This replica's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals: a replica of capacity 2 is given about twice the weight of one of capacity 1")
 	healthcheck := healthcheckFlag{}
 	flags.Var(&healthcheck, "healthcheck", "Ask the exporter at --web.listen-address whether it is ready, GET /ready, or with --healthcheck=health whether it is alive, GET /health, and exit 0 on 200 or 1 otherwise, within 5s, without starting the exporter or reading its configuration; for a container health check")
 	check := flags.Bool("dry-run", false, "Validate the configuration and static target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
@@ -436,7 +437,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		startup = append(startup, "config_watch_interval", manager.WatchInterval().String())
 	}
 	if alloc != nil {
-		startup = append(startup, "allocator", alloc.url, "allocator_cache_dir", alloc.cacheDir, "allocator_member", alloc.member, "allocator_advertise", alloc.advertise,
+		startup = append(startup, "allocator", alloc.url, "allocator_cache_dir", alloc.cacheDir, "allocator_member", alloc.member, "allocator_advertise", alloc.advertise, "allocator_capacity", alloc.capacity,
 			"awaiting_configuration", manager.Awaiting())
 	}
 	// The name every OTLP resource carries, as the configuration resolved

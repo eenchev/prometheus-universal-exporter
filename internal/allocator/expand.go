@@ -33,6 +33,10 @@ type discoveredEntry struct {
 	// labels are its labels, which win over a discovered target's.
 	keys   []*yaml.Node
 	labels map[string]string
+	// weight is every target's weight, in thousandths, and weightLabel
+	// the discovered label a target's own weight is read from, when set.
+	weight      int64
+	weightLabel string
 }
 
 // sampleAddress stands for a discovered address when an entry is checked
@@ -74,14 +78,14 @@ func splitDiscovered(raw []byte) ([]byte, *yaml.Node) {
 // keys, with sampleAddress in place of a discovered address: whatever the
 // entry writes is checked at load, and only the target and the labels of a
 // discovered target are left to check when it is found.
-func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration) ([]*discoveredEntry, error) {
+func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration, defaultWeight int64) ([]*discoveredEntry, error) {
 	if list.Kind != yaml.SequenceNode || len(list.Content) == 0 {
 		return nil, fmt.Errorf("%s must be a list of entries, each a static target with discovery", config.DiscoveredTargetsKey)
 	}
 	var out []*discoveredEntry
 	seen := map[string]bool{}
 	for i, node := range list.Content {
-		e, err := readDiscoveredEntry(node, head, conf, base, defaultRefresh)
+		e, err := readDiscoveredEntry(node, head, conf, base, defaultRefresh, defaultWeight)
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %d: %w", config.DiscoveredTargetsKey, i, err)
 		}
@@ -104,18 +108,22 @@ func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Confi
 	return out, nil
 }
 
-func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration) (*discoveredEntry, error) {
+func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration, defaultWeight int64) (*discoveredEntry, error) {
 	if node.Kind != yaml.MappingNode {
 		return nil, errors.New("it is not a mapping")
 	}
-	e := &discoveredEntry{}
+	e := &discoveredEntry{weight: defaultWeight}
 	var shardKey string
-	var discovery *yaml.Node
+	var discovery, weight *yaml.Node
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key, value := node.Content[i], node.Content[i+1]
 		switch key.Value {
 		case "name":
 			e.name = value.Value
+		case weightKey:
+			weight = value
+		case weightLabelKey:
+			e.weightLabel = value.Value
 		case "target_template":
 			e.template = value.Value
 		case "shard_key":
@@ -133,6 +141,16 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	}
 	if discovery == nil {
 		return nil, fmt.Errorf("entry %q has no discovery; a target of its own belongs under targets", e.name)
+	}
+	if weight != nil {
+		w, err := nodeWeight(weight, fmt.Sprintf("entry %q weight", e.name))
+		if err != nil {
+			return nil, err
+		}
+		e.weight = w
+	}
+	if e.weightLabel != "" && !model.ValidLabelName(e.weightLabel) {
+		return nil, fmt.Errorf("entry %q weight_label %q is not a label name; name the discovered label a target's weight is read from, such as __meta_pue_weight", e.name, e.weightLabel)
 	}
 	if err := decodeStrict(discovery, &e.discovery); err != nil {
 		return nil, fmt.Errorf("entry %q discovery: %w", e.name, err)
@@ -231,29 +249,32 @@ func checkStaticTarget(head []*yaml.Node, target *yaml.Node) (*model.StaticTarge
 
 // sourceSpec is a discovery source of the inputs: its key, which is the
 // same while its owner and its configuration are, its kind (probe or
-// static) and owner (the probe job or the discovered_targets entry).
+// static) and owner (the probe job or the discovered_targets entry), and
+// the owner's weight_label, which its answers' weights are held by
+// (holdWeights).
 type sourceSpec struct {
 	key, kind, owner string
 	cfg              DiscoveryConfig
+	weightLabel      string
 }
 
 // discoverySources are the discovery sources of the inputs, the probe
 // jobs' and then the entries', in file order.
 func (in *Inputs) discoverySources() []sourceSpec {
 	var out []sourceSpec
-	add := func(kind, owner string, list []DiscoveryConfig) {
+	add := func(kind, owner, weightLabel string, list []DiscoveryConfig) {
 		for _, d := range list {
 			text, _ := json.Marshal(d)
-			out = append(out, sourceSpec{key: kind + "/" + owner + "/" + d.Name + "\x00" + string(text), kind: kind, owner: owner, cfg: d})
+			out = append(out, sourceSpec{key: kind + "/" + owner + "/" + d.Name + "\x00" + string(text) + "\x00" + weightLabel, kind: kind, owner: owner, cfg: d, weightLabel: weightLabel})
 		}
 	}
 	if in.Probes != nil {
 		for i := range in.Probes.Jobs {
-			add("probe", in.Probes.Jobs[i].Name, in.Probes.Jobs[i].Discovery)
+			add("probe", in.Probes.Jobs[i].Name, in.Probes.Jobs[i].WeightLabel, in.Probes.Jobs[i].Discovery)
 		}
 	}
 	for _, e := range in.entries {
-		add("static", e.name, e.discovery)
+		add("static", e.name, e.weightLabel, e.discovery)
 	}
 	return out
 }
@@ -291,11 +312,12 @@ func (in *Inputs) expand(found map[string][]discovered, checked map[string]check
 	}
 	cp := *in
 	out = &cp
+	out.fallbacks = nil
 	out.digest = allocapi.Generation(digest)
 	if in.Probes != nil {
 		out.Probes = &ProbeFile{Jobs: make([]ProbeJob, len(in.Probes.Jobs))}
 		for i := range in.Probes.Jobs {
-			out.Probes.Jobs[i] = in.expandProbeJob(&in.Probes.Jobs[i], found, &skipped)
+			out.Probes.Jobs[i] = in.expandProbeJob(&in.Probes.Jobs[i], found, &skipped, &out.fallbacks)
 		}
 	}
 	if len(in.entries) > 0 {
@@ -304,13 +326,14 @@ func (in *Inputs) expand(found map[string][]discovered, checked map[string]check
 	return out, skipped, now
 }
 
-func (in *Inputs) expandProbeJob(j *ProbeJob, found map[string][]discovered, skipped *[]string) ProbeJob {
+func (in *Inputs) expandProbeJob(j *ProbeJob, found map[string][]discovered, skipped *[]string, fallbacks *[]weightFallback) ProbeJob {
 	job := *j
 	if len(j.Discovery) == 0 {
 		return job
 	}
 	job.Targets = slices.Clone(j.Targets)
 	job.labelsOf = map[string]map[string]string{}
+	job.weightOf = map[string]int64{}
 	seen := map[string]bool{}
 	for _, target := range j.Targets {
 		seen[target] = true
@@ -332,6 +355,14 @@ func (in *Inputs) expandProbeJob(j *ProbeJob, found map[string][]discovered, ski
 			seen[target] = true
 			job.Targets = append(job.Targets, target)
 			job.labelsOf[target] = probeLabels(d.Labels)
+			if j.WeightLabel != "" {
+				value, present := d.Labels[j.WeightLabel]
+				if w, reason := labelWeight(value, present); reason != "" {
+					*fallbacks = append(*fallbacks, weightFallback{kind: "probe", owner: j.Name, source: s.cfg.Name, target: target, reason: reason})
+				} else {
+					job.weightOf[target] = w
+				}
+			}
 		}
 	}
 	return job
@@ -443,12 +474,23 @@ func hashedAddress(address string) string {
 	return readable + "_X" + hex.EncodeToString(sum[:8])
 }
 
+// weightFallback is a discovered target whose weight_label gave no weight,
+// for reason, and which takes its entry's or job's weight: of kind static
+// or probe, owner the entry or the job, from source.
+type weightFallback struct {
+	kind, owner, source, target, reason string
+}
+
 // candidate is a target an entry's discovery found.
 type candidate struct {
 	entry           *discoveredEntry
 	address, target string
 	labels          map[string]string
 	name            string
+	// weight is its weight, in thousandths, and fallback why its entry's
+	// weight_label gave none, from source, when it did not.
+	weight           int64
+	fallback, source string
 }
 
 func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, checked, now map[string]checkedTarget, skipped *[]string) {
@@ -464,7 +506,16 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 					continue
 				}
 				addresses[d.Address] = true
-				candidates = append(candidates, &candidate{entry: e, address: d.Address, target: fromTemplate(e.template, d.Address), labels: staticLabels(d.Labels), name: discoveredName(e.name, d.Address)})
+				c := &candidate{entry: e, address: d.Address, target: fromTemplate(e.template, d.Address), labels: staticLabels(d.Labels), name: discoveredName(e.name, d.Address), weight: e.weight}
+				if e.weightLabel != "" {
+					value, present := d.Labels[e.weightLabel]
+					if w, reason := labelWeight(value, present); reason != "" {
+						c.fallback, c.source = reason, s.cfg.Name
+					} else {
+						c.weight = w
+					}
+				}
+				candidates = append(candidates, c)
 			}
 		}
 	}
@@ -482,6 +533,7 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 	targets := &model.StaticTargetFile{Interval: in.Targets.Interval, Concurrency: in.Targets.Concurrency, Targets: slices.Clone(in.Targets.Targets)}
 	static := &staticDocument{head: in.static.head, targets: slices.Clone(in.static.targets)}
 	shardKeys := slices.Clone(in.shardKeys)
+	weights := slices.Clone(in.weights)
 	index := make(map[string]int, len(targets.Targets)+len(candidates))
 	for name, i := range in.targetIndex {
 		index[name] = i
@@ -514,6 +566,10 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 			key = c.address
 		}
 		shardKeys = append(shardKeys, key)
+		weights = append(weights, c.weight)
+		if c.fallback != "" {
+			out.fallbacks = append(out.fallbacks, weightFallback{kind: "static", owner: c.entry.name, source: c.source, target: c.name, reason: c.fallback})
+		}
 	}
-	out.Targets, out.static, out.shardKeys, out.targetIndex = targets, static, shardKeys, index
+	out.Targets, out.static, out.shardKeys, out.targetIndex, out.weights = targets, static, shardKeys, index, weights
 }

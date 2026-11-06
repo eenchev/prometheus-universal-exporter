@@ -37,8 +37,60 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   unscraped, for the settle time after its member TTL. An allocator started
   with a longer settle time exits 2; set `1h` or less
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+- The target allocator bounds each member's load at
+  `--allocation.balance-factor`, 1.25 by default, times its fair share, and
+  places static and probe targets in one pass: with a few targets a member,
+  some that rendezvous hashing put on a member already over its bound go to
+  another, and the targets of one shard key, static or probe, stay on one
+  member. With many targets a member the bound seldom binds and nothing
+  moves: a thousand over five members are placed as before, every one. Give
+  `--allocation.balance-factor=10` for hashing alone, for up to 10 members
+  ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)).
+- A `collector_files` entry of the allocator's configuration that would
+  match `allocation.yaml`, such as `a*.yaml`, is refused at load, as one
+  matching `static-targets.yaml` is: the bundle may carry a file of that
+  name. Narrow the entry, for example to a directory of collector files.
 
 ### New
+
+- Weighted allocation: a target's `weight`, a static target file's or a
+  probe targets file's `default_weight`, a `discovered_targets` entry's or
+  a probe job's `weight`, and `weight_label`, a discovery label whose value
+  is a discovered target's own weight, say what each target takes of a
+  replica, and the exporter's `--allocator.capacity`, from 0.1 to 100, what
+  a replica takes against the others; the allocator places the targets by
+  weighted rendezvous hashing with bounded loads, so each member's weight
+  follows its capacity. A discovered weight that is no weight falls back on
+  its owner's, logged once and counted in
+  `pue_allocator_weight_label_fallbacks_total`, and one that moves less
+  than 20% is ignored. Every weight is 1 and every capacity 1 unless set
+  ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)). The
+  exporter refuses a static target file with the weights, naming the
+  allocator, as it does `discovered_targets`.
+- `pue-allocator --allocation.balance-factor`, from 1 to 10, 1.25 by
+  default: how far above its fair share of the weight a member's load may
+  go. A factor other than the default travels in every bundle, so instances
+  of different factors serve different generations
+  ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)).
+- The allocator's `/metrics` has `pue_allocator_assigned_weight`,
+  `pue_allocator_member_capacity`, `pue_allocator_member_load_ratio` and
+  `pue_allocator_overloaded_members`, the members a unit too heavy for
+  any member's room puts over their bound, not those a whole unit puts a
+  little over it, and `/v1/status` each member's
+  capacity, weight, fair share and load ratio, each job's and target's
+  weight, and the units heavier than a fair share, which are also logged
+  once ([Metrics](docs/ALLOCATOR.md#metrics)).
+- The allocator's status page shows each member's capacity, and in the
+  Targets table its weight, the weight it keeps draining, its fair share
+  and a bar of its weight with its fair share marked, the overloaded
+  members marked and the units heavier than a fair share named in a
+  warning; the probe jobs table, a member's view and a job's view give each
+  job's and each target's weight, and the discovery sources table how many
+  weights fell back ([Status page](docs/ALLOCATOR.md#status-page)).
+- The chart's `allocator.balanceFactor` sets the allocator's
+  `--allocation.balance-factor`, from 1 to 10 with at most three decimals;
+  empty keeps the allocator's 1.25
+  ([chart README](charts/prometheus-universal-exporter/README.md)).
 
 - `request.ip_family` on an `http` or `graphite` collector chooses the
   address family its requests connect over, as blackbox_exporter's

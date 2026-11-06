@@ -5,8 +5,10 @@
 //
 // Replicas make themselves known with heartbeats (allocapi.Heartbeat). The
 // members whose heartbeats keep coming form the member list, which takes
-// effect once it has held for the settle time, and every target is
-// allocated to one member of it by rendezvous hashing (allocapi.Owner). The
+// effect once it has held for the settle time, and every target is placed
+// on one member of it by its weight and the members' capacities, by
+// rendezvous hashing weighted by capacity with bounded loads (placement.go),
+// which with every weight and capacity alike is allocapi.Owner's. The
 // allocator keeps nothing on disk: the same input files and the same
 // heartbeats give the same bundles and the same answers, on a restarted
 // allocator or on a second one beside it. See docs/ALLOCATOR.md.
@@ -65,6 +67,11 @@ type Options struct {
 	// (WatchLoop).
 	Address, Version, Revision string
 	WatchInterval              time.Duration
+	// BalanceFactor is --allocation.balance-factor, how far above its fair
+	// share a member's load may go (placement.go); 0 takes
+	// DefaultBalanceFactor. The command line keeps it within
+	// MinBalanceFactor and MaxBalanceFactor.
+	BalanceFactor float64
 }
 
 // Allocator holds the inputs in force, the members, the member list that
@@ -105,9 +112,30 @@ type Allocator struct {
 	proposedAt time.Time
 	effective  []string
 	settled    bool
+	// proposedCaps and effectiveCaps are the capacities of the members of
+	// proposed and of effective, in their order, in thousandths: a
+	// capacity is part of the member list, and a change of one takes
+	// effect, as a member's coming or going does, once it has held for the
+	// settle time.
+	proposedCaps, effectiveCaps []int64
+	// balanceFactor is Options.BalanceFactor in thousandths, and plan the
+	// placement made last (planFor). heavy are the units heavier than a
+	// fair share the last placement found, by key, logged once while they
+	// stay so.
+	balanceFactor int64
+	plan          *placement
+	heavy         map[string]bool
+	// fallbacksTotal counts the discovered targets whose weight_label gave
+	// no weight, as they begin to fall back; fallingBack are those of the
+	// inputs in force, and fallbackLogged the sources and reasons logged,
+	// once while any target of them falls back. The last two change under
+	// reloadMu, the counts under mu.
+	fallbacksTotal map[fallbackKey]uint64
+	fallingBack    map[weightFallback]bool
+	fallbackLogged map[string]bool
 	// draining are the static targets a member has lost and keeps for one
 	// of the target's intervals, until the time they map to.
-	draining map[drainKey]time.Time
+	draining map[drainKey]drain
 	// bundles are the bundles of the effective members, and joining the
 	// bundle of any other member: the configuration with no static
 	// targets.
@@ -161,6 +189,9 @@ type Allocator struct {
 }
 
 type member struct {
+	// capacity is what its last heartbeat said, within allocapi's bounds,
+	// in thousandths.
+	capacity     int64
 	advertise    string
 	lastSeen     time.Time
 	generation   string
@@ -173,6 +204,23 @@ type member struct {
 
 type drainKey struct{ target, member string }
 
+// drain is how long a member keeps a static target it has lost, and
+// whether a change of the discovered targets moved it. Those are the drains
+// a follower takes from the leader's snapshot (takeDrains) rather than
+// works out: the leader puts the answers of its sources in force one at a
+// time, as they come, and a target one answer moves it drains, where a
+// follower that takes several answers at once would not see the target
+// move at all, or see it move from elsewhere.
+type drain struct {
+	until      time.Time
+	discovered bool
+	// own, on a drain of the leader's snapshot that this instance drained
+	// for a reason of its own too, is when its own would end: the drain is
+	// the leader's, which the snapshot and its digest list as the leader's
+	// do, and its own takes over when the leader's leaves the snapshot.
+	own time.Time
+}
+
 // New returns an allocator serving in.
 func New(in *Inputs, opts Options) *Allocator {
 	a := &Allocator{
@@ -183,7 +231,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		maxMembers:        opts.MaxMembers,
 		inputs:            in,
 		members:           map[string]*member{},
-		draining:          map[drainKey]time.Time{},
+		draining:          map[drainKey]drain{},
 		bundles:           map[string]*allocapi.Bundle{},
 		collectorsOf:      map[string]map[string]bool{},
 		changed:           make(chan struct{}),
@@ -197,6 +245,9 @@ func New(in *Inputs, opts Options) *Allocator {
 		version:           opts.Version,
 		revision:          opts.Revision,
 		watchInterval:     opts.WatchInterval,
+		balanceFactor:     factorMilli(opts.BalanceFactor),
+		heavy:             map[string]bool{},
+		fallbacksTotal:    map[fallbackKey]uint64{},
 	}
 	if a.clock == nil {
 		a.clock = realClock{}
@@ -274,6 +325,7 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	}
 	m.sequence = hb.Sequence
 	m.advertise, m.lastSeen, m.generation, m.shuttingDown = hb.Advertise, a.clock.Now(), hb.Generation, hb.ShuttingDown
+	m.capacity = allocapi.CapacityMilli(hb.Capacity)
 	switch {
 	case hb.Refused == nil:
 		// The replica keeps reporting a refusal until it puts a later
@@ -396,16 +448,20 @@ func (a *Allocator) update() {
 		}
 	}
 	sort.Strings(liveMembers)
-	if !slices.Equal(liveMembers, a.proposed) {
-		a.proposed, a.proposedAt = liveMembers, now
+	caps := make([]int64, len(liveMembers))
+	for i, name := range liveMembers {
+		caps[i] = a.members[name].capacity
+	}
+	if !slices.Equal(liveMembers, a.proposed) || !slices.Equal(caps, a.proposedCaps) {
+		a.proposed, a.proposedCaps, a.proposedAt = liveMembers, caps, now
 	}
 	rebuild := false
 	if a.settleDue(now) {
 		a.takeEffect(now)
 		rebuild = true
 	}
-	for key, until := range a.draining {
-		if !now.Before(until) {
+	for key, d := range a.draining {
+		if !now.Before(d.until) {
 			delete(a.draining, key)
 			rebuild = true
 		}
@@ -420,7 +476,7 @@ func (a *Allocator) update() {
 // it differs from the effective one, has held for the settle time, and, for
 // the first one, is not empty and comes no sooner than firstSettle.
 func (a *Allocator) settleDue(now time.Time) bool {
-	if a.settled && slices.Equal(a.proposed, a.effective) {
+	if a.settled && a.proposedInEffect() {
 		return false
 	}
 	if !a.settled && (len(a.proposed) == 0 || now.Before(a.firstSettle())) {
@@ -461,13 +517,20 @@ func (a *Allocator) firstSettle() time.Time {
 	return at
 }
 
+// proposedInEffect reports whether the proposed member list, with its
+// capacities, is the effective one.
+func (a *Allocator) proposedInEffect() bool {
+	return slices.Equal(a.proposed, a.effective) && slices.Equal(a.proposedCaps, a.effectiveCaps)
+}
+
 // takeEffect makes the proposed member list the effective one. A static
 // target that moves from a member still in the list keeps being that
 // member's for one of its intervals, while its new owner already scrapes
 // it, so its series has no gap.
 func (a *Allocator) takeEffect(now time.Time) {
-	before, after := a.effective, slices.Clone(a.proposed)
-	a.effective = after
+	before, was := a.effective, a.currentPlan()
+	a.effective, a.effectiveCaps = slices.Clone(a.proposed), slices.Clone(a.proposedCaps)
+	after, is := a.effective, a.currentPlan()
 	if a.settled {
 		a.memberChanges++
 	}
@@ -476,10 +539,9 @@ func (a *Allocator) takeEffect(now time.Time) {
 	if in := a.inputs; in != nil && in.Targets != nil && len(before) > 0 {
 		for i := range in.Targets.Targets {
 			t := &in.Targets.Targets[i]
-			was, _ := allocapi.Owner(before, in.shardKeys[i])
-			is, _ := allocapi.Owner(after, in.shardKeys[i])
-			if was != is && slices.Contains(after, was) {
-				a.draining[drainKey{t.Name, was}] = now.Add(time.Duration(t.Interval))
+			from, to := was.owner[in.shardKeys[i]], is.owner[in.shardKeys[i]]
+			if from != to && slices.Contains(after, from) {
+				a.draining[drainKey{t.Name, from}] = drain{until: now.Add(time.Duration(t.Interval))}
 			}
 		}
 	}
@@ -501,23 +563,31 @@ func (a *Allocator) takeEffect(now time.Time) {
 // the member that had it, as takeEffect does for a change of the member
 // list: a changed shard_key moves a target as surely as a new member does.
 // A target the new inputs no longer have drains nowhere, nor does one that
-// is back with the member draining it.
-func (a *Allocator) handOver(old *Inputs, now time.Time) {
+// is back with the member draining it. discovered says the change is one of
+// the discovered targets.
+func (a *Allocator) handOver(old *Inputs, now time.Time, discovered bool) {
 	in := a.inputs
 	if a.settled && old != nil && old.Targets != nil && in.Targets != nil && len(a.effective) > 0 {
+		before := a.planFor(old, a.effective, a.effectiveCaps)
+		after := a.currentPlan()
 		for i := range in.Targets.Targets {
 			t := &in.Targets.Targets[i]
 			j, ok := old.targetIndex[t.Name]
 			if !ok {
 				continue
 			}
-			was, _ := allocapi.Owner(a.effective, old.shardKeys[j])
-			is, _ := allocapi.Owner(a.effective, in.shardKeys[i])
+			was, is := before.owner[old.shardKeys[j]], after.owner[in.shardKeys[i]]
 			if was != is {
-				a.draining[drainKey{t.Name, was}] = now.Add(time.Duration(t.Interval))
+				a.draining[drainKey{t.Name, was}] = drain{until: now.Add(time.Duration(t.Interval)), discovered: discovered}
 			}
 		}
 	}
+	a.dropStaleDrains()
+}
+
+// dropStaleDrains drops the draining targets the inputs in force no longer
+// have, and those back with the member draining them.
+func (a *Allocator) dropStaleDrains() {
 	for key := range a.draining {
 		if owner := a.ownerOf(key.target); owner == "" || owner == key.member {
 			delete(a.draining, key)
@@ -536,8 +606,7 @@ func (a *Allocator) ownerOf(name string) string {
 	if !ok {
 		return ""
 	}
-	owner, _ := allocapi.Owner(a.effective, in.shardKeys[i])
-	return owner
+	return a.currentPlan().owner[in.shardKeys[i]]
 }
 
 // difference is what of a is not in b.
@@ -573,7 +642,7 @@ func (a *Allocator) schedule() {
 			consider(m.lastSeen.Add(a.memberTTL))
 		}
 	}
-	if !a.settled || !slices.Equal(a.proposed, a.effective) {
+	if !a.settled || !a.proposedInEffect() {
 		if at := a.proposedAt.Add(a.settle); a.settled || len(a.proposed) > 0 {
 			if !a.settled && at.Before(a.firstSettle()) {
 				at = a.firstSettle()
@@ -581,8 +650,8 @@ func (a *Allocator) schedule() {
 			consider(at)
 		}
 	}
-	for _, until := range a.draining {
-		consider(until)
+	for _, d := range a.draining {
+		consider(d.until)
 	}
 	if next.IsZero() {
 		return
@@ -609,8 +678,9 @@ func (a *Allocator) rebuild() {
 	}
 	shares := map[string][]int{}
 	if in.Targets != nil && len(a.effective) > 0 {
+		plan := a.currentPlan()
 		for i := range in.Targets.Targets {
-			owner, _ := allocapi.Owner(a.effective, in.shardKeys[i])
+			owner := plan.owner[in.shardKeys[i]]
 			shares[owner] = append(shares[owner], i)
 		}
 		for key := range a.draining {
@@ -660,6 +730,9 @@ func (a *Allocator) bundleOf(share []int) *allocapi.Bundle {
 		} else {
 			files[allocapi.StaticTargetsFile] = text
 		}
+	}
+	if a.balanceFactor != factorMilli(DefaultBalanceFactor) {
+		files[allocapi.AllocationFile] = allocationFile(a.balanceFactor)
 	}
 	b := &allocapi.Bundle{Files: files}
 	b.Seal()
@@ -736,7 +809,7 @@ func (a *Allocator) Reload(p Paths) bool {
 	// What was checked was checked against the files in force before.
 	a.checked = nil
 	a.syncSources(in)
-	a.putInForce(in)
+	a.putInForce(in, false, nil)
 	a.mu.Lock()
 	a.reloadsOK++
 	a.mu.Unlock()

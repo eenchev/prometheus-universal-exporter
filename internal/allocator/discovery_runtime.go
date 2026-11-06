@@ -177,9 +177,15 @@ func (a *Allocator) startSource(s *sourceState) {
 	s.cancel = cancel
 	go func() {
 		for {
-			if a.refreshSource(ctx, s) {
-				a.applyDiscovery()
+			found, err := a.askSource(ctx, s)
+			// The answer is taken and put in force under reloadMu, as a
+			// snapshot is served (snapshotOf), so no snapshot holds what a
+			// source found without the targets it moved draining.
+			a.reloadMu.Lock()
+			if a.takeAnswer(ctx, s, found, err) {
+				a.applyDiscoveryLocked()
 			}
+			a.reloadMu.Unlock()
 			timer := time.NewTimer(s.spec.cfg.refresh())
 			select {
 			case <-ctx.Done():
@@ -195,8 +201,19 @@ func (a *Allocator) startSource(s *sourceState) {
 // failure keeps what s found last, and is logged and counted once while
 // its text stays the same, as a refused reload is.
 func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
+	found, err := a.askSource(ctx, s)
+	return a.takeAnswer(ctx, s, found, err)
+}
+
+// askSource asks s once.
+func (a *Allocator) askSource(ctx context.Context, s *sourceState) ([]discovered, error) {
 	attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name}
-	found, err := s.fetch(ctx, a.logger.With(attrs...))
+	return s.fetch(ctx, a.logger.With(attrs...))
+}
+
+// takeAnswer takes s's answer, found or err, and reports whether what it
+// found changed.
+func (a *Allocator) takeAnswer(ctx context.Context, s *sourceState, found []discovered, err error) bool {
 	if ctx.Err() != nil {
 		// Stopped meanwhile: the source is no longer in force.
 		return false
@@ -212,6 +229,9 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 	s.successes++
 	s.lastGood = s.refreshed
 	s.fromSnapshot = false
+	if s.ok {
+		found = holdWeights(s.found, found, s.spec.weightLabel)
+	}
 	if s.ok && sameDiscovered(s.found, found) {
 		return false
 	}
@@ -265,12 +285,10 @@ func (a *Allocator) foundBySource() map[string][]discovered {
 	return out
 }
 
-// applyDiscovery puts in force the input files in force with what the
-// sources found now.
-func (a *Allocator) applyDiscovery() {
-	a.reloadMu.Lock()
-	defer a.reloadMu.Unlock()
-	if a.putInForce(a.base) {
+// applyDiscoveryLocked puts in force the input files in force with what
+// the sources found now. Called under reloadMu.
+func (a *Allocator) applyDiscoveryLocked() {
+	if a.putInForce(a.base, true, nil) {
 		a.logger.Info("discovered targets changed", a.currentInputs().logAttrs()...)
 	}
 }
@@ -283,9 +301,13 @@ func (a *Allocator) currentInputs() *Inputs {
 
 // putInForce puts base, with what the sources found added, in force, as a
 // reload does: a static target that moves to another member is handed
-// over, and one no longer there leaves every share at once. It reports
-// whether the inputs in force changed. Called under reloadMu.
-func (a *Allocator) putInForce(base *Inputs) bool {
+// over, and one no longer there leaves every share at once. discovered says
+// the change is one of the discovered targets. leader, when not nil, are
+// the drains of the leader's snapshot the discovered targets come from,
+// which are put in force in place of those the change would make here
+// (takeDrains), even when the targets stay the same. It reports whether the
+// inputs in force changed. Called under reloadMu.
+func (a *Allocator) putInForce(base *Inputs, discovered bool, leader *peerSnapshot) bool {
 	in, skipped, checked := base.expand(a.foundBySource(), a.checked)
 	a.checked = checked
 	if text := strings.Join(skipped, "\n"); text != a.lastSkipped {
@@ -298,17 +320,31 @@ func (a *Allocator) putInForce(base *Inputs) bool {
 			a.logger.Warn(fmt.Sprintf("%d discovered targets are left out", len(skipped)), "targets", shown)
 		}
 	}
+	counts := a.noteFallbacks(in.fallbacks)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.inputs != nil && a.inputs.digest == in.digest {
+	for key, n := range counts {
+		a.fallbacksTotal[key] += n
+	}
+	same := a.inputs != nil && a.inputs.digest == in.digest
+	if same && leader == nil {
 		return false
 	}
-	old := a.inputs
-	a.inputs = in
-	a.handOver(old, a.clock.Now())
+	old, now := a.inputs, a.clock.Now()
+	if !same {
+		a.inputs = in
+	}
+	if leader != nil {
+		if !a.takeDrains(leader.Draining, now) && same {
+			a.schedule()
+			return false
+		}
+	} else {
+		a.handOver(old, now, discovered)
+	}
 	a.rebuild()
 	a.schedule()
-	return true
+	return !same
 }
 
 // sourceMetrics are what /metrics shows of each source, in order of kind,

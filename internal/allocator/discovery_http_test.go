@@ -472,7 +472,9 @@ func (a *Allocator) refreshDiscovery(ctx context.Context) {
 		changed = a.refreshSource(ctx, s) || changed
 	}
 	if changed {
-		a.applyDiscovery()
+		a.reloadMu.Lock()
+		a.applyDiscoveryLocked()
+		a.reloadMu.Unlock()
 	}
 }
 

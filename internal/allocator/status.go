@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 )
 
 // The status of an allocator instance, for people who have no Prometheus to
@@ -176,6 +175,12 @@ type MemberStatus struct {
 	// Draining are the static targets it keeps for one of their intervals
 	// after they moved to another member.
 	Draining int `json:"draining"`
+	// Capacity is the capacity its last heartbeat said, within the bounds
+	// the allocator holds it to, and CapacityInList the one the member list
+	// places by, which a changed capacity becomes once it has held for the
+	// settle time; 0 for a member not in the list.
+	Capacity       float64 `json:"capacity"`
+	CapacityInList float64 `json:"capacity_in_list,omitempty"`
 }
 
 // SpreadStatus is how the targets are spread over the members.
@@ -189,6 +194,20 @@ type SpreadStatus struct {
 	Total     SpreadCounts `json:"total"`
 	Average   SpreadCounts `json:"average"`
 	Imbalance SpreadCounts `json:"imbalance"`
+	// TotalWeight is the members' weights added up, as Total adds up their
+	// targets, and Capacity their capacities. BalanceFactor is
+	// --allocation.balance-factor. MaxLoadRatio is the highest LoadRatio of
+	// a member, 1 for weight spread in proportion to capacity, 0 when there
+	// is none, and Overloaded counts the members that are.
+	TotalWeight   SpreadCounts `json:"total_weight"`
+	Capacity      float64      `json:"capacity"`
+	BalanceFactor float64      `json:"balance_factor"`
+	MaxLoadRatio  float64      `json:"max_load_ratio"`
+	Overloaded    int          `json:"overloaded"`
+	// Heavy are the units, the targets of one shard key, that weigh more
+	// than the fair share of the member of the largest capacity: each fills
+	// the member it is on, whatever the balance factor.
+	Heavy []HeavyUnit `json:"heavy"`
 	// Jobs are the probe jobs, in file order, each with how its targets
 	// are spread: one column of the members' table each would not fit a
 	// page beside a few jobs.
@@ -199,6 +218,31 @@ type SpreadStatus struct {
 type SpreadMember struct {
 	Member string `json:"member"`
 	SpreadCounts
+	// Capacity is the capacity it is placed by: its capacity in the member
+	// list, or, for a live member outside it that a probe is routed to,
+	// its last heartbeat's.
+	Capacity float64 `json:"capacity"`
+	// Weight is its targets' weight, as SpreadCounts counts them: a static
+	// target that moved weighs on its new owner, and on the member that
+	// keeps it draining only in Draining.
+	Weight SpreadCounts `json:"weight"`
+	// FairShare is the weight it would have were the static and probe
+	// weight of every member spread in proportion to capacity: that weight
+	// times its capacity over theirs. LoadRatio is its static and probe
+	// weight over FairShare, 0 when FairShare is; Overloaded says it is
+	// above BalanceFactor, which only a unit too heavy for any member's
+	// room puts it.
+	FairShare  float64 `json:"fair_share"`
+	LoadRatio  float64 `json:"load_ratio"`
+	Overloaded bool    `json:"overloaded"`
+}
+
+// HeavyUnit is a unit heavier than a fair share: the targets of one shard
+// key, their weight together and the member they are on.
+type HeavyUnit struct {
+	ShardKey string  `json:"shard_key"`
+	Weight   float64 `json:"weight"`
+	Member   string  `json:"member"`
 }
 
 // SpreadCounts count a member's targets, or a sum, an average or an
@@ -219,8 +263,10 @@ type SpreadCounts struct {
 type JobSpread struct {
 	Job       string `json:"job"`
 	Collector string `json:"collector"`
-	// Targets are the job's targets, listed and discovered.
-	Targets int `json:"targets"`
+	// Targets are the job's targets, listed and discovered, and Weight
+	// their weight.
+	Targets int     `json:"targets"`
+	Weight  float64 `json:"weight"`
 	// Members are the members it is routed among, by id, each with the
 	// targets routed to it; none while no member is live or the member
 	// list has not formed.
@@ -243,8 +289,9 @@ type JobSpread struct {
 
 // JobMember is the targets of a probe job routed to one member.
 type JobMember struct {
-	Member  string `json:"member"`
-	Targets int    `json:"targets"`
+	Member  string  `json:"member"`
+	Targets int     `json:"targets"`
+	Weight  float64 `json:"weight"`
 }
 
 // JobSource is one discovery source of a probe job, as SourceStatus has
@@ -317,6 +364,9 @@ type SourceStatus struct {
 	// From is own when what it holds is this instance's own discovery, snapshot
 	// when it came from the leader's snapshot, "" before either.
 	From string `json:"from,omitempty"`
+	// WeightFallbacks are the targets it found whose owner's weight_label
+	// gave no weight, which take the owner's weight.
+	WeightFallbacks int `json:"weight_fallbacks"`
 }
 
 // Status is the status of the allocator now. An instance that does not lead
@@ -329,9 +379,15 @@ func (a *Allocator) Status() Status {
 	ready := a.inputs != nil && !a.stopped
 	s.Peers = a.peersStatusLocked(now)
 	s.Partial = s.Peers != nil && s.Peers.LeaderOnly && s.Peers.Role != "leader"
+	fallbacks := map[string]int{}
 	if !s.Partial {
 		s.Members = a.membersStatusLocked(now)
 		s.Spread = a.spreadLocked()
+		if a.inputs != nil {
+			for _, f := range a.inputs.fallbacks {
+				fallbacks[f.kind+"/"+f.owner+"/"+f.source]++
+			}
+		}
 	}
 	a.mu.Unlock()
 
@@ -347,6 +403,9 @@ func (a *Allocator) Status() Status {
 	}
 	if !s.Partial {
 		s.Sources = a.sourcesStatus(now)
+		for i := range s.Sources {
+			s.Sources[i].WeightFallbacks = fallbacks[s.Sources[i].Kind+"/"+s.Sources[i].Owner+"/"+s.Sources[i].Name]
+		}
 		sourcesOfJobs(s.Spread, s.Sources)
 	}
 	return s
@@ -372,7 +431,10 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 		ms := MemberStatus{ID: id, Address: m.advertise, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
 			LastHeartbeatAgeSeconds: ageSeconds(now.Sub(m.lastSeen).Seconds()), Live: a.live(m, now),
 			InList: a.settled && contains(a.effective, id), ShuttingDown: m.shuttingDown, Generation: m.generation,
-			Refused: a.refusals[id], Draining: draining[id]}
+			Refused: a.refusals[id], Draining: draining[id], Capacity: float64(m.capacity) / milli}
+		if i := slices.Index(a.effective, id); a.settled && i >= 0 {
+			ms.CapacityInList = float64(a.effectiveCaps[i]) / milli
+		}
 		if b := a.bundleLocked(id); b != nil {
 			ms.Current = b.Generation
 		}
@@ -398,55 +460,32 @@ func contains(list []string, s string) bool {
 
 // spreadLocked is how the targets are spread over the members: a static
 // target to its owner in the member list, and a probe target to the member
-// service discovery routes it to, as /metrics counts them. Called under
-// a.mu.
+// service discovery routes it to, as /metrics counts them, and their
+// weights alike. Called under a.mu.
 func (a *Allocator) spreadLocked() *SpreadStatus {
-	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}}
-	rows := map[string]*SpreadMember{}
-	row := func(name string) *SpreadMember {
-		r := rows[name]
-		if r == nil {
-			r = &SpreadMember{Member: name}
-			rows[name] = r
-		}
-		return r
-	}
-	for _, name := range a.effective {
-		row(name)
-	}
-	in := a.inputs
-	if in != nil && len(a.effective) > 0 {
-		for i := range in.shardKeys {
-			owner, _ := allocapi.Owner(a.effective, in.shardKeys[i])
-			row(owner).Static++
-		}
-		for key := range a.draining {
-			row(key.member).Draining++
-		}
-	}
-	if in != nil && in.Probes != nil {
-		for i := range in.Probes.Jobs {
-			j := &in.Probes.Jobs[i]
-			js, _ := a.jobSpreadLocked(j)
-			// A job's targets count towards the members' rows once the
-			// member list has formed, as the static targets do.
-			if len(a.effective) > 0 {
-				for _, m := range js.Members {
-					row(m.Member).Probe += float64(m.Targets)
-				}
-			}
-			out.Jobs = append(out.Jobs, js)
-		}
-	}
-	names := make([]string, 0, len(rows))
-	for name := range rows {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		r := rows[name]
+	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}, Heavy: []HeavyUnit{}, BalanceFactor: float64(a.balanceFactor) / milli}
+	loads := a.loadsLocked()
+	out.Jobs = append(out.Jobs, loads.jobs...)
+	for _, name := range loads.names {
+		l := loads.rows[name]
+		r := SpreadMember{Member: name, Capacity: float64(l.capacity) / milli,
+			SpreadCounts: SpreadCounts{Static: float64(l.static), Draining: float64(l.draining), Probe: float64(l.probe)},
+			Weight:       SpreadCounts{Static: float64(l.staticWeight) / milli, Draining: float64(l.drainingWeight) / milli, Probe: float64(l.probeWeight) / milli},
+			FairShare:    float64(l.fair) / milli, Overloaded: l.overloaded}
 		r.Total = r.Static + r.Draining + r.Probe
-		out.Members = append(out.Members, *r)
+		r.Weight.Total = r.Weight.Static + r.Weight.Draining + r.Weight.Probe
+		if l.fair > 0 {
+			r.LoadRatio = float64(l.staticWeight+l.probeWeight) / float64(l.fair)
+		}
+		out.Members = append(out.Members, r)
+		out.Capacity += r.Capacity
+		out.MaxLoadRatio = max(out.MaxLoadRatio, r.LoadRatio)
+		if r.Overloaded {
+			out.Overloaded++
+		}
+	}
+	for _, h := range a.currentPlan().heavy {
+		out.Heavy = append(out.Heavy, HeavyUnit{ShardKey: h.key, Weight: float64(h.weight) / milli, Member: h.member})
 	}
 
 	var most SpreadCounts
@@ -459,6 +498,10 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 		add(&out.Total.Draining, &most.Draining, r.Draining)
 		add(&out.Total.Probe, &most.Probe, r.Probe)
 		add(&out.Total.Total, &most.Total, r.Total)
+		out.TotalWeight.Static += r.Weight.Static
+		out.TotalWeight.Draining += r.Weight.Draining
+		out.TotalWeight.Probe += r.Weight.Probe
+		out.TotalWeight.Total += r.Weight.Total
 	}
 	n := float64(len(out.Members))
 	average := func(v float64) float64 {
@@ -480,25 +523,137 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 	return out
 }
 
-// jobSpreadLocked is how j's targets are spread over the members it is
-// routed among, and the member each target is routed to, "" for none.
-// Called under a.mu.
-func (a *Allocator) jobSpreadLocked(j *ProbeJob) (JobSpread, map[string]string) {
-	out := JobSpread{Job: j.Name, Collector: j.Collector, Targets: len(j.Targets), Members: []JobMember{}, Sources: []JobSource{}}
-	pool := a.routing(j)
-	owners := make(map[string]string, len(j.Targets))
-	counts := make(map[string]int, len(pool))
-	for _, target := range j.Targets {
-		if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil {
-			owners[target] = owner
-			counts[owner]++
+// memberLoad is one member's targets and their weight, in thousandths: those
+// it owns, those it keeps draining and the probes routed to it; its
+// capacity, its fair share of the static and probe weight of every member,
+// and whether that weight is above the balance factor times it.
+type memberLoad struct {
+	static, draining, probe                   int
+	staticWeight, drainingWeight, probeWeight int64
+	capacity, fair                            int64
+	overloaded                                bool
+	// units are the weights of the units it holds, owned or routed to
+	// it, by shard key: what tells a member over its bound by more than
+	// whole units explain (overloaded) from one that holds a unit too
+	// heavy for any member's room.
+	units map[string]int64
+}
+
+// loads are every member's memberLoad, by name, and the names in order:
+// the members of the member list, and any other live member a probe is
+// routed to; and each probe job's spread, in file order.
+type loads struct {
+	rows  map[string]*memberLoad
+	names []string
+	jobs  []JobSpread
+}
+
+// loadsLocked works out loads from the placement, the draining targets
+// and service discovery's routing, as the status, the metrics and a
+// member's view count them. Called under a.mu.
+func (a *Allocator) loadsLocked() loads {
+	out := loads{rows: map[string]*memberLoad{}}
+	plan := a.currentPlan()
+	row := func(name string) *memberLoad {
+		r := out.rows[name]
+		if r == nil {
+			r = &memberLoad{capacity: plan.capOf[name], units: map[string]int64{}}
+			if _, in := plan.capOf[name]; !in {
+				if m := a.members[name]; m != nil {
+					r.capacity = m.capacity
+				} else {
+					r.capacity = milli
+				}
+			}
+			out.rows[name] = r
+		}
+		return r
+	}
+	for _, name := range a.effective {
+		row(name)
+	}
+	in := a.inputs
+	if in != nil && len(a.effective) > 0 {
+		for i := range in.shardKeys {
+			r := row(plan.owner[in.shardKeys[i]])
+			r.static++
+			r.staticWeight += in.staticWeight(i)
+			r.units[in.shardKeys[i]] += in.staticWeight(i)
+		}
+		for key := range a.draining {
+			r := row(key.member)
+			r.draining++
+			if i, ok := in.targetIndex[key.target]; ok {
+				r.drainingWeight += in.staticWeight(i)
+			}
 		}
 	}
+	if in != nil && in.Probes != nil {
+		for i := range in.Probes.Jobs {
+			j := &in.Probes.Jobs[i]
+			js, owners, weights := a.jobSpreadLocked(j)
+			// A job's targets count towards the members' rows once the
+			// member list has formed, as the static targets do.
+			if len(a.effective) > 0 {
+				for _, m := range js.Members {
+					r := row(m.Member)
+					r.probe += m.Targets
+					r.probeWeight += weights[m.Member]
+				}
+				for _, target := range j.Targets {
+					if owner := owners[target]; owner != "" {
+						row(owner).units[shardKeyOf(j, target)] += j.weightOfTarget(target)
+					}
+				}
+			}
+			out.jobs = append(out.jobs, js)
+		}
+	}
+	for name := range out.rows {
+		out.names = append(out.names, name)
+	}
+	sort.Strings(out.names)
+	var total, capacity int64
+	capOf := make(map[string]int64, len(out.names))
+	for _, name := range out.names {
+		r := out.rows[name]
+		total += r.staticWeight + r.probeWeight
+		capacity += r.capacity
+		capOf[name] = r.capacity
+	}
+	bounds := boundsOf(out.names, capOf, capacity, total, a.balanceFactor)
+	for _, name := range out.names {
+		r := out.rows[name]
+		r.fair = fairShare(total, r.capacity, capacity)
+		r.overloaded = isOverloaded(r.staticWeight+r.probeWeight, bounds[name], r.units)
+	}
+	return out
+}
+
+// jobSpreadLocked is how j's targets are spread over the members it is
+// routed among, the member each target is routed to, "" for none, and the
+// weight routed to each member, in thousandths. Called under a.mu.
+func (a *Allocator) jobSpreadLocked(j *ProbeJob) (JobSpread, map[string]string, map[string]int64) {
+	out := JobSpread{Job: j.Name, Collector: j.Collector, Targets: len(j.Targets), Members: []JobMember{}, Sources: []JobSource{}}
+	pool := a.routing(j)
+	owners := a.routeJob(j)
+	counts := make(map[string]int, len(pool))
+	weights := make(map[string]int64, len(pool))
+	var total int64
+	for _, target := range j.Targets {
+		w := j.weightOfTarget(target)
+		total += w
+		if owner := owners[target]; owner != "" {
+			counts[owner]++
+			weights[owner] += w
+		}
+	}
+	out.Weight = float64(total) / milli
 	for _, name := range pool {
-		out.Members = append(out.Members, JobMember{Member: name, Targets: counts[name]})
+		out.Members = append(out.Members, JobMember{Member: name, Targets: counts[name], Weight: float64(weights[name]) / milli})
 	}
 	if len(out.Members) == 0 {
-		return out, owners
+		return out, owners, weights
 	}
 	routed := 0
 	out.Min = out.Members[0].Targets
@@ -511,7 +666,7 @@ func (a *Allocator) jobSpreadLocked(j *ProbeJob) (JobSpread, map[string]string) 
 		out.Imbalance = float64(out.Max) / out.Average
 		out.Uneven = uneven(out.Max, routed, len(out.Members))
 	}
-	return out, owners
+	return out, owners, weights
 }
 
 // sourcesOfJobs puts each probe job's discovery sources of sources in its
@@ -685,4 +840,27 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(st.SnapshotAgeSeconds, 'f', -1, 64))
 	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
 	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", st.CheckFailures, st.SnapshotFailures)
+}
+
+// isOverloaded reports whether a member of load, holding units, is over its
+// bound because a unit is too heavy for the room any member has left, not
+// because the weight comes in whole units: a member a unit too heavy for any
+// member fills alone, or one still over its bound without its lightest unit.
+// A bound is rounded down and units are whole, so the members' bounds add up
+// to less than the weight at a balance factor of 1, and a member a little
+// over its own, by less than a unit, is the placement working.
+func isOverloaded(load, bound int64, units map[string]int64) bool {
+	if load <= bound {
+		return false
+	}
+	if len(units) <= 1 {
+		return true
+	}
+	lightest := int64(-1)
+	for _, w := range units {
+		if lightest < 0 || w < lightest {
+			lightest = w
+		}
+	}
+	return load-lightest > bound
 }

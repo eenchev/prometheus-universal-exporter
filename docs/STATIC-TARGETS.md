@@ -256,8 +256,13 @@ that share a key share a replica.
 The exporter discovers no targets: a file with the allocator's
 `discovered_targets` key ([Discovering targets](ALLOCATOR.md#discovering-targets))
 is refused, naming the allocator, since the exporter alone would scrape none
-of what it describes. The allocator writes each discovered target out as a
-target of its own before it hands a replica its share. The file's schema,
+of what it describes. So is one with the allocator's weights,
+`default_weight` at its top level or `weight` or `weight_label` on a target
+([Weights and capacity](ALLOCATOR.md#weights-and-capacity)), naming the
+allocator too: the exporter scrapes every target of its file, and the
+allocator takes the weights out before it hands a replica its share. The
+allocator writes each discovered target out as a target of its own before
+it hands a replica its share. The file's schema,
 `configs/static-targets.schema.json`, refuses the key too; the allocator's
 file has a schema of its own that takes it,
 [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json).

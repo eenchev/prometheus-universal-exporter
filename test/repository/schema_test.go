@@ -448,6 +448,11 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 				errs = append(errs, fmt.Sprintf("%s: %v is below %v", path, n, minimum))
 			}
 		}
+		if least, ok := schema["exclusiveMinimum"].(float64); ok {
+			if n, ok := value.(float64); ok && n <= least {
+				errs = append(errs, fmt.Sprintf("%s: %v is not above %v", path, n, least))
+			}
+		}
 		if maximum, ok := schema["maximum"].(float64); ok {
 			if n, ok := value.(float64); ok && n > maximum {
 				errs = append(errs, fmt.Sprintf("%s: %v is above %v", path, n, maximum))

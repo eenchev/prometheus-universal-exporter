@@ -54,6 +54,7 @@ pue-allocator \
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes, at most `24h`; `0` reads them once. |
 | `--settle` | `15s` | How long a changed member list must hold before targets move, at most `1h`. |
 | `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
+| `--allocation.balance-factor` | `1.25` | How far above its fair share of the targets' weight, the total times its part of the members' capacity, a member's load may go before a target that hashes to it goes to the next member, from 1 to 10 with at most three decimals ([Weights and capacity](#weights-and-capacity)); the chart's `allocator.balanceFactor`. |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.refresh-interval` | each kind's own | How often a [discovery source](#discovering-targets) that sets no `refresh_interval` is asked, from `1s` to `24h`, whatever its kind. Left out, or `0`, each kind keeps its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. A source's `timeout` is held to it as to a `refresh_interval` written ([How fast changes reach the exporters](#how-fast-changes-reach-the-exporters)). |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
@@ -162,6 +163,12 @@ targets:
     shard_key: db1
 ```
 
+A target may set `weight`, what it takes of a replica against the other
+targets, and the file `default_weight`, the weight of a target that sets
+none; both are 1 when left out ([Weights and capacity](#weights-and-capacity)).
+Only the allocator reads them: it takes them out of the file before the
+exporter's loader checks it, and a share carries none.
+
 A replica's share is a static target file of its own: the file's top-level
 keys (`interval`, `concurrency`) as written, and the targets of the share in
 the file's order, each with its name written out, so a target left to its
@@ -233,6 +240,10 @@ probe_jobs:
   reaches: a URL's host and port, with `:80` or `:443` filled in for an `http`
   or `https` URL that names none, compared without case, or anything else as
   written.
+- `weight` is the weight of each of the job's targets, the file's top-level
+  `default_weight` when left out, and 1 without either; `weight_label`, with
+  `discovery`, names a label of the sources whose value is a discovered
+  target's own weight ([Weights and capacity](#weights-and-capacity)).
 
 The file may keep YAML anchors under top-level `x-` keys, as the exporter's
 files may. Its schema, [`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json),
@@ -545,6 +556,23 @@ input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A follower
 keeps what it holds of a source that has not answered on the leader.
 
+The snapshot also lists the static targets the leader drains because a
+change of the discovered targets moved them, each with its member and how
+much longer it drains there, and a follower drains those, for what is left
+of them, in place of working out its own. The leader puts its sources'
+answers in force one at a time, as they come, and each may move static
+targets, which then drain ([Weights and capacity](#weights-and-capacity));
+a follower that takes several answers at once from one snapshot sees only
+where the targets were and where they are, and would drain other targets,
+or none, so the bundles of the members that had them would differ. A
+target the follower drains for a reason of its own, a member list or input
+files that changed, keeps draining, for the longer of the two, and is
+listed in the follower's own snapshot as the leader's drain while the
+leader's lasts, so the two snapshots agree; its own drain goes on after
+that. The drains are part of the snapshot's digest, so instances that found the same targets
+but drain other ones, as two that both led for a moment may, are told
+apart, and the follower takes the leader's.
+
 A snapshot writes each source's targets as the target groups it answered, a
 group's labels once rather than once for each of its targets, so it is about
 the size of the sources' answers; it may be up to 16 MiB for each of the
@@ -749,10 +777,13 @@ heartbeating, and a replica whose heartbeats stop frees its place when its
 member TTL runs out, though it stays in the member list until `--settle`
 after that.
 
-Every target, static or probe, belongs to the member with the highest
-rendezvous score, the first 8 bytes of SHA-256 of the member's id, a NUL and
-the target's shard key. Adding a replica moves only the targets it now wins,
-about one in N+1; removing one moves only its own.
+Every target, static or probe, is placed on a member by its shard key:
+rendezvous hashing, the first 8 bytes of SHA-256 of the member's id, a NUL
+and the shard key, weighted by the members' capacities and bounded so no
+member takes much more than its share of the targets' weight
+([Weights and capacity](#weights-and-capacity)). Adding a replica moves
+about the targets it takes, one in N+1 of the weight; removing one moves
+about its own.
 
 **Handover.** A static target that moves from a replica still in the member
 list stays in that replica's share for one of the target's intervals, its own
@@ -772,7 +803,128 @@ series, since its `instance` is its target. A probe is routed among the
 members of the member list that are live (all live members if none is), and
 among those only to the members whose heartbeat reports a bundle whose
 configuration has the job's collector, when any does: a collector just added
-draws no `unknown collector` answers while the new bundle spreads.
+draws no `unknown collector` answers while the new bundle spreads. A probe
+goes to the member the placement gives its shard key when that member is
+among them; the others, while their member is not live or has no bundle
+with the collector yet, are placed among them as the placement places, over
+the loads it gave.
+
+## Weights and capacity
+
+Targets differ in what they cost a replica, a page of a thousand series
+against a health check, and replicas in what they can take. A target's
+**weight** says what it takes against the other targets, and a replica's
+**capacity** what it takes against the other replicas: both are relative,
+and both are 1 unless set. The allocator places the targets so each
+member's weight follows its share of the capacity: a member of capacity 2
+is given about twice the weight of a member of capacity 1.
+
+- A static target's `weight`, or the static target file's top-level
+  `default_weight`, or 1. A `discovered_targets` entry's `weight` is the
+  weight of each target it makes, its file's `default_weight` when left out.
+- A probe job's `weight` is the weight of each of its targets, the probe
+  targets file's top-level `default_weight` when left out.
+- A `discovered_targets` entry or a probe job with `discovery` may set
+  `weight_label`, the name of a label of its sources, such as
+  `__meta_pue_weight` or a label its source's `labels` sets, whose value is
+  a discovered target's own weight.
+- A replica's capacity is the exporter's `--allocator.capacity`, from 0.1
+  to 100, 1 by default, which every heartbeat says. The allocator takes a
+  heartbeat's capacity below 0.1 as 0.1 and above 100 as 100, so no replica
+  can claim nearly every target, and one that says none as 1.
+
+A weight is a number above 0 and at most 1000, with at most three
+decimals, such as `2` or `0.5`; any other in a file is refused at load,
+naming the file and the target, entry or job. A discovered weight label
+whose value is missing, not a number, out of that range or of more than
+three decimals leaves the target its entry's or job's weight: the target
+is kept, the fallback is logged once for each source and reason while it
+lasts, and counted, as a target begins to fall back, in
+`pue_allocator_weight_label_fallbacks_total{kind,owner,reason}`. A
+discovered weight that moves less than 20% from the weight in force for
+the target is ignored, so a label that wavers moves no target and changes
+no bundle; one that moves 20% or more is taken, and is the weight in force
+from then on. The weight in force is held in what each source keeps, which
+followers take from the leader's snapshot, so every instance places by the
+same weights. `max_targets` and `--discovery.max-targets` bound the targets
+before any is weighed.
+
+**Placement.** The targets that share a shard key, static or probe, of any
+job, are one unit: they go to one member together, and weigh there what
+they weigh together. Static and probe targets are placed in one pass over
+the members of the member list, so a member's load is its static weight
+and its probe weight together. The units are taken in the order of a hash
+of their keys, not heaviest first, so a unit's place depends little on the
+units that come and go around it. Each goes to the member of the highest
+weighted rendezvous score for its key, its capacity over `-ln h`, `h` the
+member's rendezvous hash as a fraction, whose load with the unit stays
+within its bound: `--allocation.balance-factor`, 1.25 by default, times its
+fair share, the total weight times its capacity over the members' capacity.
+Of members of one capacity the higher hash has the higher score, so with
+every capacity alike the order is plain rendezvous hashing's. When no
+member has room, the unit goes to the member least loaded for its
+capacity, the one of the higher score of those alike: no unit is ever left
+out. Weights, capacities and the factor are held in thousandths, every sum
+and comparison is in integers, the logarithm too, and every tie is broken
+by the hash and then the member's name, so every instance of the allocator
+places the same inputs and the same members alike.
+
+A capacity is part of the member list: a replica that restarts with
+another capacity changes the placement as a member's coming or going does,
+once the list has held for `--settle`. A static target that moves weighs on
+its new owner from the moment it moves; the member that keeps it draining
+for one of its intervals ([Handover](#members-and-allocation)) holds its
+weight apart, as draining. The balance factor is in the bundles: an
+instance of another factor than 1.25 adds `allocation.yaml`, which says it,
+to every bundle, which the exporter does not read, so two instances that
+place by other factors serve bundles of other generations rather than
+shares that differ while their generations agree. A `collector_files`
+entry that would match `allocation.yaml` is refused, as one matching
+`static-targets.yaml` is.
+
+**Corner cases.** With no member nothing is placed, and with one member it
+holds everything. With two, each may take at most 1.25 times half the
+weight, so the bounds leave little room, and a unit that does not fit the
+member its hash prefers goes to the other. A unit heavier than the fair
+share of the member of the largest capacity, the total over the members
+when the capacities are alike, fills the member it goes to whatever the
+others hold: it is logged once while it stays so, listed in the status's
+`heavy`, and its member is counted in `pue_allocator_overloaded_members`
+when it goes past its bound. A member past its bound by less than its
+lightest unit is not: the bounds are rounded down and the units are whole,
+so at a balance factor near 1 some member is usually a unit over its own,
+which is the placement working, not a unit too heavy. Split such a unit, by a `shard_key` of its
+own for each target, or give it a weight nearer the others'.
+
+**Stability.** The bound is what keeps the load even, and what costs a
+little stability: a member that joins takes the units its hash gives it,
+and the units it takes leave room on the others that units further on in
+the pass may move into. With many targets a member, the bound is far above
+what hashing puts on a member by chance and seldom binds: a thousand
+targets of weight 1 over five members are placed as rendezvous hashing
+places them, every one, and a sixth member moves 17% of a thousand
+weighted targets, about the 1 in 6 it must. With few targets a member the
+bound binds often: it evens out what hashing would leave uneven, and moves
+more units at a change, 10 targets over 10 members being held to one each.
+Since static and probe targets share the members' loads, a change of the
+probe targets can move a static target too, which is handed over as any
+move is. Where a target drains thus depends on the order the changes came
+in, not only on the targets before and after them: the leader, whose
+sources answer one at a time, may move a static target when the first
+answer comes and again, or back, when the second does, where a follower
+that takes both answers from one snapshot sees a single change, or none.
+So a follower takes the leader's drains of the discovered targets with its
+snapshot ([Instances with discovery](#instances-with-discovery)) rather
+than working them out, and the instances serve the same bundles once it
+has. Placing the static targets first, by their own weight, and the probes
+after them would keep probe changes from moving static targets, but not
+two answers of static sources from doing the same, and would balance the
+members' loads less well; taking the drains from the leader covers both.
+The bound applies with or without weights and
+capacities, one rule for all;
+`--allocation.balance-factor` 10 lets hashing place everything for up to 10
+members, and 1 holds every member to its fair share, as nearly as whole
+units allow, moving the most at a change.
 
 ## API
 
@@ -796,7 +948,7 @@ must not be one of them. The token is never taken from the URL.
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another instance | `{"id": "…", "discovering": true, "address_known": true}`: the instance's process id, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, and the static targets a change of them moved that drain, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /` | a person | The [status page](#status-page). |
 | `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
@@ -951,16 +1103,32 @@ its instance ID. It shows
   overdue, more than one and a half intervals after the last,
   the bundle it has in force beside the one it is to have, a refusal it
   reports, whether it is in the member list, joining, silent or shutting
-  down, and the static targets it keeps draining;
+  down, its capacity, and the static targets it keeps draining. A capacity
+  its heartbeats changed is shown as the one the member list places it by,
+  an arrow and the new one, until it has held for `--settle`;
 - how the targets are spread: for each member, the static targets it owns,
   those it keeps draining, the probe targets service discovery routes to it
-  and the total, with a bar of each; then the totals, the average per member
-  and the imbalance, the most any member has divided by the average, `1.00×`
-  for targets spread evenly. The columns stay these whatever the number of
-  probe jobs;
+  and the total; its weight, what the static targets it owns and the
+  probes routed to it weigh, the weight it is placed by; the weight of
+  the targets it keeps draining, apart, since they weigh on their new
+  owners; its capacity and its fair share, the weight times its capacity
+  over the capacity of all ([Weights and capacity](#weights-and-capacity));
+  and a bar of its weight, a segment each of the static, the draining and
+  the probe weight, with its fair share marked on it. Then the totals, the
+  average per member and the imbalance, the most any member has divided by
+  the average, `1.00×` for targets spread evenly, and for the weight the
+  most any member holds of its fair share, which for members of one
+  capacity is the same. The weight of a member overloaded is marked:
+  above the balance factor times its fair share by more than whole units
+  explain, still above it without its lightest unit, or filled alone by a
+  unit above it; and a sentence above the
+  table says how many are and why; a unit heavier than the fair share of
+  the member of the largest capacity, a target or the targets of one shard
+  key, is named in a warning above the table with its weight and its
+  member. The columns stay these whatever the number of probe jobs;
 - the probe jobs, a row each: the job, which links to its view
   ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
-  targets, the members it is routed among, the fewest, the average and the
+  targets, what they weigh together, the members it is routed among, the fewest, the average and the
   most targets of the job a member of them has, the imbalance, the most
   divided by the average, and its discovery sources with their result, or
   `listed` for a job whose file lists every target. The members a job is
@@ -985,7 +1153,8 @@ its instance ID. It shows
   case; a refresh keeps the order, the filter and the caret. Without
   JavaScript the headings are plain, as nothing sorts the table then;
 - the discovery sources: each one's kind, owner, result, with the error
-  while it fails, its targets, how often it is asked (its
+  while it fails and how many of its targets' weights fell back on their
+  owner's, their `weight_label` giving none, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
   and whether what
   it holds is this instance's own discovery or the leader's snapshot. A
@@ -1023,16 +1192,28 @@ and its `value`); `partial`, true on a follower under `--peers.leader-only`,
 whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
 `in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds`,
 `settle_seconds` and `list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
-`in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`
-and `draining`); `spread` (`members`, `total`, `average` and `imbalance`,
-each with `static`, `draining`, `probe` and `total`, and `jobs`, in file
-order, each with `job`, `collector`, `targets`, `members`, the members it is
-routed among by id, each with its `member` and `targets`, `min`, `average`,
-`max`, `imbalance`, `uneven`, the mark above, and `sources`, each with its
-`name`, `type` and `result`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
-`ok`, `failing` or `pending`, `error`, `targets`,
-`refresh_interval_seconds`, `last_refresh`,
-`last_success` and `from`, `own` or `snapshot`). A follower's
+`in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`,
+`draining`, `capacity`, the one its last heartbeat said as the allocator
+takes it, and `capacity_in_list`, the one the member list places by, left
+out for a member not in it); `spread` (`members`, each with its `member`,
+`static`, `draining`, `probe` and `total`, its `capacity`, its `weight`,
+with `static`, `draining`, `probe` and `total`, its `fair_share` of the
+static and probe weight, its `load_ratio`, that weight over the fair share,
+and `overloaded`, above `balance_factor` times it by more than its
+lightest unit, or by a unit alone (`pue_allocator_overloaded_members`); `total`, `average` and
+`imbalance`, each with `static`, `draining`, `probe` and `total`;
+`total_weight` likewise, `capacity`, the members' together,
+`balance_factor`, `max_load_ratio`, `overloaded`, the members that are, and
+`heavy`, the units heavier than a fair share, each with its `shard_key`,
+`weight` and `member` ([Weights and capacity](#weights-and-capacity)); and
+`jobs`, in file order, each with `job`, `collector`, `targets`, `weight`,
+`members`, the members it is routed among by id, each with its `member`,
+`targets` and `weight`, `min`, `average`, `max`, `imbalance`, `uneven`, the
+mark above, and `sources`, each with its `name`, `type` and `result`); and
+`sources` (`name`, `kind`, `owner`, `type`, `result`, `ok`, `failing` or
+`pending`, `error`, `targets`, `refresh_interval_seconds`, `last_refresh`,
+`last_success`, `from`, `own` or `snapshot`, and `weight_fallbacks`, its
+targets whose owner's `weight_label` gave no weight). A follower's
 `refresh_interval_seconds` of a source it takes from the leader's snapshot
 is the leader's, who asks the source, not its own setting of it, as during
 a rolling update that changes it. Times are RFC 3339 in UTC,
@@ -1048,14 +1229,15 @@ the first visit: give any user name, and the token as the password
 A member's id in the members and in the spread links to its view,
 `GET /?member=<id>`: what that one exporter replica has, to answer "which
 targets does this pod scrape?" without reading its bundle. It shows the
-member as the members do, then
+member as the members do, its capacity among them, then
 
 - the static targets it owns, by name, each with its target, collector,
-  labels and interval;
+  labels, interval and weight;
 - the static targets it keeps draining, each with the member it moved to,
-  which links to that member's view, and how much longer it drains;
-- the probe targets service discovery routes to it, counted by probe job,
-  then each with its job and collector.
+  which links to that member's view, how much longer it drains and its
+  weight;
+- the probe targets service discovery routes to it, counted and weighed by
+  probe job, then each with its job, collector and weight.
 
 The counts are the spread's for the member. A target is shown as the
 exporter's pages show it, its credentials withheld: a URL's user and
@@ -1079,10 +1261,10 @@ filter kept, and its bar's JSON link is `GET /v1/status?member=<id>`, the
 same as JSON: `generated_at`, `member`, `filter`, `limit` (1000),
 `partial`, `leader`, `status` (the member as `members.list` has it),
 `static` and `draining` (`total`, `matching` and `list`, each with `name`,
-`collector`, `target`, `labels`, `interval`, and while draining `moved_to`
-and `drains_for_seconds`), and `probes` (`jobs`, each with `job`,
-`collector` and `targets`; `total`, `matching` and `list`, each with `job`,
-`collector` and `target`). A member the allocator does not know is
+`collector`, `target`, `labels`, `interval`, `weight`, and while draining
+`moved_to` and `drains_for_seconds`), and `probes` (`jobs`, each with `job`,
+`collector`, `targets` and `weight`; `total`, `matching` and `list`, each with `job`,
+`collector`, `target` and `weight`). A member the allocator does not know is
 answered `404` as JSON, and the page, and its fragment, say so with `200`,
 so a view left open, refreshing itself, of a member that has gone shows
 that it has, its filter box hidden; `?member=` without an id is answered
@@ -1098,17 +1280,19 @@ A probe job's name in the probe jobs table links to its view,
 `GET /?job=<name>`: where that job's targets go, to answer "which pod probes
 this site?" without asking service discovery. It shows
 
-- the job: its collector, its targets, listed and discovered, its shard
-  key, its labels, a label written `""` left out, its params, and its
+- the job: its collector, its targets, listed and discovered, their
+  weight together with the job's weight, or its `weight_label` and the
+  weight a target falls back on, its shard key, its labels, a label written `""` left out, its params, and its
   discovery sources, each with its kind, result and how often it is asked,
   and its error, on a line of its own, while it fails, or none;
 - the members it is routed among, each linking to its view, with the
-  targets of the job it has and a bar of them, the most first, the fewest
+  targets of the job it has, their weight and a bar of them, the most first, the fewest
   to the most and the average above them, the imbalance marked as in the
   probe jobs table;
 - its targets, by target, each with the member service discovery routes
-  it to, which links to that member's view, and the labels its discovery
-  source gave it, but those the job's own labels set or take away.
+  it to, which links to that member's view, the labels its discovery
+  source gave it, but those the job's own labels set or take away, and its
+  weight.
 
 A discovered target's source labels, those whose names start with `__`,
 such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
@@ -1133,10 +1317,11 @@ target, its member and its labels shown as `name=value`. Its bar's JSON
 link is `GET /v1/status?job=<name>`, the same as JSON, with every label of
 a target, its source labels included, which its `?filter=` matches: `generated_at`, `job`,
 `filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
-`spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
+`spread.jobs` has it, its `members` the most first), `shard_key`,
+`job_weight` and `weight_label`, `labels`,
 `params`, `sources` (as the status's `sources` have them) and `targets`
-(`total`, `matching` and `list`, each with `target`, `member` and
-`labels`). A job the probe targets file does not have is answered `404` as
+(`total`, `matching` and `list`, each with `target`, `member`, `labels` and
+`weight`). A job the probe targets file does not have is answered `404` as
 JSON, and the page, and its fragment, say so with `200`, its filter box
 hidden, so a view left open over a reload that renamed the job shows it;
 `?job=` without a name is answered `400`. Under `--peers.leader-only` a
@@ -1150,6 +1335,11 @@ follower serves no job's view: the page names the leader, and the JSON is
 | `pue_allocator_members` | gauge | Members of the member list allocation uses. |
 | `pue_allocator_targets{kind}` | gauge | Targets of the input files in force, `static` or `probe`. |
 | `pue_allocator_assigned{member,kind}` | gauge | Static targets each member owns, without those it drains, and probe targets routed to it. |
+| `pue_allocator_assigned_weight{member,kind}` | gauge | The weight of what `pue_allocator_assigned` counts: a static target that moved weighs on its new owner, not on the member that keeps it draining ([Weights and capacity](#weights-and-capacity)). |
+| `pue_allocator_member_capacity{member}` | gauge | The capacity each member is placed by: its capacity in the member list, or, for a live member outside it that a probe is routed to, its last heartbeat's. |
+| `pue_allocator_member_load_ratio{member}` | gauge | Each member's static and probe weight over its fair share, the members' weight times its capacity over theirs: `1` for weight in proportion to capacity. |
+| `pue_allocator_overloaded_members` | gauge | Members whose weight is above `--allocation.balance-factor` times their fair share because a unit is too heavy for any member's room: still above it without their lightest unit, or filled by a unit above it alone. A member above it by less than a unit, as whole units leave some at a balance factor near 1, is not counted. |
+| `pue_allocator_weight_label_fallbacks_total{kind,owner,reason}` | counter | Discovered targets whose owner's `weight_label` gave no weight, which took the owner's weight instead, counted as each begins to fall back, by `reason`: `missing`, `not_a_number`, `out_of_range` or `too_many_decimals`. |
 | `pue_allocator_targets_per_member{kind}` | gauge | Those allocated to the members, by `kind`, divided by the number of members: what each replica has on average; `0` with no member. |
 | `pue_allocator_generation_info{member,generation}` | gauge | `1`, with the generation of each member's bundle. |
 | `pue_allocator_reloads_total{result}` | counter | Changed input files put in force (`success`) or refused (`failure`). |

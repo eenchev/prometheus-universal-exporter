@@ -185,7 +185,15 @@ func TestATCPAnswerEndsAtAnswerBytes(t *testing.T) {
 	if body, err := tcpScrape(t, c, modbus.Addr, nil); err != nil || body != string(answer) {
 		t.Fatalf("body %x, %v", body, err)
 	}
-	short := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = conn.Write(answer[:5]) })
+	// The server reads the whole request before it answers short and
+	// closes: closing with the request unread would make the system reset
+	// the connection, which the client may read before the 5 bytes'
+	// end, and the scrape would fail as reset rather than as cut short.
+	short := testutil.NewTCPStub(t, func(conn net.Conn) {
+		if _, err := io.ReadFull(conn, make([]byte, len(request))); err == nil {
+			_, _ = conn.Write(answer[:5])
+		}
+	})
 	if _, err := tcpScrape(t, c, short.Addr, nil); err == nil || !strings.Contains(err.Error(), "closed the connection after 5 bytes, and request.answer_bytes is 13") {
 		t.Errorf("an answer cut short: %v", err)
 	}

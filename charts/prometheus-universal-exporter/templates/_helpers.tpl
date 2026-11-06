@@ -548,6 +548,19 @@ true
 {{- $text -}}
 {{- end -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.allocatorBalanceFactor" -}}
+{{- /* Empty or null leaves the flag out, and the allocator's default,
+       1.25, applies. The allocator refuses a factor outside 1 to 10 or of
+       more than three decimals, so either fails rendering here instead. */ -}}
+{{- $value := .Values.allocator.balanceFactor -}}
+{{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
+{{- $text := include "prometheus-universal-exporter.text" $value -}}
+{{- if or (not (regexMatch "^[1-9][0-9]?(\\.[0-9]{1,3})?$" $text)) (lt (float64 $text) 1.0) (gt (float64 $text) 10.0) -}}
+{{- fail (printf "allocator.balanceFactor %s must be a number from 1 to 10 with at most three decimals, such as 1.5, or empty to keep the allocator's default, 1.25" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.statusRefresh" -}}
 {{- /* Empty leaves the flag out, and the exporter's default, off, applies.
        Whole hours, minutes and seconds, so the chart can hold it to the

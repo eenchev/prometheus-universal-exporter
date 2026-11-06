@@ -901,6 +901,14 @@ allocator:
   # of a new pod beyond them is refused until one stops heartbeating. A whole
   # number from 1; keep it above the most exporter pods the autoscaler runs.
   maxMembers: 1000
+  # How far above its fair share of the targets' weight a member's load may
+  # go before a target its hash gives it goes to the next member
+  # (--allocation.balance-factor): 1 holds every member to its fair share
+  # and moves the most targets when the members change, 10 lets hashing
+  # place everything for up to 10 members. A number from 1 to 10 with at
+  # most three decimals; empty leaves the flag out and the allocator's
+  # default, 1.25, in force.
+  balanceFactor: ""
   # Log level of the allocator: debug, info, warn or error.
   logLevel: info
   # With a discovery source, where the pods are peers: only the leader

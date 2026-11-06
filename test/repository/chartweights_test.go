@@ -61,3 +61,36 @@ func TestChartProbeJobsTakeWeights(t *testing.T) {
 		t.Errorf("a weight of 0 rendered %v:\n%s", ok, testutil.FirstLines(out, 5))
 	}
 }
+
+// allocator.balanceFactor renders --allocation.balance-factor on the
+// allocator's pods, as a number or a string, and nothing when empty or
+// null; what the allocator refuses fails rendering, with the values schema
+// and with it skipped.
+func TestChartSetsTheBalanceFactor(t *testing.T) {
+	helm := requireHelm(t)
+	allocator := []string{"--set", "allocator.enabled=true"}
+	for value, want := range map[string]string{"1": "1", "1.5": "1.5", "10": "10", "2.125": "2.125", `"3"`: "3", `"1.25"`: "1.25"} {
+		out, ok := helmTemplate(t, helm, chartDir, append(allocator, "--set-json", "allocator.balanceFactor="+value)...)
+		if !ok || !strings.Contains(out, `- "--allocation.balance-factor=`+want+`"`+"\n") {
+			t.Errorf("%s: rendered %v\n%s", value, ok, testutil.FirstLines(out, 5))
+		}
+	}
+	for _, args := range [][]string{allocator, append(allocator, "--set-string", "allocator.balanceFactor="), append(allocator, "--set", "allocator.balanceFactor=null")} {
+		if out, ok := helmTemplate(t, helm, chartDir, args...); !ok || strings.Contains(out, "--allocation.balance-factor") {
+			t.Errorf("%v: rendered %v, with the flag: %v", args, ok, strings.Contains(out, "--allocation.balance-factor"))
+		}
+	}
+	for name, value := range map[string]string{
+		"below 1": "0.99", "above 10": "10.5", "eleven": "11", "four decimals": "1.0001", "a word": `"even"`, "zero": "0", "negative": "-2",
+	} {
+		for _, skip := range []bool{false, true} {
+			args := append(allocator, "--set-json", "allocator.balanceFactor="+value)
+			if skip {
+				args = append([]string{"--skip-schema-validation"}, args...)
+			}
+			if out, ok := helmTemplate(t, helm, chartDir, args...); ok || !strings.Contains(out, "balanceFactor") {
+				t.Errorf("%s (schema skipped %v): rendered %v, want a failure naming allocator.balanceFactor:\n%s", name, skip, ok, testutil.FirstLines(out, 5))
+			}
+		}
+	}
+}

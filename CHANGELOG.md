@@ -83,6 +83,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   warning; the probe jobs table, a member's view and a job's view give each
   job's and each target's weight, and the discovery sources table how many
   weights fell back ([Status page](docs/ALLOCATOR.md#status-page)).
+- The chart's `allocator.balanceFactor` sets the allocator's
+  `--allocation.balance-factor`, from 1 to 10 with at most three decimals;
+  empty keeps the allocator's 1.25
+  ([chart README](charts/prometheus-universal-exporter/README.md)).
 
 - `request.ip_family` on an `http` or `graphite` collector chooses the
   address family its requests connect over, as blackbox_exporter's

@@ -923,7 +923,12 @@ bounds, or rendering MUST fail), each taken as written when it is not
 through, is the text `0` and not taken for empty, and a duration longer than
 any Go duration holds fails rendering rather than the allocator's start, and
 `--members.max` from `allocator.maxMembers`, 1000 by default, a
-whole number from 1 to 2147483647. `allocator.heartbeatInterval` MUST be a
+whole number from 1 to 2147483647, and `--allocation.balance-factor` from
+`allocator.balanceFactor` unless it is empty or `null`, the default, which
+render no flag: a number from 1 to 10 with at most three decimals, as a
+number or as a string, the allocator's bounds, or rendering MUST fail, in
+the template whether or not the values schema is checked, whose bounds
+MUST be the same. `allocator.heartbeatInterval` MUST be a
 Go duration from 1s to 2m, the allocator's bounds, or rendering MUST fail;
 the exporter pods MUST NOT be given a heartbeat setting of their own, since
 they take the allocator's from its heartbeat answers. Its `minReadySeconds` MUST be
@@ -1994,7 +1999,8 @@ are skipped and the text checks of the templates still run:
      allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
      a probe job of an unknown or no collector, a probe job name that is no
      DNS-1123 label or is used twice, `allocator.replicas` 0,
-     `allocator.maxMembers` 0, a `settle` that is no duration or, with the
+     `allocator.maxMembers` 0, an `allocator.balanceFactor` below 1, above
+     10, of four decimals or a word, a `settle` that is no duration or, with the
      template, over `1h`, `2h` and `99999999h` included, an unknown log
      level, an `env` entry `POD_IP`, an `--allocator.*` flag in `extraArgs`,
      `staticTargets.monitor.targets` beside the allocator, a mount over the

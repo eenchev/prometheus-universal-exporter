@@ -961,27 +961,36 @@ its instance ID. It shows
   never on a member only one or two over the evenest split, the targets
   divided by the members and rounded up, and on every job of 4 targets or
   more over 4 members that has all of them on one. A click on a column's
-  heading sorts the table by it, a second the other way, and a filter box
-  above it hides, as it is typed, the jobs whose name, collector and
-  sources' names do not hold its text, in any case; a refresh keeps the
-  order, the filter and the caret;
+  heading sorts the table by it, a second the other way, numbers by their
+  value and text, in any case, with the numbers in it by theirs, `job2`
+  before `job10`; a filter box above it hides, as it is typed, the jobs
+  whose name, collector and sources' names do not hold its text, in any
+  case; a refresh keeps the order, the filter and the caret. Without
+  JavaScript the headings are plain, as nothing sorts the table then;
 - the discovery sources: each one's kind, owner, result, with the error
   while it fails, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
   and whether what
-  it holds is this instance's own discovery or the leader's snapshot.
+  it holds is this instance's own discovery or the leader's snapshot. A
+  long name of a source or of its owner wraps rather than push the table
+  past the page's edge.
 
 The page writes a duration, an interval or an age, as the exporter's pages
 do: Go's form with every unit that is zero left out, `1m`, `1m30s`, `2h`
-and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. The JSON
-keeps its values: seconds as numbers, and a static target's `interval` as
-Go writes it, `1m0s`.
+and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. An
+interval configured keeps its fraction, a `--config.watch-interval` of
+`500ms` as `500ms` and a `--settle` of `1500ms` as `1.5s`; an age, how long
+ago something was, is in whole seconds. The JSON keeps its values: seconds
+as numbers, and a static target's `interval` as Go writes it, `1m0s`.
 
 The page refreshes itself as the exporter's status page does: Refresh, and
 an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
 `?refresh=30s`, fetching the page's content again (`?format=fragment`) and
-skipping its turn while the tab is hidden. It has the exporter's pages' bar,
-with their theme picker, and needs nothing from outside the allocator.
+skipping its turn while the tab is hidden. A refresh asked while one waits
+for the same URL is left to that one; one asked after the URL changed
+aborts the one waiting and asks again, so the latest wins. It has the
+exporter's pages' bar, with their theme picker, and needs nothing from
+outside the allocator.
 
 `GET /v1/status` answers the same as JSON: `generated_at`; `instance`
 (`address`, `id`, `version`, `revision`, `started_at`, `uptime_seconds`,
@@ -1072,8 +1081,8 @@ this site?" without asking service discovery. It shows
 
 - the job: its collector, its targets, listed and discovered, its shard
   key, its labels, a label written `""` left out, its params, and its
-  discovery sources, each with its kind and result, and its error while it
-  fails, or none;
+  discovery sources, each with its kind, result and how often it is asked,
+  and its error, on a line of its own, while it fails, or none;
 - the members it is routed among, each linking to its view, with the
   targets of the job it has and a bar of them, the most first, the fewest
   to the most and the average above them, the imbalance marked as in the
@@ -1087,9 +1096,13 @@ such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
 often a dozen a target, and the page leaves them out. *Show source labels*,
 under the filter of a job with discovery sources, shows them: it puts
 `?meta=1` in the URL, or takes it out, and refreshes the content, so the
-auto-refresh and a bookmark keep the choice. The filter, as it is typed and
-with Search all, matches the labels shown and no other: while the source
-labels are left out, `__meta_zone=ams` matches nothing.
+auto-refresh and a bookmark keep the choice. A refresh still waiting for the
+URL before is abandoned for one of the URL as it is, so a click is never
+lost to a refresh in flight and the answer shown is always to the latest
+choice; a target keeps its line where it fits, the labels wrapping first.
+The filter, as it is typed and with Search all, matches the labels shown
+and no other: while the source labels are left out, `__meta_zone=ams`
+matches nothing.
 
 The counts are the spread's for the job. A target is shown with its
 credentials withheld as on a member's view, and a param whose name reads

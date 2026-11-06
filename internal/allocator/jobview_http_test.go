@@ -137,8 +137,8 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 	page := ask(h, "/", "").Body.String()
 	requireIn(t, page,
 		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>`,
-		"<h2>Probe jobs</h2>", `<table class="spread sortable" id="probe-jobs">`,
-		`<th class="num" aria-sort="none" data-sort="num"><button type="button">Imbalance</button></th>`,
+		"<h2>Probe jobs</h2>", `<table class="spread" id="probe-jobs">`,
+		`<th class="num" data-sort="num">Imbalance</th>`,
 		`<a href="?job=websites" title="the targets of the probe job websites"><strong>websites</strong></a>`,
 		"<tr data-order=\"2\" data-match=\"pods\ndemo\npod-files\">",
 		`<span class="source">pod-files <span class="good">ok</span></span>`,
@@ -148,7 +148,7 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 		// The script puts the order and the filter back on the table a
 		// refresh swaps in, and the caret in the filter being typed in.
 		"      filterRows();\n      arrangeJobs();\n", `$("jobs-filter").setSelectionRange(caret[0], caret[1]);`,
-		`table.sortable th.num button::before { content: "\2195 ";`)
+		`table.sortable th.num button::before { content: "\2195\00a0";`)
 	if strings.Contains(page, `title="probe job `) {
 		t.Error("the targets table still has a column of each probe job")
 	}

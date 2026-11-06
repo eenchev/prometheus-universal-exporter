@@ -8474,8 +8474,10 @@ Recommended behavior:
   something took — in Go's form with every unit that is zero left out:
   `1m`, `1m30s`, `2h` and `1h30s`, never `1m0s`, `2h0m0s` or `1h0m30s`; a
   fraction of a second MUST be kept (`1m0.5s`), one under a second MUST be
-  written as Go writes it (`500ms`), and none as `0s`. One helper
-  (`pagekit.Duration`) MUST write them for both programs. The JSON answers
+  written as Go writes it (`500ms`), and none as `0s`; an interval
+  configured MUST NOT be cut to whole seconds, as an age, how long ago
+  something was, may be. One helper (`pagekit.Duration`) MUST write them
+  for both programs. The JSON answers
   MUST keep their values as they are: seconds as numbers, and a duration
   held as a string, as a static target's `interval`, in Go's form (`1m0s`).
 
@@ -30409,7 +30411,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.272 Allocator probe jobs table and job view
 
-- `TestTheStatusPageHasAProbeJobsTable` (allocator): with four probe jobs over r1, r2 and r3, websites of six listed targets, apis of two, pods of three targets a `file_sd` source finds and legacy of one listed target and a source of a file that is no JSON, after one refresh of the sources, `/v1/status`'s `spread.jobs` has the four in file order, each routed among r1, r2 and r3 by id, its members' targets summing to its targets, its `min`, `average`, `max` and `imbalance` those of its members' counts, and `uneven` true exactly when the most is at least 1.5 times the targets over the members rounded up; each member's `probe` is the sum of its jobs' counts; websites has the collector demo and no sources (`[]`), pods its source ok and legacy its source failing, and legacy, one target over three members, is not uneven at `3`; the page's targets table has the fixed columns Member, Static, Draining, Probe, Total and Share and no column of a probe job, and the probe jobs table has sortable headings, a link of each job to `?job=<name>`, a `data-match` of the job, collector and sources' names, each source with its result, `listed` for a job without one, the filter box, hidden until the script shows it, a refresh that arranges the table again and puts the caret back, the sort mark before a number column's name, and the imbalance marked exactly on the uneven jobs.
+- `TestTheStatusPageHasAProbeJobsTable` (allocator): with four probe jobs over r1, r2 and r3, websites of six listed targets, apis of two, pods of three targets a `file_sd` source finds and legacy of one listed target and a source of a file that is no JSON, after one refresh of the sources, `/v1/status`'s `spread.jobs` has the four in file order, each routed among r1, r2 and r3 by id, its members' targets summing to its targets, its `min`, `average`, `max` and `imbalance` those of its members' counts, and `uneven` true exactly when the most is above the average by 3 or more and by 3 or more standard deviations of a member's count; each member's `probe` is the sum of its jobs' counts; websites has the collector demo and no sources (`[]`), pods its source ok and legacy its source failing, and legacy, one target over three members, is not uneven at `3`; the page's targets table has the fixed columns Member, Static, Draining, Probe, Total and Share and no column of a probe job, and the probe jobs table has plain headings the script makes sortable, a link of each job to `?job=<name>`, a `data-match` of the job, collector and sources' names, each source with its result, `listed` for a job without one, the filter box, hidden until the script shows it, a refresh that arranges the table again and puts the caret back, the sort mark before a number column's name, and the imbalance marked exactly on the uneven jobs.
 - `TestTheJobViewListsItsTargets` (allocator): with the same jobs, `/v1/status?job=websites` has the collector, the shard key `target`, the label team and not the one written `""`, the param timeout as written and api_key as `<redacted>`, no sources, the members with the spread's counts, the most first, and the six targets by target, each with the member `SD` routes it to and no labels; pods has its source ok and three targets, each with the label namespace its source gave it and not team, which the job sets; apis shows its targets' `access_token` as `<redacted>` and never the token; the page has its title, the bar's home and JSON links, the way back, the heading, the filter box with the job, its label and hint, the job's facts, the params masked, `none: the probe targets file lists every target`, the members' table, the targets' table and a link to a member's view, and never the credential or the label written `""`; legacy's page shows its source failing; the fragment is the content alone; `?filter=<member>`, in upper case, lists that member's targets alone, every count but the matching kept, and `?filter=namespace=shop` pods' three; an unknown job is answered `200` on the page, with the notice, the filter box hidden and the script hiding it, and on its fragment, and `404` as JSON, and an empty `job` `400` on both; a member's view links each probe job, in its jobs table and in its list, to the job's view.
 - `TestAJobViewIsBounded` (allocator): a job of 1005 targets lists 1000 of them, the page says `Only the first 1000 are listed</span>; 5 more are left out.`, and `?filter=h1004` finds the one beyond the bound.
 - `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator): under `--peers.leader-only` a follower's `/v1/status?job=<name>` is `partial` with the leader's address and no spread or targets, its page names the leader with the notice and has no filter box or targets, and the leader's view is whole.
@@ -30419,7 +30421,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheIntervalFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--config.watch-interval=45s`, `--settle=3s` and `--discovery.refresh-interval=7s` and a probe job of a `file_sd` source without `refresh_interval` and one of `2m` gives a status of a 45s watch interval, a 3s settle time and sources asked every 7 and 120 seconds.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
-- `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
+- `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), renamed and changed in § 34.275.
 
 ## 34.273 Allocator polish: durations, source labels, the first member list
 
@@ -30449,6 +30451,19 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--config.watch-interval` of `-1s` or `25h` exits 2 with `--config.watch-interval must be from 0 to 24h`, and `--discovery.refresh-interval` of `999ms`, `-1s` or `24h0m0.001s` with `--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` (repository), changed: `24h` and `1440m` render, and with the values schema skipped an integer `0` of `allocator.configWatchInterval` renders `--config.watch-interval=0`, where `default` took it for empty and left the flag out.
 - `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.configWatchInterval` of `24h0m1s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start, and of the integer `30`, and `allocator.discoveryRefreshInterval` of `1441m`, `99999999h` or the integer `0`, fail rendering with the schema and with it skipped, each saying `must be a Go duration from 0 to 24h` or `from 1s to 24h`.
+
+## 34.275 Fixes from the review of the allocator's jobs and polish: pages
+
+- `TestTheLatestRefreshWins` (allocator): a job's view's script leaves a refresh asked while another waits for the same URL to that one, aborts one waiting for another URL and asks again, with the fetch's `signal`, swaps in an answer only when its refresh is still the latest, says nothing of a refresh aborted for a later one, and the *Show source labels* box's change refreshes; no refresh is dropped for one in flight. (In headless Chromium, with fragments answered after 1.5s, ticking the box 200ms after Refresh, and unticking and ticking it again 100ms apart, show the source labels, where they stayed left out, and three clicks of Refresh 100ms apart ask once.)
+- `TestTheSortMarksStandApartFromTheirNames` (allocator): every sort mark is apart from its heading's name by `\00a0`, `"\2195\00a0"` before a number column's name and `"\00a0\2195"` after another's, the same for `\2191` and `\2193`, and no `content` has a space after an escape, which would end the escape and be lost. (In headless Chromium, the computed mark before Targets is `"↕ "`, where it was `"↕"`, flush with the name.)
+- `TestTheProbeJobsTableSortsNaturallyAndOnlyWithItsScript` (allocator): the probe jobs table sorts text with an `Intl.Collator` of `numeric: true` and `sensitivity: "base"`, not a plain `localeCompare`, and is served with plain headings, no button and no `aria-sort`, and without the `sortable` class, which the script adds with the buttons. (In headless Chromium, jobs `job1`, `job2`, `job10`, `job3`, `job21` and `Job3` sort as `job1`, `job2`, `job3`, `Job3`, `job10`, `job21`, where `job10` came before `job2`, and without JavaScript the table has no button, where it had nine.)
+- `TestTheJobViewSetsASourcesErrorApartAndKeepsATargetWhole` (allocator): a job's view writes its failing source as `inventory file_sd failing, refreshed every 1m`, then its error muted on a line of its own; its targets' cells break a target with `overflow-wrap: break-word`, only where it is longer than the line. (In headless Chromium, of a job of 40 discovered targets with `?meta=1`, none wraps at 1600, 1280, 1024 or 390 pixels wide, where all 40 did at 1600, 1280 and 1024.)
+- `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), formerly `TestTheSourcesTableKeepsItsShortCellsOnOneLine`: of a probe job of an 85-character name and a source of a 42-character one, the sources table keeps the kind under each name and the *From* cell on one line, lets the source's and the owner's names and the result's error wrap, and the probe jobs table a source's name; neither name cell is kept on one line. (In headless Chromium, the sources table of such a job fits in the page at 1024, 1280 and 1600 pixels wide, where it was 1590 pixels wide at each.)
+- `TestTheAllocatorPagesKeepAConfiguredIntervalsFraction` (allocator): an allocator of a 500ms watch interval, a 2.5s heartbeat interval and a 1500ms settle time has `read again every 500ms for changes`, `heartbeat every 2.5s; a member not heard from for 7.5s` and `holds for 1.5s` on its page, and its uptime 1.7s after the start as `1s`; a `file_sd` source of a `refresh_interval` of 1500ms is `1.5s` in the sources table and `refreshed every 1.5s` on its job's view.
+- `TestAJobIsUnevenOnlyBeyondWhatHashingGivesByChance` (allocator): a job is uneven exactly when its most is above the average by 3 or more and by 3 or more standard deviations of a member's count: not 2 of 2 over 2 members, 3 of 3 over 3, 3 of 4 over 4, 5 of 6 over 3, 5 of 8 over 4, 8 of 20 over 4, 35 of 100 over 4 or 120 of 1000 over 10, nor 5 over 1 member or none over 3, but 4 of 4 over 4, 6 of 6 over 3, 8 of 8 over 4, 12 of 20 over 4, 40 of 100 over 4 and 130 of 1000 over 10.
+- `TestThePagesMarkOnlyAJobHashingWouldSeldomSpreadSo` (allocator): over four members, a job of 4 targets all on one member is uneven and marked on the status page and its view, and one of 3 targets all on one member is neither; the page says the rule.
+- `TestTheStatusPageHasAProbeJobsTable` (allocator), changed: the table has plain headings, the number column's mark is `"\2195\00a0"`, and `uneven` and the mark follow the rule above.
+- `TestNoGoCommentSaysAParagraphTwice` (repository): no Go file's comment has two paragraphs one after the other of which four in five of the shorter's words, of 12 or more, are the longer's, as the job view's paragraph on source labels was twice.
 
 # 35. Documentation requirements
 
@@ -33805,7 +33820,8 @@ its kind, owner, source kind, result (`ok`, `failing` with its error, or
 targets a follower took from the leader's snapshot, the leader's interval of
 it, which the snapshot MUST carry per source and its digest MUST cover, so a
 follower names the leader's interval it took and is told of a change of
-it), which the page MUST show, last refresh and last success, and whether what it
+it), which the page MUST show, a source's and its owner's names wrapping
+rather than widening the table past the page, last refresh and last success, and whether what it
 holds came from the instance's own discovery or the leader's snapshot. `GET
 /` MUST render the same as an HTML page framed as the exporter's pages are
 (§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target
@@ -33820,8 +33836,11 @@ probe, total and the bar, never a column per probe job), a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
 members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its
-heading and the other way at a second, numbers by value and ties in file
-order, and filtered as a filter box is typed by the job, collector and
+heading and the other way at a second, numbers by value, text with the
+numbers in it by theirs and in any case (`job2` before `job10`), and ties in
+file order, its headings plain until the script makes them buttons, so a
+page without JavaScript shows no sort mark, a mark apart from its heading's
+name, and filtered as a filter box is typed by the job, collector and
 sources' names (`data-match`), with plain JavaScript, a refresh keeping the
 order, the filter and the caret, and the exporter's status page's refresh controls, `?refresh=`
 keeping the interval and `?format=fragment` answering the content alone,
@@ -33859,7 +33878,8 @@ job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
 member's view is: the job's collector, targets, shard key, labels (one
 written `""` left out), params, a param whose name reads as a credential's
 (`fetch.CredentialName`) as `<redacted>` and any other through
-`fetch.RedactText`, and discovery sources with their result; the members it
+`fetch.RedactText`, and discovery sources with their result and refresh
+interval, a failing one's error on a line of its own; the members it
 is routed among, linked to their views, with the targets of the job each
 has, as the spread counts them, and a bar, the most first; and its targets
 by target, each shown as `fetch.DisplayTarget` shows it, with the member
@@ -33869,8 +33889,12 @@ those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
 them; a job with discovery sources MUST have a *Show source labels* box by
 its filter that puts `?meta=1` in the URL, or takes it out, and refreshes
 the content, so a refresh, which fetches the URL's fragment, keeps the
-choice. `?filter=` MUST cut the targets to those whose target, member or a
-label shown as `name=value` holds the text, before the first 1000, and a
+choice; a refresh waiting for another URL MUST be aborted for it and its
+answer never swapped in, so the latest choice is the one shown, and a
+refresh asked while one waits for the same URL MUST be left to that one. A
+target MUST keep its line where it fits, its labels wrapping first.
+`?filter=` MUST cut the targets to those whose target, member or a label
+shown as `name=value` holds the text, before the first 1000, and a
 row's `data-match`, which the box filters by as it is typed, MUST hold the
 same, so a source label left out matches neither. `GET
 /v1/status?job=<name>` MUST answer the same as JSON

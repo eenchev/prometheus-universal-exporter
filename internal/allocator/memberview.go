@@ -331,6 +331,11 @@ td.target { overflow-wrap: anywhere; min-width: 14em; }
    the labels theirs, and the target wraps. */
 @media (min-width: 641px) { table#owned td.target, table#draining td.target { width: 40%; } }
 table.targets td.id { min-width: 13em; }
+/* A job's target, a URL, keeps its line where it fits: its labels, the
+   source labels among them with ?meta=1, wrap first, and the target breaks
+   only where it is longer than the line, never a letter alone onto the
+   next for want of the room the labels took. */
+table#job-targets td.target { overflow-wrap: break-word; }
 td.labels { min-width: 10em; }
 td.moved { overflow-wrap: anywhere; min-width: 9em; }
 span.label { display: inline-flex; margin: 0 4px 2px 0; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; text-indent: 0; }

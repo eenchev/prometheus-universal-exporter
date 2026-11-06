@@ -245,14 +245,26 @@ func imbalance(n float64) string {
 	return strconv.FormatFloat(n, 'f', 2, 64) + "×"
 }
 
-// age writes seconds, an age or an interval, in whole seconds, minutes and
-// hours, as the pages write a duration (pagekit.Duration): 1m, not 1m0s.
+// age writes seconds of an age, how long ago something was, in whole
+// seconds, minutes and hours, as the pages write a duration
+// (pagekit.Duration): 1m, not 1m0s. The fraction of an age that has run on
+// since is no news; an interval configured is written by interval.
 func age(s float64) string {
 	d := time.Duration(s * float64(time.Second)).Truncate(time.Second)
 	if d < time.Second {
 		return "0s"
 	}
 	return pagekit.Duration(d)
+}
+
+// interval writes seconds of an interval configured, as the heartbeat
+// interval or a source's refresh interval, as it was given, its fraction
+// kept (pagekit.Duration): a watch interval of 500ms is 500ms, and a
+// settle time of 1500ms is 1.5s, where age would write 0s and 1s. The
+// seconds are rounded to the nanosecond, a duration's own unit, which is
+// what the float of the JSON came from.
+func interval(s float64) string {
+	return pagekit.Duration(time.Duration(math.Round(s * float64(time.Second))))
 }
 
 // shortGeneration is a generation's first 8 characters, which tell
@@ -280,7 +292,7 @@ func jobMatch(j JobSpread) string {
 	return strings.Join([]string{j.Job, j.Collector, sourceNames(j.Sources)}, "\n")
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "duration": pagekit.DurationText, "gen": shortGeneration,
+var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
 	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
@@ -295,10 +307,15 @@ th { background: var(--panel); white-space: nowrap; }
 td { overflow-wrap: normal; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.id { overflow-wrap: anywhere; min-width: 9em; }
-/* A source's name and kind, its owner and where its targets came from are
-   short phrases that read badly broken over lines; the result, with its
-   error, takes the width that is left. */
-table.sources td:first-child, table.sources td:nth-child(2), table.sources td:last-child { white-space: nowrap; }
+/* A source's kind, under its name, its owner's, and where its targets
+   came from are short phrases that read badly broken over lines. The
+   names of a source and its owner, a probe job's, are as long as they were
+   written, so they wrap, at a hyphen where they have one, rather than push
+   the columns past the page's edge; the result, with its error, takes the
+   width that is left, a path in the error broken where it must be. */
+table.sources span.kind, table.sources td:last-child { white-space: nowrap; }
+table.sources td.owner { overflow-wrap: anywhere; min-width: 9em; }
+table.sources td.result { overflow-wrap: anywhere; min-width: 12em; }
 tfoot td { background: var(--panel); }
 /* Scrolled sideways, as on a phone, the spread keeps each row's member in
    view beside its counts and bar. */
@@ -343,16 +360,22 @@ td.bar { width: 32%; min-width: 120px; }
 /* A sortable table's headings are buttons, marked as the exporter's debug
    page marks its series table's: ↕ for a column not sorted by, ↑ or ↓ for
    the one sorted by. A number's column has the mark before its name, so
-   the name ends where the column's numbers end. */
+   the name ends where the column's numbers end. The script makes the
+   headings buttons and the table sortable, so a page without it has plain
+   headings. The space between a mark and the name is \00a0, a no-break
+   space: a space after an escape such as \2195 ends the escape and is no
+   part of the text, so "\2195 " is the mark alone, flush with the name. */
 table.sortable th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
-table.sortable th:not(.num) button::after { content: " \2195"; color: var(--muted); }
-table.sortable th.num button::before { content: "\2195 "; color: var(--muted); }
-table.sortable th[aria-sort="ascending"]:not(.num) button::after { content: " \2191"; color: var(--accent); }
-table.sortable th[aria-sort="descending"]:not(.num) button::after { content: " \2193"; color: var(--accent); }
-table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191 "; color: var(--accent); }
-table.sortable th.num[aria-sort="descending"] button::before { content: "\2193 "; color: var(--accent); }
+table.sortable th:not(.num) button::after { content: "\00a0\2195"; color: var(--muted); }
+table.sortable th.num button::before { content: "\2195\00a0"; color: var(--muted); }
+table.sortable th[aria-sort="ascending"]:not(.num) button::after { content: "\00a0\2191"; color: var(--accent); }
+table.sortable th[aria-sort="descending"]:not(.num) button::after { content: "\00a0\2193"; color: var(--accent); }
+table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191\00a0"; color: var(--accent); }
+table.sortable th.num[aria-sort="descending"] button::before { content: "\2193\00a0"; color: var(--accent); }
+/* A job's sources' names wrap, as the sources table's do, so a long one
+   does not push the table past the page's edge. */
 td.sources { min-width: 10em; }
-td.sources span.source { white-space: nowrap; }
+td.sources span.source { overflow-wrap: anywhere; }
 form.filter.jobs { margin: 0 0 8px; }
 form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: border-box; }
 /* On a phone the label is "Instance" over "ID", so the column is no wider
@@ -444,13 +467,14 @@ var statusFrame = `<!DOCTYPE html>
 // Refresh and the auto-refresh fetch the content again, ?format=fragment,
 // and swap it in, as the exporter's status page does: the fetch is
 // same-origin, so it carries the credentials the page was opened with. A
-// hidden tab is not refreshed, and a refresh still waiting is not
-// overlapped. Without JavaScript the button reloads the page, the form puts
-// the interval in the URL, and the meta refresh reloads it.
+// hidden tab is not refreshed, and a refresh still waiting for the URL as
+// it is is not overlapped (refresh). Without JavaScript the button reloads
+// the page, the form puts the interval in the URL, and the meta refresh
+// reloads it.
 (() => {
   const $ = (id) => document.getElementById(id);
   const content = $("status-content"), every = $("refresh-every"), state = $("refresh-state");
-  let timer = 0, inFlight = false, refreshedAt = Date.now(), dataAt = "";
+  let timer = 0, inFlight = null, refreshedAt = Date.now(), dataAt = "";
   const clock = (ms) => new Date(ms).toLocaleTimeString();
   const seconds = () => Number(every.selectedOptions[0].dataset.seconds) || 0;
   function asOf() {
@@ -520,12 +544,17 @@ var statusFrame = `<!DOCTYPE html>
   }
   // The status page's probe jobs table sorts by the column whose heading
   // is clicked, the other way at a second click, numbers by their value
-  // (data-value) and text as it reads, a tie in file order (data-order);
-  // and it filters its rows as its filter is typed, matching in any case
-  // the texts each row carries in data-match. Both are in the content,
-  // which a refresh replaces, so the order chosen and the text typed are
-  // kept here and put back on the new table, the caret where it was.
+  // (data-value) and text as it reads, the numbers in it by their value,
+  // job2 before job10, and a letter's case no matter, a tie in file order
+  // (data-order); and it filters its rows as its filter is typed, matching
+  // in any case the texts each row carries in data-match. The headings are
+  // made buttons here, the table marked sortable: without JavaScript they
+  // are plain headings, as nothing would sort the table. The table is in
+  // the content, which a refresh replaces, so the order chosen and the
+  // text typed are kept here and put back on the new table, the caret
+  // where it was.
   let jobSort = -1, jobDown = false, jobFilter = "";
+  const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
   function arrangeJobs() {
     const table = content.querySelector("table#probe-jobs"), box = $("jobs-filter");
     if (!table) return;
@@ -534,6 +563,15 @@ var statusFrame = `<!DOCTYPE html>
       box.form.hidden = false;
     }
     const heads = table.tHead.rows[0].cells, body = table.tBodies[0];
+    if (!table.classList.contains("sortable")) {
+      for (const head of heads) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.append(...head.childNodes);
+        head.append(button);
+      }
+      table.classList.add("sortable");
+    }
     const numeric = jobSort >= 0 && heads[jobSort].dataset.sort === "num";
     const key = (row) => {
       const cell = row.cells[jobSort];
@@ -541,7 +579,7 @@ var statusFrame = `<!DOCTYPE html>
     };
     const rows = Array.from(body.rows).sort((x, y) => {
       let c = 0;
-      if (jobSort >= 0) c = numeric ? key(x) - key(y) : key(x).localeCompare(key(y));
+      if (jobSort >= 0) c = numeric ? key(x) - key(y) : collator.compare(key(x), key(y));
       if (jobDown) c = -c;
       return c || Number(x.dataset.order) - Number(y.dataset.order);
     });
@@ -573,18 +611,29 @@ var statusFrame = `<!DOCTYPE html>
     if (event.target.id === "jobs") event.preventDefault();
   });
   arrangeJobs();
+  // A refresh asked while another waits for the URL as it is now is that
+  // one: the answer coming is the one asked for, and a slow allocator is
+  // not asked again at every tick of the auto-refresh. One asked after the
+  // URL changed, as the Show source labels box changes it, aborts the one
+  // waiting, whose answer is to the URL before, and asks again, so the
+  // latest wins and an answer to a URL left is never swapped in.
   async function refresh() {
-    if (inFlight) return;
-    inFlight = true;
     const url = new URL(location.href);
     url.searchParams.set("format", "fragment");
     url.hash = "";
+    if (inFlight && inFlight.url === url.href) return;
+    if (inFlight) inFlight.abort();
+    const mine = new AbortController();
+    mine.url = url.href;
+    inFlight = mine;
     try {
-      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
+      const response = await fetch(url, {credentials: "same-origin", cache: "no-store", signal: mine.signal});
       if (!response.ok) throw new Error("HTTP " + response.status);
+      const text = await response.text();
+      if (inFlight !== mine) return;
       const typing = document.activeElement && document.activeElement.id === "jobs-filter" ? document.activeElement : null;
       const caret = typing && [typing.selectionStart, typing.selectionEnd];
-      content.innerHTML = await response.text();
+      content.innerHTML = text;
       refreshedAt = Date.now();
       asOf();
       filterRows();
@@ -594,10 +643,13 @@ var statusFrame = `<!DOCTYPE html>
         $("jobs-filter").setSelectionRange(caret[0], caret[1]);
       }
     } catch (error) {
+      // A refresh aborted for a later one says nothing: the later one says
+      // how it went.
+      if (inFlight !== mine) return;
       state.className = "bad";
       state.textContent = "Refresh failed at " + clock(Date.now()) + " (" + error.message + "); showing the data as of " + clock(Date.parse(dataAt) || refreshedAt);
     } finally {
-      inFlight = false;
+      if (inFlight === mine) inFlight = null;
     }
   }
   function schedule() {
@@ -670,7 +722,7 @@ const statusContent = `{{define "content"}}
 <tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
 <tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
 <tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
-<tr><th>Input files</th><td>{{if .Instance.WatchIntervalSeconds}}read again every {{age .Instance.WatchIntervalSeconds}} for changes{{else}}<span class="muted">read once, at the start</span> (<code class="flag">--config.watch-interval=0</code>){{end}}</td></tr>
+<tr><th>Input files</th><td>{{if .Instance.WatchIntervalSeconds}}read again every {{interval .Instance.WatchIntervalSeconds}} for changes{{else}}<span class="muted">read once, at the start</span> (<code class="flag">--config.watch-interval=0</code>){{end}}</td></tr>
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
@@ -715,7 +767,7 @@ const statusContent = `{{define "content"}}
 {{- with .Members}}
 
 <h2>Members</h2>
-<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}} The replicas heartbeat every {{age .HeartbeatIntervalSeconds}}; a member not heard from for {{age .MemberTTLSeconds}} stops being live. A changed member list holds for {{age .SettleSeconds}} before targets move.</p>
+<p>{{if .Formed}}{{.InList}} member{{if ne .InList 1}}s{{end}} in the member list, {{.Live}} live.{{else}}<span class="bad">The member list has not formed yet</span>: no bundle or service discovery answer is served until it does. {{.Live}} live.{{end}} The replicas heartbeat every {{interval .HeartbeatIntervalSeconds}}; a member not heard from for {{interval .MemberTTLSeconds}} stops being live. A changed member list holds for {{interval .SettleSeconds}} before targets move.</p>
 {{- if .List}}
 <div class="scroll">
 <table>
@@ -782,8 +834,8 @@ const statusContent = `{{define "content"}}
 </form>
 <p class="note muted" data-rows-of="probe-jobs"></p>
 <div class="scroll">
-<table class="spread sortable" id="probe-jobs">
-<thead><tr><th aria-sort="none" data-sort="text"><button type="button">Job</button></th><th aria-sort="none" data-sort="text"><button type="button">Collector</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Targets</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Members</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Min</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Avg</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Max</button></th><th class="num" aria-sort="none" data-sort="num"><button type="button">Imbalance</button></th><th aria-sort="none" data-sort="text"><button type="button">Sources</button></th></tr></thead>
+<table class="spread" id="probe-jobs">
+<thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th><th class="num" data-sort="num">Members</th><th class="num" data-sort="num">Min</th><th class="num" data-sort="num">Avg</th><th class="num" data-sort="num">Max</th><th class="num" data-sort="num">Imbalance</th><th data-sort="text">Sources</th></tr></thead>
 <tbody>
 {{- range $i, $j := .Jobs}}
 <tr data-order="{{$i}}" data-match="{{jobMatch $j}}">
@@ -816,11 +868,11 @@ const statusContent = `{{define "content"}}
 <tbody>
 {{- range .Sources}}
 <tr>
-<td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted">{{.Type}}</span></td>
-<td>{{.Owner}}<br><span class="muted">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
-<td>{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}</td>
+<td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted kind">{{.Type}}</span></td>
+<td class="owner">{{.Owner}}<br><span class="muted kind">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
+<td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
-<td class="num">{{age .RefreshIntervalSeconds}}</td>
+<td class="num">{{interval .RefreshIntervalSeconds}}</td>
 <td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
 <td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
 </tr>

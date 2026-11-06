@@ -19,26 +19,40 @@ import (
 // before any file is read.
 func TestAMalformedCommandLineExits2(t *testing.T) {
 	for args, want := range map[string]string{
-		"--nope":                                      "flag provided but not defined",
-		"stray":                                       `unexpected argument "stray"`,
-		"--settle=-1s":                                "--settle must not be negative",
-		"--members.max=0":                             "--members.max must be 1 or more",
-		"--heartbeat.interval=999ms":                  "--heartbeat.interval must be from 1s to 2m, got 999ms",
-		"--heartbeat.interval=2m1s":                   "--heartbeat.interval must be from 1s to 2m, got 2m1s",
-		"--heartbeat.interval=0s":                     "--heartbeat.interval must be from 1s to 2m, got 0s",
-		"--discovery.max-targets=0":                   "--discovery.max-targets must be 1 or more",
-		"--discovery.refresh-interval=999ms":          "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got 999ms",
-		"--discovery.refresh-interval=-1s":            "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got -1s",
-		"--discovery.refresh-interval=24h0m0.001s":    "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got 24h0m0.001s",
-		"--config.watch-interval=-1s":                 "--config.watch-interval must be from 0 to 24h, got -1s",
-		"--config.watch-interval=25h":                 "--config.watch-interval must be from 0 to 24h, got 25h0m0s",
-		"--log.level=verbose":                         `--log.level "verbose" is not a level`,
-		"--web.listen-address=nowhere":                "--web.listen-address",
-		"--peers=pue-allocator":                       `--peers entry "pue-allocator" is not a host:port`,
-		"--peers=a:9116,,b:9116":                      `--peers entry "" is not a host:port`,
-		"--peers.self=10.0.3.7":                       "--peers.self is given without --peers",
-		"--peers.leader-only":                         "--peers.leader-only is given without --peers",
-		"--peers=a:9116 --peers.self=pue-allocator-0": `--peers.self "pue-allocator-0" is not an IP address`,
+		"--nope":                                        "flag provided but not defined",
+		"stray":                                         `unexpected argument "stray"`,
+		"--settle=-1s":                                  "--settle must not be negative",
+		"--members.max=0":                               "--members.max must be 1 or more",
+		"--heartbeat.interval=999ms":                    "--heartbeat.interval must be from 1s to 2m, got 999ms",
+		"--heartbeat.interval=2m1s":                     "--heartbeat.interval must be from 1s to 2m, got 2m1s",
+		"--heartbeat.interval=0s":                       "--heartbeat.interval must be from 1s to 2m, got 0s",
+		"--discovery.max-targets=0":                     "--discovery.max-targets must be 1 or more",
+		"--discovery.refresh-interval=999ms":            "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got 999ms",
+		"--discovery.refresh-interval=-1s":              "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got -1s",
+		"--discovery.refresh-interval=24h0m0.001s":      "--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default, got 24h0m0.001s",
+		"--config.watch-interval=-1s":                   "--config.watch-interval must be from 0 to 24h, got -1s",
+		"--config.watch-interval=25h":                   "--config.watch-interval must be from 0 to 24h, got 25h0m0s",
+		"--log.level=verbose":                           `--log.level "verbose" is not a level`,
+		"--web.listen-address=nowhere":                  "--web.listen-address",
+		"--peers=pue-allocator":                         `--peers entry "pue-allocator" is not a host:port`,
+		"--peers=a:9116,,b:9116":                        `--peers entry "" is not a host:port`,
+		"--peers.self=10.0.3.7":                         "--peers.self is given without --peers",
+		"--peers.leader-only":                           "--peers.leader-only is given without --peers",
+		"--peers=a:9116 --peers.self=pue-allocator-0":   `--peers.self "pue-allocator-0" is not an IP address`,
+		"--peers.check-interval=1s":                     "--peers.check-interval is given without --peers",
+		"--peers.check-timeout=1s":                      "--peers.check-timeout is given without --peers",
+		"--peers.failure-threshold=3":                   "--peers.failure-threshold is given without --peers",
+		"--peers.snapshot-timeout=30s":                  "--peers.snapshot-timeout is given without --peers",
+		"--peers=a:9116 --peers.check-interval=499ms":   "--peers.check-interval must be from 500ms to 1m, got 499ms",
+		"--peers=a:9116 --peers.check-interval=1m1s":    "--peers.check-interval must be from 500ms to 1m, got 1m1s",
+		"--peers=a:9116 --peers.check-interval=0s":      "--peers.check-interval must be from 500ms to 1m, got 0s",
+		"--peers=a:9116 --peers.check-timeout=99ms":     "--peers.check-timeout must be from 100ms to less than --peers.check-interval (2s), got 99ms",
+		"--peers=a:9116 --peers.check-timeout=2s":       "--peers.check-timeout must be from 100ms to less than --peers.check-interval (2s), got 2s",
+		"--peers=a:9116 --peers.check-interval=800ms":   "--peers.check-timeout must be from 100ms to less than --peers.check-interval (800ms), got 1s",
+		"--peers=a:9116 --peers.failure-threshold=0":    "--peers.failure-threshold must be from 1 to 20, got 0",
+		"--peers=a:9116 --peers.failure-threshold=21":   "--peers.failure-threshold must be from 1 to 20, got 21",
+		"--peers=a:9116 --peers.snapshot-timeout=5m1s":  "--peers.snapshot-timeout must be from --peers.check-timeout (1s) to 5m, got 5m1s",
+		"--peers=a:9116 --peers.snapshot-timeout=999ms": "--peers.snapshot-timeout must be from --peers.check-timeout (1s) to 5m, got 999ms",
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(strings.Fields(args), &stdout, &stderr); code != 2 {
@@ -61,7 +75,7 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-discovery.refresh-interval", "-peers", "-peers.self", "-peers.leader-only", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-discovery.refresh-interval", "-peers", "-peers.self", "-peers.leader-only", "-peers.check-interval", "-peers.check-timeout", "-peers.failure-threshold", "-peers.snapshot-timeout", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}

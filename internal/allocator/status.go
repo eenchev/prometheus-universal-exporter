@@ -70,6 +70,12 @@ type PeersStatus struct {
 	// AddressKnown that it knows its own address.
 	Discovering  bool `json:"discovering"`
 	AddressKnown bool `json:"address_known"`
+	// CheckIntervalSeconds, CheckTimeoutSeconds, FailureThreshold and
+	// SnapshotTimeoutSeconds are the peers' timings (PeerOptions).
+	CheckIntervalSeconds   float64 `json:"check_interval_seconds"`
+	CheckTimeoutSeconds    float64 `json:"check_timeout_seconds"`
+	FailureThreshold       int     `json:"failure_threshold"`
+	SnapshotTimeoutSeconds float64 `json:"snapshot_timeout_seconds"`
 	// LiveInstances are the live instances, this one included.
 	LiveInstances int    `json:"live_instances"`
 	LeaderChanges uint64 `json:"leader_changes"`
@@ -99,7 +105,7 @@ type PeerStatus struct {
 	// Self says it is this instance, and Leader that it is the leader.
 	Self   bool `json:"self"`
 	Leader bool `json:"leader"`
-	// Live says the instance answered and has not failed PeerFailures
+	// Live says the instance answered and has not failed FailureThreshold
 	// checks in a row since; this instance is always live.
 	Live bool `json:"live"`
 	// ID, Discovering and AddressKnown are the instance's last answer.
@@ -582,7 +588,9 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 	defer p.mu.Unlock()
 	st := &PeersStatus{Role: "deciding", LeaderOnly: p.o.LeaderOnly, Discovering: discovering, AddressKnown: p.self.IsValid(),
 		LiveInstances: 1, LeaderChanges: p.leaderChanges, SnapshotTaken: p.took, SnapshotFailuresInARow: p.snapshotFails,
-		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Instances: []PeerStatus{}}
+		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Instances: []PeerStatus{},
+		CheckIntervalSeconds: p.o.CheckInterval.Seconds(), CheckTimeoutSeconds: p.o.CheckTimeout.Seconds(),
+		FailureThreshold: p.o.FailureThreshold, SnapshotTimeoutSeconds: p.o.SnapshotTimeout.Seconds()}
 	if p.decided {
 		st.Role = "follower"
 		if p.leading {

@@ -61,6 +61,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	peerList := flags.String("peers", "", "Optional allocator instances to run beside, as host:port entries, comma-separated: a name resolved to every address it has, as a headless Service's, or an IP address. List every instance, this one included, so each finds its own address among them. The live instance of the lowest address leads and alone asks the discovery sources; the others serve what it found")
 	peerSelf := flags.String("peers.self", "", "This instance's address as its peers reach it, an IP address (the port of --web.listen-address) or ip:port; left out, the instance finds itself among the peers' addresses by asking them")
 	peerLeaderOnly := flags.Bool("peers.leader-only", false, "With --peers, only the leader serves the whole of /metrics and of the status page; a follower serves the peers' metrics and its own peer state alone, so a Prometheus scraping every instance has one instance's series of the allocation")
+	peerCheckInterval := flags.Duration("peers.check-interval", allocator.DefaultPeerCheckInterval, "With --peers, how often each instance resolves --peers, checks every other instance and, as a follower, fetches the leader's snapshot, from 500ms to 1m")
+	peerCheckTimeout := flags.Duration("peers.check-timeout", allocator.DefaultPeerCheckTimeout, "With --peers, how long a check of another instance, and a lookup of --peers, may take, from 100ms to less than --peers.check-interval")
+	peerFailureThreshold := flags.Int("peers.failure-threshold", allocator.DefaultPeerFailureThreshold, "With --peers, how many checks in a row an instance must fail before it stops being live, the leader then being replaced, from 1 to 20; a follower whose snapshot fetches fail as often logs so")
+	peerSnapshotTimeout := flags.Duration("peers.snapshot-timeout", allocator.DefaultPeerSnapshotTimeout, "With --peers, how long a follower's fetch of the leader's snapshot may take, from --peers.check-timeout to 5m")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, which may have discovered_targets, for editors, and exit")
 	printProbeTargetsSchema := flags.Bool("probe-targets-file-schema", false, "Print the JSON Schema of the probe targets file, for editors, and exit")
@@ -101,6 +105,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *maxDiscovered < 1 {
 		return commandLineError(stderr, fmt.Errorf("--discovery.max-targets must be 1 or more, got %d", *maxDiscovered))
 	}
+	// The peers' timings given, by name, which only --peers takes.
+	timingsGiven := []string{}
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "peers.check-interval", "peers.check-timeout", "peers.failure-threshold", "peers.snapshot-timeout":
+			timingsGiven = append(timingsGiven, f.Name)
+		}
+	})
 	var peerOptions *allocator.PeerOptions
 	switch {
 	case *peerList != "":
@@ -108,7 +120,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return commandLineError(stderr, err)
 		}
-		peerOptions = &allocator.PeerOptions{Peers: entries, LeaderOnly: *peerLeaderOnly}
+		if err := checkPeerTimings(*peerCheckInterval, *peerCheckTimeout, *peerFailureThreshold, *peerSnapshotTimeout); err != nil {
+			return commandLineError(stderr, err)
+		}
+		peerOptions = &allocator.PeerOptions{Peers: entries, LeaderOnly: *peerLeaderOnly,
+			CheckInterval: *peerCheckInterval, CheckTimeout: *peerCheckTimeout, FailureThreshold: *peerFailureThreshold, SnapshotTimeout: *peerSnapshotTimeout}
 		if *peerSelf != "" {
 			if peerOptions.Self, err = allocator.ParseSelf(*peerSelf, *listenAddress); err != nil {
 				return commandLineError(stderr, err)
@@ -118,6 +134,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return commandLineError(stderr, errors.New("--peers.self is given without --peers"))
 	case *peerLeaderOnly:
 		return commandLineError(stderr, errors.New("--peers.leader-only is given without --peers: an instance without peers is its own leader and serves everything"))
+	case len(timingsGiven) > 0:
+		return commandLineError(stderr, fmt.Errorf("--%s is given without --peers: an instance without peers checks none", timingsGiven[0]))
 	}
 	if *showVersion {
 		b := exporter.BuildVersion()
@@ -182,7 +200,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logger.Info("starting allocator", append([]any{"version", build.Version, "address", *listenAddress,
 		"config_file", *configFile, "static_targets_file", *staticTargetsFile, "probe_targets_file", *probeTargetsFile,
 		"watch_interval", watchInterval.String(), "settle", settle.String(), "heartbeat_interval", heartbeatInterval.String(), "max_members", *maxMembers, "max_discovered_targets", *maxDiscovered, "discovery_refresh_interval", discoveryRefresh.String(), "token", token != nil,
-		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly}, inputs.LogAttrs()...)...)
+		"peers", *peerList, "peers_self", *peerSelf, "peers_leader_only", *peerLeaderOnly, "peers_check_interval", peerCheckInterval.String(), "peers_check_timeout", peerCheckTimeout.String(),
+		"peers_failure_threshold", *peerFailureThreshold, "peers_snapshot_timeout", peerSnapshotTimeout.String()}, inputs.LogAttrs()...)...)
 	handler := alloc.Handler("")
 	if token != nil {
 		handler = alloc.HandlerReading(token)
@@ -209,12 +228,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Info("shutting down; a second signal exits at once")
 		alloc.BeginShutdown()
 		if peerOptions != nil {
-			// The peers check /v1/peer every PeerInterval: serving on, with
-			// 503 there, until each has checked lets the next instance lead at
-			// once, where a closed listener would only be counted out after
-			// PeerFailures refused checks.
-			logger.Info("answering the peers that this instance shuts down before stopping the server", "delay", allocator.PeerShutdownDelay.String())
-			time.Sleep(allocator.PeerShutdownDelay)
+			// The peers check /v1/peer every --peers.check-interval: serving
+			// on, with 503 there, until each has checked lets the next
+			// instance lead at once, where a closed listener would only be
+			// counted out after --peers.failure-threshold refused checks.
+			delay := peerOptions.ShutdownDelay()
+			logger.Info("answering the peers that this instance shuts down before stopping the server", "delay", delay.String())
+			time.Sleep(delay)
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
@@ -223,6 +243,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// checkPeerTimings holds the peers' timings to their bounds
+// (allocator.MinPeerCheckInterval, ...), each given or its default.
+func checkPeerTimings(interval, timeout time.Duration, threshold int, snapshot time.Duration) error {
+	switch {
+	case interval < allocator.MinPeerCheckInterval || interval > allocator.MaxPeerCheckInterval:
+		return fmt.Errorf("--peers.check-interval must be from 500ms to 1m, got %s", interval)
+	case timeout < allocator.MinPeerCheckTimeout || timeout >= interval:
+		return fmt.Errorf("--peers.check-timeout must be from 100ms to less than --peers.check-interval (%s), got %s", interval, timeout)
+	case threshold < 1 || threshold > allocator.MaxPeerFailureThreshold:
+		return fmt.Errorf("--peers.failure-threshold must be from 1 to 20, got %d", threshold)
+	case snapshot < timeout || snapshot > allocator.MaxPeerSnapshotTimeout:
+		return fmt.Errorf("--peers.snapshot-timeout must be from --peers.check-timeout (%s) to 5m, got %s", timeout, snapshot)
+	}
+	return nil
 }
 
 // startLoadTries is how often the start reads input files that keep

@@ -65,7 +65,7 @@ func startRunAt(t *testing.T, address string, args ...string) {
 		_ = process.Signal(syscall.SIGTERM)
 		select {
 		case <-done:
-		case <-time.After(allocator.PeerShutdownDelay + 10*time.Second):
+		case <-time.After(allocator.PeerOptions{}.ShutdownDelay() + 10*time.Second):
 			t.Error("the allocator did not exit")
 		}
 	})
@@ -113,6 +113,23 @@ func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
 	})
 	if !s.Peers.LeaderOnly || s.Partial || s.Members == nil {
 		t.Errorf("the leader's status is %+v, peers %+v", s, s.Peers)
+	}
+}
+
+// --peers.check-interval, --peers.check-timeout, --peers.failure-threshold
+// and --peers.snapshot-timeout reach the allocator, which says them in the
+// peers' part of its status.
+func TestThePeerTimingFlagsReachTheAllocator(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := ln.Addr().String()
+	_ = ln.Close()
+	startRunAt(t, address, "--peers="+address, "--peers.check-interval=750ms", "--peers.check-timeout=250ms", "--peers.failure-threshold=5", "--peers.snapshot-timeout=45s")
+	p := fetchStatus(t, address).Peers
+	if p == nil || p.CheckIntervalSeconds != 0.75 || p.CheckTimeoutSeconds != 0.25 || p.FailureThreshold != 5 || p.SnapshotTimeoutSeconds != 45 {
+		t.Errorf("the peers are %+v, want checks every 0.75s within 0.25s, 5 failures and a snapshot timeout of 45s", p)
 	}
 }
 

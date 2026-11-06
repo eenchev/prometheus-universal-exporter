@@ -65,7 +65,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   their checks of the leader so a leader that hangs while it answers does
   not hold them up, and serve the same bundles and targets, and when it
   goes, telling the others for 3 seconds before it stops, the next instance
-  leads at once from the targets it took last. New metrics say which
+  leads at once from the targets it took last, and after three failed
+  checks when it stops answering. `--peers.check-interval` (2s, from 500ms
+  to 1m), `--peers.check-timeout` (1s, below the interval),
+  `--peers.failure-threshold` (3, from 1 to 20) and
+  `--peers.snapshot-timeout` (30s, up to 5m) set those timings, which the
+  status page and `/v1/status` show; the chart sets them from
+  `allocator.peerCheckInterval`, `allocator.peerCheckTimeout`,
+  `allocator.peerFailureThreshold` and `allocator.peerSnapshotTimeout`,
+  refused without a discovery source, and gives the allocator's pods a
+  grace period that covers the wait at their stop. New metrics say which
   instance leads, which instances are up (`pue_allocator_peer_up{peer}`) and
   how long a follower has not held the leader's targets ([Instances with
   discovery](docs/ALLOCATOR.md#instances-with-discovery)).

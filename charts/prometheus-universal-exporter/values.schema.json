@@ -728,6 +728,10 @@
         "maxMembers": {"type": "integer", "minimum": 1, "maximum": 2147483647, "description": "Rendered as --members.max: how many live members the allocator takes."},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as the allocator's --log.level."},
         "leaderOnly": {"type": "boolean", "description": "Rendered as the allocator's --peers.leader-only, with a discovery source only: only the leader serves the whole of /metrics and of the status page."},
+        "peerCheckInterval": {"type": "string", "description": "Rendered as the allocator's --peers.check-interval, with a discovery source only: a Go duration from 500ms to 1m, which the chart checks; empty leaves the flag out and the allocator's default, 2s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerCheckTimeout": {"type": "string", "description": "Rendered as the allocator's --peers.check-timeout, with a discovery source only: a Go duration from 100ms to less than the check interval, which the chart checks; empty leaves the flag out and the allocator's default, 1s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerSnapshotTimeout": {"type": "string", "description": "Rendered as the allocator's --peers.snapshot-timeout, with a discovery source only: a Go duration from the check timeout to 5m, which the chart checks; empty leaves the flag out and the allocator's default, 30s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerFailureThreshold": {"type": ["integer", "null"], "minimum": 1, "maximum": 20, "description": "Rendered as the allocator's --peers.failure-threshold, with a discovery source only: the failed checks in a row after which a pod stops being live; null leaves the flag out and the allocator's default, 3, in force."},
         "tokenSecret": {
           "type": "object",
           "additionalProperties": false,

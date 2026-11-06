@@ -1370,6 +1370,23 @@ true
 {{- $intervalSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) 1000) | int64 -}}
 {{- add (max $settleSeconds 120) $intervalSeconds -}}
 {{- end }}
+{{- /* The allocator pods' grace period among peers. On SIGTERM a peer
+       answers its peers that it is stopping and keeps serving for its
+       shutdown delay, a check interval and a check timeout, so every peer
+       sees it go at its next check, and then stops its server within 10
+       seconds; 5 seconds more cover its exit. That is 18 seconds with the
+       default 2s and 1s, which Kubernetes' default of 30 covers, and up to
+       135 with the longest interval and timeout the allocator takes, so
+       the grace period is the larger of 30 and that sum, the delay rounded
+       up to whole seconds. The peers' timings do not touch minReadySeconds: a new
+       pod checks its peers and fetches the leader's snapshot from its
+       start, and its rounds, at most 1m apart, run well within it. */ -}}
+{{- define "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" -}}
+{{- $interval := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckInterval | default "2s" -}}
+{{- $timeout := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckTimeout | default "1s" -}}
+{{- $delay := ceil (divf (addf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) (include "prometheus-universal-exporter.goDurationMilliseconds" $timeout)) 1000) | int64 -}}
+{{- max 30 (add $delay 15) -}}
+{{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}
 {{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.scrapeConfig.enabled .Values.allocator.probeJobs -}}
@@ -1429,6 +1446,29 @@ true
 {{- fail (printf "allocator.discoveryRefreshInterval %q must be a Go duration from 1s to 24h, for example \"30s\"" $refresh) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The peers' timings, held to the allocator's bounds, an empty one
+       counting as the allocator's default against the others: a check
+       timeout below the interval, a snapshot timeout of at least the check
+       timeout. */ -}}
+{{- $durationPattern := "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" -}}
+{{- $peerInterval := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckInterval -}}
+{{- $peerTimeout := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckTimeout -}}
+{{- $peerSnapshot := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerSnapshotTimeout -}}
+{{- $intervalMilliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" ($peerInterval | default "2s") | float64 -}}
+{{- $timeoutMilliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" ($peerTimeout | default "1s") | float64 -}}
+{{- if and $peerInterval (or (not (regexMatch $durationPattern $peerInterval)) (lt $intervalMilliseconds 500.0) (gt $intervalMilliseconds 60000.0)) -}}
+{{- fail (printf "allocator.peerCheckInterval %q must be a Go duration from 500ms to 1m, for example \"2s\"" $peerInterval) -}}
+{{- end -}}
+{{- if or (and $peerTimeout (not (regexMatch $durationPattern $peerTimeout))) (lt $timeoutMilliseconds 100.0) (ge $timeoutMilliseconds $intervalMilliseconds) -}}
+{{- fail (printf "allocator.peerCheckTimeout %q must be a Go duration from 100ms to less than allocator.peerCheckInterval (%s)" ($peerTimeout | default "1s") ($peerInterval | default "2s")) -}}
+{{- end -}}
+{{- if $peerSnapshot -}}
+{{- $milliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" $peerSnapshot | float64 -}}
+{{- if or (not (regexMatch $durationPattern $peerSnapshot)) (lt $milliseconds $timeoutMilliseconds) (gt $milliseconds 300000.0) -}}
+{{- fail (printf "allocator.peerSnapshotTimeout %q must be a Go duration from allocator.peerCheckTimeout (%s) to 5m, for example \"30s\"" $peerSnapshot ($peerTimeout | default "1s")) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := include "prometheus-universal-exporter.wholeNumber" (list "allocator.peerFailureThreshold" $allocator.peerFailureThreshold 1 20) -}}
 {{- if not (has ($allocator.logLevel | default "info") (list "debug" "info" "warn" "error")) -}}
 {{- fail (printf "allocator.logLevel %q must be debug, info, warn or error" (toString $allocator.logLevel)) -}}
 {{- end -}}

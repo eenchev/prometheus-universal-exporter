@@ -275,12 +275,12 @@ func TestThePeersStatusAgreesWithTheMetrics(t *testing.T) {
 	hasLine(t, leader, fmt.Sprintf("pue_allocator_peer_up{peer=%q} 1\n", follower.addr.String()))
 
 	leader.failPeer.Store(true)
-	for range PeerFailures {
+	for range DefaultPeerFailureThreshold {
 		follower.round()
 	}
 	hasLine(t, follower, fmt.Sprintf("pue_allocator_peer_up{peer=%q} 0\n", leader.addr.String()))
 	fs = statusOf(t, follower.a.Handler(""), "")
-	if fs.Peers.Role != "leader" || fs.Peers.Instances[0].Live || fs.Peers.Instances[0].Failures != PeerFailures || fs.Peers.CheckFailures != PeerFailures {
+	if fs.Peers.Role != "leader" || fs.Peers.Instances[0].Live || fs.Peers.Instances[0].Failures != DefaultPeerFailureThreshold || fs.Peers.CheckFailures != DefaultPeerFailureThreshold {
 		t.Errorf("after the leader's checks failed the follower's peers are %+v", fs.Peers)
 	}
 	samples(follower, fs)
@@ -359,7 +359,7 @@ func TestALeaderOnlyFollowerServesThePeersPartAlone(t *testing.T) {
 	}
 
 	leader.failPeer.Store(true)
-	for range PeerFailures {
+	for range DefaultPeerFailureThreshold {
 		follower.round()
 	}
 	if ff := familiesOf(follower.metrics(t)); !ff["pue_allocator_assigned"] || !ff["pue_allocator_peer_up"] {

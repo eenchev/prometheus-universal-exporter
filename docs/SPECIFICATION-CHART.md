@@ -881,7 +881,26 @@ flags and the variable MUST NOT be rendered. `allocator.leaderOnly`, false
 by default, MUST add `--peers.leader-only` after them, so only the leader's
 `/metrics`, which the allocator's ServiceMonitor scrapes on every pod, has
 the allocation's series; true without a discovery source MUST fail
-rendering, since the allocator refuses the flag without `--peers`. The chart
+rendering, since the allocator refuses the flag without `--peers`.
+`allocator.peerCheckInterval`, `allocator.peerCheckTimeout`,
+`allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold`, empty
+or `null` by default, MUST render `--peers.check-interval`,
+`--peers.check-timeout`, `--peers.snapshot-timeout` and
+`--peers.failure-threshold` after `--peers.self` when set, each taken as
+written as the other duration values are, and nothing when empty; held to
+the allocator's bounds, an empty one counting as the allocator's default
+against the others (a check interval from `500ms` to `1m`, a check timeout
+from `100ms` to less than the check interval, a snapshot timeout from the
+check timeout to `5m`, a failure threshold a whole number from 1 to 20), or
+rendering MUST fail, by the values schema where it can and by the template
+also with the schema skipped; and any of them set without a discovery
+source MUST fail rendering, as `allocator.leaderOnly` does. With a discovery
+source the allocator's pods MUST have `terminationGracePeriodSeconds` the
+larger of 30 and the shutdown delay, the check interval and the check
+timeout rounded up to whole seconds, plus 15, the 10 seconds the allocator
+takes to stop its server and 5 for its exit, so Kubernetes does not kill a
+peer still telling its peers it stops; without one it MUST NOT be rendered.
+The peers' timings MUST NOT change `minReadySeconds`. The chart
 README MUST say how to reach an allocator pod's status page with `kubectl
 port-forward`, give the token as a browser asks for it, and find the leader's
 pod by the address every pod's page and `pue_allocator_leader{peer}` name.
@@ -1992,6 +2011,15 @@ are skipped and the text checks of the templates still run:
      (`TestChartRunsTheAllocatorLeaderOnly`); `allocator.leaderOnly: true`
      without a discovery source fails rendering, with the values schema and
      with it skipped (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+   - With a discovery source the peers' timings render their flags after
+     `--peers.self` when set and nothing when empty or null, and the
+     allocator pods' `terminationGracePeriodSeconds` is 30 by default, 36
+     for a `20s` interval and a `500ms` timeout and 135 for `1m` and
+     `59.5s`, and is not rendered without a discovery source
+     (`TestChartSetsThePeersTimings`); each set without a discovery source,
+     or outside the allocator's bounds, fails rendering, with the values
+     schema and with it skipped
+     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - `allocator.heartbeatInterval` renders `--heartbeat.interval` with its
      value and nothing when empty; the Deployment's `minReadySeconds` is
      `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with

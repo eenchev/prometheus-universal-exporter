@@ -30346,11 +30346,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader` (allocator): a follower whose source differs from the leader's only in its `refresh_interval` serves the leader's targets of it and runs no refresh loop itself.
 - `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
 - `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for an instance of one source or none, 32 MiB for one of two.
-- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
+- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than the default check timeout, is taken.
 - `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
 - `TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two instances whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
 - `TestPeersAreOrderedAndTheLowestLiveInstanceLeads` (allocator), changed: an instance of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own id is lower.
-- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
+- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least the check interval after the signal before its listener closes, logs its shutdown delay, `3s` by default and `600ms` with `--peers.check-interval=500ms` and `--peers.check-timeout=100ms`, and exits 0.
 
 ## 34.269 Fixes to address families and masking
 
@@ -30797,6 +30797,20 @@ duration, response-size, and emitted-series health metrics.
 The chart values and monitors that expose this endpoint are specified in
 [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.
 
+
+## 34.276 Peer timing settings
+
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), extended: each of `--peers.check-interval`, `--peers.check-timeout`, `--peers.failure-threshold` and `--peers.snapshot-timeout` without `--peers` exits 2 naming it; with `--peers`, a check interval of `499ms`, `1m1s` or `0s`, a check timeout of `99ms` or of the interval (`2s`), a check interval of `800ms` against the default `1s` timeout, a failure threshold of 0 or 21 and a snapshot timeout of `5m1s` or under the check timeout (`999ms`) each exit 2 with the bound and the value.
+- `TestVersionAndHelp` (cmd/pue-allocator), extended: `-h` lists the four peer timing flags.
+- `TestThePeerTimingFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--peers` and `--peers.check-interval=750ms`, `--peers.check-timeout=250ms`, `--peers.failure-threshold=5` and `--peers.snapshot-timeout=45s` answers `/v1/status` with `check_interval_seconds` 0.75, `check_timeout_seconds` 0.25, `failure_threshold` 5 and `snapshot_timeout_seconds` 45.
+- `TestAFollowerLeadsAfterTheConfiguredFailedChecks` (allocator): two instances running their rounds with a 100ms check interval and a failure threshold of 5; once the leader's listener closes the follower leads no sooner than 400ms after, four intervals after its first failed check, and within 2.5s, five intervals and 2s of slack, sooner than the defaults' three 2s rounds could.
+- `TestACheckIsBoundedByTheConfiguredTimeout` (allocator): a lower peer that answers its check after 300ms is not live with a 100ms check timeout and a threshold of 1, so the instance leads, and with the default timeout it is, so the instance follows it.
+- `TestASnapshotFetchIsBoundedByTheConfiguredTimeoutAndThreshold` (allocator): a follower with a 200ms snapshot timeout and a failure threshold of 2 does not take a snapshot written 600ms after its headers, counts both failed fetches, and logs that it cannot fetch the snapshot after the second, not the first.
+- `TestTheStatusGivesThePeerTimings` (allocator): `/v1/status`'s peers give `check_interval_seconds`, `check_timeout_seconds`, `failure_threshold` and `snapshot_timeout_seconds`, 2, 1, 3 and 30 by default and 0.75, 0.25, 1 and 90 when set, and the page's Peers section says "The instances check each other every 2s, each check within 1s, and an instance stops being live after 3 failed checks in a row; a follower fetches the leader's snapshot with each round of checks, a fetch within 30s." and, when set, "every 750ms, each check within 250ms, … after 1 failed check in a row; … a fetch within 1m30s."
+- `TestTheShutdownDelayIsAnIntervalAndATimeout` (allocator): `PeerOptions.ShutdownDelay` is `3s` with the timings left zero, `1m59s` for a `1m` interval and a `59s` timeout, and `600ms` for `500ms` and `100ms`.
+- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator), extended: with `--peers.check-interval=500ms` and `--peers.check-timeout=100ms` the instance logs a shutdown delay of `600ms` and answers `/v1/peer` with `503` for at least `500ms` after the signal.
+- `TestChartSetsThePeersTimings` (chart, test/repository): with a discovery source `allocator.peerCheckInterval`, `allocator.peerCheckTimeout`, `allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold` render `--peers.check-interval`, `--peers.check-timeout`, `--peers.snapshot-timeout` and `--peers.failure-threshold` after `--peers.self` when set and nothing when empty or null; the allocator pods' `terminationGracePeriodSeconds` is 30 by default and for `5s`, 36 for a `20s` interval and a `500ms` timeout, 135 for `1m` and `59.5s`; without a discovery source it is not rendered.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: a peer timing, or `allocator.peerFailureThreshold`, without a discovery source fails rendering naming it; with one, a check interval that is no duration (the values schema) or outside `500ms` to `1m`, a check timeout under `100ms` or not below the interval, the default `1s` included against an `800ms` interval, a snapshot timeout under the check timeout or over `5m` (the template), and a failure threshold of 0 or 21 (the values schema and the template) fail rendering, with the values schema and with it skipped.
 
 ## 42.1 OTLP export
 
@@ -33577,22 +33591,33 @@ start with nothing found.
 
 **Peers.** With `--peers`, `host:port` entries, comma-separated, each with a
 host and a decimal port from 1 to 65535 (anything else MUST exit 2), an
-instance MUST, at its start and then every `PeerInterval` (2s), resolve each
+instance MUST, at its start and then every check interval, `--peers.check-interval`, resolve each
 entry to every address its host has (an IP address taken as it is, an
 IPv4-mapped IPv6 address as IPv4; a lookup that fails keeping the addresses
 of the last, logged once while its text stays the same) and ask every
 address but its own at `GET /v1/peer` with the API's bearer token within
-`PeerTimeout` (1s), without a proxy. `--peers.self`, only with `--peers`
+the check timeout, `--peers.check-timeout`, each lookup bounded by it too,
+without a proxy. The peers' timings MUST be flags: `--peers.check-interval`
+(default `2s`) from `500ms` to `1m`, `--peers.check-timeout` (default `1s`)
+from `100ms` to less than the check interval, so a round, which waits for
+its checks, stays shorter than the wait between two rounds,
+`--peers.failure-threshold` (default 3) from 1 to 20, and
+`--peers.snapshot-timeout` (default `30s`) from the check timeout to `5m`;
+a value outside its bounds, and any of them without `--peers`, MUST exit 2
+naming the flag, and every place that waits, counts failures or says a
+timing (the rounds, the checks, the snapshot fetch, the logs, the status,
+the page) MUST use the values in force, never the defaults. `--peers.self`, only with `--peers`
 (exit 2 otherwise), MUST be an IP address, taking the port of
 `--web.listen-address`, or an IP address and a port, and is the instance's
 own address, a peer even when no entry resolves to it; without it, the
 address whose answer names the instance's own process (a random instance
 made at its start) MUST be taken for its own. A instance MUST be live once
-it has answered, until `PeerFailures` (3) checks in a row have failed, and
+it has answered, until the failure threshold's checks in a row have failed, and
 MUST stop being live at once when it answers `503`, which `/v1/peer` MUST
 answer from the first `SIGTERM` or `SIGINT`, the instance then serving its
-API on, as it does during a shutdown otherwise, for `PeerShutdownDelay`
-(`PeerInterval` and `PeerTimeout`, 3s) before its server shuts down, so
+API on, as it does during a shutdown otherwise, for its shutdown delay
+(`PeerOptions.ShutdownDelay`: the check interval and the check timeout,
+3s with the defaults) before its server shuts down, so
 every peer's next check gets the `503` rather than a refused connection; and
 otherwise its process's id (`id`), whether it discovers, and whether it
 knows its own address (`true` without `--peers`). The leader of a instance
@@ -33604,7 +33629,7 @@ follow the lowest live instance that discovers and knows its own address,
 else the live instance of the lowest id among those that discover, unless it
 discovers itself and its own id is lower, and lead when no live instance
 discovers; it MUST log an error once when its own address is still not known
-after `PeerFailures` rounds. `--peers`'s help MUST say to list every
+after the failure threshold's rounds. `--peers`'s help MUST say to list every
 instance, this one included. Only the leader MUST run the discovery sources'
 refresh loops; a follower MUST stop them, keeping what they found, and fetch
 the leader's `GET /v1/peer/snapshot` with the token every round, which MUST
@@ -33614,7 +33639,7 @@ owner, its kind and its name, not its settings), its targets written as
 target groups, each run of targets of the same labels one group with its
 labels once, as a file_sd or http_sd answer gives them, with an `ETag` of
 its digest and `304` to an `If-None-Match` naming it; the follower MUST
-fetch it within `SnapshotTimeout` (30s), its client having no shorter
+fetch it within the snapshot timeout, `--peers.snapshot-timeout`, its client having no shorter
 timeout of its own, beside its rounds rather than within them, one fetch at
 a time (a round that finds the fetch of the same leader still running MUST
 NOT start another), so a leader that hangs while it writes its snapshot MUST
@@ -33639,14 +33664,14 @@ itself, from a refresh loop of its own, until a snapshot has it (or a `304`
 says the leader holds what the follower does), and only then stopped. A
 follower that, having taken the snapshot, still holds something else MUST
 NOT count it as taken for its snapshot's age, and MUST log so once after
-`PeerFailures` such fetches in a row and once when the two agree again. A
+the failure threshold's such fetches in a row and once when the two agree again. A
 instance that comes to lead MUST start the loops with what its sources hold,
 the snapshot it took last, so no discovered target leaves the bundles until
 each source answers; one that leads without ever having taken a snapshot
 MUST first take that of the lowest other live instance, if any, starting the
 loops once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
-failure, and log once after `PeerFailures` failures in a row and once when a
+failure, and log once after the failure threshold's failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
 instance MUST ask its sources itself, from its start. With
 `--peers.leader-only`, only with `--peers` (exit 2 otherwise), an instance
@@ -33659,7 +33684,9 @@ with `partial` true and `members`, `spread` and `sources` `null`; and `/`
 with this instance and its peers alone, naming the leader's address. The
 instance that leads MUST serve the whole of each, so the instances'
 allocation is in one instance's metrics. `docs/ALLOCATOR.md` MUST describe
-the peers, their flags, timings and metrics, and that a network split gives
+the peers, their flags, timings and metrics, how long a failover takes
+with the timings (at most the failure threshold times a check interval and
+a check timeout after the leader's last answer), and that a network split gives
 each side a leader, the targets then flipping between the two until it
 heals.
 
@@ -33689,7 +33716,7 @@ above `2m` as a command-line error; the member TTL MUST be three intervals
 (`allocapi.MemberTTL`), and no other setting of either MUST exist, on the
 allocator or on the exporter. `--heartbeat.interval` MUST NOT be checked
 against `--settle`: the two are independent. It MUST NOT change the timings of the
-peers either, which check each other every `PeerInterval` whatever it is. A member MUST be live while its last heartbeat is younger than
+peers either, which check each other every `--peers.check-interval` whatever it is. A member MUST be live while its last heartbeat is younger than
 the member TTL and did not say `shutting_down`; one that did MUST stop
 being live at once. A heartbeat whose `sequence` is not greater than that of
 the last heartbeat applied of its member with the same `instance`, or whose
@@ -33787,7 +33814,10 @@ else `--web.listen-address`, its `id`, the build's version and revision, its
 start and uptime, whether it is ready, and `--config.watch-interval` in
 seconds (`watch_interval_seconds`, `0` for files read once), which the page
 MUST show; under `peers`, with `--peers`
-(else `null`), its role, the leader, the live instances (`live_instances`),
+(else `null`), its role, the leader, the peers' timings in force
+(`check_interval_seconds`, `check_timeout_seconds`, `failure_threshold`,
+`snapshot_timeout_seconds`), which the page's Peers section MUST say, the
+live instances (`live_instances`),
 the leader changes, the snapshot's age, whether it has taken one and holds
 the leader's targets, its check and snapshot failures, every address of its
 peers, its own included (`instances`), with liveness, the last answer's

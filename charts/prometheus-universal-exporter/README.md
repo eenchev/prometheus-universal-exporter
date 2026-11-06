@@ -1676,9 +1676,15 @@ discovery answers. So each pod is run with
 the exporter pods heartbeat to, and `--peers.self=$(POD_IP)`, its pod's IP
 from the downward API: the live pod of the lowest IP leads and alone asks
 the sources, and the others serve the targets it found, fetched from it
-every 2 seconds, so every pod serves the same bundles and the same targets.
-When the leader goes, the pod of the next IP leads, serving the targets it
-took last until its sources answer. `allocator.replicas` is 2 by default, as
+every `allocator.peerCheckInterval`, 2 seconds by default, so every pod
+serves the same bundles and the same targets. When the leader goes, the
+pod of the next IP leads, serving the targets it took last until its
+sources answer: at its next check when the leader shuts down, and after
+`allocator.peerFailureThreshold` failed checks, 3 by default, when it stops
+answering. A stopping pod keeps serving for a check interval and a check
+timeout first, so its peers see it go, and the pods'
+`terminationGracePeriodSeconds` is that, rounded up, plus 15 seconds, or
+30 when that is less, as with the default timings. `allocator.replicas` is 2 by default, as
 without discovery, and any number is safe; the Deployment rolls out with
 the default strategy, a pod at a time, under the disruption budget of
 `maxUnavailable: 1`, and the allocator's NetworkPolicy also admits the
@@ -1764,6 +1770,10 @@ allocator refuses.
 | `allocator.maxMembers` | `1000` | `--members.max`: how many live members the allocator takes; the heartbeat of a new pod beyond them is refused until one stops heartbeating. Keep it above the most exporter pods the autoscaler runs. |
 | `allocator.logLevel` | `info` | `debug`, `info`, `warn` or `error`. |
 | `allocator.leaderOnly` | `false` | With a discovery source, where the pods are peers: `--peers.leader-only`, only the leader serves the whole of `/metrics` and of the status page, and the other pods the peers' metrics alone, so the ServiceMonitor has one pod's series of the allocation. `true` without a discovery source fails rendering. |
+| `allocator.peerCheckInterval` | `""`: `2s` | With a discovery source: `--peers.check-interval`, how often each pod resolves the headless Service, checks the other pods and, as a follower, fetches the leader's snapshot, so how soon a follower serves what the leader found. A Go duration from `500ms` to `1m`. |
+| `allocator.peerCheckTimeout` | `""`: `1s` | With a discovery source: `--peers.check-timeout`, how long a check of another pod may take, from `100ms` to less than `peerCheckInterval`. |
+| `allocator.peerFailureThreshold` | `null`: `3` | With a discovery source: `--peers.failure-threshold`, the failed checks in a row, from 1 to 20, after which a pod stops being live: a leader that stops answering is replaced within that many check intervals and check timeouts, 9 seconds with the defaults; one that shuts down cleanly at the next check. |
+| `allocator.peerSnapshotTimeout` | `""`: `30s` | With a discovery source: `--peers.snapshot-timeout`, how long a follower's fetch of the leader's snapshot may take, from `peerCheckTimeout` to `5m`. |
 | `allocator.tokenSecret.name` / `key` | `""` / `token` | The Secret holding the shared bearer token, which the allocator always requires, the exporter pods send and the ScrapeConfigs present; empty, the chart generates one (see [The allocator's token](#the-allocators-token)). |
 | `allocator.staticTargets.data` | `""` | The static target document, as `staticTargets.data`; a target may add `shard_key`. |
 | `allocator.staticTargets.expandEnv` | `false` | `--static-targets.expand-env` on the exporter pods, which expand `${NAME}` references in their share of the document. |
@@ -1883,7 +1893,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into a ConfigMap of their own. |
-| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `heartbeatInterval`, `configWatchInterval`, `discoveryRefreshInterval`, `maxMembers`, `logLevel`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
+| `allocator` | object | disabled | The target allocator and the exporter in allocator mode: `enabled`, `replicas`, `image`, `resources`, `settle`, `heartbeatInterval`, `configWatchInterval`, `discoveryRefreshInterval`, `maxMembers`, `logLevel`, `leaderOnly`, `peerCheckInterval`, `peerCheckTimeout`, `peerFailureThreshold`, `peerSnapshotTimeout`, `tokenSecret`, `staticTargets`, `probeJobs`, `extraVolumes`, `extraVolumeMounts`, `networkPolicy`, `pdb`, `podLabels`, `podAnnotations`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `serviceMonitor`, `scrapeConfig`, `rbac`, `serviceAccount`; see [Target allocator](#target-allocator). |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `probes` | array | `[]` | Prometheus Operator `Probe` resources, one per entry, whose prober is the exporter's Service at `/probe`: `name` a unique DNS-1123 label, `collector` (required, and one `config.data` defines), `targets` (URLs) or `ingress` (`selector`, `namespaceSelector`) but not both, `targetLabels` (with `targets` only), `interval` and `scrapeTimeout`, `jobName`, `labels`, `annotations`, `relabelings`, `metricRelabelings`, `params` without `collector` or `target`, and `auth` as a monitor's; see [Uptime probes](#uptime-probes). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |

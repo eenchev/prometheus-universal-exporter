@@ -38,32 +38,80 @@ const (
 	SnapshotPath = "/v1/peer/snapshot"
 )
 
-// The timings of the peers. Every PeerInterval an instance resolves its
-// peers, asks each at PeerPath within PeerTimeout and, as a follower, fetches
-// the leader's snapshot within SnapshotTimeout: a snapshot holds what every
-// source found, which may be megabytes where a check is a few bytes, and a
-// fetch cut short would leave the follower on its last snapshot for as long
-// as the snapshot stays that large. The fetch runs beside the rounds, one at
-// a time (snapshotFetch), so a leader that hangs while it writes its snapshot
-// delays no check: the follower goes on checking every PeerInterval, and
-// leads, or follows another instance, as soon as the checks say so, which
-// cancels the fetch. An instance that answered stays live until PeerFailures
-// checks in a row have failed, so one slow answer does not move the leader;
-// one that answers it is shutting down stops being live at once. A follower
-// whose snapshot fetches fail PeerFailures times in a row says so, once, and
-// keeps serving the snapshot it fetched last.
+// The timings of the peers, PeerOptions' CheckInterval, CheckTimeout,
+// SnapshotTimeout and FailureThreshold, from --peers.check-interval,
+// --peers.check-timeout, --peers.snapshot-timeout and
+// --peers.failure-threshold. Every check interval an instance resolves its
+// peers, asks each at PeerPath within the check timeout and, as a follower,
+// fetches the leader's snapshot within the snapshot timeout: a snapshot
+// holds what every source found, which may be megabytes where a check is a
+// few bytes, and a fetch cut short would leave the follower on its last
+// snapshot for as long as the snapshot stays that large. The fetch runs
+// beside the rounds, one at a time (snapshotFetch), so a leader that hangs
+// while it writes its snapshot delays no check: the follower goes on
+// checking every check interval, and leads, or follows another instance, as
+// soon as the checks say so, which cancels the fetch. An instance that
+// answered stays live until the failure threshold's checks in a row have
+// failed, so one slow answer does not move the leader; one that answers it
+// is shutting down stops being live at once. A follower whose snapshot
+// fetches fail as many times in a row says so, once, and keeps serving the
+// snapshot it fetched last.
 const (
-	PeerInterval    = 2 * time.Second
-	PeerTimeout     = time.Second
-	SnapshotTimeout = 30 * time.Second
-	PeerFailures    = 3
+	DefaultPeerCheckInterval    = 2 * time.Second
+	DefaultPeerCheckTimeout     = time.Second
+	DefaultPeerSnapshotTimeout  = 30 * time.Second
+	DefaultPeerFailureThreshold = 3
 )
 
-// PeerShutdownDelay is how long an instance among peers keeps serving after
+// The bounds of the peers' timings, which the command line holds them to.
+// A check interval of at least 500ms keeps the rounds, each a lookup of
+// every --peers name and a request to every peer, and a follower's
+// snapshot requests from loading the instances and their DNS; one of at
+// most 1m keeps a failover, the failure threshold's intervals, within
+// minutes, and the shutdown delay, an interval and a check timeout, under
+// 2m, which the chart's allocator pods' grace period covers. A check
+// timeout of at least 100ms leaves a check across a cluster's network
+// room to answer, and one below the interval keeps a round, which waits
+// for its checks, shorter than the wait between two rounds. The failure
+// threshold is from 1, where one failed check moves the leader, to 20,
+// where a leader that stopped answering leads on for 20 intervals. The
+// snapshot timeout is at least the check timeout, a snapshot being at
+// least as large as a check's answer, and at most 5m, how long one fetch
+// from a leader that hangs keeps a follower from fetching again.
+const (
+	MinPeerCheckInterval    = 500 * time.Millisecond
+	MaxPeerCheckInterval    = time.Minute
+	MinPeerCheckTimeout     = 100 * time.Millisecond
+	MaxPeerFailureThreshold = 20
+	MaxPeerSnapshotTimeout  = 5 * time.Minute
+)
+
+// ShutdownDelay is how long an instance among peers keeps serving after
 // BeginShutdown, its PeerPath answering 503, before its server stops: a
-// round of every peer and its check, so each peer sees it is shutting
-// down and the next instance leads at once.
-const PeerShutdownDelay = PeerInterval + PeerTimeout
+// round of every peer and its check, the check interval and the check
+// timeout, so each peer sees it is shutting down and the next instance
+// leads at once.
+func (o PeerOptions) ShutdownDelay() time.Duration {
+	o = o.withDefaults()
+	return o.CheckInterval + o.CheckTimeout
+}
+
+// withDefaults is o with each timing left zero at its default.
+func (o PeerOptions) withDefaults() PeerOptions {
+	if o.CheckInterval == 0 {
+		o.CheckInterval = DefaultPeerCheckInterval
+	}
+	if o.CheckTimeout == 0 {
+		o.CheckTimeout = DefaultPeerCheckTimeout
+	}
+	if o.SnapshotTimeout == 0 {
+		o.SnapshotTimeout = DefaultPeerSnapshotTimeout
+	}
+	if o.FailureThreshold == 0 {
+		o.FailureThreshold = DefaultPeerFailureThreshold
+	}
+	return o
+}
 
 // maxSnapshotBytes bounds a snapshot's body: what every source found, a
 // source's own answer being bounded at maxDiscoveryAnswerBytes, so that
@@ -77,7 +125,7 @@ func (a *Allocator) maxSnapshotBytes() int {
 // PeerOptions are the settings of the peers.
 type PeerOptions struct {
 	// Peers are the instances, each a host:port: a name resolved to all its
-	// addresses every PeerInterval, as the chart's headless Service's, or
+	// addresses every CheckInterval, as the chart's headless Service's, or
 	// an IP address. ParsePeers reads --peers into them.
 	Peers []string
 	// Self is this instance's address as its peers reach it. Left zero, the
@@ -96,10 +144,19 @@ type PeerOptions struct {
 	// in every instance's.
 	LeaderOnly bool
 	// Client asks the peers; one of no proxy when nil. Each request is
-	// bounded by PeerTimeout, or SnapshotTimeout for a snapshot, through
+	// bounded by CheckTimeout, or SnapshotTimeout for a snapshot, through
 	// its context, so Client needs no timeout of its own, which would cut
 	// a snapshot short.
 	Client *http.Client
+	// CheckInterval, CheckTimeout, SnapshotTimeout and FailureThreshold are
+	// the peers' timings, --peers.check-interval, --peers.check-timeout,
+	// --peers.snapshot-timeout and --peers.failure-threshold; each left
+	// zero is its default (DefaultPeerCheckInterval, ...). The command line
+	// holds them to their bounds (MinPeerCheckInterval, ...).
+	CheckInterval    time.Duration
+	CheckTimeout     time.Duration
+	SnapshotTimeout  time.Duration
+	FailureThreshold int
 }
 
 // ParsePeers reads --peers: host:port entries, comma-separated, each with
@@ -189,8 +246,8 @@ func chooseLeader(self netip.AddrPort, id string, discovering bool, others []liv
 
 // peerState is what an instance knows of one of its peers.
 type peerState struct {
-	// live says the peer answered and has not failed PeerFailures checks in
-	// a row since; fails counts the checks it failed in a row.
+	// live says the peer answered and has not failed FailureThreshold
+	// checks in a row since; fails counts the checks it failed in a row.
 	live  bool
 	fails int
 	// self says the address is this instance's own.
@@ -219,7 +276,7 @@ type peers struct {
 	known map[netip.AddrPort]*peerState
 	// self is this instance's address, invalid until it is known. rounds
 	// counts the rounds, and selfMissing says the address was still not
-	// known after PeerFailures of them, which is logged once.
+	// known after FailureThreshold of them, which is logged once.
 	self        netip.AddrPort
 	rounds      int
 	selfMissing bool
@@ -264,18 +321,19 @@ func (a *Allocator) UsePeers(o PeerOptions) {
 	if o.Self.IsValid() {
 		o.Self = netip.AddrPortFrom(o.Self.Addr().Unmap(), o.Self.Port())
 	}
+	o = o.withDefaults()
 	a.peers = &peers{a: a, o: o, resolved: map[string][]netip.AddrPort{}, resolveErr: map[string]string{},
 		known: map[netip.AddrPort]*peerState{}, self: o.Self}
 }
 
 // RunPeers runs the peers' rounds, the first at once and then every
-// PeerInterval, until ctx ends or the allocator shuts down, which ends a
+// CheckInterval, until ctx ends or the allocator shuts down, which ends a
 // snapshot fetch still running too.
 func (a *Allocator) RunPeers(ctx context.Context) {
 	defer a.peers.stopFetch()
 	for {
 		a.peers.round(ctx)
-		timer := time.NewTimer(PeerInterval)
+		timer := time.NewTimer(a.peers.o.CheckInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -311,7 +369,7 @@ func (p *peers) resolve(ctx context.Context) []netip.AddrPort {
 		if ip, err := netip.ParseAddr(host); err == nil {
 			addrs = []netip.AddrPort{netip.AddrPortFrom(ip.Unmap(), uint16(port))}
 		} else {
-			lookupCtx, cancel := context.WithTimeout(ctx, PeerTimeout)
+			lookupCtx, cancel := context.WithTimeout(ctx, p.o.CheckTimeout)
 			hosts, err := p.o.Resolve(lookupCtx, host)
 			cancel()
 			if err != nil {
@@ -405,7 +463,7 @@ func (b *cancelBody) Close() error {
 
 // check asks addr whether it is up, and reports its answer.
 func (p *peers) check(ctx context.Context, addr netip.AddrPort) (peerAnswer, error) {
-	resp, err := p.get(ctx, addr, PeerPath, "", PeerTimeout)
+	resp, err := p.get(ctx, addr, PeerPath, "", p.o.CheckTimeout)
 	if err != nil {
 		return peerAnswer{}, err
 	}
@@ -484,7 +542,7 @@ func (p *peers) round(ctx context.Context) {
 				p.self, self = addr, addr
 			}
 		case r.err == nil:
-			if !st.live && st.fails >= PeerFailures {
+			if !st.live && st.fails >= p.o.FailureThreshold {
 				p.a.logger.Info("an allocator instance answers again", "peer", addr.String())
 			}
 			st.live, st.fails, st.answer = true, 0, r.answer
@@ -492,9 +550,9 @@ func (p *peers) round(ctx context.Context) {
 			st.fails++
 			p.checkFailures++
 			if errors.Is(r.err, errShuttingDown) {
-				st.fails = max(st.fails, PeerFailures)
+				st.fails = max(st.fails, p.o.FailureThreshold)
 			}
-			if st.live && st.fails >= PeerFailures {
+			if st.live && st.fails >= p.o.FailureThreshold {
 				st.live = false
 				p.a.logger.Warn("an allocator instance stopped answering; it is no longer among the live instances", "peer", addr.String(), "error", r.err)
 			}
@@ -502,7 +560,7 @@ func (p *peers) round(ctx context.Context) {
 	}
 	p.known = known
 	p.rounds++
-	if !self.IsValid() && p.rounds >= PeerFailures && !p.selfMissing {
+	if !self.IsValid() && p.rounds >= p.o.FailureThreshold && !p.selfMissing {
 		p.selfMissing = true
 		p.a.logger.Error("no address of --peers answers as this instance, so it cannot place itself among its peers: list every instance in --peers, this one included, or give --peers.self; meanwhile it follows only an instance that discovers", "peers", strings.Join(p.o.Peers, ","))
 	}
@@ -623,7 +681,7 @@ func (p *peers) fetchFailed(addr netip.AddrPort, err error) {
 	defer p.mu.Unlock()
 	p.snapshotFails++
 	p.snapshotFailures++
-	if p.snapshotFails >= PeerFailures && !p.stale {
+	if p.snapshotFails >= p.o.FailureThreshold && !p.stale {
 		p.stale = true
 		since := "never"
 		if !p.snapshotAt.IsZero() {
@@ -677,7 +735,7 @@ type snapshotSource struct {
 // snapshot holds once it is taken.
 func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed bool, err error) {
 	_, held := p.a.snapshotOf()
-	resp, err := p.get(ctx, addr, SnapshotPath, held, SnapshotTimeout)
+	resp, err := p.get(ctx, addr, SnapshotPath, held, p.o.SnapshotTimeout)
 	if err != nil {
 		return false, err
 	}
@@ -716,7 +774,7 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 // reset: an instance whose input files have a source the leader's lack, or
 // lack one the leader's have, as while a changed ConfigMap reaches one
 // pod before the other, holds other targets, and its age grows, and is
-// logged once after PeerFailures fetches in a row, until the two agree.
+// logged once after FailureThreshold fetches in a row, until the two agree.
 func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -732,7 +790,7 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 		return
 	}
 	p.differ++
-	if p.differ >= PeerFailures && !p.differLogged {
+	if p.differ >= p.o.FailureThreshold && !p.differLogged {
 		p.differLogged = true
 		since := "never"
 		if !p.snapshotAt.IsZero() {
@@ -833,7 +891,7 @@ func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 func (a *Allocator) servePeer(w http.ResponseWriter, _ *http.Request) {
 	if !a.Ready() {
 		// An instance shutting down is no candidate for leader any more: its
-		// peers stop counting it at once rather than after PeerFailures
+		// peers stop counting it at once rather than after FailureThreshold
 		// checks.
 		http.Error(w, "the allocator is shutting down", http.StatusServiceUnavailable)
 		return

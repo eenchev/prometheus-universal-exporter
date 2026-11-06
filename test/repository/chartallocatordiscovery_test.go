@@ -262,3 +262,44 @@ func TestChartRunsTheAllocatorLeaderOnly(t *testing.T) {
 		}
 	}
 }
+
+// With a discovery source the peers' timings render --peers.check-interval,
+// --peers.check-timeout, --peers.snapshot-timeout and
+// --peers.failure-threshold when set, after --peers.self, and nothing when
+// empty or null; the pods' grace period covers a stopping pod's shutdown
+// delay, a check interval and a check timeout, its 10s server shutdown
+// and 5s for its exit, Kubernetes' 30 while that is less, as with the
+// defaults. Without a discovery source no grace period is rendered.
+func TestChartSetsThePeersTimings(t *testing.T) {
+	helm := requireHelm(t)
+	const name = "test-prometheus-universal-exporter-allocator"
+	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
+	for _, c := range []struct {
+		args  []string
+		flags []string
+		grace string
+	}{
+		{nil, nil, "30"},
+		{[]string{"--set", "allocator.peerCheckInterval=5s", "--set", "allocator.peerFailureThreshold=5"}, []string{"--peers.check-interval=5s", "--peers.failure-threshold=5"}, "30"},
+		{[]string{"--set", "allocator.peerCheckInterval=20s", "--set", "allocator.peerCheckTimeout=500ms", "--set", "allocator.peerSnapshotTimeout=2m"},
+			[]string{"--peers.check-interval=20s", "--peers.check-timeout=500ms", "--peers.snapshot-timeout=2m"}, "36"},
+		{[]string{"--set", "allocator.peerCheckInterval=1m", "--set", "allocator.peerCheckTimeout=59.5s", "--set", "allocator.peerSnapshotTimeout=5m", "--set", "allocator.peerFailureThreshold=20"},
+			[]string{"--peers.check-interval=1m", "--peers.check-timeout=59.5s", "--peers.snapshot-timeout=5m", "--peers.failure-threshold=20"}, "135"},
+		{[]string{"--set", "allocator.peerCheckInterval=", "--set", "allocator.peerFailureThreshold=null"}, nil, "30"},
+	} {
+		docs := manifests(t, helm, append([]string{"--namespace", "monitoring", "--set", "allocator.enabled=true", "--set-json", discoveryJob}, c.args...)...)
+		spec := path(manifest(t, docs, "Deployment/"+name), "spec", "template", "spec")
+		args := scalars(path(spec, "containers", "0", "args"))
+		at := slices.Index(args, "--peers.self=$(POD_IP)")
+		if at < 0 || !slices.Equal(args[at+1:], c.flags) {
+			t.Errorf("%v: the allocator's arguments are %v, want %v after --peers.self", c.args, args, c.flags)
+		}
+		if got := text(path(spec, "terminationGracePeriodSeconds")); got != c.grace {
+			t.Errorf("%v: the allocator's grace period is %q, want %s", c.args, got, c.grace)
+		}
+	}
+	docs := manifests(t, helm, "--set", "allocator.enabled=true")
+	if grace := path(manifest(t, docs, "Deployment/"+name), "spec", "template", "spec", "terminationGracePeriodSeconds"); grace != nil {
+		t.Errorf("without discovery the allocator's grace period is %s, want Kubernetes' default", text(grace))
+	}
+}

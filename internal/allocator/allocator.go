@@ -5,8 +5,10 @@
 //
 // Replicas make themselves known with heartbeats (allocapi.Heartbeat). The
 // members whose heartbeats keep coming form the member list, which takes
-// effect once it has held for the settle time, and every target is
-// allocated to one member of it by rendezvous hashing (allocapi.Owner). The
+// effect once it has held for the settle time, and every target is placed
+// on one member of it by its weight and the members' capacities, by
+// rendezvous hashing weighted by capacity with bounded loads (placement.go),
+// which with every weight and capacity alike is allocapi.Owner's. The
 // allocator keeps nothing on disk: the same input files and the same
 // heartbeats give the same bundles and the same answers, on a restarted
 // allocator or on a second one beside it. See docs/ALLOCATOR.md.

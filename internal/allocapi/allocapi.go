@@ -262,8 +262,12 @@ func Score(member, key string) uint64 {
 }
 
 // Owner is the member with the highest Score for key, the lower name on a
-// tie. Adding a member moves only the keys it now wins; removing one moves
-// only its own.
+// tie: plain rendezvous hashing. Adding a member moves only the keys it now
+// wins; removing one moves only its own. The allocator does not call it: it
+// places a target by its weight and the members' capacities, rendezvous
+// hashing weighted by capacity with bounded loads, which ranks members of
+// one capacity by Score and, with every weight and capacity alike and room
+// enough, chooses Owner's member; Owner is what its tests hold it to.
 func Owner(members []string, key string) (string, error) {
 	if len(members) == 0 {
 		return "", ErrNoMembers

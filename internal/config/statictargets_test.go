@@ -211,3 +211,19 @@ discovered_targets:
 		t.Fatalf("got %v, want discovered_targets refused for the allocator's", err)
 	}
 }
+
+// A static target file of the allocator's weights, default_weight at the top
+// or weight on a target, is refused naming the allocator, as its
+// discovered_targets is, rather than as an unknown key.
+func TestTheExporterRefusesTheAllocatorsWeights(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"default_weight: 2\ntargets:\n  - name: a\n    collector: c\n    target: http://a.example\n", "line 1: default_weight is read by the target allocator (pue-allocator --static-targets-file)"},
+		{"targets:\n  - name: a\n    collector: c\n    target: http://a.example\n    weight: 2\n", "line 5: weight is read by the target allocator (pue-allocator --static-targets-file)"},
+		{"targets:\n  - name: a\n    collector: c\n    target: http://a.example\n    weight_label: w\n", "line 5: weight_label is read by the target allocator"},
+	} {
+		_, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", c.text))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: got %v, want %q", c.text, err, c.want)
+		}
+	}
+}

@@ -64,7 +64,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   its owner's, logged once and counted in
   `pue_allocator_weight_label_fallbacks_total`, and one that moves less
   than 20% is ignored. Every weight is 1 and every capacity 1 unless set
-  ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)).
+  ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)). The
+  exporter refuses a static target file with the weights, naming the
+  allocator, as it does `discovered_targets`.
 - `pue-allocator --allocation.balance-factor`, from 1 to 10, 1.25 by
   default: how far above its fair share of the weight a member's load may
   go. A factor other than the default travels in every bundle, so instances

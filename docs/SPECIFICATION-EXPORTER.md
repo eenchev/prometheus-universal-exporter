@@ -26658,7 +26658,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `StartDiscovery` refreshes the sources on its own and `BeginShutdown`
   stops them (`TestStartDiscoveryRefreshesOnItsOwn`).
 - The exporter refuses a static target file with `discovered_targets`,
-  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`).
+  naming the allocator (`TestTheExporterRefusesDiscoveredTargets`), and one
+  with `default_weight` at its top level or `weight` or `weight_label` on a
+  target, naming the allocator, which places the targets by their weights,
+  rather than as an unknown key (`TestTheExporterRefusesTheAllocatorsWeights`).
 - `--discovery.max-targets=0` exits 2, and `-h` lists the flag with its
   default, 10000 (`TestAMalformedCommandLineExits2`, `TestVersionAndHelp`).
 - The chart renders no allocator ServiceAccount or RBAC without a

@@ -604,3 +604,49 @@ func TestInstancesFindThemselvesAmongTheAddressesOfTheirName(t *testing.T) {
 		t.Errorf("the instance at %s does not follow the lower one:\n%s", high.addr, high.metrics(t))
 	}
 }
+
+// A follower that drains a static target on a member for a reason of its
+// own, a member list that changed, and finds the leader draining it there
+// too for a change of the discovered targets lists the drain in its
+// snapshot as the leader's, so the two snapshots' digests agree rather
+// than the follower warning that its input files differ; it keeps the
+// target draining for the longer of the two, and its own drain takes over
+// once the leader's leaves the snapshot.
+func TestAFollowerListsTheLeadersDrainOfATargetItDrainsItself(t *testing.T) {
+	in := mustLoad(t, writeInputs(t, testConfig, staticTargets(20), ""))
+	a, clock := settledAllocator(t, in, "m1", "m2")
+	a.mu.Lock()
+	var target string
+	for _, tg := range in.Targets.Targets {
+		if a.ownerOf(tg.Name) == "m2" {
+			target = tg.Name
+			break
+		}
+	}
+	key := drainKey{target, "m1"}
+	now := clock.Now()
+	a.draining[key] = drain{until: now.Add(30 * time.Second)}
+	a.takeDrains([]snapshotDrain{{Target: target, Member: "m1", Seconds: 10}}, now)
+	listed := a.discoveredDrains(now)
+	until := a.draining[key].until
+	a.mu.Unlock()
+	if len(listed) != 1 || listed[0].Target != target || listed[0].Member != "m1" || !until.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("with the leader draining %s on m1 the follower lists %v, draining it until %v, want it listed and draining for 30s", target, listed, until.Sub(now))
+	}
+	_, digest := a.snapshotOf()
+	leader := New(in, Options{Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(leader.BeginShutdown)
+	leader.mu.Lock()
+	leader.draining[key] = drain{until: now.Add(10 * time.Second), discovered: true}
+	leader.mu.Unlock()
+	if _, want := leader.snapshotOf(); digest != want {
+		t.Errorf("the follower's snapshot digest %s, the leader's %s", digest, want)
+	}
+	// The leader's drain ends; the follower's own goes on.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.takeDrains(nil, now.Add(12*time.Second))
+	if d, ok := a.draining[key]; !ok || d.discovered || !d.until.Equal(now.Add(30*time.Second)) || len(a.discoveredDrains(now.Add(12*time.Second))) != 0 {
+		t.Errorf("once the leader's drain ended the follower drains %+v (%v), want its own, until 30s, listed no more", d, ok)
+	}
+}

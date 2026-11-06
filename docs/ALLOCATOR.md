@@ -566,8 +566,10 @@ a follower that takes several answers at once from one snapshot sees only
 where the targets were and where they are, and would drain other targets,
 or none, so the bundles of the members that had them would differ. A
 target the follower drains for a reason of its own, a member list or input
-files that changed, keeps draining, for the longer of the two. The drains
-are part of the snapshot's digest, so instances that found the same targets
+files that changed, keeps draining, for the longer of the two, and is
+listed in the follower's own snapshot as the leader's drain while the
+leader's lasts, so the two snapshots agree; its own drain goes on after
+that. The drains are part of the snapshot's digest, so instances that found the same targets
 but drain other ones, as two that both led for a moment may, are told
 apart, and the follower takes the leader's.
 

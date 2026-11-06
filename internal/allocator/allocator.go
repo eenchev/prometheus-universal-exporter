@@ -212,6 +212,11 @@ type drainKey struct{ target, member string }
 type drain struct {
 	until      time.Time
 	discovered bool
+	// own, on a drain of the leader's snapshot that this instance drained
+	// for a reason of its own too, is when its own would end: the drain is
+	// the leader's, which the snapshot and its digest list as the leader's
+	// do, and its own takes over when the leader's leaves the snapshot.
+	own time.Time
 }
 
 // New returns an allocator serving in.

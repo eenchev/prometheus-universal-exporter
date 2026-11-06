@@ -30855,6 +30855,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: runs at a balance factor of 10, so a member joining moves only what it takes and one leaving only its own, which the bound breaks for 30 targets over a few members by what the probes' random port hashes to.
 - `TestAFollowerDrainsWhatTheLeaderDrains` (allocator): a leader whose static source answers before its probe source, the follower having taken neither answer, moves the static target when the probe target comes and drains it on the member that had it; the follower, taking both answers from one snapshot, drains it there too, and the two serve the same bundles, of the same generations, with the same snapshot digest at once, and again once 30s have passed, the target no longer draining on either.
 - `TestAFollowerThatFoundTheSameTargetsTakesTheLeadersDrains` (allocator): two instances that discovered alone, the leader's static source answering first and the follower's probe source first, find the same targets, the leader draining one and the follower none; once they are peers the follower's fetch is answered with the snapshot, its digest covering the drains, and the two serve the same bundles.
+- `TestAFollowerListsTheLeadersDrainOfATargetItDrainsItself` (allocator): a follower draining a target on m1 for 30s for a member list that changed takes a leader's snapshot draining it there for 10s for a change of the discovered targets: it lists the drain in its snapshot, whose digest is the leader's, keeps it draining for 30s, and once the leader's drain leaves the snapshot drains it as its own, until 30s, listed no more.
 - `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): its bundles are compared right after the follower took the snapshot again, whichever of the leader's sources answered first; 50 runs, and 50 under the race detector, pass.
 - `TestTheAllocatorsSchemasDeclareTheDecodersKeys` (test/repository), changed: the probe targets file has `default_weight` beside `probe_jobs`, and an entry `weight` and `weight_label`; `TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses`, extended: weights of 0, over 1000 or of text, a `weight_label` that is no label name and a `default_weight` of 0 or -1 are refused by both schemas, the weights of every place are taken, and the exporter's static target schema refuses `weight`.
 - `TestChartSetsTheAllocatorCapacity` (chart, test/repository): `server.allocatorCapacity` of 2, 0.1, 100, 1.25 and `"2.5"` renders `--allocator.capacity` with it beside `allocator.enabled`, empty, null and unset render none; set without `allocator.enabled`, of 0.05, 100.5, 1.0001 or a word, and `--allocator.capacity` in `extraArgs`, fail rendering naming `server.allocatorCapacity`, with the values schema and with it skipped.
@@ -33719,7 +33720,11 @@ of a source is put in force, so it never holds an answer without the drains
 the answer made. A follower taking a snapshot MUST drain those in place of
 the drains of discovered targets it holds, even when the discovered targets
 stay the same, keeping a target it drains for a member list or input files
-that changed for the longer of the two, and leaving out a drain on a member
+that changed for the longer of the two, listed in its own snapshot and its
+digest as the leader's drain while the leader's snapshot lists it (so a
+follower holding the leader's targets and drains MUST NOT be told apart from
+the leader by its own drain of one of them) and as its own drain after that,
+and leaving out a drain on a member
 not in its member list, of a target it lacks, or of one that member owns
 there. A source
 of the follower's that the snapshot lacks MUST be asked by the follower

@@ -899,15 +899,20 @@ func (a *Allocator) takeSnapshot(snap *peerSnapshot) {
 // made, each for what is left of it at the leader, and reports whether the
 // targets that drain changed. A target this instance drains for another
 // reason, a member list or input files that changed, keeps draining, for
-// the longer of the two. A drain on a member not in this instance's member
-// list, or of a target it does not have or that member owns here, is left
-// out: the two instances hold other member lists or input files for the
-// moment, and serve other bundles anyway. Called under mu.
+// the longer of the two, and is listed in this instance's snapshot as the
+// leader's, so the two snapshots' digests agree; its own drain takes over
+// once the leader's leaves the snapshot. A drain on a member not in this
+// instance's member list, or of a target it does not have or that member
+// owns here, is left out: the two instances hold other member lists or
+// input files for the moment, and serve other bundles anyway. Called under mu.
 func (a *Allocator) takeDrains(list []snapshotDrain, now time.Time) bool {
 	before := make(map[drainKey]bool, len(a.draining))
 	for key, d := range a.draining {
 		before[key] = true
-		if d.discovered {
+		switch {
+		case d.discovered && now.Before(d.own):
+			a.draining[key] = drain{until: d.own}
+		case d.discovered:
 			delete(a.draining, key)
 		}
 	}
@@ -920,7 +925,9 @@ func (a *Allocator) takeDrains(list []snapshotDrain, now time.Time) bool {
 		key := drainKey{d.Target, d.Member}
 		until := now.Add(time.Duration(d.Seconds * float64(time.Second)))
 		if own, ok := a.draining[key]; ok {
-			a.draining[key] = drain{until: maxTime(own.until, until)}
+			// Listed as the leader's, so the two snapshots agree, and
+			// kept for the longer of the two.
+			a.draining[key] = drain{until: maxTime(own.until, until), discovered: true, own: own.until}
 			continue
 		}
 		a.draining[key] = drain{until: until, discovered: true}

@@ -1364,7 +1364,7 @@ true
        one before it is available. Empty settle and heartbeatInterval are the
        allocator's defaults, 15s and 10s. */ -}}
 {{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
-{{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
+{{- $settle := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.settle | default "15s" -}}
 {{- $interval := .Values.allocator.heartbeatInterval | default "" | toString | default "10s" -}}
 {{- $settleSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $settle) 1000) | int64 -}}
 {{- $intervalSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) 1000) | int64 -}}
@@ -1419,9 +1419,11 @@ true
 {{- if and (include "prometheus-universal-exporter.staticTargetsMonitor" .) .Values.staticTargets.monitor.targets -}}
 {{- fail "staticTargets.monitor.targets is set beside allocator.enabled, but each exporter pod then holds only its share of the static targets, so a name would be missing on most pods; leave staticTargets.monitor.targets empty" -}}
 {{- end -}}
-{{- $settle := $allocator.settle | default "" | toString -}}
-{{- if and $settle (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) -}}
-{{- fail (printf "allocator.settle %q must be a Go duration of zero or more, for example \"15s\"" $settle) -}}
+{{- /* Taken as written unless null, and at most 1h, the flag's bound, as
+       the intervals below are. */ -}}
+{{- $settle := include "prometheus-universal-exporter.allocatorDuration" $allocator.settle -}}
+{{- if and $settle (or (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) (gt (include "prometheus-universal-exporter.goDurationMilliseconds" $settle | float64) 3600000.0)) -}}
+{{- fail (printf "allocator.settle %q must be a Go duration from 0 to 1h, for example \"15s\"" $settle) -}}
 {{- end -}}
 {{- $interval := $allocator.heartbeatInterval | default "" | toString -}}
 {{- if $interval -}}

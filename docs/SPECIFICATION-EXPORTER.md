@@ -30812,6 +30812,13 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestChartSetsThePeersTimings` (chart, test/repository): with a discovery source `allocator.peerCheckInterval`, `allocator.peerCheckTimeout`, `allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold` render `--peers.check-interval`, `--peers.check-timeout`, `--peers.snapshot-timeout` and `--peers.failure-threshold` after `--peers.self` when set and nothing when empty or null; the allocator pods' `terminationGracePeriodSeconds` is 30 by default and for `5s`, 36 for a `20s` interval and a `500ms` timeout, 135 for `1m` and `59.5s`; without a discovery source it is not rendered.
 - `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: a peer timing, or `allocator.peerFailureThreshold`, without a discovery source fails rendering naming it; with one, a check interval that is no duration (the values schema) or outside `500ms` to `1m`, a check timeout under `100ms` or not below the interval, the default `1s` included against an `800ms` interval, a snapshot timeout under the check timeout or over `5m` (the template), and a failure threshold of 0 or 21 (the values schema and the template) fail rendering, with the values schema and with it skipped.
 
+## 34.277 A maximum for the settle time
+
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--settle` of `-1s`, and of `2h`, `1h0m0.001s` or `2562047h`, which passed before, exits 2 with `--settle must be from 0 to 1h`.
+- `TestTheLongestSettleIsNoCommandLineError` (cmd/pue-allocator): `--settle` of `0`, `0s`, `1h`, `60m` and `3600s` is no command-line error, the start going on to the missing configuration and exiting 1.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (chart, test/repository), extended: `allocator.settle` of `1h`, `60m` and `3600s` renders `--settle` with its value and `minReadySeconds` 3610, 3720 with a `2m` heartbeat interval and 3601 with `1s`; with the values schema skipped an integer `0` renders `--settle=0`, where `with` took it for empty and left the flag out, and `minReadySeconds` 130.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: `allocator.settle` of `2h`, `1h0m0.001s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start or ran it with a settle time over an hour, fails rendering with the template, and `soon` and the integer `30` with the values schema, each with the schema and with it skipped saying `must be a Go duration from 0 to 1h`.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33728,8 +33735,8 @@ the member TTL old, so a heartbeat arriving after the one saying
 `shutting_down` does not make it live again. A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
-held for `--settle` (default `15s`), so a member live again within it keeps
-its share; the first member list MUST form only once the live members have
+held for `--settle` (default `15s`; from `0` to `1h`, else exit 2), so a
+member live again within it keeps its share; the first member list MUST form only once the live members have
 not changed for `--settle`, and MUST NOT form before a member is live,
 before `max(--settle, --heartbeat.interval)` after the start, nor before
 `I` after the first heartbeat heard, where `I` is the longest

@@ -52,7 +52,7 @@ pue-allocator \
 | `--probe-targets-file` | none | The probe targets file, served to Prometheus at `/v1/sd/<job>`. |
 | `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. The status page, `/v1/status` and `/metrics` also take it as the password of Basic auth, for a browser ([Status page](#status-page)). |
 | `--config.watch-interval` | `1m` | How often the input files are read again for changes, at most `24h`; `0` reads them once. |
-| `--settle` | `15s` | How long a changed member list must hold before targets move. |
+| `--settle` | `15s` | How long a changed member list must hold before targets move, at most `1h`. |
 | `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
 | `--discovery.refresh-interval` | each kind's own | How often a [discovery source](#discovering-targets) that sets no `refresh_interval` is asked, from `1s` to `24h`, whatever its kind. Left out, or `0`, each kind keeps its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. A source's `timeout` is held to it as to a `refresh_interval` written ([How fast changes reach the exporters](#how-fast-changes-reach-the-exporters)). |

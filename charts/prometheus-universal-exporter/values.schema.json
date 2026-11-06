@@ -721,7 +721,7 @@
             "limits": {"$ref": "#/$defs/quantityMap"}
           }
         },
-        "settle": {"type": "string", "description": "Rendered as --settle: a Go duration of zero or more; empty leaves the flag out.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "settle": {"type": "string", "description": "Rendered as --settle: a Go duration from 0 to 1h, which the chart checks; empty leaves the flag out and the allocator's default, 15s, in force.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
         "heartbeatInterval": {"type": "string", "description": "Rendered as --heartbeat.interval: a Go duration from 1s to 2m, which the chart checks; empty leaves the flag out and the allocator's default, 10s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
         "configWatchInterval": {"type": "string", "description": "Rendered as the allocator's --config.watch-interval: a Go duration from 0 to 24h, which the chart checks, 0 reading the input files once; empty leaves the flag out and the allocator's default, 60s, in force.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
         "discoveryRefreshInterval": {"type": "string", "description": "Rendered as the allocator's --discovery.refresh-interval: a Go duration from 1s to 24h, which the chart checks; empty leaves the flag out and each discovery source kind its own default.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},

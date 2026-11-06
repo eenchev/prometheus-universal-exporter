@@ -53,7 +53,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	tokenFile := flags.String("web.token-file", "", "Optional file holding a bearer token every request but /healthz and /ready must carry; the status page, /v1/status and /metrics also take it as Basic auth's password, for a browser")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to read the input files again for changes, at most 24h; 0 reads them once")
-	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move; a replica back within it keeps its share")
+	settle := flags.Duration("settle", allocator.DefaultSettle, "How long a changed member list must hold before targets move, at most 1h; a replica back within it keeps its share")
 	heartbeatInterval := flags.Duration("heartbeat.interval", allocapi.DefaultHeartbeatInterval, "How often the replicas heartbeat, which every heartbeat reply tells them, from 1s to 2m; a replica not heard from for three intervals stops being a member")
 	maxMembers := flags.Int("members.max", allocator.DefaultMaxMembers, "How many live members to take; a heartbeat of a new member beyond them is refused with 429 until one stops heartbeating")
 	discoveryRefresh := flags.Duration("discovery.refresh-interval", 0, "How often to ask a discovery source that sets no refresh_interval, from 1s to 24h; 0 leaves each kind its own default: 1m for file_sd and http_sd, 30s for kubernetes and dns_sd")
@@ -90,8 +90,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *watchInterval < 0 || *watchInterval > allocator.MaxWatchInterval {
 		return commandLineError(stderr, fmt.Errorf("--config.watch-interval must be from 0 to 24h, got %s; 0 reads the files once", *watchInterval))
 	}
-	if *settle < 0 {
-		return commandLineError(stderr, fmt.Errorf("--settle must not be negative, got %s", *settle))
+	if *settle < 0 || *settle > allocator.MaxSettle {
+		return commandLineError(stderr, fmt.Errorf("--settle must be from 0 to 1h, got %s", *settle))
 	}
 	if *heartbeatInterval < allocapi.MinHeartbeatInterval || *heartbeatInterval > allocapi.MaxHeartbeatInterval {
 		return commandLineError(stderr, fmt.Errorf("--heartbeat.interval must be from 1s to 2m, got %s", *heartbeatInterval))

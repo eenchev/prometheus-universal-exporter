@@ -21,7 +21,10 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 	for args, want := range map[string]string{
 		"--nope":                                        "flag provided but not defined",
 		"stray":                                         `unexpected argument "stray"`,
-		"--settle=-1s":                                  "--settle must not be negative",
+		"--settle=-1s":                                  "--settle must be from 0 to 1h, got -1s",
+		"--settle=2h":                                   "--settle must be from 0 to 1h, got 2h0m0s",
+		"--settle=1h0m0.001s":                           "--settle must be from 0 to 1h, got 1h0m0.001s",
+		"--settle=2562047h":                             "--settle must be from 0 to 1h, got 2562047h0m0s",
 		"--members.max=0":                               "--members.max must be 1 or more",
 		"--heartbeat.interval=999ms":                    "--heartbeat.interval must be from 1s to 2m, got 999ms",
 		"--heartbeat.interval=2m1s":                     "--heartbeat.interval must be from 1s to 2m, got 2m1s",
@@ -61,6 +64,19 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		var line map[string]any
 		if err := json.Unmarshal(stderr.Bytes(), &line); err != nil || !strings.Contains(line["error"].(string), want) {
 			t.Errorf("%s: logged %q, want a JSON line with %q", args, stderr.String(), want)
+		}
+	}
+}
+
+// --settle takes 0 and its bound, 1h, however written: with them the
+// command line is accepted and the start goes on to read the inputs, here a
+// missing configuration, which exits 1 rather than 2.
+func TestTheLongestSettleIsNoCommandLineError(t *testing.T) {
+	missing := "--config.file=" + filepath.Join(t.TempDir(), "missing.yaml")
+	for _, settle := range []string{"0", "0s", "1h", "60m", "3600s"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"--settle=" + settle, missing}, &stdout, &stderr); code != 1 {
+			t.Errorf("--settle=%s: exited %d, want 1 for the missing configuration: %s", settle, code, stderr.String())
 		}
 	}
 }

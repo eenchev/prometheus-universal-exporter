@@ -123,7 +123,7 @@ spec:
             {{- end }}
             - {{ printf "--web.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
             - {{ printf "--log.level=%s" ($allocator.logLevel | default "info") | quote }}
-            {{- with $allocator.settle }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
             {{- end }}
             {{- with $allocator.heartbeatInterval }}

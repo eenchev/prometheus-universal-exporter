@@ -910,7 +910,8 @@ configuration's `config.yaml`, `--static-targets-file` while
 `allocator.probeJobs` is not empty, `--web.token-file` naming the token's
 mounted file, `--log.level`
 from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
-empty, `--heartbeat.interval` from `allocator.heartbeatInterval` unless it
+empty (a Go duration from zero to `1h`, the allocator's bound, or rendering
+MUST fail), `--heartbeat.interval` from `allocator.heartbeatInterval` unless it
 is empty, `--config.watch-interval` from `allocator.configWatchInterval`
 unless it is empty (a Go duration from zero to `24h`, the allocator's bound,
 `0s` reading the input files once, or rendering MUST fail),
@@ -1992,10 +1993,12 @@ are skipped and the text checks of the templates still run:
      allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
      a probe job of an unknown or no collector, a probe job name that is no
      DNS-1123 label or is used twice, `allocator.replicas` 0,
-     `allocator.maxMembers` 0, a `settle` that is no duration, an unknown log level, an `env` entry `POD_IP`, an
-     `--allocator.*` flag in `extraArgs`, `staticTargets.monitor.targets`
-     beside the allocator, a mount over the cache or token directory, and a
-     ScrapeConfig timeout longer than its interval.
+     `allocator.maxMembers` 0, a `settle` that is no duration or, with the
+     template, over `1h`, `2h` and `99999999h` included, an unknown log
+     level, an `env` entry `POD_IP`, an `--allocator.*` flag in `extraArgs`,
+     `staticTargets.monitor.targets` beside the allocator, a mount over the
+     cache or token directory, and a ScrapeConfig timeout longer than its
+     interval.
    - With a discovery source, of a probe job or of a `discovered_targets`
      entry, the allocator's Deployment has 2 replicas, or
      `allocator.replicas`, 3 and 1 included, and the default strategy; its
@@ -2024,7 +2027,9 @@ are skipped and the text checks of the templates still run:
      value and nothing when empty; the Deployment's `minReadySeconds` is
      `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with
      both empty, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 310 with
-     `settle: 5m` (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
+     `settle: 5m`, 3610 with `settle: 1h`, the bound, and 130 with an integer
+     `0` of `settle` and the values schema skipped, which renders
+     `--settle=0` (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
      `heartbeatInterval` that is no duration fails with the values schema
      and with it skipped, and one under `1s` or over `2m` with the template
      (`TestChartRefusesWhatTheAllocatorCannotRunWith`); `make helm-test`

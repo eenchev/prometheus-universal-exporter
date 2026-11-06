@@ -863,8 +863,8 @@ allocator:
       cpu: 500m
       memory: 256Mi
   # How long a changed member list has to hold before targets move
-  # (--settle), so a pod restarting quickly keeps its share. A Go duration of
-  # zero or more; empty leaves the flag out and the allocator's default, 15s,
+  # (--settle), so a pod restarting quickly keeps its share. A Go duration
+  # from 0 to 1h; empty leaves the flag out and the allocator's default, 15s,
   # in force.
   settle: 15s
   # How often the exporter pods heartbeat to the allocator

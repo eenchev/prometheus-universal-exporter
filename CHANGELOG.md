@@ -31,6 +31,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   left out: an interval of `1m`, an age of `35m` and a threshold of `2h`
   where it wrote `1m0s`, `35m0s` and `2h0m0s`. The JSON keeps Go's form
   and its seconds ([Status page](docs/ENDPOINTS.md#status-page)).
+- `pue-allocator --settle` takes at most `1h`, and the chart's
+  `allocator.settle` fails rendering beyond it, where any duration was
+  taken: the targets of a replica gone without a word stay with it,
+  unscraped, for the settle time after its member TTL. An allocator started
+  with a longer settle time exits 2; set `1h` or less
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 
 ### New
 

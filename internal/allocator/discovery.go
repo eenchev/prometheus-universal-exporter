@@ -135,6 +135,12 @@ const (
 	// than the allocator's start.
 	MaxDiscoveryRefresh = 24 * time.Hour
 	MaxWatchInterval    = 24 * time.Hour
+	// MaxSettle is the longest --settle. The targets of a replica that
+	// stopped without a word stay with it, unscraped, until the settle time
+	// has passed after its member TTL, so an hour is the most worth waiting
+	// for it to come back; like the two above, the bound gives the chart
+	// one to check.
+	MaxSettle = time.Hour
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
 	// a page of a Kubernetes listing.
 	maxDiscoveryAnswerBytes = 16 << 20

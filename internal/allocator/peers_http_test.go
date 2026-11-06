@@ -247,6 +247,15 @@ func TestAFollowerServesTheLeadersDiscoveredTargets(t *testing.T) {
 	if !reflect.DeepEqual(ls, fs) {
 		t.Errorf("the service discovery answers differ:\nleader   %v\nfollower %v", ls, fs)
 	}
+	// Static and probe targets share the members' loads, so the leader,
+	// whose sources answer one after the other, may have placed the static
+	// target before the probe target came and moved it once it did; it then
+	// drains the target for one of its intervals, where the follower, which
+	// took both at once, has nothing to drain. Past that interval the two
+	// serve the same bundles.
+	for _, c := range []*peerInstance{leader, follower} {
+		keepBeating(t, c.a, c.clock, 31*time.Second, "r1", "r2")
+	}
 	for _, member := range []string{"r1", "r2", "joining"} {
 		lb, fb := leader.a.Bundle(member), follower.a.Bundle(member)
 		if lb.Generation != fb.Generation || !reflect.DeepEqual(lb.Files, fb.Files) {

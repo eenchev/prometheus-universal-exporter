@@ -353,7 +353,12 @@ func TestTheAllocatorAndItsReplicasEndToEnd(t *testing.T) {
 
 	clock := newFakeClock()
 	logger := testutil.QuietLogger(t)
-	a := New(mustLoad(t, p), Options{Settle: DefaultSettle, Clock: clock, Logger: logger})
+	// The largest balance factor leaves every target where rendezvous
+	// hashing puts it, so a member's coming moves only what it takes and
+	// its going only its own; at the default, 30 targets over a few members
+	// would make the bound move others too, by what the probes' random
+	// port hashes to.
+	a := New(mustLoad(t, p), Options{Settle: DefaultSettle, Clock: clock, Logger: logger, BalanceFactor: MaxBalanceFactor})
 	e := &endToEnd{t: t, a: a, clock: clock, pulse: newPulse(), gate: &gate{closed: map[string]chan struct{}{}}, logger: logger, replicas: map[string]*replica{}}
 	e.log = &heartbeatLog{clock: clock, pulse: e.pulse, heard: map[string]heard{}}
 	e.api = httptest.NewServer(e.log.wrap(a.Handler("")))

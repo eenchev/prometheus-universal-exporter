@@ -137,6 +137,12 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 		"an A dns_sd without a port":  entry("    discovery:\n      - dns_sd: {names: [a.example], type: A}\n"),
 		"a dns_sd port out of range":  entry("    discovery:\n      - dns_sd: {names: [a.example], type: AAAA, port: 70000}\n"),
 		"an unknown dns_sd key":       entry("    discovery:\n      - dns_sd: {names: [a.example], transport: tcp}\n"),
+		"an entry's weight of 0":      entry(source + "    weight: 0\n"),
+		"an entry's weight over 1000": entry(source + "    weight: 1000.5\n"),
+		"an entry's weight of text":   entry(source + "    weight: heavy\n"),
+		"a bad weight_label":          entry(source + "    weight_label: a-b\n"),
+		"a default_weight of -1":      "default_weight: -1\n" + entry(source),
+		"a target's weight of 0":      "interval: 1m\ntargets:\n  - {name: a, collector: node, target: 'http://a/', weight: 0}\n",
 	} {
 		if problems := schemaProblems(t, static, document); len(problems) == 0 {
 			t.Errorf("%s: the allocator's static target schema takes\n%s", name, document)
@@ -152,6 +158,15 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 	}
 	if problems := schemaProblems(t, probes, job(source)); len(problems) > 0 {
 		t.Fatalf("a job of discovery alone is refused: %v", problems)
+	}
+	if problems := schemaProblems(t, probes, "default_weight: 0.5\n"+job(source+"    weight: 2.5\n    weight_label: __meta_pue_weight\n")); len(problems) > 0 {
+		t.Errorf("a job's weights are refused: %v", problems)
+	}
+	if problems := schemaProblems(t, static, "default_weight: 2\n"+entry(source+"    weight: 1000\n    weight_label: __meta_pue_weight\n")+"targets:\n  - {name: a, collector: node, target: 'http://a/', weight: 0.001}\n"); len(problems) > 0 {
+		t.Errorf("the static target file's weights are refused: %v", problems)
+	}
+	if problems := schemaProblems(t, loadSchemaFile(t, staticTargetsSchemaFile), "interval: 1m\ntargets:\n  - {name: a, collector: node, target: 'http://a/', weight: 2}\n"); len(problems) == 0 {
+		t.Error("the exporter's static target schema takes a weight, which the exporter refuses")
 	}
 	for name, document := range map[string]string{
 		"no jobs":                    "probe_jobs: []\n",
@@ -170,6 +185,11 @@ func TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses(t *testing.T) {
 		"a template without address": job(source + "    target_template: https://x/\n"),
 		"an unknown job key":         job(source + "    target: https://x/\n"),
 		"a bad source":               job("    discovery:\n      - kubernetes: {port: m, bogus: 1}\n"),
+		"a job's weight of 0":        job(source + "    weight: 0\n"),
+		"a job's weight over 1000":   job(source + "    weight: 1001\n"),
+		"a job's weight of text":     job(source + "    weight: '2'\n"),
+		"a bad job weight_label":     job(source + "    weight_label: 9w\n"),
+		"a default_weight of 0":      "default_weight: 0\n" + job(source),
 	} {
 		if problems := schemaProblems(t, probes, document); len(problems) == 0 {
 			t.Errorf("%s: the probe targets schema takes\n%s", name, document)
@@ -256,7 +276,7 @@ func TestTheAllocatorsSchemasDeclareTheDecodersKeys(t *testing.T) {
 	probes := loadSchemaFile(t, probeTargetsSchemaFile)
 	static := loadSchemaFile(t, allocatorStaticTargetsSchemaFile)
 	file := keyTree(reflect.TypeFor[allocator.ProbeFile]())
-	if len(file) != 1 || len(file["probe_jobs"].(map[string]any)) < 8 {
+	if len(file) != 2 || len(file["probe_jobs"].(map[string]any)) < 8 {
 		t.Fatalf("read %v from allocator.ProbeFile; the reader has stopped finding its keys", file)
 	}
 	if got := schemaKeyTree(probes, probes); !reflect.DeepEqual(got, file) {
@@ -275,7 +295,7 @@ func TestTheAllocatorsSchemasDeclareTheDecodersKeys(t *testing.T) {
 	want := keyTree(reflect.TypeFor[model.StaticTarget]())
 	delete(want, "target")
 	var leaf map[string]any
-	want["name"], want["shard_key"], want["target_template"], want["discovery"] = leaf, leaf, leaf, source
+	want["name"], want["shard_key"], want["target_template"], want["discovery"], want["weight"], want["weight_label"] = leaf, leaf, leaf, source, leaf, leaf
 	entry := at(t, static, "discovered_targets", "[]")
 	if got := schemaKeyTree(entry, entry); !reflect.DeepEqual(got, want) {
 		t.Errorf("a discovered_targets entry takes the keys\n%v\nwant a static target's but target, with name, shard_key, target_template and discovery:\n%v", got, want)

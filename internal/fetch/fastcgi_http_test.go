@@ -149,22 +149,9 @@ func writeTestRecord(w io.Writer, kind byte, content string) {
 func TestFastCGIStderrAndWhatIsNoFastCGI(t *testing.T) {
 	params := make(chan map[string]string, 1)
 	fpm := testutil.NewTCPStub(t, func(conn net.Conn) {
-		r := bufio.NewReader(conn)
-		var pairs []byte
-		for {
-			var header [8]byte
-			if _, err := io.ReadFull(r, header[:]); err != nil {
-				return
-			}
-			length, padding := int(binary.BigEndian.Uint16(header[4:])), int(header[6])
-			content := make([]byte, length+padding)
-			_, _ = io.ReadFull(r, content)
-			if header[1] == fcgiParams {
-				pairs = append(pairs, content[:length]...)
-			}
-			if header[1] == fcgiStdin && length == 0 {
-				break
-			}
+		pairs, ok := readTestRequest(conn)
+		if !ok {
+			return
 		}
 		params <- readTestPairs(pairs)
 		writeTestRecord(conn, fcgiStderr, "Primary script unknown\n")
@@ -188,14 +175,43 @@ func TestFastCGIStderrAndWhatIsNoFastCGI(t *testing.T) {
 	if _, ok := env["CONTENT_LENGTH"]; ok {
 		t.Errorf("a request without a body sent CONTENT_LENGTH %q", env["CONTENT_LENGTH"])
 	}
+	// It reads the request first: closing with it unread would make the
+	// system reset the connection, which the client may read in place of
+	// the answer.
 	plain := testutil.NewTCPStub(t, func(conn net.Conn) {
-		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		if _, ok := readTestRequest(conn); ok {
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		}
 	})
 	if _, err := FetchCollector(ctx, "http://"+plain.Addr+"/status", c, RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), "is no FastCGI record") {
 		t.Errorf("an HTTP server: %v", err)
 	}
 	if err := CheckTarget(c, "https://fpm:9000/status", false); err == nil || !strings.Contains(err.Error(), "is not an http:// URL") {
 		t.Errorf("an https target: %v", err)
+	}
+}
+
+// readTestRequest reads a FastCGI request's records up to the empty
+// FCGI_STDIN that ends it, and answers the content of its FCGI_PARAMS.
+func readTestRequest(conn net.Conn) ([]byte, bool) {
+	r := bufio.NewReader(conn)
+	var pairs []byte
+	for {
+		var header [8]byte
+		if _, err := io.ReadFull(r, header[:]); err != nil {
+			return nil, false
+		}
+		length, padding := int(binary.BigEndian.Uint16(header[4:])), int(header[6])
+		content := make([]byte, length+padding)
+		if _, err := io.ReadFull(r, content); err != nil {
+			return nil, false
+		}
+		if header[1] == fcgiParams {
+			pairs = append(pairs, content[:length]...)
+		}
+		if header[1] == fcgiStdin && length == 0 {
+			return pairs, true
+		}
 	}
 }
 

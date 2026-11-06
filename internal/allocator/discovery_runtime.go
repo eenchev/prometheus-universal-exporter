@@ -285,15 +285,8 @@ func (a *Allocator) foundBySource() map[string][]discovered {
 	return out
 }
 
-// applyDiscovery puts in force the input files in force with what the
-// sources found now.
-func (a *Allocator) applyDiscovery() {
-	a.reloadMu.Lock()
-	defer a.reloadMu.Unlock()
-	a.applyDiscoveryLocked()
-}
-
-// applyDiscoveryLocked is applyDiscovery under reloadMu.
+// applyDiscoveryLocked puts in force the input files in force with what
+// the sources found now. Called under reloadMu.
 func (a *Allocator) applyDiscoveryLocked() {
 	if a.putInForce(a.base, true, nil) {
 		a.logger.Info("discovered targets changed", a.currentInputs().logAttrs()...)

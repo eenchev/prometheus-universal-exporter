@@ -1,3 +1,5 @@
+//go:build !select_request_types || request_type_http || request_type_tcp
+
 package fetch
 
 import (
@@ -13,11 +15,6 @@ import (
 // request.unix_socket, of an http collector (unixsocket.go) and of a tcp
 // one (requesttype_tcp.go), is checked alike in every build that has either
 // type, and its pattern is the schema's in every build.
-
-// UnixSocketPattern is what request.unix_socket may be, for the
-// configuration's JSON Schema: an absolute path, or "", which is the key
-// left out. What else it has to be is the exporter's to refuse.
-const UnixSocketPattern = `^$|^/`
 
 // maxUnixSocketPath is the longest request.unix_socket the system the
 // exporter runs on can connect to, in bytes: sun_path, the path's room in

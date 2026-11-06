@@ -62,6 +62,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   a `unix_socket`, so PHP-FPM's status and ping pages, which PHP-FPM serves
   over FastCGI alone, are read as any HTTP answer
   ([FastCGI](docs/REQUESTS.md#fastcgi)).
+- The opt-in `icmp` request type pings a host on an unprivileged ICMP
+  socket, as `ping` does, and answers how many echoes came back, the loss
+  and the round trips as a JSON document; a host that answers nothing is a
+  loss of 1, not a failed scrape ([Ping over ICMP](docs/ICMP.md)).
 - `decoder.type: binary` reads a binary answer by the layout of
   `response.binary`, integers, floats, strings and lists of them, into a
   document jq, yq and Python read by the fields' names

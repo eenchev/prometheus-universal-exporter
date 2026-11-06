@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP (`tcp`), and searches of LDAP directories (`ldap`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket (`tcp`), searches of LDAP directories (`ldap`), and the echo replies of hosts pinged over ICMP (`icmp`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
@@ -708,8 +708,8 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap` and `sshexec` are
-implemented;
+`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec` and
+`icmp` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -774,8 +774,9 @@ they use. A default build — no tags, and the published image — MUST carry ev
 type but the opt-in ones. An opt-in type is one few deployments want in the
 binary: `s3file`, for the AWS SDK it links, `redis`, `tcp` and `ldap`, which
 link nothing outside the standard library but reach servers most
-deployments of the exporter do not have, and `sshexec`, which runs commands
-on the hosts it reaches. No build MAY carry one unless asked for it by its tag,
+deployments of the exporter do not have, `sshexec`, which runs commands
+on the hosts it reaches, and `icmp`, which links nothing outside the
+standard library but opens ICMP sockets few deployments ping with. No build MAY carry one unless asked for it by its tag,
 and the source MUST list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
@@ -839,7 +840,7 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp` and `ldap` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap` and `icmp` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -2385,6 +2386,53 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
   command sent and the server's answer, quoted, before the handshake's
   outcome or its error. The verbose `url` label MUST be
   `tls://host:port` and `http_method` MUST be `HANDSHAKE`.
+
+#### `icmp`
+
+An `icmp` collector pings a host, as ping does, and hands the transforms a
+JSON document of the replies. It is an opt-in type (§ 5.1, Selecting request
+types at build time). Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `count` | `3` | Echo requests a scrape sends, 1 to 100. |
+| `interval` | `1s` | How long apart they are sent, at least `10ms`. |
+| `reply_timeout` | `1s` | How long the last one's reply is waited for, at least `10ms`. |
+| `payload_bytes` | `56` | Bytes of data each carries, 8 to 1232. |
+| `ip_family`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- A key outside its bounds, and an `ip_family` other than `ip4`, `ip6`,
+  `prefer_ip4` and `prefer_ip6`, MUST be refused at load. The target MUST be
+  a host, a name or an address, an IPv6 one with brackets or without; a
+  scheme, a path, a query, a user or a port MUST be refused before anything
+  is sent. Its `url` label MUST be `icmp://` and the host, its
+  `http_method` `PING`.
+- A name MUST be looked up when the scrape is made, and the first address of
+  the family `ip_family` asks for pinged: `ip4` and `ip6` of that family
+  alone, failing the scrape, naming the host and the family, when it has
+  none; `prefer_ip4` and `prefer_ip6` of that family first; left out, the
+  first address. The target lists MUST hold the name before the lookup and
+  the address the socket is connected to, as for `ntp`.
+- The echoes MUST go on an unprivileged ICMP datagram socket (`SOCK_DGRAM`
+  of `IPPROTO_ICMP` or `IPPROTO_ICMPV6`), connected to the address, never a
+  raw socket; a socket the system refuses for permission MUST fail the
+  scrape naming `net.ipv4.ping_group_range`. An echo MUST be type 8 with
+  its checksum, or 128 for ICMPv6, its sequence the echo's number from 1,
+  its data a random 8-byte token of the scrape and bytes after it; a reply
+  MUST be taken only when it is type 0 or 129, code 0, of a sequence sent and
+  of the echo's data, after an IPv4 header where the system reads one, a
+  second reply to one echo being counted as a duplicate.
+- The echoes MUST be sent `interval` apart, and the scrape MUST end once
+  every reply came, `reply_timeout` after the last was sent, or at its
+  deadline. A host that answered none MUST be no failure: the document is
+  answered with `received` 0. An echo the network has no route for MUST
+  count as lost, not fail the scrape.
+- The document MUST be a JSON object with `host`, `address`, `family` (4 or
+  6), `sent`, `received`, `loss_ratio`, `rtts_seconds`, the round trips from
+  the shortest, `rtt_min_seconds`, `rtt_avg_seconds`, `rtt_max_seconds` and
+  `rtt_stddev_seconds` (the population deviation) when a reply came and
+  left out otherwise, `duplicates`, `payload_bytes` and `duration_seconds`,
+  with the `Content-Type` `application/json` and no status.
 
 #### `ntp`
 
@@ -9986,7 +10034,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -30571,7 +30619,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md` and `sshexec` in `docs/SSHEXEC.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md` and `icmp` in `docs/ICMP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -30945,6 +30993,17 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestSchemaAndExporterAgreeOnBinaryKeysWrittenEmpty` (test/repository): `response.binary.byte_order` and a field's `byte_order`, `""` the key left out, and a field's `type`, required, get one verdict from the schema and the exporter; `request.fastcgi.params{}` is a row of the http table.
 - `TestDecoderListsNameEveryDecoder` (test/repository), changed: `binary` is named in spec § 1, the chart README and the comment on `model.DecoderConfig`.
 - `TestARequestGoesOverTheCollectorsUnixSocket` and the other `unix_socket` tests (fetch, http), changed: `unix_socket` is of the request's common part, `model.RequestConfig.UnixSocket`, rather than of the http type's own keys.
+
+## 34.280 Ping over ICMP
+
+- `TestAnICMPCollectorsDefaults` (fetch, icmp): a collector of no keys sends 3 echoes 1s apart, waits 1s, carries 56 bytes, is labelled `icmp://` and the host, and its method is `PING`.
+- `TestAnICMPCollectorPingsLoopback` (fetch, icmp): three echoes to 127.0.0.1 10ms apart all come back, a loss of 0, with three round trips and their minimum no more than their maximum, family 4; skipped where the system opens no ICMP datagram socket.
+- `TestAnICMPHostThatAnswersNothingIsALossOfOne` (fetch, icmp): two echoes on a connection that answers nothing are a loss of 1 with no round trip within 3s; a host that answers the first twice and the second with another token's data is one reply, one duplicate and a loss of 0.5.
+- `TestAnICMPCollectorKeepsToItsTargetLists` (fetch, icmp): `denied_targets: [127.0.0.0/8]` refuses `127.0.0.1` and `localhost`.
+- `TestICMPEchoesAndReplies` (fetch, icmp): an echo is type 8 whose checksum sums to 0, an ICMPv6 one type 128 with none; a reply is read with and without an IPv4 header, and one of another token and an unreachable are not taken.
+- `TestICMPTargetsAndFamilies` (fetch, icmp): names and addresses, IPv6 ones with brackets or without, are targets, and a port, a scheme, a path and nothing are refused; `::1` is pinged under `prefer_ip4`, and refused under `ip4`.
+- `TestICMPKeysAreChecked` (fetch, icmp): a count of -1 and 101, an interval and a reply_timeout of 1ms, payload_bytes of 7 and 1233, and `ip_family: ip5` are refused.
+- `TestAProbeOfAnICMPCollectorReadsTheReplies` (exporter, icmp): a probe of 127.0.0.1 exports `ping_received 2` and `ping_loss_ratio 0` from the document; skipped where the system opens no ICMP datagram socket.
 
 ## 42.1 OTLP export
 

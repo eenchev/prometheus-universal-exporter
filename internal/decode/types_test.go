@@ -25,6 +25,7 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"logfmt":     "a=1 b=2\n",
 		"toml":       "a = 1\n",
 		"ini":        "[s]\na = 1\n",
+		"binary":     "\x00\x01",
 		"none":       "anything at all",
 	}
 	for _, decoder := range model.DecoderTypes {
@@ -37,7 +38,7 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 				t.Fatalf("no sample body for decoder %q; add one", decoder)
 			}
 			header := true
-			c := &model.Collector{Name: "types", Decoder: model.DecoderConfig{Type: decoder}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: &header}}}
+			c := &model.Collector{Name: "types", Decoder: model.DecoderConfig{Type: decoder}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: &header}, Binary: model.BinaryConfig{Fields: []model.BinaryField{{Name: "a", Type: "u16"}}}}}
 			d, err := Decode(&fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}, c)
 			if err != nil {
 				t.Fatalf("err=%v", err)

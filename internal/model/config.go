@@ -679,7 +679,7 @@ type BinaryField struct {
 	ByteOrder string `yaml:"byte_order"`
 }
 
-// The types of a response.binary field: integers of 1, 2, 4 and 8 bytes,
+// BinaryTypes are the types of a response.binary field: integers of 1, 2, 4 and 8 bytes,
 // unsigned (u) and two's complement (i); IEEE 754 floats of 4 and 8 bytes;
 // text of a length, and text up to a NUL byte; and bytes passed over.
 var BinaryTypes = []string{"u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "string", "cstring", "skip"}

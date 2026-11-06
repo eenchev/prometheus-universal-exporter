@@ -88,7 +88,7 @@ func TestAnHTTPCollectorSpeaksFastCGI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got seen
-	if err := json.Unmarshal(resp.Body, &got); err != nil || got != (seen{"/status", "full=", "POST", "www", "hello"}) || resp.StatusCode != 200 || resp.Headers.Get("Content-Type") != "application/json" {
+	if err := json.Unmarshal(resp.Body, &got); err != nil || got != (seen{"/status", "full=", "POST", "www", "hello"}) || resp.StatusCode != http.StatusOK || resp.Headers.Get("Content-Type") != "application/json" {
 		t.Errorf("answered %d %v %q: %+v, %v", resp.StatusCode, resp.Headers, resp.Body, got, err)
 	}
 	env := <-params
@@ -175,7 +175,7 @@ func TestFastCGIStderrAndWhatIsNoFastCGI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := FetchCollector(ctx, "http://"+fpm.Addr+"/nope.php", c, RequestOverrides{}, nil)
-	if err != nil || resp.StatusCode != 404 || string(resp.Body) != "File not found.\n" || resp.Headers.Get("X-Fastcgi-Stderr") != "Primary script unknown" {
+	if err != nil || resp.StatusCode != http.StatusNotFound || string(resp.Body) != "File not found.\n" || resp.Headers.Get("X-Fastcgi-Stderr") != "Primary script unknown" {
 		t.Fatalf("answered %+v, %v", resp, err)
 	}
 	env := <-params

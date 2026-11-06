@@ -2353,6 +2353,12 @@
                 },
                 "type": "object"
               },
+              "count": {
+                "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
               "database": {
                 "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only.",
                 "not": {
@@ -2548,8 +2554,25 @@
                 },
                 "type": "array"
               },
+              "interval": {
+                "description": "icmp: how long apart the echoes are sent, at least 10ms; 1s when left out.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
               "ip_family": {
-                "description": "http and graphite: the address family the requests connect to the target over. ip4 or ip6 connect over that family alone, and fail when the target has no address of it; prefer_ip4 or prefer_ip6 try that family first and the other when it has no address or none takes the connection. Left out, both families, as Go connects. Not with unix_socket or a proxy_url other than direct, and a request with it is refused rather than sent through the environment's proxy. See docs/REQUESTS.md#address-families.",
+                "description": "http and graphite: the address family the requests connect to the target over. ip4 or ip6 connect over that family alone, and fail when the target has no address of it; prefer_ip4 or prefer_ip6 try that family first and the other when it has no address or none takes the connection. Left out, both families, as Go connects. Not with unix_socket or a proxy_url other than direct, and a request with it is refused rather than sent through the environment's proxy. See docs/REQUESTS.md#address-families. icmp: the family of the address a name is pinged at, its first of that family, or of either when left out; see docs/ICMP.md.",
                 "enum": [
                   "ip4",
                   "ip6",
@@ -3576,6 +3599,12 @@
                 "description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false.",
                 "type": "boolean"
               },
+              "payload_bytes": {
+                "description": "icmp: how many bytes of data each echo carries, from 8 to 1232; 56 when left out, as ping's.",
+                "maximum": 1232,
+                "minimum": 8,
+                "type": "integer"
+              },
               "private_key_file": {
                 "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
                 "not": {
@@ -3700,6 +3729,23 @@
                 "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md.",
                 "pattern": "^$|^[A-Za-z0-9_-]+$",
                 "type": "string"
+              },
+              "reply_timeout": {
+                "description": "icmp: how long the last echo's reply is waited for once it is sent, at least 10ms; 1s when left out. A scrape takes about (count - 1) × interval + reply_timeout, within its deadline.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "resource": {
                 "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md.",

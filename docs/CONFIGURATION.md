@@ -2676,9 +2676,9 @@ reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) �
 `sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
 certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
-`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
-`kubernetes` lists Kubernetes objects — see [Kubernetes
-objects](KUBERNETES.md).
+`ntp` asks an NTP server for the time — see [NTP](NTP.md) — `icmp` pings
+a host — see [Ping over ICMP](ICMP.md) — and `kubernetes` lists Kubernetes
+objects — see [Kubernetes objects](KUBERNETES.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -2823,6 +2823,13 @@ For `sshexec`, in a build that [asks for it](SSHEXEC.md#building-with-sshexec),
 idle and limit keys, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The command's output is a body, read by any
 decoder; its table is in [Commands over SSH](SSHEXEC.md#a-collector).
+
+For `icmp`, in a build that [asks for it](ICMP.md#building-with-icmp), no
+key is required: `count` is how many echoes a scrape sends, `interval` how
+long apart, `reply_timeout` how long the last one's reply is waited for and
+`payload_bytes` the data each carries; `ip_family`, `allowed_targets` and
+`denied_targets` apply too. The decoder is `json`; its table is in [Ping
+over ICMP](ICMP.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -2865,6 +2872,8 @@ its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
 accepts `timeout` and `param_<name>`, and requires a `target`, the service,
 `host:port` with its port. `sshexec` accepts `timeout` and
 `param_<name>`, and requires a `target`, the host, as `sshfile` does.
+`icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
+host pinged, with no port.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -2923,7 +2932,7 @@ their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `tlscert`, `ntp` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
-links the AWS SDK, below, the opt-in `redis`, `tcp` and `ldap` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, the opt-in `redis`, `tcp`, `ldap` and `icmp` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -2944,7 +2953,7 @@ any type:
 make build OPT_IN_REQUEST_TYPES=s3file
 make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec)" .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" .
 ```
 
 Its tag alone, `request_type_s3file`, `request_type_redis`,
@@ -5914,6 +5923,7 @@ as each type says it, so a build without a type has nothing of it:
 | `sql` | Database server: `host or host:<the driver's port>`, such as `host:5432`; Account for `snowflake` |
 | `dns` | Name to resolve: `example.com`, the server being `request.server` or the system's resolver; Address to resolve for `PTR` |
 | `ntp` | NTP server: `host or host:123` |
+| `icmp` | Host: `host` |
 | `tlscert` | Server: `host or host:443`, or the `starttls` protocol's port |
 | `sshfile`, `sshexec` | SSH host: `host or host:22` |
 | `localfile` | File, or Directory when `request.path` names the file or `files` reads a directory: under its root, optional |
@@ -6967,6 +6977,7 @@ nothing there.
 - [TCP.md](TCP.md) — the opt-in `tcp` request type.
 - [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
 - [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.
+- [ICMP.md](ICMP.md) — the opt-in `icmp` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

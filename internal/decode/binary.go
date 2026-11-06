@@ -140,15 +140,15 @@ func binaryNumber(kind string, order binary.ByteOrder, b []byte) any {
 	case "u8":
 		return int(b[0])
 	case "i8":
-		return int(int8(b[0]))
+		return int(int8(b[0])) //nolint:gosec // G115: a byte read as two's complement, as the type says
 	case "u16":
 		return int(order.Uint16(b))
 	case "i16":
-		return int(int16(order.Uint16(b)))
+		return int(int16(order.Uint16(b))) //nolint:gosec // G115: as above
 	case "u32":
 		return int(order.Uint32(b))
 	case "i32":
-		return int(int32(order.Uint32(b)))
+		return int(int32(order.Uint32(b))) //nolint:gosec // G115: as above
 	case "f32":
 		return float64(math.Float32frombits(order.Uint32(b)))
 	case "u64":
@@ -157,7 +157,7 @@ func binaryNumber(kind string, order binary.ByteOrder, b []byte) any {
 		}
 		return float64(order.Uint64(b))
 	case "i64":
-		return int(int64(order.Uint64(b)))
+		return int(int64(order.Uint64(b))) //nolint:gosec // G115: as above
 	}
 	return math.Float64frombits(order.Uint64(b))
 }

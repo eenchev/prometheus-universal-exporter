@@ -108,16 +108,21 @@ func fastcgiKey(f *FastCGIConfig) string {
 	if f == nil {
 		return ""
 	}
-	key := "fcgi\x00" + f.DocumentRoot
+	var key strings.Builder
+	key.WriteString("fcgi\x00")
+	key.WriteString(f.DocumentRoot)
 	names := make([]string, 0, len(f.Params))
 	for name := range f.Params {
 		names = append(names, name)
 	}
 	slices.Sort(names)
 	for _, name := range names {
-		key += "\x00" + name + "=" + f.Params[name]
+		key.WriteString("\x00")
+		key.WriteString(name)
+		key.WriteString("=")
+		key.WriteString(f.Params[name])
 	}
-	return key
+	return key.String()
 }
 
 // parseFastCGIKey is fastcgiKey read back.
@@ -324,7 +329,7 @@ func fcgiParamsOf(req *http.Request, f *FastCGIConfig, length int, local, remote
 // writeRecord writes one record of the request.
 func writeRecord(w *bufio.Writer, kind byte, content []byte) {
 	padding := (8 - len(content)%8) % 8
-	header := []byte{fcgiVersion, kind, 0, fcgiRequestID, byte(len(content) >> 8), byte(len(content)), byte(padding), 0}
+	header := []byte{fcgiVersion, kind, 0, fcgiRequestID, byte(len(content) >> 8), byte(len(content)), byte(padding), 0} //nolint:gosec // G115: content is at most fcgiMaxContent bytes, padding below 8
 	_, _ = w.Write(header)
 	_, _ = w.Write(content)
 	_, _ = w.Write(make([]byte, padding))
@@ -346,9 +351,9 @@ func writeStream(w *bufio.Writer, kind byte, content []byte) {
 func writePair(b *bytes.Buffer, name, value string) {
 	for _, n := range []int{len(name), len(value)} {
 		if n < 128 {
-			b.WriteByte(byte(n))
+			b.WriteByte(byte(n)) //nolint:gosec // G115: below 128
 		} else {
-			_ = binary.Write(b, binary.BigEndian, uint32(n)|1<<31)
+			_ = binary.Write(b, binary.BigEndian, uint32(n)|1<<31) //nolint:gosec // G115: a name or value of the request, far below 2^31 bytes
 		}
 	}
 	b.WriteString(name)

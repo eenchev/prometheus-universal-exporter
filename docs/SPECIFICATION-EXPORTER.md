@@ -31003,7 +31003,8 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAnICMPCollectorsDefaults` (fetch, icmp): a collector of no keys sends 3 echoes 1s apart, waits 1s, carries 56 bytes, is labelled `icmp://` and the host, and its method is `PING`.
 - `TestAnICMPCollectorPingsLoopback` (fetch, icmp): three echoes to 127.0.0.1 10ms apart all come back, a loss of 0, with three round trips and their minimum no more than their maximum, family 4; skipped where the system opens no ICMP datagram socket.
 - `TestAnICMPHostThatAnswersNothingIsALossOfOne` (fetch, icmp): two echoes on a connection that answers nothing are a loss of 1 with no round trip within 3s; a host that answers the first twice and the second with another token's data is one reply, one duplicate and a loss of 0.5.
-- `TestAnICMPCollectorKeepsToItsTargetLists` (fetch, icmp): `denied_targets: [127.0.0.0/8]` refuses `127.0.0.1` and `localhost`, on a system that opens no ICMP socket too.
+- `TestAnICMPCollectorKeepsToItsTargetLists` (fetch, icmp): `denied_targets: [127.0.0.0/8, ::1/128]` refuses `127.0.0.1` and `localhost`, whichever family it resolves to first, on a system that opens no ICMP socket too.
+- `TestAnICMPSocketToAnIPv6Address` (fetch, icmp): opening the socket to `::1` fails or succeeds and does not panic.
 - `TestICMPEchoesAndReplies` (fetch, icmp): an echo is type 8 whose checksum sums to 0, an ICMPv6 one type 128 with none; a reply is read with and without an IPv4 header, and one of another token and an unreachable are not taken.
 - `TestICMPTargetsAndFamilies` (fetch, icmp): names and addresses, IPv6 ones with brackets or without, are targets, and a port, a scheme, a path and nothing are refused; `::1` is pinged under `prefer_ip4`, and refused under `ip4`.
 - `TestICMPKeysAreChecked` (fetch, icmp): a count of -1 and 101, an interval and a reply_timeout of 1ms, payload_bytes of 7 and 1233, and `ip_family: ip5` are refused.

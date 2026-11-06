@@ -138,7 +138,7 @@ func TestAnICMPHostThatAnswersNothingIsALossOfOne(t *testing.T) {
 // The target policy holds the host, and the address the socket is
 // connected to.
 func TestAnICMPCollectorKeepsToItsTargetLists(t *testing.T) {
-	c := icmpCollector(t, func(c *model.Collector) { c.Request.DeniedTargets = []string{"127.0.0.0/8"} })
+	c := icmpCollector(t, func(c *model.Collector) { c.Request.DeniedTargets = []string{"127.0.0.0/8", "::1/128"} })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := FetchCollector(ctx, "127.0.0.1", c, RequestOverrides{}, nil); !errors.Is(err, ErrTargetRefused) {
@@ -146,6 +146,16 @@ func TestAnICMPCollectorKeepsToItsTargetLists(t *testing.T) {
 	}
 	if _, err := FetchCollector(ctx, "localhost", c, RequestOverrides{}, nil); !errors.Is(err, ErrTargetRefused) {
 		t.Errorf("a name of a denied address: %v", err)
+	}
+}
+
+// An IPv6 address is pinged on an ICMPv6 socket: opening one, which a
+// system without IPv6 or without ping sockets refuses, fails or succeeds,
+// and never panics, as making the IPv4 socket address of it first did.
+func TestAnICMPSocketToAnIPv6Address(t *testing.T) {
+	conn, err := icmpDial(netip.MustParseAddr("::1"))
+	if err == nil {
+		_ = conn.Close()
 	}
 }
 

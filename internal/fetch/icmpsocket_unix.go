@@ -15,11 +15,14 @@ import (
 // connected socket is a net.Conn whose remote address the target policy
 // checks, and reads only that address's replies.
 func icmpDial(address netip.Addr) (net.Conn, error) {
-	family, proto := syscall.AF_INET, syscall.IPPROTO_ICMP
-	var to syscall.Sockaddr = &syscall.SockaddrInet4{Addr: address.As4()}
-	if address.Is6() {
-		family, proto = syscall.AF_INET6, syscall.IPPROTO_ICMPV6
-		to = &syscall.SockaddrInet6{Addr: address.As16()}
+	// As4 panics on an IPv6 address, so each family's address is made
+	// only for it.
+	var family, proto int
+	var to syscall.Sockaddr
+	if address.Is4() {
+		family, proto, to = syscall.AF_INET, syscall.IPPROTO_ICMP, &syscall.SockaddrInet4{Addr: address.As4()}
+	} else {
+		family, proto, to = syscall.AF_INET6, syscall.IPPROTO_ICMPV6, &syscall.SockaddrInet6{Addr: address.As16()}
 	}
 	fd, err := syscall.Socket(family, syscall.SOCK_DGRAM, proto)
 	if err != nil {

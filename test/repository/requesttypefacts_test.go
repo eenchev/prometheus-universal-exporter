@@ -169,7 +169,7 @@ func TestSentencesNameTheRequestTypesThatTakeAKey(t *testing.T) {
 var decoderNames = map[string]string{
 	"json": "JSON", "ndjson": "NDJSON", "yaml": "YAML", "toml": "TOML", "ini": "INI",
 	"xml": "XML", "csv": "CSV", "html": "HTML", "logfmt": "logfmt",
-	"prometheus": "Prometheus", "text": "plain text", "graphite": "Graphite",
+	"prometheus": "Prometheus", "text": "plain text", "graphite": "Graphite", "binary": "binary",
 }
 
 // Spec § 1, the chart README's opening and the comment on
@@ -231,6 +231,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"ldap":       {"an LDAP directory", ""},
 	"sshexec":    {"a command run on another host over SSH", ""},
 	"ntp":        {"the clock of an NTP server", "NTP servers"},
+	"icmp":       {"the echo replies of a host pinged over ICMP", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

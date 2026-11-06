@@ -38,7 +38,7 @@ func TestDecoderNoneIsTakenByTheTransformsThatReadNull(t *testing.T) {
 		t.Errorf("response.charset: %v", err)
 	}
 	_, err = Load(testutil.WriteFile(t, "config.yaml", strings.Replace(collector("jq", "$status", ""), "type: none", "type: nothing", 1)))
-	if err == nil || !strings.Contains(err.Error(), "ndjson, logfmt, toml, ini, none, in lower case") {
+	if err == nil || !strings.Contains(err.Error(), "ndjson, logfmt, toml, ini, binary, none, in lower case") {
 		t.Errorf("an unknown decoder: %v", err)
 	}
 }

@@ -620,7 +620,7 @@
             "additionalProperties": false,
             "properties": {
               "type": {
-                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None.",
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None. binary reads the answer of a binary protocol by the layout of response.binary, never chosen by auto.",
                 "enum": [
                   "auto",
                   "json",
@@ -635,6 +635,7 @@
                   "logfmt",
                   "toml",
                   "ini",
+                  "binary",
                   "none",
                   ""
                 ],
@@ -2067,6 +2068,11 @@
                 },
                 "type": "array"
               },
+              "answer_bytes": {
+                "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "api_server": {
                 "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster.",
                 "pattern": "^$|^https://[^/?#@]+(/[^?#]*)?$",
@@ -2317,6 +2323,12 @@
                 },
                 "type": "object"
               },
+              "count": {
+                "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
               "database": {
                 "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only.",
                 "not": {
@@ -2377,6 +2389,35 @@
                 "pattern": "^$|^https?://[^/?#@]+/?$",
                 "type": "string"
               },
+              "fastcgi": {
+                "additionalProperties": false,
+                "description": "http: send the requests to a FastCGI application, such as PHP-FPM, in place of an HTTP server: the URL's host and port, 80 by default, or unix_socket, are where; its path is the script, SCRIPT_NAME; its query, headers and body are QUERY_STRING, HTTP_ parameters and the request's stdin. The CGI answer is read as an HTTP answer, its Status header the status. http:// targets alone; not with proxy_url, login or tls. {} sends the request as it is. See docs/REQUESTS.md#fastcgi.",
+                "properties": {
+                  "document_root": {
+                    "description": "The absolute path of the directory the application's scripts are in, SCRIPT_FILENAME being it and the URL's path; left out, SCRIPT_FILENAME is the path, as PHP-FPM's status page asks.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "params": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "CGI parameters sent beside those made of the request, each in place of one of the same name, such as SCRIPT_FILENAME: /usr/share/php/status.php. No placeholder.",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
               "field_selector": {
                 "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out.",
                 "not": {
@@ -2428,7 +2469,7 @@
                 ]
               },
               "greeting": {
-                "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
+                "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
                 "type": [
                   "string",
                   "number",
@@ -2483,8 +2524,25 @@
                 },
                 "type": "array"
               },
+              "interval": {
+                "description": "icmp: how long apart the echoes are sent, at least 10ms; 1s when left out.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
               "ip_family": {
-                "description": "http and graphite: the address family the requests connect to the target over. ip4 or ip6 connect over that family alone, and fail when the target has no address of it; prefer_ip4 or prefer_ip6 try that family first and the other when it has no address or none takes the connection. Left out, both families, as Go connects. Not with unix_socket or a proxy_url other than direct, and a request with it is refused rather than sent through the environment's proxy. See docs/REQUESTS.md#address-families.",
+                "description": "http and graphite: the address family the requests connect to the target over. ip4 or ip6 connect over that family alone, and fail when the target has no address of it; prefer_ip4 or prefer_ip6 try that family first and the other when it has no address or none takes the connection. Left out, both families, as Go connects. Not with unix_socket or a proxy_url other than direct, and a request with it is refused rather than sent through the environment's proxy. See docs/REQUESTS.md#address-families. icmp: the family of the address a name is pinged at, its first of that family, or of either when left out; see docs/ICMP.md.",
                 "enum": [
                   "ip4",
                   "ip6",
@@ -3511,6 +3569,12 @@
                 "description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false.",
                 "type": "boolean"
               },
+              "payload_bytes": {
+                "description": "icmp: how many bytes of data each echo carries, from 8 to 1232; 56 when left out, as ping's.",
+                "maximum": 1232,
+                "minimum": 8,
+                "type": "integer"
+              },
               "private_key_file": {
                 "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
                 "not": {
@@ -3635,6 +3699,23 @@
                 "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md.",
                 "pattern": "^$|^[A-Za-z0-9_-]+$",
                 "type": "string"
+              },
+              "reply_timeout": {
+                "description": "icmp: how long the last echo's reply is waited for once it is sent, at least 10ms; 1s when left out. A scrape takes about (count - 1) × interval + reply_timeout, within its deadline.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "resource": {
                 "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md.",
@@ -3789,6 +3870,14 @@
                   "boolean"
                 ]
               },
+              "send_hex": {
+                "description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "server": {
                 "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
                 "not": {
@@ -3830,7 +3919,7 @@
                 "type": "boolean"
               },
               "starttls": {
-                "description": "tcp and tlscert: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. tcp: the handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake; with no send, terminator may not be set. tlscert: the certificates the handshake presents are the document, as on a TLS port, which names the protocol in starttls, and a target without a port is at the protocol's own, 25, 143, 110 or 21; write :587 for SMTP submission. See docs/TCP.md#starttls and docs/TLSCERT.md#starttls.",
+                "description": "tcp and tlscert: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. tcp: the handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake; with neither send nor send_hex, neither terminator nor answer_bytes may be set. tlscert: the certificates the handshake presents are the document, as on a TLS port, which names the protocol in starttls, and a target without a port is at the protocol's own, 25, 143, 110 or 21; write :587 for SMTP submission. See docs/TCP.md#starttls and docs/TLSCERT.md#starttls.",
                 "enum": [
                   "smtp",
                   "imap",
@@ -3945,8 +4034,12 @@
                 ],
                 "type": "string"
               },
+              "udp": {
+                "description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp.",
+                "type": "boolean"
+              },
               "unix_socket": {
-                "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket.",
+                "description": "http and tcp: the absolute path of a Unix domain socket the requests are sent over in place of a connection to the target's host, such as /var/run/docker.sock. http: every request of the collector, its login's, redirects' and pages' included, as curl --unix-socket sends it; the URL's host still names the Host header and the TLS server name, and its path and query are sent as usual; not with proxy_url. tcp: the exchange, the target naming the service in labels alone. No probe parameter, static target or defaults block sets it. See docs/REQUESTS.md#over-a-unix-socket and docs/TCP.md#over-a-unix-socket.",
                 "pattern": "^$|^/",
                 "type": "string"
               },
@@ -3985,6 +4078,88 @@
           "response": {
             "additionalProperties": false,
             "properties": {
+              "binary": {
+                "additionalProperties": false,
+                "description": "binary decoder, required with it: the layout a binary answer is read by, its fields in order, into a document of each field's name and value for a jq, yq or python transform. See docs/CONFIGURATION.md#binary-answers.",
+                "properties": {
+                  "byte_order": {
+                    "description": "binary decoder: the byte order of the numbers of a field that sets none: big, the default, as network protocols write them, or little.",
+                    "enum": [
+                      "big",
+                      "little",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "fields": {
+                    "description": "binary decoder: the fields, read in order, each from the byte after the one before it unless it sets offset. A field past the end of the answer fails the decode; bytes after the last are left unread.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "byte_order": {
+                          "description": "The field's byte order, big or little, in place of the layout's.",
+                          "enum": [
+                            "big",
+                            "little",
+                            ""
+                          ],
+                          "type": "string"
+                        },
+                        "count": {
+                          "description": "Numbers only: the field is a list of this many values of its type, one after another, such as a run of registers; left out, one value and no list.",
+                          "maximum": 65536,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "length": {
+                          "description": "string and skip, required: how many bytes; cstring: the most bytes read for its NUL; no number takes it.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "name": {
+                          "description": "The field's name in the document, unique, such as registers; required but for a skip, which has none.",
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "offset": {
+                          "description": "The byte the field starts at, from 0 at the start of the answer; left out, right after the field before it.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "type": {
+                          "description": "Required. u8, u16, u32, u64: unsigned integers of 1, 2, 4 and 8 bytes; i8 to i64 two's complement ones; f32, f64: IEEE 754 floats; string: length bytes of text; cstring: text up to a NUL byte; skip: length bytes passed over.",
+                          "enum": [
+                            "u8",
+                            "i8",
+                            "u16",
+                            "i16",
+                            "u32",
+                            "i32",
+                            "u64",
+                            "i64",
+                            "f32",
+                            "f64",
+                            "string",
+                            "cstring",
+                            "skip"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1000,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
               "charset": {
                 "description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings.",
                 "type": [

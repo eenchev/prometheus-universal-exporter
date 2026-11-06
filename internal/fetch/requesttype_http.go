@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -18,14 +19,15 @@ import (
 // when left out; the body sent; the pagination that fetches the
 // further pages of a paginated answer and merges them into one JSON
 // document, the first page with its items array holding every page's items
-// (pagination.go), nil when the answer is one page; and the Unix domain
-// socket every request of the collector is sent over in place of a TCP
-// connection to the URL's host, "" for none (unixsocket.go).
+// (pagination.go), nil when the answer is one page. request.unix_socket,
+// which tcp takes too, is of the common part (model.RequestConfig).
 type HTTPConfig struct {
 	Method     string                  `yaml:"method"`
 	Body       string                  `yaml:"body"`
 	Pagination *model.PaginationConfig `yaml:"pagination,omitempty"`
-	UnixSocket string                  `yaml:"unix_socket,omitempty"`
+	// FastCGI is request.fastcgi, nil for none: the requests are sent to a
+	// FastCGI application in place of an HTTP server (fastcgi.go).
+	FastCGI *FastCGIConfig `yaml:"fastcgi,omitempty"`
 }
 
 // httpRequest is an http collector's own request keys: the zero HTTPConfig
@@ -46,7 +48,7 @@ func init() {
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "new_connection", "ip_family", "allowed_schemes",
 			"allowed_targets", "denied_targets", "accept_status", "login", "rate_limit",
-			"proxy_url", "proxy_basic_auth_file",
+			"proxy_url", "proxy_basic_auth_file", "unix_socket",
 		},
 		Config:   HTTPConfig{},
 		KeyRules: httpKeyRules,
@@ -56,7 +58,7 @@ func init() {
 		},
 		Policy: func(c *model.Collector) RequestPolicy {
 			own := httpRequest(c)
-			return RequestPolicy{Pagination: own.Pagination, UnixSocket: own.UnixSocket}
+			return RequestPolicy{Pagination: own.Pagination, UnixSocket: c.Request.UnixSocket}
 		},
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
@@ -100,6 +102,10 @@ type httpRequester struct{ URLTarget }
 // the rules of a request made over HTTP, then its method, GET when left
 // out and in upper case, and its pagination.
 func (httpRequester) Validate(c *model.Collector) error {
+	// Before the keys it refuses beside it are checked on their own.
+	if err := validateFastCGI(c, httpRequest(c).FastCGI); err != nil {
+		return err
+	}
 	if err := validateHTTPRequest(c); err != nil {
 		return err
 	}
@@ -113,7 +119,7 @@ func (httpRequester) Validate(c *model.Collector) error {
 	}
 	own.Method = method
 	c.Request.Own = own
-	if err := validateUnixSocket(c, own.UnixSocket); err != nil {
+	if err := validateUnixSocket(c, c.Request.UnixSocket); err != nil {
 		return err
 	}
 	return validatePagination(c)
@@ -126,24 +132,35 @@ func (httpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 
 // CheckTarget checks an http collector's target.
 func (httpRequester) CheckTarget(c *model.Collector, target string, static bool) error {
-	return checkHTTPTarget(c, target, static)
+	if err := checkHTTPTarget(c, target, static); err != nil {
+		return err
+	}
+	// FastCGI carries no TLS: an https target would be sent in plaintext. A
+	// bare host:port, as Prometheus's discovery hands a target over, is
+	// http:// as for any http collector (normalizeTarget).
+	if httpRequest(c).FastCGI != nil && !strings.HasPrefix(strings.ToLower(normalizeTarget(target)), "http://") {
+		return fmt.Errorf("target %q is not an http:// URL; request.fastcgi speaks FastCGI in plaintext to the URL's host and port, so write http://host:port", target)
+	}
+	return nil
 }
 
 // httpKeyRules is what the configuration schema says of a http
 // collector's own keys.
 func httpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"method":               {"enum": SchemaOptionalEnum(HTTPMethodSpellings()), "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET."},
-		"body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
-		"pagination":           httpPaginationRule(),
-		"unix_socket":          {"pattern": UnixSocketPattern, "description": "http: the absolute path of the Unix domain socket every request of the collector, its login's, redirects' and pages' included, is sent over in place of a TCP connection to the URL's host, as curl --unix-socket sends it, such as /var/run/docker.sock. The URL's host still names the Host header and the TLS server name, and its path and query are sent as usual. Not with proxy_url. No probe parameter or static target sets it. See docs/REQUESTS.md#over-a-unix-socket."},
-		"pagination.type":      {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
-		"pagination.items":     {"not": SchemaOnlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
-		"pagination.next":      {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
-		"pagination.param":     {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
-		"pagination.start":     {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it; 0 numbers the pages from 0."},
-		"pagination.size":      {"minimum": 0, "description": "offset: how far the offset moves from one page to the next. 0, as when left out, moves it by the number of items the page held. 0 is taken beside any type."},
-		"pagination.max_pages": {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
+		"method":                {"enum": SchemaOptionalEnum(HTTPMethodSpellings()), "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET."},
+		"body":                  {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
+		"pagination":            httpPaginationRule(),
+		"fastcgi":               {"description": "http: send the requests to a FastCGI application, such as PHP-FPM, in place of an HTTP server: the URL's host and port, 80 by default, or unix_socket, are where; its path is the script, SCRIPT_NAME; its query, headers and body are QUERY_STRING, HTTP_ parameters and the request's stdin. The CGI answer is read as an HTTP answer, its Status header the status. http:// targets alone; not with proxy_url, login or tls. {} sends the request as it is. See docs/REQUESTS.md#fastcgi."},
+		"fastcgi.document_root": {"description": "The absolute path of the directory the application's scripts are in, SCRIPT_FILENAME being it and the URL's path; left out, SCRIPT_FILENAME is the path, as PHP-FPM's status page asks."},
+		"fastcgi.params":        {"propertyNames": map[string]any{"pattern": FastCGIParamPattern}, "description": "CGI parameters sent beside those made of the request, each in place of one of the same name, such as SCRIPT_FILENAME: /usr/share/php/status.php. No placeholder."},
+		"pagination.type":       {"enum": model.PaginationTypes, "description": "Required. How the next page is found. link: the URL of the Link header's rel=\"next\" (RFC 8288). next_url: the URL next reads from the page. cursor: the value next reads from the page, sent as the query parameter param. page: a page number in param, from start, one more each page. offset: an offset in param, from start, moved on by the items each page holds, or by size."},
+		"pagination.items":      {"not": SchemaOnlyBlanks(), "description": "Required. The jq path of the array each page holds its items in, such as .items, .data.results, or . for a page that is an array. The merged answer is the first page with this array holding the items of every page, in order."},
+		"pagination.next":       {"description": "Required with type next_url and cursor, and for no other: the jq expression of the next page's URL, absolute or relative to the page's, or of its cursor, read from the page, with $headers and $status as in a rule. null, false or \"\" ends the pages."},
+		"pagination.param":      {"description": "Required with type cursor, page and offset, and for no other: the query parameter the cursor, the page number or the offset is sent in. It replaces a parameter of that name in the target's query; request.query may not set it."},
+		"pagination.start":      {"description": "page and offset: the first page's number, 1 when left out, or offset, 0 when left out. The first page is asked for with it; 0 numbers the pages from 0."},
+		"pagination.size":       {"minimum": 0, "description": "offset: how far the offset moves from one page to the next. 0, as when left out, moves it by the number of items the page held. 0 is taken beside any type."},
+		"pagination.max_pages":  {"minimum": 1, "maximum": model.MaxMaxPages, "description": "The most pages one trip fetches, the first included: from 1 to 1000, 10 when left out. A trip that stops here with another page to come is answered with the pages it fetched, counted in http_exporter_pagination_max_pages_reached_total and logged."},
 	}
 }
 

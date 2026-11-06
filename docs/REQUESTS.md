@@ -425,7 +425,7 @@ One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
 `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes` and the opt-in
-`s3file`, `redis`, `tcp`, `ldap` and `sshexec` — and under every transform: `transform.labels` are applied
+`s3file`, `redis`, `tcp`, `ldap`, `sshexec` and `icmp` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
@@ -780,7 +780,7 @@ Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
 `graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target),
-[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target) and [`ldap`](LDAP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
+[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`icmp`](ICMP.md#the-target), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target) and [`ldap`](LDAP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
 collector may resolve, matched by name alone, and which buckets an
 [`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
 glob, since its target is a bucket:
@@ -799,7 +799,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `redis`, `tcp`, `ldap` and `sshexec` collector, and a
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `icmp`, `redis`, `tcp`, `ldap` and `sshexec` collector, and a
 `dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
 refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
@@ -1160,8 +1160,8 @@ A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
   length and the limit. The schema leaves the length to the exporter, since
   it differs from system to system. Linux's abstract sockets, written with a
   leading `@`, are not absolute paths and are refused. It is the
-  `http` type's alone: another type's collector that sets it is refused, as
-  any key of another type is.
+  `http` type's and the [`tcp`](TCP.md#over-a-unix-socket) type's: another
+  type's collector that sets it is refused, as any key of another type is.
 - **The URL keeps its meaning**: its host is the `Host` header, its path and
   query are the request's, joined with `path` and `query` as usual. The host
   is never looked up or dialed; any name will do, such as `http://docker` or
@@ -1218,6 +1218,78 @@ podSecurityContext:
 Access to Docker's socket is control of the node's containers: give it to
 an exporter whose `/probe` only those you trust can reach, and prefer a
 read-only socket proxy in front of it where you have one.
+
+### FastCGI
+
+An `http` collector can speak FastCGI to its target in place of HTTP, for an
+application that answers on a FastCGI port or socket alone: PHP-FPM's status
+and ping pages, which PHP-FPM serves to its FastCGI clients and to no
+browser, or any FastCGI application's own status script.
+
+```yaml
+collectors:
+  - name: php_fpm
+    request:
+      type: http
+      fastcgi: {}                 # the status page needs no document root
+      path: /status
+      query: {json: ""}
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: phpfpm_active_processes
+        expression: '."active processes"'
+      - name: phpfpm_listen_queue
+        expression: '."listen queue"'
+```
+
+A probe of `target=http://php-fpm:9000` asks PHP-FPM on port 9000 for
+`/status?json`, as `cgi-fcgi -bind -connect php-fpm:9000` does with
+`SCRIPT_NAME=/status SCRIPT_FILENAME=/status QUERY_STRING=json`; PHP-FPM
+answers its status when `pm.status_path` is `/status`. With
+[`unix_socket`](#over-a-unix-socket), such as `/run/php/php-fpm.sock`, the
+request goes to the socket and the URL's host only names it.
+
+- **The request is the collector's**: its URL's path, decoded, is the
+  script, `SCRIPT_NAME`, and with `document_root` before it its file,
+  `SCRIPT_FILENAME` (the path alone without one); its query is
+  `QUERY_STRING`; its method `REQUEST_METHOD`; each header an `HTTP_`
+  parameter (`X-Pool` is `HTTP_X_POOL`), `Content-Type` and the body's
+  length `CONTENT_TYPE` and `CONTENT_LENGTH`; its body the application's
+  stdin. `Proxy` is sent as no parameter, since `HTTP_PROXY` sets a proxy
+  in many applications. `GATEWAY_INTERFACE`, `SERVER_NAME`, `SERVER_PORT`,
+  `REQUEST_URI`, `DOCUMENT_URI`, `DOCUMENT_ROOT`, `SERVER_ADDR` and
+  `REMOTE_ADDR` are set too.
+- **`params`** adds parameters, or replaces those above by name, such as
+  `SCRIPT_FILENAME: /usr/share/php/status.php`. A name is letters, digits
+  and `_`, not starting with a digit; a value holds no placeholder and no
+  control character.
+- **The answer is read as an HTTP answer.** The application's `Status`
+  header is the status, `200` without one, so `accept_status`, retries,
+  decoders and rules read it as they read an HTTP server's; what the
+  application wrote to its stderr before its headers, PHP-FPM's `Primary
+  script unknown` for a path it has no script for, is the
+  `X-Fastcgi-Stderr` header, its first 4 KiB, which a jq rule reads as
+  `$headers["x-fastcgi-stderr"]`.
+- **Plaintext, to the application.** A target is an `http://` URL, or a
+  bare `host:port`, as Prometheus's discovery hands one over, which is read
+  as `http://`; the port is the application's FastCGI port, `80` when the
+  target names none. `https` targets, `tls`, `proxy_url`,
+  `proxy_basic_auth_file` and `login` are refused beside `fastcgi`, and the
+  environment's proxy does not apply. A redirect to an `https://` URL is not
+  followed: it fails the request rather than leave FastCGI for an HTTPS
+  request to the host it names.
+  `allowed_targets` and `denied_targets` hold the connection as they hold an
+  HTTP request's.
+- **One connection a request.** The application closes the connection once
+  it has answered, as a FastCGI client that does not ask it to keep it open
+  is answered.
+- **Errors.** A target that answers no FastCGI record, such as an HTTP
+  server, fails the request: `the answer is no FastCGI record, version 72; is
+  the target a FastCGI application's port?`. An application that closes the
+  connection before it ended the request fails it too.
 
 ## Retries
 
@@ -1842,8 +1914,9 @@ helpers](CONFIGURATION.md#value-parsing-helpers)).
 
 What this collector does not do:
 
-- No ICMP: the exporter does not ping. A host's reachability is a
-  connection to one of its ports.
+- No ICMP: an `http` collector does not ping. A host's reachability is a
+  connection to one of its ports, or the [`icmp`](ICMP.md) type's echoes, in
+  a build that asks for it.
 - No raw TCP: a port that speaks something other than HTTP is the
   [`tcp`](TCP.md) type's, in a build that asks for it, and a name's records
   the [`dns`](DNS.md) type's.

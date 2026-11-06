@@ -198,6 +198,16 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	if c.Decoder.Type == model.DecoderNone {
 		return &Decoded{Kind: model.DecoderNone, Raw: r.Body}, nil
 	}
+	// A binary answer is bytes, read as response.binary lays them out: no
+	// charset applies to it, and a conversion would move every byte after
+	// one it rewrote (binary.go).
+	if c.Decoder.Type == "binary" {
+		v, err := decodeBinary(r.Body, c.Response.Binary)
+		if err != nil {
+			return nil, fmt.Errorf("binary decode: %w", err)
+		}
+		return &Decoded{Kind: "binary", Data: v, Raw: r.Body}, nil
+	}
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)
 	if err != nil {

@@ -80,7 +80,7 @@ func socketServer(t *testing.T, config *tls.Config, handle http.HandlerFunc) (so
 func socketCollector(t *testing.T, name, socket string) *model.Collector {
 	t.Helper()
 	c := testutil.Collector(name, "text")
-	c.Request.Own = HTTPConfig{UnixSocket: socket}
+	c.Request.Own, c.Request.UnixSocket = HTTPConfig{}, socket
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestARequestGoesOverTheCollectorsUnixSocket(t *testing.T) {
 	unresolvable(t, nil)
 	socket, seen := socketServer(t, nil, nil)
 	c := testutil.Collector("docker", "text")
-	c.Request.Own = HTTPConfig{UnixSocket: socket}
+	c.Request.Own, c.Request.UnixSocket = HTTPConfig{}, socket
 	c.Request.Path = "/v1.43/info"
 	c.Request.Query = map[string]string{"all": "1"}
 	c.Request.Headers = map[string]string{"X-Tenant": "blue"}
@@ -198,7 +198,7 @@ func TestALoginGoesOverTheCollectorsUnixSocket(t *testing.T) {
 		_, _ = io.WriteString(w, "value=5\n")
 	})
 	c := testutil.Collector("api", "text")
-	c.Request.Own = HTTPConfig{UnixSocket: socket}
+	c.Request.Own, c.Request.UnixSocket = HTTPConfig{}, socket
 	c.Request.Login = &model.LoginConfig{Type: "json", URL: "http://auth.example/login", Token: ".access_token", FieldFiles: secretFiles(t, map[string]string{"password": "p"})}
 	if err := ValidateRequest(&c); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestTheTargetPolicyAppliesToTheHostOverAUnixSocket(t *testing.T) {
 		"a denied loopback, not the socket": {denied: []string{"127.0.0.0/8"}, target: "http://docker/"},
 	} {
 		collector := testutil.Collector("api", "text")
-		collector.Request.Own = HTTPConfig{UnixSocket: socket}
+		collector.Request.Own, collector.Request.UnixSocket = HTTPConfig{}, socket
 		collector.Request.AllowedTargets, collector.Request.DeniedTargets = c.allowed, c.denied
 		if err := ValidateRequest(&collector); err != nil {
 			t.Fatal(err)
@@ -293,7 +293,7 @@ func TestAUnixSocketIsCheckedWhenItLoads(t *testing.T) {
 		"proxy credentials": {socket: "/run/docker.sock", proxy: "http://proxy.example:3128", files: &model.ProxyBasicAuthFile{Username: "/u", Password: "/p"}, want: "sets request.unix_socket and request.proxy_url"},
 	} {
 		collector := testutil.Collector("api", "text")
-		collector.Request.Own = HTTPConfig{UnixSocket: c.socket}
+		collector.Request.Own, collector.Request.UnixSocket = HTTPConfig{}, c.socket
 		collector.Request.ProxyURL, collector.Request.ProxyBasicAuthFile = c.proxy, c.files
 		if err := ValidateRequest(&collector); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.want)
@@ -301,7 +301,7 @@ func TestAUnixSocketIsCheckedWhenItLoads(t *testing.T) {
 	}
 	for _, accepted := range []string{"", "/var/run/docker.sock", "/run/php/php-fpm.sock"} {
 		collector := testutil.Collector("api", "text")
-		collector.Request.Own = HTTPConfig{UnixSocket: accepted}
+		collector.Request.Own, collector.Request.UnixSocket = HTTPConfig{}, accepted
 		if err := ValidateRequest(&collector); err != nil {
 			t.Errorf("%q: %v", accepted, err)
 		}
@@ -320,12 +320,12 @@ func TestAUnixSocketPathTooLongIsRefusedWhenItLoads(t *testing.T) {
 	}
 	path := func(n int) string { return "/" + strings.Repeat("s", n-1) }
 	at := testutil.Collector("api", "text")
-	at.Request.Own = HTTPConfig{UnixSocket: path(maxUnixSocketPath)}
+	at.Request.Own, at.Request.UnixSocket = HTTPConfig{}, path(maxUnixSocketPath)
 	if err := ValidateRequest(&at); err != nil {
 		t.Fatalf("a path of %d bytes: %v", maxUnixSocketPath, err)
 	}
 	over := testutil.Collector("api", "text")
-	over.Request.Own = HTTPConfig{UnixSocket: path(maxUnixSocketPath + 1)}
+	over.Request.Own, over.Request.UnixSocket = HTTPConfig{}, path(maxUnixSocketPath+1)
 	message := fmt.Sprintf(`collector "api" request.unix_socket is %d bytes long, and a Unix socket's path may be at most %d bytes on %s`, maxUnixSocketPath+1, maxUnixSocketPath, runtime.GOOS)
 	if err := ValidateRequest(&over); err == nil || !strings.Contains(err.Error(), message) {
 		t.Fatalf("a path of %d bytes: %v, want %q", maxUnixSocketPath+1, err, message)

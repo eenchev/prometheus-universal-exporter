@@ -287,6 +287,12 @@ type RequestConfig struct {
 	// ip6 alone, prefer_ip4 or prefer_ip6 first, and "" for Go's own
 	// choice, both families raced (fetch/ipfamily.go).
 	IPFamily string `yaml:"ip_family"`
+	// UnixSocket is the absolute path of the Unix domain socket the
+	// requests are sent over in place of a connection to the target's
+	// host: an http collector's every request (fetch/unixsocket.go), and a
+	// tcp collector's exchange. The configuration's alone: no probe
+	// parameter, static target or defaults block sets it.
+	UnixSocket string `yaml:"unix_socket"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
 	// made to, that a followed redirect may carry the request's headers,
 	// credentials and body to: host names, globs of them and IP addresses
@@ -645,7 +651,50 @@ type ResponseConfig struct {
 	CSV        CSVConfig         `yaml:"csv"`
 	Namespaces map[string]string `yaml:"namespaces"`
 	Graphite   GraphiteConfig    `yaml:"graphite"`
+	Binary     BinaryConfig      `yaml:"binary"`
 }
+
+// BinaryConfig is response.binary: the layout the binary decoder reads a
+// body of a binary protocol by (decode/binary.go), its fields in order, and
+// the byte order of those that set none, big by default.
+type BinaryConfig struct {
+	ByteOrder string        `yaml:"byte_order"`
+	Fields    []BinaryField `yaml:"fields"`
+}
+
+// Set reports whether response.binary says anything.
+func (b BinaryConfig) Set() bool { return b.ByteOrder != "" || len(b.Fields) > 0 }
+
+// BinaryField is one field of response.binary: its name in the document,
+// its type, where it starts, after the field before it when Offset is nil,
+// how many values of the type it is, an array of them when Count is set,
+// how many bytes a string or a skip is, and its byte order, the layout's
+// when empty.
+type BinaryField struct {
+	Name      string `yaml:"name"`
+	Type      string `yaml:"type"`
+	Offset    *int   `yaml:"offset"`
+	Count     int    `yaml:"count"`
+	Length    int    `yaml:"length"`
+	ByteOrder string `yaml:"byte_order"`
+}
+
+// BinaryTypes are the types of a response.binary field: integers of 1, 2, 4 and 8 bytes,
+// unsigned (u) and two's complement (i); IEEE 754 floats of 4 and 8 bytes;
+// text of a length, and text up to a NUL byte; and bytes passed over.
+var BinaryTypes = []string{"u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "string", "cstring", "skip"}
+
+// BinaryByteOrders are the values of response.binary's byte_order.
+var BinaryByteOrders = []string{"big", "little"}
+
+// MaxBinaryFields is the most fields response.binary may have, and
+// MaxBinaryCount the most values one field may hold: a layout is a
+// protocol's header and a few registers, and a bound keeps the document one
+// rule of its size makes.
+const (
+	MaxBinaryFields = 1000
+	MaxBinaryCount  = 65536
+)
 
 // GraphiteConfig is response.graphite: how the graphite decoder turns each
 // series' points into the one value a metric rule reads (decode/graphite.go).
@@ -677,7 +726,7 @@ type CSVConfig struct {
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
 // reads the response: json, ndjson, yaml, toml, ini, xml, csv, html,
-// logfmt, prometheus, text or graphite, or none, which reads no body. Unset or auto, the transform's type
+// logfmt, prometheus, text, graphite or binary, or none, which reads no body. Unset or auto, the transform's type
 // picks it when it implies one, and otherwise the response's content type or
 // its content.
 type DecoderConfig struct {
@@ -1080,7 +1129,7 @@ var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, L
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", DecoderNone}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", DecoderNone}
 
 // DecoderNone is the decoder.type that reads no body: jq and yq rules read
 // null, with $status and $headers, and a Python script's data is None, for

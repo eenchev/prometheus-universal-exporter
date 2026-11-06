@@ -121,7 +121,7 @@ func optInRequestTypes(t *testing.T) []string {
 // SFTP module only when it is sshfile, and the AWS SDK only when it is
 // s3file; a build of graphite, http and localfile together links none
 // of them, nor does one of dns, tlscert, ntp and kubernetes, or of redis,
-// tcp or ldap alone, which need nothing outside the standard library; and the default
+// tcp, ldap or icmp alone, which need nothing outside the standard library; and the default
 // build, of every type but the opt-in s3file, redis, tcp and ldap, links gRPC's
 // and SSH's and no AWS SDK, which only a build asking for s3file
 // (OPT_IN_REQUEST_TYPES) links, and a build asking for redis, tcp or ldap alone
@@ -129,7 +129,7 @@ func optInRequestTypes(t *testing.T) []string {
 // the packages only tests import, such as internal/grpctest and
 // internal/sshtest, are not among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
-	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,kubernetes,ldap,ntp,redis,tcp,tlscert") {
+	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,icmp,kubernetes,ldap,ntp,redis,tcp,tlscert") {
 		packages := linkedPackages(t, types)
 		for _, own := range []struct {
 			requestTypes []string

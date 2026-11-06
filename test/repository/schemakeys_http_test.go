@@ -231,6 +231,7 @@ func httpSchemaKeys() []schemaKey {
 		// "" as the key left out.
 		{key: "collectors[].request.ip_family", document: jqCollector, at: request, setting: "      ip_family: %s\n", valid: "prefer_ip6", invalid: "ipv6", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.unix_socket", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/var/run/docker.sock", invalid: "var/run/docker.sock", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.fastcgi.params{}", document: jqCollector, at: request, setting: "      fastcgi: {params: {%s: x}}\n", valid: "APP_ENV", invalid: "9X", absent: true},
 		{key: "collectors[].request.unix_socket", of: "of nothing but blanks", document: jqCollector, at: request, setting: "      unix_socket: %s\n", valid: "/run/php/php-fpm.sock", invalid: `"  "`, absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
 		// An entry of include or exclude is a regular expression: both

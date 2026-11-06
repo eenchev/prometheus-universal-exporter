@@ -200,8 +200,8 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 		}
 	}
 	inOrder("docs/STATIC-TARGETS.md", "| [`kubernetes`](KUBERNETES.md#static-targets)", "| [`ozdefault`](OZDEFAULT.md#static-targets) |", "| [`s3file`](S3FILE.md#static-targets), opt-in", "| [`sshexec`](SSHEXEC.md#static-targets), opt-in", "| [`zzdemo`](ZZDEMO.md#static-targets), opt-in |", "<!-- /request-types -->")
-	inOrder("docs/CONFIGURATION.md", "- [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.\n- [OZDEFAULT.md](OZDEFAULT.md) — the `ozdefault` request type.\n- [S3FILE.md](S3FILE.md)", "- [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.\n- [ZZDEMO.md](ZZDEMO.md) — the opt-in `zzdemo` request type.\n")
-	inOrder("docs/SPECIFICATION-EXPORTER.md", "`kubernetes` in `docs/KUBERNETES.md`, `ozdefault` in `docs/OZDEFAULT.md`, and the opt-in `s3file`", ", `sshexec` in `docs/SSHEXEC.md` and `zzdemo` in `docs/ZZDEMO.md`, with `localfile` and `grpc` above")
+	inOrder("docs/CONFIGURATION.md", "- [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.\n- [OZDEFAULT.md](OZDEFAULT.md) — the `ozdefault` request type.\n- [S3FILE.md](S3FILE.md)", "- [ICMP.md](ICMP.md) — the opt-in `icmp` request type.\n- [ZZDEMO.md](ZZDEMO.md) — the opt-in `zzdemo` request type.\n")
+	inOrder("docs/SPECIFICATION-EXPORTER.md", "`kubernetes` in `docs/KUBERNETES.md`, `ozdefault` in `docs/OZDEFAULT.md`, and the opt-in `s3file`", ", `icmp` in `docs/ICMP.md` and `zzdemo` in `docs/ZZDEMO.md`, with `localfile` and `grpc` above")
 	inOrder("docs/REDIS.md", "it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, ozdefault, sql, sshfile, tlscert.")
 	inOrder("docs/CONFIGURATION.md", "write one\n  of dns, graphite, grpc, http, kubernetes, localfile, ntp, ozdefault, sql, sshfile, tlscert`")
 	if spec := read(t, filepath.Join(dir, "docs/SPECIFICATION-EXPORTER.md")); strings.Contains(spec, "in its place in this list") {

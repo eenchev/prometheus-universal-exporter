@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,11 +92,21 @@ import (
 // the server closes the connection when it is empty, and whether the answer is
 // a JSON document of the exchange. request.starttls, which tlscert takes
 // too, is of the common part (model.RequestConfig.StartTLS).
+//
+// UDP sends send, or send_hex, as one datagram and takes the first datagram
+// that comes back as the answer. SendHex is send as hexadecimal bytes, for
+// a protocol whose requests are binary, and AnswerBytes a length the answer
+// ends at, for one whose answers end neither with a terminator nor with the
+// connection: Modbus TCP, whose server keeps the connection open and whose
+// answer to a read is as long as the read asks.
 type TCPConfig struct {
-	Greeting   string `yaml:"greeting,omitempty"`
-	Send       string `yaml:"send,omitempty"`
-	Terminator string `yaml:"terminator,omitempty"`
-	Document   bool   `yaml:"document,omitempty"`
+	Greeting    string `yaml:"greeting,omitempty"`
+	Send        string `yaml:"send,omitempty"`
+	SendHex     string `yaml:"send_hex,omitempty"`
+	Terminator  string `yaml:"terminator,omitempty"`
+	AnswerBytes int    `yaml:"answer_bytes,omitempty"`
+	UDP         bool   `yaml:"udp,omitempty"`
+	Document    bool   `yaml:"document,omitempty"`
 }
 
 // tcpRequest is a tcp collector's own request keys: the zero TCPConfig of
@@ -109,7 +120,7 @@ func tcpRequest(c *model.Collector) TCPConfig {
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeTCP,
-		Fields:       []string{"tls", "starttls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"tls", "starttls", "max_response_bytes", "allowed_targets", "denied_targets", "unix_socket"},
 		Config:       TCPConfig{},
 		KeyRules:     tcpKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
@@ -155,8 +166,8 @@ func (tcpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 }
 
 // CheckTarget checks a tcp collector's target.
-func (tcpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseTCPTarget(target)
+func (tcpRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
+	_, err := parseTCPTarget(target, c.Request.UnixSocket == "")
 	return err
 }
 
@@ -209,6 +220,12 @@ func validateTCPRequest(x *model.Collector) error {
 	if HasPathParams(r.Terminator) {
 		return fmt.Errorf("collector %q request.terminator %q has a placeholder; the end of the answer is matched as it is written", x.Name, r.Terminator)
 	}
+	if err := validateTCPBinary(x.Name, r); err != nil {
+		return err
+	}
+	if err := validateTCPTransport(x, r); err != nil {
+		return err
+	}
 	if err := validateTCPGreeting(x.Name, r); err != nil {
 		return err
 	}
@@ -225,6 +242,87 @@ func validateTCPRequest(x *model.Collector) error {
 		if character, refused := lineValueRefused(p.Default); p.HasDefault && refused {
 			return fmt.Errorf("collector %q request.send: the default of %s holds %s; %s", x.Name, p.Name, character, lineValueRule)
 		}
+	}
+	return nil
+}
+
+// validateTCPBinary checks send_hex and answer_bytes: send_hex is pairs of
+// hexadecimal digits, blanks between them or not, of at most tcpMaxText
+// bytes, holding no placeholder, since a probe's value would be text in a
+// binary request, and not beside send; answer_bytes is above 0 and not
+// beside terminator, either being where the answer ends. A length past the
+// response limit fails the scrape before anything is read (tcpReadBytes).
+func validateTCPBinary(name string, r TCPConfig) error {
+	if r.SendHex != "" {
+		if r.Send != "" {
+			return fmt.Errorf("collector %q sets request.send and request.send_hex; send_hex is send written as hexadecimal bytes, so write one of them", name)
+		}
+		if strings.Contains(r.SendHex, "{{") {
+			return fmt.Errorf("collector %q request.send_hex has a placeholder; the bytes are sent as written, and no probe parameter fills them", name)
+		}
+		b, err := tcpHexBytes(r.SendHex)
+		if err != nil {
+			return fmt.Errorf("collector %q request.send_hex: %w", name, err)
+		}
+		if len(b) > tcpMaxText {
+			return fmt.Errorf("collector %q request.send_hex is %d bytes, more than the %d a tcp collector may send", name, len(b), tcpMaxText)
+		}
+	}
+	switch {
+	case r.AnswerBytes < 0:
+		return fmt.Errorf("collector %q request.answer_bytes is %d; it is how many bytes the answer is, above 0, or left out", name, r.AnswerBytes)
+	case r.AnswerBytes > 0 && r.Terminator != "":
+		return fmt.Errorf("collector %q sets request.answer_bytes and request.terminator; each says where the answer ends, so write one of them", name)
+	}
+	return nil
+}
+
+// tcpHexBytes reads send_hex: pairs of hexadecimal digits, in either case,
+// with blanks, tabs and line breaks between them or none.
+func tcpHexBytes(text string) ([]byte, error) {
+	digits := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, text)
+	if digits == "" {
+		return nil, errors.New("it holds no byte; write the bytes sent as pairs of hexadecimal digits, such as \"00 01 00 00 00 06 01 03 00 00 00 02\"")
+	}
+	b, err := hex.DecodeString(digits)
+	if err != nil {
+		var invalid hex.InvalidByteError
+		if errors.As(err, &invalid) {
+			return nil, fmt.Errorf("%q is not a hexadecimal digit; write the bytes sent as pairs of hexadecimal digits, such as \"00 01 00 00 00 06 01 03 00 00 00 02\"", string(rune(invalid)))
+		}
+		return nil, fmt.Errorf("it has %d hexadecimal digits, an odd number; each byte is two digits", len(digits))
+	}
+	return b, nil
+}
+
+// validateTCPTransport checks udp and unix_socket. A UDP exchange is one
+// datagram each way: it has no greeting, no TLS and no terminator or length
+// to read up to, and sends something, since a UDP server speaks only when
+// spoken to. A Unix socket is a stream connection to a path of the
+// exporter's side (validateUnixSocket); a datagram socket is not reached.
+func validateTCPTransport(x *model.Collector, r TCPConfig) error {
+	if err := validateUnixSocket(x, x.Request.UnixSocket); err != nil {
+		return err
+	}
+	if !r.UDP {
+		return nil
+	}
+	switch {
+	case x.Request.UnixSocket != "":
+		return fmt.Errorf("collector %q sets request.udp and request.unix_socket; a Unix socket is reached as a stream, so leave udp out with unix_socket", x.Name)
+	case x.Request.TLS != model.TLSConfig{} || x.Request.StartTLS != "":
+		return fmt.Errorf("collector %q sets request.udp and request.tls or request.starttls; the exporter speaks no TLS over UDP, so leave them out", x.Name)
+	case r.Greeting != "":
+		return fmt.Errorf("collector %q sets request.udp and request.greeting; a UDP server says nothing before it is sent a datagram, so leave greeting out", x.Name)
+	case r.Terminator != "" || r.AnswerBytes > 0:
+		return fmt.Errorf("collector %q sets request.udp and request.terminator or request.answer_bytes; over UDP the answer is the first datagram that comes back, so leave them out", x.Name)
+	case r.Send == "" && r.SendHex == "":
+		return fmt.Errorf("collector %q sets request.udp without request.send or request.send_hex; a UDP server answers a datagram it is sent, so write what is sent", x.Name)
 	}
 	return nil
 }
@@ -249,8 +347,8 @@ func validateTCPGreeting(name string, r TCPConfig) error {
 	if _, err := tcpGreetingPattern(r.Greeting); err != nil {
 		return fmt.Errorf("collector %q request.greeting %q is not a regular expression Go reads: %w", name, r.Greeting, err)
 	}
-	if r.Send == "" && r.Terminator != "" {
-		return fmt.Errorf("collector %q sets request.greeting and request.terminator without request.send; with no send the greeting is the answer, and nothing is read after it for a terminator to end", name)
+	if r.Send == "" && r.SendHex == "" && (r.Terminator != "" || r.AnswerBytes > 0) {
+		return fmt.Errorf("collector %q sets request.greeting and request.%s without request.send or send_hex; with nothing sent the greeting is the answer, and nothing is read after it for it to end", name, tcpEndKey(r))
 	}
 	return nil
 }
@@ -266,8 +364,8 @@ func validateTCPStartTLS(name, protocol string, r TCPConfig) error {
 	if err := validateStartTLS(name, RequestTypeTCP, protocol); err != nil {
 		return err
 	}
-	if r.Send == "" && r.Terminator != "" {
-		return fmt.Errorf("collector %q sets request.starttls and request.terminator without request.send; with no send the scrape ends with the TLS handshake, and nothing is read after it for a terminator to end", name)
+	if r.Send == "" && r.SendHex == "" && (r.Terminator != "" || r.AnswerBytes > 0) {
+		return fmt.Errorf("collector %q sets request.starttls and request.%s without request.send or send_hex; with nothing sent the scrape ends with the TLS handshake, and nothing is read after it for it to end", name, tcpEndKey(r))
 	}
 	return nil
 }
@@ -282,9 +380,11 @@ type tcpAddress struct {
 	host, hostPort string
 }
 
-// parseTCPTarget reads a target: host:port or [v6]:port, the port required.
-// Nothing else may come with it.
-func parseTCPTarget(raw string) (tcpAddress, error) {
+// parseTCPTarget reads a target: host:port or [v6]:port, the port required
+// unless portRequired is false, as for a collector of request.unix_socket,
+// whose target names the service and is never dialed. Nothing else may
+// come with it.
+func parseTCPTarget(raw string, portRequired bool) (tcpAddress, error) {
 	target := strings.TrimSpace(raw)
 	if strings.Contains(target, "://") {
 		scheme, _, _ := strings.Cut(target, "://")
@@ -294,6 +394,13 @@ func parseTCPTarget(raw string) (tcpAddress, error) {
 		return tcpAddress{}, fmt.Errorf("target %q has a path, query or user in it; a tcp target is only the host and its port", raw)
 	}
 	host, port, err := net.SplitHostPort(target)
+	if err != nil && !portRequired && target != "" && !strings.Contains(strings.Trim(target, "[]"), ":") {
+		canonical, err := canonicalHost(strings.Trim(target, "[]"))
+		if err != nil {
+			return tcpAddress{}, err
+		}
+		return tcpAddress{host: canonical, hostPort: canonical}, nil
+	}
 	if err != nil {
 		return tcpAddress{}, fmt.Errorf("target %q is not host:port; a tcp target names its port, which no default stands in for, and an IPv6 address in brackets, as [2001:db8::1]:11211", raw)
 	}
@@ -321,33 +428,44 @@ func tcpSecure(c *model.Collector) bool {
 }
 
 // tcpURL is the url label and the trace's URL of a scrape: tcp://host:port,
-// or tls:// over TLS, from the start or after STARTTLS.
-func tcpURL(a tcpAddress, secure bool) string {
-	if secure {
+// tls:// over TLS, from the start or after STARTTLS, udp:// over UDP, and
+// over a Unix socket unix:// and the socket's path, the target the name the
+// service goes by in the labels, which is never dialed.
+func tcpURL(a tcpAddress, c *model.Collector) string {
+	switch {
+	case c.Request.UnixSocket != "" && tcpSecure(c):
+		return "tls+unix://" + c.Request.UnixSocket
+	case c.Request.UnixSocket != "":
+		return "unix://" + c.Request.UnixSocket
+	case tcpRequest(c).UDP:
+		return "udp://" + a.hostPort
+	case tcpSecure(c):
 		return "tls://" + a.hostPort
 	}
 	return "tcp://" + a.hostPort
 }
 
 func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
-	a, err := parseTCPTarget(target)
+	a, err := parseTCPTarget(target, c.Request.UnixSocket == "")
 	if err != nil {
 		return "", err
 	}
-	return tcpURL(a, tcpSecure(withTargetAccount(c, overrides))), nil
+	return tcpURL(a, withTargetAccount(c, overrides)), nil
 }
 
 func tcpMethod(c *model.Collector, _ RequestOverrides) string {
-	if tcpRequest(c).Send == "" {
+	if r := tcpRequest(c); r.Send == "" && r.SendHex == "" {
 		return tcpMethodRead
 	}
 	return tcpMethodSend
 }
 
 // tcpDisplay renders a target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
+// holds no credentials, when it is one at all. A target without a port is
+// one of a collector of request.unix_socket, which the display does not
+// know of.
 func tcpDisplay(target string) string {
-	if _, err := parseTCPTarget(target); err != nil {
+	if _, err := parseTCPTarget(target, false); err != nil {
 		return "<invalid target>"
 	}
 	return strings.TrimSpace(target)
@@ -359,13 +477,20 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	start := time.Now()
 	// A static target's own tls block, in place of the collector's.
 	c = withTargetAccount(c, overrides)
-	address, err := parseTCPTarget(target)
+	address, err := parseTCPTarget(target, c.Request.UnixSocket == "")
 	if err != nil {
 		return nil, err
 	}
 	send, err := templateField{"request.send", tcpRequest(c).Send, "line"}.render(overrides.Params)
 	if err != nil {
 		return nil, err
+	}
+	if hexText := tcpRequest(c).SendHex; hexText != "" {
+		b, err := tcpHexBytes(hexText)
+		if err != nil {
+			return nil, fmt.Errorf("request.send_hex: %w", err)
+		}
+		send = string(b)
 	}
 	if overrides.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -389,14 +514,16 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	}
 	// The host's name now; the address the connection is made to when it
 	// is made, as an http request's connections are checked.
+	// Over a Unix socket, the target's name as written, which is never
+	// looked up (overSocket).
 	if policy := policyOf(c); policy != nil {
-		guard := &policyGuard{policy: policy, hosts: map[string]bool{}}
+		guard := &policyGuard{policy: policy, hosts: map[string]bool{}, socket: c.Request.UnixSocket != ""}
 		if err := guard.check(ctx, &url.URL{Scheme: "tcp", Host: address.hostPort}); err != nil {
 			return nil, err
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
-	label := tcpURL(address, secure)
+	label := tcpURL(address, c)
 	traced := http.Header{"Tcp-Send": {tcpShown(send)}}
 	if pattern := tcpRequest(c).Greeting; pattern != "" {
 		// Before Tcp-Send in a report, which lists headers by name, as the
@@ -638,11 +765,28 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	dialer := &net.Dialer{}
 	began := time.Now()
 	dialed := began
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
-	if err != nil {
-		if !errors.Is(err, ErrTargetRefused) {
+	var conn net.Conn
+	var err error
+	switch {
+	case c.Request.UnixSocket != "":
+		// The operator's socket, which no target policy holds to an
+		// address: the target's name was checked as written.
+		conn, err = dialer.DialContext(ctx, "unix", c.Request.UnixSocket)
+		if err != nil {
+			err = tcpFailure(ctx, fmt.Errorf("connecting to request.unix_socket: %w", err))
+		}
+	case r.UDP:
+		conn, err = policyDialer(dialer.DialContext)(ctx, "udp", address.hostPort)
+		if err != nil && !errors.Is(err, ErrTargetRefused) {
 			err = tcpFailure(ctx, fmt.Errorf("connecting to %s: %w", address.hostPort, err))
 		}
+	default:
+		conn, err = policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
+		if err != nil && !errors.Is(err, ErrTargetRefused) {
+			err = tcpFailure(ctx, fmt.Errorf("connecting to %s: %w", address.hostPort, err))
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	x.connect = time.Since(began)
@@ -726,10 +870,17 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	began = time.Now()
 	if send != "" {
 		if _, err := io.WriteString(conn, send); err != nil {
-			return nil, tcpFailure(ctx, fmt.Errorf("sending request.send to %s: %w", address.hostPort, err))
+			return nil, tcpFailure(ctx, fmt.Errorf("sending %s to %s: %w", tcpSendKey(r), address.hostPort, err))
 		}
 	}
-	x.body, x.how, err = tcpRead(ctx, reader, address, []byte(r.Terminator), limit, shared)
+	switch {
+	case r.UDP:
+		x.body, x.how, err = udpRead(ctx, conn, address, limit)
+	case r.AnswerBytes > 0:
+		x.body, x.how, err = tcpReadBytes(ctx, reader, address, r.AnswerBytes, limit, shared)
+	default:
+		x.body, x.how, err = tcpRead(ctx, reader, address, []byte(r.Terminator), limit, shared)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -788,6 +939,60 @@ func tcpRead(ctx context.Context, conn io.Reader, address tcpAddress, terminator
 	}
 }
 
+// tcpEndKey is the key that says where the answer ends, for a refusal.
+func tcpEndKey(r TCPConfig) string {
+	if r.AnswerBytes > 0 {
+		return "answer_bytes"
+	}
+	return "terminator"
+}
+
+// tcpSendKey is the key of what a scrape sends, for its errors.
+func tcpSendKey(r TCPConfig) string {
+	if r.SendHex != "" {
+		return "request.send_hex"
+	}
+	return "request.send"
+}
+
+// udpRead reads the answer to a datagram: the first datagram that comes
+// back, held to limit. A read of one byte more than limit tells a datagram
+// past the limit from one that fills it, since a datagram's bytes beyond
+// what the read holds are dropped. A port no server listens on answers with
+// ICMP port unreachable, which the connected socket's read reports as
+// connection refused: that fails the scrape at once rather than at the
+// deadline.
+func udpRead(ctx context.Context, conn net.Conn, address tcpAddress, limit int64) ([]byte, string, error) {
+	buf := make([]byte, min(limit, 64<<10)+1)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, "", tcpFailure(ctx, fmt.Errorf("reading from %s: no datagram came back: %w", address.hostPort, err))
+	}
+	if int64(n) > limit {
+		return nil, "", model.MarkError(model.Errorf("the answer of %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
+	}
+	return buf[:n], "the answer is the first datagram that came back", nil
+}
+
+// tcpReadBytes reads the answer up to request.answer_bytes, the length a
+// binary protocol's answer is, and no further: a server that keeps the
+// connection open has said all once that many bytes have come. One that
+// closes the connection sooner fails the scrape, the answer being short.
+func tcpReadBytes(ctx context.Context, reader io.Reader, address tcpAddress, want int, limit, shared int64) ([]byte, string, error) {
+	if shared+int64(want) > limit {
+		return nil, "", model.MarkError(model.Errorf("request.answer_bytes is %d, and the answer of %s would be larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", want, address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
+	}
+	body := make([]byte, want)
+	n, err := io.ReadFull(reader, body)
+	switch {
+	case err == nil:
+		return body, fmt.Sprintf("the answer was the %d bytes of request.answer_bytes", want), nil
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+		return nil, "", fmt.Errorf("the server closed the connection after %d bytes, and request.answer_bytes is %d", n, want)
+	}
+	return nil, "", tcpFailure(ctx, fmt.Errorf("reading from %s: %d of the %d bytes of request.answer_bytes came: %w", address.hostPort, n, want, err))
+}
+
 // checkTCPFiles reads the tls block's files as a scrape reads them, the
 // collector's or those of a static target's own block, for --dry-run.
 // Loading the configuration reads none of them, since a file may be mounted
@@ -839,9 +1044,12 @@ func refuseEmptySend(where string, placeholders []pathPlaceholder, rendered stri
 // own keys.
 func tcpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"document":   {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, starttls, the protocol, with starttls, connect_seconds, tls_seconds, greeting_seconds, starttls_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
-		"greeting":   {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
-		"send":       {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
-		"terminator": {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
+		"document":     {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, starttls, the protocol, with starttls, connect_seconds, tls_seconds, greeting_seconds, starttls_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
+		"greeting":     {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
+		"send":         {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
+		"send_hex":     {"description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols."},
+		"answer_bytes": {"minimum": 0, "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols."},
+		"udp":          {"description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp."},
+		"terminator":   {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
 	}
 }

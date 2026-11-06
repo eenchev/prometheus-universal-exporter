@@ -16,11 +16,16 @@ thing to run:
   as it should, and how long it took ([Services that speak
   first](#services-that-speak-first));
 - whether a mail or FTP server that begins TLS on request, with `STARTTLS`,
-  does, with a certificate that verifies ([STARTTLS](#starttls)).
+  does, with a certificate that verifies ([STARTTLS](#starttls));
+- a service that answers over UDP, such as a game server's query
+  ([Over UDP](#over-udp)), or on a Unix socket, as HAProxy's runtime API
+  often is ([Over a Unix socket](#over-a-unix-socket));
+- a binary protocol, such as Modbus TCP, written in hexadecimal and read by
+  a layout of its fields ([Binary protocols](#binary-protocols)).
 
 Whatever reads a body reads the answer: `regex` for lines of text, `csv`,
 `prometheus` for a service that writes exposition, `jq` for one that answers
-JSON, `yq`, `python`.
+JSON, `yq`, `python`, and `binary` for a binary answer.
 
 The type is opt-in: the default build and the published image leave it out,
 so a build carries it only when asked
@@ -108,10 +113,14 @@ sum; a server that has had no get yet has no ratio.
 | --- | --- | --- |
 | `type` | — | **Required.** `tcp`. |
 | `document` | `false` | `true` hands the transforms a JSON document of the exchange, the greeting, the answer and each step's seconds, in place of the server's text; the decoder is then `json`. See [The exchange as a document](#the-exchange-as-a-document). |
-| `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` the greeting is the answer. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
+| `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` or `send_hex` the greeting is the answer, and `terminator` and `answer_bytes` are refused. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
 | `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on the plaintext connection, after the greeting, as that protocol asks for it, and write `send` over TLS. See [STARTTLS](#starttls). |
 | `send` | nothing | The text written once the connection is made, such as `"stats\r\n"`. Write it in double quotes, in which YAML reads `\r\n` as a carriage return and a line feed; in single quotes or none, `\r\n` is four characters. May hold `{{param_name}}` placeholders. At most 64 KiB. Left out, nothing is written, and the answer is what the server says first. See [What a scrape sends](#what-a-scrape-sends). |
+| `send_hex` | nothing | The bytes written, as pairs of hexadecimal digits, with blanks between them or none: `"00 01 00 00 00 06 01 03 00 00 00 02"`. In place of `send`, for a protocol whose requests are binary; no placeholder. At most 64 KiB. See [Binary protocols](#binary-protocols). |
 | `terminator` | none | What the answer ends with, such as `"END\r\n"`: reading stops once it has come. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See [Reading the answer](#reading-the-answer). |
+| `answer_bytes` | none | How many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length. Not with `terminator`. See [Binary protocols](#binary-protocols). |
+| `udp` | `false` | `true` sends `send` or `send_hex` as one UDP datagram and takes the first datagram back as the answer. See [Over UDP](#over-udp). |
+| `unix_socket` | none | The absolute path of a Unix socket the exchange is made over, in place of a connection to the target. See [Over a Unix socket](#over-a-unix-socket). |
 | `tls` | none | Speak TLS, verifying the server: see [TLS](#tls). With `starttls`, the settings of the TLS it begins. |
 | `max_response_bytes` | `10MiB` | The most bytes of the answer: see [Limits](#limits). |
 | `allowed_targets`, `denied_targets` | none | The services the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
@@ -125,7 +134,9 @@ reads as, JSON when it is JSON: the answer has no `Content-Type` to go by.
 ## The target
 
 The probe's `target` is the service: `host:port` or `[v6]:port`. The port
-is required, since no port is every such service's. A scheme, a path, a
+is required, since no port is every such service's; a collector of
+[`unix_socket`](#over-a-unix-socket) takes a host without one, since its
+target only names the service. A scheme, a path, a
 query or a user in the target is refused with `400`, before anything is
 sent. `allowed_targets` and `denied_targets` are matched against the host
 before the connection is made and against the address it is made to, and
@@ -233,6 +244,115 @@ envelope unless [`document`](#the-exchange-as-a-document) asks for one,
 with no status (`$status` is `null`, Python's `response.status_code`
 `None`) and no headers of the server's: the only headers it carries are
 the exporter's [timings](#timings-as-headers).
+
+## Over UDP
+
+With `udp: true`, `send` or `send_hex` goes to `host:port` as one UDP
+datagram, and the first datagram that comes back is the answer, read by any
+decoder, as a TCP answer is. A UDP server speaks only when spoken to, so a
+collector of `udp` writes what it sends; `greeting`, `terminator`,
+`answer_bytes`, `tls`, `starttls` and `unix_socket` are refused beside it.
+
+```yaml
+collectors:
+  - name: memcached_udp
+    request:
+      type: tcp
+      udp: true
+      # memcached's UDP frame header: request id, sequence, count, reserved.
+      send_hex: "00 01 00 00 00 01 00 00 73 74 61 74 73 0d 0a"   # stats\r\n
+    decoder:
+      type: text
+    transform:
+      type: regex
+    metrics:
+      - name: memcached_curr_items
+        expression: 'STAT curr_items (\d+)'
+```
+
+The socket is connected to the target's address, so only its datagrams are
+read, and the target lists are checked on it as on a TCP connection. A port
+no server listens on answers with ICMP port unreachable, which fails the
+scrape at once (`connection refused`) rather than at its deadline; a server
+that drops the datagram, or whose answer is lost, fails at the deadline. A
+datagram past the response limit fails the scrape as a limit exceeded. The
+scrape is labelled `url="udp://host:port"`.
+
+## Over a Unix socket
+
+`unix_socket` makes the exchange over a Unix domain socket on the exporter's
+side in place of a TCP connection: HAProxy's runtime API on
+`/var/run/haproxy.sock`, a service's control socket. It is the absolute
+path of the socket, checked as an [`http` collector's](REQUESTS.md#over-a-unix-socket)
+is, and is the configuration's alone: no probe parameter, static target or
+`defaults` block sets it, so whoever can reach `/probe` never names the file
+the exporter connects to.
+
+```yaml
+collectors:
+  - name: haproxy_info
+    request:
+      type: tcp
+      unix_socket: /var/run/haproxy.sock
+      send: "show info\n"
+    decoder:
+      type: text
+    transform:
+      type: regex
+    metrics:
+      - name: haproxy_uptime_seconds
+        expression: 'Uptime_sec: (\d+)'
+```
+
+The target names the service and is never dialed: a host, with a port or
+without, such as `target=haproxy`. `allowed_targets` and `denied_targets`
+hold it to its name as written, which is never looked up, so a name the list
+does not name is refused even when the list holds networks. Everything else
+is a TCP exchange's: `greeting`, `starttls`, `tls` over the socket, `send`,
+`terminator` and `answer_bytes`. The scrape is labelled
+`url="unix:///var/run/haproxy.sock"`, `tls+unix://` with TLS. A socket that
+cannot be reached fails the scrape with an error naming its path in the
+exporter's log, and a probe's caller is told the path withheld.
+
+## Binary protocols
+
+`send_hex` writes the bytes of a binary request, and the [`binary`
+decoder](CONFIGURATION.md#binary-answers) reads the answer's fields by a
+layout. Many binary servers keep the connection open after an answer that
+ends with no terminator; `answer_bytes` ends it at the length the protocol
+gives it. A Modbus TCP read of two holding registers from unit 1, whose
+answer is 9 bytes and 2 for each register:
+
+```yaml
+collectors:
+  - name: modbus
+    request:
+      type: tcp
+      send_hex: "0001 0000 0006 01 03 0000 0002"   # read 2 registers from 0
+      answer_bytes: 13
+    decoder:
+      type: binary
+    response:
+      binary:
+        fields:
+          - {type: skip, length: 7}     # the MBAP header and the unit
+          - {name: function, type: u8}
+          - {name: bytes, type: u8}
+          - {name: registers, type: u16, count: 2}
+    transform:
+      type: jq
+    metrics:
+      - name: modbus_register
+        expression: .registers[0]
+```
+
+A server that closes the connection before `answer_bytes` came fails the
+scrape, saying how many bytes came; one that sends fewer and keeps the
+connection open fails at the deadline. An `answer_bytes` past the response
+limit fails the scrape before anything is read. A Modbus exception, the
+function with its high bit set (`0x83`) and one byte of its code, is 9 bytes,
+fewer than `answer_bytes`, so the server's refusal of a read fails the
+scrape at its deadline as an answer that did not come whole.
 
 ## Services that speak first
 
@@ -883,8 +1003,9 @@ Requests
 ```
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)
-a scrape is labelled `url="tcp://host:port"`, `tls://` over TLS, and
-`http_method="SEND"` when the collector writes `send`, `http_method="READ"`
+a scrape is labelled `url="tcp://host:port"`, `tls://` over TLS, `udp://`
+over UDP and `unix://` with the socket's path over a Unix socket, and
+`http_method="SEND"` when the collector writes `send` or `send_hex`, `http_method="READ"`
 when it only reads.
 
 ## Limitations
@@ -904,8 +1025,12 @@ when it only reads.
   needs a pattern for what it writes first.
 - **One connection per scrape.** No connection is kept between scrapes, so
   each scrape costs a TCP handshake, and a TLS one with TLS.
-- **No UDP, no Unix sockets.** A service reached only over a Unix socket,
-  as HAProxy's runtime API often is, needs a TCP socket configured beside it.
+- **One datagram each way over UDP.** A UDP exchange sends one datagram and
+  takes one back: an answer split over several datagrams is read as its
+  first, and a datagram lost on the way fails the scrape at its deadline,
+  with no second try.
+- **Stream sockets alone.** A Unix datagram socket, as some services' control
+  sockets are, is not reached.
 
 ## Troubleshooting
 

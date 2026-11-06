@@ -53,6 +53,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The opt-in `tcp` type speaks UDP (`udp: true`: one datagram sent, the
+  first back is the answer) and over a Unix socket (`unix_socket`, as an
+  `http` collector's), and binary protocols: `send_hex` writes the request's
+  bytes, and `answer_bytes` ends an answer of a known length, as Modbus
+  TCP's ([Text protocols over TCP](docs/TCP.md#over-udp)).
+- An `http` collector speaks FastCGI with `request.fastcgi`, to a port or
+  a `unix_socket`, so PHP-FPM's status and ping pages, which PHP-FPM serves
+  over FastCGI alone, are read as any HTTP answer
+  ([FastCGI](docs/REQUESTS.md#fastcgi)).
+- The opt-in `icmp` request type pings a host on an unprivileged ICMP
+  socket, as `ping` does, and answers how many echoes came back, the loss
+  and the round trips as a JSON document; a host that answers nothing is a
+  loss of 1, not a failed scrape ([Ping over ICMP](docs/ICMP.md)).
+- `decoder.type: binary` reads a binary answer by the layout of
+  `response.binary`, integers, floats, strings and lists of them, into a
+  document jq, yq and Python read by the fields' names
+  ([Binary answers](docs/CONFIGURATION.md#binary-answers)).
 - Weighted allocation: a target's `weight`, a static target file's or a
   probe targets file's `default_weight`, a `discovered_targets` entry's or
   a probe job's `weight`, and `weight_label`, a discovery label whose value

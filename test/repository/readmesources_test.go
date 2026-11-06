@@ -30,6 +30,7 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"ldap":       {"LDAP directory", "LDAP directories"},
 	"sshexec":    {"a command run on another host", "the output of a command run on another host"},
 	"ntp":        {"NTP server", "the clock of an NTP server"},
+	"icmp":       {"host answering a ping", "the echo replies of a host pinged over ICMP"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

@@ -265,6 +265,14 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 	}
 	r := icmpRequest(c)
 	traceRequest(ctx, icmpMethod, "icmp://"+host, http.Header{"Icmp-Address": {address.String()}, "Icmp-Count": {strconv.Itoa(r.Count)}}, "", false)
+	// The address is held to the target lists before a socket is opened,
+	// as the connection's is (checkConnection), the socket being connected
+	// to that address alone: a refused one is refused whether or not the
+	// system would open the socket.
+	if err := checkConnection(ctx, net.JoinHostPort(host, "0"), icmpConnectedTo{remote: &net.UDPAddr{IP: address.AsSlice()}}); err != nil {
+		traceFailedOutcome(ctx, "error: "+err.Error())
+		return nil, err
+	}
 	conn, err := icmpDial(address)
 	if err != nil {
 		err = fmt.Errorf("opening an ICMP socket to ping %s: %w", address, err)
@@ -275,13 +283,6 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	// The socket's own remote address is no *net.UDPAddr where the system
-	// file makes it an *net.IPAddr; the policy reads the address it was
-	// connected to (checkConnection).
-	if err := checkConnection(ctx, net.JoinHostPort(host, "0"), icmpConnectedTo{conn, &net.UDPAddr{IP: address.AsSlice()}}); err != nil {
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return nil, err
-	}
 	doc, err := icmpPing(ctx, conn, address, r)
 	if err != nil {
 		traceFailedOutcome(ctx, "error: "+err.Error())
@@ -305,8 +306,8 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 	}, nil
 }
 
-// icmpConnectedTo is a socket, with the address it is connected to as its
-// remote address, for the target policy.
+// icmpConnectedTo is the socket a scrape connects, as the target policy
+// reads it: the address it is connected to.
 type icmpConnectedTo struct {
 	net.Conn
 	remote net.Addr

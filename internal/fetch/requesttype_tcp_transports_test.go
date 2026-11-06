@@ -213,11 +213,21 @@ func TestTCPTransportAndBinaryKeysAreChecked(t *testing.T) {
 		{func(c *model.Collector) { c.Request.Own = TCPConfig{SendHex: "{{param_x}}"} }, "request.send_hex has a placeholder"},
 		{func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "x", AnswerBytes: -1} }, "request.answer_bytes is -1"},
 		{func(c *model.Collector) { c.Request.Own = TCPConfig{Send: "x", AnswerBytes: 4, Terminator: "\n"} }, "sets request.answer_bytes and request.terminator"},
+		{func(c *model.Collector) { c.Request.Own = TCPConfig{Greeting: "^220", AnswerBytes: 4} }, "sets request.greeting and request.answer_bytes without request.send or send_hex"},
+		{func(c *model.Collector) { c.Request.Own, c.Request.StartTLS = TCPConfig{AnswerBytes: 4}, "smtp" }, "sets request.starttls and request.answer_bytes without request.send or send_hex"},
 	} {
 		x := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP}}
 		c.edit(x)
 		if err := ValidateRequest(x); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("got %v, want %q", err, c.want)
+		}
+	}
+	// send_hex is something sent, as send is: a greeting or STARTTLS
+	// before it, and an end of the answer after it, are taken.
+	for _, own := range []TCPConfig{{Greeting: "^220", SendHex: "00", Terminator: "\n"}, {Greeting: "^220", SendHex: "00", AnswerBytes: 2}} {
+		x := &model.Collector{Name: "stats", Request: model.RequestConfig{Type: RequestTypeTCP, Own: own}}
+		if err := ValidateRequest(x); err != nil {
+			t.Errorf("%+v: %v", own, err)
 		}
 	}
 }

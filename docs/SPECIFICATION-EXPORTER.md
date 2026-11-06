@@ -2412,7 +2412,9 @@ types at build time). Its keys:
   alone, failing the scrape, naming the host and the family, when it has
   none; `prefer_ip4` and `prefer_ip6` of that family first; left out, the
   first address. The target lists MUST hold the name before the lookup and
-  the address the socket is connected to, as for `ntp`.
+  the address before a socket is opened, a refused one being refused
+  whether or not the system opens ICMP sockets, the socket then being
+  connected to that address alone.
 - The echoes MUST go on an unprivileged ICMP datagram socket (`SOCK_DGRAM`
   of `IPPROTO_ICMP` or `IPPROTO_ICMPV6`), connected to the address, never a
   raw socket; a socket the system refuses for permission MUST fail the
@@ -2843,7 +2845,8 @@ types at build time): only a build asked for it carries it. Its keys:
 - `greeting`, `send` and `terminator` written `""` MUST be the keys left
   out. Any of them longer than 64 KiB, a placeholder in `terminator` or
   `greeting`, a `greeting` Go's `regexp` does not compile, `terminator` with
-  `greeting` and without `send`, and a placeholder of `send` that does not
+  `greeting` and without `send` or `send_hex`, `answer_bytes` likewise, and the
+  two with `starttls` and neither of those, and a placeholder of `send` that does not
   parse or names a filter MUST be refused at load, as MUST a `tls` block
   with one of `cert_file` and `key_file` alone. No probe parameter MAY set
   `greeting`.
@@ -30982,13 +30985,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestATCPCollectorSpeaksUDP` (fetch, tcp): `udp` sends `stats\r\n` as one datagram and takes the echo back as the body, labelled `udp://`; `send_hex` sends `ff ff ff ff 54 53 6f 75 72 63 65 00`, written over two lines, as its bytes, method `SEND`; a datagram of 101 bytes fails a limit of 100 as a limit exceeded and fits a limit of 101; a port nothing listens on fails with connection refused within 3s.
 - `TestATCPCollectorSpeaksOverAUnixSocket` (fetch, tcp): `unix_socket` makes the exchange over the socket for the targets `haproxy` and `haproxy:9999`, labelled `unix://` and the path; `allowed_targets: [haproxy]` lets `haproxy` through and refuses `other`; a socket that is not there fails with its path in the error and none in what the caller is told; without `unix_socket` a target without a port is refused.
 - `TestATCPAnswerEndsAtAnswerBytes` (fetch, tcp): a Modbus TCP read written in `send_hex` with blanks inside it gets the 13 bytes of `answer_bytes` though the server keeps the connection open; a server that closes after 5 bytes fails, saying so and the 13.
-- `TestTCPTransportAndBinaryKeysAreChecked` (fetch, tcp): `udp` without anything to send, with `terminator`, `greeting`, `starttls` and `unix_socket`, a relative `unix_socket`, `send` beside `send_hex`, a `send_hex` with `g`, an odd number of digits, nothing but blanks or a placeholder, a negative `answer_bytes` and one beside `terminator` are each refused, naming what is wrong.
+- `TestTCPTransportAndBinaryKeysAreChecked` (fetch, tcp), with what the review of the branch added: `answer_bytes` beside `greeting` or `starttls` with nothing sent is refused, and `send_hex` beside `greeting` and `terminator` or `answer_bytes` is taken, as `send` is; `udp` without anything to send, with `terminator`, `greeting`, `starttls` and `unix_socket`, a relative `unix_socket`, `send` beside `send_hex`, a `send_hex` with `g`, an odd number of digits, nothing but blanks or a placeholder, a negative `answer_bytes` and one beside `terminator` are each refused, naming what is wrong.
 - `TestTheBinaryDecoderReadsTheLayout` (decode): a Modbus TCP answer is read into its fields with a skip, an offset, a count and an i16, and its first two bytes again little-endian; a little-endian layout reads an f32, a cstring, a string holding a byte that is no UTF-8 as U+FFFD, an i64 of -1 and a u64 of 2^64-1 as a float.
 - `TestTheBinaryDecoderRefusesAShortAnswer` (decode): a u32 of 3 bytes, a count, a string and a skip past the end, an offset at the end, and a cstring with no NUL in the body or in its length fail naming the field, its start and the body's length; a charset the answer declares is not applied.
 - `TestTheBinaryLayoutIsCheckedAtLoad` (config): the decoder with no fields, the layout beside json or no decoder, a regex transform, a bad `byte_order`, type, field `byte_order`, a field without a name, a named skip, a skip or string without `length`, a number with one, a cstring with `count`, a name twice, a negative offset or count and a count above 65,536 are refused; python and a field of every type are taken.
 - `TestAnHTTPCollectorSpeaksFastCGI` (fetch, http): a POST of `hello` to `/status?full=` with an `X-Pool` header reaches a `net/http/fcgi` application with its path, query, method, header and body, and `SCRIPT_FILENAME` and `DOCUMENT_URI` `/status`, and its JSON answer comes back with its `Content-Type` and status 200; the application's 404 is the status, `document_root: /srv/www` makes `SCRIPT_FILENAME` `/srv/www/missing`, and `params` replace `SERVER_NAME` and add `APP_ENV` and a value of 200 bytes.
 - `TestFastCGIGoesOverAUnixSocket` (fetch, http): `fastcgi` with `unix_socket` asks the application on the socket for `http://php-fpm/ping` and reads `pong`.
 - `TestFastCGIStderrAndWhatIsNoFastCGI` (fetch, http): an application that writes `Primary script unknown` to stderr and a `Status: 404 Not Found` answer is answered 404 with its body and `X-Fastcgi-Stderr`; its parameters are `SCRIPT_NAME`, `SCRIPT_FILENAME` and `REQUEST_URI` `/nope.php`, `REQUEST_METHOD` `GET`, an empty `QUERY_STRING`, `GATEWAY_INTERFACE` `CGI/1.1`, the port as `SERVER_PORT`, and no `CONTENT_LENGTH`; an HTTP server's answer fails as no FastCGI record; an `https` target is refused.
+- `TestFastCGITakesABareTargetAndFollowsNoRedirectToHTTPS` (fetch, http): `php-fpm:9000` is a target; an application that redirects to an HTTPS server fails the request with no request reaching that server, and `/my%20status` is the `SCRIPT_FILENAME` `/my status`.
 - `TestFastCGIKeysAreChecked` (fetch, http): `fastcgi` beside `proxy_url`, `tls` and `login`, a relative `document_root`, a parameter named `9X`, one with a placeholder and one with a line break are refused.
 - `TestSchemaAndExporterAgreeOnBinaryKeysWrittenEmpty` (test/repository): `response.binary.byte_order` and a field's `byte_order`, `""` the key left out, and a field's `type`, required, get one verdict from the schema and the exporter; `request.fastcgi.params{}` is a row of the http table.
 - `TestDecoderListsNameEveryDecoder` (test/repository), changed: `binary` is named in spec § 1, the chart README and the comment on `model.DecoderConfig`.
@@ -30999,7 +31003,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAnICMPCollectorsDefaults` (fetch, icmp): a collector of no keys sends 3 echoes 1s apart, waits 1s, carries 56 bytes, is labelled `icmp://` and the host, and its method is `PING`.
 - `TestAnICMPCollectorPingsLoopback` (fetch, icmp): three echoes to 127.0.0.1 10ms apart all come back, a loss of 0, with three round trips and their minimum no more than their maximum, family 4; skipped where the system opens no ICMP datagram socket.
 - `TestAnICMPHostThatAnswersNothingIsALossOfOne` (fetch, icmp): two echoes on a connection that answers nothing are a loss of 1 with no round trip within 3s; a host that answers the first twice and the second with another token's data is one reply, one duplicate and a loss of 0.5.
-- `TestAnICMPCollectorKeepsToItsTargetLists` (fetch, icmp): `denied_targets: [127.0.0.0/8]` refuses `127.0.0.1` and `localhost`.
+- `TestAnICMPCollectorKeepsToItsTargetLists` (fetch, icmp): `denied_targets: [127.0.0.0/8]` refuses `127.0.0.1` and `localhost`, on a system that opens no ICMP socket too.
 - `TestICMPEchoesAndReplies` (fetch, icmp): an echo is type 8 whose checksum sums to 0, an ICMPv6 one type 128 with none; a reply is read with and without an IPv4 header, and one of another token and an unreachable are not taken.
 - `TestICMPTargetsAndFamilies` (fetch, icmp): names and addresses, IPv6 ones with brackets or without, are targets, and a port, a scheme, a path and nothing are refused; `::1` is pinged under `prefer_ip4`, and refused under `ip4`.
 - `TestICMPKeysAreChecked` (fetch, icmp): a count of -1 and 101, an interval and a reply_timeout of 1ms, payload_bytes of 7 and 1233, and `ip_family: ip5` are refused.
@@ -34628,7 +34632,7 @@ FastCGI responder's request (FastCGI 1.0, `FCGI_KEEP_CONN` unset) on a
 connection of its own to the URL's host and port, 80 without one, or to
 `unix_socket`, through the pool's dialer and so the target policy: the
 parameters MUST be `GATEWAY_INTERFACE` `CGI/1.1`, `REQUEST_METHOD`,
-`REQUEST_URI`, `SCRIPT_NAME` and `DOCUMENT_URI` the URL's path,
+`REQUEST_URI`, as the request writes it, `SCRIPT_NAME` and `DOCUMENT_URI` the URL's path decoded,
 `SCRIPT_FILENAME` the path joined to `document_root`, the path alone
 without one, `DOCUMENT_ROOT`, `QUERY_STRING`, `SERVER_NAME`, `SERVER_PORT`,
 `SERVER_ADDR`, `REMOTE_ADDR`, `CONTENT_LENGTH` with a body, `CONTENT_TYPE`
@@ -34648,8 +34652,9 @@ environment's included, MUST apply; `request.fastcgi` beside `proxy_url`,
 absolute or holds a placeholder, and a parameter whose name is no CGI
 variable's (letters, digits and `_`, not starting with a digit) or whose
 value holds a placeholder or a control character MUST be refused when the
-configuration loads, and a target that is not an `http://` URL when it is
-checked. `request.fastcgi` MUST be part of the pool's settings, so a pool of
+configuration loads, and a target that is not an `http://` URL, a bare
+`host:port` being one, when it is checked; a redirect to an `https://` URL
+MUST fail the request, never be followed over HTTPS. `request.fastcgi` MUST be part of the pool's settings, so a pool of
 HTTP connections never carries a FastCGI request.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST

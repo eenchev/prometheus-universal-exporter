@@ -135,8 +135,10 @@ func (httpRequester) CheckTarget(c *model.Collector, target string, static bool)
 	if err := checkHTTPTarget(c, target, static); err != nil {
 		return err
 	}
-	// FastCGI carries no TLS: an https target would be sent in plaintext.
-	if httpRequest(c).FastCGI != nil && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(target)), "http://") {
+	// FastCGI carries no TLS: an https target would be sent in plaintext. A
+	// bare host:port, as Prometheus's discovery hands a target over, is
+	// http:// as for any http collector (normalizeTarget).
+	if httpRequest(c).FastCGI != nil && !strings.HasPrefix(strings.ToLower(normalizeTarget(target)), "http://") {
 		return fmt.Errorf("target %q is not an http:// URL; request.fastcgi speaks FastCGI in plaintext to the URL's host and port, so write http://host:port", target)
 	}
 	return nil

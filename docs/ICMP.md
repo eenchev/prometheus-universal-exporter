@@ -70,7 +70,7 @@ answers:
 | `reply_timeout` | `1s` | How long the last echo's reply is waited for once it is sent, at least `10ms`. |
 | `payload_bytes` | `56` | How many bytes of data each echo carries, from 8 to 1232, as `ping -s`. The first 8 are a random token the replies are matched by. |
 | `ip_family` | either | `ip4` or `ip6` pings the first address of that family of a name, `prefer_ip4` or `prefer_ip6` that family's first and else the other's; left out, the first address the name resolves to. |
-| `allowed_targets`, `denied_targets` | none | The hosts the collector may and may not ping, as for [any type that reaches a host](REQUESTS.md#restricting-targets): the name before it is looked up, and the address pinged. |
+| `allowed_targets`, `denied_targets` | none | The hosts the collector may and may not ping, as for [any type that reaches a host](REQUESTS.md#restricting-targets): the name before it is looked up, and the address pinged before a socket is opened. |
 
 No other request key applies, and setting one is a startup error. A scrape
 takes about `(count - 1) × interval + reply_timeout`, and ends sooner once

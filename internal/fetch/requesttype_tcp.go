@@ -347,8 +347,8 @@ func validateTCPGreeting(name string, r TCPConfig) error {
 	if _, err := tcpGreetingPattern(r.Greeting); err != nil {
 		return fmt.Errorf("collector %q request.greeting %q is not a regular expression Go reads: %w", name, r.Greeting, err)
 	}
-	if r.Send == "" && r.Terminator != "" {
-		return fmt.Errorf("collector %q sets request.greeting and request.terminator without request.send; with no send the greeting is the answer, and nothing is read after it for a terminator to end", name)
+	if r.Send == "" && r.SendHex == "" && (r.Terminator != "" || r.AnswerBytes > 0) {
+		return fmt.Errorf("collector %q sets request.greeting and request.%s without request.send or send_hex; with nothing sent the greeting is the answer, and nothing is read after it for it to end", name, tcpEndKey(r))
 	}
 	return nil
 }
@@ -364,8 +364,8 @@ func validateTCPStartTLS(name, protocol string, r TCPConfig) error {
 	if err := validateStartTLS(name, RequestTypeTCP, protocol); err != nil {
 		return err
 	}
-	if r.Send == "" && r.Terminator != "" {
-		return fmt.Errorf("collector %q sets request.starttls and request.terminator without request.send; with no send the scrape ends with the TLS handshake, and nothing is read after it for a terminator to end", name)
+	if r.Send == "" && r.SendHex == "" && (r.Terminator != "" || r.AnswerBytes > 0) {
+		return fmt.Errorf("collector %q sets request.starttls and request.%s without request.send or send_hex; with nothing sent the scrape ends with the TLS handshake, and nothing is read after it for it to end", name, tcpEndKey(r))
 	}
 	return nil
 }
@@ -939,6 +939,14 @@ func tcpRead(ctx context.Context, conn io.Reader, address tcpAddress, terminator
 	}
 }
 
+// tcpEndKey is the key that says where the answer ends, for a refusal.
+func tcpEndKey(r TCPConfig) string {
+	if r.AnswerBytes > 0 {
+		return "answer_bytes"
+	}
+	return "terminator"
+}
+
 // tcpSendKey is the key of what a scrape sends, for its errors.
 func tcpSendKey(r TCPConfig) string {
 	if r.SendHex != "" {
@@ -1037,7 +1045,7 @@ func refuseEmptySend(where string, placeholders []pathPlaceholder, rendered stri
 func tcpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
 		"document":     {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, starttls, the protocol, with starttls, connect_seconds, tls_seconds, greeting_seconds, starttls_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
-		"greeting":     {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
+		"greeting":     {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
 		"send":         {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
 		"send_hex":     {"description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols."},
 		"answer_bytes": {"minimum": 0, "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols."},

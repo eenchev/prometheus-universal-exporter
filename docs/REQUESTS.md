@@ -1252,8 +1252,8 @@ answers its status when `pm.status_path` is `/status`. With
 [`unix_socket`](#over-a-unix-socket), such as `/run/php/php-fpm.sock`, the
 request goes to the socket and the URL's host only names it.
 
-- **The request is the collector's**: its URL's path is the script,
-  `SCRIPT_NAME`, and with `document_root` before it its file,
+- **The request is the collector's**: its URL's path, decoded, is the
+  script, `SCRIPT_NAME`, and with `document_root` before it its file,
   `SCRIPT_FILENAME` (the path alone without one); its query is
   `QUERY_STRING`; its method `REQUEST_METHOD`; each header an `HTTP_`
   parameter (`X-Pool` is `HTTP_X_POOL`), `Content-Type` and the body's
@@ -1273,10 +1273,14 @@ request goes to the socket and the URL's host only names it.
   script unknown` for a path it has no script for, is the
   `X-Fastcgi-Stderr` header, its first 4 KiB, which a jq rule reads as
   `$headers["x-fastcgi-stderr"]`.
-- **Plaintext, to the application.** A target is an `http://` URL; the port
-  is the application's FastCGI port, `80` when the URL names none. `https`
-  targets, `tls`, `proxy_url`, `proxy_basic_auth_file` and `login` are
-  refused beside `fastcgi`, and the environment's proxy does not apply.
+- **Plaintext, to the application.** A target is an `http://` URL, or a
+  bare `host:port`, as Prometheus's discovery hands one over, which is read
+  as `http://`; the port is the application's FastCGI port, `80` when the
+  target names none. `https` targets, `tls`, `proxy_url`,
+  `proxy_basic_auth_file` and `login` are refused beside `fastcgi`, and the
+  environment's proxy does not apply. A redirect to an `https://` URL is not
+  followed: it fails the request rather than leave FastCGI for an HTTPS
+  request to the host it names.
   `allowed_targets` and `denied_targets` hold the connection as they hold an
   HTTP request's.
 - **One connection a request.** The application closes the connection once

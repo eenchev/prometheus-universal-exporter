@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/fcgi"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,5 +246,40 @@ func TestFastCGIKeysAreChecked(t *testing.T) {
 		if err := ValidateRequest(&x); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("got %v, want %q", err, c.want)
 		}
+	}
+}
+
+// A bare host:port target, as Prometheus's discovery hands one over, is an
+// http:// one, and a redirect to https:// is not followed, since it would
+// leave FastCGI for an HTTPS request to the host it names; SCRIPT_NAME is
+// the path decoded, as CGI has it.
+func TestFastCGITakesABareTargetAndFollowsNoRedirectToHTTPS(t *testing.T) {
+	c := fastcgiCollector(t, &FastCGIConfig{})
+	if err := CheckTarget(c, "php-fpm:9000", false); err != nil {
+		t.Errorf("a bare host:port: %v", err)
+	}
+	hits := 0
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = io.WriteString(w, "over https")
+	}))
+	t.Cleanup(secure.Close)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := make(chan map[string]string, 1)
+	fcgiApplication(t, ln, params, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, secure.URL+"/x", http.StatusFound)
+	})
+	follows := fastcgiCollector(t, &FastCGIConfig{}, func(c *model.Collector) { c.Request.FollowRedirects = true })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = FetchCollector(ctx, ln.Addr().String()+"/my%20status", follows, RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "redirected to an https:// URL") || hits != 0 {
+		t.Errorf("a redirect to https: %v, %d requests over HTTPS", err, hits)
+	}
+	if env := <-params; env["SCRIPT_FILENAME"] != "/my status" {
+		t.Errorf("SCRIPT_FILENAME is %q, want the path decoded", env["SCRIPT_FILENAME"])
 	}
 }

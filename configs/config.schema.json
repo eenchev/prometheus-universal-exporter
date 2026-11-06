@@ -2499,7 +2499,7 @@
                 ]
               },
               "greeting": {
-                "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send the greeting is the answer, and terminator may not be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
+                "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
                 "type": [
                   "string",
                   "number",
@@ -3949,7 +3949,7 @@
                 "type": "boolean"
               },
               "starttls": {
-                "description": "tcp and tlscert: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. tcp: the handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake; with no send, terminator may not be set. tlscert: the certificates the handshake presents are the document, as on a TLS port, which names the protocol in starttls, and a target without a port is at the protocol's own, 25, 143, 110 or 21; write :587 for SMTP submission. See docs/TCP.md#starttls and docs/TLSCERT.md#starttls.",
+                "description": "tcp and tlscert: smtp, imap, pop3 or ftp: begin TLS on the plaintext connection as that protocol asks for it, after the server's greeting, which is read and must be the protocol's ready greeting (220, * OK, +OK, 220): EHLO and STARTTLS, a1 STARTTLS, STLS or AUTH TLS. A server that does not offer STARTTLS, refuses it or answers otherwise fails the scrape; it never goes on in plaintext. tcp: the handshake takes the tls block's settings, or verifies against the system's roots without one; send is written only over TLS, and without it the scrape ends with the handshake; with neither send nor send_hex, neither terminator nor answer_bytes may be set. tlscert: the certificates the handshake presents are the document, as on a TLS port, which names the protocol in starttls, and a target without a port is at the protocol's own, 25, 143, 110 or 21; write :587 for SMTP submission. See docs/TCP.md#starttls and docs/TLSCERT.md#starttls.",
                 "enum": [
                   "smtp",
                   "imap",

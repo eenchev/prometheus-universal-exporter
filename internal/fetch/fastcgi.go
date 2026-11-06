@@ -140,7 +140,20 @@ func init() {
 	collectorFastCGI = func(c *model.Collector) string { return fastcgiKey(httpRequest(c).FastCGI) }
 	registerFastCGI = func(t *http.Transport, key string, dial func(ctx context.Context, network, address string) (net.Conn, error)) {
 		t.RegisterProtocol("http", &fastcgiTransport{config: parseFastCGIKey(key), dial: dial})
+		// A redirect to https would leave FastCGI for an HTTPS request to
+		// whatever host it names, which the collector never asked to
+		// speak HTTP to: it fails instead.
+		t.RegisterProtocol("https", fastcgiNoHTTPS{})
 	}
+}
+
+// fastcgiNoHTTPS refuses a FastCGI collector's https request, which only
+// a redirect makes, its target being http:// (httpRequester.CheckTarget).
+type fastcgiNoHTTPS struct{}
+
+// RoundTrip refuses req.
+func (fastcgiNoHTTPS) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("the FastCGI application redirected to an https:// URL, of host %s; request.fastcgi speaks FastCGI alone, never HTTPS, so the redirect is not followed", req.URL.Host)
 }
 
 // fastcgiTransport sends a transport's http requests as FastCGI
@@ -258,7 +271,9 @@ func (f *fastcgiTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // Content-Length, which are CONTENT_TYPE and CONTENT_LENGTH; and
 // request.fastcgi.params, each in place of one of the same name.
 func fcgiParamsOf(req *http.Request, f *FastCGIConfig, length int, local, remote net.Addr) [][2]string {
-	script := req.URL.EscapedPath()
+	// The path decoded, as CGI's SCRIPT_NAME is (RFC 3875, 4.1.13): the
+	// script's file is named by it, not by its escapes.
+	script := req.URL.Path
 	if script == "" {
 		script = "/"
 	}

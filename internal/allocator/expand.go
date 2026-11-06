@@ -534,6 +534,8 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 	static := &staticDocument{head: in.static.head, targets: slices.Clone(in.static.targets)}
 	shardKeys := slices.Clone(in.shardKeys)
 	weights := slices.Clone(in.weights)
+	origins := make([]string, len(in.Targets.Targets), len(in.Targets.Targets)+len(candidates))
+	copy(origins, in.origins)
 	index := make(map[string]int, len(targets.Targets)+len(candidates))
 	for name, i := range in.targetIndex {
 		index[name] = i
@@ -567,9 +569,10 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 		}
 		shardKeys = append(shardKeys, key)
 		weights = append(weights, c.weight)
+		origins = append(origins, c.entry.name)
 		if c.fallback != "" {
 			out.fallbacks = append(out.fallbacks, weightFallback{kind: "static", owner: c.entry.name, source: c.source, target: c.name, reason: c.fallback})
 		}
 	}
-	out.Targets, out.static, out.shardKeys, out.targetIndex, out.weights = targets, static, shardKeys, index, weights
+	out.Targets, out.static, out.shardKeys, out.targetIndex, out.weights, out.origins = targets, static, shardKeys, index, weights, origins
 }

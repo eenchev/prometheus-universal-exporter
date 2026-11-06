@@ -114,7 +114,7 @@ func TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine(t *testing.T) 
 		"table.sources td.owner { overflow-wrap: anywhere; min-width: 9em; }", "table.sources td.result { overflow-wrap: anywhere; min-width: 12em; }",
 		"td.id { overflow-wrap: anywhere; min-width: 9em; }",
 		`<td class="id"><strong>pod-files-with-a-very-long-source-name-too</strong><br><span class="muted kind">file_sd</span></td>`,
-		`<td class="owner">`+job+`<br><span class="muted kind">probe job</span></td>`,
+		`<td class="owner"><b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job=`+job+`" title="the targets of the probe job `+job+`">`+job+`</a></td>`,
 		"td.sources span.source { overflow-wrap: anywhere; }")
 	for _, nowrap := range []string{"table.sources td:first-child", "table.sources td:nth-child(2)", "td.sources span.source { white-space: nowrap; }"} {
 		if strings.Contains(page, nowrap) {

@@ -326,7 +326,21 @@ func jobMatch(j JobSpread) string {
 }
 
 var statusFuncs = template.FuncMap{"count": count, "weight": weight, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
-	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
+	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames, "plus": plus, "andList": andList}
+
+// plus is a + b, for a total of two counts.
+func plus(a, b int) int { return a + b }
+
+// andList writes names as prose: "a", "a and b", "a, b and c".
+func andList(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
 // the exporter's status page draws them, numbers right-aligned in figures
@@ -396,6 +410,11 @@ td.bar { width: 32%; min-width: 120px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend b { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
 .legend b.avg { width: 0; height: 14px; border-radius: 0; border-left: 2px solid var(--fg); }
+/* A kind of target's colour, the bars', beside its name wherever the page
+   names it: the definitions, the members table's headings, the sections'
+   headings and what a discovery source feeds. */
+b.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+th.group { text-align: center; border-bottom: 1px solid var(--line); }
 @media (max-width: 640px) { td.bar { min-width: 90px; } }
 /* A sortable table's headings are buttons, marked as the exporter's debug
    page marks its series table's: ↕ for a column not sorted by, ↑ or ↓ for
@@ -833,6 +852,10 @@ const statusContent = `{{define "content"}}
 {{- with .View}}{{if .Shown}}
 
 <h2>Targets</h2>
+<p class="kinds"><b class="swatch seg-static"></b><strong>Static targets</strong> are scraped by the member that owns them, on their own interval, and served on its <code>/static-targets</code>. <b class="swatch seg-probe"></b><strong>Probe targets</strong> are what Prometheus asks this allocator for, <code>/v1/sd/&lt;job&gt;</code>, each pointed at the member that probes it, and Prometheus probes them through that member.</p>
+{{- with $.Spread}}
+<p id="kinds-summary">{{plus .StaticWritten .StaticDiscovered}} static target{{if ne (plus .StaticWritten .StaticDiscovered) 1}}s{{end}}: {{.StaticWritten}} written in the static target file{{if .StaticDiscovered}} and {{.StaticDiscovered}} discovered by {{andList .StaticSources}}{{end}}. {{plus .ProbeListed .ProbeDiscovered}} probe target{{if ne (plus .ProbeListed .ProbeDiscovered) 1}}s{{end}}: {{.ProbeListed}} listed in the probe jobs{{if .ProbeDiscovered}} and {{.ProbeDiscovered}} discovered by {{andList .ProbeSources}}{{end}}.</p>
+{{- end}}
 <p>{{count .Total.Static}} static target{{if ne .Total.Static 1.0}}s{{end}}{{if .Total.Draining}}, {{count .Total.Draining}} draining,{{end}} and {{count .Total.Probe}} probe target{{if ne .Total.Probe 1.0}}s{{end}} over {{len .Members}} member{{if ne (len .Members) 1}}s{{end}}: {{average .Average.Total}} per member on average, the most {{imbalance .Imbalance.Total}} the average. They weigh {{weight .Total.Weight}}{{if .Total.DrainingWeight}}, and those draining {{weight .Total.DrainingWeight}} more on the members that keep them,{{end}} over a capacity of {{weight .Total.Capacity}}: a member's fair share is the weight times its capacity over the capacity of all, and the most loaded holds {{imbalance .Imbalance.Weight}} its fair share. A target goes to the member its hash prefers while that member's weight stays within {{weight $.Spread.BalanceFactor}} times its fair share (<code class="flag">--allocation.balance-factor</code>), and to the next otherwise.</p>
 {{- if $.Spread.Overloaded}}
 <p><span class="bad">{{$.Spread.Overloaded}} member{{if ne $.Spread.Overloaded 1}}s are{{else}} is{{end}} overloaded</span>, {{if ne $.Spread.Overloaded 1}}their weights{{else}}its weight{{end}} marked: above {{weight $.Spread.BalanceFactor}} times {{if ne $.Spread.Overloaded 1}}their fair shares{{else}}its fair share{{end}}, which only a target, or the targets of one shard key, too heavy for the room any member has left puts a member.</p>
@@ -849,7 +872,10 @@ const statusContent = `{{define "content"}}
 {{- end}}
 <div class="scroll">
 <table class="spread">
-<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>
+<thead>
+<tr><th rowspan="2">Member</th><th class="group" colspan="2"><b class="swatch seg-static"></b>Static targets</th><th class="group"><b class="swatch seg-probe"></b>Probe targets</th><th class="num" rowspan="2">Total</th><th class="num" rowspan="2">Weight</th><th class="num" rowspan="2">Draining weight</th><th class="num" rowspan="2">Capacity</th><th class="num" rowspan="2">Fair share</th><th rowspan="2">Share</th></tr>
+<tr><th class="num">Owned</th><th class="num">Draining</th><th class="num">Routed</th></tr>
+</thead>
 <tbody>
 {{- range .Members}}
 <tr>
@@ -879,12 +905,41 @@ const statusContent = `{{define "content"}}
 </tfoot>
 </table>
 </div>
-<p class="legend"><span><b class="seg-static"></b>static, owned</span><span><b class="seg-draining"></b>static, draining</span><span><b class="seg-probe"></b>probe, routed</span><span><b class="avg"></b>the member's fair share</span><span>Bars are weight, and run to the most a member weighs or a fair share comes to.</span></p>
+<p class="legend"><span><b class="seg-static"></b>static targets, owned</span><span><b class="seg-draining"></b>static targets, draining</span><span><b class="seg-probe"></b>probe targets, routed</span><span><b class="avg"></b>the member's fair share</span><span>Bars are weight, and run to the most a member weighs or a fair share comes to.</span></p>
+{{- end}}{{end}}
+{{- with .Spread}}{{if .Static}}
+
+<h2 id="static-targets"><b class="swatch seg-static"></b>Static targets</h2>
+<p>The static targets by where they come from: those the static target file writes, and each <code>discovered_targets</code> entry's. Each row's targets are spread over the member list: Min, Avg and Max count the row's targets a member owns, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> as a probe job's is below.</p>
+<div class="scroll">
+<table class="spread" id="static-origins">
+<thead><tr><th>From</th><th class="num">Targets</th><th class="num">Weight</th><th class="num">Members</th><th class="num">Min</th><th class="num">Avg</th><th class="num">Max</th><th class="num">Imbalance</th><th>Sources</th></tr></thead>
+<tbody>
+{{- range .Static}}
+<tr{{if .Entry}} id="static-entry-{{.Entry}}"{{end}}>
+<td class="id">{{if .Entry}}<strong>{{.Entry}}</strong><br><span class="muted kind">discovered_targets entry</span>{{else}}<strong>written</strong><br><span class="muted kind">in the static target file</span>{{end}}</td>
+<td class="num">{{.Targets}}</td>
+<td class="num">{{weight .Weight}}</td>
+<td class="num">{{len .Members}}</td>
+{{- if .Members}}
+<td class="num">{{.Min}}</td>
+<td class="num">{{average .Average}}</td>
+<td class="num">{{.Max}}</td>
+<td class="num">{{if .Uneven}}<span class="bad" title="Max is further above Avg than hashing puts a member's targets by chance">{{imbalance .Imbalance}}</span>{{else}}{{imbalance .Imbalance}}{{end}}</td>
+{{- else}}
+<td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td>
+{{- end}}
+<td class="sources">{{range $k, $s := .Sources}}{{if $k}}<br>{{end}}<span class="source">{{.Name}} {{template "result" .Result}}</span>{{else}}<span class="muted">written</span>{{end}}</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
 {{- end}}{{end}}
 {{- with .Spread}}{{if .Jobs}}
 
-<h2>Probe jobs</h2>
-<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's Weight is what its targets weigh together, and its targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
+<h2 id="probe-jobs-section"><b class="swatch seg-probe"></b>Probe jobs</h2>
+<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}, their probe targets by job. A job's Weight is what its targets weigh together, and its targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
 <form class="filter jobs" id="jobs" role="search" hidden>
 <label for="jobs-filter">Filter: job, collector or source</label>
 <input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
@@ -923,12 +978,12 @@ const statusContent = `{{define "content"}}
 {{- if .Sources}}
 <div class="scroll">
 <table class="sources">
-<thead><tr><th>Source</th><th>Owner</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
+<thead><tr><th>Source</th><th>Feeds</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
 <tbody>
 {{- range .Sources}}
 <tr>
 <td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted kind">{{.Type}}</span></td>
-<td class="owner">{{.Owner}}<br><span class="muted kind">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
+<td class="owner">{{if eq .Kind "probe"}}<b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job={{.Owner}}" title="the targets of the probe job {{.Owner}}">{{.Owner}}</a>{{else}}<b class="swatch seg-static"></b>static targets<br><span class="muted kind">of the entry</span> <a href="#static-entry-{{.Owner}}" title="the static targets of the discovered_targets entry {{.Owner}}">{{.Owner}}</a>{{end}}</td>
 <td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}{{if .WeightFallbacks}}<br><span class="bad">{{.WeightFallbacks}} weight{{if ne .WeightFallbacks 1}}s{{end}} fell back</span> <span class="muted">on the owner's: their weight label gave no weight</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{interval .RefreshIntervalSeconds}}</td>

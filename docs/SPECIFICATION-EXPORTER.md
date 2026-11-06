@@ -31015,6 +31015,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestATargetsNameLinksItsSeries` (exporter): on the status page a scraped target's name links `../static-targets?targets=ok`, which, followed from the page, serves that target's series and not another's; the target not yet scraped has no link; no row links a debug scrape below `--web.debug=full`, and at it the row of `ok` links `../static-targets?debug=ok`; under `--web.static-targets-path=/static/targets` the link is `../targets?targets=ok`.
 - `TestTheStatusPagesShortColumnsKeepTheirWordsWhole` (exporter), changed: the target's cell begins with the link of its name.
 
+## 34.282 Static and probe targets told apart on the allocator's page
+
+- `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator): one written static target, three a `discovered_targets` entry's source finds, two probe targets a job lists and two its source `sites` finds, over r1 and r2: the spread's JSON counts 1 written and 3 discovered static targets by `file_sd_0` and 2 listed and 2 discovered probe targets by `sites`, and has a static row of the written target with no source and one of the entry `node` with its three targets over both members and its source; the page defines both kinds with their swatches, says `4 static targets: 1 written in the static target file and 3 discovered by file_sd_0. 4 probe targets: 2 listed in the probe jobs and 2 discovered by sites.`, groups the members table's columns under Static targets (Owned, Draining) and Probe targets (Routed), names the legend's segments by kind, has the static targets table with its two rows, the entry's anchored, before the probe jobs table, and a Feeds column linking the job and the entry; a member's view and a job's view mark their target headings with the kind's swatch.
+- `TestTheStatusPageHasAProbeJobsTable`, `TestTheTargetsTableShowsWeightsAndCapacities`, `TestTheJobViewListsItsTargets` and `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), changed: the members table's heading of two rows, the probe jobs heading with its swatch, a job view's *Probe targets*, and the sources table's Feeds cell.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -34162,14 +34167,25 @@ instance)`, `live instances`) and its process's random id its `Instance ID`
 (`ID` beside each peer's address), with each member's capacity in the
 members table, one its heartbeats changed shown as the one in the list, an
 arrow and the new one until it takes effect, the spread's table's columns
-fixed (member, static, draining, probe, total, weight, draining weight,
-capacity, fair share and the bar, never a column per probe job), its weight
+fixed (member, static targets owned and draining under one heading,
+probe targets routed under another, total, weight, draining weight,
+capacity, fair share and the bar, never a column per probe job), the
+section opening with what a static target and a probe target are, each
+with its bar's colour, and how many of each the files write and the
+sources found, the sources named, its legend naming the segments static
+targets, owned and draining, and probe targets, routed, its weight
 the static and probe weight the member is placed by, its draining weight
 apart, its bar drawn in CSS alone of the static, draining and probe weight
 with the member's fair share marked on it, the imbalance of the weight the
 highest load ratio, an overloaded member's weight marked with a sentence
 saying how many are and why, and each heavy unit named, with its shard key,
-weight and member, in a warning above the table; a probe jobs table
+weight and member, in a warning above the table; a static targets table,
+before the probe jobs table, of a row of the targets the static target file
+writes and a row of each `discovered_targets` entry that found any, in file
+order, with its targets, their weight, the members, min, average, max and
+the imbalance of the row's targets each member owns, marked as a job's, and
+the entry's sources, a row of an entry anchored for the sources table's
+link; a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
 their weight, members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its

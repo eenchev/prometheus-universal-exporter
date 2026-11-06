@@ -53,6 +53,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The allocator's status page tells static targets from probe targets: it
+  says what each kind is and how many of each the files write and the
+  sources found, groups the members table's columns under the two kinds in
+  the bars' colours, adds a static targets table, of the written targets
+  and each `discovered_targets` entry, beside the probe jobs table, and
+  says which kind each discovery source feeds
+  ([Status page](docs/ALLOCATOR.md#status-page)).
 - On the status page a scraped static target's name links to its own
   series, `/static-targets?targets=<name>`, and with `--web.debug=full` a
   *debug* link beside it scrapes it once now and reports each stage

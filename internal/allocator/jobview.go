@@ -295,7 +295,7 @@ const jobContent = `{{define "content"}}
 <p class="muted">No member to route the job's probes to yet: the member list has not formed, or no member is live.</p>
 {{- end}}
 
-<h2>Targets <span class="count">{{.Targets.Total}}</span></h2>
+<h2><b class="swatch seg-probe"></b>Probe targets <span class="count">{{.Targets.Total}}</span></h2>
 {{- with .Targets}}{{template "list-note" (listNote .Total .Matching (len .List) $.Filter "job-targets")}}{{end}}
 {{- if .Targets.List}}
 <div class="scroll">

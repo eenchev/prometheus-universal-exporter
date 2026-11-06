@@ -385,7 +385,7 @@ const memberContent = `{{define "content"}}
 {{- end}}
 <p>{{.Static.Total}} static target{{if ne .Static.Total 1}}s{{end}} owned, {{.Draining.Total}} draining and {{.Probes.Total}} probe target{{if ne .Probes.Total 1}}s{{end}} routed to this member.{{if .Filter}} Only those holding “{{.Filter}}” are listed.{{end}}</p>
 
-<h2>Static targets owned <span class="count">{{.Static.Total}}</span></h2>
+<h2><b class="swatch seg-static"></b>Static targets owned <span class="count">{{.Static.Total}}</span></h2>
 {{- with .Static}}{{template "list-note" (listNote .Total .Matching (len .List) $.Filter "owned")}}{{end}}
 {{- if .Static.List}}
 <div class="scroll">
@@ -416,7 +416,7 @@ const memberContent = `{{define "content"}}
 </div>
 {{- end}}
 
-<h2>Probe targets routed <span class="count">{{.Probes.Total}}</span></h2>
+<h2><b class="swatch seg-probe"></b>Probe targets routed <span class="count">{{.Probes.Total}}</span></h2>
 {{- if .Probes.Jobs}}
 <table class="jobs">
 <thead><tr><th>Probe job</th><th>Collector</th><th class="num">Targets</th><th class="num">Weight</th></tr></thead>

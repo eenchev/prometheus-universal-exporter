@@ -1106,15 +1106,26 @@ its instance ID. It shows
   down, its capacity, and the static targets it keeps draining. A capacity
   its heartbeats changed is shown as the one the member list places it by,
   an arrow and the new one, until it has held for `--settle`;
-- how the targets are spread: for each member, the static targets it owns,
-  those it keeps draining, the probe targets service discovery routes to it
-  and the total; its weight, what the static targets it owns and the
+- how the targets are spread. Two sentences open it: what the two kinds
+  of target are — a *static target* is scraped by the member that owns it,
+  on its own interval, and served on that member's `/static-targets`; a
+  *probe target* is what Prometheus asks the allocator for
+  (`/v1/sd/<job>`), pointed at a member, and probes through it — each
+  with its colour, the bars' (orange and blue); and how many of each there
+  are, by where they come from: `27 static targets: 3 written in the
+  static target file and 24 discovered by services. 25 probe targets: 3
+  listed in the probe jobs and 22 discovered by sites.` Then, for each
+  member, under the heading *Static targets*, the static targets it owns
+  and those it keeps draining, under *Probe targets* the probe targets
+  service discovery routes to it, and the total; its weight, what the static targets it owns and the
   probes routed to it weigh, the weight it is placed by; the weight of
   the targets it keeps draining, apart, since they weigh on their new
   owners; its capacity and its fair share, the weight times its capacity
   over the capacity of all ([Weights and capacity](#weights-and-capacity));
   and a bar of its weight, a segment each of the static, the draining and
-  the probe weight, with its fair share marked on it. Then the totals, the
+  the probe weight, with its fair share marked on it; the legend under it
+  names them *static targets, owned*, *static targets, draining* and *probe
+  targets, routed*. Then the totals, the
   average per member and the imbalance, the most any member has divided by
   the average, `1.00×` for targets spread evenly, and for the weight the
   most any member holds of its fair share, which for members of one
@@ -1126,7 +1137,13 @@ its instance ID. It shows
   the member of the largest capacity, a target or the targets of one shard
   key, is named in a warning above the table with its weight and its
   member. The columns stay these whatever the number of probe jobs;
-- the probe jobs, a row each: the job, which links to its view
+- the static targets by where they come from, under the heading *Static
+  targets*: a row of those the static target file writes, and one of each
+  `discovered_targets` entry, in file order, with its targets, what they
+  weigh together, the members of the member list, the fewest, the average
+  and the most of the row's targets a member owns, the imbalance, marked as
+  a probe job's is below, and its discovery sources with their result;
+- the probe jobs, under the heading *Probe jobs*, a row each: the job, which links to its view
   ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
   targets, what they weigh together, the members it is routed among, the fewest, the average and the
   most targets of the job a member of them has, the imbalance, the most
@@ -1152,7 +1169,10 @@ its instance ID. It shows
   whose name, collector and sources' names do not hold its text, in any
   case; a refresh keeps the order, the filter and the caret. Without
   JavaScript the headings are plain, as nothing sorts the table then;
-- the discovery sources: each one's kind, owner, result, with the error
+- the discovery sources: each one's kind; what it feeds, *probe targets of
+  the job* and the job, linked to its view, or *static targets of the
+  entry* and the `discovered_targets` entry, linked to its row in the
+  static targets table, each with its kind's colour; its result, with the error
   while it fails and how many of its targets' weights fell back on their
   owner's, their `weight_label` giving none, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
@@ -1209,7 +1229,13 @@ lightest unit, or by a unit alone (`pue_allocator_overloaded_members`); `total`,
 `jobs`, in file order, each with `job`, `collector`, `targets`, `weight`,
 `members`, the members it is routed among by id, each with its `member`,
 `targets` and `weight`, `min`, `average`, `max`, `imbalance`, `uneven`, the
-mark above, and `sources`, each with its `name`, `type` and `result`); and
+mark above, and `sources`, each with its `name`, `type` and `result`;
+`static`, the static targets by origin, each with `entry`, `""` for those
+the file writes, `targets`, `weight`, `members`, `min`, `average`, `max`,
+`imbalance`, `uneven` and `sources`, as a job's; and `static_written`,
+`static_discovered` and `static_sources`, `probe_listed`,
+`probe_discovered` and `probe_sources`, the counts and the names of the
+sources of the summary above the table); and
 `sources` (`name`, `kind`, `owner`, `type`, `result`, `ok`, `failing` or
 `pending`, `error`, `targets`, `refresh_interval_seconds`, `last_refresh`,
 `last_success`, `from`, `own` or `snapshot`, and `weight_fallbacks`, its

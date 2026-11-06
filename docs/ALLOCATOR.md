@@ -888,7 +888,10 @@ share of the member of the largest capacity, the total over the members
 when the capacities are alike, fills the member it goes to whatever the
 others hold: it is logged once while it stays so, listed in the status's
 `heavy`, and its member is counted in `pue_allocator_overloaded_members`
-when it goes past its bound. Split such a unit, by a `shard_key` of its
+when it goes past its bound. A member past its bound by less than its
+lightest unit is not: the bounds are rounded down and the units are whole,
+so at a balance factor near 1 some member is usually a unit over its own,
+which is the placement working, not a unit too heavy. Split such a unit, by a `shard_key` of its
 own for each target, or give it a weight nearer the others'.
 
 **Stability.** The bound is what keeps the load even, and what costs a
@@ -1113,8 +1116,10 @@ its instance ID. It shows
   average per member and the imbalance, the most any member has divided by
   the average, `1.00×` for targets spread evenly, and for the weight the
   most any member holds of its fair share, which for members of one
-  capacity is the same. The weight of a member overloaded, above the
-  balance factor times its fair share, is marked, and a sentence above the
+  capacity is the same. The weight of a member overloaded is marked:
+  above the balance factor times its fair share by more than whole units
+  explain, still above it without its lightest unit, or filled alone by a
+  unit above it; and a sentence above the
   table says how many are and why; a unit heavier than the fair share of
   the member of the largest capacity, a target or the targets of one shard
   key, is named in a warning above the table with its weight and its
@@ -1192,7 +1197,8 @@ out for a member not in it); `spread` (`members`, each with its `member`,
 `static`, `draining`, `probe` and `total`, its `capacity`, its `weight`,
 with `static`, `draining`, `probe` and `total`, its `fair_share` of the
 static and probe weight, its `load_ratio`, that weight over the fair share,
-and `overloaded`, above `balance_factor` times it; `total`, `average` and
+and `overloaded`, above `balance_factor` times it by more than its
+lightest unit, or by a unit alone (`pue_allocator_overloaded_members`); `total`, `average` and
 `imbalance`, each with `static`, `draining`, `probe` and `total`;
 `total_weight` likewise, `capacity`, the members' together,
 `balance_factor`, `max_load_ratio`, `overloaded`, the members that are, and
@@ -1330,7 +1336,7 @@ follower serves no job's view: the page names the leader, and the JSON is
 | `pue_allocator_assigned_weight{member,kind}` | gauge | The weight of what `pue_allocator_assigned` counts: a static target that moved weighs on its new owner, not on the member that keeps it draining ([Weights and capacity](#weights-and-capacity)). |
 | `pue_allocator_member_capacity{member}` | gauge | The capacity each member is placed by: its capacity in the member list, or, for a live member outside it that a probe is routed to, its last heartbeat's. |
 | `pue_allocator_member_load_ratio{member}` | gauge | Each member's static and probe weight over its fair share, the members' weight times its capacity over theirs: `1` for weight in proportion to capacity. |
-| `pue_allocator_overloaded_members` | gauge | Members whose weight is above `--allocation.balance-factor` times their fair share, which only a unit too heavy for any member's room puts them. |
+| `pue_allocator_overloaded_members` | gauge | Members whose weight is above `--allocation.balance-factor` times their fair share because a unit is too heavy for any member's room: still above it without their lightest unit, or filled by a unit above it alone. A member above it by less than a unit, as whole units leave some at a balance factor near 1, is not counted. |
 | `pue_allocator_weight_label_fallbacks_total{kind,owner,reason}` | counter | Discovered targets whose owner's `weight_label` gave no weight, which took the owner's weight instead, counted as each begins to fall back, by `reason`: `missing`, `not_a_number`, `out_of_range` or `too_many_decimals`. |
 | `pue_allocator_targets_per_member{kind}` | gauge | Those allocated to the members, by `kind`, divided by the number of members: what each replica has on average; `0` with no member. |
 | `pue_allocator_generation_info{member,generation}` | gauge | `1`, with the generation of each member's bundle. |

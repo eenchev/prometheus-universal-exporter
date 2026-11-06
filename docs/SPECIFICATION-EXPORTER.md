@@ -30840,6 +30840,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestStaticAndProbeTargetsShareTheMembersLoad` (allocator): 40 static targets of weights 1 to 5 and 40 probes of weight 2 over 3 members give a spread of static weight 120, probe weight 80 and capacity 3; each member's static and probe weight is within 1.25 times its fair share of 66.67, with its load ratio, not overloaded, and `/metrics` gives each member's `pue_allocator_assigned_weight` by kind, `pue_allocator_member_capacity` 1 and `pue_allocator_member_load_ratio`, and `pue_allocator_overloaded_members` 0.
 - `TestAShardKeyGroupStaysTogether` (allocator): 30 static targets of six shard keys and weights 1 to 4 over 4 members have every target of a key in one member's share.
 - `TestAHeavyUnitIsLoggedOnceAndShown` (allocator): a target of weight 50 among 10 of weight 1 and 2 probes is logged once across a member joining, listed in `spread.heavy` with its shard key, weight and member, in that member's share, and the member is the one overloaded, its load ratio above 1.25.
+- `TestAMemberAWholeUnitPutsOverItsBoundIsNotOverloaded` (allocator): 3 targets of weight 1 over 2 members at the default balance factor and 11 over 2 at a balance factor of 1 leave a member a unit over its bound and count no member overloaded, in the status, its members or `pue_allocator_overloaded_members`; a target of weight 5 among four of weight 1 over 2 members at a balance factor of 1 counts one.
 - `TestADrainingTargetWeighsOnItsNewOwner` (allocator): after a third member joins, it owns weight and drains none; the draining weight is the spread's `total_weight.draining` and above 0, the static weight stays 60, and each old member's static weight is the weight of what its view lists as owned, each with its weight.
 - `TestAHeartbeatsCapacity` (allocator): a heartbeat's capacity of 1000, 0.001, -5, 0, 2.5 and 1.0004 is shown as 100, 0.1, 0.1, 1, 2.5 and 1; a member's capacity changed to 3 moves nothing before `--settle` and then gives it about three times the weight of a member of capacity 1, its `capacity_in_list` 3.
 - `TestTheBalanceFactorIsInTheGeneration` (allocator): two instances of the same inputs and capacities, heartbeats heard in other orders, serve the same generations; a factor of 10 serves other generations, a factor of 2 adds `allocation.yaml` saying `balance_factor: 2` to a bundle the replica loads, and the default adds none.
@@ -34093,7 +34094,12 @@ members, by kind, divided by the number of members; `0` with no member),
 alone), `pue_allocator_member_capacity{member}`,
 `pue_allocator_member_load_ratio{member}` (a member's static and probe
 weight over its fair share), `pue_allocator_overloaded_members` (the members
-whose weight is above the balance factor times their fair share),
+whose weight is above the balance factor times their fair share because a
+unit is too heavy for any member's room: still above it without their
+lightest unit, or filled by one unit above it alone; a member above it by
+less than its lightest unit, as whole units and bounds rounded down leave
+one at a balance factor near 1, MUST NOT be counted, nor marked overloaded
+in the status or on the status page),
 `pue_allocator_weight_label_fallbacks_total{kind,owner,reason}`,
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,

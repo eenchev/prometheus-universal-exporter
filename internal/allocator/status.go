@@ -532,6 +532,11 @@ type memberLoad struct {
 	staticWeight, drainingWeight, probeWeight int64
 	capacity, fair                            int64
 	overloaded                                bool
+	// units are the weights of the units it holds, owned or routed to
+	// it, by shard key: what tells a member over its bound by more than
+	// whole units explain (overloaded) from one that holds a unit too
+	// heavy for any member's room.
+	units map[string]int64
 }
 
 // loads are every member's memberLoad, by name, and the names in order:
@@ -552,7 +557,7 @@ func (a *Allocator) loadsLocked() loads {
 	row := func(name string) *memberLoad {
 		r := out.rows[name]
 		if r == nil {
-			r = &memberLoad{capacity: plan.capOf[name]}
+			r = &memberLoad{capacity: plan.capOf[name], units: map[string]int64{}}
 			if _, in := plan.capOf[name]; !in {
 				if m := a.members[name]; m != nil {
 					r.capacity = m.capacity
@@ -573,6 +578,7 @@ func (a *Allocator) loadsLocked() loads {
 			r := row(plan.owner[in.shardKeys[i]])
 			r.static++
 			r.staticWeight += in.staticWeight(i)
+			r.units[in.shardKeys[i]] += in.staticWeight(i)
 		}
 		for key := range a.draining {
 			r := row(key.member)
@@ -585,7 +591,7 @@ func (a *Allocator) loadsLocked() loads {
 	if in != nil && in.Probes != nil {
 		for i := range in.Probes.Jobs {
 			j := &in.Probes.Jobs[i]
-			js, _, weights := a.jobSpreadLocked(j)
+			js, owners, weights := a.jobSpreadLocked(j)
 			// A job's targets count towards the members' rows once the
 			// member list has formed, as the static targets do.
 			if len(a.effective) > 0 {
@@ -593,6 +599,11 @@ func (a *Allocator) loadsLocked() loads {
 					r := row(m.Member)
 					r.probe += m.Targets
 					r.probeWeight += weights[m.Member]
+				}
+				for _, target := range j.Targets {
+					if owner := owners[target]; owner != "" {
+						row(owner).units[shardKeyOf(j, target)] += j.weightOfTarget(target)
+					}
 				}
 			}
 			out.jobs = append(out.jobs, js)
@@ -614,7 +625,7 @@ func (a *Allocator) loadsLocked() loads {
 	for _, name := range out.names {
 		r := out.rows[name]
 		r.fair = fairShare(total, r.capacity, capacity)
-		r.overloaded = r.staticWeight+r.probeWeight > bounds[name]
+		r.overloaded = isOverloaded(r.staticWeight+r.probeWeight, bounds[name], r.units)
 	}
 	return out
 }
@@ -829,4 +840,27 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 	fmt.Fprintf(b, "pue_allocator_snapshot_age_seconds %s\n", strconv.FormatFloat(st.SnapshotAgeSeconds, 'f', -1, 64))
 	family("pue_allocator_peer_failures_total", "counter", "Requests to the peers that failed, by request: check, a peer's liveness, or snapshot, a follower's fetch of the leader's discovered targets.")
 	fmt.Fprintf(b, "pue_allocator_peer_failures_total{request=\"check\"} %d\npue_allocator_peer_failures_total{request=\"snapshot\"} %d\n", st.CheckFailures, st.SnapshotFailures)
+}
+
+// isOverloaded reports whether a member of load, holding units, is over its
+// bound because a unit is too heavy for the room any member has left, not
+// because the weight comes in whole units: a member a unit too heavy for any
+// member fills alone, or one still over its bound without its lightest unit.
+// A bound is rounded down and units are whole, so the members' bounds add up
+// to less than the weight at a balance factor of 1, and a member a little
+// over its own, by less than a unit, is the placement working.
+func isOverloaded(load, bound int64, units map[string]int64) bool {
+	if load <= bound {
+		return false
+	}
+	if len(units) <= 1 {
+		return true
+	}
+	lightest := int64(-1)
+	for _, w := range units {
+		if lightest < 0 || w < lightest {
+			lightest = w
+		}
+	}
+	return load-lightest > bound
 }

@@ -355,6 +355,36 @@ func TestAHeavyUnitIsLoggedOnceAndShown(t *testing.T) {
 	}
 }
 
+// A member a whole unit puts a little over its bound is not overloaded:
+// 3 targets of weight 1 over 2 members at the default balance factor, a
+// bound of 1.875 each, and 11 over 2 at a balance factor of 1, a bound of
+// 5.5, leave one member a unit over it, which is the placement working. A
+// target of weight 5 among four of 1 at a balance factor of 1, too heavy
+// for the bound of 4 of either member, overloads the member it is on.
+func TestAMemberAWholeUnitPutsOverItsBoundIsNotOverloaded(t *testing.T) {
+	for _, c := range []struct {
+		static     string
+		factor     float64
+		overloaded int
+	}{
+		{staticTargets(3), 0, 0},
+		{staticTargets(11), 1, 0},
+		{"interval: 30s\ntargets:\n  - {name: five, collector: demo, target: http://five.example, weight: 5}\n" + strings.TrimPrefix(staticTargets(4), "interval: 30s\nconcurrency: 4\ntargets:\n"), 1, 1},
+	} {
+		a, _ := settledAllocatorWith(t, mustLoad(t, writeInputs(t, testConfig, c.static, "")), Options{BalanceFactor: c.factor}, "r1", "r2")
+		st := statusOf(t, a.Handler(""), "").Spread
+		marked := 0
+		for _, m := range st.Members {
+			if m.Overloaded {
+				marked++
+			}
+		}
+		if st.Overloaded != c.overloaded || marked != c.overloaded || !strings.Contains(metricsOf(t, a), fmt.Sprintf("pue_allocator_overloaded_members %d\n", c.overloaded)) {
+			t.Errorf("%d targets at the balance factor %v: %d overloaded, %d marked, want %d (spread %+v)", len(a.inputs.Targets.Targets), c.factor, st.Overloaded, marked, c.overloaded, st.Members)
+		}
+	}
+}
+
 // A static target that moves to a member that joins weighs on its new
 // owner, and on the member that keeps it draining only as draining.
 func TestADrainingTargetWeighsOnItsNewOwner(t *testing.T) {

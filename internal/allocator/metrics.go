@@ -75,7 +75,7 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 		}
 		fmt.Fprintf(&b, "pue_allocator_member_load_ratio{member=\"%s\"} %s\n", escape(name), strconv.FormatFloat(ratio, 'g', -1, 64))
 	}
-	family("pue_allocator_overloaded_members", "gauge", "Members whose static and probe weight is above --allocation.balance-factor times their fair share: a target, or the targets of one shard key, weigh too much for any member's room.")
+	family("pue_allocator_overloaded_members", "gauge", "Members whose static and probe weight is above --allocation.balance-factor times their fair share because a target, or the targets of one shard key, weigh too much for any member's room: still above it without their lightest unit, or filled by one unit above it alone.")
 	fmt.Fprintf(&b, "pue_allocator_overloaded_members %d\n", overloaded)
 
 	// The average is what one more member would take off each: the figure to

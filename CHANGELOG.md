@@ -72,7 +72,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   ([Weights and capacity](docs/ALLOCATOR.md#weights-and-capacity)).
 - The allocator's `/metrics` has `pue_allocator_assigned_weight`,
   `pue_allocator_member_capacity`, `pue_allocator_member_load_ratio` and
-  `pue_allocator_overloaded_members`, and `/v1/status` each member's
+  `pue_allocator_overloaded_members`, the members a unit too heavy for
+  any member's room puts over their bound, not those a whole unit puts a
+  little over it, and `/v1/status` each member's
   capacity, weight, fair share and load ratio, each job's and target's
   weight, and the units heavier than a fair share, which are also logged
   once ([Metrics](docs/ALLOCATOR.md#metrics)).

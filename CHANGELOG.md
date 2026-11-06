@@ -76,6 +76,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   capacity, weight, fair share and load ratio, each job's and target's
   weight, and the units heavier than a fair share, which are also logged
   once ([Metrics](docs/ALLOCATOR.md#metrics)).
+- The allocator's status page shows each member's capacity, and in the
+  Targets table its weight, the weight it keeps draining, its fair share
+  and a bar of its weight with its fair share marked, the overloaded
+  members marked and the units heavier than a fair share named in a
+  warning; the probe jobs table, a member's view and a job's view give each
+  job's and each target's weight, and the discovery sources table how many
+  weights fell back ([Status page](docs/ALLOCATOR.md#status-page)).
 
 - `request.ip_family` on an `http` or `graphite` collector chooses the
   address family its requests connect over, as blackbox_exporter's

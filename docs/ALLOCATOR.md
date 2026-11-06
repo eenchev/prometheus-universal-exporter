@@ -1098,16 +1098,30 @@ its instance ID. It shows
   overdue, more than one and a half intervals after the last,
   the bundle it has in force beside the one it is to have, a refusal it
   reports, whether it is in the member list, joining, silent or shutting
-  down, and the static targets it keeps draining;
+  down, its capacity, and the static targets it keeps draining. A capacity
+  its heartbeats changed is shown as the one the member list places it by,
+  an arrow and the new one, until it has held for `--settle`;
 - how the targets are spread: for each member, the static targets it owns,
   those it keeps draining, the probe targets service discovery routes to it
-  and the total, with a bar of each; then the totals, the average per member
-  and the imbalance, the most any member has divided by the average, `1.00×`
-  for targets spread evenly. The columns stay these whatever the number of
-  probe jobs;
+  and the total; its weight, what the static targets it owns and the
+  probes routed to it weigh, the weight it is placed by; the weight of
+  the targets it keeps draining, apart, since they weigh on their new
+  owners; its capacity and its fair share, the weight times its capacity
+  over the capacity of all ([Weights and capacity](#weights-and-capacity));
+  and a bar of its weight, a segment each of the static, the draining and
+  the probe weight, with its fair share marked on it. Then the totals, the
+  average per member and the imbalance, the most any member has divided by
+  the average, `1.00×` for targets spread evenly, and for the weight the
+  most any member holds of its fair share, which for members of one
+  capacity is the same. The weight of a member overloaded, above the
+  balance factor times its fair share, is marked, and a sentence above the
+  table says how many are and why; a unit heavier than the fair share of
+  the member of the largest capacity, a target or the targets of one shard
+  key, is named in a warning above the table with its weight and its
+  member. The columns stay these whatever the number of probe jobs;
 - the probe jobs, a row each: the job, which links to its view
   ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
-  targets, the members it is routed among, the fewest, the average and the
+  targets, what they weigh together, the members it is routed among, the fewest, the average and the
   most targets of the job a member of them has, the imbalance, the most
   divided by the average, and its discovery sources with their result, or
   `listed` for a job whose file lists every target. The members a job is
@@ -1132,7 +1146,8 @@ its instance ID. It shows
   case; a refresh keeps the order, the filter and the caret. Without
   JavaScript the headings are plain, as nothing sorts the table then;
 - the discovery sources: each one's kind, owner, result, with the error
-  while it fails, its targets, how often it is asked (its
+  while it fails and how many of its targets' weights fell back on their
+  owner's, their `weight_label` giving none, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
   and whether what
   it holds is this instance's own discovery or the leader's snapshot. A
@@ -1206,14 +1221,15 @@ the first visit: give any user name, and the token as the password
 A member's id in the members and in the spread links to its view,
 `GET /?member=<id>`: what that one exporter replica has, to answer "which
 targets does this pod scrape?" without reading its bundle. It shows the
-member as the members do, then
+member as the members do, its capacity among them, then
 
 - the static targets it owns, by name, each with its target, collector,
-  labels and interval;
+  labels, interval and weight;
 - the static targets it keeps draining, each with the member it moved to,
-  which links to that member's view, and how much longer it drains;
-- the probe targets service discovery routes to it, counted by probe job,
-  then each with its job and collector.
+  which links to that member's view, how much longer it drains and its
+  weight;
+- the probe targets service discovery routes to it, counted and weighed by
+  probe job, then each with its job, collector and weight.
 
 The counts are the spread's for the member. A target is shown as the
 exporter's pages show it, its credentials withheld: a URL's user and
@@ -1239,7 +1255,7 @@ same as JSON: `generated_at`, `member`, `filter`, `limit` (1000),
 `static` and `draining` (`total`, `matching` and `list`, each with `name`,
 `collector`, `target`, `labels`, `interval`, `weight`, and while draining
 `moved_to` and `drains_for_seconds`), and `probes` (`jobs`, each with `job`,
-`collector` and `targets`; `total`, `matching` and `list`, each with `job`,
+`collector`, `targets` and `weight`; `total`, `matching` and `list`, each with `job`,
 `collector`, `target` and `weight`). A member the allocator does not know is
 answered `404` as JSON, and the page, and its fragment, say so with `200`,
 so a view left open, refreshing itself, of a member that has gone shows
@@ -1256,17 +1272,19 @@ A probe job's name in the probe jobs table links to its view,
 `GET /?job=<name>`: where that job's targets go, to answer "which pod probes
 this site?" without asking service discovery. It shows
 
-- the job: its collector, its targets, listed and discovered, its shard
-  key, its labels, a label written `""` left out, its params, and its
+- the job: its collector, its targets, listed and discovered, their
+  weight together with the job's weight, or its `weight_label` and the
+  weight a target falls back on, its shard key, its labels, a label written `""` left out, its params, and its
   discovery sources, each with its kind, result and how often it is asked,
   and its error, on a line of its own, while it fails, or none;
 - the members it is routed among, each linking to its view, with the
-  targets of the job it has and a bar of them, the most first, the fewest
+  targets of the job it has, their weight and a bar of them, the most first, the fewest
   to the most and the average above them, the imbalance marked as in the
   probe jobs table;
 - its targets, by target, each with the member service discovery routes
-  it to, which links to that member's view, and the labels its discovery
-  source gave it, but those the job's own labels set or take away.
+  it to, which links to that member's view, the labels its discovery
+  source gave it, but those the job's own labels set or take away, and its
+  weight.
 
 A discovered target's source labels, those whose names start with `__`,
 such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
@@ -1291,7 +1309,8 @@ target, its member and its labels shown as `name=value`. Its bar's JSON
 link is `GET /v1/status?job=<name>`, the same as JSON, with every label of
 a target, its source labels included, which its `?filter=` matches: `generated_at`, `job`,
 `filter`, `limit` (1000), `partial`, `leader`, `spread` (the job as
-`spread.jobs` has it, its `members` the most first), `shard_key`, `labels`,
+`spread.jobs` has it, its `members` the most first), `shard_key`,
+`job_weight` and `weight_label`, `labels`,
 `params`, `sources` (as the status's `sources` have them) and `targets`
 (`total`, `matching` and `list`, each with `target`, `member`, `labels` and
 `weight`). A job the probe targets file does not have is answered `404` as

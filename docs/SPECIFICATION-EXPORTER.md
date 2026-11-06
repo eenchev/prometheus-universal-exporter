@@ -30858,6 +30858,9 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheAllocatorsSchemasDeclareTheDecodersKeys` (test/repository), changed: the probe targets file has `default_weight` beside `probe_jobs`, and an entry `weight` and `weight_label`; `TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses`, extended: weights of 0, over 1000 or of text, a `weight_label` that is no label name and a `default_weight` of 0 or -1 are refused by both schemas, the weights of every place are taken, and the exporter's static target schema refuses `weight`.
 - `TestChartSetsTheAllocatorCapacity` (chart, test/repository): `server.allocatorCapacity` of 2, 0.1, 100, 1.25 and `"2.5"` renders `--allocator.capacity` with it beside `allocator.enabled`, empty, null and unset render none; set without `allocator.enabled`, of 0.05, 100.5, 1.0001 or a word, and `--allocator.capacity` in `extraArgs`, fail rendering naming `server.allocatorCapacity`, with the values schema and with it skipped.
 - `TestChartProbeJobsTakeWeights` (chart, test/repository): a probe job's `weight` and `weight_label` reach the probe targets file as written, and a weight of 0 fails rendering; `TestChartProbeJobKeysAreTheAllocatorsKeys`, extended by the keys.
+- `TestTheTargetsTableShowsWeightsAndCapacities` (allocator): a target of weight 50, 10 of weight 1 and two probes of weight 2 over r1 of capacity 2, r2 and r3: the Targets table's heading is Member, Static, Draining, Probe, Total, Weight, Draining weight, Capacity, Fair share and Share, the Members table has Capacity before Draining, r1's 2; the page says the weight 64 over a capacity of 4 and the highest load ratio, the balance factor 1.25, one member overloaded and why, and warns of the unit `big`, weighing 50, on its member, against the fair share 32.0; each member's row has its weight, marked when overloaded, its draining weight, capacity and fair share, its bar's static segment as wide as its static weight of the most a member weighs or a fair share comes to, and its fair share marked; the total row adds them up and the imbalance row's weight is the highest load ratio; a capacity heartbeated as 3 before `--settle` shows `1 → 3`.
+- `TestTheViewsShowEachTargetsWeight` (allocator): a member's view has Capacity among its facts and a Weight column, right-aligned, in its owned, draining and probe tables (`big` weighing 50), and its probe jobs table the weight of each job's targets (`probes.jobs[].weight`, 2 a target); the status page's probe jobs table has Weight after Targets (4 for two targets of 2); a job's view says its weight, 4 (2 a target), has a Weight column in its members' table and its targets', and gives `job_weight` 2 and no `weight_label`.
+- `TestTheSourcesTableShowsTheWeightsThatFellBack` (allocator): two sources whose owners' `weight_label` gave two of three targets no weight each say `2 weights fell back` beside their result, and the job's view says its weight, 8, and that each target's comes from `__meta_pue_weight`, else the job's 0.5.
 
 ## 42.1 OTLP export
 
@@ -33975,7 +33978,8 @@ or more standard deviations of a member's count, √(targets × (1 −
 marked, and its discovery sources with their result; and every
 discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
-`pending`), targets, the interval it is asked at
+`pending`), the targets whose weight fell back on their owner's
+(`weight_fallbacks`), which the page MUST show beside the result, targets, the interval it is asked at
 (`refresh_interval_seconds`: its `refresh_interval`, else
 `--discovery.refresh-interval`, else its kind's default; for a source whose
 targets a follower took from the leader's snapshot, the leader's interval of
@@ -33991,11 +33995,19 @@ Allocator`, with the theme picker, the logo as its icon, the same
 no-store`), every value escaped, calling each allocator process an instance
 and never a copy (`This instance`, the peers' `Instance` column, `(this
 instance)`, `live instances`) and its process's random id its `Instance ID`
-(`ID` beside each peer's address), with a bar of each member's targets drawn
-in CSS alone, the members' table's columns fixed (member, static, draining,
-probe, total and the bar, never a column per probe job), a probe jobs table
+(`ID` beside each peer's address), with each member's capacity in the
+members table, one its heartbeats changed shown as the one in the list, an
+arrow and the new one until it takes effect, the spread's table's columns
+fixed (member, static, draining, probe, total, weight, draining weight,
+capacity, fair share and the bar, never a column per probe job), its weight
+the static and probe weight the member is placed by, its draining weight
+apart, its bar drawn in CSS alone of the static, draining and probe weight
+with the member's fair share marked on it, the imbalance of the weight the
+highest load ratio, an overloaded member's weight marked with a sentence
+saying how many are and why, and each heavy unit named, with its shard key,
+weight and member, in a warning above the table; a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
-members, min, average, max, the imbalance, marked where uneven, and the
+their weight, members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its
 heading and the other way at a second, numbers by value, text with the
 numbers in it by theirs and in any case (`job2` before `job10`), and ties in
@@ -34010,10 +34022,12 @@ in the members and in the spread MUST link to its view, `GET /?member=<id>`,
 framed as the page is, with a link back to it and refreshed as it is: the
 member as the members have it; the static targets it owns as
 `pue_allocator_assigned` counts them, by name, with collector, target,
-labels (one written `""` left out) and interval; those it keeps draining
-with the member each moved to and how much longer it drains; and the probe
-targets routed to it, counted by job and listed with job and collector, in
-file order of the jobs and by target. A target MUST be shown as
+labels (one written `""` left out), interval and weight; those it keeps
+draining with the member each moved to, how much longer it drains and its
+weight; and the probe targets routed to it, counted and weighed by job and
+listed with job, collector and weight, in file order of the jobs and by
+target; each weight in a column of its own, right-aligned, and the member's
+capacity among its facts. A target MUST be shown as
 `fetch.DisplayTarget` shows it for its collector, credentials withheld, and
 a static target's `params` and `request` MUST NOT be shown. `?filter=<text>`
 MUST cut each list to the targets whose name, target, collector, a label as
@@ -34036,16 +34050,17 @@ under `--peers.leader-only` MUST NOT serve a member's targets: its view
 names the leader and its JSON is `partial`, with the leader's address. A
 member's view MUST link each probe job's name to the job's view. Each probe
 job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
-member's view is: the job's collector, targets, shard key, labels (one
+member's view is: the job's collector, targets, their weight with the job's
+weight or its `weight_label` (`job_weight`, `weight_label`), shard key, labels (one
 written `""` left out), params, a param whose name reads as a credential's
 (`fetch.CredentialName`) as `<redacted>` and any other through
 `fetch.RedactText`, and discovery sources with their result and refresh
 interval, a failing one's error on a line of its own; the members it
 is routed among, linked to their views, with the targets of the job each
-has, as the spread counts them, and a bar, the most first; and its targets
-by target, each shown as `fetch.DisplayTarget` shows it, with the member
-`SD` routes it to, linked, and the labels its source gave it but those the
-job sets or takes away. The page MUST leave out a target's source labels,
+has, as the spread counts them, their weight and a bar, the most first; and
+its targets by target, each shown as `fetch.DisplayTarget` shows it, with
+the member `SD` routes it to, linked, the labels its source gave it but
+those the job sets or takes away, and its weight, right-aligned. The page MUST leave out a target's source labels,
 those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
 them; a job with discovery sources MUST have a *Show source labels* box by
 its filter that puts `?meta=1` in the URL, or takes it out, and refreshes

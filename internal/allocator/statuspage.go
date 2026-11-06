@@ -181,20 +181,31 @@ type statusPage struct {
 
 // spreadView is the spread as the table shows it: a row of each member,
 // with its bar, and rows of the total, the average and the imbalance. The
-// probe jobs have a table of their own, a row each.
+// probe jobs have a table of their own, a row each. FairShareMost is the
+// fair share of the member of the largest capacity, which a heavy unit
+// weighs more than.
 type spreadView struct {
 	Members                   []spreadRow
 	Total, Average, Imbalance spreadRow
-	// AveragePct is where the average total falls on the bars, which run
-	// from 0 to the largest total of a member.
-	AveragePct float64
-	Shown      bool
+	FairShareMost             float64
+	Shown                     bool
 }
 
+// spreadRow is a member's row, or the total's, the average's or the
+// imbalance's: its targets, and their weight. Weight is what it owns and
+// has routed, the weight it is placed by, and DrainingWeight what it keeps
+// draining, which weighs on the targets' new owners. The bar runs on the
+// weight, StaticPct, DrainingPct and ProbePct its segments' widths and
+// FairPct where the member's fair share falls, from 0 to the most a
+// member weighs or a fair share comes to.
 type spreadRow struct {
 	Member                              string
 	Static, Draining, Probe, Total      float64
+	Capacity, Weight, DrainingWeight    float64
+	FairShare                           float64
+	Overloaded                          bool
 	StaticPct, DrainingPct, ProbePct    float64
+	FairPct                             float64
 	StaticText, DrainingText, ProbeText string
 }
 
@@ -207,7 +218,8 @@ func statusPageOf(s Status) statusPage {
 	v := spreadView{Shown: len(sp.Members) > 0}
 	most := 0.0
 	for _, m := range sp.Members {
-		most = max(most, m.Total)
+		most = max(most, m.Weight.Total, m.FairShare)
+		v.FairShareMost = max(v.FairShareMost, m.FairShare)
 	}
 	pct := func(n float64) float64 {
 		if most == 0 {
@@ -215,21 +227,36 @@ func statusPageOf(s Status) statusPage {
 		}
 		return math.Round(n/most*1000) / 10
 	}
-	row := func(name string, c SpreadCounts) spreadRow {
-		return spreadRow{Member: name, Static: c.Static, Draining: c.Draining, Probe: c.Probe, Total: c.Total}
+	row := func(name string, c, w SpreadCounts) spreadRow {
+		return spreadRow{Member: name, Static: c.Static, Draining: c.Draining, Probe: c.Probe, Total: c.Total,
+			Weight: w.Static + w.Probe, DrainingWeight: w.Draining}
 	}
+	var drainingMost float64
 	for _, m := range sp.Members {
-		r := row(m.Member, m.SpreadCounts)
-		r.StaticPct, r.DrainingPct, r.ProbePct = pct(m.Static), pct(m.Draining), pct(m.Probe)
-		r.StaticText = fmt.Sprintf("%s: %s static targets owned", m.Member, count(m.Static))
-		r.DrainingText = fmt.Sprintf("%s: %s static targets draining", m.Member, count(m.Draining))
-		r.ProbeText = fmt.Sprintf("%s: %s probe targets routed", m.Member, count(m.Probe))
+		r := row(m.Member, m.SpreadCounts, m.Weight)
+		r.Capacity, r.FairShare, r.Overloaded = m.Capacity, m.FairShare, m.Overloaded
+		r.StaticPct, r.DrainingPct, r.ProbePct, r.FairPct = pct(m.Weight.Static), pct(m.Weight.Draining), pct(m.Weight.Probe), pct(m.FairShare)
+		r.StaticText = fmt.Sprintf("%s: %s static targets owned, weighing %s", m.Member, count(m.Static), weight(m.Weight.Static))
+		r.DrainingText = fmt.Sprintf("%s: %s static targets draining, weighing %s", m.Member, count(m.Draining), weight(m.Weight.Draining))
+		r.ProbeText = fmt.Sprintf("%s: %s probe targets routed, weighing %s", m.Member, count(m.Probe), weight(m.Weight.Probe))
+		drainingMost = max(drainingMost, m.Weight.Draining)
 		v.Members = append(v.Members, r)
 	}
-	v.Total = row("Total", sp.Total)
-	v.Average = row("Average per member", sp.Average)
-	v.Imbalance = row("Imbalance, most ÷ average", sp.Imbalance)
-	v.AveragePct = pct(sp.Average.Total)
+	n := float64(len(sp.Members))
+	v.Total = row("Total", sp.Total, sp.TotalWeight)
+	v.Total.Capacity, v.Total.FairShare = sp.Capacity, v.Total.Weight
+	v.Average = row("Average per member", sp.Average, SpreadCounts{})
+	v.Imbalance = row("Imbalance, most ÷ average", sp.Imbalance, SpreadCounts{})
+	if n > 0 {
+		v.Average.Capacity, v.Average.Weight, v.Average.DrainingWeight, v.Average.FairShare = sp.Capacity/n, v.Total.Weight/n, v.Total.DrainingWeight/n, v.Total.Weight/n
+	}
+	// A member's weight is weighed against its fair share, which is the
+	// average for members of one capacity: the most a member holds of its
+	// fair share is the weight's imbalance.
+	v.Imbalance.Weight = sp.MaxLoadRatio
+	if v.Average.DrainingWeight > 0 {
+		v.Imbalance.DrainingWeight = drainingMost / v.Average.DrainingWeight
+	}
 	page.View = v
 	return page
 }
@@ -243,6 +270,12 @@ func imbalance(n float64) string {
 		return "–"
 	}
 	return strconv.FormatFloat(n, 'f', 2, 64) + "×"
+}
+
+// weight writes a weight or a capacity as the files write it, to the
+// thousandth at most: 2, 0.5, 1.25.
+func weight(n float64) string {
+	return strconv.FormatFloat(math.Round(n*milli)/milli, 'f', -1, 64)
 }
 
 // age writes seconds of an age, how long ago something was, in whole
@@ -292,7 +325,7 @@ func jobMatch(j JobSpread) string {
 	return strings.Join([]string{j.Job, j.Collector, sourceNames(j.Sources)}, "\n")
 }
 
-var statusFuncs = template.FuncMap{"count": count, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
+var statusFuncs = template.FuncMap{"count": count, "weight": weight, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
 	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
@@ -334,6 +367,13 @@ table.facts td { overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 code.gen, code.flag, p.notice code { white-space: nowrap; }
 p.notice { margin: 16px 0 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; background: var(--panel); }
+/* The heavy units' warning: a notice marked as a fault is, its units a
+   list, each shard key, a target's address or URL, broken where it must
+   be rather than push the box past the page's edge. */
+div.notice.warning { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--bad); border-radius: 6px; background: var(--panel); }
+div.notice.warning p { margin: 0; }
+div.notice.warning ul { margin: 6px 0 0; padding-left: 20px; }
+code.shard-key { overflow-wrap: anywhere; }
 :root { --bar-static: #c2410c; --bar-probe: #2563eb; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; } }
 :root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; }
@@ -689,6 +729,7 @@ const statusParts = `
 {{- define "heartbeat"}}{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{end}}
+{{- define "capacity"}}{{if and .InList (ne .CapacityInList .Capacity)}}<span title="the member list places it by {{weight .CapacityInList}} until its heartbeats' {{weight .Capacity}} has held for the settle time">{{weight .CapacityInList}} <span class="bad">→</span> {{weight .Capacity}}</span>{{else}}{{weight .Capacity}}{{end}}{{end}}
 {{- define "result"}}{{if eq . "ok"}}<span class="good">ok</span>{{else if eq . "failing"}}<span class="bad">failing</span>{{else}}<span class="muted">not answered yet</span>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
@@ -771,7 +812,7 @@ const statusContent = `{{define "content"}}
 {{- if .List}}
 <div class="scroll">
 <table>
-<thead><tr><th>Member</th><th>Address</th><th class="num">Last heartbeat</th><th>Bundle in force</th><th>State</th><th class="num">Draining</th></tr></thead>
+<thead><tr><th>Member</th><th>Address</th><th class="num">Last heartbeat</th><th>Bundle in force</th><th>State</th><th class="num">Capacity</th><th class="num">Draining</th></tr></thead>
 <tbody>
 {{- range .List}}
 <tr>
@@ -780,6 +821,7 @@ const statusContent = `{{define "content"}}
 <td class="num">{{template "heartbeat" .}}</td>
 <td>{{template "bundle" .}}</td>
 <td>{{template "state" .}}</td>
+<td class="num">{{template "capacity" .}}</td>
 <td class="num">{{.Draining}}</td>
 </tr>
 {{- end}}
@@ -791,12 +833,24 @@ const statusContent = `{{define "content"}}
 {{- with .View}}{{if .Shown}}
 
 <h2>Targets</h2>
-<p>{{count .Total.Static}} static target{{if ne .Total.Static 1.0}}s{{end}}{{if .Total.Draining}}, {{count .Total.Draining}} draining,{{end}} and {{count .Total.Probe}} probe target{{if ne .Total.Probe 1.0}}s{{end}} over {{len .Members}} member{{if ne (len .Members) 1}}s{{end}}: {{average .Average.Total}} per member on average, the most {{imbalance .Imbalance.Total}} the average.</p>
+<p>{{count .Total.Static}} static target{{if ne .Total.Static 1.0}}s{{end}}{{if .Total.Draining}}, {{count .Total.Draining}} draining,{{end}} and {{count .Total.Probe}} probe target{{if ne .Total.Probe 1.0}}s{{end}} over {{len .Members}} member{{if ne (len .Members) 1}}s{{end}}: {{average .Average.Total}} per member on average, the most {{imbalance .Imbalance.Total}} the average. They weigh {{weight .Total.Weight}}{{if .Total.DrainingWeight}}, and those draining {{weight .Total.DrainingWeight}} more on the members that keep them,{{end}} over a capacity of {{weight .Total.Capacity}}: a member's fair share is the weight times its capacity over the capacity of all, and the most loaded holds {{imbalance .Imbalance.Weight}} its fair share. A target goes to the member its hash prefers while that member's weight stays within {{weight $.Spread.BalanceFactor}} times its fair share (<code class="flag">--allocation.balance-factor</code>), and to the next otherwise.</p>
+{{- if $.Spread.Overloaded}}
+<p><span class="bad">{{$.Spread.Overloaded}} member{{if ne $.Spread.Overloaded 1}}s are{{else}} is{{end}} overloaded</span>, {{if ne $.Spread.Overloaded 1}}their weights{{else}}its weight{{end}} marked: above {{weight $.Spread.BalanceFactor}} times {{if ne $.Spread.Overloaded 1}}their fair shares{{else}}its fair share{{end}}, which only a target, or the targets of one shard key, too heavy for the room any member has left puts a member.</p>
+{{- end}}
+{{- with $.Spread.Heavy}}
+<div class="notice warning" id="heavy-units">
+<p><strong>{{len .}} unit{{if ne (len .) 1}}s weigh{{else}} weighs{{end}} more than a member's fair share</strong>, {{average $.View.FairShareMost}}, that of the member of the largest capacity: such a unit, a target or the targets of one shard key, fills the member it is on, which then holds little else, and no member list can spread it. Split it, by a <code>shard_key</code> of its own for each target, or give it a weight nearer the others'.</p>
+<ul>
+{{- range .}}
+<li><code class="shard-key">{{.ShardKey}}</code> weighs <strong>{{weight .Weight}}</strong>, on <a href="?member={{.Member}}" title="the targets of {{.Member}}">{{.Member}}</a></li>
+{{- end}}
+</ul>
+</div>
+{{- end}}
 <div class="scroll">
 <table class="spread">
-<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>
+<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>
 <tbody>
-{{- $avg := .AveragePct}}
 {{- range .Members}}
 <tr>
 <td class="id"><a href="?member={{.Member}}" title="the targets of {{.Member}}"><strong>{{.Member}}</strong></a></td>
@@ -804,29 +858,33 @@ const statusContent = `{{define "content"}}
 <td class="num">{{count .Draining}}</td>
 <td class="num">{{count .Probe}}</td>
 <td class="num"><strong>{{count .Total}}</strong></td>
-<td class="bar"><div class="bar-track" role="img" aria-label="{{.StaticText}}; {{.DrainingText}}; {{.ProbeText}}">{{if .Static}}<span class="seg-static" style="width: {{.StaticPct}}%" title="{{.StaticText}}"></span>{{end}}{{if .Draining}}<span class="seg-draining" style="width: {{.DrainingPct}}%" title="{{.DrainingText}}"></span>{{end}}{{if .Probe}}<span class="seg-probe" style="width: {{.ProbePct}}%" title="{{.ProbeText}}"></span>{{end}}<i class="avg" style="left: {{$avg}}%" title="the average per member"></i></div></td>
+<td class="num">{{if .Overloaded}}<strong class="bad" title="overloaded: above {{weight $.Spread.BalanceFactor}} times its fair share">{{weight .Weight}}</strong>{{else}}<strong>{{weight .Weight}}</strong>{{end}}</td>
+<td class="num">{{weight .DrainingWeight}}</td>
+<td class="num">{{weight .Capacity}}</td>
+<td class="num">{{average .FairShare}}</td>
+<td class="bar"><div class="bar-track" role="img" aria-label="{{.StaticText}}; {{.DrainingText}}; {{.ProbeText}}; its fair share {{average .FairShare}}">{{if .StaticPct}}<span class="seg-static" style="width: {{.StaticPct}}%" title="{{.StaticText}}"></span>{{end}}{{if .DrainingPct}}<span class="seg-draining" style="width: {{.DrainingPct}}%" title="{{.DrainingText}}"></span>{{end}}{{if .ProbePct}}<span class="seg-probe" style="width: {{.ProbePct}}%" title="{{.ProbeText}}"></span>{{end}}<i class="avg" style="left: {{.FairPct}}%" title="its fair share, {{average .FairShare}}"></i></div></td>
 </tr>
 {{- end}}
 </tbody>
 <tfoot>
 {{- with .Total}}
-<tr><td>{{.Member}}</td><td class="num">{{count .Static}}</td><td class="num">{{count .Draining}}</td><td class="num">{{count .Probe}}</td><td class="num">{{count .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{count .Static}}</td><td class="num">{{count .Draining}}</td><td class="num">{{count .Probe}}</td><td class="num">{{count .Total}}</td><td class="num">{{weight .Weight}}</td><td class="num">{{weight .DrainingWeight}}</td><td class="num">{{weight .Capacity}}</td><td class="num">{{weight .FairShare}}</td><td></td></tr>
 {{- end}}
 {{- with .Average}}
-<tr><td>{{.Member}}</td><td class="num">{{average .Static}}</td><td class="num">{{average .Draining}}</td><td class="num">{{average .Probe}}</td><td class="num">{{average .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{average .Static}}</td><td class="num">{{average .Draining}}</td><td class="num">{{average .Probe}}</td><td class="num">{{average .Total}}</td><td class="num">{{average .Weight}}</td><td class="num">{{average .DrainingWeight}}</td><td class="num">{{average .Capacity}}</td><td class="num">{{average .FairShare}}</td><td></td></tr>
 {{- end}}
 {{- with .Imbalance}}
-<tr><td>{{.Member}}</td><td class="num">{{imbalance .Static}}</td><td class="num">{{imbalance .Draining}}</td><td class="num">{{imbalance .Probe}}</td><td class="num">{{imbalance .Total}}</td><td></td></tr>
+<tr><td>{{.Member}}</td><td class="num">{{imbalance .Static}}</td><td class="num">{{imbalance .Draining}}</td><td class="num">{{imbalance .Probe}}</td><td class="num">{{imbalance .Total}}</td><td class="num" title="the most a member holds of its fair share">{{imbalance .Weight}}</td><td class="num">{{imbalance .DrainingWeight}}</td><td></td><td></td><td></td></tr>
 {{- end}}
 </tfoot>
 </table>
 </div>
-<p class="legend"><span><b class="seg-static"></b>static, owned</span><span><b class="seg-draining"></b>static, draining</span><span><b class="seg-probe"></b>probe, routed</span><span><b class="avg"></b>average per member</span><span>Bars run to the largest total.</span></p>
+<p class="legend"><span><b class="seg-static"></b>static, owned</span><span><b class="seg-draining"></b>static, draining</span><span><b class="seg-probe"></b>probe, routed</span><span><b class="avg"></b>the member's fair share</span><span>Bars are weight, and run to the most a member weighs or a fair share comes to.</span></p>
 {{- end}}{{end}}
 {{- with .Spread}}{{if .Jobs}}
 
 <h2>Probe jobs</h2>
-<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
+<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's Weight is what its targets weigh together, and its targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
 <form class="filter jobs" id="jobs" role="search" hidden>
 <label for="jobs-filter">Filter: job, collector or source</label>
 <input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
@@ -835,13 +893,14 @@ const statusContent = `{{define "content"}}
 <p class="note muted" data-rows-of="probe-jobs"></p>
 <div class="scroll">
 <table class="spread" id="probe-jobs">
-<thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th><th class="num" data-sort="num">Members</th><th class="num" data-sort="num">Min</th><th class="num" data-sort="num">Avg</th><th class="num" data-sort="num">Max</th><th class="num" data-sort="num">Imbalance</th><th data-sort="text">Sources</th></tr></thead>
+<thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th><th class="num" data-sort="num">Weight</th><th class="num" data-sort="num">Members</th><th class="num" data-sort="num">Min</th><th class="num" data-sort="num">Avg</th><th class="num" data-sort="num">Max</th><th class="num" data-sort="num">Imbalance</th><th data-sort="text">Sources</th></tr></thead>
 <tbody>
 {{- range $i, $j := .Jobs}}
 <tr data-order="{{$i}}" data-match="{{jobMatch $j}}">
 <td class="id"><a href="?job={{.Job}}" title="the targets of the probe job {{.Job}}"><strong>{{.Job}}</strong></a></td>
 <td>{{.Collector}}</td>
 <td class="num" data-value="{{.Targets}}">{{.Targets}}</td>
+<td class="num" data-value="{{.Weight}}">{{weight .Weight}}</td>
 <td class="num" data-value="{{len .Members}}">{{len .Members}}</td>
 {{- if .Members}}
 <td class="num" data-value="{{.Min}}">{{.Min}}</td>
@@ -870,7 +929,7 @@ const statusContent = `{{define "content"}}
 <tr>
 <td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted kind">{{.Type}}</span></td>
 <td class="owner">{{.Owner}}<br><span class="muted kind">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
-<td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}</td>
+<td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}{{if .WeightFallbacks}}<br><span class="bad">{{.WeightFallbacks}} weight{{if ne .WeightFallbacks 1}}s{{end}} fell back</span> <span class="muted">on the owner's: their weight label gave no weight</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{interval .RefreshIntervalSeconds}}</td>
 <td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>

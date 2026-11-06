@@ -3,8 +3,10 @@ package allocapi
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -134,5 +136,20 @@ func TestCheckFilesRefusesAFileThatIsAlsoADirectory(t *testing.T) {
 	}
 	if err := CheckFiles(map[string]string{ConfigFile: "", "a": "", "ab/c": "", "a.d/e": "", "a-b": ""}); err != nil {
 		t.Errorf("names sharing leading characters were refused: %v", err)
+	}
+}
+
+// A heartbeat's capacity is taken in thousandths within MinCapacity and
+// MaxCapacity, the nearest bound for one outside them, NaN included, and
+// DefaultCapacity for none; the field is left out of a heartbeat that has
+// none.
+func TestCapacityMilli(t *testing.T) {
+	for capacity, want := range map[float64]int64{0: 1000, 1: 1000, 2.5: 2500, 1.2345: 1235, 0.1: 100, 0.0999: 100, -3: 100, 100: 100000, 1e9: 100000, math.Inf(1): 100000, math.NaN(): 100} {
+		if got := CapacityMilli(capacity); got != want {
+			t.Errorf("a capacity of %v is %d thousandths, want %d", capacity, got, want)
+		}
+	}
+	if b, _ := json.Marshal(Heartbeat{Member: "m"}); strings.Contains(string(b), "capacity") {
+		t.Errorf("a heartbeat of no capacity says %s", b)
 	}
 }

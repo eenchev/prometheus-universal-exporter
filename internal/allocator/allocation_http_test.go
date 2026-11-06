@@ -14,12 +14,18 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// owned are the static targets of in that member owns among members, by
-// name in file order.
+// owned are the static targets of in that member owns among members, each
+// of capacity 1, by name in file order, as the default balance factor
+// places them.
 func owned(in *Inputs, members []string, member string) []string {
+	caps := make([]int64, len(members))
+	for i := range caps {
+		caps[i] = milli
+	}
+	p := place(in.units(), members, caps, factorMilli(DefaultBalanceFactor))
 	var names []string
 	for i := range in.Targets.Targets {
-		if owner, _ := allocapi.Owner(members, in.shardKeys[i]); owner == member {
+		if p.owner[in.shardKeys[i]] == member {
 			names = append(names, in.Targets.Targets[i].Name)
 		}
 	}

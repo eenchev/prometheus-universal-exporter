@@ -83,6 +83,9 @@ type JobTarget struct {
 	// names start with __, its source labels, are left out of the page's
 	// view unless asked for (JobView).
 	Labels map[string]string `json:"labels,omitempty"`
+	// Weight is the target's weight: its own from the job's weight_label,
+	// or the job's.
+	Weight float64 `json:"weight"`
 }
 
 // JobView is the view of the probe job named job, its targets cut to
@@ -105,14 +108,14 @@ func (a *Allocator) JobView(job, filter string, sourceLabels bool) (view JobView
 		a.mu.Unlock()
 		return view, false
 	}
-	spread, owners := a.jobSpreadLocked(j)
+	spread, owners, _ := a.jobSpreadLocked(j)
 	collector := model.CollectorByName(a.inputs.Config, j.Collector)
 	if collector == nil {
 		collector = &model.Collector{}
 	}
 	var targets []JobTarget
 	for _, target := range j.Targets {
-		t := JobTarget{Target: fetch.DisplayTarget(collector, target), Member: owners[target]}
+		t := JobTarget{Target: fetch.DisplayTarget(collector, target), Member: owners[target], Weight: float64(j.weightOfTarget(target)) / milli}
 		for name, value := range j.labelsOf[target] {
 			if _, set := j.Labels[name]; !set && (sourceLabels || !isSourceLabel(name)) {
 				if t.Labels == nil {

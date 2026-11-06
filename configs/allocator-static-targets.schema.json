@@ -31,6 +31,12 @@
       "minimum": 0,
       "type": "integer"
     },
+    "default_weight": {
+      "description": "The weight of a target or a discovered_targets entry that sets none. Defaults to 1. A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+      "exclusiveMinimum": 0,
+      "maximum": 1000,
+      "type": "number"
+    },
     "discovered_targets": {
       "description": "Static targets written once for every target their discovery finds: each entry is a static target without target, whose other keys every target it makes takes. Only the allocator reads it; the exporter refuses it. See docs/ALLOCATOR.md#discovering-targets.",
       "items": {
@@ -1910,6 +1916,17 @@
             "description": "Makes a target of each discovered address, {{address}} standing for it, such as https://{{address}}/health; without one the address is the target.",
             "pattern": "^$|\\{\\{address\\}\\}",
             "type": "string"
+          },
+          "weight": {
+            "description": "The weight of each target the entry makes, unless weight_label gives one of its own. Defaults to the file's default_weight. A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "type": "number"
+          },
+          "weight_label": {
+            "description": "A label of the discovery sources, such as __meta_pue_weight, whose value is a discovered target's weight; a value that is missing or no weight leaves the target the weight above, and a change of less than 20% from the weight in force is ignored.",
+            "pattern": "^$|^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
           }
         },
         "required": [
@@ -3383,6 +3400,12 @@
               "number",
               "boolean"
             ]
+          },
+          "weight": {
+            "description": "The target's weight against the other targets: how much of a member it takes. Defaults to default_weight. A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "type": "number"
           }
         },
         "required": [

@@ -212,6 +212,9 @@ func (a *Allocator) refreshSource(ctx context.Context, s *sourceState) bool {
 	s.successes++
 	s.lastGood = s.refreshed
 	s.fromSnapshot = false
+	if s.ok {
+		found = holdWeights(s.found, found, s.spec.weightLabel)
+	}
 	if s.ok && sameDiscovered(s.found, found) {
 		return false
 	}
@@ -298,8 +301,12 @@ func (a *Allocator) putInForce(base *Inputs) bool {
 			a.logger.Warn(fmt.Sprintf("%d discovered targets are left out", len(skipped)), "targets", shown)
 		}
 	}
+	counts := a.noteFallbacks(in.fallbacks)
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for key, n := range counts {
+		a.fallbacksTotal[key] += n
+	}
 	if a.inputs != nil && a.inputs.digest == in.digest {
 		return false
 	}

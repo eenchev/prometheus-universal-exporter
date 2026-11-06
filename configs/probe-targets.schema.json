@@ -9,6 +9,12 @@
     }
   },
   "properties": {
+    "default_weight": {
+      "description": "The weight of a job that sets none. Defaults to 1. A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+      "exclusiveMinimum": 0,
+      "maximum": 1000,
+      "type": "number"
+    },
     "probe_jobs": {
       "description": "The probe jobs.",
       "items": {
@@ -566,6 +572,17 @@
               ]
             },
             "type": "array"
+          },
+          "weight": {
+            "description": "The weight of each of the job's targets, unless weight_label gives one of its own. Defaults to the file's default_weight. A number above 0 and at most 1000, with at most three decimals. See docs/ALLOCATOR.md#weights-and-capacity.",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "type": "number"
+          },
+          "weight_label": {
+            "description": "A label of the discovery sources, such as __meta_pue_weight, whose value is a discovered target's weight; a value that is missing or no weight leaves the target the weight above, and a change of less than 20% from the weight in force is ignored.",
+            "pattern": "^$|^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
           }
         },
         "required": [

@@ -26,6 +26,10 @@ func TestAMalformedCommandLineExits2(t *testing.T) {
 		"--settle=1h0m0.001s":                           "--settle must be from 0 to 1h, got 1h0m0.001s",
 		"--settle=2562047h":                             "--settle must be from 0 to 1h, got 2562047h0m0s",
 		"--members.max=0":                               "--members.max must be 1 or more",
+		"--allocation.balance-factor=0.99":              "--allocation.balance-factor must be from 1 to 10 with at most three decimals, got 0.99",
+		"--allocation.balance-factor=10.5":              "--allocation.balance-factor must be from 1 to 10 with at most three decimals, got 10.5",
+		"--allocation.balance-factor=1.2345":            "--allocation.balance-factor must be from 1 to 10 with at most three decimals, got 1.2345",
+		"--allocation.balance-factor=NaN":               "--allocation.balance-factor must be from 1 to 10 with at most three decimals, got NaN",
 		"--heartbeat.interval=999ms":                    "--heartbeat.interval must be from 1s to 2m, got 999ms",
 		"--heartbeat.interval=2m1s":                     "--heartbeat.interval must be from 1s to 2m, got 2m1s",
 		"--heartbeat.interval=0s":                       "--heartbeat.interval must be from 1s to 2m, got 0s",
@@ -91,12 +95,12 @@ func TestVersionAndHelp(t *testing.T) {
 	if code := run([]string{"-h"}, &stdout, &stderr); code != 0 {
 		t.Errorf("-h exited %d", code)
 	}
-	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-members.max", "-discovery.max-targets", "-discovery.refresh-interval", "-peers", "-peers.self", "-peers.leader-only", "-peers.check-interval", "-peers.check-timeout", "-peers.failure-threshold", "-peers.snapshot-timeout", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
+	for _, flag := range []string{"-web.listen-address", "-config.file", "-static-targets-file", "-probe-targets-file", "-web.token-file", "-log.level", "-config.watch-interval", "-settle", "-heartbeat.interval", "-allocation.balance-factor", "-members.max", "-discovery.max-targets", "-discovery.refresh-interval", "-peers", "-peers.self", "-peers.leader-only", "-peers.check-interval", "-peers.check-timeout", "-peers.failure-threshold", "-peers.snapshot-timeout", "-version", "-static-targets-file-schema", "-probe-targets-file-schema"} {
 		if !strings.Contains(stdout.String(), "  "+flag+" ") && !strings.Contains(stdout.String(), "  "+flag+"\n") {
 			t.Errorf("-h does not list %s:\n%s", flag, stdout.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 10s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") {
+	if !strings.Contains(stdout.String(), `(default ":9116")`) || !strings.Contains(stdout.String(), "(default 15s)") || !strings.Contains(stdout.String(), "(default 10s)") || !strings.Contains(stdout.String(), "(default 1000)") || !strings.Contains(stdout.String(), "(default 10000)") || !strings.Contains(stdout.String(), "(default 1.25)") {
 		t.Errorf("-h does not give the defaults of the listen address, the settle time, the heartbeat interval and the member bound:\n%s", stdout.String())
 	}
 }

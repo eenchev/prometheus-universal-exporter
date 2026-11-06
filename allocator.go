@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
@@ -30,11 +32,13 @@ import (
 // allocatorFlags are the allocator mode's flags as given.
 type allocatorFlags struct {
 	url, cacheDir, member, advertise, tokenFile string
+	capacity                                    float64
 }
 
 // allocatorMode is allocator mode as the flags set it up.
 type allocatorMode struct {
 	url, cacheDir, member, advertise, tokenFile string
+	capacity                                    float64
 }
 
 // configFile and staticTargetsFile are the files of the bundle in the cache
@@ -54,7 +58,7 @@ func (a *allocatorMode) awaitingSentence() string {
 var fileFlags = []string{"config.file", "static-targets-file"}
 
 // allocatorOnlyFlags are the flags read only in allocator mode.
-var allocatorOnlyFlags = []string{"allocator.cache-dir", "allocator.member", "allocator.advertise", "allocator.token-file"}
+var allocatorOnlyFlags = []string{"allocator.cache-dir", "allocator.member", "allocator.advertise", "allocator.token-file", "allocator.capacity"}
 
 // setUp checks the allocator mode's flags and works out their defaults: nil
 // without --allocator.url. Allocator mode is refused with a flag that names
@@ -82,7 +86,13 @@ func (f allocatorFlags) setUp(flags *flag.FlagSet, listenAddress string) (*alloc
 	if f.cacheDir == "" {
 		return nil, errors.New("--allocator.url needs --allocator.cache-dir, the directory the bundle from the allocator is kept in")
 	}
-	a := &allocatorMode{url: f.url, cacheDir: f.cacheDir, member: f.member, advertise: f.advertise, tokenFile: f.tokenFile}
+	// The allocator takes a heartbeat's capacity outside the bounds as the
+	// nearest one, so a bad one cannot claim every target; one given here
+	// is refused, so a typo does not go unsaid.
+	if c := f.capacity * 1000; !(f.capacity >= allocapi.MinCapacity && f.capacity <= allocapi.MaxCapacity) || math.Abs(c-math.Round(c)) > 1e-6 {
+		return nil, fmt.Errorf("--allocator.capacity must be from 0.1 to 100 with at most three decimals, got %s", strconv.FormatFloat(f.capacity, 'g', -1, 64))
+	}
+	a := &allocatorMode{url: f.url, cacheDir: f.cacheDir, member: f.member, advertise: f.advertise, tokenFile: f.tokenFile, capacity: f.capacity}
 	if a.member == "" {
 		host, err := os.Hostname()
 		if err != nil || host == "" {
@@ -247,7 +257,7 @@ func noNotExist(err error) error {
 // force or refused, not cut short. stop may be called more than once.
 func (a *allocatorMode) startClient(manager allocclient.Reloader, generation string, logger *slog.Logger) (client *allocclient.Client, stop func(), err error) {
 	client, err = allocclient.New(allocclient.Options{
-		URL: a.url, CacheDir: a.cacheDir, Member: a.member, Advertise: a.advertise, TokenFile: a.tokenFile,
+		URL: a.url, CacheDir: a.cacheDir, Member: a.member, Advertise: a.advertise, TokenFile: a.tokenFile, Capacity: a.capacity,
 		Manager: manager, Logger: logger, Generation: generation,
 	})
 	if err != nil {

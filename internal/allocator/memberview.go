@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -80,6 +79,8 @@ type MemberStaticTarget struct {
 	// DrainsForSeconds how much longer the member keeps it.
 	MovedTo          string  `json:"moved_to,omitempty"`
 	DrainsForSeconds float64 `json:"drains_for_seconds,omitempty"`
+	// Weight is the target's weight.
+	Weight float64 `json:"weight"`
 }
 
 // MemberProbeList is the probe targets routed to a member: Jobs counts
@@ -105,6 +106,8 @@ type MemberProbeTarget struct {
 	Job       string `json:"job"`
 	Collector string `json:"collector"`
 	Target    string `json:"target"`
+	// Weight is the target's weight.
+	Weight float64 `json:"weight"`
 }
 
 // MemberView is member's view, cut to filter; known is false when the
@@ -166,10 +169,13 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		return st
 	}
 	if in.Targets != nil && len(a.effective) > 0 {
+		plan := a.currentPlan()
 		var owned []MemberStaticTarget
 		for i := range in.Targets.Targets {
-			if owner, _ := allocapi.Owner(a.effective, in.shardKeys[i]); owner == member {
-				owned = append(owned, static(&in.Targets.Targets[i]))
+			if plan.owner[in.shardKeys[i]] == member {
+				st := static(&in.Targets.Targets[i])
+				st.Weight = float64(in.staticWeight(i)) / milli
+				owned = append(owned, st)
 			}
 		}
 		sort.Slice(owned, func(i, j int) bool { return owned[i].Name < owned[j].Name })
@@ -181,6 +187,7 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 				continue
 			}
 			st := static(&in.Targets.Targets[i])
+			st.Weight = float64(in.staticWeight(i)) / milli
 			st.MovedTo = a.ownerOf(key.target)
 			st.DrainsForSeconds = ageSeconds(until.Sub(now).Seconds())
 			draining = append(draining, st)
@@ -193,11 +200,11 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		for i := range in.Probes.Jobs {
 			j := &in.Probes.Jobs[i]
 			job := MemberProbeJob{Job: j.Name, Collector: j.Collector}
-			pool := a.routing(j)
+			owners := a.routeJob(j)
 			var targets []MemberProbeTarget
 			for _, target := range j.Targets {
-				if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil && owner == member {
-					targets = append(targets, MemberProbeTarget{Job: j.Name, Collector: j.Collector, Target: shown(j.Collector, target)})
+				if owners[target] == member {
+					targets = append(targets, MemberProbeTarget{Job: j.Name, Collector: j.Collector, Target: shown(j.Collector, target), Weight: float64(j.weightOfTarget(target)) / milli})
 				}
 			}
 			sort.Slice(targets, func(i, j int) bool { return targets[i].Target < targets[j].Target })

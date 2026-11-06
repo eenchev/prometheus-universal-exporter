@@ -100,8 +100,16 @@ func mustLoad(t *testing.T, p Paths) *Inputs {
 // members, on a clock of the test's own.
 func settledAllocator(t *testing.T, in *Inputs, members ...string) (*Allocator, *fakeClock) {
 	t.Helper()
+	return settledAllocatorWith(t, in, Options{}, members...)
+}
+
+// settledAllocatorWith is settledAllocator with opts, its settle time, clock
+// and logger the test's.
+func settledAllocatorWith(t *testing.T, in *Inputs, opts Options, members ...string) (*Allocator, *fakeClock) {
+	t.Helper()
 	clock := newFakeClock()
-	a := New(in, Options{Settle: 15 * time.Second, Clock: clock, Logger: testutil.QuietLogger(t)})
+	opts.Settle, opts.Clock, opts.Logger = 15*time.Second, clock, testutil.QuietLogger(t)
+	a := New(in, opts)
 	beat(t, a, members...)
 	keepBeating(t, a, clock, 20*time.Second, members...)
 	if got := effective(a); !slices.Equal(got, members) {

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"sort"
 	"strings"
@@ -70,11 +71,47 @@ func ClampHeartbeatInterval(seconds float64) time.Duration {
 	return time.Duration(seconds * float64(time.Second))
 }
 
-// The files of a bundle that have a fixed place.
+// The files of a bundle that have a fixed place. AllocationFile holds the
+// settings the share was placed with that are not the allocator's defaults,
+// --allocation.balance-factor, and is left out with the defaults: it is
+// in the bundle so that two instances of the allocator that place by other
+// settings serve bundles of other generations, rather than shares that
+// differ while their generations say they are the same. The exporter does
+// not read it.
 const (
 	ConfigFile        = "config.yaml"
 	StaticTargetsFile = "static-targets.yaml"
+	AllocationFile    = "allocation.yaml"
 )
+
+// A replica's capacity (--allocator.capacity) is its share of the targets'
+// weight against the other members': a member of capacity 2 is given about
+// twice the weight of one of capacity 1. The exporter refuses a capacity
+// outside MinCapacity and MaxCapacity at its command line, and the
+// allocator takes a heartbeat's outside them as the nearest bound, so no
+// heartbeat can claim nearly every target, and one that says none as
+// DefaultCapacity.
+const (
+	DefaultCapacity = 1.0
+	MinCapacity     = 0.1
+	MaxCapacity     = 100.0
+)
+
+// CapacityMilli is a heartbeat's capacity in thousandths, as the allocator
+// places by it: 0, a heartbeat that says none, is DefaultCapacity; one
+// below MinCapacity, NaN included, is MinCapacity, and one above
+// MaxCapacity is MaxCapacity; any other is rounded to the thousandth.
+func CapacityMilli(capacity float64) int64 {
+	switch {
+	case capacity == 0:
+		capacity = DefaultCapacity
+	case !(capacity >= MinCapacity):
+		capacity = MinCapacity
+	case capacity > MaxCapacity:
+		capacity = MaxCapacity
+	}
+	return int64(math.Round(capacity * 1000))
+}
 
 // Heartbeat is what a replica sends to HeartbeatPath every heartbeat
 // interval.
@@ -119,6 +156,10 @@ type Heartbeat struct {
 	// from yet, still on the older interval, may take to reach it, and forms
 	// its first member list no sooner.
 	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
+	// Capacity is the replica's --allocator.capacity, its share of the
+	// targets' weight against the other members'; left out, the allocator
+	// takes DefaultCapacity (CapacityMilli).
+	Capacity float64 `json:"capacity,omitempty"`
 }
 
 // Refusal is a bundle a replica would not load.

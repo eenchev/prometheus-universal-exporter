@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 )
 
 // WriteMetrics writes the allocator's own metrics in the Prometheus text
@@ -49,40 +47,36 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 	fmt.Fprintf(&b, "pue_allocator_targets{kind=\"probe\"} %d\npue_allocator_targets{kind=\"static\"} %d\n", probes, static)
 
 	family("pue_allocator_assigned", "gauge", "Targets allocated to each member of the member list, by kind: static targets it owns, without those it keeps draining, and probe targets service discovery routes to it.")
-	type count struct{ static, probe int }
-	assigned := map[string]*count{}
-	for _, name := range a.effective {
-		assigned[name] = &count{}
-	}
-	if in := a.inputs; in != nil && len(a.effective) > 0 {
-		for i := range in.shardKeys {
-			owner, _ := allocapi.Owner(a.effective, in.shardKeys[i])
-			assigned[owner].static++
-		}
-		if in.Probes != nil {
-			for i := range in.Probes.Jobs {
-				j := &in.Probes.Jobs[i]
-				pool := a.routing(j)
-				for _, target := range j.Targets {
-					if owner, err := allocapi.Owner(pool, shardKeyOf(j, target)); err == nil {
-						if assigned[owner] == nil {
-							assigned[owner] = &count{}
-						}
-						assigned[owner].probe++
-					}
-				}
-			}
-		}
-	}
-	names := make([]string, 0, len(assigned))
-	for name := range assigned {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	loads := a.loadsLocked()
+	names := loads.names
 	for _, name := range names {
-		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"probe\",member=\"%s\"} %d\n", escape(name), assigned[name].probe)
-		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"static\",member=\"%s\"} %d\n", escape(name), assigned[name].static)
+		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"probe\",member=\"%s\"} %d\n", escape(name), loads.rows[name].probe)
+		fmt.Fprintf(&b, "pue_allocator_assigned{kind=\"static\",member=\"%s\"} %d\n", escape(name), loads.rows[name].static)
 	}
+	family("pue_allocator_assigned_weight", "gauge", "The weight of the targets allocated to each member of the member list, by kind, as pue_allocator_assigned counts them: a static target that moved weighs on its new owner, not on the member that keeps it draining.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "pue_allocator_assigned_weight{kind=\"probe\",member=\"%s\"} %s\n", escape(name), formatMilli(loads.rows[name].probeWeight))
+		fmt.Fprintf(&b, "pue_allocator_assigned_weight{kind=\"static\",member=\"%s\"} %s\n", escape(name), formatMilli(loads.rows[name].staticWeight))
+	}
+	family("pue_allocator_member_capacity", "gauge", "The capacity each member is placed by: its --allocator.capacity in the member list, or, for a live member outside it that a probe is routed to, its last heartbeat's.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "pue_allocator_member_capacity{member=\"%s\"} %s\n", escape(name), formatMilli(loads.rows[name].capacity))
+	}
+	family("pue_allocator_member_load_ratio", "gauge", "Each member's static and probe weight over its fair share, the weight of every member times its capacity over theirs: 1 for weight in proportion to capacity; 0 for a member of no fair share.")
+	overloaded := 0
+	for _, name := range names {
+		r := loads.rows[name]
+		ratio := 0.0
+		if r.fair > 0 {
+			ratio = float64(r.staticWeight+r.probeWeight) / float64(r.fair)
+		}
+		if r.overloaded {
+			overloaded++
+		}
+		fmt.Fprintf(&b, "pue_allocator_member_load_ratio{member=\"%s\"} %s\n", escape(name), strconv.FormatFloat(ratio, 'g', -1, 64))
+	}
+	family("pue_allocator_overloaded_members", "gauge", "Members whose static and probe weight is above --allocation.balance-factor times their fair share: a target, or the targets of one shard key, weigh too much for any member's room.")
+	fmt.Fprintf(&b, "pue_allocator_overloaded_members %d\n", overloaded)
 
 	// The average is what one more member would take off each: the figure to
 	// scale the exporter's replicas by when it is to keep so many targets
@@ -91,8 +85,8 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 	family("pue_allocator_targets_per_member", "gauge", "Targets allocated to the members of the member list, by kind, divided by the number of members: static targets and probe targets per member on average; 0 with no member.")
 	var allStatic, allProbe int
 	for _, name := range names {
-		allStatic += assigned[name].static
-		allProbe += assigned[name].probe
+		allStatic += loads.rows[name].static
+		allProbe += loads.rows[name].probe
 	}
 	perMember := func(total int) string {
 		if len(a.effective) == 0 {
@@ -120,6 +114,25 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 
 	family("pue_allocator_members_refused_total", "counter", "Heartbeats of new members refused because as many members as --members.max allows were live.")
 	fmt.Fprintf(&b, "pue_allocator_members_refused_total %d\n", a.membersRefused)
+
+	family("pue_allocator_weight_label_fallbacks_total", "counter", "Discovered targets whose owner's weight_label gave no weight, which took the owner's weight instead, by kind (probe or static), owner (the probe job or the discovered_targets entry) and reason: missing, not_a_number, out_of_range (not above 0 and at most 1000) or too_many_decimals; a target is counted when it begins to fall back.")
+	keys := make([]fallbackKey, 0, len(a.fallbacksTotal))
+	for key := range a.fallbacksTotal {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		x, y := keys[i], keys[j]
+		if x.kind != y.kind {
+			return x.kind < y.kind
+		}
+		if x.owner != y.owner {
+			return x.owner < y.owner
+		}
+		return x.reason < y.reason
+	})
+	for _, key := range keys {
+		fmt.Fprintf(&b, "pue_allocator_weight_label_fallbacks_total{kind=\"%s\",owner=\"%s\",reason=\"%s\"} %d\n", key.kind, escape(key.owner), key.reason, a.fallbacksTotal[key])
+	}
 
 	sources := a.sourceMetrics()
 	labels := func(m sourceMetric) string {

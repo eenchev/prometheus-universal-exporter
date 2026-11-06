@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -219,8 +220,16 @@ type staticStatusPage struct {
 	// says them.
 	PerKey  int `json:"-"`
 	MaxKeys int `json:"-"`
-	// StaticTargetsPath is the static targets endpoint.
+	// StaticTargetsPath is the static targets endpoint, and SeriesLink
+	// the endpoint relative to the page, which is served at its path
+	// followed by /status: a target's name links to the endpoint narrowed
+	// to it, ?targets=, so the link holds behind a proxy that serves the
+	// exporter under a prefix, as the bar's links do. DebugLinks says
+	// --web.debug is full, under which a scraped target's row links its
+	// debug scrape too, ?debug=.
 	StaticTargetsPath string `json:"-"`
+	SeriesLink        string `json:"-"`
+	DebugLinks        bool   `json:"-"`
 	// Chrome is the page's bar (pagechrome.go); the content section, which
 	// a refresh swaps in, has none.
 	Chrome pageChrome `json:"-"`
@@ -240,6 +249,8 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		Allocator:         s.allocatorStatus != nil,
 		Total:             len(targets),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
+		SeriesLink:        "../" + path.Base(s.staticTargetsEndpoint()),
+		DebugLinks:        s.debug == DebugFull,
 		PerKey:            recentProbesPerKey,
 		MaxKeys:           recentProbeKeys,
 	}
@@ -662,14 +673,14 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 
 <h2>Static targets</h2>
 {{- if .Total}}
-<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>.</p>
+<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>; a scraped target's name links to its own.</p>
 <div class="scroll">
 <table>
 <thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Failures</th><th>Last error</th></tr></thead>
 <tbody>
 {{- range .Rows}}
 <tr>
-<td class="what"><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td>{{duration .Interval}}</td>
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>

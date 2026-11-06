@@ -31010,6 +31010,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestICMPKeysAreChecked` (fetch, icmp): a count of -1 and 101, an interval and a reply_timeout of 1ms, payload_bytes of 7 and 1233, and `ip_family: ip5` are refused.
 - `TestAProbeOfAnICMPCollectorReadsTheReplies` (exporter, icmp): a probe of 127.0.0.1 exports `ping_received 2` and `ping_loss_ratio 0` from the document; skipped where the system opens no ICMP datagram socket.
 
+## 34.281 A static target's series from the status page
+
+- `TestATargetsNameLinksItsSeries` (exporter): on the status page a scraped target's name links `../static-targets?targets=ok`, which, followed from the page, serves that target's series and not another's; the target not yet scraped has no link; no row links a debug scrape below `--web.debug=full`, and at it the row of `ok` links `../static-targets?debug=ok`; under `--web.static-targets-path=/static/targets` the link is `../targets?targets=ok`.
+- `TestTheStatusPagesShortColumnsKeepTheirWordsWhole` (exporter), changed: the target's cell begins with the link of its name.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33303,6 +33308,13 @@ then one of the OTLP export. Of the static targets:
   result under `cache.stale_if_error`) or `skipped by backoff` (a scrape
   `failure_backoff` kept from the target); and whether the response cache
   answered it. A target not yet scraped MUST be shown as `not yet scraped`.
+  A scraped target's name MUST link to the endpoint narrowed to it,
+  `?targets=<name>`, relative to the page, so the link holds under a prefix
+  a proxy serves the exporter at, and one not yet scraped, of which the
+  endpoint has nothing, MUST have no link; under `--web.debug=full`, and
+  under no other level, a scraped target's row MUST link its debug scrape,
+  `?debug=<name>`, beside its name. The links MUST follow
+  `--web.static-targets-path`.
   A target whose collector or address a reload changed MUST be shown as not
   yet scraped until its own scrape.
 - Each row MUST show the consecutive failed scrapes, the error of the last

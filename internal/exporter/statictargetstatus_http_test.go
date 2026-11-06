@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -422,4 +423,32 @@ func TestARemovedTargetIsForgottenWithoutAReadOfTheEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("after a bundle from the allocator moved a target away", "otlp_only")
+}
+
+// A scraped target's name links to the endpoint narrowed to it,
+// ?targets=, relative to the page, which serves that target's series and
+// no other's; a target not yet scraped, which the endpoint has nothing of,
+// has no link. Under --web.debug=full the row links the target's debug
+// scrape too, and below it does not. The links follow
+// --web.static-targets-path.
+func TestATargetsNameLinksItsSeries(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page, `<a href="../static-targets?targets=ok" title="the series the endpoint serves of ok"><strong>ok</strong></a>`, "a scraped target's name links to its own")
+	if strings.Contains(page, "targets=never") || !strings.Contains(page, "<strong>never</strong>") {
+		t.Errorf("the target not yet scraped is linked")
+	}
+	if strings.Contains(page, "?debug=") {
+		t.Errorf("below --web.debug=full the page links a debug scrape")
+	}
+	base, _ := url.Parse("http://exporter/static-targets/status")
+	link, _ := base.Parse("../static-targets?targets=ok")
+	series := getPath(server, http.MethodGet, link.RequestURI()).Body.String()
+	if !strings.Contains(series, `static_target="ok"`) || strings.Contains(series, `static_target="broken"`) {
+		t.Errorf("%s serves:\n%s", link.RequestURI(), series)
+	}
+	server.SetDebug(DebugFull)
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<a class="muted" href="../static-targets?debug=ok" title="scrape ok once now, and report each stage">debug</a>`)
+	server.SetStaticTargetsPath("/static/targets")
+	requireContains(t, getPage(t, server, "/static/targets/status"), `href="../targets?targets=ok"`)
 }

@@ -661,7 +661,11 @@ as a whole. The static targets section has a row per
 target:
 
 - its name, collector, target and labels, its interval, and whether it is
-  exported over OTLP. The target is shown as its `target` label and the log
+  exported over OTLP. Once the target has been scraped, its name links to
+  the series the endpoint serves of it, `/static-targets?targets=<name>`
+  ([above](#the-static-targets-endpoint)), and with `--web.debug=full` a
+  *debug* link beside it scrapes it once now and reports each stage
+  (`?debug=<name>`, [Debugging a static target](#debugging-a-static-target)). The target is shown as its `target` label and the log
   show it, with a credential in its URL withheld;
 - when its last scrape began, how long ago that was and how long it took;
 - the result: `success`, `failed`, `stale result served` (failed, and the

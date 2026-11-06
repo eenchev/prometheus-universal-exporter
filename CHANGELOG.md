@@ -53,6 +53,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- On the status page a scraped static target's name links to its own
+  series, `/static-targets?targets=<name>`, and with `--web.debug=full` a
+  *debug* link beside it scrapes it once now and reports each stage
+  ([Status page](docs/STATIC-TARGETS.md#status-page)).
 - The opt-in `tcp` type speaks UDP (`udp: true`: one datagram sent, the
   first back is the answer) and over a Unix socket (`unix_socket`, as an
   `http` collector's), and binary protocols: `send_hex` writes the request's

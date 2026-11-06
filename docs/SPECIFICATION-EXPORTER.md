@@ -30852,7 +30852,9 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheMetricsDescribeTheAllocation` (allocator), changed: the expected static targets of each member are the weighted placement's, static and probe targets together, where they were `allocapi.Owner`'s of the static targets alone.
 - `TestThePagesMarkOnlyAJobHashingWouldSeldomSpreadSo` (allocator), changed: runs at a balance factor of 10, so the targets lie where hashing puts them, which the bound would even out.
 - `TestTheAllocatorAndItsReplicasEndToEnd` (allocator), changed: runs at a balance factor of 10, so a member joining moves only what it takes and one leaving only its own, which the bound breaks for 30 targets over a few members by what the probes' random port hashes to.
-- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator), changed: the leader's and the follower's bundles are compared once one interval has passed, after which a static target the leader moved when its probe target came no longer drains.
+- `TestAFollowerDrainsWhatTheLeaderDrains` (allocator): a leader whose static source answers before its probe source, the follower having taken neither answer, moves the static target when the probe target comes and drains it on the member that had it; the follower, taking both answers from one snapshot, drains it there too, and the two serve the same bundles, of the same generations, with the same snapshot digest at once, and again once 30s have passed, the target no longer draining on either.
+- `TestAFollowerThatFoundTheSameTargetsTakesTheLeadersDrains` (allocator): two instances that discovered alone, the leader's static source answering first and the follower's probe source first, find the same targets, the leader draining one and the follower none; once they are peers the follower's fetch is answered with the snapshot, its digest covering the drains, and the two serve the same bundles.
+- `TestAFollowerServesTheLeadersDiscoveredTargets` (allocator): its bundles are compared right after the follower took the snapshot again, whichever of the leader's sources answered first; 50 runs, and 50 under the race detector, pass.
 - `TestTheAllocatorsSchemasDeclareTheDecodersKeys` (test/repository), changed: the probe targets file has `default_weight` beside `probe_jobs`, and an entry `weight` and `weight_label`; `TestTheAllocatorsSchemasRefuseWhatTheAllocatorRefuses`, extended: weights of 0, over 1000 or of text, a `weight_label` that is no label name and a `default_weight` of 0 or -1 are refused by both schemas, the weights of every place are taken, and the exporter's static target schema refuses `weight`.
 - `TestChartSetsTheAllocatorCapacity` (chart, test/repository): `server.allocatorCapacity` of 2, 0.1, 100, 1.25 and `"2.5"` renders `--allocator.capacity` with it beside `allocator.enabled`, empty, null and unset render none; set without `allocator.enabled`, of 0.05, 100.5, 1.0001 or a word, and `--allocator.capacity` in `extraArgs`, fail rendering naming `server.allocatorCapacity`, with the values schema and with it skipped.
 - `TestChartProbeJobsTakeWeights` (chart, test/repository): a probe job's `weight` and `weight_label` reach the probe targets file as written, and a weight of 0 fails rendering; `TestChartProbeJobKeysAreTheAllocatorsKeys`, extended by the keys.
@@ -33703,7 +33705,18 @@ source or `--discovery.max-targets`: a source's targets refused MUST be the
 source's failure, logged and counted in
 `pue_allocator_discovery_refreshes_total{result="failure"}` once while its
 text stays the same, the source keeping what the follower holds, and MUST
-keep what it holds of a source that has not answered on the leader. A source
+keep what it holds of a source that has not answered on the leader. The
+snapshot MUST list, as `draining`, the static targets the instance drains
+because a change of the discovered targets moved them, each with its member
+and the seconds left, and its digest MUST cover each such target and member
+but not the seconds; it MUST be taken under the lock under which an answer
+of a source is put in force, so it never holds an answer without the drains
+the answer made. A follower taking a snapshot MUST drain those in place of
+the drains of discovered targets it holds, even when the discovered targets
+stay the same, keeping a target it drains for a member list or input files
+that changed for the longer of the two, and leaving out a drain on a member
+not in its member list, of a target it lacks, or of one that member owns
+there. A source
 of the follower's that the snapshot lacks MUST be asked by the follower
 itself, from a refresh loop of its own, until a snapshot has it (or a `304`
 says the leader holds what the follower does), and only then stopped. A
@@ -33825,9 +33838,14 @@ A probe whose placed member is not among the members it is routed among
 rule, over the loads of the placement. A static target whose
 owner changes while its old owner stays in the member list MUST stay in the
 old owner's share for one of its intervals, its own or the file's, and then
-leave it, whether a change of the member list or a reload of the input
-files changed its owner (its `shard_key` changed, say); a static target a
-reload removes MUST leave every share at once.
+leave it, whether a change of the member list, a reload of the input files
+or a change of the discovered targets changed its owner (its `shard_key`
+changed, say); a static target a reload removes MUST leave every share at
+once. A follower MUST NOT work out the drains of a change of the discovered
+targets it takes from the leader's snapshot: it MUST drain those the
+snapshot lists, each for what is left of it there (**Peers** above), so
+the instances serve identical bundles once the follower has taken the
+snapshot, whatever order the leader's sources answered in.
 
 **Bundles.** A member's bundle MUST be `allocapi.Bundle`, sealed: the
 configuration at `config.yaml` and every collector file at its path

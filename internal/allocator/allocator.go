@@ -133,7 +133,7 @@ type Allocator struct {
 	fallbackLogged map[string]bool
 	// draining are the static targets a member has lost and keeps for one
 	// of the target's intervals, until the time they map to.
-	draining map[drainKey]time.Time
+	draining map[drainKey]drain
 	// bundles are the bundles of the effective members, and joining the
 	// bundle of any other member: the configuration with no static
 	// targets.
@@ -202,6 +202,18 @@ type member struct {
 
 type drainKey struct{ target, member string }
 
+// drain is how long a member keeps a static target it has lost, and
+// whether a change of the discovered targets moved it. Those are the drains
+// a follower takes from the leader's snapshot (takeDrains) rather than
+// works out: the leader puts the answers of its sources in force one at a
+// time, as they come, and a target one answer moves it drains, where a
+// follower that takes several answers at once would not see the target
+// move at all, or see it move from elsewhere.
+type drain struct {
+	until      time.Time
+	discovered bool
+}
+
 // New returns an allocator serving in.
 func New(in *Inputs, opts Options) *Allocator {
 	a := &Allocator{
@@ -212,7 +224,7 @@ func New(in *Inputs, opts Options) *Allocator {
 		maxMembers:        opts.MaxMembers,
 		inputs:            in,
 		members:           map[string]*member{},
-		draining:          map[drainKey]time.Time{},
+		draining:          map[drainKey]drain{},
 		bundles:           map[string]*allocapi.Bundle{},
 		collectorsOf:      map[string]map[string]bool{},
 		changed:           make(chan struct{}),
@@ -441,8 +453,8 @@ func (a *Allocator) update() {
 		a.takeEffect(now)
 		rebuild = true
 	}
-	for key, until := range a.draining {
-		if !now.Before(until) {
+	for key, d := range a.draining {
+		if !now.Before(d.until) {
 			delete(a.draining, key)
 			rebuild = true
 		}
@@ -522,7 +534,7 @@ func (a *Allocator) takeEffect(now time.Time) {
 			t := &in.Targets.Targets[i]
 			from, to := was.owner[in.shardKeys[i]], is.owner[in.shardKeys[i]]
 			if from != to && slices.Contains(after, from) {
-				a.draining[drainKey{t.Name, from}] = now.Add(time.Duration(t.Interval))
+				a.draining[drainKey{t.Name, from}] = drain{until: now.Add(time.Duration(t.Interval))}
 			}
 		}
 	}
@@ -544,8 +556,9 @@ func (a *Allocator) takeEffect(now time.Time) {
 // the member that had it, as takeEffect does for a change of the member
 // list: a changed shard_key moves a target as surely as a new member does.
 // A target the new inputs no longer have drains nowhere, nor does one that
-// is back with the member draining it.
-func (a *Allocator) handOver(old *Inputs, now time.Time) {
+// is back with the member draining it. discovered says the change is one of
+// the discovered targets.
+func (a *Allocator) handOver(old *Inputs, now time.Time, discovered bool) {
 	in := a.inputs
 	if a.settled && old != nil && old.Targets != nil && in.Targets != nil && len(a.effective) > 0 {
 		before := a.planFor(old, a.effective, a.effectiveCaps)
@@ -558,10 +571,16 @@ func (a *Allocator) handOver(old *Inputs, now time.Time) {
 			}
 			was, is := before.owner[old.shardKeys[j]], after.owner[in.shardKeys[i]]
 			if was != is {
-				a.draining[drainKey{t.Name, was}] = now.Add(time.Duration(t.Interval))
+				a.draining[drainKey{t.Name, was}] = drain{until: now.Add(time.Duration(t.Interval)), discovered: discovered}
 			}
 		}
 	}
+	a.dropStaleDrains()
+}
+
+// dropStaleDrains drops the draining targets the inputs in force no longer
+// have, and those back with the member draining them.
+func (a *Allocator) dropStaleDrains() {
 	for key := range a.draining {
 		if owner := a.ownerOf(key.target); owner == "" || owner == key.member {
 			delete(a.draining, key)
@@ -624,8 +643,8 @@ func (a *Allocator) schedule() {
 			consider(at)
 		}
 	}
-	for _, until := range a.draining {
-		consider(until)
+	for _, d := range a.draining {
+		consider(d.until)
 	}
 	if next.IsZero() {
 		return
@@ -783,7 +802,7 @@ func (a *Allocator) Reload(p Paths) bool {
 	// What was checked was checked against the files in force before.
 	a.checked = nil
 	a.syncSources(in)
-	a.putInForce(in)
+	a.putInForce(in, false, nil)
 	a.mu.Lock()
 	a.reloadsOK++
 	a.mu.Unlock()

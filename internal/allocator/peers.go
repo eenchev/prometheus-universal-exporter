@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -707,6 +708,18 @@ type peerSnapshot struct {
 	ID          string                    `json:"id"`
 	Discovering bool                      `json:"discovering"`
 	Sources     map[string]snapshotSource `json:"sources"`
+	// Draining are the static targets a change of the discovered targets
+	// moved that drain on the instance, which a follower drains as the
+	// leader does (takeDrains).
+	Draining []snapshotDrain `json:"draining,omitempty"`
+}
+
+// snapshotDrain is a static target that drains on a member, for Seconds
+// more: what is left of it, since the instances' clocks need not agree.
+type snapshotDrain struct {
+	Target  string  `json:"target"`
+	Member  string  `json:"member"`
+	Seconds float64 `json:"seconds"`
 }
 
 // snapshotSource is one source in a snapshot: whether it has answered,
@@ -764,7 +777,7 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return false, fmt.Errorf("the snapshot is not one an allocator serves: %w", err)
 	}
-	p.a.takeSnapshot(s.Sources)
+	p.a.takeSnapshot(&s)
 	_, held = p.a.snapshotOf()
 	return held == etagValue(resp.Header.Get("ETag")), nil
 }
@@ -809,14 +822,23 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 // ConfigMap has not yet reached the leader's pod, is asked by this instance
 // itself, from a refresh loop of its own, until the snapshot has it:
 // taking nothing of it would leave its targets out of this instance's bundles
-// meanwhile.
+// meanwhile. The static targets the leader drains because a change of the
+// discovered targets moved them drain here too, for what is left of their
+// intervals there, in place of those the change would drain here
+// (takeDrains), even when the discovered targets stay the same.
 // A nil snap stands for a snapshot of what this instance holds.
-func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
+func (a *Allocator) takeSnapshot(snap *peerSnapshot) {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	var sources map[string]snapshotSource
+	if snap != nil {
+		sources = snap.Sources
+	}
 	changed := false
 	a.dmu.Lock()
 	for _, s := range a.sources {
 		attrs := []any{"kind", s.spec.kind, "owner", s.spec.owner, "source", s.spec.cfg.Name}
-		got, has := snap[s.spec.identity()]
+		got, has := sources[s.spec.identity()]
 		if snap == nil {
 			got, has = snapshotSource{}, true
 		}
@@ -862,19 +884,106 @@ func (a *Allocator) takeSnapshot(snap map[string]snapshotSource) {
 		changed = true
 	}
 	a.dmu.Unlock()
-	if changed {
-		a.applyDiscovery()
+	switch {
+	case snap != nil:
+		if a.putInForce(a.base, true, snap) {
+			a.logger.Info("discovered targets changed", a.currentInputs().logAttrs()...)
+		}
+	case changed:
+		a.applyDiscoveryLocked()
 	}
+}
+
+// takeDrains puts the drains of the leader's snapshot, list, in force in
+// place of the drains this instance's own changes of the discovered targets
+// made, each for what is left of it at the leader, and reports whether the
+// targets that drain changed. A target this instance drains for another
+// reason, a member list or input files that changed, keeps draining, for
+// the longer of the two. A drain on a member not in this instance's member
+// list, or of a target it does not have or that member owns here, is left
+// out: the two instances hold other member lists or input files for the
+// moment, and serve other bundles anyway. Called under mu.
+func (a *Allocator) takeDrains(list []snapshotDrain, now time.Time) bool {
+	before := make(map[drainKey]bool, len(a.draining))
+	for key, d := range a.draining {
+		before[key] = true
+		if d.discovered {
+			delete(a.draining, key)
+		}
+	}
+	for _, d := range list {
+		// What is left of a drain is at most a target's interval; a
+		// leader that says more, or none, is not taken at its word.
+		if !(d.Seconds > 0 && d.Seconds < 1e9) || !slices.Contains(a.effective, d.Member) {
+			continue
+		}
+		key := drainKey{d.Target, d.Member}
+		until := now.Add(time.Duration(d.Seconds * float64(time.Second)))
+		if own, ok := a.draining[key]; ok {
+			a.draining[key] = drain{until: maxTime(own.until, until)}
+			continue
+		}
+		a.draining[key] = drain{until: until, discovered: true}
+	}
+	a.dropStaleDrains()
+	changed := len(before) != len(a.draining)
+	for key := range a.draining {
+		changed = changed || !before[key]
+	}
+	return changed
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+// discoveredDrains are the drains a change of the discovered targets made,
+// in order. Called under mu.
+func (a *Allocator) discoveredDrains(now time.Time) []snapshotDrain {
+	var out []snapshotDrain
+	for key, d := range a.draining {
+		if d.discovered {
+			out = append(out, snapshotDrain{Target: key.target, Member: key.member, Seconds: max(d.until.Sub(now).Seconds(), 0)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Member < out[j].Member
+	})
+	return out
 }
 
 // snapshotOf is the allocator's snapshot and its digest, the ETag it is
 // served with and the If-None-Match a follower names: instances that hold the
-// same discovered targets have the same digest.
+// same discovered targets, and drain the same of the static targets their
+// changes moved, have the same digest. It is taken under reloadMu, under
+// which an answer of a source is put in force with the drains it makes, so
+// the snapshot never holds an answer without them.
 func (a *Allocator) snapshotOf() (peerSnapshot, string) {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	a.mu.Lock()
+	drains := a.discoveredDrains(a.clock.Now())
+	a.mu.Unlock()
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
-	s := peerSnapshot{ID: a.id, Discovering: a.discovering, Sources: map[string]snapshotSource{}}
+	s := peerSnapshot{ID: a.id, Discovering: a.discovering, Sources: map[string]snapshotSource{}, Draining: drains}
 	digest := map[string]string{}
+	if len(drains) > 0 {
+		// What is left of each drain is not part of it: it changes from one
+		// moment to the next, and the two instances' drains end alike.
+		keys := make([]string, len(drains))
+		for i, d := range drains {
+			keys[i] = d.Target + "\x00" + d.Member
+		}
+		// No source's identity begins with a NUL.
+		digest["\x00draining"] = strings.Join(keys, "\n")
+	}
 	for _, src := range a.sources {
 		id := src.spec.identity()
 		entry := snapshotSource{Answered: src.ok, RefreshIntervalSeconds: src.interval().Seconds()}

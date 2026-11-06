@@ -104,13 +104,18 @@ const peerToken = "s3cret"
 // peerInputs are input files whose probe job and discovered_targets entry
 // each have an http_sd source of srv.
 func peerInputs(t *testing.T, srv *sdServer) Paths {
+	return peerInputsOf(t, srv.URL)
+}
+
+// peerInputsOf are peerInputs of the http_sd server at url.
+func peerInputsOf(t *testing.T, url string) Paths {
 	probes := `probe_jobs:
   - name: websites
     collector: demo
     target_template: https://{{address}}/health
     discovery:
       - name: cmdb
-        http_sd: {url: "` + srv.URL + `/probes", refresh_interval: 1h}
+        http_sd: {url: "` + url + `/probes", refresh_interval: 1h}
 `
 	static := `interval: 30s
 discovered_targets:
@@ -118,7 +123,7 @@ discovered_targets:
     collector: demo
     target_template: http://{{address}}/metrics
     discovery:
-      - http_sd: {url: "` + srv.URL + `/nodes", refresh_interval: 1h}
+      - http_sd: {url: "` + url + `/nodes", refresh_interval: 1h}
 `
 	return writeInputs(t, testConfig, static, probes)
 }
@@ -247,15 +252,6 @@ func TestAFollowerServesTheLeadersDiscoveredTargets(t *testing.T) {
 	if !reflect.DeepEqual(ls, fs) {
 		t.Errorf("the service discovery answers differ:\nleader   %v\nfollower %v", ls, fs)
 	}
-	// Static and probe targets share the members' loads, so the leader,
-	// whose sources answer one after the other, may have placed the static
-	// target before the probe target came and moved it once it did; it then
-	// drains the target for one of its intervals, where the follower, which
-	// took both at once, has nothing to drain. Past that interval the two
-	// serve the same bundles.
-	for _, c := range []*peerInstance{leader, follower} {
-		keepBeating(t, c.a, c.clock, 31*time.Second, "r1", "r2")
-	}
 	for _, member := range []string{"r1", "r2", "joining"} {
 		lb, fb := leader.a.Bundle(member), follower.a.Bundle(member)
 		if lb.Generation != fb.Generation || !reflect.DeepEqual(lb.Files, fb.Files) {
@@ -285,6 +281,150 @@ func TestAFollowerServesTheLeadersDiscoveredTargets(t *testing.T) {
 	if strings.Contains(follower.metrics(t), "discovery_refreshes_total{kind=\"probe\",owner=\"websites\",source=\"cmdb\",result=\"success\"} 1") {
 		t.Error("the follower counts a refresh it did not make")
 	}
+}
+
+// The leader puts the answers of its sources in force one at a time, as they
+// come. Static and probe targets share the members' loads, so the probe
+// target, found after the static one, moves the static target to the other
+// member, and the member that had it keeps it for one of its intervals. The
+// follower takes both answers at once from the leader's snapshot, and
+// would see no target move; it drains what the leader drains, for what is
+// left of it at the leader, so the two serve the same bundles at once, and
+// once the interval has passed, again.
+func TestAFollowerDrainsWhatTheLeaderDrains(t *testing.T) {
+	url, release := heldSDServer(t)
+	p := peerInputsOf(t, url)
+	instances := []*peerInstance{newPeerInstance(t, p, nil), newPeerInstance(t, p, nil)}
+	sort.Slice(instances, func(i, j int) bool { return comparePeers(instances[i].addr, instances[j].addr) < 0 })
+	leader, follower := instances[0], instances[1]
+	usePeers(leader, follower)
+	leader.round()
+	follower.round()
+	// The follower has taken the snapshot of neither answer.
+	release["/nodes"]()
+	testutil.WaitFor(t, "the leader to find the static target", func() bool {
+		return len(allTargets(t, leader.a, "r1", "r2")) == 1
+	})
+	first := shareOf(t, leader.a, "r1", "r2")
+	release["/probes"]()
+	testutil.WaitFor(t, "the leader to find the probe target", func() bool { return serves(leader, t, "first") })
+	leader.a.mu.Lock()
+	var drains []drainKey
+	for key := range leader.a.draining {
+		drains = append(drains, key)
+	}
+	leader.a.mu.Unlock()
+	if len(drains) != 1 || drains[0].member != first {
+		t.Fatalf("the leader drains %+v, want the static target on %s, which had it", drains, first)
+	}
+	follower.round()
+	sameBundles := func(when string) {
+		t.Helper()
+		for _, member := range []string{"r1", "r2", "joining"} {
+			lb, fb := leader.a.Bundle(member), follower.a.Bundle(member)
+			if lb.Generation != fb.Generation || !reflect.DeepEqual(lb.Files, fb.Files) {
+				t.Errorf("%s the bundles of %s differ:\nleader   %v\nfollower %v", when, member, lb.Files, fb.Files)
+			}
+		}
+		_, held := follower.a.snapshotOf()
+		_, leaders := leader.a.snapshotOf()
+		if held != leaders {
+			t.Errorf("%s the follower's snapshot digest is %s, the leader's %s", when, held, leaders)
+		}
+	}
+	sameBundles("once the follower took the snapshot,")
+	if n := len(allTargets(t, follower.a, first)); n != 1 {
+		t.Errorf("the follower's bundle of %s holds %d static targets, want the one it drains", first, n)
+	}
+	for _, c := range []*peerInstance{leader, follower} {
+		keepBeating(t, c.a, c.clock, 30*time.Second, "r1", "r2")
+	}
+	sameBundles("once the target drained,")
+	if n := len(allTargets(t, follower.a, first)); n != 0 {
+		t.Errorf("the follower's bundle of %s holds %d static targets once the target drained, want none", first, n)
+	}
+}
+
+// Instances that found the same targets on their own, as two do that both led
+// for a while, may drain other static targets, their sources having
+// answered in another order: the follower is then told of the leader's
+// drains, though it holds what the leader's sources found, and drains
+// what the leader does.
+func TestAFollowerThatFoundTheSameTargetsTakesTheLeadersDrains(t *testing.T) {
+	urlA, releaseA := heldSDServer(t)
+	urlB, releaseB := heldSDServer(t)
+	a, b := newPeerInstance(t, peerInputsOf(t, urlA), nil), newPeerInstance(t, peerInputsOf(t, urlB), nil)
+	if comparePeers(a.addr, b.addr) > 0 {
+		a, b = b, a
+		releaseA, releaseB = releaseB, releaseA
+	}
+	leader, follower := a, b
+	// The leader's sources answer static target first, the follower's the
+	// probe target first: only the leader moves the static target.
+	leader.a.StartDiscovery()
+	releaseA["/nodes"]()
+	testutil.WaitFor(t, "the leader to find the static target", func() bool { return len(allTargets(t, leader.a, "r1", "r2")) == 1 })
+	releaseA["/probes"]()
+	testutil.WaitFor(t, "the leader to find the probe target", func() bool { return serves(leader, t, "first") })
+	follower.a.StartDiscovery()
+	releaseB["/probes"]()
+	testutil.WaitFor(t, "the follower to find the probe target", func() bool { return serves(follower, t, "first") })
+	releaseB["/nodes"]()
+	testutil.WaitFor(t, "the follower to find the static target", func() bool { return len(allTargets(t, follower.a, "r1", "r2")) == 1 })
+	count := func(c *peerInstance) int {
+		c.a.mu.Lock()
+		defer c.a.mu.Unlock()
+		return len(c.a.draining)
+	}
+	if count(leader) != 1 || count(follower) != 0 {
+		t.Fatalf("the leader drains %d targets and the follower %d, want 1 and 0", count(leader), count(follower))
+	}
+	usePeers(leader, follower)
+	leader.round()
+	follower.round()
+	if follower.discovering() || !leader.discovering() {
+		t.Fatalf("the follower discovers %v and the leader %v", follower.discovering(), leader.discovering())
+	}
+	for _, member := range []string{"r1", "r2", "joining"} {
+		lb, fb := leader.a.Bundle(member), follower.a.Bundle(member)
+		if lb.Generation != fb.Generation || !reflect.DeepEqual(lb.Files, fb.Files) {
+			t.Errorf("the bundles of %s differ:\nleader   %v\nfollower %v", member, lb.Files, fb.Files)
+		}
+	}
+}
+
+// heldSDServer is an http_sd server that answers /nodes and /probes with
+// one target each, each path once its release is called.
+func heldSDServer(t *testing.T) (string, map[string]func()) {
+	t.Helper()
+	held := map[string]chan struct{}{"/nodes": make(chan struct{}), "/probes": make(chan struct{})}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-held[r.URL.Path]:
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprintf(w, `[{"targets": ["first-%s.example:9100"]}]`, strings.Trim(r.URL.Path, "/"))
+	}))
+	t.Cleanup(srv.Close)
+	release := map[string]func(){}
+	for path, ch := range held {
+		release[path] = sync.OnceFunc(func() { close(ch) })
+		t.Cleanup(release[path])
+	}
+	return srv.URL, release
+}
+
+// shareOf is the member of members whose bundle holds a static target, ""
+// when none does.
+func shareOf(t *testing.T, a *Allocator, members ...string) string {
+	t.Helper()
+	for _, m := range members {
+		if len(allTargets(t, a, m)) > 0 {
+			return m
+		}
+	}
+	return ""
 }
 
 // When the leader shuts down, the follower leads at its next round, starts

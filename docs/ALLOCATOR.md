@@ -556,6 +556,21 @@ input files with the same discovered targets, and serve the same bundles, of
 the same generations, and the same service discovery answers. A follower
 keeps what it holds of a source that has not answered on the leader.
 
+The snapshot also lists the static targets the leader drains because a
+change of the discovered targets moved them, each with its member and how
+much longer it drains there, and a follower drains those, for what is left
+of them, in place of working out its own. The leader puts its sources'
+answers in force one at a time, as they come, and each may move static
+targets, which then drain ([Weights and capacity](#weights-and-capacity));
+a follower that takes several answers at once from one snapshot sees only
+where the targets were and where they are, and would drain other targets,
+or none, so the bundles of the members that had them would differ. A
+target the follower drains for a reason of its own, a member list or input
+files that changed, keeps draining, for the longer of the two. The drains
+are part of the snapshot's digest, so instances that found the same targets
+but drain other ones, as two that both led for a moment may, are told
+apart, and the follower takes the leader's.
+
 A snapshot writes each source's targets as the target groups it answered, a
 group's labels once rather than once for each of its targets, so it is about
 the size of the sources' answers; it may be up to 16 MiB for each of the
@@ -888,10 +903,19 @@ bound binds often: it evens out what hashing would leave uneven, and moves
 more units at a change, 10 targets over 10 members being held to one each.
 Since static and probe targets share the members' loads, a change of the
 probe targets can move a static target too, which is handed over as any
-move is. An instance that takes the two changes at once, as a follower does
-from the leader's snapshot, moves it without a handover, so for one of the
-target's intervals the leader's bundle of the old owner holds it draining
-and the follower's does not. The bound applies with or without weights and
+move is. Where a target drains thus depends on the order the changes came
+in, not only on the targets before and after them: the leader, whose
+sources answer one at a time, may move a static target when the first
+answer comes and again, or back, when the second does, where a follower
+that takes both answers from one snapshot sees a single change, or none.
+So a follower takes the leader's drains of the discovered targets with its
+snapshot ([Instances with discovery](#instances-with-discovery)) rather
+than working them out, and the instances serve the same bundles once it
+has. Placing the static targets first, by their own weight, and the probes
+after them would keep probe changes from moving static targets, but not
+two answers of static sources from doing the same, and would balance the
+members' loads less well; taking the drains from the leader covers both.
+The bound applies with or without weights and
 capacities, one rule for all;
 `--allocation.balance-factor` 10 lets hashing place everything for up to 10
 members, and 1 holds every member to its fair share, as nearly as whole
@@ -919,7 +943,7 @@ must not be one of them. The token is never taken from the URL.
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another instance | `{"id": "…", "discovering": true, "address_known": true}`: the instance's process id, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, and the static targets a change of them moved that drain, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /` | a person | The [status page](#status-page). |
 | `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |

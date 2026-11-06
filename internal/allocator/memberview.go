@@ -181,7 +181,7 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 		sort.Slice(owned, func(i, j int) bool { return owned[i].Name < owned[j].Name })
 		view.Static.add(owned, match)
 		var draining []MemberStaticTarget
-		for key, until := range a.draining {
+		for key, d := range a.draining {
 			i, ok := in.targetIndex[key.target]
 			if key.member != member || !ok {
 				continue
@@ -189,7 +189,7 @@ func (a *Allocator) MemberView(member, filter string) (view MemberView, known bo
 			st := static(&in.Targets.Targets[i])
 			st.Weight = float64(in.staticWeight(i)) / milli
 			st.MovedTo = a.ownerOf(key.target)
-			st.DrainsForSeconds = ageSeconds(until.Sub(now).Seconds())
+			st.DrainsForSeconds = ageSeconds(d.until.Sub(now).Seconds())
 			draining = append(draining, st)
 		}
 		sort.Slice(draining, func(i, j int) bool { return draining[i].Name < draining[j].Name })

@@ -83,17 +83,22 @@ func TestChartSchedulesTheAllocatorByItsOwnValues(t *testing.T) {
 
 // /ready answers as soon as an allocator has read its inputs, but its first
 // member list takes effect max(settle, heartbeat interval) after it starts,
-// and the exporter pods hear of it at their next heartbeat, a heartbeat
-// interval on. The Deployment's minReadySeconds covers both, so a rollout
-// does not count a new allocator available while it hands out nothing; an
-// empty settle is the allocator's default, 15s, and an empty
-// heartbeatInterval its 10s. allocator.heartbeatInterval is the allocator's
-// --heartbeat.interval, left out when empty.
+// and no sooner than the interval the exporter pods say, the old pods' up
+// to 2m during a rollout that shortens it, after the first heartbeat; the
+// exporter pods hear of it at their next heartbeat, a heartbeat interval on.
+// The Deployment's minReadySeconds, max(settle, 2m) plus the interval,
+// covers them, so a rollout does not count a new allocator available while
+// it hands out nothing; an empty settle is the allocator's default, 15s, and
+// an empty heartbeatInterval its 10s. allocator.heartbeatInterval is the
+// allocator's --heartbeat.interval, left out when empty. At settle's bound,
+// 1h, a rollout waits a little over an hour for each new allocator pod.
 func TestChartHoldsANewAllocatorUnavailableUntilItAllocates(t *testing.T) {
 	helm := requireHelm(t)
+	requireSchemaSkipping(t, helm)
 	for _, c := range []struct{ settle, interval, want string }{
-		{"", "", "25"}, {"15s", "", "25"}, {"0s", "", "20"}, {"1.5s", "", "20"}, {"500ms", "", "20"}, {"1m30.5s", "", "101"}, {"2m", "", "130"}, {"10s1ms", "", "21"},
-		{"", "10s", "25"}, {"", "5s", "20"}, {"", "30s", "60"}, {"0s", "1.5s", "4"}, {"15s", "2m", "240"}, {"20s", "1s", "21"},
+		{"", "", "130"}, {"15s", "", "130"}, {"0s", "", "130"}, {"1m30.5s", "", "130"}, {"2m", "", "130"}, {"2m0.5s", "", "131"}, {"5m", "", "310"}, {"2m1ms", "1.5s", "123"},
+		{"", "10s", "130"}, {"", "5s", "125"}, {"", "30s", "150"}, {"0s", "1.5s", "122"}, {"15s", "2m", "240"}, {"20s", "1s", "121"},
+		{"1h", "", "3610"}, {"60m", "2m", "3720"}, {"3600s", "1s", "3601"},
 	} {
 		docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-string", "allocator.settle="+c.settle, "--set-string", "allocator.heartbeatInterval="+c.interval)
 		deployment := manifest(t, docs, allocatorDeployment)
@@ -113,6 +118,19 @@ func TestChartHoldsANewAllocatorUnavailableUntilItAllocates(t *testing.T) {
 		if want := map[bool]int{true: 0, false: 1}[c.interval == ""]; flags != want {
 			t.Errorf("with heartbeat interval %q the allocator has %d --heartbeat.interval flags, want %d: %v", c.interval, flags, want, args)
 		}
+		if c.settle != "" && !slices.Contains(args, "--settle="+c.settle) {
+			t.Errorf("with settle %q the allocator's arguments are %v, want --settle=%s", c.settle, args, c.settle)
+		}
+	}
+	// With the values schema skipped an integer 0 of allocator.settle is
+	// the text 0, not taken for empty: the allocator settles at once rather
+	// than after its default 15s, and minReadySeconds counts it as 0.
+	deployment := manifest(t, manifests(t, helm, "--skip-schema-validation", "--set", "allocator.enabled=true", "--set", "allocator.settle=0"), allocatorDeployment)
+	if args := scalars(path(deployment, "spec", "template", "spec", "containers", "0", "args")); !slices.Contains(args, "--settle=0") {
+		t.Errorf("an integer 0 of allocator.settle renders %v, want --settle=0", args)
+	}
+	if got := text(path(deployment, "spec", "minReadySeconds")); got != "130" {
+		t.Errorf("an integer 0 of allocator.settle makes minReadySeconds %q, want 130", got)
 	}
 }
 

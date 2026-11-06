@@ -139,6 +139,14 @@ type HeartbeatReply struct {
 	// none, from an allocator that does not say it, keeps the interval it
 	// has.
 	HeartbeatIntervalSeconds float64 `json:"heartbeat_interval_seconds,omitempty"`
+	// Instance names the allocator's process that answered. A replica keys
+	// what each instance said by it, not by the address it reached the
+	// instance at: behind one address, a Service's ClusterIP or a load
+	// balancer, several instances may answer in turn, and with different
+	// intervals during a rollout; keyed by the address, what the address
+	// said would change at every answer. A reply without one is keyed by
+	// its address.
+	Instance string `json:"instance,omitempty"`
 }
 
 // Bundle is what BundlePath answers for one member.

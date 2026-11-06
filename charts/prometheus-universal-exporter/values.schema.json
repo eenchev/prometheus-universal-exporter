@@ -721,13 +721,17 @@
             "limits": {"$ref": "#/$defs/quantityMap"}
           }
         },
-        "settle": {"type": "string", "description": "Rendered as --settle: a Go duration of zero or more; empty leaves the flag out.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "settle": {"type": "string", "description": "Rendered as --settle: a Go duration from 0 to 1h, which the chart checks; empty leaves the flag out and the allocator's default, 15s, in force.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
         "heartbeatInterval": {"type": "string", "description": "Rendered as --heartbeat.interval: a Go duration from 1s to 2m, which the chart checks; empty leaves the flag out and the allocator's default, 10s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
-        "configWatchInterval": {"type": "string", "description": "Rendered as the allocator's --config.watch-interval: a Go duration of zero or more, 0 reading the input files once; empty leaves the flag out and the allocator's default, 60s, in force.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
-        "discoveryRefreshInterval": {"type": "string", "description": "Rendered as the allocator's --discovery.refresh-interval: a Go duration of 1s or more, which the chart checks; empty leaves the flag out and each discovery source kind its own default.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "configWatchInterval": {"type": "string", "description": "Rendered as the allocator's --config.watch-interval: a Go duration from 0 to 24h, which the chart checks, 0 reading the input files once; empty leaves the flag out and the allocator's default, 60s, in force.", "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"},
+        "discoveryRefreshInterval": {"type": "string", "description": "Rendered as the allocator's --discovery.refresh-interval: a Go duration from 1s to 24h, which the chart checks; empty leaves the flag out and each discovery source kind its own default.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
         "maxMembers": {"type": "integer", "minimum": 1, "maximum": 2147483647, "description": "Rendered as --members.max: how many live members the allocator takes."},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as the allocator's --log.level."},
         "leaderOnly": {"type": "boolean", "description": "Rendered as the allocator's --peers.leader-only, with a discovery source only: only the leader serves the whole of /metrics and of the status page."},
+        "peerCheckInterval": {"type": "string", "description": "Rendered as the allocator's --peers.check-interval, with a discovery source only: a Go duration from 500ms to 1m, which the chart checks; empty leaves the flag out and the allocator's default, 2s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerCheckTimeout": {"type": "string", "description": "Rendered as the allocator's --peers.check-timeout, with a discovery source only: a Go duration from 100ms to less than the check interval, which the chart checks; empty leaves the flag out and the allocator's default, 1s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerSnapshotTimeout": {"type": "string", "description": "Rendered as the allocator's --peers.snapshot-timeout, with a discovery source only: a Go duration from the check timeout to 5m, which the chart checks; empty leaves the flag out and the allocator's default, 30s, in force.", "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"},
+        "peerFailureThreshold": {"type": ["integer", "null"], "minimum": 1, "maximum": 20, "description": "Rendered as the allocator's --peers.failure-threshold, with a discovery source only: the failed checks in a row after which a pod stops being live; null leaves the flag out and the allocator's default, 3, in force."},
         "tokenSecret": {
           "type": "object",
           "additionalProperties": false,

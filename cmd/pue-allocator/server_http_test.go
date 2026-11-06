@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -90,11 +91,35 @@ func TestALongPollOutlastsTheReadTimeout(t *testing.T) {
 	}
 }
 
-// An instance among peers that is sent SIGTERM keeps serving for
-// allocator.PeerShutdownDelay, its /v1/peer and /ready answering 503, so
-// its peers see it is shutting down at their next check and the next instance
-// leads at once, rather than finding its listener closed; then it exits 0.
+// An instance among peers that is sent SIGTERM keeps serving for its
+// shutdown delay, a check interval and a check timeout, 3s by default and
+// 600ms with --peers.check-interval=500ms and --peers.check-timeout=100ms,
+// its /v1/peer and /ready answering 503, so its peers see it is shutting
+// down at their next check and the next instance leads at once, rather
+// than finding its listener closed; then it exits 0.
 func TestAnInstanceAmongPeersAnswers503BeforeItStops(t *testing.T) {
+	for _, c := range []struct {
+		args            []string
+		interval, delay time.Duration
+	}{
+		{nil, allocator.DefaultPeerCheckInterval, 3 * time.Second},
+		{[]string{"--peers.check-interval=500ms", "--peers.check-timeout=100ms"}, 500 * time.Millisecond, 600 * time.Millisecond},
+	} {
+		unavailable, logs := stopAmongPeers(t, c.args...)
+		if unavailable < c.interval {
+			t.Errorf("%v: /v1/peer answered 503 until %s after the signal, want it served for at least %s", c.args, unavailable, c.interval)
+		}
+		if want := fmt.Sprintf(`"delay":"%s"`, c.delay); !strings.Contains(logs, want) {
+			t.Errorf("%v: the shutdown is not logged with %s:\n%s", c.args, want, logs)
+		}
+	}
+}
+
+// stopAmongPeers runs an instance among peers with args, sends it SIGTERM
+// once it is ready, and returns for how long after the signal /v1/peer
+// answered 503 and what the instance logged.
+func stopAmongPeers(t *testing.T, args ...string) (time.Duration, string) {
+	t.Helper()
 	dir := t.TempDir()
 	conf := testutil.WriteIn(t, dir, "config.yaml", `collectors:
   - name: demo
@@ -115,7 +140,7 @@ func TestAnInstanceAmongPeersAnswers503BeforeItStops(t *testing.T) {
 	done := make(chan int, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
-		done <- run([]string{"--web.listen-address=" + address, "--config.file=" + conf, "--config.watch-interval=0", "--peers=" + address}, &stdout, &stderr)
+		done <- run(append([]string{"--web.listen-address=" + address, "--config.file=" + conf, "--config.watch-interval=0", "--peers=" + address}, args...), &stdout, &stderr)
 	}()
 	status := func(path string) (int, error) {
 		resp, err := http.Get("http://" + address + path)
@@ -151,15 +176,13 @@ func TestAnInstanceAmongPeersAnswers503BeforeItStops(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if unavailable < allocator.PeerInterval {
-		t.Errorf("/v1/peer answered 503 until %s after the signal, want it served for at least %s", unavailable, allocator.PeerInterval)
-	}
 	select {
 	case code := <-done:
 		if code != 0 {
 			t.Errorf("exited %d:\n%s", code, stderr.String())
 		}
-	case <-time.After(allocator.PeerShutdownDelay + 10*time.Second):
+	case <-time.After(allocator.PeerOptions{}.ShutdownDelay() + 10*time.Second):
 		t.Fatal("the allocator did not exit")
 	}
+	return unavailable, stderr.String()
 }

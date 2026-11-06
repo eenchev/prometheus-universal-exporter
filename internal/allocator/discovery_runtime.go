@@ -32,6 +32,20 @@ type sourceState struct {
 	// fromSnapshot says what the source holds came from the snapshot.
 	refreshed    time.Time
 	fromSnapshot bool
+	// leaderRefresh is how often the leader asks the source, as its last
+	// snapshot taken said, 0 when it said none.
+	leaderRefresh time.Duration
+}
+
+// interval is how often what the source holds is renewed: the leader's
+// interval of it when it came from the leader's snapshot and the snapshot
+// said one, as the leader is who asks it then, whatever this instance's
+// own settings of it say, and the source's own otherwise.
+func (s *sourceState) interval() time.Duration {
+	if s.fromSnapshot && s.leaderRefresh > 0 {
+		return s.leaderRefresh
+	}
+	return s.spec.cfg.refresh()
 }
 
 // fetch asks the source once; logger takes what is logged on the way.
@@ -96,7 +110,7 @@ func (a *Allocator) syncSources(in *Inputs) {
 			// failure is logged and counted, even one of the same text.
 			s.found, s.ok = old.found, old.ok
 			s.successes, s.failures, s.lastGood = old.successes, old.failures, old.lastGood
-			s.refreshed, s.fromSnapshot = old.refreshed, old.fromSnapshot
+			s.refreshed, s.fromSnapshot, s.leaderRefresh = old.refreshed, old.fromSnapshot, old.leaderRefresh
 		}
 		a.sources[spec.key] = s
 		if a.discovering {

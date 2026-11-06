@@ -51,15 +51,19 @@ pue-allocator \
 | `--static-targets-file` | none | The static target file, split among the replicas. |
 | `--probe-targets-file` | none | The probe targets file, served to Prometheus at `/v1/sd/<job>`. |
 | `--web.token-file` | none | A file holding a bearer token every request but `/healthz` and `/ready` must carry, read again when it changes, so a rotated Secret takes effect without a restart. The status page, `/v1/status` and `/metrics` also take it as the password of Basic auth, for a browser ([Status page](#status-page)). |
-| `--config.watch-interval` | `1m` | How often the input files are read again for changes; `0` reads them once. |
-| `--settle` | `15s` | How long a changed member list must hold before targets move. |
+| `--config.watch-interval` | `1m` | How often the input files are read again for changes, at most `24h`; `0` reads them once. |
+| `--settle` | `15s` | How long a changed member list must hold before targets move, at most `1h`. |
 | `--heartbeat.interval` | `10s` | How often the replicas heartbeat, from `1s` to `2m`, which the allocator tells them in every heartbeat answer; a replica not heard from for three intervals, the member TTL, stops being a member ([Members and allocation](#members-and-allocation)). |
 | `--members.max` | `1000` | How many live members the allocator takes; a heartbeat of a new member beyond them is answered `429`. |
-| `--discovery.refresh-interval` | each kind's own | How often a [discovery source](#discovering-targets) that sets no `refresh_interval` is asked, `1s` or more, whatever its kind. Left out, or `0`, each kind keeps its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. A source's `timeout` is held to it as to a `refresh_interval` written ([How fast changes reach the exporters](#how-fast-changes-reach-the-exporters)). |
+| `--discovery.refresh-interval` | each kind's own | How often a [discovery source](#discovering-targets) that sets no `refresh_interval` is asked, from `1s` to `24h`, whatever its kind. Left out, or `0`, each kind keeps its own default: `1m` for `file_sd` and `http_sd`, `30s` for `kubernetes` and `dns_sd`. A source's `timeout` is held to it as to a `refresh_interval` written ([How fast changes reach the exporters](#how-fast-changes-reach-the-exporters)). |
 | `--discovery.max-targets` | `10000` | How many targets one answer of a [discovery source](#discovering-targets) may hold, for a source that sets no `max_targets`; an answer with more is refused. |
-| `--peers` | none | The allocator instances to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every 2s, or an IP address. List every instance, this one included, so each finds its own address among them. The instances are then peers, of which only the leader asks the discovery sources ([Instances with discovery](#instances-with-discovery)). |
+| `--peers` | none | The allocator instances to run beside, as `host:port` entries, comma-separated: a name, resolved to every address it has every `--peers.check-interval`, or an IP address. List every instance, this one included, so each finds its own address among them. The instances are then peers, of which only the leader asks the discovery sources ([Instances with discovery](#instances-with-discovery)). |
 | `--peers.self` | none | This instance's address as its peers reach it: an IP address, taking the port of `--web.listen-address`, or `ip:port`. Left out, the instance finds itself among its peers' addresses by asking them. Only with `--peers`. |
 | `--peers.leader-only` | off | Only the leader serves the whole of `/metrics` and of the status page; a follower serves the peers' metrics and its own peer state alone ([Leader-only metrics](#leader-only-metrics)). Only with `--peers`. |
+| `--peers.check-interval` | `2s` | How often each instance resolves `--peers`, checks every other instance and, as a follower, fetches the leader's snapshot, from `500ms` to `1m` ([Instances with discovery](#instances-with-discovery)). Only with `--peers`. |
+| `--peers.check-timeout` | `1s` | How long a check of another instance, and a lookup of a `--peers` name, may take, from `100ms` to less than `--peers.check-interval`. Only with `--peers`. |
+| `--peers.failure-threshold` | `3` | How many checks in a row an instance must fail before it stops being live, from 1 to 20; a follower whose snapshot fetches fail, or leave it holding other targets than the leader, as many times in a row logs so once. Only with `--peers`. |
+| `--peers.snapshot-timeout` | `30s` | How long a follower's fetch of the leader's snapshot may take, from `--peers.check-timeout` to `5m`. Only with `--peers`. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. Every line is JSON, as the exporter's. |
 | `--version` | | Print the version and the request types of the build, and exit. |
 | `--static-targets-file-schema` | | Print the JSON Schema of the static target file, with `discovered_targets`, for editors, and exit. |
@@ -70,7 +74,9 @@ status 1, and a malformed command line with 2. Files that change while the
 start reads them, as a ConfigMap being swapped does, are read again a second
 later, up to five times in all, before the start gives up with exit status 1. `SIGTERM` or `SIGINT` shuts it
 down: `/ready` answers `503`, every long poll is answered at once, and the
-server stops within ten seconds.
+server stops within ten seconds; an instance among peers first keeps
+serving for a check interval and a check timeout, 3s by default
+([Instances with discovery](#instances-with-discovery)).
 
 ## Inputs
 
@@ -506,9 +512,11 @@ instance's address resolves to, as the chart's headless Service, or a list of
 their addresses. Without `--peers` an instance asks its sources itself, which is
 right for one instance alone; instances of input files alone need no peers.
 
-Every 2s each instance resolves `--peers` to its addresses and asks each
-other instance at `GET /v1/peer`, with the API's token, within 1s. An
-instance that answered is live until three such checks in a row have failed,
+Every check interval, `--peers.check-interval` (2s), each instance resolves
+`--peers` to its addresses and asks each other instance at `GET /v1/peer`,
+with the API's token, within the check timeout, `--peers.check-timeout`
+(1s). An instance that answered is live until the failure threshold's
+checks in a row have failed, `--peers.failure-threshold` (3),
 so one slow answer does not move the leader; one that answers `503`, as an
 instance shutting down does, stops being live at once. An instance knows its
 own address from `--peers.self`, or else by asking: the address answering
@@ -525,12 +533,12 @@ its own address: the lowest such instance that knows its own address, else
 the one of the lowest instance ID among those that do not, unless it leads
 itself and its own ID is lower still; with no instance discovering it leads.
 Two such instances so settle on one leader within two checks, rather than
-each following the other with neither asking the sources. After three checks
-without finding its own address an instance logs an error once: list every
+each following the other with neither asking the sources. After the failure
+threshold's rounds without finding its own address an instance logs an error once: list every
 instance in `--peers`, this one included, or give `--peers.self`.
 
 Only the leader asks the discovery sources. Every other instance, a follower,
-fetches the leader's snapshot every 2s at `GET /v1/peer/snapshot`, what each
+fetches the leader's snapshot every check interval at `GET /v1/peer/snapshot`, what each
 of its sources last found, and puts it in force as a source's answer would
 be, in place of asking the sources itself. The instances so expand the same
 input files with the same discovered targets, and serve the same bundles, of
@@ -540,10 +548,11 @@ keeps what it holds of a source that has not answered on the leader.
 A snapshot writes each source's targets as the target groups it answered, a
 group's labels once rather than once for each of its targets, so it is about
 the size of the sources' answers; it may be up to 16 MiB for each of the
-follower's sources, the bound of one answer, and a fetch may take 30s, where
-a check takes 1s. The fetch runs beside the checks, one at a time, so a
+follower's sources, the bound of one answer, and a fetch may take the
+snapshot timeout, `--peers.snapshot-timeout` (30s), where a check takes the
+check timeout. The fetch runs beside the checks, one at a time, so a
 leader that hangs while it writes its snapshot delays none of them: the
-follower goes on checking every 2s, and when the leader stops being live it
+follower goes on checking every check interval, and when the leader stops being live it
 leads, or follows the next instance, at once, cancelling the fetch. A source's targets in the snapshot are checked as its own
 answer is, and held to the follower's `max_targets` of the source, or
 `--discovery.max-targets`: more targets than that, an empty target or a
@@ -566,12 +575,16 @@ reached the leader's pod first or the follower's own sources answering while
 it led for a moment, the next fetch brings the snapshot and puts it right. A
 follower whose input files differ from the leader's in their discovery
 sources holds other targets after taking the snapshot;
-`pue_allocator_snapshot_age_seconds` then grows, and after three such
-fetches in a row the follower logs so once, until the two agree again.
+`pue_allocator_snapshot_age_seconds` then grows, and after the failure
+threshold's fetches in a row the follower logs so once, until the two agree again.
 
 When the leader goes away, the instance of the next address leads from its
-next check: at once when the leader is shutting down, and after three failed
-checks when it stops answering. It starts asking the sources, and serves the
+next check: at once when the leader is shutting down, and after the failure
+threshold's failed checks when it stops answering: within the failure
+threshold times a check interval and a check timeout after its last
+answer, 9s with the defaults, three rounds of 2s and a 1s check, and 18s
+with `--peers.check-interval=5s`; sooner when its address leaves what
+`--peers` resolves to, as a deleted pod's does. It starts asking the sources, and serves the
 targets of the snapshot it took last until each source first answers, as a
 source whose settings a reload changed does, so the targets never leave the
 bundles. An instance that comes to lead without ever having taken a
@@ -579,17 +592,17 @@ snapshot, as a new instance of the lowest address does, first takes that of
 the lowest other live instance. An instance that sees a lower instance come
 back stops asking its sources and follows it. A follower that cannot fetch
 the leader's snapshot keeps serving the one it took last, never nothing;
-after three failures in a row it logs so once, and
+after the failure threshold's failures in a row it logs so once, and
 `pue_allocator_snapshot_age_seconds` tells how old its snapshot is
 ([Metrics](#metrics)).
 
 An instance shutting down answers `/v1/peer` with `503` from the first signal,
-and keeps serving for 3s more, a round of every peer's checks, before its
-server stops: `/ready` answers `503`, a bundle long poll is answered at
+and keeps serving for a check interval and a check timeout more, 3s by
+default, a round of every peer's checks, before its server stops: `/ready` answers `503`, a bundle long poll is answered at
 once, and heartbeats, bundles, service discovery answers and its snapshot
 are served as before. Every peer so sees it shutting down at its next
-check, and the next instance leads at once rather than after three refused
-connections. Instances being replaced one at a time, as a rolling update does,
+check, and the next instance leads at once rather than after the failure
+threshold's refused connections. Instances being replaced one at a time, as a rolling update does,
 so keep the targets. Peers are not a consensus: a network split that leaves two groups
 of instances unable to reach each other gives each group a leader, each asking
 the sources on its own timer, and while the split lasts the replicas'
@@ -669,32 +682,46 @@ A change to the live members takes effect once it has held for `--settle`: a
 replica that restarts and is back within it keeps its share, and nothing
 moves. The first member list forms once the live members have not changed
 for `--settle`, each replica heard from for the first time starting the wait
-again, and no sooner than `--settle` or a heartbeat interval, whichever is
-longer, after the allocator started, so a restarted allocator has heard from
-every replica before it hands out shares. The heartbeat interval there is
-the longest of the allocator's own and those its replicas say in their
-heartbeats. An instance started with a shorter `--heartbeat.interval` than
-the instances before it said, as during a rollout that shortens it, hears a
-replica first at the replica's next lookup of the instances' addresses on
-the old interval, so every replica has reached it within the old interval
-of its start, and the first member list waits that long. A replica
-heartbeats every instance at the shortest interval they say, so each hears
-it often enough, and says in its heartbeats the longest: the last interval
-each instance its lookup finds said, an instance's kept while its
-heartbeats fail and dropped once its address is gone. While an instance
-from before the rollout is still found, every replica says the old
-interval, a replica that started after the new instance among them, and
-the first list waits for the replicas still on it whichever replica it
-hears first. A replica that has not been told an interval yet, as one that
-has just started, says none, as the 10s it heartbeats at until then is no
-instance's, and its heartbeat does not change the wait; when the instances'
-first answers tell it one, it heartbeats every instance again at once, saying
-the longest, rather than at its next turn. What is left: a replica started
-once no instance from before is found any more has no one to learn the old
-interval from, and says the new one; if the new instance hears only such
-replicas before its own interval and `--settle` have passed, they form the
-first list by themselves, and it changes as the replicas still on the old
-interval arrive. A rollout that keeps an old instance until a new one is
+again, and no sooner than `--settle` or the allocator's own heartbeat
+interval, whichever is longer, after the allocator started, so a restarted
+allocator has heard from every replica before it hands out shares. Nor does
+it form sooner than the longest interval the replicas say in their
+heartbeats after the first heartbeat came. An instance started with a
+shorter `--heartbeat.interval` than the instances before it said, as during
+a rollout that shortens it, is heard by a replica first at the replica's
+next lookup of the instances' addresses on the old interval after the
+instance could be found, which is later than its start: a headless Service
+lists it once it is ready, and the lookups see it some time after that. The
+first heartbeat comes once a replica has found it, so within the old
+interval after the first heartbeat every replica on the old interval has
+found it and heartbeated it at once, and the first member list waits that
+long. A replica heartbeats every instance at the shortest interval they say,
+so each hears it often enough, and says in its heartbeats the longest: the
+last interval each instance it heard from said, an instance's kept while
+its heartbeats fail, and dropped once its address is gone or once it has
+not answered for the member TTL of the longest interval said. A replica
+tells the instances apart by the name each answer carries
+([API](#api)), not by the address it reached them at, so instances that
+answer one address in turn, as behind a Service's ClusterIP or a load
+balancer, each keep their say, rather than the address's changing at every
+answer. While an instance from before the rollout is still found, every
+replica says the old interval, a replica that started after the new
+instance among them, and the first list waits for the replicas still on it
+whichever replica it hears first. A replica that has not been told an
+interval yet, as one that has just started, says none, as the 10s it
+heartbeats at until then is no instance's, and its heartbeat does not
+change the interval waited for, though as any heartbeat it starts the
+wait's count from the first heartbeat; when the instances' first answers
+tell it one, it heartbeats every instance again at once, saying the
+longest, rather than at its next turn. It does so whenever the longest
+grows past any it said before; when it comes back to one it said before, as
+when an instance that was not heard for a while answers again, at most once
+an interval, and when it shrinks at the next turn. What is left: a replica
+started once no instance from before is found any more has no one to learn
+the old interval from, and says the new one; if the new instance hears only
+such replicas before its own interval and `--settle` have passed, they form
+the first list by themselves, and it changes as the replicas still on the
+old interval arrive. A rollout that keeps an old instance until a new one is
 ready, as the chart's does, finds an old instance throughout.
 
 `--heartbeat.interval` and `--settle` are independent, and no value of one
@@ -706,7 +733,7 @@ within the member TTL is never missed, whatever `--settle` is; `--settle`
 is what keeps a replica that is gone for longer, but back within it, from
 moving its share. An interval longer than `--settle` makes the first member
 list wait the interval rather than `--settle`. The instances of the allocator
-check each other every 2s whatever the interval
+check each other every `--peers.check-interval` whatever the interval
 ([Instances with discovery](#instances-with-discovery)): it is the replicas'
 timing alone. Until then the bundle and service
 discovery endpoints answer `503`, and replicas and Prometheus keep what they
@@ -769,7 +796,7 @@ must not be one of them. The token is never taken from the URL.
 | `GET /v1/bundle?member=<id>` | replica | The replica's bundle, with long polling. |
 | `GET /v1/sd/<job>` | Prometheus | The job's probe targets in the HTTP service discovery format. |
 | `GET /v1/peer` | another instance | `{"id": "…", "discovering": true, "address_known": true}`: the instance's process id, whether it asks its discovery sources, and whether it knows its own address (or runs without `--peers`); `503` while it shuts down. |
-| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered and the target groups it last found, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
+| `GET /v1/peer/snapshot` | another instance | Every discovery source of the instance's input files, whether it has answered, the target groups it last found and how often it is asked, with the digest of it as its `ETag`, `304` to an `If-None-Match` naming it. |
 | `GET /` | a person | The [status page](#status-page). |
 | `GET /v1/status` | a person, a script | What the status page shows, as JSON. |
 | `GET /metrics` | Prometheus | The allocator's own metrics. |
@@ -800,11 +827,12 @@ one it heartbeats at, the shortest; it is left out until an instance has
 said one, and the first member list waits for it ([Members and
 allocation](#members-and-allocation)). A body over 64 KiB
 is answered `413`, and the heartbeat of a new member beyond `--members.max`
-`429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10}`:
-the generation of the member's bundle, or `""` while the member list has not
-formed, and `--heartbeat.interval` in seconds. A replica whose bundle
-differs fetches it, and heartbeats at the interval from its next heartbeat
-on ([Members and allocation](#members-and-allocation)).
+`429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10,
+"instance": "…"}`: the generation of the member's bundle, or `""` while the
+member list has not formed, `--heartbeat.interval` in seconds, and the name
+of the instance that answered, random and made at its start. A replica
+whose bundle differs fetches it, and heartbeats at the interval from its
+next heartbeat on ([Members and allocation](#members-and-allocation)).
 
 ### Bundles
 
@@ -886,8 +914,9 @@ Prometheus asking again. Each wait has its own setting:
 | --- | --- | --- |
 | The input files: the configuration, its collector files, the static and probe target files | the next read of them, every `1m` | `--config.watch-interval`; the chart's `allocator.configWatchInterval`. On Kubernetes the kubelet also takes up to about a minute to update a mounted ConfigMap. |
 | A discovery source's targets | the next ask of the source, every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and `dns_sd` | the source's `refresh_interval`, or `--discovery.refresh-interval` for every source that sets none; the chart's `allocator.discoveryRefreshInterval` |
-| A follower's targets, among peers | the next fetch of the leader's snapshot, every 2s | fixed ([Instances with discovery](#instances-with-discovery)) |
-| The members: a replica joining or gone | a gone replica's member TTL, three heartbeat intervals, then the settle time for either | `--heartbeat.interval` (`10s`) and `--settle` (`15s`); the chart's `allocator.heartbeatInterval` and `allocator.settle` |
+| A follower's targets, among peers | the next fetch of the leader's snapshot, every `2s` | `--peers.check-interval`; the chart's `allocator.peerCheckInterval` ([Instances with discovery](#instances-with-discovery)) |
+| The leader, among peers, when it stops answering | the failure threshold's failed checks, at most `3` check intervals and check timeouts, `9s` | `--peers.failure-threshold`, `--peers.check-interval` and `--peers.check-timeout`; the chart's `allocator.peerFailureThreshold`, `allocator.peerCheckInterval` and `allocator.peerCheckTimeout`. A leader shutting down cleanly is replaced at the next check. |
+| The members: a replica joining, shutting down or gone | the settle time for a replica joining and for one shutting down cleanly, whose last heartbeat says so (on `SIGTERM`); for a replica gone without a word, its member TTL, three heartbeat intervals, then the settle time | `--heartbeat.interval` (`10s`) and `--settle` (`15s`); the chart's `allocator.heartbeatInterval` and `allocator.settle` |
 | A bundle, to a replica | nothing: the long poll answers at once | |
 | A probe target, to Prometheus | Prometheus's next ask of `/v1/sd/<job>`, every `1m` by its default | the scrape configuration's `http_sd_configs` `refresh_interval`; the chart's `allocator.scrapeConfig.refreshInterval` (`30s`) |
 
@@ -908,7 +937,10 @@ its instance ID. It shows
   the input files again (`--config.watch-interval`) or that it read them
   once, and whether it is ready;
 - with `--peers`, whether it leads or follows, which instance leads, and
-  whether it runs with `--peers.leader-only`, and
+  whether it runs with `--peers.leader-only`; the peers' timings, how often
+  the instances check each other and within what timeout, after how many
+  failed checks in a row an instance stops being live and within what
+  timeout a follower fetches the leader's snapshot; and
   every instance its peers' addresses give, itself included, with its ID,
   whether it is live, discovers and knows its own address, when it was last
   checked and the checks it failed in a row; how old the instance's
@@ -935,36 +967,55 @@ its instance ID. It shows
   routed among are those service discovery may route its targets to
   ([Service discovery](#service-discovery)), so one given none of its
   targets counts, with 0, and Min shows it. The imbalance is marked where
-  the most is half again as many as the evenest split would give a member,
-  the targets divided by the members and rounded up: a job of 2 targets over
-  3 members cannot do better than `1.50×`, so the average alone would mark
-  every small job. A click on a column's heading sorts the table by it, a
-  second the other way, and a filter box above it hides, as it is typed, the
-  jobs whose name, collector and sources' names do not hold its text, in any
-  case; a refresh keeps the order, the filter and the caret;
+  the most is further above the average than hashing puts a member's
+  targets by chance: by 3 targets or more, and by 3 or more standard
+  deviations of a member's count, √(targets × (1 − 1/members) ÷ members).
+  Hashing spreads a few targets unevenly as often as not, 3 over 3 members
+  all on one in one placement of nine, so the imbalance alone says little
+  of a small job: of random placements the mark falls on none of 2 targets
+  over 2 members or 3 over 3, 1.6% of 4 over 4, 1.7% of 8 over 4, 0.4% of
+  6 over 3, 1.6% of 20 over 4, 1.1% of 100 over 4 and 1.8% of 1000 over 10,
+  never on a member only one or two over the evenest split, the targets
+  divided by the members and rounded up, and on every job of 4 targets or
+  more over 4 members that has all of them on one. A click on a column's
+  heading sorts the table by it, a second the other way, numbers by their
+  value and text, in any case, with the numbers in it by theirs, `job2`
+  before `job10`; a filter box above it hides, as it is typed, the jobs
+  whose name, collector and sources' names do not hold its text, in any
+  case; a refresh keeps the order, the filter and the caret. Without
+  JavaScript the headings are plain, as nothing sorts the table then;
 - the discovery sources: each one's kind, owner, result, with the error
   while it fails, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
   and whether what
-  it holds is this instance's own discovery or the leader's snapshot.
+  it holds is this instance's own discovery or the leader's snapshot. A
+  long name of a source or of its owner wraps rather than push the table
+  past the page's edge.
 
 The page writes a duration, an interval or an age, as the exporter's pages
 do: Go's form with every unit that is zero left out, `1m`, `1m30s`, `2h`
-and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. The JSON
-keeps its values: seconds as numbers, and a static target's `interval` as
-Go writes it, `1m0s`.
+and `1h30s` rather than `1m0s`, `1m30s`, `2h0m0s` and `1h0m30s`. An
+interval configured keeps its fraction, a `--config.watch-interval` of
+`500ms` as `500ms` and a `--settle` of `1500ms` as `1.5s`; an age, how long
+ago something was, is in whole seconds. The JSON keeps its values: seconds
+as numbers, and a static target's `interval` as Go writes it, `1m0s`.
 
 The page refreshes itself as the exporter's status page does: Refresh, and
 an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
 `?refresh=30s`, fetching the page's content again (`?format=fragment`) and
-skipping its turn while the tab is hidden. It has the exporter's pages' bar,
-with their theme picker, and needs nothing from outside the allocator.
+skipping its turn while the tab is hidden. A refresh asked while one waits
+for the same URL is left to that one; one asked after the URL changed
+aborts the one waiting and asks again, so the latest wins. It has the
+exporter's pages' bar, with their theme picker, and needs nothing from
+outside the allocator.
 
 `GET /v1/status` answers the same as JSON: `generated_at`; `instance`
 (`address`, `id`, `version`, `revision`, `started_at`, `uptime_seconds`,
 `ready`, `watch_interval_seconds`, `0` for files read once); `peers`, `null` without `--peers` (`role`, `leader` or `follower`,
 `deciding` before the first check; `leader`, the leader's address;
-`leader_only`; `live_instances`, `leader_changes`, `snapshot_age_seconds`,
+`leader_only`; `check_interval_seconds`, `check_timeout_seconds`,
+`failure_threshold` and `snapshot_timeout_seconds`, the peers' timings;
+`live_instances`, `leader_changes`, `snapshot_age_seconds`,
 `snapshot_taken`, `holds_leader_state`, the failures, `instances`, each with
 its `address`, `self`, `leader`, `live`, `id`, `discovering`,
 `address_known`, `last_check` and `failures`, and `metrics`, each a `series`
@@ -981,7 +1032,10 @@ routed among by id, each with its `member` and `targets`, `min`, `average`,
 `name`, `type` and `result`); and `sources` (`name`, `kind`, `owner`, `type`, `result`,
 `ok`, `failing` or `pending`, `error`, `targets`,
 `refresh_interval_seconds`, `last_refresh`,
-`last_success` and `from`, `own` or `snapshot`). Times are RFC 3339 in UTC,
+`last_success` and `from`, `own` or `snapshot`). A follower's
+`refresh_interval_seconds` of a source it takes from the leader's snapshot
+is the leader's, who asks the source, not its own setting of it, as during
+a rolling update that changes it. Times are RFC 3339 in UTC,
 each with its age in seconds beside it.
 
 With `--web.token-file` a browser asks for a user name and a password on
@@ -1046,8 +1100,8 @@ this site?" without asking service discovery. It shows
 
 - the job: its collector, its targets, listed and discovered, its shard
   key, its labels, a label written `""` left out, its params, and its
-  discovery sources, each with its kind and result, and its error while it
-  fails, or none;
+  discovery sources, each with its kind, result and how often it is asked,
+  and its error, on a line of its own, while it fails, or none;
 - the members it is routed among, each linking to its view, with the
   targets of the job it has and a bar of them, the most first, the fewest
   to the most and the average above them, the imbalance marked as in the
@@ -1061,9 +1115,13 @@ such as `__meta_kubernetes_namespace`, which the job's relabeling reads, are
 often a dozen a target, and the page leaves them out. *Show source labels*,
 under the filter of a job with discovery sources, shows them: it puts
 `?meta=1` in the URL, or takes it out, and refreshes the content, so the
-auto-refresh and a bookmark keep the choice. The filter, as it is typed and
-with Search all, matches the labels shown and no other: while the source
-labels are left out, `__meta_zone=ams` matches nothing.
+auto-refresh and a bookmark keep the choice. A refresh still waiting for the
+URL before is abandoned for one of the URL as it is, so a click is never
+lost to a refresh in flight and the answer shown is always to the latest
+choice; a target keeps its line where it fits, the labels wrapping first.
+The filter, as it is typed and with Search all, matches the labels shown
+and no other: while the source labels are left out, `__meta_zone=ams`
+matches nothing.
 
 The counts are the spread's for the job. A target is shown with its
 credentials withheld as on a member's view, and a param whose name reads
@@ -1133,7 +1191,12 @@ IP, so the pods are peers and only the leader asks the sources
 ([Instances with discovery](#instances-with-discovery)), and the allocator's
 NetworkPolicy admits the allocator's own pods; they are rolled out as any
 Deployment is, one at a time, under a disruption budget of
-`maxUnavailable: 1`. The configuration (`config.data`)
+`maxUnavailable: 1`. A new pod counts as available `max(allocator.settle,
+2m)` plus `allocator.heartbeatInterval` after it is ready, by when it has
+formed its first member list and the replicas have heard of it, whatever
+interval the old pods said, up to the 2m that bounds it ([Members and
+allocation](#members-and-allocation)), so a rollout does not replace the
+last old pod before a new one hands out targets, also with one pod. The configuration (`config.data`)
 and `allocator.staticTargets.data` and `allocator.probeJobs`, the static
 targets and the probe jobs, are mounted into the allocator only; a change to
 them rolls the allocator, and reaches the replicas as a new bundle without a
@@ -1196,7 +1259,14 @@ the ConfigMap reaches the allocator without a rollout.
 
 `allocator.leaderOnly` runs the peers with `--peers.leader-only`, so the
 allocator's ServiceMonitor, which scrapes every pod, has one pod's series of
-the allocation ([Leader-only metrics](#leader-only-metrics)). Each allocator
+the allocation ([Leader-only metrics](#leader-only-metrics)).
+`allocator.peerCheckInterval`, `allocator.peerCheckTimeout`,
+`allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold` give
+the peers' timings, `--peers.check-interval`, `--peers.check-timeout`,
+`--peers.snapshot-timeout` and `--peers.failure-threshold`, and the
+allocator pods' grace period covers the longer wait at their stop that a
+longer interval or timeout makes. Like `allocator.leaderOnly`, each fails
+rendering without a discovery source. Each allocator
 pod's [status page](#status-page) is reached with `kubectl port-forward`, the
 leader's by the pod IP every pod's page names; see
 [The allocator's status page](../charts/prometheus-universal-exporter/README.md#the-allocators-status-page).

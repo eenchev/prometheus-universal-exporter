@@ -3,6 +3,8 @@
 package allocator
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,4 +50,37 @@ func TestTheAllocatorPagesWriteDurationsWithoutZeroUnits(t *testing.T) {
 			t.Errorf("a page writes a zero unit:\n%s", visibleText(p))
 		}
 	}
+}
+
+// An interval configured is written as it was given, its fraction kept:
+// a watch interval of 500ms, a heartbeat interval of 2.5s, the member TTL
+// that follows from it and a settle time of 1500ms, and a source's
+// refresh_interval of 1500ms in the sources table and on its job's view,
+// where age, which writes how long ago something was in whole seconds,
+// would cut them to 0s, 2s and 1s. An age is still whole seconds.
+func TestTheAllocatorPagesKeepAConfiguredIntervalsFraction(t *testing.T) {
+	clock := newFakeClock()
+	a := New(mustLoad(t, writeInputs(t, testConfig, staticTargets(3), "")), Options{Settle: 1500 * time.Millisecond, HeartbeatInterval: 2500 * time.Millisecond,
+		WatchInterval: 500 * time.Millisecond, Clock: clock, Logger: testutil.QuietLogger(t)})
+	t.Cleanup(a.BeginShutdown)
+	clock.Advance(1700 * time.Millisecond)
+	page := ask(a.Handler(""), "/", "").Body.String()
+	requireIn(t, page, "read again every 500ms for changes", "(up 1s)",
+		"The replicas heartbeat every 2.5s; a member not heard from for 7.5s stops being live. A changed member list holds for 1.5s before targets move.")
+
+	p := writeInputs(t, testConfig, staticTargets(3), `probe_jobs:
+  - name: pods
+    collector: demo
+    target_template: http://{{address}}/metrics
+    discovery:
+      - name: pod-files
+        file_sd: {files: [sd/pods.json], refresh_interval: 1500ms}
+`)
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "sd/pods.json", `[{"targets": ["10.0.0.1:8080"]}]`)
+	j, _ := settledAllocator(t, mustLoad(t, p), "r1", "r2")
+	t.Cleanup(j.BeginShutdown)
+	j.refreshDiscovery(context.Background())
+	h := j.Handler("")
+	requireIn(t, ask(h, "/", "").Body.String(), `<td class="num">1.5s</td>`)
+	requireIn(t, ask(h, "/?job=pods", "").Body.String(), "refreshed every 1.5s")
 }

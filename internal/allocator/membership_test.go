@@ -198,7 +198,7 @@ func TestASilentMemberLeavesAfterTheTTLAndTheSettleTime(t *testing.T) {
 }
 
 // A member shutting down leaves the live members at once, without waiting
-// for its TTL, and the member list after the settle time.
+// for its TTL, and the member list after the settle time, and not before.
 func TestAMemberShuttingDownLeavesAtOnce(t *testing.T) {
 	a, clock := membershipAllocator(t, 15*time.Second)
 	beat(t, a, "r1", "r2")
@@ -206,7 +206,11 @@ func TestAMemberShuttingDownLeavesAtOnce(t *testing.T) {
 	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r2", Advertise: "r2:9115", ShuttingDown: true})); err != nil {
 		t.Fatal(err)
 	}
-	keepBeating(t, a, clock, 15*time.Second, "r1")
+	keepBeating(t, a, clock, 15*time.Second-time.Millisecond, "r1")
+	if got := effective(a); !slices.Equal(got, []string{"r1", "r2"}) {
+		t.Fatalf("got the member list %v 1ms before the settle time after r2 shut down, want [r1 r2]", got)
+	}
+	keepBeating(t, a, clock, time.Millisecond, "r1")
 	if got := effective(a); !slices.Equal(got, []string{"r1"}) {
 		t.Fatalf("got the member list %v the settle time after r2 shut down, want [r1]", got)
 	}
@@ -492,8 +496,9 @@ func TestTheFirstMemberListWaitsTheIntervalTheReplicasHeartbeatAt(t *testing.T) 
 // its heartbeats, and they do not change how long the first member list
 // waits: heard first, it holds the list back neither for the 10s the
 // client starts with nor at all, and a replica heard after it whose first
-// heartbeat says the old 40s makes the list wait 40s, of the both of them
-// and the one heard later.
+// heartbeat says the old 40s makes the list wait 40s after the first
+// heartbeat, fresh's, which says the instance could be found by then, of the
+// both of them and the one heard later.
 func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	clock := newFakeClock()
 	at := func(a *Allocator, interval time.Duration, members ...string) {
@@ -521,8 +526,12 @@ func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	}
 	clock.Advance(2 * time.Second)
 	at(a, 5*time.Second, "fresh", "old1", "old2")
+	if got := effective(a); got != nil {
+		t.Fatalf("the first member list formed of %v 39s after the first heartbeat", got)
+	}
+	clock.Advance(time.Second)
 	if got := effective(a); !slices.Equal(got, []string{"fresh", "old1", "old2"}) || memberChanges(a) != 0 {
-		t.Errorf("40s after the start got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
+		t.Errorf("40s after the first heartbeat got the member list %v after %d changes, want [fresh old1 old2] as the first", got, memberChanges(a))
 	}
 	// An instance that hears only heartbeats saying none waits its own
 	// interval.

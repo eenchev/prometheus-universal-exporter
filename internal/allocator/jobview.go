@@ -32,13 +32,6 @@ import (
 // leaves them out unless asked for them, ?meta=1, and its filter then
 // matches only the labels shown, as a row's data-match does; the JSON
 // keeps them all.
-//
-// A discovered target carries its source's labels whose names start with
-// __, as __meta_kubernetes_namespace, for the job's relabeling: often a
-// dozen a target, they bury the labels the target is shown with. The page
-// leaves them out unless asked for them, ?meta=1, and its filter then
-// matches only the labels shown, as a row's data-match does; the JSON
-// keeps them all.
 
 // JobView is the answer at StatusPath?job=<name>.
 type JobView struct {
@@ -265,12 +258,12 @@ const jobContent = `{{define "content"}}
 <tr><th>Shard key</th><td>{{.ShardKey}}</td></tr>
 <tr><th>Labels</th><td>{{template "labels" .Labels}}</td></tr>
 <tr><th>Params</th><td>{{template "labels" .Params}}</td></tr>
-<tr><th>Discovery</th><td>{{range .Sources}}<span class="source"><strong>{{.Name}}</strong> <span class="muted">{{.Type}}</span> {{template "result" .Result}}, refreshed every {{age .RefreshIntervalSeconds}}{{if eq .Result "failing"}} <span class="muted">{{.Error}}</span>{{end}}</span><br>{{else}}<span class="muted">none: the probe targets file lists every target</span>{{end}}</td></tr>
+<tr><th>Discovery</th><td>{{range .Sources}}<span class="source"><strong>{{.Name}}</strong> <span class="muted">{{.Type}}</span> {{template "result" .Result}}, refreshed every {{interval .RefreshIntervalSeconds}}</span><br>{{if eq .Result "failing"}}<span class="muted">{{.Error}}</span><br>{{end}}{{else}}<span class="muted">none: the probe targets file lists every target</span>{{end}}</td></tr>
 </table>
 
 <h2>Members <span class="count">{{len $sp.Members}}</span></h2>
 {{- if $sp.Members}}
-<p>The job's probes are routed among {{len $sp.Members}} member{{if ne (len $sp.Members) 1}}s{{end}}: {{$sp.Min}} to {{$sp.Max}} targets each, {{average $sp.Average}} on average, the most {{if $sp.Uneven}}<span class="bad">{{imbalance $sp.Imbalance}}</span>{{else}}{{imbalance $sp.Imbalance}}{{end}} the average.</p>
+<p>The job's probes are routed among {{len $sp.Members}} member{{if ne (len $sp.Members) 1}}s{{end}}: {{$sp.Min}} to {{$sp.Max}} targets each, {{average $sp.Average}} on average, the most {{if $sp.Uneven}}<span class="bad" title="the most is further above the average than hashing puts a member's targets by chance">{{imbalance $sp.Imbalance}}</span>{{else}}{{imbalance $sp.Imbalance}}{{end}} the average.</p>
 <div class="scroll">
 <table class="spread job-members">
 <thead><tr><th>Member</th><th class="num">Targets</th><th>Share</th></tr></thead>

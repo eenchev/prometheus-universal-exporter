@@ -31,6 +31,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   left out: an interval of `1m`, an age of `35m` and a threshold of `2h`
   where it wrote `1m0s`, `35m0s` and `2h0m0s`. The JSON keeps Go's form
   and its seconds ([Status page](docs/ENDPOINTS.md#status-page)).
+- `pue-allocator --settle` takes at most `1h`, and the chart's
+  `allocator.settle` fails rendering beyond it, where any duration was
+  taken: the targets of a replica gone without a word stay with it,
+  unscraped, for the settle time after its member TTL. An allocator started
+  with a longer settle time exits 2; set `1h` or less
+  ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 
 ### New
 
@@ -65,7 +71,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   their checks of the leader so a leader that hangs while it answers does
   not hold them up, and serve the same bundles and targets, and when it
   goes, telling the others for 3 seconds before it stops, the next instance
-  leads at once from the targets it took last. New metrics say which
+  leads at once from the targets it took last, and after three failed
+  checks when it stops answering. `--peers.check-interval` (2s, from 500ms
+  to 1m), `--peers.check-timeout` (1s, below the interval),
+  `--peers.failure-threshold` (3, from 1 to 20) and
+  `--peers.snapshot-timeout` (30s, up to 5m) set those timings, which the
+  status page and `/v1/status` show; the chart sets them from
+  `allocator.peerCheckInterval`, `allocator.peerCheckTimeout`,
+  `allocator.peerFailureThreshold` and `allocator.peerSnapshotTimeout`,
+  refused without a discovery source, and gives the allocator's pods a
+  grace period that covers the wait at their stop. New metrics say which
   instance leads, which instances are up (`pue_allocator_peer_up{peer}`) and
   how long a follower has not held the leader's targets ([Instances with
   discovery](docs/ALLOCATOR.md#instances-with-discovery)).
@@ -73,8 +88,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   leader, the members and their bundles, how the targets are spread over
   the members, with the average and the imbalance, a table of the probe
   jobs, each with its targets, the members it is routed among, the fewest,
-  average and most a member has, the imbalance, marked where uneven, and
-  its discovery sources, sortable by any column and with a filter box, and
+  average and most a member has, the imbalance, marked where the most is
+  further above the average than hashing puts targets by chance, and its
+  discovery sources, sortable by any column and with a filter box, and
   the discovery sources, refreshing itself as the exporter's status page
   does and writing a duration as it does, `1m` and `1h30s`; and the same
   as JSON at `/v1/status`. Each member links to its own
@@ -93,12 +109,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   which the page, `/v1/status` and `/metrics` take beside the bearer token
   ([Status page](docs/ALLOCATOR.md#status-page)).
 - `pue-allocator --discovery.refresh-interval`: how often a discovery source
-  that sets no `refresh_interval` is asked, whatever its kind; left out,
-  each kind keeps its own default. The chart sets it from
+  that sets no `refresh_interval` is asked, whatever its kind, from 1s to
+  24h; left out, each kind keeps its own default. The chart sets it from
   `allocator.discoveryRefreshInterval`, and the allocator's
-  `--config.watch-interval` from the new `allocator.configWatchInterval`.
+  `--config.watch-interval`, now at most 24h too, from the new
+  `allocator.configWatchInterval`, refusing at rendering a value over 24h.
   The status page shows how often the input files are read, the settle
-  time and each source's interval, and the allocator docs list every delay
+  time and each source's interval, on a follower the leader's, who asks it,
+  and the allocator docs list every delay
   between a change and the exporters with the setting of each ([How fast
   changes reach the
   exporters](docs/ALLOCATOR.md#how-fast-changes-reach-the-exporters)).
@@ -122,15 +140,21 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   replica late to no other, and looks up the instances' addresses at the
   interval in force, a new one taking effect at once. Each heartbeat says
   the longest interval the instances the replica finds said
-  (`interval_seconds`), once one has said one, and an instance's first
-  member list waits the longest any says, so an instance started with a
-  shorter interval than the instances before it hears the replicas on the
-  old interval first, also when the first it hears started after it. The
+  (`interval_seconds`), once one has said one, each instance told apart by
+  the name its answer carries (`instance`), so instances answering one
+  address in turn keep their own say; an instance's first member list waits
+  the longest any says after the first heartbeat it hears, so an instance
+  started with a shorter interval than the instances before it hears the
+  replicas on the old interval first, also when the lookups find it late
+  and when the first it hears started after it. The
   status page shows both and marks a member whose heartbeat is overdue
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
 - The chart's `allocator.heartbeatInterval` sets the allocator's
   `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
-  follows it.
+  is `max(allocator.settle, 2m)` plus it, so a new allocator pod counts as
+  available only once its first member list has formed and reached the
+  exporter pods, also during a rollout that shortens the interval, whose
+  old value the chart cannot know.
 
 ### Fixed
 

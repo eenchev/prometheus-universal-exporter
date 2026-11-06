@@ -881,7 +881,26 @@ flags and the variable MUST NOT be rendered. `allocator.leaderOnly`, false
 by default, MUST add `--peers.leader-only` after them, so only the leader's
 `/metrics`, which the allocator's ServiceMonitor scrapes on every pod, has
 the allocation's series; true without a discovery source MUST fail
-rendering, since the allocator refuses the flag without `--peers`. The chart
+rendering, since the allocator refuses the flag without `--peers`.
+`allocator.peerCheckInterval`, `allocator.peerCheckTimeout`,
+`allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold`, empty
+or `null` by default, MUST render `--peers.check-interval`,
+`--peers.check-timeout`, `--peers.snapshot-timeout` and
+`--peers.failure-threshold` after `--peers.self` when set, each taken as
+written as the other duration values are, and nothing when empty; held to
+the allocator's bounds, an empty one counting as the allocator's default
+against the others (a check interval from `500ms` to `1m`, a check timeout
+from `100ms` to less than the check interval, a snapshot timeout from the
+check timeout to `5m`, a failure threshold a whole number from 1 to 20), or
+rendering MUST fail, by the values schema where it can and by the template
+also with the schema skipped; and any of them set without a discovery
+source MUST fail rendering, as `allocator.leaderOnly` does. With a discovery
+source the allocator's pods MUST have `terminationGracePeriodSeconds` the
+larger of 30 and the shutdown delay, the check interval and the check
+timeout rounded up to whole seconds, plus 15, the 10 seconds the allocator
+takes to stop its server and 5 for its exit, so Kubernetes does not kill a
+peer still telling its peers it stops; without one it MUST NOT be rendered.
+The peers' timings MUST NOT change `minReadySeconds`. The chart
 README MUST say how to reach an allocator pod's status page with `kubectl
 port-forward`, give the token as a browser asks for it, and find the leader's
 pod by the address every pod's page and `pue_allocator_leader{peer}` name.
@@ -891,23 +910,31 @@ configuration's `config.yaml`, `--static-targets-file` while
 `allocator.probeJobs` is not empty, `--web.token-file` naming the token's
 mounted file, `--log.level`
 from `allocator.logLevel`, `--settle` from `allocator.settle` unless it is
-empty, `--heartbeat.interval` from `allocator.heartbeatInterval` unless it
+empty (a Go duration from zero to `1h`, the allocator's bound, or rendering
+MUST fail), `--heartbeat.interval` from `allocator.heartbeatInterval` unless it
 is empty, `--config.watch-interval` from `allocator.configWatchInterval`
-unless it is empty (a Go duration of zero or more, `0s` reading the input
-files once, or rendering MUST fail), `--discovery.refresh-interval` from
-`allocator.discoveryRefreshInterval` unless it is empty (a Go duration of
-`1s` or more, the allocator's bound, or rendering MUST fail), and
+unless it is empty (a Go duration from zero to `24h`, the allocator's bound,
+`0s` reading the input files once, or rendering MUST fail),
+`--discovery.refresh-interval` from `allocator.discoveryRefreshInterval`
+unless it is empty (a Go duration from `1s` to `24h`, the allocator's
+bounds, or rendering MUST fail), each taken as written when it is not
+`null`, so that an integer `0`, which only a skipped values schema lets
+through, is the text `0` and not taken for empty, and a duration longer than
+any Go duration holds fails rendering rather than the allocator's start, and
 `--members.max` from `allocator.maxMembers`, 1000 by default, a
 whole number from 1 to 2147483647. `allocator.heartbeatInterval` MUST be a
 Go duration from 1s to 2m, the allocator's bounds, or rendering MUST fail;
 the exporter pods MUST NOT be given a heartbeat setting of their own, since
 they take the allocator's from its heartbeat answers. Its `minReadySeconds` MUST be
-`max(allocator.settle, allocator.heartbeatInterval)` plus
-`allocator.heartbeatInterval`, each rounded up to whole seconds, an empty
-settle counting as the allocator's 15s and an empty interval as its 10s:
-`/ready` answers once the allocator has read its inputs, but its first member
-list takes effect that maximum after it starts and the exporter pods hear of it
-at their next heartbeat, a heartbeat interval on, so a rollout counting a new pod available at once
+`max(allocator.settle, 2m)` plus `allocator.heartbeatInterval`, each rounded
+up to whole seconds, an empty settle counting as the allocator's 15s and an
+empty interval as its 10s, whatever `allocator.replicas` is: `/ready`
+answers once the allocator has read its inputs, but its first member list
+takes effect no sooner than `max(settle, interval)` after it starts nor than
+the interval the exporter pods say after the first heartbeat, which during a
+rollout that shortens the interval is the old pods' one, up to 2m, which the
+chart cannot know, and the exporter pods hear of it at their next heartbeat,
+a heartbeat interval on, so a rollout counting a new pod available sooner
 could replace every old allocator before a new one hands out a target. Its
 pods MUST be scheduled by `allocator.nodeSelector`, `allocator.tolerations`,
 `allocator.affinity`, `allocator.priorityClassName` and
@@ -1966,10 +1993,12 @@ are skipped and the text checks of the templates still run:
      allocator beside `staticTargets.enabled` or an enabled `monitors` entry,
      a probe job of an unknown or no collector, a probe job name that is no
      DNS-1123 label or is used twice, `allocator.replicas` 0,
-     `allocator.maxMembers` 0, a `settle` that is no duration, an unknown log level, an `env` entry `POD_IP`, an
-     `--allocator.*` flag in `extraArgs`, `staticTargets.monitor.targets`
-     beside the allocator, a mount over the cache or token directory, and a
-     ScrapeConfig timeout longer than its interval.
+     `allocator.maxMembers` 0, a `settle` that is no duration or, with the
+     template, over `1h`, `2h` and `99999999h` included, an unknown log
+     level, an `env` entry `POD_IP`, an `--allocator.*` flag in `extraArgs`,
+     `staticTargets.monitor.targets` beside the allocator, a mount over the
+     cache or token directory, and a ScrapeConfig timeout longer than its
+     interval.
    - With a discovery source, of a probe job or of a `discovered_targets`
      entry, the allocator's Deployment has 2 replicas, or
      `allocator.replicas`, 3 and 1 included, and the default strategy; its
@@ -1985,22 +2014,37 @@ are skipped and the text checks of the templates still run:
      (`TestChartRunsTheAllocatorLeaderOnly`); `allocator.leaderOnly: true`
      without a discovery source fails rendering, with the values schema and
      with it skipped (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+   - With a discovery source the peers' timings render their flags after
+     `--peers.self` when set and nothing when empty or null, and the
+     allocator pods' `terminationGracePeriodSeconds` is 30 by default, 36
+     for a `20s` interval and a `500ms` timeout and 135 for `1m` and
+     `59.5s`, and is not rendered without a discovery source
+     (`TestChartSetsThePeersTimings`); each set without a discovery source,
+     or outside the allocator's bounds, fails rendering, with the values
+     schema and with it skipped
+     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - `allocator.heartbeatInterval` renders `--heartbeat.interval` with its
      value and nothing when empty; the Deployment's `minReadySeconds` is
-     `max(settle, heartbeatInterval)` plus `heartbeatInterval`, each rounded
-     up, 25 with both empty, 60 with `30s`, 4 with `settle: 0s` and `1.5s`
-     (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
+     `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with
+     both empty, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 310 with
+     `settle: 5m`, 3610 with `settle: 1h`, the bound, and 130 with an integer
+     `0` of `settle` and the values schema skipped, which renders
+     `--settle=0` (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
      `heartbeatInterval` that is no duration fails with the values schema
      and with it skipped, and one under `1s` or over `2m` with the template
      (`TestChartRefusesWhatTheAllocatorCannotRunWith`); `make helm-test`
-     renders `30s` and refuses `3m`.
+     renders `30s`, with `minReadySeconds: 150`, and refuses `3m`.
    - `allocator.configWatchInterval` renders `--config.watch-interval` and
      `allocator.discoveryRefreshInterval` `--discovery.refresh-interval`
-     with their values, `0s` included for the first, and nothing when empty
+     with their values, `0s` included for the first, `24h` and `1440m`
+     included, an integer `0` of the first with the values schema skipped
+     as `--config.watch-interval=0`, and nothing when empty
      (`TestChartSetsHowOftenTheAllocatorLooksForChanges`); a value of either
-     that is no duration fails with the values schema and with it skipped,
-     and a `discoveryRefreshInterval` under `1s`, `0s` included, with the
-     template (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+     that is no duration, the integer `30` included, fails with the values
+     schema and with it skipped, a `discoveryRefreshInterval` under `1s`,
+     `0s` and the integer `0` included, and either over `24h`, `24h0m1s`,
+     `1441m` and `99999999h`, which no Go duration holds, with the template
+     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
    - The allocator's Role allows only `list` on EndpointSlices
      (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
    - Every example query of an allocator metric in `docs/*.md` and the chart

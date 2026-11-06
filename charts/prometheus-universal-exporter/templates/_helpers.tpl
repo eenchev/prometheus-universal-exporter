@@ -1350,23 +1350,54 @@ true
 {{- end }}
 {{- /* The allocator Deployment's minReadySeconds. /ready answers 200 once the
        allocator has read its inputs, but its first member list takes effect
-       max(settle, heartbeat interval) after it starts (internal/allocator
-       firstSettle), and the exporter pods learn of it at their next
-       heartbeat, a heartbeat interval later. Until then the new pod hands
-       out no targets, so a rollout that took it for available at once could
-       replace every old pod before any new one allocates. Empty settle and
-       heartbeatInterval are the allocator's defaults, 15s and 10s. */ -}}
+       no sooner than max(settle, its heartbeat interval) after it starts,
+       nor sooner than the longest interval the exporter pods say after the
+       first of them heartbeats it (internal/allocator firstSettle), and the
+       exporter pods learn of it at their next heartbeat, a heartbeat
+       interval later. Until then the new pod hands out no targets, so a
+       rollout that took it for available sooner could replace every old pod
+       before any new one allocates. The interval the exporter pods say is
+       the old pods' during a rollout that changes it, which the chart
+       cannot know: 2m, the most any allocator says, covers every one, so
+       minReadySeconds is max(settle, 2m) plus the heartbeat interval, with
+       one pod as with several, since each old pod is replaced once the new
+       one before it is available. Empty settle and heartbeatInterval are the
+       allocator's defaults, 15s and 10s. */ -}}
 {{- define "prometheus-universal-exporter.allocatorMinReadySeconds" -}}
-{{- $settle := .Values.allocator.settle | default "" | toString | default "15s" -}}
+{{- $settle := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.settle | default "15s" -}}
 {{- $interval := .Values.allocator.heartbeatInterval | default "" | toString | default "10s" -}}
 {{- $settleSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $settle) 1000) | int64 -}}
 {{- $intervalSeconds := ceil (divf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) 1000) | int64 -}}
-{{- add (max $settleSeconds $intervalSeconds) $intervalSeconds -}}
+{{- add (max $settleSeconds 120) $intervalSeconds -}}
+{{- end }}
+{{- /* The allocator pods' grace period among peers. On SIGTERM a peer
+       answers its peers that it is stopping and keeps serving for its
+       shutdown delay, a check interval and a check timeout, so every peer
+       sees it go at its next check, and then stops its server within 10
+       seconds; 5 seconds more cover its exit. That is 18 seconds with the
+       default 2s and 1s, which Kubernetes' default of 30 covers, and up to
+       135 with the longest interval and timeout the allocator takes, so
+       the grace period is the larger of 30 and that sum, the delay rounded
+       up to whole seconds. The peers' timings do not touch minReadySeconds: a new
+       pod checks its peers and fetches the leader's snapshot from its
+       start, and its rounds, at most 1m apart, run well within it. */ -}}
+{{- define "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" -}}
+{{- $interval := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckInterval | default "2s" -}}
+{{- $timeout := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckTimeout | default "1s" -}}
+{{- $delay := ceil (divf (addf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) (include "prometheus-universal-exporter.goDurationMilliseconds" $timeout)) 1000) | int64 -}}
+{{- max 30 (add $delay 15) -}}
 {{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}
 {{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.scrapeConfig.enabled .Values.allocator.probeJobs -}}
 true
+{{- end -}}
+{{- end }}
+{{- /* A duration setting of the allocator as text: "" when unset (null),
+       and any other value as written, so an integer 0 is "0", not unset. */ -}}
+{{- define "prometheus-universal-exporter.allocatorDuration" -}}
+{{- if not (kindIs "invalid" .) -}}
+{{- toString . -}}
 {{- end -}}
 {{- end }}
 {{- /* The allocator's settings, and what the exporter cannot do beside it.
@@ -1388,9 +1419,11 @@ true
 {{- if and (include "prometheus-universal-exporter.staticTargetsMonitor" .) .Values.staticTargets.monitor.targets -}}
 {{- fail "staticTargets.monitor.targets is set beside allocator.enabled, but each exporter pod then holds only its share of the static targets, so a name would be missing on most pods; leave staticTargets.monitor.targets empty" -}}
 {{- end -}}
-{{- $settle := $allocator.settle | default "" | toString -}}
-{{- if and $settle (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) -}}
-{{- fail (printf "allocator.settle %q must be a Go duration of zero or more, for example \"15s\"" $settle) -}}
+{{- /* Taken as written unless null, and at most 1h, the flag's bound, as
+       the intervals below are. */ -}}
+{{- $settle := include "prometheus-universal-exporter.allocatorDuration" $allocator.settle -}}
+{{- if and $settle (or (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $settle)) (gt (include "prometheus-universal-exporter.goDurationMilliseconds" $settle | float64) 3600000.0)) -}}
+{{- fail (printf "allocator.settle %q must be a Go duration from 0 to 1h, for example \"15s\"" $settle) -}}
 {{- end -}}
 {{- $interval := $allocator.heartbeatInterval | default "" | toString -}}
 {{- if $interval -}}
@@ -1399,16 +1432,45 @@ true
 {{- fail (printf "allocator.heartbeatInterval %q must be a Go duration from 1s to 2m, for example \"10s\"" $interval) -}}
 {{- end -}}
 {{- end -}}
-{{- $watch := $allocator.configWatchInterval | default "" | toString -}}
-{{- if and $watch (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $watch)) -}}
-{{- fail (printf "allocator.configWatchInterval %q must be a Go duration of zero or more, for example \"1m\"; 0 reads the input files once" $watch) -}}
+{{- /* An unset value is empty; any other is taken as written, an integer 0
+       that --skip-schema-validation lets through included, which `default`
+       would take for unset. At most 24h, the flags' bound: a duration no
+       Go duration holds passes the pattern and would stop the allocator's
+       start. */ -}}
+{{- $watch := include "prometheus-universal-exporter.allocatorDuration" $allocator.configWatchInterval -}}
+{{- if and $watch (or (not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $watch)) (gt (include "prometheus-universal-exporter.goDurationMilliseconds" $watch | float64) 86400000.0)) -}}
+{{- fail (printf "allocator.configWatchInterval %q must be a Go duration from 0 to 24h, for example \"1m\"; 0 reads the input files once" $watch) -}}
 {{- end -}}
-{{- $refresh := $allocator.discoveryRefreshInterval | default "" | toString -}}
+{{- $refresh := include "prometheus-universal-exporter.allocatorDuration" $allocator.discoveryRefreshInterval -}}
 {{- if $refresh -}}
-{{- if or (not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $refresh)) (lt (include "prometheus-universal-exporter.goDurationMilliseconds" $refresh | float64) 1000.0) -}}
-{{- fail (printf "allocator.discoveryRefreshInterval %q must be a Go duration of 1s or more, for example \"30s\"" $refresh) -}}
+{{- $milliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" $refresh | float64 -}}
+{{- if or (not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $refresh)) (lt $milliseconds 1000.0) (gt $milliseconds 86400000.0) -}}
+{{- fail (printf "allocator.discoveryRefreshInterval %q must be a Go duration from 1s to 24h, for example \"30s\"" $refresh) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The peers' timings, held to the allocator's bounds, an empty one
+       counting as the allocator's default against the others: a check
+       timeout below the interval, a snapshot timeout of at least the check
+       timeout. */ -}}
+{{- $durationPattern := "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" -}}
+{{- $peerInterval := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckInterval -}}
+{{- $peerTimeout := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckTimeout -}}
+{{- $peerSnapshot := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerSnapshotTimeout -}}
+{{- $intervalMilliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" ($peerInterval | default "2s") | float64 -}}
+{{- $timeoutMilliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" ($peerTimeout | default "1s") | float64 -}}
+{{- if and $peerInterval (or (not (regexMatch $durationPattern $peerInterval)) (lt $intervalMilliseconds 500.0) (gt $intervalMilliseconds 60000.0)) -}}
+{{- fail (printf "allocator.peerCheckInterval %q must be a Go duration from 500ms to 1m, for example \"2s\"" $peerInterval) -}}
+{{- end -}}
+{{- if or (and $peerTimeout (not (regexMatch $durationPattern $peerTimeout))) (lt $timeoutMilliseconds 100.0) (ge $timeoutMilliseconds $intervalMilliseconds) -}}
+{{- fail (printf "allocator.peerCheckTimeout %q must be a Go duration from 100ms to less than allocator.peerCheckInterval (%s)" ($peerTimeout | default "1s") ($peerInterval | default "2s")) -}}
+{{- end -}}
+{{- if $peerSnapshot -}}
+{{- $milliseconds := include "prometheus-universal-exporter.goDurationMilliseconds" $peerSnapshot | float64 -}}
+{{- if or (not (regexMatch $durationPattern $peerSnapshot)) (lt $milliseconds $timeoutMilliseconds) (gt $milliseconds 300000.0) -}}
+{{- fail (printf "allocator.peerSnapshotTimeout %q must be a Go duration from allocator.peerCheckTimeout (%s) to 5m, for example \"30s\"" $peerSnapshot ($peerTimeout | default "1s")) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := include "prometheus-universal-exporter.wholeNumber" (list "allocator.peerFailureThreshold" $allocator.peerFailureThreshold 1 20) -}}
 {{- if not (has ($allocator.logLevel | default "info") (list "debug" "info" "warn" "error")) -}}
 {{- fail (printf "allocator.logLevel %q must be debug, info, warn or error" (toString $allocator.logLevel)) -}}
 {{- end -}}

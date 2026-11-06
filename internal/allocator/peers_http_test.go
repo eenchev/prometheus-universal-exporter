@@ -304,15 +304,15 @@ func TestTheNextInstanceLeadsWhenTheLeaderShutsDown(t *testing.T) {
 }
 
 // A follower that cannot fetch the leader's snapshot keeps serving the one
-// it took last, says so once in the log after PeerFailures failures in a
+// it took last, says so once in the log after DefaultPeerFailureThreshold failures in a
 // row, and shows how old it is; a leader that stops answering altogether
-// stays the leader until PeerFailures checks in a row have failed, and then
+// stays the leader until DefaultPeerFailureThreshold checks in a row have failed, and then
 // the follower leads, still serving the snapshot's targets.
 func TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot(t *testing.T) {
 	leader, follower, _ := leaderAndFollower(t)
 	leader.failSnapshot.Store(true)
-	for range PeerFailures + 1 {
-		follower.clock.Advance(PeerInterval)
+	for range DefaultPeerFailureThreshold + 1 {
+		follower.clock.Advance(DefaultPeerCheckInterval)
 		follower.round()
 		if !serves(follower, t, "first") || follower.discovering() {
 			t.Fatalf("a follower that cannot fetch the snapshot serves %v, discovering %v", follower.probeTargets(t), follower.discovering())
@@ -335,9 +335,9 @@ func TestAFollowerThatLosesTheLeaderKeepsItsLastSnapshot(t *testing.T) {
 	}
 
 	leader.server.Close()
-	for i := 1; i <= PeerFailures; i++ {
+	for i := 1; i <= DefaultPeerFailureThreshold; i++ {
 		follower.round()
-		if leading := follower.discovering(); leading != (i == PeerFailures) {
+		if leading := follower.discovering(); leading != (i == DefaultPeerFailureThreshold) {
 			t.Fatalf("after %d failed checks of the leader the follower leads: %v", i, leading)
 		}
 		if !serves(follower, t, "first") {

@@ -88,7 +88,7 @@ func hasLine(t *testing.T, c *peerInstance, line string) {
 // age grows; once it reloads too, its next fetch, which names the digest of
 // what it holds rather than the snapshot it took last, takes the new job's
 // targets, and the two serve the same targets and bundles again. The
-// difference is logged once after PeerFailures fetches, and when it ends.
+// difference is logged once after DefaultPeerFailureThreshold fetches, and when it ends.
 func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 	srv := stableSD(t)
 	pa := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
@@ -113,8 +113,8 @@ func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 	}
 	reload(leader)
 	testutil.WaitFor(t, "the leader to discover the new job", func() bool { return len(jobTargets(leader.a, "extra")) == 1 })
-	for range PeerFailures + 1 {
-		follower.clock.Advance(PeerInterval)
+	for range DefaultPeerFailureThreshold + 1 {
+		follower.clock.Advance(DefaultPeerCheckInterval)
 		follower.round()
 	}
 	hasLine(t, follower, "pue_allocator_snapshot_age_seconds 8\n")
@@ -124,7 +124,7 @@ func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 	}
 
 	reload(follower)
-	follower.clock.Advance(PeerInterval)
+	follower.clock.Advance(DefaultPeerCheckInterval)
 	follower.round()
 	if l, f := jobTargets(leader.a, "extra"), jobTargets(follower.a, "extra"); !reflect.DeepEqual(l, f) {
 		t.Errorf("the leader serves %v for the new job, the follower %v", l, f)
@@ -147,7 +147,7 @@ func TestAFollowerTakesTheLeadersTargetsOfASourceItReloadsLater(t *testing.T) {
 func TestAFollowerThatLedBrieflyTakesTheLeadersTargetsAgain(t *testing.T) {
 	leader, follower, srv := leaderAndFollower(t)
 	leader.failPeer.Store(true)
-	for range PeerFailures {
+	for range DefaultPeerFailureThreshold {
 		follower.round()
 	}
 	if !follower.discovering() {
@@ -235,7 +235,7 @@ func TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt(t *testing.T) {
 	leader.round()
 	follower.round()
 	testutil.WaitFor(t, "the leader to discover", func() bool { return len(jobTargets(leader.a, "websites")) == 1 })
-	follower.clock.Advance(PeerInterval)
+	follower.clock.Advance(DefaultPeerCheckInterval)
 	follower.round()
 	testutil.WaitFor(t, "the follower to ask the source the leader lacks", func() bool {
 		return slices.Equal(jobTargets(follower.a, "extra"), []string{"https://extra.example:9100/health"})
@@ -246,7 +246,7 @@ func TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt(t *testing.T) {
 	if l, f := jobTargets(leader.a, "websites"), jobTargets(follower.a, "websites"); !slices.Equal(l, f) {
 		t.Errorf("the follower serves %v of the job both have, the leader %v", f, l)
 	}
-	follower.clock.Advance(PeerInterval)
+	follower.clock.Advance(DefaultPeerCheckInterval)
 	follower.round()
 	if strings.Contains(follower.metrics(t), "pue_allocator_snapshot_age_seconds 0\n") {
 		t.Error("the follower holding other targets than the leader's snapshot shows a snapshot age of 0")
@@ -359,14 +359,14 @@ func followFake(c *peerInstance, addr netip.AddrPort) {
 
 // A snapshot whose body takes longer than a check may, as a large one over
 // a busy network does, is taken: a fetch has SnapshotTimeout, not
-// PeerTimeout.
+// DefaultPeerCheckTimeout.
 func TestASnapshotMayTakeLongerThanACheck(t *testing.T) {
 	srv := stableSD(t)
 	p := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
 	c := newPeerInstance(t, p, nil)
 	id, _ := json.Marshal(mustLoad(t, p).sources[0].identity())
 	body := `{"id":"leader","discovering":true,"sources":{` + string(id) + `:{"answered":true,"groups":[{"targets":["slow.example:80"],"labels":null}]}}}`
-	followFake(c, fakeLeader(t, body, PeerTimeout+500*time.Millisecond))
+	followFake(c, fakeLeader(t, body, DefaultPeerCheckTimeout+500*time.Millisecond))
 	c.round()
 	if got := jobTargets(c.a, "websites"); !slices.Equal(got, []string{"https://slow.example:80/health"}) {
 		t.Errorf("the follower serves %v, want the slow snapshot's target:\n%s", got, c.logs.String())
@@ -417,7 +417,7 @@ func TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader(t *testing.T) {
 		token := func() (string, error) { return peerToken, nil }
 		a.a.UsePeers(PeerOptions{Peers: []string{b.addr.String()}, Token: token})
 		b.a.UsePeers(PeerOptions{Peers: []string{a.addr.String()}, Token: token})
-		for range PeerFailures + 2 {
+		for range DefaultPeerFailureThreshold + 2 {
 			if together {
 				var wg sync.WaitGroup
 				wg.Go(a.round)

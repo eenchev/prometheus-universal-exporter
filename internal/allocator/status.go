@@ -3,6 +3,7 @@ package allocator
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -69,6 +70,12 @@ type PeersStatus struct {
 	// AddressKnown that it knows its own address.
 	Discovering  bool `json:"discovering"`
 	AddressKnown bool `json:"address_known"`
+	// CheckIntervalSeconds, CheckTimeoutSeconds, FailureThreshold and
+	// SnapshotTimeoutSeconds are the peers' timings (PeerOptions).
+	CheckIntervalSeconds   float64 `json:"check_interval_seconds"`
+	CheckTimeoutSeconds    float64 `json:"check_timeout_seconds"`
+	FailureThreshold       int     `json:"failure_threshold"`
+	SnapshotTimeoutSeconds float64 `json:"snapshot_timeout_seconds"`
 	// LiveInstances are the live instances, this one included.
 	LiveInstances int    `json:"live_instances"`
 	LeaderChanges uint64 `json:"leader_changes"`
@@ -98,7 +105,7 @@ type PeerStatus struct {
 	// Self says it is this instance, and Leader that it is the leader.
 	Self   bool `json:"self"`
 	Leader bool `json:"leader"`
-	// Live says the instance answered and has not failed PeerFailures
+	// Live says the instance answered and has not failed FailureThreshold
 	// checks in a row since; this instance is always live.
 	Live bool `json:"live"`
 	// ID, Discovering and AddressKnown are the instance's last answer.
@@ -225,11 +232,9 @@ type JobSpread struct {
 	Average   float64 `json:"average"`
 	Max       int     `json:"max"`
 	Imbalance float64 `json:"imbalance"`
-	// Uneven says Max is at least half again as many as the evenest split
-	// would give the member of the most, Targets divided by the members
-	// and rounded up (unevenFactor). Against Average alone a job of few
-	// targets would always read uneven: 2 targets over 3 members cannot
-	// do better than 1.5.
+	// Uneven says Max is further above Average than hashing puts a
+	// member's targets by chance (uneven): Imbalance alone says little of
+	// a job of few targets, which hashing seldom spreads evenly.
 	Uneven bool `json:"uneven"`
 	// Sources are the job's discovery sources, in the order of the
 	// status's; none for a job whose file lists every target.
@@ -250,9 +255,37 @@ type JobSource struct {
 	Result string `json:"result"`
 }
 
-// unevenFactor is how many times the evenest split's most a job's most
-// must be for the job to be uneven (JobSpread.Uneven).
-const unevenFactor = 1.5
+// uneven is whether most, the most targets of a job a member has, of
+// routed targets over members, is further above the average than hashing
+// puts a member's targets by chance: by unevenTargets or more, and by
+// unevenDeviations or more standard deviations of a member's count, which
+// is binomial, √(routed × p × (1 − p)) with p = 1/members. Hashing spreads
+// a few targets unevenly as often as not, 3 over 3 members all on one
+// member in one placement of nine, so a rule of the evenest split alone,
+// as Max half again as many as the targets over the members rounded up,
+// marked 78% of random placements of 3 over 3 and 96% of 8 over 4. Of
+// random placements, this rule marks none of 2 over 2 or 3 over 3, where no
+// member can be 3 above the average, 1.6% of 4 over 4, 1.7% of 8 over 4,
+// 0.4% of 6 over 3, 1.6% of 20 over 4, 1.1% of 100 over 4 and 1.8% of 1000
+// over 10, and never a member only one or two over the evenest split, the
+// average rounded up being less than one above the average; and it marks
+// every job of 4 targets or more over 4 members that has all of them on
+// one member.
+func uneven(most, routed, members int) bool {
+	if members == 0 {
+		return false
+	}
+	p := 1 / float64(members)
+	above := float64(most) - float64(routed)*p
+	return above >= unevenTargets && above >= unevenDeviations*math.Sqrt(float64(routed)*p*(1-p))
+}
+
+// unevenTargets and unevenDeviations are how far above the average a
+// job's most must be for the job to be uneven (uneven).
+const (
+	unevenTargets    = 3
+	unevenDeviations = 3
+)
 
 // SourceStatus is one discovery source.
 type SourceStatus struct {
@@ -272,7 +305,8 @@ type SourceStatus struct {
 	Targets int `json:"targets"`
 	// RefreshIntervalSeconds is how often it is asked: its
 	// refresh_interval, or --discovery.refresh-interval for a source that
-	// sets none, or its kind's default.
+	// sets none, or its kind's default; for what a follower took from the
+	// leader's snapshot (From snapshot), the leader's, who asks it.
 	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds"`
 	// LastRefresh is when it was last asked or taken from the leader's
 	// snapshot, LastSuccess when that last succeeded, RFC 3339 in UTC, ""
@@ -475,8 +509,7 @@ func (a *Allocator) jobSpreadLocked(j *ProbeJob) (JobSpread, map[string]string) 
 	out.Average = float64(routed) / float64(len(out.Members))
 	if out.Average > 0 {
 		out.Imbalance = float64(out.Max) / out.Average
-		evenest := (routed + len(out.Members) - 1) / len(out.Members)
-		out.Uneven = float64(out.Max) >= unevenFactor*float64(evenest)
+		out.Uneven = uneven(out.Max, routed, len(out.Members))
 	}
 	return out, owners
 }
@@ -503,7 +536,7 @@ func (a *Allocator) sourcesStatus(now time.Time) []SourceStatus {
 	out := make([]SourceStatus, 0, len(a.sources))
 	for _, s := range a.sources {
 		st := SourceStatus{Name: s.spec.cfg.Name, Kind: s.spec.kind, Owner: s.spec.owner, Type: s.spec.cfg.kind(),
-			RefreshIntervalSeconds: s.spec.cfg.refresh().Seconds()}
+			RefreshIntervalSeconds: s.interval().Seconds()}
 		switch {
 		case s.lastErr != "":
 			st.Result, st.Error = "failing", s.lastErr
@@ -555,7 +588,9 @@ func (a *Allocator) peersStatusLocked(now time.Time) *PeersStatus {
 	defer p.mu.Unlock()
 	st := &PeersStatus{Role: "deciding", LeaderOnly: p.o.LeaderOnly, Discovering: discovering, AddressKnown: p.self.IsValid(),
 		LiveInstances: 1, LeaderChanges: p.leaderChanges, SnapshotTaken: p.took, SnapshotFailuresInARow: p.snapshotFails,
-		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Instances: []PeerStatus{}}
+		CheckFailures: p.checkFailures, SnapshotFailures: p.snapshotFailures, Instances: []PeerStatus{},
+		CheckIntervalSeconds: p.o.CheckInterval.Seconds(), CheckTimeoutSeconds: p.o.CheckTimeout.Seconds(),
+		FailureThreshold: p.o.FailureThreshold, SnapshotTimeoutSeconds: p.o.SnapshotTimeout.Seconds()}
 	if p.decided {
 		st.Role = "follower"
 		if p.leading {

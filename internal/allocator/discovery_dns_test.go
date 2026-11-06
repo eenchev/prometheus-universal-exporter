@@ -235,8 +235,11 @@ func TestDNSSDIsCheckedAtLoad(t *testing.T) {
 		"a port out of range": {func(n *DNSSDConfig) { n.Type, n.Port = "AAAA", 65536 }, "dns_sd.port must be a port"},
 		"a server URL":        {func(n *DNSSDConfig) { n.Server = "udp://10.0.0.53" }, "dns_sd.server"},
 		"a server's bad port": {func(n *DNSSDConfig) { n.Server = "10.0.0.53:0" }, "dns_sd.server"},
-		"a long timeout":      {func(n *DNSSDConfig) { n.Timeout = model.Duration(31 * time.Second) }, "dns_sd.timeout 31s is longer than its refresh_interval 30s"},
-		"a short refresh":     {func(n *DNSSDConfig) { n.RefreshInterval = model.Duration(100 * time.Millisecond) }, "under the least"},
+		"a long timeout":      {func(n *DNSSDConfig) { n.Timeout = model.Duration(31 * time.Second) }, "dns_sd.timeout 31s is longer than dns_sd's default refresh interval 30s"},
+		"a timeout over its own interval": {func(n *DNSSDConfig) {
+			n.Timeout, n.RefreshInterval = model.Duration(11*time.Second), model.Duration(10*time.Second)
+		}, "dns_sd.timeout 11s is longer than its refresh_interval 10s"},
+		"a short refresh": {func(n *DNSSDConfig) { n.RefreshInterval = model.Duration(100 * time.Millisecond) }, "under the least"},
 	} {
 		d := ok()
 		c.mutate(d.DNSSD)

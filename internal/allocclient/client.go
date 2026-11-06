@@ -188,6 +188,9 @@ type Client struct {
 	// newTimer starts the wait between two bundle requests; a test makes
 	// it a timer of its own.
 	newTimer func(time.Duration) (<-chan time.Time, func() bool)
+	// now is the time what an instance said is stamped and aged by
+	// (takeAnnounced); a test gives a clock of its own.
+	now func() time.Time
 
 	mu sync.Mutex
 	// inForce is the generation of the bundle in force, seen that of the
@@ -205,26 +208,24 @@ type Client struct {
 	interval        time.Duration
 	intervalChanged chan struct{}
 	// reported is the interval the heartbeats say (allocapi.Heartbeat's
-	// IntervalSeconds): the longest of those announced, while one is, where
-	// interval is the shortest, and 0 until an instance of the allocator has
-	// announced one, a heartbeat leaving it out until then. Options' default
-	// is no instance's interval, and would tell an instance that has just
-	// started nothing of how long the replicas take to reach it. The
-	// longest, not the interval in force, is what such an instance needs:
-	// while an instance before it still announces a longer interval, the
-	// replicas it has not reached yet may still be on that one, and find the
-	// new instance only at their next lookup on it.
-	reported time.Duration
-	// announced is, for each address the allocator's host resolves to whose
-	// last heartbeat was answered, the interval that answer said, 0 for
-	// none: an address whose heartbeat failed has no say until it answers
-	// again.
-	announced map[string]time.Duration
-	// lastSaid is, for each address the allocator's host resolves to, the
-	// interval its last answer said, 0 for none, kept while its heartbeats
-	// fail: an instance that is slow or restarting still has replicas on
-	// the interval it said, which reported is to cover.
-	lastSaid map[string]time.Duration
+	// IntervalSeconds): the longest of those the instances said (says),
+	// where interval is the shortest, and 0 until an instance of the
+	// allocator has announced one, a heartbeat leaving it out until then.
+	// Options' default is no instance's interval, and would tell an
+	// instance that has just started nothing of how long the replicas take
+	// to reach it. The longest, not the interval in force, is what such an
+	// instance needs: while an instance before it still announces a longer
+	// interval, the replicas it has not reached yet may still be on that
+	// one, and find the new instance only at their next lookup on it.
+	// highest is the longest reported has been, and earlyBeat when a change
+	// of it last heartbeated every instance at once (takeAnnounced).
+	reported, highest time.Duration
+	earlyBeat         time.Time
+	// says is what each instance of the allocator said in its last answer,
+	// keyed by the instance's name (allocapi.HeartbeatReply's Instance), or
+	// by the address it answered at when its answer names none: one address
+	// may be answered by several instances in turn.
+	says map[string]*said
 	// sending holds, for each allocator address, the slot of the heartbeat
 	// on its way there, one at a time: an instance of the allocator keeps the
 	// last heartbeat it hears, so the one ShuttingDown sends must not be
@@ -243,6 +244,23 @@ type Client struct {
 	// address, so an error repeated at every try is logged once, until it
 	// changes or ends: with several addresses failing, each has its own.
 	lastLogged map[logKey]string
+}
+
+// said is what an instance of the allocator said in its last answer: the
+// interval, 0 for none, the address the answer came from, and when. answered
+// is false once a heartbeat to that address failed after it: the instance
+// then has no say in the interval in force until it answers again, as
+// whichever instance the address leads to did not answer. It keeps its say
+// in the interval reported, the longest, while its address resolves and
+// it is not older than the member TTL of the longest interval said: an
+// instance that is slow or restarting still has replicas on the interval it
+// said, and one behind an address that several instances answer is not
+// heard at every heartbeat.
+type said struct {
+	interval time.Duration
+	address  string
+	at       time.Time
+	answered bool
 }
 
 // logKey is what an error is logged once for: a stage, and for a heartbeat
@@ -287,8 +305,9 @@ func New(o Options) (*Client, error) {
 			t := time.NewTimer(d)
 			return t.C, t.Stop
 		},
+		now:     time.Now,
 		inForce: o.Generation, seen: o.Generation, interval: o.HeartbeatInterval, intervalChanged: make(chan struct{}),
-		announced: map[string]time.Duration{}, lastSaid: map[string]time.Duration{}, sending: map[string]chan struct{}{},
+		says: map[string]*said{}, sending: map[string]chan struct{}{},
 		syncErrors: map[string]uint64{StageHeartbeat: 0, StageFetch: 0, StageWrite: 0},
 		lastLogged: map[logKey]string{},
 	}, nil
@@ -404,14 +423,9 @@ func (c *Client) forgetAddresses(addrs []string) {
 			delete(c.lastLogged, key)
 		}
 	}
-	for addr := range c.announced {
-		if !slices.Contains(addrs, addr) {
-			delete(c.announced, addr)
-		}
-	}
-	for addr := range c.lastSaid {
-		if !slices.Contains(addrs, addr) {
-			delete(c.lastSaid, addr)
+	for key, s := range c.says {
+		if !slices.Contains(addrs, s.address) {
+			delete(c.says, key)
 		}
 	}
 	c.takeAnnounced()
@@ -570,15 +584,17 @@ func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 // once the one before to addr is back, and takes its reply. A reply naming a
 // generation other than the last the bundle loop has seen, by the time the
 // reply is in, wakes the bundle loop from its wait. The interval the reply
-// says, kept within allocapi's bounds, or none, becomes addr's say in the
-// interval in force, which is the shortest any instance whose last heartbeat
-// was answered says (takeAnnounced): every instance then hears the replica
-// within its own interval, which a longer one would not ensure. An instance
-// that fails loses its say, and when no instance says one the interval stays
-// as it is, so an instance that cannot be reached for a while does not take
-// back what the others said. Its say in the interval the heartbeats say, the
-// longest, is kept until its address no longer resolves. sent is false when ctx ended before this
-// heartbeat's turn came, and nothing was sent.
+// says, kept within allocapi's bounds, or none, becomes the say of the
+// instance that answered (said) in the interval in force, which is the
+// shortest any instance whose last heartbeat was answered says
+// (takeAnnounced): every instance then hears the replica within its own
+// interval, which a longer one would not ensure. The instances last heard at
+// an address that fails lose their say, and when no instance says one the
+// interval stays as it is, so an instance that cannot be reached for a while
+// does not take back what the others said. Their say in the interval the
+// heartbeats say, the longest, is kept until the address no longer resolves
+// or the member TTL of the longest interval has passed. sent is false when
+// ctx ended before this heartbeat's turn came, and nothing was sent.
 func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	slot := c.sending[addr]
@@ -613,14 +629,22 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	// news, and waking it for one would ask again without waiting.
 	c.mu.Lock()
 	seen, inForce := c.seen, c.inForce
-	switch {
-	case err != nil:
-		delete(c.announced, addr)
-	case reply.HeartbeatIntervalSeconds != 0:
-		c.announced[addr] = allocapi.ClampHeartbeatInterval(reply.HeartbeatIntervalSeconds)
-		c.lastSaid[addr] = c.announced[addr]
-	default:
-		c.announced[addr], c.lastSaid[addr] = 0, 0
+	if err != nil {
+		for _, s := range c.says {
+			if s.address == addr {
+				s.answered = false
+			}
+		}
+	} else {
+		key := reply.Instance
+		if key == "" {
+			key = "address " + addr
+		}
+		s := &said{address: addr, at: c.now(), answered: true}
+		if reply.HeartbeatIntervalSeconds != 0 {
+			s.interval = allocapi.ClampHeartbeatInterval(reply.HeartbeatIntervalSeconds)
+		}
+		c.says[key] = s
 	}
 	c.takeAnnounced()
 	c.mu.Unlock()
@@ -633,27 +657,44 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 
 // takeAnnounced makes the shortest interval announced by the instances
 // whose last heartbeat was answered the interval in force, and the longest
-// the last answer of each instance the host resolves to said the one the
-// heartbeats say (reported), when any is. When the one they say changes,
-// the replica's first being told one among those changes, every instance
-// is heartbeated at once (beat), not at its next turn on the interval: the
-// heartbeats a new replica sent before it heard any instance said none,
-// and an instance that has just started would otherwise form its first
-// member list of the replicas that came first before it hears from them
-// how long the others may take. Called under mu.
+// any instance said the one the heartbeats say (reported), when any is,
+// first dropping what an instance said that is older than the member TTL of
+// the longest said. When the one they say grows, the replica's first being
+// told one among those changes, every instance is heartbeated at once
+// (beat), not at its next turn on the interval: the heartbeats a new replica
+// sent before it heard any instance said none, and an instance that has just
+// started would otherwise form its first member list of the replicas that
+// came first before it hears from them how long the others may take. That is
+// done for a value longer than any said before at once, and for one said
+// before, which comes back once an instance that was not heard for a while
+// is again, at most once an interval; a value that shrinks waits for the
+// next turn, as it makes no instance wait longer. Called under mu.
 func (c *Client) takeAnnounced() {
+	now := c.now()
 	var longest time.Duration
-	for _, d := range c.lastSaid {
-		longest = max(longest, d)
+	for _, s := range c.says {
+		longest = max(longest, s.interval)
+	}
+	window := allocapi.MemberTTL(max(longest, c.interval))
+	longest = 0
+	var shortest time.Duration
+	for key, s := range c.says {
+		if now.Sub(s.at) >= window {
+			delete(c.says, key)
+			continue
+		}
+		longest = max(longest, s.interval)
+		if s.answered && s.interval != 0 && (shortest == 0 || s.interval < shortest) {
+			shortest = s.interval
+		}
 	}
 	if longest != 0 && longest != c.reported {
+		grew := longest > c.reported
 		c.reported = longest
-		signal(c.beat)
-	}
-	var shortest time.Duration
-	for _, d := range c.announced {
-		if d != 0 && (shortest == 0 || d < shortest) {
-			shortest = d
+		if grew && (longest > c.highest || now.Sub(c.earlyBeat) >= c.interval) {
+			c.highest = max(c.highest, longest)
+			c.earlyBeat = now
+			signal(c.beat)
 		}
 	}
 	if shortest == 0 || shortest == c.interval {

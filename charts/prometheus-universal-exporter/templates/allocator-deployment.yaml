@@ -6,6 +6,14 @@
 {{- if and $allocator.leaderOnly (not (include "prometheus-universal-exporter.allocatorDiscovers" .)) }}
 {{- fail "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source, so the allocator's pods are no peers and each serves everything: set it false, or add a discovery source" }}
 {{- end }}
+{{- /* The peers' timings are peers' flags too, refused as leaderOnly is. */}}
+{{- if not (include "prometheus-universal-exporter.allocatorDiscovers" .) }}
+{{- range $key := list "peerCheckInterval" "peerCheckTimeout" "peerSnapshotTimeout" "peerFailureThreshold" }}
+{{- with include "prometheus-universal-exporter.allocatorDuration" (get $allocator $key) }}
+{{- fail (printf "allocator.%s is set, but no probe job nor discovered_targets entry has a discovery source, so the allocator's pods are no peers and check none: leave it empty, or add a discovery source" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,6 +59,11 @@ spec:
         {{- $_ := set $podAnnotations "checksum/config" $checksum }}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
+      {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
+      {{- /* A peer that is stopped keeps serving its shutdown delay first;
+             see the helper. */}}
+      terminationGracePeriodSeconds: {{ include "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" . }}
+      {{- end }}
       serviceAccountName: {{ include "prometheus-universal-exporter.allocatorServiceAccountName" . }}
       {{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
       {{- /* A kubernetes discovery source lists EndpointSlices with the
@@ -110,7 +123,7 @@ spec:
             {{- end }}
             - {{ printf "--web.token-file=%s/token" (include "prometheus-universal-exporter.allocatorTokenDir" .) | quote }}
             - {{ printf "--log.level=%s" ($allocator.logLevel | default "info") | quote }}
-            {{- with $allocator.settle }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.settle }}
             - {{ printf "--settle=%s" . | quote }}
             {{- end }}
             {{- with $allocator.heartbeatInterval }}
@@ -118,10 +131,10 @@ spec:
             {{- end }}
             {{- /* Empty leaves the allocator's default; 0, which reads the
                    files once, is a value of its own, not taken for unset. */}}
-            {{- if not (eq ($allocator.configWatchInterval | default "" | toString) "") }}
-            - {{ printf "--config.watch-interval=%s" (toString $allocator.configWatchInterval) | quote }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.configWatchInterval }}
+            - {{ printf "--config.watch-interval=%s" . | quote }}
             {{- end }}
-            {{- with $allocator.discoveryRefreshInterval }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.discoveryRefreshInterval }}
             - {{ printf "--discovery.refresh-interval=%s" . | quote }}
             {{- end }}
             {{- /* Unset takes the allocator's default, 1000; 0 is refused, not
@@ -134,6 +147,20 @@ spec:
                    Service lists it. */}}
             - {{ printf "--peers=%s.%s.svc:9116" (include "prometheus-universal-exporter.allocatorFullname" .) (include "prometheus-universal-exporter.namespace" .) | quote }}
             - "--peers.self=$(POD_IP)"
+            {{- /* Empty, or null for the threshold, leaves the allocator's
+                   default. */}}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckInterval }}
+            - {{ printf "--peers.check-interval=%s" . | quote }}
+            {{- end }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckTimeout }}
+            - {{ printf "--peers.check-timeout=%s" . | quote }}
+            {{- end }}
+            {{- with include "prometheus-universal-exporter.allocatorDuration" $allocator.peerSnapshotTimeout }}
+            - {{ printf "--peers.snapshot-timeout=%s" . | quote }}
+            {{- end }}
+            {{- with include "prometheus-universal-exporter.wholeNumber" (list "allocator.peerFailureThreshold" $allocator.peerFailureThreshold 1 20) }}
+            - {{ printf "--peers.failure-threshold=%s" . | quote }}
+            {{- end }}
             {{- if $allocator.leaderOnly }}
             {{- /* Only the leader serves the allocation's metrics, so the
                    ServiceMonitor, which scrapes every pod, gets one pod's

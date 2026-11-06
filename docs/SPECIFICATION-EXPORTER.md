@@ -8474,8 +8474,10 @@ Recommended behavior:
   something took — in Go's form with every unit that is zero left out:
   `1m`, `1m30s`, `2h` and `1h30s`, never `1m0s`, `2h0m0s` or `1h0m30s`; a
   fraction of a second MUST be kept (`1m0.5s`), one under a second MUST be
-  written as Go writes it (`500ms`), and none as `0s`. One helper
-  (`pagekit.Duration`) MUST write them for both programs. The JSON answers
+  written as Go writes it (`500ms`), and none as `0s`; an interval
+  configured MUST NOT be cut to whole seconds, as an age, how long ago
+  something was, may be. One helper (`pagekit.Duration`) MUST write them
+  for both programs. The JSON answers
   MUST keep their values as they are: seconds as numbers, and a duration
   held as a string, as a static target's `interval`, in Go's form (`1m0s`).
 
@@ -30344,11 +30346,11 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAFollowerTakesASourceWhoseSettingsDifferOnTheLeader` (allocator): a follower whose source differs from the leader's only in its `refresh_interval` serves the leader's targets of it and runs no refresh loop itself.
 - `TestAFollowerAsksASourceTheLeaderLacksUntilTheLeaderHasIt` (allocator): a follower whose probe targets file has a job the leader's lacks asks its source itself and serves its target, beside the leader's targets of the other job, its snapshot age not 0; once the leader reloads the job and discovers it, the follower's next round stops its own loop, logs so, and its snapshot age is 0.
 - `TestASnapshotWritesAGroupsLabelsOnce` (allocator): a file_sd file of one group of 10000 targets with 7 KB of labels gives a snapshot of at most twice the file's size, which the follower takes, serving all 10000 targets with a snapshot age of 0; a snapshot may be 16 MiB for an instance of one source or none, 32 MiB for one of two.
-- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than `PeerTimeout`, is taken.
+- `TestASnapshotMayTakeLongerThanACheck` (allocator): a leader whose snapshot body comes 1.5s after its headers, longer than the default check timeout, is taken.
 - `TestASnapshotIsHeldToTheSourcesMaxTargetsAndChecks` (allocator): a snapshot giving a source of `max_targets: 10` 11 targets, an empty target, or a label `bad name` is refused: the follower serves none of it, counts the source's failure and logs that the leader's snapshot of it is refused.
 - `TestInstancesThatDoNotKnowTheirAddressSettleOnOneLeader` (allocator): two instances whose `--peers` name only the other, without `--peers.self`, checking each other one after the other or in rounds run together, settle within five rounds on one leader; the follower serves the leader's targets, and each logs once that no address of `--peers` answers as itself.
 - `TestPeersAreOrderedAndTheLowestLiveInstanceLeads` (allocator), changed: an instance of unknown address leads when no live peer discovers, follows the lowest discovering peer that knows its address, else the lowest discovering instance, and keeps leading when its own id is lower.
-- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least `PeerInterval` after the signal before its listener closes, and exits 0.
+- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator): `run` with `--peers` sent `SIGTERM` keeps answering `/v1/peer` and `/ready` with `503` for at least the check interval after the signal before its listener closes, logs its shutdown delay, `3s` by default and `600ms` with `--peers.check-interval=500ms` and `--peers.check-timeout=100ms`, and exits 0.
 
 ## 34.269 Fixes to address families and masking
 
@@ -30409,7 +30411,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.272 Allocator probe jobs table and job view
 
-- `TestTheStatusPageHasAProbeJobsTable` (allocator): with four probe jobs over r1, r2 and r3, websites of six listed targets, apis of two, pods of three targets a `file_sd` source finds and legacy of one listed target and a source of a file that is no JSON, after one refresh of the sources, `/v1/status`'s `spread.jobs` has the four in file order, each routed among r1, r2 and r3 by id, its members' targets summing to its targets, its `min`, `average`, `max` and `imbalance` those of its members' counts, and `uneven` true exactly when the most is at least 1.5 times the targets over the members rounded up; each member's `probe` is the sum of its jobs' counts; websites has the collector demo and no sources (`[]`), pods its source ok and legacy its source failing, and legacy, one target over three members, is not uneven at `3`; the page's targets table has the fixed columns Member, Static, Draining, Probe, Total and Share and no column of a probe job, and the probe jobs table has sortable headings, a link of each job to `?job=<name>`, a `data-match` of the job, collector and sources' names, each source with its result, `listed` for a job without one, the filter box, hidden until the script shows it, a refresh that arranges the table again and puts the caret back, the sort mark before a number column's name, and the imbalance marked exactly on the uneven jobs.
+- `TestTheStatusPageHasAProbeJobsTable` (allocator): with four probe jobs over r1, r2 and r3, websites of six listed targets, apis of two, pods of three targets a `file_sd` source finds and legacy of one listed target and a source of a file that is no JSON, after one refresh of the sources, `/v1/status`'s `spread.jobs` has the four in file order, each routed among r1, r2 and r3 by id, its members' targets summing to its targets, its `min`, `average`, `max` and `imbalance` those of its members' counts, and `uneven` true exactly when the most is above the average by 3 or more and by 3 or more standard deviations of a member's count; each member's `probe` is the sum of its jobs' counts; websites has the collector demo and no sources (`[]`), pods its source ok and legacy its source failing, and legacy, one target over three members, is not uneven at `3`; the page's targets table has the fixed columns Member, Static, Draining, Probe, Total and Share and no column of a probe job, and the probe jobs table has plain headings the script makes sortable, a link of each job to `?job=<name>`, a `data-match` of the job, collector and sources' names, each source with its result, `listed` for a job without one, the filter box, hidden until the script shows it, a refresh that arranges the table again and puts the caret back, the sort mark before a number column's name, and the imbalance marked exactly on the uneven jobs.
 - `TestTheJobViewListsItsTargets` (allocator): with the same jobs, `/v1/status?job=websites` has the collector, the shard key `target`, the label team and not the one written `""`, the param timeout as written and api_key as `<redacted>`, no sources, the members with the spread's counts, the most first, and the six targets by target, each with the member `SD` routes it to and no labels; pods has its source ok and three targets, each with the label namespace its source gave it and not team, which the job sets; apis shows its targets' `access_token` as `<redacted>` and never the token; the page has its title, the bar's home and JSON links, the way back, the heading, the filter box with the job, its label and hint, the job's facts, the params masked, `none: the probe targets file lists every target`, the members' table, the targets' table and a link to a member's view, and never the credential or the label written `""`; legacy's page shows its source failing; the fragment is the content alone; `?filter=<member>`, in upper case, lists that member's targets alone, every count but the matching kept, and `?filter=namespace=shop` pods' three; an unknown job is answered `200` on the page, with the notice, the filter box hidden and the script hiding it, and on its fragment, and `404` as JSON, and an empty `job` `400` on both; a member's view links each probe job, in its jobs table and in its list, to the job's view.
 - `TestAJobViewIsBounded` (allocator): a job of 1005 targets lists 1000 of them, the page says `Only the first 1000 are listed</span>; 5 more are left out.`, and `?filter=h1004` finds the one beyond the bound.
 - `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator): under `--peers.leader-only` a follower's `/v1/status?job=<name>` is `partial` with the leader's address and no spread or targets, its page names the leader with the notice and has no filter box or targets, and the leader's view is whole.
@@ -30419,7 +30421,7 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestTheIntervalFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--config.watch-interval=45s`, `--settle=3s` and `--discovery.refresh-interval=7s` and a probe job of a `file_sd` source without `refresh_interval` and one of `2m` gives a status of a 45s watch interval, a 3s settle time and sources asked every 7 and 120 seconds.
 - `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--discovery.refresh-interval` of `999ms` or `-1s` exits 2 naming the flag's bound; `TestVersionAndHelp` finds the flag in `-h`.
 - `TestChartSetsHowOftenTheAllocatorLooksForChanges` and `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), as the chart specification's test list says.
-- `TestTheSourcesTableKeepsItsShortCellsOnOneLine` (allocator): the status page's style keeps the discovery sources table's source, owner and *From* cells on one line, so a long error in the result cell takes the width instead of breaking them.
+- `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), renamed and changed in § 34.275.
 
 ## 34.273 Allocator polish: durations, source labels, the first member list
 
@@ -30433,6 +30435,35 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 - `TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest` (allocclient): a client finding two instances, one saying 2s and one 4s, has 2s in force; each instance hears a heartbeat saying `interval_seconds` 4 within a second of the start, at once rather than at the interval's turn, none before it saying anything but none or 2, and every one after it saying 4, at least two in the 4s left.
 - `TestAFreshReplicaMakesANewInstanceWaitForTheOldInterval` (allocator), the reviewer's scenario: a replica that starts after a new instance of a 1s interval and a 1s settle time, and finds it and two instances from before saying 3s, says `interval_seconds` 3 to the new instance; its first member list has not formed 1.5s after the start, and with two replicas from before heartbeating from then on, saying 3s, it forms of the three at 3.5s with no member list change.
 - `TestAReplicaSaysNoIntervalUntilAnInstanceDoes` (allocclient) still passes unchanged: with one instance the longest said is the one in force.
+
+## 34.274 Fixes from the review of the allocator's jobs and polish: heartbeats and settings
+
+- `TestInstancesAnsweringOneAddressInTurnDoNotFlipTheInterval` (allocclient), the reviewer's scenario: two instances answering one address in turn, `p` saying 2s and `q` 4s, give a 2s interval in force, at most 6 heartbeats in 5s, every heartbeat from the third on saying `interval_seconds` 4, and one log line of a changed interval; keyed by the address, the heartbeats ran back to back and every answer logged a change.
+- `TestWhatAnInstanceSaidIsKeptForTheMemberTTLAndHeartbeatsEarlyOnlyWhenItGrows` (allocclient): with `p` saying 1s and `q` 2s at two addresses, on a clock of the test's own, the first 1s and then 2s heartbeat every instance at once; `q`'s address gone gives 1s and no early heartbeat; `q` back within the interval gives 2s and no early heartbeat, and back an interval later an early one; `q` failing at an address that keeps resolving keeps its 2s for 1ms less than 6s, the member TTL of 2s, and loses it at 6s.
+- `TestTheHeartbeatEndpoint` (allocator), changed: the answer before the member list formed is `{"generation":"","heartbeat_interval_seconds":10,"instance":"<id>"}`, with the instance's id.
+- `TestTheFirstMemberListWaitsTheOldIntervalAfterTheFirstHeartbeat` (allocator), the reviewer's rollout scenario on a clock of the test's own: an instance of a 5s interval and a 1s settle time first heard 30s after its start from `r1` saying 40s, and from `r2` saying 40s at 65s, has no member list 1ms before 70s and `[r1 r2]` as its first at 70s; counted from the start, the list formed of `r1` alone at 40s.
+- `TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait` (allocator), changed: the heartbeat saying none, the first, at 1s starts the count of the 40s said after it, so the list has not formed at 40s and forms at 41s.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (repository), changed: the allocator's `minReadySeconds` is `max(settle, 2m)` plus the heartbeat interval, 130 with both empty, 125 with `5s`, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 121 with `20s` and `1s`, 131 with `settle: 2m0.5s` and 310 with `5m`, so a lone allocator pod replaced during a rollout that shortens the interval from up to 2m is not counted available before its first member list forms; `make helm-test` checks 150 for `30s`.
+- `TestAFollowerShowsTheLeadersRefreshInterval` (allocator): during a rolling update that changes an `http_sd` source's `refresh_interval` from 1h to 30m, the new follower of an old leader shows `refresh_interval_seconds` 3600, from the snapshot, holds the leader's snapshot digest, and shows 1200 after the leader's interval changes to 20m; it showed its own 1800 before.
+- `TestASourceWithoutARefreshIntervalTakesTheDefault` (allocator), changed: the `dns_sd` `timeout` of 10s under a `--discovery.refresh-interval` of 5s is refused with `dns_sd.timeout 10s is longer than the default refresh interval 5s (--discovery.refresh-interval)`, where it said `its refresh_interval 5s`, which the source does not set.
+- `TestDNSSDIsCheckedAtLoad` (allocator), changed: a `dns_sd` `timeout` of 31s with no `refresh_interval` is refused as `longer than dns_sd's default refresh interval 30s`, and one of 11s with a `refresh_interval` of 10s as `longer than its refresh_interval 10s`; `TestDiscoveryIsCheckedAtLoad` (allocator), changed: a `kubernetes` one of 31s as `longer than kubernetes's default refresh interval 30s`.
+- `TestAMemberShuttingDownLeavesAtOnce` (allocator), changed: a member whose heartbeat says it is shutting down is still in the member list 1ms before the settle time after it, and gone at the settle time, without its TTL, as the delay table of `docs/ALLOCATOR.md` now says beside a replica gone without a word, which leaves after its TTL and the settle time (`TestASilentMemberLeavesAfterTheTTLAndTheSettleTime`).
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--config.watch-interval` of `-1s` or `25h` exits 2 with `--config.watch-interval must be from 0 to 24h`, and `--discovery.refresh-interval` of `999ms`, `-1s` or `24h0m0.001s` with `--discovery.refresh-interval must be from 1s to 24h, or 0 for each kind's own default`.
+- `TestChartSetsHowOftenTheAllocatorLooksForChanges` (repository), changed: `24h` and `1440m` render, and with the values schema skipped an integer `0` of `allocator.configWatchInterval` renders `--config.watch-interval=0`, where `default` took it for empty and left the flag out.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (repository), changed: `allocator.configWatchInterval` of `24h0m1s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start, and of the integer `30`, and `allocator.discoveryRefreshInterval` of `1441m`, `99999999h` or the integer `0`, fail rendering with the schema and with it skipped, each saying `must be a Go duration from 0 to 24h` or `from 1s to 24h`.
+
+## 34.275 Fixes from the review of the allocator's jobs and polish: pages
+
+- `TestTheLatestRefreshWins` (allocator): a job's view's script leaves a refresh asked while another waits for the same URL to that one, aborts one waiting for another URL and asks again, with the fetch's `signal`, swaps in an answer only when its refresh is still the latest, says nothing of a refresh aborted for a later one, and the *Show source labels* box's change refreshes; no refresh is dropped for one in flight. (In headless Chromium, with fragments answered after 1.5s, ticking the box 200ms after Refresh, and unticking and ticking it again 100ms apart, show the source labels, where they stayed left out, and three clicks of Refresh 100ms apart ask once.)
+- `TestTheSortMarksStandApartFromTheirNames` (allocator): every sort mark is apart from its heading's name by `\00a0`, `"\2195\00a0"` before a number column's name and `"\00a0\2195"` after another's, the same for `\2191` and `\2193`, and no `content` has a space after an escape, which would end the escape and be lost. (In headless Chromium, the computed mark before Targets is `"↕ "`, where it was `"↕"`, flush with the name.)
+- `TestTheProbeJobsTableSortsNaturallyAndOnlyWithItsScript` (allocator): the probe jobs table sorts text with an `Intl.Collator` of `numeric: true` and `sensitivity: "base"`, not a plain `localeCompare`, and is served with plain headings, no button and no `aria-sort`, and without the `sortable` class, which the script adds with the buttons. (In headless Chromium, jobs `job1`, `job2`, `job10`, `job3`, `job21` and `Job3` sort as `job1`, `job2`, `job3`, `Job3`, `job10`, `job21`, where `job10` came before `job2`, and without JavaScript the table has no button, where it had nine.)
+- `TestTheJobViewSetsASourcesErrorApartAndKeepsATargetWhole` (allocator): a job's view writes its failing source as `inventory file_sd failing, refreshed every 1m`, then its error muted on a line of its own; its targets' cells break a target with `overflow-wrap: break-word`, only where it is longer than the line. (In headless Chromium, of a job of 40 discovered targets with `?meta=1`, none wraps at 1600, 1280, 1024 or 390 pixels wide, where all 40 did at 1600, 1280 and 1024.)
+- `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), formerly `TestTheSourcesTableKeepsItsShortCellsOnOneLine`: of a probe job of an 85-character name and a source of a 42-character one, the sources table keeps the kind under each name and the *From* cell on one line, lets the source's and the owner's names and the result's error wrap, and the probe jobs table a source's name; neither name cell is kept on one line. (In headless Chromium, the sources table of such a job fits in the page at 1024, 1280 and 1600 pixels wide, where it was 1590 pixels wide at each.)
+- `TestTheAllocatorPagesKeepAConfiguredIntervalsFraction` (allocator): an allocator of a 500ms watch interval, a 2.5s heartbeat interval and a 1500ms settle time has `read again every 500ms for changes`, `heartbeat every 2.5s; a member not heard from for 7.5s` and `holds for 1.5s` on its page, and its uptime 1.7s after the start as `1s`; a `file_sd` source of a `refresh_interval` of 1500ms is `1.5s` in the sources table and `refreshed every 1.5s` on its job's view.
+- `TestAJobIsUnevenOnlyBeyondWhatHashingGivesByChance` (allocator): a job is uneven exactly when its most is above the average by 3 or more and by 3 or more standard deviations of a member's count: not 2 of 2 over 2 members, 3 of 3 over 3, 3 of 4 over 4, 5 of 6 over 3, 5 of 8 over 4, 8 of 20 over 4, 35 of 100 over 4 or 120 of 1000 over 10, nor 5 over 1 member or none over 3, but 4 of 4 over 4, 6 of 6 over 3, 8 of 8 over 4, 12 of 20 over 4, 40 of 100 over 4 and 130 of 1000 over 10.
+- `TestThePagesMarkOnlyAJobHashingWouldSeldomSpreadSo` (allocator): over four members, a job of 4 targets all on one member is uneven and marked on the status page and its view, and one of 3 targets all on one member is neither; the page says the rule.
+- `TestTheStatusPageHasAProbeJobsTable` (allocator), changed: the table has plain headings, the number column's mark is `"\2195\00a0"`, and `uneven` and the mark follow the rule above.
+- `TestNoGoCommentSaysAParagraphTwice` (repository): no Go file's comment has two paragraphs one after the other of which four in five of the shorter's words, of 12 or more, are the longer's, as the job view's paragraph on source labels was twice.
 
 # 35. Documentation requirements
 
@@ -30766,6 +30797,27 @@ duration, response-size, and emitted-series health metrics.
 The chart values and monitors that expose this endpoint are specified in
 [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.
 
+
+## 34.276 Peer timing settings
+
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), extended: each of `--peers.check-interval`, `--peers.check-timeout`, `--peers.failure-threshold` and `--peers.snapshot-timeout` without `--peers` exits 2 naming it; with `--peers`, a check interval of `499ms`, `1m1s` or `0s`, a check timeout of `99ms` or of the interval (`2s`), a check interval of `800ms` against the default `1s` timeout, a failure threshold of 0 or 21 and a snapshot timeout of `5m1s` or under the check timeout (`999ms`) each exit 2 with the bound and the value.
+- `TestVersionAndHelp` (cmd/pue-allocator), extended: `-h` lists the four peer timing flags.
+- `TestThePeerTimingFlagsReachTheAllocator` (cmd/pue-allocator): `run` with `--peers` and `--peers.check-interval=750ms`, `--peers.check-timeout=250ms`, `--peers.failure-threshold=5` and `--peers.snapshot-timeout=45s` answers `/v1/status` with `check_interval_seconds` 0.75, `check_timeout_seconds` 0.25, `failure_threshold` 5 and `snapshot_timeout_seconds` 45.
+- `TestAFollowerLeadsAfterTheConfiguredFailedChecks` (allocator): two instances running their rounds with a 100ms check interval and a failure threshold of 5; once the leader's listener closes the follower leads no sooner than 400ms after, four intervals after its first failed check, and within 2.5s, five intervals and 2s of slack, sooner than the defaults' three 2s rounds could.
+- `TestACheckIsBoundedByTheConfiguredTimeout` (allocator): a lower peer that answers its check after 300ms is not live with a 100ms check timeout and a threshold of 1, so the instance leads, and with the default timeout it is, so the instance follows it.
+- `TestASnapshotFetchIsBoundedByTheConfiguredTimeoutAndThreshold` (allocator): a follower with a 200ms snapshot timeout and a failure threshold of 2 does not take a snapshot written 600ms after its headers, counts both failed fetches, and logs that it cannot fetch the snapshot after the second, not the first.
+- `TestTheStatusGivesThePeerTimings` (allocator): `/v1/status`'s peers give `check_interval_seconds`, `check_timeout_seconds`, `failure_threshold` and `snapshot_timeout_seconds`, 2, 1, 3 and 30 by default and 0.75, 0.25, 1 and 90 when set, and the page's Peers section says "The instances check each other every 2s, each check within 1s, and an instance stops being live after 3 failed checks in a row; a follower fetches the leader's snapshot with each round of checks, a fetch within 30s." and, when set, "every 750ms, each check within 250ms, … after 1 failed check in a row; … a fetch within 1m30s."
+- `TestTheShutdownDelayIsAnIntervalAndATimeout` (allocator): `PeerOptions.ShutdownDelay` is `3s` with the timings left zero, `1m59s` for a `1m` interval and a `59s` timeout, and `600ms` for `500ms` and `100ms`.
+- `TestAnInstanceAmongPeersAnswers503BeforeItStops` (cmd/pue-allocator), extended: with `--peers.check-interval=500ms` and `--peers.check-timeout=100ms` the instance logs a shutdown delay of `600ms` and answers `/v1/peer` with `503` for at least `500ms` after the signal.
+- `TestChartSetsThePeersTimings` (chart, test/repository): with a discovery source `allocator.peerCheckInterval`, `allocator.peerCheckTimeout`, `allocator.peerSnapshotTimeout` and `allocator.peerFailureThreshold` render `--peers.check-interval`, `--peers.check-timeout`, `--peers.snapshot-timeout` and `--peers.failure-threshold` after `--peers.self` when set and nothing when empty or null; the allocator pods' `terminationGracePeriodSeconds` is 30 by default and for `5s`, 36 for a `20s` interval and a `500ms` timeout, 135 for `1m` and `59.5s`; without a discovery source it is not rendered.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: a peer timing, or `allocator.peerFailureThreshold`, without a discovery source fails rendering naming it; with one, a check interval that is no duration (the values schema) or outside `500ms` to `1m`, a check timeout under `100ms` or not below the interval, the default `1s` included against an `800ms` interval, a snapshot timeout under the check timeout or over `5m` (the template), and a failure threshold of 0 or 21 (the values schema and the template) fail rendering, with the values schema and with it skipped.
+
+## 34.277 A maximum for the settle time
+
+- `TestAMalformedCommandLineExits2` (cmd/pue-allocator), changed: `--settle` of `-1s`, and of `2h`, `1h0m0.001s` or `2562047h`, which passed before, exits 2 with `--settle must be from 0 to 1h`.
+- `TestTheLongestSettleIsNoCommandLineError` (cmd/pue-allocator): `--settle` of `0`, `0s`, `1h`, `60m` and `3600s` is no command-line error, the start going on to the missing configuration and exiting 1.
+- `TestChartHoldsANewAllocatorUnavailableUntilItAllocates` (chart, test/repository), extended: `allocator.settle` of `1h`, `60m` and `3600s` renders `--settle` with its value and `minReadySeconds` 3610, 3720 with a `2m` heartbeat interval and 3601 with `1s`; with the values schema skipped an integer `0` renders `--settle=0`, where `with` took it for empty and left the flag out, and `minReadySeconds` 130.
+- `TestChartRefusesWhatTheAllocatorCannotRunWith` (chart, test/repository), extended: `allocator.settle` of `2h`, `1h0m0.001s` or `99999999h`, which passed the schema and the template and then stopped the allocator's start or ran it with a settle time over an hour, fails rendering with the template, and `soon` and the integer `30` with the values schema, each with the schema and with it skipped saying `must be a Go duration from 0 to 1h`.
 
 ## 42.1 OTLP export
 
@@ -33423,7 +33475,8 @@ names. The allocator MUST NOT expand `${NAME}`
 references. Invalid inputs at the start MUST exit 1; files that change while
 the start reads them MUST be read again after a pause of 1 second, up to 5
 reads in all, and exit 1 only then. The files MUST be read
-again every `--config.watch-interval` (`0` reads them once); a change MUST be
+again every `--config.watch-interval` (`0` reads them once; from `0` to
+`24h`, else exit 2); a change MUST be
 put in force only when all are accepted, the last good inputs staying in
 force otherwise, and one refusal MUST be logged and counted
 (`pue_allocator_reloads_total{result="failure"}`) once while its text
@@ -33440,10 +33493,14 @@ optional `name` (`[A-Za-z0-9_][A-Za-z0-9_.-]*`, unique in the list, by default
 names) and `max_targets` (0 or more; 0 takes `--discovery.max-targets`,
 default `10000`, at least `1`); `refresh_interval` MUST be at least `1s`,
 and a source that sets none MUST be asked every `--discovery.refresh-interval`
-when that is given (at least `1s`, else exit 2), whatever its kind, and
+when that is given (from `1s` to `24h`, else exit 2), whatever its kind, and
 else every `1m` for `file_sd` and `http_sd` and `30s` for `kubernetes` and
 `dns_sd`; a
-`timeout` written longer than it MUST be refused, and one left out MUST be
+`timeout` written longer than it MUST be refused, the refusal naming the
+interval as the source's `refresh_interval` when it sets one, as `the
+default refresh interval <d> (--discovery.refresh-interval)` when it came
+from that flag, and as `<kind>'s default refresh interval <d>` else, and
+one left out MUST be
 `10s` or the `refresh_interval` when that is shorter. `file_sd.files` MUST
 be paths or patterns ending in `.json`, `.yml` or `.yaml`, relative ones taken
 from the directory of the file naming them, read again at every refresh.
@@ -33541,22 +33598,33 @@ start with nothing found.
 
 **Peers.** With `--peers`, `host:port` entries, comma-separated, each with a
 host and a decimal port from 1 to 65535 (anything else MUST exit 2), an
-instance MUST, at its start and then every `PeerInterval` (2s), resolve each
+instance MUST, at its start and then every check interval, `--peers.check-interval`, resolve each
 entry to every address its host has (an IP address taken as it is, an
 IPv4-mapped IPv6 address as IPv4; a lookup that fails keeping the addresses
 of the last, logged once while its text stays the same) and ask every
 address but its own at `GET /v1/peer` with the API's bearer token within
-`PeerTimeout` (1s), without a proxy. `--peers.self`, only with `--peers`
+the check timeout, `--peers.check-timeout`, each lookup bounded by it too,
+without a proxy. The peers' timings MUST be flags: `--peers.check-interval`
+(default `2s`) from `500ms` to `1m`, `--peers.check-timeout` (default `1s`)
+from `100ms` to less than the check interval, so a round, which waits for
+its checks, stays shorter than the wait between two rounds,
+`--peers.failure-threshold` (default 3) from 1 to 20, and
+`--peers.snapshot-timeout` (default `30s`) from the check timeout to `5m`;
+a value outside its bounds, and any of them without `--peers`, MUST exit 2
+naming the flag, and every place that waits, counts failures or says a
+timing (the rounds, the checks, the snapshot fetch, the logs, the status,
+the page) MUST use the values in force, never the defaults. `--peers.self`, only with `--peers`
 (exit 2 otherwise), MUST be an IP address, taking the port of
 `--web.listen-address`, or an IP address and a port, and is the instance's
 own address, a peer even when no entry resolves to it; without it, the
 address whose answer names the instance's own process (a random instance
 made at its start) MUST be taken for its own. A instance MUST be live once
-it has answered, until `PeerFailures` (3) checks in a row have failed, and
+it has answered, until the failure threshold's checks in a row have failed, and
 MUST stop being live at once when it answers `503`, which `/v1/peer` MUST
 answer from the first `SIGTERM` or `SIGINT`, the instance then serving its
-API on, as it does during a shutdown otherwise, for `PeerShutdownDelay`
-(`PeerInterval` and `PeerTimeout`, 3s) before its server shuts down, so
+API on, as it does during a shutdown otherwise, for its shutdown delay
+(`PeerOptions.ShutdownDelay`: the check interval and the check timeout,
+3s with the defaults) before its server shuts down, so
 every peer's next check gets the `503` rather than a refused connection; and
 otherwise its process's id (`id`), whether it discovers, and whether it
 knows its own address (`true` without `--peers`). The leader of a instance
@@ -33568,7 +33636,7 @@ follow the lowest live instance that discovers and knows its own address,
 else the live instance of the lowest id among those that discover, unless it
 discovers itself and its own id is lower, and lead when no live instance
 discovers; it MUST log an error once when its own address is still not known
-after `PeerFailures` rounds. `--peers`'s help MUST say to list every
+after the failure threshold's rounds. `--peers`'s help MUST say to list every
 instance, this one included. Only the leader MUST run the discovery sources'
 refresh loops; a follower MUST stop them, keeping what they found, and fetch
 the leader's `GET /v1/peer/snapshot` with the token every round, which MUST
@@ -33578,7 +33646,7 @@ owner, its kind and its name, not its settings), its targets written as
 target groups, each run of targets of the same labels one group with its
 labels once, as a file_sd or http_sd answer gives them, with an `ETag` of
 its digest and `304` to an `If-None-Match` naming it; the follower MUST
-fetch it within `SnapshotTimeout` (30s), its client having no shorter
+fetch it within the snapshot timeout, `--peers.snapshot-timeout`, its client having no shorter
 timeout of its own, beside its rounds rather than within them, one fetch at
 a time (a round that finds the fetch of the same leader still running MUST
 NOT start another), so a leader that hangs while it writes its snapshot MUST
@@ -33603,14 +33671,14 @@ itself, from a refresh loop of its own, until a snapshot has it (or a `304`
 says the leader holds what the follower does), and only then stopped. A
 follower that, having taken the snapshot, still holds something else MUST
 NOT count it as taken for its snapshot's age, and MUST log so once after
-`PeerFailures` such fetches in a row and once when the two agree again. A
+the failure threshold's such fetches in a row and once when the two agree again. A
 instance that comes to lead MUST start the loops with what its sources hold,
 the snapshot it took last, so no discovered target leaves the bundles until
 each source answers; one that leads without ever having taken a snapshot
 MUST first take that of the lowest other live instance, if any, starting the
 loops once that fetch ends, whether it succeeded or not. A follower whose
 fetches fail MUST keep serving the snapshot it took last, count each
-failure, and log once after `PeerFailures` failures in a row and once when a
+failure, and log once after the failure threshold's failures in a row and once when a
 fetch succeeds again. A change of leader MUST be logged. Without `--peers` a
 instance MUST ask its sources itself, from its start. With
 `--peers.leader-only`, only with `--peers` (exit 2 otherwise), an instance
@@ -33623,7 +33691,9 @@ with `partial` true and `members`, `spread` and `sources` `null`; and `/`
 with this instance and its peers alone, naming the leader's address. The
 instance that leads MUST serve the whole of each, so the instances'
 allocation is in one instance's metrics. `docs/ALLOCATOR.md` MUST describe
-the peers, their flags, timings and metrics, and that a network split gives
+the peers, their flags, timings and metrics, how long a failover takes
+with the timings (at most the failure threshold times a check interval and
+a check timeout after the leader's last answer), and that a network split gives
 each side a leader, the targets then flipping between the two until it
 heals.
 
@@ -33653,7 +33723,7 @@ above `2m` as a command-line error; the member TTL MUST be three intervals
 (`allocapi.MemberTTL`), and no other setting of either MUST exist, on the
 allocator or on the exporter. `--heartbeat.interval` MUST NOT be checked
 against `--settle`: the two are independent. It MUST NOT change the timings of the
-peers either, which check each other every `PeerInterval` whatever it is. A member MUST be live while its last heartbeat is younger than
+peers either, which check each other every `--peers.check-interval` whatever it is. A member MUST be live while its last heartbeat is younger than
 the member TTL and did not say `shutting_down`; one that did MUST stop
 being live at once. A heartbeat whose `sequence` is not greater than that of
 the last heartbeat applied of its member with the same `instance`, or whose
@@ -33665,16 +33735,19 @@ the member TTL old, so a heartbeat arriving after the one saying
 `shutting_down` does not make it live again. A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
-held for `--settle` (default `15s`), so a member live again within it keeps
-its share; the first member list MUST form only once the live members have
-not changed for `--settle`, and MUST NOT form before a member is live nor
-before `max(--settle, --heartbeat.interval, I)` after the start, where `I`
-is the longest `interval_seconds` a heartbeat heard before it formed said,
-brought within `1s` and `2m`, 0 when none said one; a heartbeat without
-`interval_seconds`, or with 0, MUST NOT change `I`. Since a replica says the
-longest interval the instances it finds said (§ 42.14e), `I` covers the
-replicas still on an older, longer interval for as long as an instance that
-said it is found. A member
+held for `--settle` (default `15s`; from `0` to `1h`, else exit 2), so a
+member live again within it keeps its share; the first member list MUST form only once the live members have
+not changed for `--settle`, and MUST NOT form before a member is live,
+before `max(--settle, --heartbeat.interval)` after the start, nor before
+`I` after the first heartbeat heard, where `I` is the longest
+`interval_seconds` a heartbeat heard before it formed said, brought within
+`1s` and `2m`, 0 when none said one; a heartbeat without
+`interval_seconds`, or with 0, MUST NOT change `I`, but counts as any other
+for the first heartbeat heard. The first heartbeat comes once a replica has
+found the instance, which a rollout's lookups do only some time after its
+start, and since a replica says the longest interval the instances it finds
+said (§ 42.14e), `I` after it covers the replicas still on an older, longer
+interval for as long as an instance that said it is found. A member
 that stops being live MUST leave the member list only after `--settle`, as
 any other change does. The allocator MUST take at most `--members.max`
 (default `1000`, at least `1`) live members: the heartbeat of a member it
@@ -33705,8 +33778,9 @@ member list MUST get the configuration alone.
 
 **API.** `POST /v1/heartbeat` MUST take an `allocapi.Heartbeat` and answer
 an `allocapi.HeartbeatReply` with the generation of the member's bundle, `""`
-before the member list has formed, and `heartbeat_interval_seconds`, the
-heartbeat interval in seconds, in every answer; a heartbeat without `member`, a
+before the member list has formed, `heartbeat_interval_seconds`, the
+heartbeat interval in seconds, and `instance`, a random name of the
+allocator's process made at its start, in every answer; a heartbeat without `member`, a
 `host:port` `advertise` with a host and a decimal port from 1 to 65535, an
 `instance` of 1 to 64 bytes or a `sequence` of 1 or more MUST be answered
 `400`, a body over 64 KiB `413`, and one refused for
@@ -33747,7 +33821,10 @@ else `--web.listen-address`, its `id`, the build's version and revision, its
 start and uptime, whether it is ready, and `--config.watch-interval` in
 seconds (`watch_interval_seconds`, `0` for files read once), which the page
 MUST show; under `peers`, with `--peers`
-(else `null`), its role, the leader, the live instances (`live_instances`),
+(else `null`), its role, the leader, the peers' timings in force
+(`check_interval_seconds`, `check_timeout_seconds`, `failure_threshold`,
+`snapshot_timeout_seconds`), which the page's Peers section MUST say, the
+live instances (`live_instances`),
 the leader changes, the snapshot's age, whether it has taken one and holds
 the leader's targets, its check and snapshot failures, every address of its
 peers, its own included (`instances`), with liveness, the last answer's
@@ -33768,14 +33845,20 @@ with no target); each probe job, in file order, with its collector, its
 targets, the members it is routed among (`routing`), each with the targets
 of the job routed to it, 0 included, the fewest, the average and the most of
 those, the imbalance (the most divided by the average, `0` with no target),
-uneven when the most is at least 1.5 times the targets divided by the
-members rounded up, and its discovery sources with their result; and every
+uneven when the most is above the average by 3 targets or more and by 3
+or more standard deviations of a member's count, √(targets × (1 −
+1/members) ÷ members), so the noise of hashing a few targets is not
+marked, and its discovery sources with their result; and every
 discovery source with
 its kind, owner, source kind, result (`ok`, `failing` with its error, or
 `pending`), targets, the interval it is asked at
 (`refresh_interval_seconds`: its `refresh_interval`, else
-`--discovery.refresh-interval`, else its kind's default), which the page
-MUST show, last refresh and last success, and whether what it
+`--discovery.refresh-interval`, else its kind's default; for a source whose
+targets a follower took from the leader's snapshot, the leader's interval of
+it, which the snapshot MUST carry per source and its digest MUST cover, so a
+follower names the leader's interval it took and is told of a change of
+it), which the page MUST show, a source's and its owner's names wrapping
+rather than widening the table past the page, last refresh and last success, and whether what it
 holds came from the instance's own discovery or the leader's snapshot. `GET
 /` MUST render the same as an HTML page framed as the exporter's pages are
 (§ 42.14a: the bar, naming it `Prometheus Universal Exporter · Target
@@ -33790,8 +33873,11 @@ probe, total and the bar, never a column per probe job), a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
 members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its
-heading and the other way at a second, numbers by value and ties in file
-order, and filtered as a filter box is typed by the job, collector and
+heading and the other way at a second, numbers by value, text with the
+numbers in it by theirs and in any case (`job2` before `job10`), and ties in
+file order, its headings plain until the script makes them buttons, so a
+page without JavaScript shows no sort mark, a mark apart from its heading's
+name, and filtered as a filter box is typed by the job, collector and
 sources' names (`data-match`), with plain JavaScript, a refresh keeping the
 order, the filter and the caret, and the exporter's status page's refresh controls, `?refresh=`
 keeping the interval and `?format=fragment` answering the content alone,
@@ -33829,7 +33915,8 @@ job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
 member's view is: the job's collector, targets, shard key, labels (one
 written `""` left out), params, a param whose name reads as a credential's
 (`fetch.CredentialName`) as `<redacted>` and any other through
-`fetch.RedactText`, and discovery sources with their result; the members it
+`fetch.RedactText`, and discovery sources with their result and refresh
+interval, a failing one's error on a line of its own; the members it
 is routed among, linked to their views, with the targets of the job each
 has, as the spread counts them, and a bar, the most first; and its targets
 by target, each shown as `fetch.DisplayTarget` shows it, with the member
@@ -33839,8 +33926,12 @@ those whose names start with `__` (`__meta_…`), unless `?meta=1` asks for
 them; a job with discovery sources MUST have a *Show source labels* box by
 its filter that puts `?meta=1` in the URL, or takes it out, and refreshes
 the content, so a refresh, which fetches the URL's fragment, keeps the
-choice. `?filter=` MUST cut the targets to those whose target, member or a
-label shown as `name=value` holds the text, before the first 1000, and a
+choice; a refresh waiting for another URL MUST be aborted for it and its
+answer never swapped in, so the latest choice is the one shown, and a
+refresh asked while one waits for the same URL MUST be left to that one. A
+target MUST keep its line where it fits, its labels wrapping first.
+`?filter=` MUST cut the targets to those whose target, member or a label
+shown as `name=value` holds the text, before the first 1000, and a
 row's `data-match`, which the box filters by as it is typed, MUST hold the
 same, so a source label left out matches neither. `GET
 /v1/status?job=<name>` MUST answer the same as JSON
@@ -33914,12 +34005,19 @@ process's first heartbeat and one more for each heartbeat built after it, so
 that a heartbeat given up on and arriving late is known for an old one, and
 `interval_seconds`, once a reply has said a `heartbeat_interval_seconds`
 other than 0, and MUST leave `interval_seconds` out before. `interval_seconds`
-MUST be the longest of the intervals the last answer of each address the
-allocator's host resolved to last said, each brought within `1s` and `2m`,
-an address's kept while its heartbeats fail and dropped when it no longer
-resolves; when none of them says one, it MUST stay as it is. When it
-changes, the first time it is set included, a heartbeat MUST be sent to
-every address at once, not at the next turn of the interval; on that signal the
+MUST be the longest of the intervals the last answer of each instance of
+the allocator said, each brought within `1s` and `2m`, an instance being
+the reply's `instance`, or the address answered at for a reply without
+one; an instance's MUST be kept while heartbeats to its address fail, and
+dropped when its address no longer resolves or its last answer is the
+member TTL (`allocapi.MemberTTL`) of the longest of them, or of the
+interval in force when that is longer, old; when none of them says one, it
+MUST stay as it is. When it grows to an interval longer than any it was
+before, the first time it is set included, a heartbeat MUST be sent to
+every address at once, not at the next turn of the interval; when it grows
+to one it was before, the same MUST happen only when the last time was at
+least an interval ago, and when it shrinks it MUST wait for the next turn.
+On the shutdown signal the
 exporter MUST send one at once, bounded by 2 seconds, before
 `--web.shutdown-delay` begins. Heartbeats to an address MUST be sent one at a time, each
 built once the one before to it is back, so no heartbeat without `shutting_down`
@@ -33933,14 +34031,17 @@ for a heartbeat, for each address, until it changes or ends.
 
 The heartbeat interval MUST be `allocapi.DefaultHeartbeatInterval`, 10
 seconds, at the start, and the exporter MUST NOT have a setting of it. Of
-the addresses whose last heartbeat was answered without error, those whose
-reply said a `heartbeat_interval_seconds` other than 0 MUST make the
-interval the shortest of them, each first brought within `1s` and `2m` (one
+the instances, as for `interval_seconds`, not dropped, whose last answer
+came without error and with no heartbeat to its address failing since,
+those whose reply said a `heartbeat_interval_seconds` other than 0 MUST make
+the interval the shortest of them, each first brought within `1s` and `2m` (one
 below, a negative one included, taken as `1s`, one above as `2m`), and the
 next heartbeat to every address MUST follow that interval after the last
 one to it, and the next lookup of the addresses that interval after the
 last lookup ended, at once when that is past; when none says one, because every instance failed or none sends the
-field, the interval MUST stay as it is.
+field, the interval MUST stay as it is. A change of the interval MUST be
+logged, and only a change: instances answering one address in turn with
+different intervals change nothing while each keeps its say.
 
 The exporter MUST ask for its bundle with `GET
 /v1/bundle?member=<member>&wait=30s`, with `If-None-Match: "<generation>"`

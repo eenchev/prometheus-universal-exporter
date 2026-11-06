@@ -3,6 +3,8 @@
 package allocator
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +71,7 @@ func TestASourceWithoutARefreshIntervalTakesTheDefault(t *testing.T) {
 		t.Fatalf("a timeout of 10s under dns_sd's 30s is refused: %v", err)
 	}
 	timed.DiscoveryRefresh = 5 * time.Second
-	if _, err := LoadInputs(timed); err == nil || !strings.Contains(err.Error(), "dns_sd.timeout 10s is longer than its refresh_interval 5s") {
+	if _, err := LoadInputs(timed); err == nil || !strings.Contains(err.Error(), "dns_sd.timeout 10s is longer than the default refresh interval 5s (--discovery.refresh-interval)") {
 		t.Errorf("a timeout over the default interval of 5s is not refused: %v", err)
 	}
 }
@@ -95,12 +97,28 @@ func TestTheStatusSaysHowOftenTheInputsAreRead(t *testing.T) {
 	}
 }
 
-// The discovery sources table keeps a source's name and kind, its owner and
-// where its targets came from on one line each, so a long error in the
-// result cell takes the width instead of breaking them over several lines.
-func TestTheSourcesTableKeepsItsShortCellsOnOneLine(t *testing.T) {
-	a := New(mustLoad(t, writeInputs(t, testConfig, staticTargets(2), "")), Options{Settle: 15 * time.Second, Clock: newFakeClock(), Logger: testutil.QuietLogger(t)})
+// The discovery sources table keeps a source's kind, its owner's and where
+// its targets came from on one line each, and lets the names of a source and
+// its owner, as a probe job's of 85 characters, wrap, so a long name does
+// not push the table past the page's edge, and a long error in the result
+// cell, a path in it broken where it must be, takes the width that is left.
+func TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine(t *testing.T) {
+	job := strings.Repeat("pods-with-a-long-name-", 4)[:85]
+	p := writeInputs(t, testConfig, staticTargets(2), "probe_jobs:\n  - name: "+job+"\n    collector: demo\n    discovery:\n      - name: pod-files-with-a-very-long-source-name-too\n        file_sd: {files: [sd/pods.json]}\n")
+	testutil.WriteIn(t, filepath.Dir(p.ProbeTargets), "sd/pods.json", `[{"targets": ["10.0.0.1:8080"]}]`)
+	a, _ := settledAllocator(t, mustLoad(t, p), "r1", "r2")
 	t.Cleanup(a.BeginShutdown)
+	a.refreshDiscovery(context.Background())
 	page := ask(a.Handler(""), "/", "").Body.String()
-	requireIn(t, page, "table.sources td:first-child, table.sources td:nth-child(2), table.sources td:last-child { white-space: nowrap; }")
+	requireIn(t, page, "table.sources span.kind, table.sources td:last-child { white-space: nowrap; }",
+		"table.sources td.owner { overflow-wrap: anywhere; min-width: 9em; }", "table.sources td.result { overflow-wrap: anywhere; min-width: 12em; }",
+		"td.id { overflow-wrap: anywhere; min-width: 9em; }",
+		`<td class="id"><strong>pod-files-with-a-very-long-source-name-too</strong><br><span class="muted kind">file_sd</span></td>`,
+		`<td class="owner">`+job+`<br><span class="muted kind">probe job</span></td>`,
+		"td.sources span.source { overflow-wrap: anywhere; }")
+	for _, nowrap := range []string{"table.sources td:first-child", "table.sources td:nth-child(2)", "td.sources span.source { white-space: nowrap; }"} {
+		if strings.Contains(page, nowrap) {
+			t.Errorf("the style still keeps a name on one line: %s", nowrap)
+		}
+	}
 }

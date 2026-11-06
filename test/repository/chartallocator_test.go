@@ -345,19 +345,25 @@ func TestChartRendersAScrapeConfigPerProbeJob(t *testing.T) {
 // emptyDir alone.
 // allocator.configWatchInterval and allocator.discoveryRefreshInterval are
 // rendered as the allocator's --config.watch-interval and
-// --discovery.refresh-interval when set, 0s reading the input files once,
-// and left out when empty (TestChartRendersTheAllocatorAndTheExporterInAllocatorMode).
+// --discovery.refresh-interval when set, 0s reading the input files once, up
+// to 24h, the flags' bound, and left out when empty
+// (TestChartRendersTheAllocatorAndTheExporterInAllocatorMode). With the
+// values schema skipped, an integer 0 is a value of its own, not taken for
+// unset: it reads the input files once.
 func TestChartSetsHowOftenTheAllocatorLooksForChanges(t *testing.T) {
 	helm := requireHelm(t)
+	requireSchemaSkipping(t, helm)
 	for _, c := range []struct {
-		watch, refresh string
-		want           []string
+		args []string
+		want []string
 	}{
-		{"30s", "15s", []string{"--config.watch-interval=30s", "--discovery.refresh-interval=15s"}},
-		{"0s", "", []string{"--config.watch-interval=0s"}},
-		{"", "2m", []string{"--discovery.refresh-interval=2m"}},
+		{[]string{"--set-string", "allocator.configWatchInterval=30s", "--set-string", "allocator.discoveryRefreshInterval=15s"}, []string{"--config.watch-interval=30s", "--discovery.refresh-interval=15s"}},
+		{[]string{"--set-string", "allocator.configWatchInterval=0s", "--set-string", "allocator.discoveryRefreshInterval="}, []string{"--config.watch-interval=0s"}},
+		{[]string{"--set-string", "allocator.configWatchInterval=", "--set-string", "allocator.discoveryRefreshInterval=2m"}, []string{"--discovery.refresh-interval=2m"}},
+		{[]string{"--set-string", "allocator.configWatchInterval=24h", "--set-string", "allocator.discoveryRefreshInterval=1440m"}, []string{"--config.watch-interval=24h", "--discovery.refresh-interval=1440m"}},
+		{[]string{"--skip-schema-validation", "--set", "allocator.configWatchInterval=0"}, []string{"--config.watch-interval=0"}},
 	} {
-		docs := manifests(t, helm, "--set", "allocator.enabled=true", "--set-string", "allocator.configWatchInterval="+c.watch, "--set-string", "allocator.discoveryRefreshInterval="+c.refresh)
+		docs := manifests(t, helm, append([]string{"--set", "allocator.enabled=true"}, c.args...)...)
 		var got []string
 		for _, arg := range scalars(path(manifest(t, docs, "Deployment/test-prometheus-universal-exporter-allocator"), "spec", "template", "spec", "containers", "0", "args")) {
 			if strings.HasPrefix(arg, "--config.watch-interval=") || strings.HasPrefix(arg, "--discovery.refresh-interval=") {
@@ -365,7 +371,7 @@ func TestChartSetsHowOftenTheAllocatorLooksForChanges(t *testing.T) {
 			}
 		}
 		if !slices.Equal(got, c.want) {
-			t.Errorf("configWatchInterval %q and discoveryRefreshInterval %q render %v, want %v", c.watch, c.refresh, got, c.want)
+			t.Errorf("%v renders %v, want %v", c.args, got, c.want)
 		}
 	}
 }
@@ -484,7 +490,15 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 		"no member the allocator takes": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.maxMembers=0"},
 			"allocator.maxMembers", "allocator.maxMembers 0 must be a whole number from 1 to 2147483647"},
 		"a settle that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=soon"},
-			"allocator.settle", `allocator.settle "soon" must be a Go duration`},
+			"allocator.settle", `allocator.settle "soon" must be a Go duration from 0 to 1h`},
+		"a settle over 1h": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=2h"},
+			"", `allocator.settle "2h" must be a Go duration from 0 to 1h`},
+		"a settle just over 1h": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=1h0m0.001s"},
+			"", `allocator.settle "1h0m0.001s" must be a Go duration from 0 to 1h`},
+		"a settle no duration holds": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=99999999h"},
+			"", `allocator.settle "99999999h" must be a Go duration from 0 to 1h`},
+		"a settle of a number": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.settle=30"},
+			"allocator.settle", `allocator.settle "30" must be a Go duration from 0 to 1h`},
 		"a heartbeat interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.heartbeatInterval=soon"},
 			"allocator.heartbeatInterval", `allocator.heartbeatInterval "soon" must be a Go duration from 1s to 2m`},
 		"a heartbeat interval under 1s": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.heartbeatInterval=999ms"},
@@ -494,15 +508,51 @@ func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
 		"a heartbeat interval of zero": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.heartbeatInterval=0s"},
 			"", `allocator.heartbeatInterval "0s" must be a Go duration from 1s to 2m`},
 		"a watch interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.configWatchInterval=often"},
-			"allocator.configWatchInterval", `allocator.configWatchInterval "often" must be a Go duration of zero or more`},
+			"allocator.configWatchInterval", `allocator.configWatchInterval "often" must be a Go duration from 0 to 24h`},
+		"a watch interval over 24h": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.configWatchInterval=24h0m1s"},
+			"", `allocator.configWatchInterval "24h0m1s" must be a Go duration from 0 to 24h`},
+		"a watch interval no duration holds": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.configWatchInterval=99999999h"},
+			"", `allocator.configWatchInterval "99999999h" must be a Go duration from 0 to 24h`},
+		"a watch interval of a number": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.configWatchInterval=30"},
+			"allocator.configWatchInterval", `allocator.configWatchInterval "30" must be a Go duration from 0 to 24h`},
 		"a refresh interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=often"},
-			"allocator.discoveryRefreshInterval", `allocator.discoveryRefreshInterval "often" must be a Go duration of 1s or more`},
+			"allocator.discoveryRefreshInterval", `allocator.discoveryRefreshInterval "often" must be a Go duration from 1s to 24h`},
 		"a refresh interval under 1s": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=500ms"},
-			"", `allocator.discoveryRefreshInterval "500ms" must be a Go duration of 1s or more`},
+			"", `allocator.discoveryRefreshInterval "500ms" must be a Go duration from 1s to 24h`},
 		"a refresh interval of zero": {[]string{"--set", "allocator.enabled=true", "--set-string", "allocator.discoveryRefreshInterval=0s"},
-			"", `allocator.discoveryRefreshInterval "0s" must be a Go duration of 1s or more`},
+			"", `allocator.discoveryRefreshInterval "0s" must be a Go duration from 1s to 24h`},
+		"a refresh interval of the number zero": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=0"},
+			"allocator.discoveryRefreshInterval", `allocator.discoveryRefreshInterval "0" must be a Go duration from 1s to 24h`},
+		"a refresh interval over 24h": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=1441m"},
+			"", `allocator.discoveryRefreshInterval "1441m" must be a Go duration from 1s to 24h`},
+		"a refresh interval no duration holds": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.discoveryRefreshInterval=99999999h"},
+			"", `allocator.discoveryRefreshInterval "99999999h" must be a Go duration from 1s to 24h`},
 		"leader-only without peers": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.leaderOnly=true"},
 			"", "allocator.leaderOnly is true, but no probe job nor discovered_targets entry has a discovery source"},
+		"a peer timing without peers": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.peerCheckInterval=5s"},
+			"", "allocator.peerCheckInterval is set, but no probe job nor discovered_targets entry has a discovery source"},
+		"a failure threshold without peers": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.peerFailureThreshold=3"},
+			"", "allocator.peerFailureThreshold is set, but no probe job nor discovered_targets entry has a discovery source"},
+		"a peer check interval that is no duration": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckInterval=often"},
+			"allocator.peerCheckInterval", `allocator.peerCheckInterval "often" must be a Go duration from 500ms to 1m`},
+		"a peer check interval under 500ms": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckInterval=499ms", "--set", "allocator.peerCheckTimeout=100ms"},
+			"", `allocator.peerCheckInterval "499ms" must be a Go duration from 500ms to 1m`},
+		"a peer check interval over 1m": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckInterval=1m1s"},
+			"", `allocator.peerCheckInterval "1m1s" must be a Go duration from 500ms to 1m`},
+		"a peer check timeout under 100ms": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckTimeout=99ms"},
+			"", `allocator.peerCheckTimeout "99ms" must be a Go duration from 100ms to less than allocator.peerCheckInterval (2s)`},
+		"a peer check timeout of the interval": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckTimeout=2s"},
+			"", `allocator.peerCheckTimeout "2s" must be a Go duration from 100ms to less than allocator.peerCheckInterval (2s)`},
+		"a peer check interval under the default timeout": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerCheckInterval=800ms"},
+			"", `allocator.peerCheckTimeout "1s" must be a Go duration from 100ms to less than allocator.peerCheckInterval (800ms)`},
+		"a peer snapshot timeout under the check timeout": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerSnapshotTimeout=999ms"},
+			"", `allocator.peerSnapshotTimeout "999ms" must be a Go duration from allocator.peerCheckTimeout (1s) to 5m`},
+		"a peer snapshot timeout over 5m": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerSnapshotTimeout=5m1s"},
+			"", `allocator.peerSnapshotTimeout "5m1s" must be a Go duration from allocator.peerCheckTimeout (1s) to 5m`},
+		"a peer failure threshold of zero": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerFailureThreshold=0"},
+			"allocator.peerFailureThreshold", "allocator.peerFailureThreshold 0 must be a whole number from 1 to 20"},
+		"a peer failure threshold over 20": {[]string{"--set", "allocator.enabled=true", "--set-json", `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`, "--set", "allocator.peerFailureThreshold=21"},
+			"allocator.peerFailureThreshold", "allocator.peerFailureThreshold 21 must be a whole number from 1 to 20"},
 		"an unknown log level": {[]string{"--set", "allocator.enabled=true", "--set", "allocator.logLevel=loud"},
 			"allocator.logLevel", `allocator.logLevel "loud" must be debug, info, warn or error`},
 		"the pod's address in env": {[]string{"--set", "allocator.enabled=true", "--set-json", `env=[{"name":"POD_IP","value":"10.0.0.1"}]`},

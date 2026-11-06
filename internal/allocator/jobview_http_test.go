@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -75,11 +76,11 @@ func jobViewOf(t *testing.T, h http.Handler, query string) JobView {
 // The status's spread has a row of each probe job: its collector, its
 // targets, the members it is routed among with the targets of each, the
 // fewest, the mean and the most a member has, the imbalance, marked uneven
-// against the evenest split, and its sources; the members' rows count each
-// job's targets among their probe targets. The page's targets table has
-// fixed columns, a probe job no longer one of its own, and the probe jobs
-// have a table of their own, sortable and filtered as it is typed, the
-// order and the filter kept over a refresh.
+// where hashing would seldom put as many on one member, and its sources;
+// the members' rows count each job's targets among their probe targets.
+// The page's targets table has fixed columns, a probe job no longer one of
+// its own, and the probe jobs have a table of their own, sortable and
+// filtered as it is typed, the order and the filter kept over a refresh.
 func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 	a := jobAllocator(t)
 	h := a.Handler("")
@@ -104,9 +105,9 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 			probe[m.Member] += m.Targets
 		}
 		avg := float64(j.Targets) / 3
-		evenest := (j.Targets + 2) / 3
+		above := float64(most) - avg
 		if sum != j.Targets || j.Min != least || j.Max != most || j.Average != avg || j.Imbalance != float64(most)/avg ||
-			j.Uneven != (float64(most) >= 1.5*float64(evenest)) {
+			j.Uneven != (above >= 3 && above >= 3*math.Sqrt(float64(j.Targets)*2/9)) {
 			t.Errorf("%s: %+v", j.Job, j)
 		}
 	}
@@ -136,8 +137,8 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 	page := ask(h, "/", "").Body.String()
 	requireIn(t, page,
 		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th>Share</th></tr></thead>`,
-		"<h2>Probe jobs</h2>", `<table class="spread sortable" id="probe-jobs">`,
-		`<th class="num" aria-sort="none" data-sort="num"><button type="button">Imbalance</button></th>`,
+		"<h2>Probe jobs</h2>", `<table class="spread" id="probe-jobs">`,
+		`<th class="num" data-sort="num">Imbalance</th>`,
 		`<a href="?job=websites" title="the targets of the probe job websites"><strong>websites</strong></a>`,
 		"<tr data-order=\"2\" data-match=\"pods\ndemo\npod-files\">",
 		`<span class="source">pod-files <span class="good">ok</span></span>`,
@@ -147,12 +148,12 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 		// The script puts the order and the filter back on the table a
 		// refresh swaps in, and the caret in the filter being typed in.
 		"      filterRows();\n      arrangeJobs();\n", `$("jobs-filter").setSelectionRange(caret[0], caret[1]);`,
-		`table.sortable th.num button::before { content: "\2195 ";`)
+		`table.sortable th.num button::before { content: "\2195\00a0";`)
 	if strings.Contains(page, `title="probe job `) {
 		t.Error("the targets table still has a column of each probe job")
 	}
 	for _, j := range sp.Jobs {
-		mark := fmt.Sprintf(`<span class="bad" title="Max is half again as many as the evenest split would give a member">%s</span>`, imbalance(j.Imbalance))
+		mark := fmt.Sprintf(`<span class="bad" title="Max is further above Avg than hashing puts a member&#39;s targets by chance">%s</span>`, imbalance(j.Imbalance))
 		_, row, _ := strings.Cut(page, `<a href="?job=`+j.Job+`"`)
 		row, _, _ = strings.Cut(row, "</tr>")
 		if strings.Contains(row, mark) != j.Uneven {

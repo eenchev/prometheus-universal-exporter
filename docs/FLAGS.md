@@ -40,6 +40,7 @@ in [Running it](ALLOCATOR.md#running-it) on its page.
 | `--allocator.member` | the host name | This exporter's name in the allocator's member list. |
 | `--allocator.advertise` | first address, listen port | `host:port` Prometheus is sent to for this exporter's probes: the listen address's host, or else the host's first address that is not a loopback one, with the listen port. |
 | `--allocator.token-file` | none | File holding the bearer token sent to the allocator, read again for every request. |
+| `--allocator.capacity` | `1` | This exporter's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals, sent in every heartbeat: a member of capacity 2 is given about twice the weight of one of capacity 1. See [Weights and capacity](ALLOCATOR.md#weights-and-capacity). |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](CONFIGURATION.md#dry-run). |
 | `--healthcheck` | off | Ask the exporter at `--web.listen-address` whether it is ready (`GET /ready`), or with `--healthcheck=health` whether it is alive (`GET /health`), and exit `0` on `200` or `1` otherwise, within 5 seconds, without starting or reading the configuration; for a container health check. See [Health checks](CONFIGURATION.md#health-checks). |
 

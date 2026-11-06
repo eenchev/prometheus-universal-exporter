@@ -6818,6 +6818,7 @@ prometheus-universal-exporter \
 | `--allocator.member` | the host name | This exporter's name among the allocator's members: in Kubernetes the pod's name, which the host name is. |
 | `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. |
 | `--allocator.token-file` | none | A file holding a bearer token sent with every request to the allocator, read again for each, so a rotated Secret takes effect at once. |
+| `--allocator.capacity` | `1` | This exporter's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals, said in every heartbeat: a member of capacity 2 is given about twice the weight of one of capacity 1. A change takes effect, as a restart does, once the allocator's member list has held for its `--settle` ([Weights and capacity](ALLOCATOR.md#weights-and-capacity)). |
 
 `--config.file` and `--static-targets-file` cannot be given with
 `--allocator.url`, nor the other `--allocator.` flags without it: the start is

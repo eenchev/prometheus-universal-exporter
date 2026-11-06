@@ -124,6 +124,9 @@ spec:
             {{- else }}
             - --config.file=/etc/prometheus-universal-exporter/config.yaml
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.allocatorCapacity" .) }}
+            - {{ printf "--allocator.capacity=%s" . | quote }}
+            {{- end }}
             - {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}
             - {{ printf "--web.self-metrics-path=%s" .Values.selfMetrics.path | quote }}
             - {{ printf "--python.path=%s" (include "prometheus-universal-exporter.pythonPath" .) | quote }}

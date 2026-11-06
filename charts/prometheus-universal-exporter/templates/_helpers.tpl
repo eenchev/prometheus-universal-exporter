@@ -36,7 +36,8 @@
   "--allocator.cache-dir" "the chart sets it with allocator.enabled, to the pod's cache volume"
   "--allocator.member" "the chart sets it with allocator.enabled, to the pod's name"
   "--allocator.advertise" "the chart sets it with allocator.enabled, to the pod's address and server.listenAddress's port"
-  "--allocator.token-file" "set allocator.tokenSecret instead" -}}
+  "--allocator.token-file" "set allocator.tokenSecret instead"
+  "--allocator.capacity" "set server.allocatorCapacity instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
        serving, so a pod started with one would restart for ever. */ -}}
 {{- $oneShot := dict
@@ -526,6 +527,23 @@ true
 {{- $text := include "prometheus-universal-exporter.text" $value -}}
 {{- if not (regexMatch "^[0-9]$" $text) -}}
 {{- fail (printf "server.gzipLevel %q must be a whole number from 0, which answers uncompressed, to 9, or empty to keep the exporter's default, 1" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.allocatorCapacity" -}}
+{{- /* Empty or null leaves the flag out, and the exporter's default, 1,
+       applies. The exporter takes the flag only in allocator mode, and
+       refuses a capacity outside 0.1 to 100 or of more than three
+       decimals, so either fails rendering here instead. */ -}}
+{{- $value := .Values.server.allocatorCapacity -}}
+{{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
+{{- if not (and .Values.allocator .Values.allocator.enabled) -}}
+{{- fail "server.allocatorCapacity is set without allocator.enabled; the capacity is a share of the allocator's targets, which only an exporter of the allocator has" -}}
+{{- end -}}
+{{- $text := include "prometheus-universal-exporter.text" $value -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,3})?$" $text)) (lt (float64 $text) 0.1) (gt (float64 $text) 100.0) -}}
+{{- fail (printf "server.allocatorCapacity %s must be a number from 0.1 to 100 with at most three decimals, such as 2 or 0.5, or empty to keep the exporter's default, 1" $text) -}}
 {{- end -}}
 {{- $text -}}
 {{- end -}}
@@ -1497,8 +1515,8 @@ true
 {{- /* The allocator decodes the file strictly and refuses a job without
        targets, so either would stop it at start. */ -}}
 {{- range $key, $_ := $job -}}
-{{- if not (has $key (list "name" "collector" "targets" "params" "labels" "shard_key" "discovery" "target_template")) -}}
-{{- fail (printf "allocator.probeJobs entry %s has the key %s, which the allocator refuses; a probe job takes name, collector, targets, params, labels, shard_key, discovery and target_template" $name $key) -}}
+{{- if not (has $key (list "name" "collector" "targets" "params" "labels" "shard_key" "discovery" "target_template" "weight" "weight_label")) -}}
+{{- fail (printf "allocator.probeJobs entry %s has the key %s, which the allocator refuses; a probe job takes name, collector, targets, params, labels, shard_key, discovery, target_template, weight and weight_label" $name $key) -}}
 {{- end -}}
 {{- end -}}
 {{- $targets := get $job "targets" -}}

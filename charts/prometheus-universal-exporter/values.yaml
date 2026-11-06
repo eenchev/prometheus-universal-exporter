@@ -172,6 +172,12 @@ server:
   # uncompressed. Empty keeps the exporter's default, 1, and leaves the flag
   # out.
   gzipLevel: ""
+  # With allocator.enabled, the exporter pods' share of the allocator's
+  # targets' weight against the other members' (--allocator.capacity): from
+  # 0.1 to 100 with at most three decimals, such as 2 for pods of twice the
+  # resources. Empty keeps the exporter's default, 1, and leaves the flag
+  # out. See docs/ALLOCATOR.md#weights-and-capacity.
+  allocatorCapacity: ""
   # The status page's auto-refresh when its URL gives none with ?refresh=
   # (--web.status-refresh): off, or whole hours, minutes and seconds from 5s
   # to 24h, such as 30s or 1m. Empty keeps the exporter's default, off, and

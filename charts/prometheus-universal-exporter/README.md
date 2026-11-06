@@ -763,6 +763,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.debugDangerous` | `--web.debug.dangerous` when true, which needs `server.debug: full`: the playground may run Python, read the pod's files and make its own requests | `false` |
 | `server.gzipLevel` | `--web.gzip-level`: `0` to `9` | unset: the exporter's `1` |
 | `server.statusRefresh` | `--web.status-refresh`: `off`, or `5s` to `24h` | unset: the exporter's `off` |
+| `server.allocatorCapacity` | `--allocator.capacity`, with `allocator.enabled` alone: `0.1` to `100` with at most three decimals | unset: the exporter's `1` |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
@@ -1520,6 +1521,12 @@ allocator:
         - https://docs.example
 ```
 
+A target's or a probe job's `weight` says what it takes of a pod against the
+other targets, and `server.allocatorCapacity`, `--allocator.capacity`, what
+the exporter pods take against the allocator's other members, 1 by default;
+the allocator spreads the weight in proportion to the capacity (see
+[Weights and capacity](../../docs/ALLOCATOR.md#weights-and-capacity)).
+
 `allocator.enabled` renders:
 
 * the allocator, a Deployment `<fullname>-allocator` of `allocator.replicas`
@@ -1886,7 +1893,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
 | `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `pythonMaxIdleWorkers`, `pythonIdleTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `pythonMaxIdleWorkers`, `pythonIdleTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `allocatorCapacity`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

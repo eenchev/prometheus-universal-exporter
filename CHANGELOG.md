@@ -53,6 +53,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An exporter in allocator mode says its `--web.static-targets-path` in its
+  heartbeats, and a member's view on the allocator's page links the
+  member's own status page and, of each static target it owns or keeps
+  draining, the series it serves of it
+  ([A member's targets](docs/ALLOCATOR.md#a-members-targets)).
 - The allocator's page has a view of each `discovered_targets` entry,
   `/?entry=<name>`, as a probe job has: its sources, how its targets are
   spread over the members and which member owns each, linked from the static

@@ -348,7 +348,8 @@ func jobMatch(j JobSpread) string {
 }
 
 var statusFuncs = template.FuncMap{"count": count, "weight": weight, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
-	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames, "plus": plus, "andList": andList}
+	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames, "plus": plus, "andList": andList,
+	"exporterStatus": exporterStatus, "exporterSeries": exporterSeries}
 
 // plus is a + b, for a total of two counts.
 func plus(a, b int) int { return a + b }

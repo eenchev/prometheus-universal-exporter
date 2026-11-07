@@ -160,6 +160,10 @@ type Heartbeat struct {
 	// targets' weight against the other members'; left out, the allocator
 	// takes DefaultCapacity (CapacityMilli).
 	Capacity float64 `json:"capacity,omitempty"`
+	// StaticTargetsPath is the path the replica serves its static targets
+	// at, --web.static-targets-path, its status page at it followed by
+	// /status: the allocator's page links them at Advertise.
+	StaticTargetsPath string `json:"static_targets_path,omitempty"`
 }
 
 // Refusal is a bundle a replica would not load.

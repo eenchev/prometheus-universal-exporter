@@ -3,6 +3,7 @@ package allocator
 import (
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -378,7 +379,7 @@ const memberContent = `{{define "content"}}
 
 <h2>This member</h2>
 <table class="facts">
-<tr><th>Address</th><td>{{.Address}}</td></tr>
+<tr><th>Address</th><td>{{.Address}}{{with exporterStatus .}} <a href="{{.}}" title="the member's own status page, its static targets' scrapes and its recent probes">status page</a>{{end}}</td></tr>
 <tr><th>State</th><td>{{template "state" .}}</td></tr>
 <tr><th>Last heartbeat</th><td>{{template "heartbeat" .}}</td></tr>
 <tr><th>Bundle in force</th><td>{{template "bundle" .}}</td></tr>
@@ -395,7 +396,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id">{{with exporterSeries $.Status .Name}}<a href="{{.}}" title="the series the member serves of this target">{{end}}<strong>{{.Name}}</strong>{{if exporterSeries $.Status .Name}}</a>{{end}}</td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -411,7 +412,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Moved to</th><th class="num">Drains for</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Draining.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id">{{with exporterSeries $.Status .Name}}<a href="{{.}}" title="the series the member serves of this target while it drains">{{end}}<strong>{{.Name}}</strong>{{if exporterSeries $.Status .Name}}</a>{{end}}</td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -444,6 +445,26 @@ const memberContent = `{{define "content"}}
 {{- end}}
 {{- end}}
 {{end}}`
+
+// exporterStatus is the status page of the member m, as its heartbeats
+// advertise it, and exporterSeries the series it serves of its static
+// target name: the exporter serves its pages over plain HTTP at the
+// address it advertises, its static targets at the path its heartbeats say
+// and its status page at that path followed by /status. Each is "" for a
+// member whose heartbeats say no path.
+func exporterStatus(m *MemberStatus) string {
+	if m == nil || m.StaticTargetsPath == "" {
+		return ""
+	}
+	return "http://" + m.Address + m.StaticTargetsPath + "/status"
+}
+
+func exporterSeries(m *MemberStatus, name string) string {
+	if m == nil || m.StaticTargetsPath == "" {
+		return ""
+	}
+	return "http://" + m.Address + m.StaticTargetsPath + "?" + url.Values{"targets": {name}}.Encode()
+}
 
 // listNoteData is what a list's note says: how many targets it has, how
 // many the filter matches, how many it shows, and its table's id.

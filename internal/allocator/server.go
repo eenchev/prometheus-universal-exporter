@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -163,8 +164,15 @@ func checkHeartbeat(hb allocapi.Heartbeat) error {
 	if hb.Sequence == 0 {
 		return fmt.Errorf("%w; the sequence counts a replica's heartbeats from 1", ErrBadHeartbeat)
 	}
+	if p := hb.StaticTargetsPath; p != "" && (len(p) > maxStaticTargetsPathBytes || !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || strings.ContainsAny(p, "?#%\\") || strings.ContainsFunc(p, func(r rune) bool { return r <= ' ' || r == 0x7f })) {
+		return fmt.Errorf("%w; static_targets_path %q is not a clean absolute path of at most %d bytes", ErrBadHeartbeat, p, maxStaticTargetsPathBytes)
+	}
 	return nil
 }
+
+// maxStaticTargetsPathBytes bounds a heartbeat's static targets path, which
+// the allocator keeps for each member.
+const maxStaticTargetsPathBytes = 256
 
 // validAddress reports whether address is a host:port with a host and a
 // decimal port from 1 to 65535: the address service discovery hands

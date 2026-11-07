@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -150,5 +151,34 @@ func TestAnEntrysViewListsItsTargets(t *testing.T) {
 		if r := ask(h, path, ""); r.Code != http.StatusBadRequest {
 			t.Errorf("%s answered %d", path, r.Code)
 		}
+	}
+}
+
+// A member's view links the member's own pages, at the address its
+// heartbeats advertise and the static targets path they say: its status
+// page, and each static target it owns or keeps draining the series it
+// serves of it. A member whose heartbeats say no path has no such link.
+func TestAMembersViewLinksItsExportersPages(t *testing.T) {
+	p := writeInputs(t, testConfig, discoveredStatic, "")
+	testutil.WriteIn(t, filepath.Dir(p.StaticTargets), "nodes.yaml", discoveredNodes)
+	a, _ := settledAllocator(t, mustLoad(t, p), "r1", "r2")
+	t.Cleanup(a.BeginShutdown)
+	a.refreshDiscovery(context.Background())
+	if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "r1", Advertise: "[fd00::1]:9115", StaticTargetsPath: "/st/targets"})); err != nil {
+		t.Fatal(err)
+	}
+	h := a.Handler("")
+	v := memberViewOf(t, h, "member=r1", "")
+	if v.Status.StaticTargetsPath != "/st/targets" || len(v.Static.List) == 0 {
+		t.Fatalf("r1 is %+v, owning %+v", v.Status, v.Static)
+	}
+	name := v.Static.List[0].Name
+	page := ask(h, "/?member=r1", "").Body.String()
+	requireIn(t, page,
+		`<tr><th>Address</th><td>[fd00::1]:9115 <a href="http://[fd00::1]:9115/st/targets/status" title="the member's own status page, its static targets' scrapes and its recent probes">status page</a></td></tr>`,
+		`<td class="id"><a href="http://[fd00::1]:9115/st/targets?targets=`+name+`" title="the series the member serves of this target"><strong>`+name+`</strong></a></td>`)
+	other := ask(h, "/?member=r2", "").Body.String()
+	if strings.Contains(other, "status page</a>") || strings.Contains(other, "?targets=") {
+		t.Error("a member whose heartbeats say no static targets path links its pages")
 	}
 }

@@ -960,12 +960,17 @@ must not be one of them. The token is never taken from the URL.
 ```json
 {"member": "exporter-0", "advertise": "10.0.3.7:9115",
  "instance": "J7KTZ3TQWK76RFHIUQJRRUD646", "sequence": 42, "generation": "8117cfab…",
- "shutting_down": false, "refused": {"generation": "…", "error": "…"}, "interval_seconds": 10}
+ "shutting_down": false, "refused": {"generation": "…", "error": "…"}, "interval_seconds": 10,
+ "static_targets_path": "/static-targets"}
 ```
 
 `member`, `advertise`, a `host:port` with a host and a decimal port from 1
 to 65535, `instance`, the replica process's name of 1 to 64 bytes, and
-`sequence`, from 1, are required; anything else is answered `400`. A
+`sequence`, from 1, are required; anything else is answered `400`, as is a
+`static_targets_path` that is not a clean absolute path of at most 256 bytes
+other than `/`, without `?`, `#`, `%`, `\`, spaces or control characters.
+`static_targets_path` is the replica's `--web.static-targets-path`, which the
+member's view links ([A member's targets](#a-members-targets)). A
 heartbeat whose sequence is not greater than the last applied of its member
 and instance, or whose instance is the one its member's current instance
 replaced, is answered as any other but changes nothing. A member that said
@@ -1257,11 +1262,15 @@ the first visit: give any user name, and the token as the password
 A member's id in the members and in the spread links to its view,
 `GET /?member=<id>`: what that one exporter replica has, to answer "which
 targets does this pod scrape?" without reading its bundle. It shows the
-member as the members do, its capacity among them, then
+member as the members do, its capacity among them, and beside its address
+a link to its own [status page](STATIC-TARGETS.md#status-page),
+`http://<address><static targets path>/status`, then
 
-- the static targets it owns, by name, each with its target, collector,
-  labels, interval and weight;
-- the static targets it keeps draining, each with the member it moved to,
+- the static targets it owns, by name, each name linking the series the
+  member serves of it, `http://<address><static targets path>?targets=<name>`,
+  each with its target, collector, labels, interval and weight;
+- the static targets it keeps draining, each name linking its series on the
+  member as an owned one's does, each with the member it moved to,
   which links to that member's view, how much longer it drains and its
   weight;
 - the probe targets service discovery routes to it, counted and weighed by

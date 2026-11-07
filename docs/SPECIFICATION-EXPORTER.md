@@ -31048,6 +31048,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: the entry's row in the static targets table and its source's Feeds cell link `?entry=node`.
 - `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator), changed: the follower's `/v1/status?entry=node` is `partial` with the leader's address and no spread or targets, and its page says the entry's view is on the leader's.
 
+## 34.288 The allocator links the exporters' pages
+
+- `TestAMembersViewLinksItsExportersPages` (allocator): r1, whose heartbeat says `[fd00::1]:9115` and `/st/targets`, has `static_targets_path` in its status, and its view links `http://[fd00::1]:9115/st/targets/status` beside its address and its first static target's name `http://[fd00::1]:9115/st/targets?targets=<name>`; r2, whose heartbeats say no path, has neither link.
+- `TestAHeartbeatWithoutMemberOrAddressIsRefused` (allocator), changed: a static targets path `static-targets`, `/`, `/a/../b`, `/a/`, `/a?b`, `/a#b`, `/a%2fb`, `/a b` and one of 257 bytes are refused, and `/static-targets`, `/a/b-c_d.e` and one of 256 bytes are not.
+- `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` (allocclient) and `TestAllocatorModeIsUnreadyUntilTheFirstBundle`, changed: the first heartbeat says the static targets path, `/static-targets` by default.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -34289,7 +34295,14 @@ saying so, the filter box hidden, so a view refreshing itself shows the
 member gone; an empty `member` MUST be answered `400` on both. A follower
 under `--peers.leader-only` MUST NOT serve a member's targets: its view
 names the leader and its JSON is `partial`, with the leader's address. A
-member's view MUST link each probe job's name to the job's view. Each probe
+member's view MUST link each probe job's name to the job's view. When the
+member's last heartbeat said its static targets path, its view MUST link
+its status page, `http://<address><path>/status`, beside its address, and
+each static target it owns or keeps draining the series it serves of it,
+`http://<address><path>?targets=<name>`; and no such link otherwise. A
+heartbeat's `static_targets_path` other than a clean absolute path of at
+most 256 bytes, not `/`, without `?`, `#`, `%`, `\`, spaces or control
+characters, MUST be refused `400`. Each probe
 job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
 member's view is: the job's collector, targets, their weight with the job's
 weight or its `weight_label` (`job_weight`, `weight_label`), shard key, labels (one
@@ -34408,7 +34421,7 @@ to another; a heartbeat to one address, and the lookup of the addresses,
 made at once and every heartbeat interval, MUST be given up on after 5
 seconds or the heartbeat interval, whichever is shorter, and a lookup that
 fails MUST keep the addresses it resolved to last. A heartbeat MUST carry the member, the advertised
-address, the generation in force (empty before the first), the last refused
+address, its `--web.static-targets-path` as `static_targets_path`, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force,
 `shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
 random name made once at the exporter's start, the `sequence`, 1 for the

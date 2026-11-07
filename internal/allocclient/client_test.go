@@ -364,9 +364,9 @@ func generations(t *testing.T, dir string) []string {
 // heartbeat after it says its generation is in force.
 func TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat(t *testing.T) {
 	a := newFakeAllocator(t)
-	c := startClient(t, a, nil)
+	c := startClient(t, a, func(o *Options) { o.StaticTargetsPath = "/static-targets" })
 	first := a.nextHeartbeat(t)
-	if first.Member != "pod-0" || first.Advertise != "10.0.0.7:8080" || first.Generation != "" || first.ShuttingDown || first.Refused != nil {
+	if first.Member != "pod-0" || first.Advertise != "10.0.0.7:8080" || first.StaticTargetsPath != "/static-targets" || first.Generation != "" || first.ShuttingDown || first.Refused != nil {
 		t.Fatalf("the first heartbeat: %+v", first.Heartbeat)
 	}
 	if r := a.nextBundleRequest(t); r.URL.Query().Get("member") != "pod-0" || r.URL.Query().Get("wait") != "30s" || r.Header.Get("If-None-Match") != "" {

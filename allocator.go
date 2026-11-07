@@ -39,6 +39,9 @@ type allocatorFlags struct {
 type allocatorMode struct {
 	url, cacheDir, member, advertise, tokenFile string
 	capacity                                    float64
+	// staticTargetsPath is --web.static-targets-path, which the heartbeats
+	// say, for the allocator's page to link this replica's pages.
+	staticTargetsPath string
 }
 
 // configFile and staticTargetsFile are the files of the bundle in the cache
@@ -258,7 +261,8 @@ func noNotExist(err error) error {
 func (a *allocatorMode) startClient(manager allocclient.Reloader, generation string, logger *slog.Logger) (client *allocclient.Client, stop func(), err error) {
 	client, err = allocclient.New(allocclient.Options{
 		URL: a.url, CacheDir: a.cacheDir, Member: a.member, Advertise: a.advertise, TokenFile: a.tokenFile, Capacity: a.capacity,
-		Manager: manager, Logger: logger, Generation: generation,
+		StaticTargetsPath: a.staticTargetsPath,
+		Manager:           manager, Logger: logger, Generation: generation,
 	})
 	if err != nil {
 		return nil, nil, err

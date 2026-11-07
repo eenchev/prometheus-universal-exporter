@@ -149,8 +149,11 @@ type MembersStatus struct {
 // MemberStatus is one member.
 type MemberStatus struct {
 	ID string `json:"id"`
-	// Address is the host:port its heartbeats advertise.
-	Address string `json:"address"`
+	// Address is the host:port its heartbeats advertise, and
+	// StaticTargetsPath where it serves its static targets, its status
+	// page at it followed by /status, as its last heartbeat said.
+	Address           string `json:"address"`
+	StaticTargetsPath string `json:"static_targets_path,omitempty"`
 	// LastHeartbeat is when its last heartbeat came, RFC 3339 in UTC, and
 	// LastHeartbeatAgeSeconds how long ago.
 	LastHeartbeat           string  `json:"last_heartbeat"`
@@ -459,7 +462,7 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 		draining[key.member]++
 	}
 	for id, m := range a.members {
-		ms := MemberStatus{ID: id, Address: m.advertise, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
+		ms := MemberStatus{ID: id, Address: m.advertise, StaticTargetsPath: m.staticTargetsPath, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
 			LastHeartbeatAgeSeconds: ageSeconds(now.Sub(m.lastSeen).Seconds()), Live: a.live(m, now),
 			InList: a.settled && contains(a.effective, id), ShuttingDown: m.shuttingDown, Generation: m.generation,
 			Refused: a.refusals[id], Draining: draining[id], Capacity: float64(m.capacity) / milli}

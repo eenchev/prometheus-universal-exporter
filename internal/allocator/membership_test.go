@@ -270,6 +270,15 @@ func TestAHeartbeatWithoutMemberOrAddressIsRefused(t *testing.T) {
 		{Member: "a", Advertise: "a:-1"},
 		{Member: "a", Advertise: "a:0x50"},
 		{Member: "a", Advertise: "a:1", Instance: strings.Repeat("i", 65)},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "static-targets"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a/../b"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a/"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a?b"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a#b"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a%2fb"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a b"},
+		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/" + strings.Repeat("p", 256)},
 	} {
 		if _, err := a.Heartbeat(stamp(hb)); !errors.Is(err, ErrBadHeartbeat) {
 			t.Errorf("%+v: got %v, want it refused", hb, err)
@@ -281,6 +290,11 @@ func TestAHeartbeatWithoutMemberOrAddressIsRefused(t *testing.T) {
 	} {
 		if _, err := a.Heartbeat(hb); !errors.Is(err, ErrBadHeartbeat) {
 			t.Errorf("%+v: got %v, want it refused", hb, err)
+		}
+	}
+	for _, path := range []string{"/static-targets", "/a/b-c_d.e", "/" + strings.Repeat("p", 255)} {
+		if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "a", Advertise: "a:1", StaticTargetsPath: path})); err != nil {
+			t.Errorf("a heartbeat saying the static targets path %s was refused: %v", path, err)
 		}
 	}
 	for _, advertise := range []string{"[::1]:9115", "a:1", "a:65535"} {

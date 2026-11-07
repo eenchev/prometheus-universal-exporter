@@ -99,6 +99,9 @@ type Options struct {
 	// none, which the allocator takes for allocapi.DefaultCapacity.
 	Member, Advertise string
 	Capacity          float64
+	// StaticTargetsPath is the exporter's --web.static-targets-path, which
+	// the heartbeats say, for the allocator's page to link.
+	StaticTargetsPath string
 	// TokenFile, when set, holds the bearer token sent with every request,
 	// read again for each, so a rotated Secret is used from the next.
 	TokenFile string
@@ -625,7 +628,7 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity}
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity, StaticTargetsPath: c.o.StaticTargetsPath}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)

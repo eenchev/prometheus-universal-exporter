@@ -182,7 +182,7 @@ func TestAllocatorModeIsUnreadyUntilTheFirstBundle(t *testing.T) {
 			t.Fatalf("%s before the bundle: %d %q", path, code, body)
 		}
 	}
-	if hb := <-a.heartbeats; hb.Member != "pod-0" || hb.Advertise != "10.0.0.7:8080" || hb.Generation != "" {
+	if hb := <-a.heartbeats; hb.Member != "pod-0" || hb.Advertise != "10.0.0.7:8080" || hb.StaticTargetsPath != "/static-targets" || hb.Generation != "" {
 		t.Fatalf("the first heartbeat: %+v", hb)
 	}
 	generation := a.serve(map[string]string{"config.yaml": allocatorTestConfig})

@@ -191,11 +191,14 @@ type Allocator struct {
 type member struct {
 	// capacity is what its last heartbeat said, within allocapi's bounds,
 	// in thousandths.
-	capacity     int64
-	advertise    string
-	lastSeen     time.Time
-	generation   string
-	shuttingDown bool
+	capacity  int64
+	advertise string
+	// staticTargetsPath is where the replica serves its static targets,
+	// as its last heartbeat said (allocapi.Heartbeat).
+	staticTargetsPath string
+	lastSeen          time.Time
+	generation        string
+	shuttingDown      bool
 	// instance and sequence are those of the last heartbeat applied, and
 	// retired the instance before it, so a late heartbeat is known.
 	instance, retired string
@@ -326,6 +329,7 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	m.sequence = hb.Sequence
 	m.advertise, m.lastSeen, m.generation, m.shuttingDown = hb.Advertise, a.clock.Now(), hb.Generation, hb.ShuttingDown
 	m.capacity = allocapi.CapacityMilli(hb.Capacity)
+	m.staticTargetsPath = hb.StaticTargetsPath
 	switch {
 	case hb.Refused == nil:
 		// The replica keeps reporting a refusal until it puts a later

@@ -329,7 +329,7 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	m.sequence = hb.Sequence
 	m.advertise, m.lastSeen, m.generation, m.shuttingDown = hb.Advertise, a.clock.Now(), hb.Generation, hb.ShuttingDown
 	m.capacity = allocapi.CapacityMilli(hb.Capacity)
-	m.staticTargetsPath = hb.StaticTargetsPath
+	m.staticTargetsPath = linkablePath(hb.StaticTargetsPath)
 	switch {
 	case hb.Refused == nil:
 		// The replica keeps reporting a refusal until it puts a later

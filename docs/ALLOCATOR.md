@@ -966,11 +966,14 @@ must not be one of them. The token is never taken from the URL.
 
 `member`, `advertise`, a `host:port` with a host and a decimal port from 1
 to 65535, `instance`, the replica process's name of 1 to 64 bytes, and
-`sequence`, from 1, are required; anything else is answered `400`, as is a
-`static_targets_path` that is not a clean absolute path of at most 256 bytes
-other than `/`, without `?`, `#`, `%`, `\`, spaces or control characters.
+`sequence`, from 1, are required; anything else is answered `400`.
 `static_targets_path` is the replica's `--web.static-targets-path`, which the
-member's view links ([A member's targets](#a-members-targets)). A
+member's view links ([A member's targets](#a-members-targets)); one that is
+not a clean absolute path of at most 256 bytes other than `/`, without `?`,
+`#`, `%`, `\`, spaces or control characters, is dropped and the heartbeat
+taken all the same, the member's view then linking none of its pages. The
+links are also left out when the advertised address would not be the
+link's host alone, as one with a `/` or an `@` in it. A
 heartbeat whose sequence is not greater than the last applied of its member
 and instance, or whose instance is the one its member's current instance
 replaced, is answered as any other but changes nothing. A member that said
@@ -1222,7 +1225,7 @@ its `address`, `self`, `leader`, `live`, `id`, `discovering`,
 and its `value`); `partial`, true on a follower under `--peers.leader-only`,
 whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
 `in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds`,
-`settle_seconds` and `list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
+`settle_seconds` and `list`, each with `id`, `address`, `static_targets_path`, the one its last heartbeat said, left out when it said none the page can link, `last_heartbeat`, `late`, `live`,
 `in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`,
 `draining`, `capacity`, the one its last heartbeat said as the allocator
 takes it, and `capacity_in_list`, the one the member list places by, left

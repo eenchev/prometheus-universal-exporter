@@ -453,17 +453,32 @@ const memberContent = `{{define "content"}}
 // and its status page at that path followed by /status. Each is "" for a
 // member whose heartbeats say no path.
 func exporterStatus(m *MemberStatus) string {
-	if m == nil || m.StaticTargetsPath == "" {
-		return ""
+	if base := exporterBase(m); base != "" {
+		return base + "/status"
 	}
-	return "http://" + m.Address + m.StaticTargetsPath + "/status"
+	return ""
 }
 
 func exporterSeries(m *MemberStatus, name string) string {
+	if base := exporterBase(m); base != "" {
+		return base + "?" + url.Values{"targets": {name}}.Encode()
+	}
+	return ""
+}
+
+// exporterBase is the member's static targets endpoint, "" without a path
+// or when its address, which a heartbeat takes as any host:port, would not
+// be the host of the URL alone: one with a / or an @ in its host would
+// send the link elsewhere.
+func exporterBase(m *MemberStatus) string {
 	if m == nil || m.StaticTargetsPath == "" {
 		return ""
 	}
-	return "http://" + m.Address + m.StaticTargetsPath + "?" + url.Values{"targets": {name}}.Encode()
+	u, err := url.Parse("http://" + m.Address)
+	if err != nil || u.Host != m.Address || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	return "http://" + m.Address + m.StaticTargetsPath
 }
 
 // listNoteData is what a list's note says: how many targets it has, how

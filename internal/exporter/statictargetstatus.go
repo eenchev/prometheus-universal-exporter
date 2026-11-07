@@ -916,7 +916,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
-<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{template "at" .LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
@@ -938,7 +938,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
-<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{template "at" .LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
 <tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>

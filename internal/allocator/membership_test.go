@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -270,15 +271,6 @@ func TestAHeartbeatWithoutMemberOrAddressIsRefused(t *testing.T) {
 		{Member: "a", Advertise: "a:-1"},
 		{Member: "a", Advertise: "a:0x50"},
 		{Member: "a", Advertise: "a:1", Instance: strings.Repeat("i", 65)},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "static-targets"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a/../b"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a/"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a?b"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a#b"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a%2fb"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/a b"},
-		{Member: "a", Advertise: "a:1", StaticTargetsPath: "/" + strings.Repeat("p", 256)},
 	} {
 		if _, err := a.Heartbeat(stamp(hb)); !errors.Is(err, ErrBadHeartbeat) {
 			t.Errorf("%+v: got %v, want it refused", hb, err)
@@ -290,11 +282,6 @@ func TestAHeartbeatWithoutMemberOrAddressIsRefused(t *testing.T) {
 	} {
 		if _, err := a.Heartbeat(hb); !errors.Is(err, ErrBadHeartbeat) {
 			t.Errorf("%+v: got %v, want it refused", hb, err)
-		}
-	}
-	for _, path := range []string{"/static-targets", "/a/b-c_d.e", "/" + strings.Repeat("p", 255)} {
-		if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: "a", Advertise: "a:1", StaticTargetsPath: path})); err != nil {
-			t.Errorf("a heartbeat saying the static targets path %s was refused: %v", path, err)
 		}
 	}
 	for _, advertise := range []string{"[::1]:9115", "a:1", "a:65535"} {
@@ -559,5 +546,56 @@ func TestAHeartbeatSayingNoIntervalDoesNotChangeTheFirstWait(t *testing.T) {
 	clock.Advance(time.Millisecond)
 	if got := effective(b); !slices.Equal(got, []string{"fresh"}) {
 		t.Errorf("at its 5s interval an instance hearing no interval has the member list %v, want [fresh]", got)
+	}
+}
+
+// A heartbeat's static targets path is kept only when the page can link
+// it; any other is dropped and the heartbeat taken all the same, the
+// member joining as any other: the path is for the page's links alone, and
+// the exporter takes a --web.static-targets-path of any length.
+func TestAHeartbeatsStaticTargetsPathIsKeptOnlyWhenLinkable(t *testing.T) {
+	a, _ := membershipAllocator(t, 0)
+	pathOf := func(member string) string {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.members[member].staticTargetsPath
+	}
+	for i, path := range []string{"static-targets", "/", "/a/../b", "/a/", "/a?b", "/a#b", "/a%2fb", "/a b", "/" + strings.Repeat("p", 256)} {
+		member := "bad" + strconv.Itoa(i)
+		if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: member, Advertise: "a:1", StaticTargetsPath: path})); err != nil {
+			t.Errorf("a heartbeat saying the static targets path %q was refused: %v", path, err)
+		} else if got := pathOf(member); got != "" {
+			t.Errorf("the static targets path %q was kept as %q", path, got)
+		}
+	}
+	for i, path := range []string{"/static-targets", "/a/b-c_d.e", "/" + strings.Repeat("p", 255)} {
+		member := "good" + strconv.Itoa(i)
+		if _, err := a.Heartbeat(stamp(allocapi.Heartbeat{Member: member, Advertise: "a:1", StaticTargetsPath: path})); err != nil || pathOf(member) != path {
+			t.Errorf("the static targets path %q: %v, kept as %q", path, err, pathOf(member))
+		}
+	}
+}
+
+// A member's own pages are linked only at an address that is the host of
+// the URL alone: a / or an @ in a host:port a heartbeat advertised would
+// send the link elsewhere.
+func TestAMembersPagesAreLinkedOnlyAtItsOwnHost(t *testing.T) {
+	for address, want := range map[string]string{
+		"r1:9115":          "http://r1:9115/st/status",
+		"[fd00::1]:9115":   "http://[fd00::1]:9115/st/status",
+		"evil.example/x:1": "",
+		"u@evil.example:1": "",
+		"a?b:1":            "",
+	} {
+		m := &MemberStatus{Address: address, StaticTargetsPath: "/st"}
+		if got := exporterStatus(m); got != want {
+			t.Errorf("the status page of %s is %q, want %q", address, got, want)
+		}
+		if got := exporterSeries(m, "t"); (got == "") != (want == "") {
+			t.Errorf("the series of %s is %q", address, got)
+		}
+	}
+	if exporterStatus(&MemberStatus{Address: "r1:9115"}) != "" || exporterStatus(nil) != "" {
+		t.Error("a member without a path is linked")
 	}
 }

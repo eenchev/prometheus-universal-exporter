@@ -216,6 +216,19 @@ func TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted(t *testing.T) {
 			t.Errorf("the recovered %s export's error does not say it was 35m ago:\n%s", what, cell)
 		}
 	}
+	// Their Last export and Last success are moments, as every moment of
+	// the page is (pagekit.LocalTimesScript).
+	d := otlpDetails(t, server)
+	for _, at := range []string{d.Logs.LastExport, d.Traces.LastExport} {
+		if at == "" || !strings.Contains(page, `<tr><th>Last export</th><td><time datetime="`+at+`">`+at+`</time><br>`) || strings.Contains(page, `<tr><th>Last export</th><td>`+at) {
+			t.Errorf("the page does not write the log and trace exports' last export %q as a <time>", at)
+		}
+	}
+	for _, at := range []string{d.Logs.LastSuccess, d.Traces.LastSuccess} {
+		if at == "" || !strings.Contains(page, `<tr><th>Last success</th><td><time datetime="`+at+`">`+at+`</time></td></tr>`) {
+			t.Errorf("the page does not write a last success %q as a <time>", at)
+		}
+	}
 	if d := otlpDetails(t, server); !isRecovered(d.Logs.LastErrorRecovered) || !isRecovered(d.Traces.LastErrorRecovered) {
 		t.Errorf("after exports got through the log export's last_error_recovered is %s, the trace export's %s; want true", shown(d.Logs.LastErrorRecovered), shown(d.Traces.LastErrorRecovered))
 	}

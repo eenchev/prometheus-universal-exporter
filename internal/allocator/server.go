@@ -164,14 +164,26 @@ func checkHeartbeat(hb allocapi.Heartbeat) error {
 	if hb.Sequence == 0 {
 		return fmt.Errorf("%w; the sequence counts a replica's heartbeats from 1", ErrBadHeartbeat)
 	}
-	if p := hb.StaticTargetsPath; p != "" && (len(p) > maxStaticTargetsPathBytes || !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || strings.ContainsAny(p, "?#%\\") || strings.ContainsFunc(p, func(r rune) bool { return r <= ' ' || r == 0x7f })) {
-		return fmt.Errorf("%w; static_targets_path %q is not a clean absolute path of at most %d bytes", ErrBadHeartbeat, p, maxStaticTargetsPathBytes)
-	}
 	return nil
 }
 
-// maxStaticTargetsPathBytes bounds a heartbeat's static targets path, which
-// the allocator keeps for each member.
+// linkablePath is a heartbeat's static targets path, which the allocator
+// keeps for each member, when it is one the page can link: a clean
+// absolute path of at most maxStaticTargetsPathBytes, not /, without a
+// query, a fragment, an escape, a backslash, a space or a control
+// character; "" otherwise. A path it cannot link is dropped, and the
+// heartbeat taken all the same: the path is for the page's links alone,
+// and the exporter takes a --web.static-targets-path of any length, so a
+// replica is never kept out of the member list over it.
+func linkablePath(p string) string {
+	if len(p) > maxStaticTargetsPathBytes || !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || strings.ContainsAny(p, "?#%\\") || strings.ContainsFunc(p, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+		return ""
+	}
+	return p
+}
+
+// maxStaticTargetsPathBytes bounds a heartbeat's static targets path that
+// the allocator keeps.
 const maxStaticTargetsPathBytes = 256
 
 // validAddress reports whether address is a host:port with a host and a

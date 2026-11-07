@@ -232,14 +232,17 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// one whose JSON is surely over the limit is refused unread
 		// (answerCodec).
 		codec := &answerCodec{limit: limit, resolver: answerResolver(m.types)}
-		options := []grpc.CallOption{grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))), grpc.ForceCodecV2(codec), grpc.Header(&header), grpc.Trailer(&trailer)}
+		options := []grpc.CallOption{grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))), grpc.ForceCodecV2(codec)}
 		var body []byte
 		var messages int
 		if m.desc.IsStreamingServer() {
-			body, messages, err = grpcReadStream(callCtx, conn, m, in, codec, grpcRequest(c).StreamMessages, options)
+			// A stream's headers and trailers are read from it, not set by
+			// call options, which grpc-go writes when the stream ends, after
+			// the call has cut it.
+			body, messages, header, trailer, err = grpcReadStream(callCtx, conn, m, in, codec, grpcRequest(c).StreamMessages, options)
 		} else {
 			out := dynamicpb.NewMessage(m.desc.Output())
-			err = conn.Invoke(callCtx, m.path(), in, out, options...)
+			err = conn.Invoke(callCtx, m.path(), in, out, append(options, grpc.Header(&header), grpc.Trailer(&trailer))...)
 			if err == nil && codec.over == nil {
 				if body, err = renderAnswer(out, m.types); err != nil {
 					return nil, &CallAnswerError{Err: err}
@@ -338,19 +341,23 @@ type grpcStreamAnswer struct {
 // cancelled: the messages are held to the response limit together, codec's
 // limit what is left of it before each one. A status the server ends the
 // stream with, other than OK, is the call's error, as a unary call's is.
-func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in *dynamicpb.Message, codec *answerCodec, most int, options []grpc.CallOption) ([]byte, int, error) {
+func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in *dynamicpb.Message, codec *answerCodec, most int, options []grpc.CallOption) ([]byte, int, metadata.MD, metadata.MD, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: string(m.desc.Name()), ServerStreams: true}, m.path(), options...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, nil, err
 	}
 	if err := stream.SendMsg(in); err != nil && !errors.Is(err, io.EOF) {
-		return nil, 0, err
+		return nil, 0, nil, nil, err
 	}
 	if err := stream.CloseSend(); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, nil, err
 	}
+	// The headers came before the first message, or with the status that
+	// ended the stream; the trailers are known once the server ended it.
+	var trailer metadata.MD
+	header, _ := stream.Header()
 	limit := codec.limit
 	// {"messages":[],"ended":false}, and a comma between messages.
 	used := int64(len(`{"messages":[],"ended":false}`))
@@ -361,23 +368,26 @@ func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in
 		err := stream.RecvMsg(out)
 		if errors.Is(err, io.EOF) {
 			answer.Ended = true
+			trailer = stream.Trailer()
 			break
 		}
 		if codec.over != nil {
 			// The message was refused unread: what is left of the limit
 			// is the stream's, not the message's alone.
 			codec.over = grpcStreamOver(limit, len(answer.Messages)+1)
-			return nil, 0, codec.over
+			return nil, 0, nil, nil, codec.over
 		}
 		if err != nil {
-			return nil, 0, err
+			// The status that ended the stream, with its trailers, which an
+			// accepted code's answer carries.
+			return nil, 0, header, stream.Trailer(), err
 		}
 		body, err := renderAnswer(out, m.types)
 		if err != nil {
-			return nil, 0, &CallAnswerError{Err: err}
+			return nil, 0, nil, nil, &CallAnswerError{Err: err}
 		}
 		if used += int64(len(body)) + 1; used > limit {
-			return nil, 0, &CallAnswerError{Err: grpcStreamOver(limit, len(answer.Messages)+1)}
+			return nil, 0, nil, nil, &CallAnswerError{Err: grpcStreamOver(limit, len(answer.Messages)+1)}
 		}
 		answer.Messages = append(answer.Messages, body)
 	}
@@ -385,7 +395,7 @@ func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in
 		answer.Messages = []json.RawMessage{}
 	}
 	body, err := json.Marshal(answer)
-	return body, len(answer.Messages), err
+	return body, len(answer.Messages), header, trailer, err
 }
 
 // grpcStreamOver is the refusal of a stream whose messages, read as far

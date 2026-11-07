@@ -1283,6 +1283,12 @@ a link to its own [status page](STATIC-TARGETS.md#status-page),
 - the probe targets service discovery routes to it, counted and weighed by
   probe job, then each with its job, collector and weight.
 
+The links to the member's own pages are to the address its heartbeats
+advertise, a pod IP on Kubernetes: they open where the browser reaches that
+address, inside the cluster or over a VPN to it. From a `kubectl
+port-forward` of the allocator they do not; forward the member's pod, and
+open the same path on the forwarded port.
+
 The counts are the spread's for the member. A target is shown as the
 exporter's pages show it, its credentials withheld: a URL's user and
 password as `redacted`, and the values of query and path parameters whose

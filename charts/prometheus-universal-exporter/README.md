@@ -1851,6 +1851,16 @@ kubectl get pod -l app.kubernetes.io/name=<name>-allocator --field-selector stat
 kubectl port-forward pod/<that pod> 9116
 ```
 
+A member's view links that exporter's own status page and each of its
+static targets' series at the pod IP it advertises, which a port-forwarded
+browser does not reach; forward the exporter's pod and open the same path,
+`/static-targets/status` by default, on the forwarded port, the port of
+`server.listenAddress`, 8080 by default:
+
+```sh
+kubectl port-forward pod/<member> 8080
+```
+
 ## Using the chart as a dependency
 
 The chart can be a dependency of your own chart. Its values then go under its name in the parent's values, and a `condition` switches it on and off:

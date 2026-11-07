@@ -34287,8 +34287,8 @@ before the probe jobs table, of a row of the targets the static target file
 writes and a row of each `discovered_targets` entry that found any, in file
 order, with its targets, their weight, the members, min, average, max and
 the imbalance of the row's targets each member owns, marked as a job's, and
-the entry's sources, a row of an entry anchored for the sources table's
-link; a probe jobs table
+the entry's sources, an entry's name linking its view (`?entry=<name>`);
+a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
 their weight, members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its

@@ -67,6 +67,10 @@ type DB struct {
 	// once on a connection: 8.0.36 when empty. The question is not recorded
 	// among the queries, nor held by Block, unless Results answers it.
 	Version string
+	// ExecErr, when set, is what a statement that returns no rows fails
+	// with, nil for one that does not fail: a SET the server does not
+	// know, say.
+	ExecErr func(statement string) error
 	// versions counts the times SELECT VERSION() was asked.
 	versions atomic.Int64
 
@@ -254,6 +258,11 @@ func (c *conn) ExecContext(_ context.Context, statement string, _ []driver.Named
 	c.db.mu.Lock()
 	defer c.db.mu.Unlock()
 	c.db.executed = append(c.db.executed, statement)
+	if c.db.ExecErr != nil {
+		if err := c.db.ExecErr(statement); err != nil {
+			return nil, err
+		}
+	}
 	return driver.RowsAffected(0), nil
 }
 

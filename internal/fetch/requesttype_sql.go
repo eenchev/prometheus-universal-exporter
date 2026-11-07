@@ -435,7 +435,7 @@ func validateSQLRequest(x *model.Collector) error {
 func loadSQLStatement(x *model.Collector, d *sqlDriver) error {
 	own := sqlRequest(x)
 	switch {
-	case own.Statement != "" && own.StatementFile != "":
+	case own.StatementFile != "" && own.Statement != "":
 		return errors.New("sets both request.statement and request.statement_file; write the statement in one of them")
 	case own.StatementFile != "":
 		if err := checkSQLStatementFileKey(own.StatementFile); err != nil {
@@ -1255,11 +1255,14 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 func sqlSchemaRule() map[string]any {
 	keys := []string{"driver", "username"}
 	properties := map[string]any{}
-	for _, key := range append(keys, "statement") {
+	for _, key := range keys {
 		properties[key] = SchemaWrittenKey(key)["properties"].(map[string]any)[key]
 	}
 	rule := map[string]any{"required": keys, "properties": properties,
-		"oneOf": []any{map[string]any{"required": []string{"statement"}}, map[string]any{"required": []string{"statement_file"}}}}
+		// One of the two, written with something other than "", which is
+		// the key left out, as the exporter reads it: statement written ""
+		// beside statement_file is statement_file alone.
+		"oneOf": []any{SchemaWrittenKey("statement"), SchemaWrittenKey("statement_file")}}
 	driverIs := func(name string) map[string]any {
 		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(name)}}, "required": []string{"driver"}}
 	}

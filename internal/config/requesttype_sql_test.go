@@ -223,3 +223,14 @@ func TestAStatementFileEditedReloadsAtTheNextTick(t *testing.T) {
 		t.Errorf("the load of a statement file of blanks: %v", err)
 	}
 }
+
+// statement written "" beside statement_file is the key left out, as ""
+// is for every key: the file's statement is the one run, and the schema
+// takes it as the exporter does.
+func TestAnEmptyStatementBesideAStatementFileIsTheKeyLeftOut(t *testing.T) {
+	file := testutil.WriteIn(t, t.TempDir(), "jobs.sql", "SELECT 1 AS n")
+	document := strings.Replace(sqlCollector, "      statement: SELECT state, count(*) AS n FROM jobs GROUP BY state\n", "      statement: \"\"\n      statement_file: "+file+"\n", 1)
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", document)); err != nil {
+		t.Errorf("%v", err)
+	}
+}

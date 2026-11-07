@@ -82,7 +82,34 @@ func mysqlRun(ctx context.Context, conn *sql.Conn, statement string, args []any,
 			guarded.serverVersion = version
 		}
 	}
-	return sqlReadOnlyTx(func(left time.Duration) []string { return mysqlStatementTimeout(version, left) })(ctx, conn, statement, args, timeout)
+	limited := guarded == nil || !guarded.noStatementLimit
+	setup := func(left time.Duration) []string {
+		if !limited {
+			return nil
+		}
+		return mysqlStatementTimeout(version, left)
+	}
+	rows, done, err := sqlReadOnlyTx(setup)(ctx, conn, statement, args, timeout)
+	// A server that says it is a version that has the variable and does
+	// not know it — a proxy speaking for another server, as ProxySQL or
+	// Vitess may — is set it no more on the connection, and the statement
+	// runs without it, rather than every scrape of it failing.
+	var step *sqlStepError
+	if limited && err != nil && errors.As(err, &step) && strings.HasPrefix(step.step, "running SET SESSION ") && mysqlUnknownVariable(err) && ctx.Err() == nil {
+		if guarded != nil {
+			guarded.noStatementLimit = true
+		}
+		limited = false
+		return sqlReadOnlyTx(setup)(ctx, conn, statement, args, timeout)
+	}
+	return rows, done, err
+}
+
+// mysqlUnknownVariable recognises the server's refusal of a variable it
+// does not know: error 1193, ER_UNKNOWN_SYSTEM_VARIABLE.
+func mysqlUnknownVariable(err error) bool {
+	var myErr *mysql.MySQLError
+	return errors.As(err, &myErr) && myErr.Number == 1193
 }
 
 // mysqlStatementTimeout is what sets the server's own time limit on the

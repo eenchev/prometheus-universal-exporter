@@ -1773,11 +1773,25 @@
                 "then": {
                   "oneOf": [
                     {
+                      "properties": {
+                        "statement": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
                       "required": [
                         "statement"
                       ]
                     },
                     {
+                      "properties": {
+                        "statement_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
                       "required": [
                         "statement_file"
                       ]
@@ -1785,11 +1799,6 @@
                   ],
                   "properties": {
                     "driver": {
-                      "not": {
-                        "const": ""
-                      }
-                    },
-                    "statement": {
                       "not": {
                         "const": ""
                       }

@@ -1186,3 +1186,37 @@ func TestSQLTypedArgsReadOnlyTheirTypesValues(t *testing.T) {
 		}
 	}
 }
+
+// A server that says it is a version with the time limit's variable and
+// refuses it as one it does not know (error 1193), as a proxy speaking for
+// another server may, has the statement run without it, and is set it no
+// more on that connection; any other refusal of it fails the scrape.
+func TestAMySQLServerThatDoesNotKnowTheLimitsVariableIsScrapedWithoutIt(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["SELECT 1 AS one"] = sqltest.Result{Columns: []string{"one"}, Rows: [][]driver.Value{{int64(1)}}}
+	refusal := &mysql.MySQLError{Number: 1193, Message: "Unknown system variable 'max_execution_time'"}
+	f.db.ExecErr = func(statement string) error {
+		if strings.HasPrefix(statement, "SET SESSION max_execution_time") {
+			return refusal
+		}
+		return nil
+	}
+	c := f.collector(t, SQLDriverMySQL, SQLDriverMySQL, "SELECT 1 AS one")
+	for scrape := range 2 {
+		if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+			t.Fatalf("scrape %d: %v", scrape, err)
+		}
+	}
+	if sets := len(f.db.Executed()); sets != 1 {
+		t.Errorf("the variable was set %d times over two scrapes on one connection, want once: %q", sets, f.db.Executed())
+	}
+	if n := len(f.db.Queries()); n != 2 {
+		t.Errorf("the statement ran %d times, want 2", n)
+	}
+	sqlPools.closeAll()
+	refusal.Number = 1227
+	_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if err == nil || !strings.Contains(err.Error(), "running SET SESSION max_execution_time") {
+		t.Errorf("another refusal of the variable: %v", err)
+	}
+}

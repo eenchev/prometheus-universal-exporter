@@ -216,7 +216,10 @@ never sent:
   VERSION()`, when its first statement runs; a server older than its
   variable, or whose version reads as neither MySQL's nor MariaDB's, is set
   nothing, rather than have every scrape refused over a variable it does
-  not know;
+  not know; and one that gives a version with the variable and then refuses
+  it as unknown (error 1193), as a proxy speaking for another server may,
+  has the statement run without it, and is set it no more on that
+  connection;
 - `sqlserver`: `SET LOCK_TIMEOUT`, in milliseconds, which bounds how long
   the statement waits on a lock another session holds, where most of a
   metrics query's waiting is; the cancel at the deadline bounds the rest.
@@ -279,7 +282,8 @@ loads, and a file that is not refuses the load, or the reload, saying why:
 - it is held to what a statement written in place is held to: one
   statement, and for `vertica` one its driver prepares.
 
-`statement` and `statement_file` are not written together. A static target
+`statement` and `statement_file` are not written together; a `statement`
+written `""` is the key left out, as for every key. A static target
 uses its collector's statement and sets no file of its own. The [target
 allocator](ALLOCATOR.md) checks the key but does not open the file, which
 travels as a path: mount it on every replica at the same path, where each

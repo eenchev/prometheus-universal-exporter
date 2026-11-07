@@ -2016,7 +2016,8 @@ of objects, one a row, of its columns by name. Its keys:
   into the statement quoted as a literal of its type, and the documentation
   MUST say which. `statement_file` MUST name, in place of `statement`, the
   file the statement is read from when the configuration loads and at each
-  reload; both written MUST be refused, and neither but on the debug page's
+  reload; both written with something other than `""` MUST be refused,
+  `""` being the key left out, and neither but on the debug page's
   playground, which makes no request. It MUST be refused at load: with
   blanks alone or around it, with a placeholder, with a NUL, or relative;
   a file missing, unreadable or no regular file — a named pipe MUST be
@@ -2101,7 +2102,10 @@ of objects, one a row, of its columns by name. Its keys:
   version the server gives when asked once on each connection (`SELECT
   VERSION()`, MariaDB's `5.5.5-` prefix skipped), and nothing on an older
   server or one whose version reads as neither, so that no scrape is
-  refused over a variable the server does not know; and `sqlserver` MUST
+  refused over a variable the server does not know; a server that refuses
+  the variable as unknown (MySQL's error 1193) MUST have the statement run
+  without it, in a new read-only transaction, and MUST NOT be set it again
+  on that connection, any other refusal failing the scrape; and `sqlserver` MUST
   set `LOCK_TIMEOUT` to it, in the transaction: each in milliseconds, a
   millisecond at least, MariaDB's in seconds to the millisecond. The server
   ending the statement at its limit (postgres's SQLSTATE 57014 statement
@@ -31153,7 +31157,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAVerticaStatementFileIsHeldToWhatAStatementIs` (fetch, vertica): `SELECT 1;\nCOMMIT` in the file is refused as more than one statement naming the file, and `SELECT 1` loads.
 - `TestAStatementFileEditedReloadsAtTheNextTick` (config): with the watch, the file edited to `SELECT 2 AS n` puts a configuration in force at the next tick, the reload naming the collector `db` changed; edited to blanks it is rejected, the configuration in force kept, the load saying the file holds no statement.
 - `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statement_file`, of a pattern, is held to text.
-- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: a row of `statement_file` in a collector without `statement`: the absolute path of `testdata/sql/statement.sql` is taken by both, `statement.sql` refused by both, and the key left out or written `""` refused by both, the collector having no statement; the schema requires one of `statement` and `statement_file` (`oneOf`), which the schema as it was is taken to have held as it held `statement` required.
+- `TestAnEmptyStatementBesideAStatementFileIsTheKeyLeftOut` (config): `statement: ""` beside a statement file loads, the schema taking it too.
+- `TestASQLStatementFileAndTypedArgsThroughAProbe` (exporter): a configuration loaded with a statement file and `arg_types: [text, int]` probes with the file's statement, `param_limit=25` bound as `int64(25)`; `param_limit=lots` is answered 400 naming `request.args[1]` with no statement run; the file edited and the configuration reloaded, the probe runs the new statement.
+- `TestAMySQLServerThatDoesNotKnowTheLimitsVariableIsScrapedWithoutIt` (fetch): a server that refuses `max_execution_time` with error 1193 is scraped twice on one connection, the variable set once, the statement run twice; refused with 1227, the scrape fails at `running SET SESSION max_execution_time`.
+- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: a row of `statement_file` in a collector without `statement`: the absolute path of `testdata/sql/statement.sql` is taken by both, `statement.sql` refused by both, and the key left out or written `""` refused by both, the collector having no statement; the schema requires one of `statement` and `statement_file` written with something other than `""` (`oneOf`), which the schema as it was is taken to have held as it held `statement` required, `""` or not.
 
 ## 42.1 OTLP export
 

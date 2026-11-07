@@ -46,6 +46,10 @@ type sqlGuardedConn struct {
 	// the connection by a driver that needs it (mysqlRun), "" until then.
 	// A connection is had by one scrape at a time.
 	serverVersion string
+	// noStatementLimit says the server refused the variable of its own
+	// time limit, as one it does not know, so it is set no more on the
+	// connection (mysqlRun).
+	noStatementLimit bool
 }
 
 // The methods a guarded connection has only when the driver's connection

@@ -367,3 +367,56 @@ func (l *sqlLogBuffer) String() string {
 	defer l.mu.Unlock()
 	return l.b.String()
 }
+
+// A collector whose statement is in a file, with typed args, loaded as the
+// exporter loads its configuration: a probe runs the file's statement with
+// its args bound as their types, a probe parameter not of its arg's type is
+// answered 400 without asking the database, and a reload after the file
+// changed runs the new statement.
+func TestASQLStatementFileAndTypedArgsThroughAProbe(t *testing.T) {
+	db := &sqltest.DB{Results: map[string]sqltest.Result{
+		"SELECT n FROM jobs WHERE queue = $1 LIMIT $2":  {Columns: []string{"n"}, Rows: [][]driver.Value{{int64(3)}}},
+		"SELECT n + 1 AS n FROM jobs LIMIT $2 OFFSET 0": {Columns: []string{"n"}, Rows: [][]driver.Value{{int64(4)}}},
+	}}
+	t.Cleanup(fetch.UseSQLTestDriver(func(ctx context.Context, _ fetch.SQLConnectInfo) (driver.Conn, error) { return db.Connect(ctx) }))
+	t.Cleanup(fetch.CloseConnections)
+	dir := t.TempDir()
+	statement := testutil.WriteIn(t, dir, "jobs.sql", "SELECT n FROM jobs WHERE queue = $1 LIMIT $2\n")
+	path := testutil.WriteIn(t, dir, "config.yaml", `collectors:
+  - name: jobs
+    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      statement_file: `+statement+`
+      args: ["{{param_queue:mail}}", "{{param_limit:10}}"]
+      arg_types: [text, int]
+    transform:
+      type: csv
+    metrics:
+      - name: jobs
+        expression: n
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := config.NewManager(cfg, path, testutil.QuietLogger(t))
+	server := NewServer(manager, "python3", testutil.QuietLogger(t))
+	if r := probeOnce(t, server, "/probe?collector=jobs&target=db.example&param_limit=25", nil); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "jobs 3") {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if q := db.Queries(); len(q) != 1 || q[0].Args[0] != "mail" || q[0].Args[1] != int64(25) {
+		t.Errorf("queries %#v", q)
+	}
+	if r := probeOnce(t, server, "/probe?collector=jobs&target=db.example&param_limit=lots", nil); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), `request.args[1] is "lots", which is no whole number`) || len(db.Queries()) != 1 {
+		t.Errorf("a limit of lots: %d %s, %d queries", r.Code, r.Body, len(db.Queries()))
+	}
+	testutil.WriteIn(t, dir, "jobs.sql", "SELECT n + 1 AS n FROM jobs LIMIT $2 OFFSET 0")
+	if err := manager.Reload("test"); err != nil {
+		t.Fatal(err)
+	}
+	if r := probeOnce(t, server, "/probe?collector=jobs&target=db.example", nil); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "jobs 4") {
+		t.Errorf("after the reload: %d %s", r.Code, r.Body)
+	}
+}

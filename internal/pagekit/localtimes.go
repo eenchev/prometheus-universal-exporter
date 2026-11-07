@@ -1,9 +1,9 @@
 package pagekit
 
-// The pages write a moment one way: as a <time datetime="…"> of RFC 3339
-// in UTC, which a page without JavaScript shows as it is. LocalTimesScript
-// defines localTimes(root), which a page's script calls on its content,
-// after each refresh too, so every moment reads alike:
+// LocalTimesScript defines localTimes(root). The pages write a moment one
+// way: as a <time datetime="…"> of RFC 3339 in UTC, which a page without
+// JavaScript shows as it is, and a page's script calls localTimes on its
+// content, after each refresh too, so every moment reads alike:
 //
 //   - a <time> whose text is the moment is shown in the browser's time, the
 //     time of day alone when it is today and the date with it otherwise,

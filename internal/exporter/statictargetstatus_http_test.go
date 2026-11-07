@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -597,7 +598,7 @@ func TestTheStatusPageWritesEachMomentAsATime(t *testing.T) {
 		`at <time datetime="`+b.LastErrorAt+`">`+b.LastErrorAt+`</time>`,
 		`data-at="`+row.Recent[0].At+`" title="`+row.Recent[0].At+` success"`,
 		"function localTimes(root) {", "localTimes(content);\n  function swap(fragment) {", "arrangeTargets(() => { content.innerHTML = fragment; });\n    localTimes(content);")
-	if strings.Contains(page, `<td data-value="`+fmt.Sprint(row.ScrapedAt)+`">`+row.LastScrape) {
+	if strings.Contains(page, `<td data-value="`+strconv.FormatInt(row.ScrapedAt, 10)+`">`+row.LastScrape) {
 		t.Error("a last scrape's moment is no <time>")
 	}
 }

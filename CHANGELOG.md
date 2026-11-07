@@ -16,6 +16,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- A `dns` collector asks its question with a client of its own rather than
+  Go's resolver. A `SERVFAIL`, `REFUSED` or other response code is now the
+  document's `rcode` rather than a failed scrape, so a rule that relied on
+  the failure reads `.rcode`; `/etc/hosts` is no longer read, its names
+  asked of the server like any other; and each answer has a `ttl`
+  ([The question](docs/DNS.md#the-question)).
 - A `kubernetes` collector lists its namespaces at once, four at a time,
   rather than one after another; the document keeps them in the order
   `namespaces` names them. Its requests, and the allocator's listings of
@@ -74,6 +80,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `dns` collector answers each record's TTL, the response code as
+  `rcode`, the answer's AA, RA and AD bits, and records of `SOA`, `CAA` and
+  `DNSKEY` ([The document](docs/DNS.md#the-document)).
 - A `grpc` collector calls a server streaming method with
   `stream_messages`, reading its stream until the server ends it or that many
   messages have come, the health service's `Watch` among them

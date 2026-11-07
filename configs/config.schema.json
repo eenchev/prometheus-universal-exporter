@@ -3930,8 +3930,8 @@
                 "type": "object"
               },
               "record_type": {
-                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md.",
-                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                 "type": "string"
               },
               "redirect_trusted_hosts": {

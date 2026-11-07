@@ -185,7 +185,7 @@ for every type but `sql` against 17.9 MB for
 Dependabot's Go group and `govulncheck` cover them with no change.
 
 The [`dns`](DNS.md) and [`tlscert`](TLSCERT.md) request types have no
-dependency of their own: the first asks Go's own resolver (`net`), the second
+dependency of their own: the first asks its questions with a DNS client of its own over `net`, the second
 makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
 same test finds none of the other types' modules in a build of either.
 

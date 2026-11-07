@@ -2295,13 +2295,14 @@ of objects, one a row, of its columns by name. Its keys:
 #### `dns`
 
 A `dns` collector resolves the probe's `target`, a DNS name, and hands its
-records to the transforms as a JSON document. The lookup MUST be Go's own
-resolver (`net.Resolver` with `PreferGo`), so the type needs no library,
-but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
+records to the transforms as a JSON document. The question MUST be the
+exporter's own, sent with a DNS client that imports the standard library
+alone, not a resolver's lookup, so that the answer's TTLs, response code and
+flags are known. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
 | `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
@@ -2321,31 +2322,46 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
   the system's configuration is appended to it.
 - The answer MUST be a JSON document of `name` (lower case, no trailing
   dot), `record_type`, `server` (`host:port`, `""` for the system's
-  resolver), `transport`, `not_found`, `count`, `duration_seconds` and
-  `answers`, one object a record with the fields of its type alone:
+  resolver), `transport`, `rcode`, the response code by name (`NOERROR`,
+  `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, the names of RFC
+  2136's codes, `RCODE<n>` for another), `not_found`, `authoritative`,
+  `recursion_available` and `authenticated_data`, the answer's AA, RA and
+  AD bits, `count`, `duration_seconds` and `answers`, one object a record
+  with its `ttl` and the fields of its type alone:
   `address` (A, AAAA); `target` (CNAME, the name the CNAME record of the
   name points to); `host` and `preference` (MX); `host` (NS);
   `text`, the record's strings joined (TXT); `target`, `port`, `priority`
-  and `weight` (SRV); `name` (PTR). Names MUST be given without their
+  and `weight` (SRV); `name` (PTR); `host`, `mailbox`, `serial`,
+  `refresh`, `retry`, `expire` and `minimum` (SOA); `flags`, `tag` and
+  `value` (CAA); `flags`, `protocol`, `algorithm` and `key_tag`, computed
+  as RFC 4034 appendix B does (DNSKEY). Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
-- A name that does not exist, or has no records of the type, MUST be an
-  answer: `not_found` true, `answers` empty and `count` 0. For `CNAME` that
-  MUST be every name without a CNAME record, whatever other records it has. A server failure,
-  a refusal, a malformed answer and a server that does not answer MUST fail
-  the scrape in the `dns` stage, naming the record type, the name and the
-  server asked, not the system's; a lookup cut short by the scrape's
-  deadline MUST wrap the context's error. TTLs and response codes are not
-  given by the resolver and MUST NOT be invented.
-- A `CNAME` lookup MUST send one question of type `CNAME` and no other,
-  over the transport as above (UDP sent again while no answer comes, TCP
-  for an answer marked truncated), to `server`, or without it to the
-  `nameserver` lines of `/etc/resolv.conf` in order, port 53, `127.0.0.1`
-  and `::1` when there are none, the next asked when one fails or does not
-  answer within 5 seconds. `/etc/hosts` and the file's other lines MUST NOT
-  be read for it. A response code other than `NOERROR` and `NXDOMAIN` MUST
-  fail the scrape, naming the code.
+- Every answer to the question MUST be the document, whatever its response
+  code. `not_found` MUST be true for `NXDOMAIN`, and for `NOERROR` without
+  records of the type, `answers` empty and `count` 0; for `CNAME` that MUST
+  be every name without a CNAME record, whatever other records it has. A
+  server that does not answer, an answer of another id, name or type, and
+  one whose records do not parse MUST fail the scrape in the `dns` stage,
+  naming the record type, the name and the server asked, not the system's;
+  a lookup cut short by the scrape's deadline MUST wrap the context's
+  error.
+- The question MUST be one of the record type, class `IN`, with RD and AD
+  set and an EDNS(0) OPT record offering 1232 bytes; a `FORMERR` answer to
+  it MUST be asked again once without the OPT record. For `PTR` it MUST be
+  of the address's `in-addr.arpa` or `ip6.arpa` name. Over `udp` it MUST be
+  sent again every 2 seconds while no answer comes and asked again over TCP
+  for an answer marked truncated; over `tcp`, over TCP alone. It MUST go to
+  `server`, or without it to the `nameserver` lines of `/etc/resolv.conf`
+  in order, port 53, `127.0.0.1` and `::1` when there are none, the next
+  asked when one fails, does not answer within 5 seconds, or answers
+  `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`, the last one's answer the
+  document when each does. `/etc/hosts` and the file's other lines MUST NOT
+  be read.
+- The records MUST be those of the record type whose owner is the name, or
+  but for `CNAME` a name the answer's CNAME records lead to from it, in any
+  order, at most 16 deep; for `CNAME` the name's own CNAME record alone.
 - The target lists MUST be matched against the name by name alone, never
   by what it resolves to: a denied name, and with `allowed_targets` one that
   matches none of its names, MUST be refused with `403` before the server is
@@ -2356,7 +2372,8 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `QUERY`, the DNS URI without
   its query, and the record type, server and transport, with the number of
-  records, `not found` or the error as its outcome. The verbose `url` label
+  records, `not found`, a response code other than `NOERROR` and
+  `NXDOMAIN`, or the error as its outcome. The verbose `url` label
   MUST be the DNS URI of RFC 4501, `dns:name?type=T` with the system's
   resolver and `dns://host:port/name?type=T` with `server`, and
   `http_method` MUST be `QUERY`.
@@ -31435,6 +31452,20 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestGRPCStreamMessagesIsChecked` (fetch, grpc): with a descriptor set, Watch without `stream_messages`, GetStats with it, Push and Sync with it, and 1001 and -1 are refused; Watch with 1000 is taken; the built-in health service's Watch with 1 answers `{"messages":[{"status":"SERVING"}],"ended":false}`.
 - `TestAReflectedServerStreamingMethodNeedsStreamMessages` (fetch, grpc): a reflected Watch without `stream_messages` fails at the call saying to set it.
 - `TestGRPCServerStreamingDocumentationExample` (repository, grpc): docs/GRPC.md's Watch example answers its two updates and the last total, the server called once with the probe's queue.
+
+## 34.304 A dns collector asks its own question and answers TTLs, response codes, flags and SOA, CAA and DNSKEY
+
+- `TestADNSDocumentHoldsTheTTLsAndTheFlags` (fetch, dns): records of TTLs 300 and 7 carry them; RA set and AA and AD not, then AA and AD set by the server, are the document's flags; `rcode` is `NOERROR`.
+- `TestADNSCollectorAsksForSOACAAAndDNSKEY` (fetch, dns): an SOA's primary, mailbox and five numbers; two CAA records, by tag; a DNSKEY's flags, protocol, algorithm and key tag; the key tag of a short key matches RFC 4034's sum worked by hand.
+- `TestADNSAnswerFollowsTheCNAMEChain` (fetch, dns): an A question of an alias of an alias answers the end's address; an A record of a name the chain does not reach is left out.
+- `TestADNSQuestionAsksForADWithEDNSAndFallsBackWithout` (fetch, dns): the question has RD and AD and an OPT record of 1232 bytes; a server answering FORMERR to EDNS is asked twice and answers.
+- `TestADNSPTRQuestionIsOfTheReverseName` (fetch, dns): the reverse names of an IPv4 and an IPv6 address.
+- `TestAMalformedDNSAnswerFails` (fetch, dns): another id, name or type, an A record of 3 bytes, an MX of one, a record cut short and a TXT string past its record fail saying the message cannot be read.
+- `TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails` (fetch, dns), changed: NXDOMAIN and NOERROR without records are `not_found` with their `rcode`; SERVFAIL and REFUSED are documents with their `rcode`, `not_found` false.
+- `TestADNSCNAMELookupAsksForTheCNAMERecordAlone` (fetch, dns), changed: SERVFAIL is the document's `rcode`.
+- `TestADNSLookupsSpanTellsItsFacts` (fetch, dns), changed: `dns.response.code` among the facts.
+- `TestADNSCollectorAnswersEachRecordTypeAsADocument` (fetch, dns), changed: each answer carries its `ttl`.
+- `TestDNSDocumentationExamples` (repository, dns), changed: the TTL and SOA serial examples load.
 
 ## 42.1 OTLP export
 

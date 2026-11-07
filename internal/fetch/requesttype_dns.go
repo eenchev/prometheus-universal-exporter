@@ -32,14 +32,14 @@ import (
 // and the transport are the collector's: a probe cannot send the exporter's
 // questions to a server the configuration does not name.
 //
-// The lookup is Go's own resolver (net.Resolver with PreferGo), which needs
-// no library: it gives the records' data and tells a name that does not
-// exist, or has no records of the type, from a failure, but gives neither
-// the records' TTLs nor the answer's response code. It has no lookup of
-// CNAME records alone, so that question the exporter sends itself
-// (dnscname.go). A name not found is an answer, with no records and
-// not_found true, so that a collector can say a record is missing; a
-// timeout, a refusal or a server failure fails the scrape.
+// The question is the exporter's own (dnswire.go), not Go's resolver's,
+// which gives neither the records' TTLs, nor the answer's response code
+// and flags, nor records of SOA, CAA or DNSKEY. Every answer is the
+// document, whatever its response code: NXDOMAIN, and NOERROR without
+// records of the type, are not_found, and SERVFAIL or REFUSED is the
+// document's rcode, so that a collector can say a record is missing or a
+// server failing; only a server that does not answer, or answers what is
+// no answer to the question, fails the scrape.
 //
 // This file imports nothing outside the standard library.
 
@@ -53,7 +53,7 @@ type DNSConfig struct {
 }
 
 // dnsRecordTypes are the values of a dns collector's request.record_type.
-var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR"}
+var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR", "SOA", "CAA", "DNSKEY"}
 
 // dnsRequest is a dns collector's own request keys: the zero DNSConfig of
 // a collector built in code whose request has not been validated, which
@@ -227,12 +227,19 @@ type dnsDocument struct {
 	Name       string `json:"name"`
 	RecordType string `json:"record_type"`
 	// Server is request.server as host:port, "" for the system's resolver.
-	Server          string      `json:"server"`
-	Transport       string      `json:"transport"`
-	NotFound        bool        `json:"not_found"`
-	Count           int         `json:"count"`
-	DurationSeconds float64     `json:"duration_seconds"`
-	Answers         []dnsAnswer `json:"answers"`
+	Server    string `json:"server"`
+	Transport string `json:"transport"`
+	// Rcode is the answer's response code by name, such as NOERROR,
+	// NXDOMAIN or SERVFAIL.
+	Rcode    string `json:"rcode"`
+	NotFound bool   `json:"not_found"`
+	// The answer's flags: AA, RA and AD.
+	Authoritative      bool        `json:"authoritative"`
+	RecursionAvailable bool        `json:"recursion_available"`
+	AuthenticatedData  bool        `json:"authenticated_data"`
+	Count              int         `json:"count"`
+	DurationSeconds    float64     `json:"duration_seconds"`
+	Answers            []dnsAnswer `json:"answers"`
 }
 
 // dnsAnswer is one record, with the fields of its type alone.
@@ -246,17 +253,23 @@ type dnsAnswer struct {
 	Priority   *uint16 `json:"priority,omitempty"`
 	Weight     *uint16 `json:"weight,omitempty"`
 	Port       *uint16 `json:"port,omitempty"`
-}
-
-// dnsResolver is the resolver of c: DNSResolver with request.server and
-// request.transport.
-func dnsResolver(c *model.Collector) *net.Resolver {
-	server := ""
-	r := dnsRequest(c)
-	if r.Server != "" {
-		server, _ = ParseDNSServer(r.Server)
-	}
-	return DNSResolver(server, r.Transport == dnsTCP)
+	// SOA's: Host is its primary server, Mailbox its responsible person's
+	// address as a name.
+	Mailbox string  `json:"mailbox,omitempty"`
+	Serial  *uint32 `json:"serial,omitempty"`
+	Refresh *uint32 `json:"refresh,omitempty"`
+	Retry   *uint32 `json:"retry,omitempty"`
+	Expire  *uint32 `json:"expire,omitempty"`
+	Minimum *uint32 `json:"minimum,omitempty"`
+	// CAA's and DNSKEY's flags; CAA's tag and value; DNSKEY's protocol,
+	// algorithm and key tag.
+	Flags     *uint16 `json:"flags,omitempty"`
+	Tag       string  `json:"tag,omitempty"`
+	Value     *string `json:"value,omitempty"`
+	Protocol  *uint8  `json:"protocol,omitempty"`
+	Algorithm *uint8  `json:"algorithm,omitempty"`
+	KeyTag    *uint16 `json:"key_tag,omitempty"`
+	TTL       uint32  `json:"ttl"`
 }
 
 // fetchDNS resolves a scrape's name and answers its records as JSON.
@@ -293,37 +306,34 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	// The record type is one of the set the configuration takes, no text
 	// of the server's, and its span tells it.
 	traceFacts(ctx, nameFact("dns.question.type", doc.RecordType))
-	answers, err := dnsLookup(ctx, c, doc.RecordType, name)
+	reply, server, err := lookupDNS(ctx, c, doc.RecordType, name)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	var dnsErr *net.DNSError
-	switch {
-	case err != nil && len(answers) > 0:
-		// Records with malformed names are left out by the resolver, which
-		// gives the others with the error.
-	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
-		doc.NotFound = true
-	case err != nil:
+	if err != nil {
+		if server != "" && doc.Server == "" {
+			shownServer = server
+		}
 		failure := dnsFailure(ctx, doc.RecordType, name, shownServer, err)
 		traceFailedOutcome(ctx, "error: "+failure.Error())
 		return nil, failure
 	}
-	sortDNSAnswers(answers)
-	if answers != nil {
-		doc.Answers = answers
-	}
+	doc.Rcode, doc.Authoritative, doc.RecursionAvailable, doc.AuthenticatedData = reply.rcode, reply.authoritative, reply.recursionAvailable, reply.authentic
+	doc.Answers = reply.answers
+	sortDNSAnswers(doc.Answers)
 	doc.Count = len(doc.Answers)
+	doc.NotFound = doc.Rcode == "NXDOMAIN" || doc.Rcode == "NOERROR" && doc.Count == 0
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
-	// How many records came, and whether the name was not found: Go's
-	// resolver tells NXDOMAIN from an answer with no record of the type by
-	// neither, so the span names no response code.
-	traceFacts(ctx, intFact("dns.answer.count", doc.Count))
+	// How many records came, the response code, and whether the name was
+	// not found.
+	traceFacts(ctx, intFact("dns.answer.count", doc.Count), nameFact("dns.response.code", doc.Rcode))
 	if doc.NotFound {
 		traceFacts(ctx, boolFact("dns.response.not_found", true))
 	}
 	switch {
+	case doc.Rcode != "NOERROR" && doc.Rcode != "NXDOMAIN":
+		traceOutcome(ctx, doc.Rcode)
 	case doc.NotFound:
 		traceOutcome(ctx, "not found")
 	case doc.Count == 1:
@@ -361,63 +371,6 @@ func dnsFailure(ctx context.Context, recordType, name, server string, err error)
 	return fmt.Errorf("resolving %s %s on %s: %w", recordType, name, server, err)
 }
 
-// dnsLookup asks resolver for the records of recordType of name. The name
-// is asked as an absolute one, with a trailing dot, so that the search
-// domains of the system's configuration are never appended to it.
-func dnsLookup(ctx context.Context, c *model.Collector, recordType, name string) ([]dnsAnswer, error) {
-	if recordType == "CNAME" {
-		// Go's resolver has no lookup of CNAME records alone
-		// (dnscname.go).
-		return lookupCNAME(ctx, c, name)
-	}
-	resolver := dnsResolver(c)
-	absolute := name + "."
-	var answers []dnsAnswer
-	switch recordType {
-	case "A", "AAAA":
-		network := "ip4"
-		if recordType == "AAAA" {
-			network = "ip6"
-		}
-		addrs, err := resolver.LookupNetIP(ctx, network, absolute)
-		for _, addr := range addrs {
-			answers = append(answers, dnsAnswer{Address: addr.Unmap().String()})
-		}
-		return answers, err
-	case "MX":
-		records, err := resolver.LookupMX(ctx, absolute)
-		for _, mx := range records {
-			answers = append(answers, dnsAnswer{Host: dnsName(mx.Host), Preference: &mx.Pref})
-		}
-		return answers, err
-	case "NS":
-		records, err := resolver.LookupNS(ctx, absolute)
-		for _, ns := range records {
-			answers = append(answers, dnsAnswer{Host: dnsName(ns.Host)})
-		}
-		return answers, err
-	case "TXT":
-		records, err := resolver.LookupTXT(ctx, absolute)
-		for _, text := range records {
-			answers = append(answers, dnsAnswer{Text: &text})
-		}
-		return answers, err
-	case "SRV":
-		_, records, err := resolver.LookupSRV(ctx, "", "", absolute)
-		for _, srv := range records {
-			answers = append(answers, dnsAnswer{Target: dnsName(srv.Target), Port: &srv.Port, Priority: &srv.Priority, Weight: &srv.Weight})
-		}
-		return answers, err
-	case "PTR":
-		names, err := resolver.LookupAddr(ctx, name)
-		for _, n := range names {
-			answers = append(answers, dnsAnswer{Name: dnsName(n)})
-		}
-		return answers, err
-	}
-	return nil, fmt.Errorf("unknown record type %q", recordType)
-}
-
 // dnsName is a name of an answer as the document shows it: without the
 // trailing dot the resolver gives it with.
 func dnsName(name string) string {
@@ -446,8 +399,9 @@ func sortDNSAnswers(answers []dnsAnswer) {
 			cmp.Compare(value(a.Preference), value(b.Preference)),
 			cmp.Compare(value(a.Priority), value(b.Priority)),
 			cmp.Compare(value(b.Weight), value(a.Weight)),
-			strings.Compare(a.Address+a.Target+a.Host+a.Name+text(a.Text), b.Address+b.Target+b.Host+b.Name+text(b.Text)),
+			strings.Compare(a.Address+a.Target+a.Host+a.Name+text(a.Text)+a.Tag+text(a.Value), b.Address+b.Target+b.Host+b.Name+text(b.Text)+b.Tag+text(b.Value)),
 			cmp.Compare(value(a.Port), value(b.Port)),
+			cmp.Compare(value(a.KeyTag), value(b.KeyTag)),
 		)
 	})
 }
@@ -479,7 +433,7 @@ func checkDNSPolicy(p *targetPolicy, name string) error {
 // own keys.
 func dnsKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md."},
+		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md."},
 		"server":      {"not": SchemaOnlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
 		"transport":   {"enum": SchemaOptionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
 	}

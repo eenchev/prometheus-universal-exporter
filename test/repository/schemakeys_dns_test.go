@@ -26,7 +26,7 @@ const dnsCollector = `collectors:
 func dnsSchemaKeys() []schemaKey {
 	request := "      # request\n"
 	return []schemaKey{
-		{key: "collectors[].request.record_type", document: dnsCollector, at: request, setting: "      record_type: %s\n", valid: "MX", invalid: "SOA", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.record_type", document: dnsCollector, at: request, setting: "      record_type: %s\n", valid: "MX", invalid: "HINFO", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.record_type", of: "in another case, with blanks around it", document: dnsCollector, at: request, setting: "      record_type: %s\n", valid: `" aaaa\t"`, invalid: `"m x"`, absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.server", document: dnsCollector, at: request, setting: "      server: %s\n", valid: "10.0.0.53:53", invalid: `" "`, absent: true, empty: true},
 		{key: "collectors[].request.transport", document: dnsCollector, at: request, setting: "      transport: %s\n", valid: "tcp", invalid: "TCP", absent: true, empty: true, emptyWas: refused},

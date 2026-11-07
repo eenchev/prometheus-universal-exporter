@@ -23,14 +23,17 @@ import (
 
 // DNS record types, by number.
 const (
-	DNSTypeA     = 1
-	DNSTypeNS    = 2
-	DNSTypeCNAME = 5
-	DNSTypePTR   = 12
-	DNSTypeMX    = 15
-	DNSTypeTXT   = 16
-	DNSTypeAAAA  = 28
-	DNSTypeSRV   = 33
+	DNSTypeA      = 1
+	DNSTypeNS     = 2
+	DNSTypeCNAME  = 5
+	DNSTypePTR    = 12
+	DNSTypeMX     = 15
+	DNSTypeTXT    = 16
+	DNSTypeAAAA   = 28
+	DNSTypeSRV    = 33
+	DNSTypeSOA    = 6
+	DNSTypeDNSKEY = 48
+	DNSTypeCAA    = 257
 )
 
 // DNSRecord is one record the stand-in server answers: its owner name,
@@ -39,6 +42,8 @@ type DNSRecord struct {
 	Owner string
 	Type  uint16
 	Data  []byte
+	// TTL is the record's time to live, 60 when left 0.
+	TTL uint32
 }
 
 // DNSStub is a DNS server on 127.0.0.1, over UDP and TCP on the same port
@@ -55,6 +60,10 @@ type DNSStub struct {
 	// truncate answers every question over UDP with no record, marked
 	// truncated, as a server does an answer too long for UDP.
 	truncate bool
+	// authoritative and authentic set AA and AD on every answer; noEDNS
+	// answers a question with an OPT record FORMERR, as a server that
+	// knows no EDNS(0) does.
+	authoritative, authentic, noEDNS bool
 	// asked is every question, as "name type network".
 	asked []string
 }
@@ -90,29 +99,29 @@ func len16(n int) uint16 {
 
 // DNSA is an A record of owner.
 func DNSA(owner, ip string) DNSRecord {
-	return DNSRecord{strings.ToLower(owner) + ".", DNSTypeA, netip.MustParseAddr(ip).AsSlice()}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeA, Data: netip.MustParseAddr(ip).AsSlice()}
 }
 
 // DNSAAAA is an AAAA record of owner.
 func DNSAAAA(owner, ip string) DNSRecord {
-	return DNSRecord{strings.ToLower(owner) + ".", DNSTypeAAAA, netip.MustParseAddr(ip).AsSlice()}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeAAAA, Data: netip.MustParseAddr(ip).AsSlice()}
 }
 
 // DNSNamed is a record of owner whose data is a name alone: CNAME, NS or
 // PTR.
 func DNSNamed(owner string, rtype uint16, target string) DNSRecord {
-	return DNSRecord{strings.ToLower(owner) + ".", rtype, wireName(target)}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: rtype, Data: wireName(target)}
 }
 
 // DNSMX is an MX record of owner.
 func DNSMX(owner string, pref uint16, host string) DNSRecord {
-	return DNSRecord{strings.ToLower(owner) + ".", DNSTypeMX, append(u16(pref), wireName(host)...)}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeMX, Data: append(u16(pref), wireName(host)...)}
 }
 
 // DNSSRV is an SRV record of owner.
 func DNSSRV(owner string, priority, weight, port uint16, target string) DNSRecord {
 	data := append(append(append(u16(priority), u16(weight)...), u16(port)...), wireName(target)...)
-	return DNSRecord{strings.ToLower(owner) + ".", DNSTypeSRV, data}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeSRV, Data: data}
 }
 
 // DNSTXT is a TXT record of owner, of the character strings parts.
@@ -121,7 +130,32 @@ func DNSTXT(owner string, parts ...string) DNSRecord {
 	for _, part := range parts {
 		data = append(append(data, len8(len(part))), part...)
 	}
-	return DNSRecord{strings.ToLower(owner) + ".", DNSTypeTXT, data}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeTXT, Data: data}
+}
+
+// DNSSOA is an SOA record of owner.
+func DNSSOA(owner, primary, mailbox string, serial, refresh, retry, expire, minimum uint32) DNSRecord {
+	data := append(wireName(primary), wireName(mailbox)...)
+	for _, v := range []uint32{serial, refresh, retry, expire, minimum} {
+		data = binary.BigEndian.AppendUint32(data, v)
+	}
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeSOA, Data: data}
+}
+
+// DNSCAA is a CAA record of owner.
+func DNSCAA(owner string, flags byte, tag, value string) DNSRecord {
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeCAA, Data: append(append([]byte{flags, len8(len(tag))}, tag...), value...)}
+}
+
+// DNSDNSKEY is a DNSKEY record of owner, of protocol 3, with key.
+func DNSDNSKEY(owner string, flags uint16, algorithm byte, key []byte) DNSRecord {
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeDNSKEY, Data: append(append(u16(flags), 3, algorithm), key...)}
+}
+
+// WithTTL is r with a TTL of ttl.
+func (r DNSRecord) WithTTL(ttl uint32) DNSRecord {
+	r.TTL = ttl
+	return r
 }
 
 // NewDNSStub starts a server answering records, stopped when t ends.
@@ -204,6 +238,21 @@ func (s *DNSStub) SetTruncate(truncate bool) {
 	s.truncate = truncate
 }
 
+// SetFlags sets AA and AD on every answer from now on, or not.
+func (s *DNSStub) SetFlags(authoritative, authentic bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authoritative, s.authentic = authoritative, authentic
+}
+
+// SetNoEDNS answers a question with an OPT record FORMERR from now on, or
+// answers it.
+func (s *DNSStub) SetNoEDNS(noEDNS bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noEDNS = noEDNS
+}
+
 // SetRecords answers records from now on.
 func (s *DNSStub) SetRecords(records ...DNSRecord) {
 	s.mu.Lock()
@@ -237,6 +286,10 @@ func (s *DNSStub) answer(query []byte, network string) []byte {
 	s.mu.Lock()
 	s.asked = append(s.asked, name+" "+dnsTypeName(qtype)+" "+network)
 	records, rcode, silent, truncated := s.records, s.rcode, s.silent, s.truncate && network == "udp"
+	authoritative, authentic := s.authoritative, s.authentic
+	if s.noEDNS && binary.BigEndian.Uint16(query[10:12]) > 0 {
+		rcode = 1 // FORMERR
+	}
 	s.mu.Unlock()
 	if silent {
 		return nil
@@ -278,6 +331,12 @@ func (s *DNSStub) answer(query []byte, network string) []byte {
 	if truncated {
 		flags |= 0x0200 // TC
 	}
+	if authoritative {
+		flags |= 0x0400 // AA
+	}
+	if authentic {
+		flags |= 0x0020 // AD
+	}
 	binary.BigEndian.PutUint16(header[2:], flags)
 	binary.BigEndian.PutUint16(header[4:], 1)
 	binary.BigEndian.PutUint16(header[6:], len16(len(answers)))
@@ -299,7 +358,11 @@ func record(r DNSRecord, question string) []byte {
 	}
 	b = append(b, u16(r.Type)...)
 	b = append(b, u16(1)...)
-	b = binary.BigEndian.AppendUint32(b, 60)
+	ttl := r.TTL
+	if ttl == 0 {
+		ttl = 60
+	}
+	b = binary.BigEndian.AppendUint32(b, ttl)
 	b = append(b, u16(len16(len(r.Data)))...)
 	return append(b, r.Data...)
 }
@@ -314,7 +377,7 @@ func decodeWireName(b []byte) []byte {
 }
 
 func dnsTypeName(t uint16) string {
-	return map[uint16]string{DNSTypeA: "A", DNSTypeNS: "NS", DNSTypeCNAME: "CNAME", DNSTypePTR: "PTR", DNSTypeMX: "MX", DNSTypeTXT: "TXT", DNSTypeAAAA: "AAAA", DNSTypeSRV: "SRV"}[t]
+	return map[uint16]string{DNSTypeA: "A", DNSTypeNS: "NS", DNSTypeCNAME: "CNAME", DNSTypePTR: "PTR", DNSTypeMX: "MX", DNSTypeTXT: "TXT", DNSTypeAAAA: "AAAA", DNSTypeSRV: "SRV", DNSTypeSOA: "SOA", DNSTypeDNSKEY: "DNSKEY", DNSTypeCAA: "CAA"}[t]
 }
 
 // Questions is what the server was asked, each as "name type network", the

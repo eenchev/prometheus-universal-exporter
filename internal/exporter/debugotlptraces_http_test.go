@@ -53,7 +53,7 @@ func TestTheOTLPTabShowsTheRunsSpans(t *testing.T) {
 	for _, span := range traces.Spans {
 		tree = append(tree, strings.Repeat("  ", span.Depth)+span.Name+" "+span.Kind)
 	}
-	want := []string{"probe text SERVER", "  http INTERNAL", "    GET CLIENT", "  decode INTERNAL", "  transform INTERNAL", "  validation INTERNAL"}
+	want := []string{"probe text SERVER", "  http INTERNAL", "    GET CLIENT", "      http.first_byte INTERNAL", "        http.connect INTERNAL", "  decode INTERNAL", "  transform INTERNAL", "  validation INTERNAL"}
 	if !slices.Equal(tree, want) {
 		t.Errorf("the tab's spans are\n%s\nwant\n%s", strings.Join(tree, "\n"), strings.Join(want, "\n"))
 	}

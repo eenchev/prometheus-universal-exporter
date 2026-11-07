@@ -544,6 +544,41 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 			span.Attributes = append(span.Attributes, stringAttribute("error.type", errorType))
 		}
 		spans = append(spans, span)
+		spans = append(spans, phaseSpans(trace, state, span.SpanID, r.Phases)...)
+	}
+	return spans
+}
+
+// phaseSpans are the spans of an HTTP request's phases, under its span,
+// parent: http.first_byte, from the request's start, when it asked for a
+// connection, to the answer's first byte, as $timings.first_byte measures
+// it; and under it, which their times are within, http.dns, http.connect
+// and http.tls, for the name's lookup, the connection and the TLS
+// handshake the request made, each only when it made it. A request on a
+// connection it reused has http.first_byte alone; one that failed before
+// its first byte has the phases that went through before what failed,
+// with no http.first_byte to hold them, so they are under its span.
+func phaseSpans(trace, state, parent string, phases []fetch.TracedPhase) []otlpSpan {
+	if len(phases) == 0 {
+		return nil
+	}
+	var spans []otlpSpan
+	under := parent
+	for _, phase := range phases {
+		if phase.Name == "first_byte" {
+			id := newSpanID()
+			under = hex.EncodeToString(id[:])
+			spans = append(spans, otlpSpan{TraceID: trace, SpanID: under, TraceState: state, ParentSpanID: parent, Name: "http.first_byte", Kind: otlpSpanKindInternal,
+				StartTimeUnixNano: nanos(phase.Start), EndTimeUnixNano: nanos(phase.End)})
+		}
+	}
+	for _, phase := range phases {
+		if phase.Name == "first_byte" {
+			continue
+		}
+		id := newSpanID()
+		spans = append(spans, otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: under, Name: "http." + phase.Name, Kind: otlpSpanKindInternal,
+			StartTimeUnixNano: nanos(phase.Start), EndTimeUnixNano: nanos(phase.End)})
 	}
 	return spans
 }

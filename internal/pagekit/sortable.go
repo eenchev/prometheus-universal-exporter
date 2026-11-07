@@ -20,10 +20,9 @@ package pagekit
 // hidden, is shown. The table is in the content, which a refresh
 // replaces, so the order chosen and the text typed are kept here and put
 // back on the new table, the box keeping focus and its caret where it was.
-const SortableScript = `
+const SortableScript = SortOrderScript + `
   function sortable(content, tableID, filterID, noun) {
     let column = -1, down = false, typed = "";
-    const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
     function arrange(typing) {
       const table = content.querySelector("table#" + tableID), box = document.getElementById(filterID);
       if (!table) return;
@@ -52,12 +51,12 @@ const SortableScript = `
       };
       const rows = Array.from(body.rows).sort((x, y) => {
         let c = 0;
-        if (column >= 0) c = numeric ? key(x) - key(y) : collator.compare(key(x), key(y));
+        if (column >= 0) c = numeric ? key(x) - key(y) : textOrder(key(x), key(y));
         if (down) c = -c;
         return c || Number(x.dataset.order) - Number(y.dataset.order);
       });
       for (const row of rows) body.appendChild(row);
-      for (let i = 0; i < heads.length; i++) heads[i].setAttribute("aria-sort", i === column ? (down ? "descending" : "ascending") : "none");
+      markSorted(heads, heads[column], down);
       const needle = typed.trim().toLowerCase();
       let shown = 0;
       for (const row of rows) {
@@ -92,6 +91,22 @@ const SortableScript = `
       swapIn();
       arrange(typing);
     };
+  }
+`
+
+// SortOrderScript defines what every sortable table of the pages sorts and
+// marks by, SortableScript's, whose rows are in the page, and the debug
+// page's series tables, whose rows are drawn from an answer's data, the
+// first of them alone: textOrder(x, y), which orders text as it reads, the
+// numbers in it by their value, job2 before job10, a letter's case no
+// matter; and markSorted(heads, sorted, down), which sets aria-sort on each
+// heading of heads, ascending or descending on sorted, the heading sorted
+// by (null for none), and none on the others, as SortableStyle marks them.
+// It is text for a page's own script, as SortableScript is.
+const SortOrderScript = `
+  const textOrder = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;
+  function markSorted(heads, sorted, down) {
+    for (const head of heads) head.setAttribute("aria-sort", head === sorted ? (down ? "descending" : "ascending") : "none");
   }
 `
 

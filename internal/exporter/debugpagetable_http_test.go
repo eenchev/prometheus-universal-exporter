@@ -169,7 +169,7 @@ func TestTheDebugPageShowsTheSeriesAsATable(t *testing.T) {
 </div>`,
 		`<input id="series-filter" type="search"`,
 		`<select id="series-metric"><option value="">Every metric</option></select>`,
-		`<div class="table-box" id="series-box" hidden><table class="series" id="series-table">`,
+		`<div class="table-box" id="series-box" hidden><table class="series sortable" id="series-table">`,
 		`.table-box { max-height: 520px; overflow: auto;`)
 	script := debugPageScript(page)
 	requireContains(t, script,
@@ -210,4 +210,26 @@ func TestTheDebugPageSaysProbeATarget(t *testing.T) {
 	}
 	server.SetDebug(DebugEdit)
 	requireContains(t, getPage(t, server, "/debug"), "Probing a target needs <code>--web.debug=full</code>")
+}
+
+// The series tables sort and mark as every sortable table of the pages
+// does, with the code they share (pagekit.SortOrderScript and
+// SortableStyle), and no copy of their own: text as it reads, the numbers
+// in it by their value and a letter's case no matter, the headings marked
+// by aria-sort and the marks the shared style's.
+func TestTheDebugPagesTablesSortWithTheSharedCode(t *testing.T) {
+	server := debugPageServer(t, &model.Config{Collectors: []model.Collector{roomsCollector("rooms")}})
+	server.SetDebug(DebugFull)
+	page := getPage(t, server, "/debug")
+	requireContains(t, page, `<table class="series sortable" id="series-table">`,
+		`table.sortable th:not(.num) button::after { content: "\00a0\2195";`)
+	script := debugPageScript(page)
+	requireContains(t, script, `const textOrder = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;`,
+		"order = textOrder(x, y);",
+		`markSorted(heads, heads.find((th) => th.dataset.column === sortBy) || null, sortDown);`)
+	for _, copied := range []string{"table.series th button::after", "x < y ? -1 : x > y ? 1 : 0", `setAttribute("aria-sort", th.dataset.column`} {
+		if strings.Contains(page, copied) {
+			t.Errorf("the page still has its own %q", copied)
+		}
+	}
 }

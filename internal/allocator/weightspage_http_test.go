@@ -62,7 +62,10 @@ func TestTheTargetsTableShowsWeightsAndCapacities(t *testing.T) {
 	}
 	page := ask(h, "/", "").Body.String()
 	requireIn(t, page,
-		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>`,
+		`<thead>
+<tr><th rowspan="2">Member</th><th class="group" colspan="2"><b class="swatch seg-static"></b>Static targets</th><th class="group"><b class="swatch seg-probe"></b>Probe targets</th><th class="num" rowspan="2">Total</th><th class="num" rowspan="2">Weight</th><th class="num" rowspan="2">Draining weight</th><th class="num" rowspan="2">Capacity</th><th class="num" rowspan="2">Fair share</th><th rowspan="2">Share</th></tr>
+<tr><th class="num">Owned</th><th class="num">Draining</th><th class="num">Routed</th></tr>
+</thead>`,
 		`<th>State</th><th class="num">Capacity</th><th class="num">Draining</th></tr></thead>`,
 		"They weigh 64 over a capacity of 4: a member's fair share is the weight times its capacity over the capacity of all, and the most loaded holds "+imbalance(sp.MaxLoadRatio)+" its fair share.",
 		"within 1.25 times its fair share (<code class=\"flag\">--allocation.balance-factor</code>)",

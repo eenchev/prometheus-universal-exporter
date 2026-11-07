@@ -16,6 +16,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- A `sql` collector with `driver: sqlserver` runs its statement in a
+  transaction that is rolled back after it, with `SET LOCK_TIMEOUT` set to
+  the scrape's time left; one with `driver: mysql` sets
+  `max_execution_time` (MySQL 5.7.8 and later) or `max_statement_time`
+  (MariaDB 10.1.1 and later) to it, in its read-only transaction, after
+  asking the server's version once on each connection. A statement that
+  cannot run in a transaction, or that the server now ends at that limit,
+  fails where it ran before; one the limit ends fails as the scrape's
+  deadline ([Databases over SQL](docs/SQL.md#the-statement)).
 - A label built from `$url`, the static targets endpoint's `target` label
   and the OTLP `target` attribute show `<redacted>` where they showed the
   value of a query parameter with `code`, `ticket`, `sid`, `otp` or `hmac`
@@ -53,6 +62,59 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `sql` collector's `statement_file` names a file holding its statement,
+  read when the configuration loads and at each reload, an edit of it
+  reloading with `--config.watch`; a file that is no statement file is
+  refused, saying why ([A statement in a file](docs/SQL.md#a-statement-in-a-file)).
+- A `sql` collector's `arg_types` binds each of its `args` as `text`, `int`,
+  `float` or `bool`, for a statement that takes no text there, such as
+  `LIMIT ?` on MySQL before 8.0.22; a value not of its type is refused when the
+  configuration or the static target file loads, or answered `400`
+  ([Typed args](docs/SQL.md#typed-args)).
+- The exporter's and the allocator's pages show an outline on what the
+  keyboard focuses, give search boxes and selects a border that can be seen
+  (3:1), tell a screen reader each ✓ ✗ strip as its counts and its latest
+  result, and announce a filter's count of the rows it keeps
+  ([Endpoints](docs/ENDPOINTS.md)).
+- The exporter's status page and the allocator's pages show each moment in
+  the browser's time, with UTC and how long ago in its tooltip; without
+  JavaScript they show UTC as before ([Endpoints](docs/ENDPOINTS.md)).
+- An exporter in allocator mode says its `--web.static-targets-path` in its
+  heartbeats, and a member's view on the allocator's page links the
+  member's own status page and, of each static target it owns or keeps
+  draining, the series it serves of it
+  ([A member's targets](docs/ALLOCATOR.md#a-members-targets)).
+- The allocator's page has a view of each `discovered_targets` entry,
+  `/?entry=<name>`, as a probe job has: its sources, how its targets are
+  spread over the members and which member owns each, linked from the static
+  targets table and the discovery sources' Feeds column; `/v1/status?entry=`
+  serves it as JSON
+  ([A discovered_targets entry's targets](docs/ALLOCATOR.md#a-discovered_targets-entrys-targets)).
+- With `--web.debug=full`, a recent probe on the status page links its
+  debug report, the probe sent again with `&debug=true`, when the page shows
+  it as it was sent ([Recent probes](docs/ENDPOINTS.md#recent-probes)).
+- On the status page each static target's collector links its section of
+  the collectors page, and in allocator mode the page names the member,
+  linked to the allocator's view of it, the bundle in force and since when,
+  and when the allocator was last heard from; the JSON has them as
+  `allocator` ([Status page](docs/STATIC-TARGETS.md#status-page)).
+- The status page's static targets table sorts by a column's heading and
+  has a filter of name, collector, target, labels or result, kept through a
+  refresh ([Status page](docs/STATIC-TARGETS.md#status-page)).
+- Each static target's row on the status page has a strip of its last 10
+  scrapes, ✓ ✗ ~ …, as the recent probes have, and the JSON has them as
+  `recent` ([Status page](docs/STATIC-TARGETS.md#status-page)).
+- The allocator's status page tells static targets from probe targets: it
+  says what each kind is and how many of each the files write and the
+  sources found, groups the members table's columns under the two kinds in
+  the bars' colours, adds a static targets table, of the written targets
+  and each `discovered_targets` entry, beside the probe jobs table, and
+  says which kind each discovery source feeds
+  ([Status page](docs/ALLOCATOR.md#status-page)).
+- On the status page a scraped static target's name links to its own
+  series, `/static-targets?targets=<name>`, and with `--web.debug=full` a
+  *debug* link beside it scrapes it once now and reports each stage
+  ([Status page](docs/STATIC-TARGETS.md#status-page)).
 - The opt-in `tcp` type speaks UDP (`udp: true`: one datagram sent, the
   first back is the answer) and over a Unix socket (`unix_socket`, as an
   `http` collector's), and binary protocols: `send_hex` writes the request's

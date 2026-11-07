@@ -1801,13 +1801,34 @@
                   ]
                 },
                 "then": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "statement": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "statement"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "statement_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "statement_file"
+                      ]
+                    }
+                  ],
                   "properties": {
                     "driver": {
-                      "not": {
-                        "const": ""
-                      }
-                    },
-                    "statement": {
                       "not": {
                         "const": ""
                       }
@@ -1820,7 +1841,6 @@
                   },
                   "required": [
                     "driver",
-                    "statement",
                     "username"
                   ]
                 }
@@ -2108,8 +2128,20 @@
                 "pattern": "^$|^https://[^/?#@]+(/[^?#]*)?$",
                 "type": "string"
               },
+              "arg_types": {
+                "description": "sql: the type each of args is bound as, one for each, in their order: text (as written), int (a whole number of 64 bits), float (a finite number) or bool (true or false, in any case). Left out, every arg is text. A value that is not of its type fails: when the configuration loads for an arg with no placeholder, or whose placeholders all have defaults; and a probe's parameter answered 400, a static target's params refused when its file loads. See docs/SQL.md#typed-args.",
+                "items": {
+                  "enum": [
+                    "text",
+                    "int",
+                    "float",
+                    "bool"
+                  ]
+                },
+                "type": "array"
+              },
               "args": {
-                "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders.",
+                "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders. Bound as text unless arg_types says otherwise.",
                 "items": {
                   "type": [
                     "string",
@@ -3960,7 +3992,7 @@
                 "type": "string"
               },
               "statement": {
-                "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement.",
+                "description": "sql, required unless statement_file names the file of it: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -3970,6 +4002,15 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "statement_file": {
+                "description": "sql: the absolute path of a file holding the one statement run, in place of statement, which it may not be written beside: read when the configuration loads, and again at each reload, which an edit of it triggers with --config.watch. A regular UTF-8 file of at most 1MiB, the statement with no {{param_...}} placeholder; a byte order mark and the blanks around the statement are taken off. Not read by the target allocator: mount it on every replica at the same path. See docs/SQL.md#the-statement.",
+                "not": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                  "type": "string"
+                },
+                "pattern": "^/",
+                "type": "string"
               },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",

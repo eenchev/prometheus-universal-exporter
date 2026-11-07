@@ -42,6 +42,14 @@ import (
 type sqlGuardedConn struct {
 	conn       driver.Conn
 	driverName string
+	// serverVersion is what the server said its version is, asked once on
+	// the connection by a driver that needs it (mysqlRun), "" until then.
+	// A connection is had by one scrape at a time.
+	serverVersion string
+	// noStatementLimit says the server refused the variable of its own
+	// time limit, as one it does not know, so it is set no more on the
+	// connection (mysqlRun).
+	noStatementLimit bool
 }
 
 // The methods a guarded connection has only when the driver's connection
@@ -199,6 +207,18 @@ func sqlDriverConn(dc any) any {
 }
 
 func (c *sqlGuardedConn) driverConn() driver.Conn { return c.conn }
+
+// guarded is the guarded connection itself, whatever kind of it dc is.
+func (c *sqlGuardedConn) guarded() *sqlGuardedConn { return c }
+
+// sqlGuardedOf is the guarded connection Conn.Raw hands its function, nil
+// for a connection that is not one.
+func sqlGuardedOf(dc any) *sqlGuardedConn {
+	if g, ok := dc.(interface{ guarded() *sqlGuardedConn }); ok {
+		return g.guarded()
+	}
+	return nil
+}
 
 // recovered, deferred, turns a panic of the driver into the error err
 // points to: the driver's fault, joined with driver.ErrBadConn, so that

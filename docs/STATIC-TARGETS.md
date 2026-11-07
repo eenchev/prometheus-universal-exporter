@@ -660,14 +660,23 @@ the recent probes and how the OTLP export is going, which
 as a whole. The static targets section has a row per
 target:
 
-- its name, collector, target and labels, its interval, and whether it is
-  exported over OTLP. The target is shown as its `target` label and the log
+- its name, collector, linked to its section on the
+  [collectors page](ENDPOINTS.md), target and labels, its interval, and whether it is
+  exported over OTLP. Once the target has been scraped, its name links to
+  the series the endpoint serves of it, `/static-targets?targets=<name>`
+  ([above](#the-static-targets-endpoint)), and with `--web.debug=full` a
+  *debug* link beside it scrapes it once now and reports each stage
+  (`?debug=<name>`, [Debugging a static target](#debugging-a-static-target)). The target is shown as its `target` label and the log
   show it, with a credential in its URL withheld;
 - when its last scrape began, how long ago that was and how long it took;
 - the result: `success`, `failed`, `stale result served` (failed, and the
   last good result served marked stale under `cache.stale_if_error`),
   `skipped by backoff` (`failure_backoff` kept the scrape from the target), or
   `not yet scraped`; and whether the response cache answered it;
+- a strip of its last 10 scrapes, oldest first, as the recent probes have:
+  ✓ `success`, ✗ `failed`, ~ `stale result served` and … `skipped by
+  backoff`, each with its time and result as its tooltip, so a target that
+  fails now and then reads apart from one that failed once;
 - the consecutive failed scrapes, and while `failure_backoff` keeps scrapes
   from the target, until when, or that its next try is in progress, with the
   failures the backoff counts. A scrape skipped by backoff tried nothing: it
@@ -690,7 +699,15 @@ target:
   exporter's log has the panic`: the panic's own text is only in the log.
 
 A summary line above says how many targets there are, how many are failing
-and how many have not been scraped yet; the failing targets come first. The
+and how many have not been scraped yet; the failing targets come first. A
+click on a column's heading sorts the table by it, the other way at a second
+click: Interval, Last scrape, Recent (by the scrapes in the strip that were no
+success) and Failures by their numbers, the others as they read, `t2` before
+`t10`. The filter above the table keeps the rows whose name, collector,
+target, labels or result hold what is typed, in any case, and says how many
+do. The order and the filter stay through a refresh. Without JavaScript the
+headings are plain and the filter is not shown; the probe jobs table of the
+[allocator's page](ALLOCATOR.md) sorts and filters with the same script. The
 page shows the moment it was served; its Refresh button and auto-refresh
 selector fetch it again without reloading it (see
 [Refreshing](ENDPOINTS.md#refreshing) in Endpoints), and
@@ -712,7 +729,9 @@ curl 'http://exporter:8080/static-targets/status?format=json'
    "cached": false, "stale": false, "consecutive_failures": 3,
    "last_error": "fetch http://legacy-eu:8080: received HTTP status 503",
    "last_error_at": "2026-10-24T08:58:41Z", "last_error_recovered": false,
-   "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3},
+   "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3,
+   "recent": [{"at": "2026-10-24T08:58:41Z", "duration_seconds": 0.012, "result": "failed"},
+              {"at": "2026-10-24T08:59:41Z", "duration_seconds": 0.0001, "result": "skipped by backoff"}]},
   {"name": "billing_eu", "...": "..."}
  ]}
 ```
@@ -723,6 +742,8 @@ off. `consecutive_failures` counts the target's failed scrapes of every kind
 but those skipped by backoff, `backoff_failures` the failed trips
 `failure_backoff` counts (see
 [Backing off from failing targets](CONFIGURATION.md#backing-off-from-failing-targets)).
+`recent` is the strip's scrapes, oldest first, each with when it began, how
+long it took and its result; it is `[]` for a target not yet scraped.
 `last_error_recovered`, given with `last_error` alone, is `true` when the last
 scrape succeeded after the one `last_error` is of, and `false` otherwise.
 
@@ -736,7 +757,21 @@ protected by `web.basic_auth` like every endpoint and answers `GET` and `HEAD`
 only. While no static target is configured it is served all the same, for its
 recent probes, and its static targets section says that none are configured.
 In allocator mode it shows the targets the allocator gave this replica, and
-says so: each replica has a page of its own. It moves with
+says so: each replica has a page of its own. It names the member the replica
+is, linked to the allocator's view of it (`<--allocator.url>/?member=<name>`,
+[A member's targets](ALLOCATOR.md#a-members-targets)), says which bundle is in
+force and since when, and when the allocator was last heard from; the JSON
+has them as `allocator`:
+
+```json
+"allocator": {"member": "pod-0", "member_view": "http://pue-allocator:9116/?member=pod-0",
+              "generation": "a1b2c3", "in_force_since": "2026-10-24T08:40:12Z", "last_sync": "2026-10-24T08:59:58Z"}
+```
+
+`generation` is that of the bundle the probes are answered from, and
+`in_force_since` is left out while the client has not yet heard that the
+reload that put it in force returned. A bundle that was in the cache
+directory at the start is in force since the start. It moves with
 `--web.static-targets-path`, so a `--web.self-metrics-path` on it is refused.
 
 ## Exporting over OTLP

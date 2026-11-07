@@ -182,7 +182,7 @@ func TestAllocatorModeIsUnreadyUntilTheFirstBundle(t *testing.T) {
 			t.Fatalf("%s before the bundle: %d %q", path, code, body)
 		}
 	}
-	if hb := <-a.heartbeats; hb.Member != "pod-0" || hb.Advertise != "10.0.0.7:8080" || hb.Generation != "" {
+	if hb := <-a.heartbeats; hb.Member != "pod-0" || hb.Advertise != "10.0.0.7:8080" || hb.StaticTargetsPath != "/static-targets" || hb.Generation != "" {
 		t.Fatalf("the first heartbeat: %+v", hb)
 	}
 	generation := a.serve(map[string]string{"config.yaml": allocatorTestConfig})
@@ -360,7 +360,7 @@ func TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(stop)
-	server.SetAllocatorStatus(allocatorStatus(client))
+	server.SetAllocatorStatus(allocatorStatus(client, mode.url, mode.member))
 	get := func(path string) (int, string) {
 		w := httptest.NewRecorder()
 		server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -379,6 +379,23 @@ func TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce(t *testing.T) 
 		t.Errorf("with the bundle in force, before its reload returned, the self-metrics do not name its generation:\n%s", body)
 	}
 	releaseOnce()
+	// Once the client has heard the reload returned, the status page names
+	// the member, linking the allocator's view of it, and says since when
+	// the bundle is in force.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		_, page := get("/static-targets/status")
+		if strings.Contains(page, "<code>"+generation+"</code>, in force since ") {
+			if !strings.Contains(page, `as the member <a href="`+a.server.URL+`/?member=pod-0"`) {
+				t.Errorf("the status page does not link the allocator's view of pod-0:\n%s", page)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the status page does not say since when the bundle is in force:\n%s", page)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	stop()
 	restarted, cached := mode.startManager(logger, "python3", nil, nil, false)
 	if cached != generation || restarted.Generation() != generation {

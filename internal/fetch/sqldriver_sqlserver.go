@@ -4,6 +4,7 @@ package fetch
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/binary"
 	"errors"
@@ -12,15 +13,20 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"time"
 
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
 )
 
 // The sqlserver driver is microsoft/go-mssqldb. SQL Server has no read-only
-// transaction (the driver refuses one), so a statement runs as it is: the
-// account must be one that can only read. When the scrape's deadline comes
-// the driver asks the server to stop the statement. encrypt says how much of
+// transaction (the driver refuses one), so a statement runs in a
+// transaction that is always rolled back, which undoes what it wrote but
+// what commits by itself, and after SET LOCK_TIMEOUT to the scrape's time
+// left, so that a statement waiting on a lock gives up when nobody waits
+// for it any more (sqlServerLockTimeout); the account must still be one
+// that can only read. When the scrape's deadline comes the driver asks the
+// server to stop the statement. encrypt says how much of
 // the connection TLS covers: disable none of it, false the login alone (its
 // certificate verified only as tls keys say, as SQL Server's own tools do
 // not verify it), true and strict all of it (strict with TDS 8.0, TLS before
@@ -36,10 +42,31 @@ func init() {
 		tlsOption: "encrypt",
 		tlsModes:  map[string]sqlTLSMode{"disable": sqlTLSOff, "false": sqlTLSVerifyByKeys, "true": sqlTLSVerify, "strict": sqlTLSVerify},
 		connect:   connectSQLServer,
-		run:       sqlPlain,
+		run:       sqlTx(sql.TxOptions{}, sqlServerLockTimeout),
+		readOnly:  "rollback",
+		timedOut:  sqlServerTimedOut,
 
 		serverError: sqlServerServerError,
 	})
+}
+
+// sqlServerLockTimeout bounds how long the statement waits on a lock to the
+// scrape's time left, in milliseconds, a millisecond at least.
+func sqlServerLockTimeout(timeout time.Duration) []string {
+	if timeout <= 0 {
+		return nil
+	}
+	return []string{"SET LOCK_TIMEOUT " + strconv.FormatInt(max(timeout.Milliseconds(), 1), 10)}
+}
+
+// sqlServerTimedOut recognises the server ending a statement at the lock
+// timeout sqlServerLockTimeout set: error 1222, Lock request time out
+// period exceeded.
+func sqlServerTimedOut(err error) bool {
+	if code, ok := sqlServerServerError(err); ok {
+		return code == "error 1222"
+	}
+	return false
 }
 
 // sqlServerServerError recognises the server's ERROR token, which the

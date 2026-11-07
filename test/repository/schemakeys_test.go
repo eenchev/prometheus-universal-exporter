@@ -459,7 +459,20 @@ func schemaAsItWasOf(t *testing.T, file string, schema map[string]any) map[strin
 	conditions, _ := schemaNode(t, schema, "collectors[].request")["allOf"].([]any)
 	for _, condition := range conditions {
 		condition := condition.(map[string]any)
-		condition["then"] = map[string]any{"required": condition["then"].(map[string]any)["required"]}
+		then := condition["then"].(map[string]any)
+		was := map[string]any{"required": then["required"]}
+		// A sql collector's statement was required, written "" or not: it
+		// is now one of statement and statement_file, which a request
+		// without either is refused by, as it was, each as required as
+		// statement was.
+		if oneOf, ok := then["oneOf"].([]any); ok {
+			var required []any
+			for _, entry := range oneOf {
+				required = append(required, map[string]any{"required": entry.(map[string]any)["required"]})
+			}
+			was["oneOf"] = required
+		}
+		condition["then"] = was
 	}
 	return schema
 }

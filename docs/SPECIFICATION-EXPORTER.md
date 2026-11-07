@@ -2006,13 +2006,42 @@ of objects, one a row, of its columns by name. Its keys:
   transaction where the driver offers one — `postgres`, `mysql` and `vertica`
   through `database/sql`'s read-only transaction, `oracle` after `SET
   TRANSACTION READ ONLY` — rolled back afterwards, and for `clickhouse` with
-  the setting `readonly=1`. `sqlserver` and `snowflake`, whose drivers
-  refuse a read-only transaction, MUST run it as it is, and the
-  documentation MUST require an account that can only read. `args` MUST be
+  the setting `readonly=1`. `sqlserver`, whose driver refuses a read-only
+  transaction, MUST run it in a transaction always rolled back afterwards,
+  and `snowflake` MUST run it as it is; the documentation MUST require an
+  account that can only read of both, and MUST say that the rollback undoes
+  no commit the statement makes itself. `args` MUST be
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
   into the statement quoted as a literal of its type, and the documentation
-  MUST say which. A `vertica` statement its driver would not prepare, and
+  MUST say which. `statement_file` MUST name, in place of `statement`, the
+  file the statement is read from when the configuration loads and at each
+  reload; both written with something other than `""` MUST be refused,
+  `""` being the key left out, and neither but on the debug page's
+  playground, which makes no request. It MUST be refused at load: with
+  blanks alone or around it, with a placeholder, with a NUL, or relative;
+  a file missing, unreadable or no regular file — a named pipe MUST be
+  refused without being opened —, over 1 MiB, not UTF-8 or holding a NUL
+  byte, of blanks alone once a UTF-8 byte order mark and the blanks around
+  it are taken off, or holding a `{{param_...}}` placeholder; and a
+  statement the driver's own check refuses (`vertica`) MUST be refused
+  naming the file. A symbolic link MUST be followed. The text read MUST be
+  part of the collector's definition, so that a reload names the collector
+  changed and its cached results are not reused; a load that opens no file
+  (the target allocator's) MUST check the key without reading the file.
+  `arg_types` MUST give each arg, by its place, the type it
+  is bound as — `text`, the default, as written; `int`, Go's `int64` of a
+  decimal whole number, a sign allowed; `float`, a finite `float64` of a
+  decimal number, no hexadecimal float, underscore, `Inf`, `NaN` or number
+  past the range; `bool`, `true` or `false` in any case — handed to the
+  driver as that Go value. It MUST be refused at load without `args`, with
+  another count of types than of args, or with a type other than those four
+  as written; an arg of a type but `text` with no placeholder, or whose
+  placeholders all have defaults, MUST be refused at load when it, filled
+  with the defaults, is not of its type; and one a probe's parameters fill
+  MUST be checked when they are, a value not of its type answered `400`
+  before the server is asked and refused in a static target's `params` when
+  its file loads. A `vertica` statement its driver would not prepare, and
   so would write the values into, doubling a `'` and leaving a `\` as it
   is, MUST be refused at load: any `COPY`, its first word as the driver
   reads the text (outside quotes, quoted identifiers, `--` and unnested
@@ -2068,8 +2097,20 @@ of objects, one a row, of its columns by name. Its keys:
   as `database/sql` would without the rest, and the exporter's own use of
   the driver's connection (`Conn.Raw`) MUST reach the driver's.
   `postgres` MUST also set `statement_timeout` to the time left, in the
-  transaction, the server ending the statement at it reported as the
-  deadline coming first though the scrape's own deadline is a moment away, and its cancel request MUST go through the exporter's dialer,
+  transaction; `mysql` MUST set `max_execution_time` to it on MySQL 5.7.8
+  and later and `max_statement_time` on MariaDB 10.1.1 and later, by the
+  version the server gives when asked once on each connection (`SELECT
+  VERSION()`, MariaDB's `5.5.5-` prefix skipped), and nothing on an older
+  server or one whose version reads as neither, so that no scrape is
+  refused over a variable the server does not know; a server that refuses
+  the variable as unknown (MySQL's error 1193) MUST have the statement run
+  without it, in a new read-only transaction, and MUST NOT be set it again
+  on that connection, any other refusal failing the scrape; and `sqlserver` MUST
+  set `LOCK_TIMEOUT` to it, in the transaction: each in milliseconds, a
+  millisecond at least, MariaDB's in seconds to the millisecond. The server
+  ending the statement at its limit (postgres's SQLSTATE 57014 statement
+  timeout, MySQL's error 3024, MariaDB's 1969, SQL Server's 1222) MUST be
+  reported as the deadline coming first though the scrape's own deadline is a moment away. `postgres`'s cancel request MUST go through the exporter's dialer,
   under the policy, to the address the statement's connection reached, and
   to no other.
 - **Rows.** Integers and floating-point numbers MUST be numbers; the text of
@@ -8565,6 +8606,27 @@ Recommended behavior:
   of a page a script swaps in, as the status page's fragment, MUST NOT touch
   it. Without JavaScript the picker MUST be hidden and the pages MUST follow
   the browser.
+- Every HTML page of the exporter and the allocator MUST show an outline in
+  the accent's colour on what the keyboard focuses (`:focus-visible`); its
+  text colours (`--fg`, `--muted`, `--accent`, `--bad`, `--good`) MUST read
+  at 4.5:1 or more on `--bg`, `--panel` and `--code` in both themes, and a
+  field's border (`--field`: a search box, a select, a text area) at 3:1 or
+  more on `--bg` and `--panel`; the allocator's bar colours MUST stand out
+  at 3:1 or more from both. A strip of marks MUST be told to a screen reader
+  as its counts by result, in the order each first came, and its latest
+  result, the marks hidden from it (`aria-hidden`); a filter's count of the
+  rows it keeps MUST be a polite live region.
+- The status page and the allocator's pages MUST write each moment as a
+  `<time>` whose `datetime` is RFC 3339 in UTC: with its text the moment
+  itself, which a page without JavaScript shows as it is, and with
+  JavaScript in the browser's time, the time of day alone today and the
+  date with it otherwise, its tooltip UTC and how long ago or until; with
+  `class="ago"` its text how long ago, as the server wrote it, and its
+  tooltip the moment in the browser's time and in UTC, after its
+  `data-note`. A strip mark's tooltip MUST begin with its moment
+  (`data-at`), written in the browser's time with UTC after it by the
+  script. The script MUST run on the content after each refresh too, and
+  MUST be one, `pagekit.LocalTimesScript`, on both.
 - Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
   status page (§ 42.14a) — MUST carry the same bar at its top, once, with
   the same style: a link back to `/` (on `/` itself, the exporter's name
@@ -8735,7 +8797,10 @@ that configuration is refused, so a configuration adding a collector file with
 a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
 reload a configuration that has not changed since it was loaded.
 
-The watch MUST cover the descriptor files of the configuration in force: the
+The watch MUST cover a sql collector's `request.statement_file` in force as
+it covers a descriptor file, below: one changing, appearing or disappearing
+MUST reload at the next tick, the statement read again and checked as the
+load checks it. The watch MUST cover the descriptor files of the configuration in force: the
 `request.protoset_file` and `request.proto_files` of its collectors, which
 only a `grpc` collector may set (§ 5.1), and the files those `.proto` files
 import, through however many files, which are every path the compile of the
@@ -31010,6 +31075,93 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestICMPKeysAreChecked` (fetch, icmp): a count of -1 and 101, an interval and a reply_timeout of 1ms, payload_bytes of 7 and 1233, and `ip_family: ip5` are refused.
 - `TestAProbeOfAnICMPCollectorReadsTheReplies` (exporter, icmp): a probe of 127.0.0.1 exports `ping_received 2` and `ping_loss_ratio 0` from the document; skipped where the system opens no ICMP datagram socket.
 
+## 34.281 A static target's series from the status page
+
+- `TestATargetsNameLinksItsSeries` (exporter): on the status page a scraped target's name links `../static-targets?targets=ok`, which, followed from the page, serves that target's series and not another's; the target not yet scraped has no link; no row links a debug scrape below `--web.debug=full`, and at it the row of `ok` links `../static-targets?debug=ok`; under `--web.static-targets-path=/static/targets` the link is `../targets?targets=ok`.
+- `TestTheStatusPagesShortColumnsKeepTheirWordsWhole` (exporter), changed: the target's cell begins with the link of its name.
+
+## 34.282 Static and probe targets told apart on the allocator's page
+
+- `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator): one written static target, three a `discovered_targets` entry's source finds, two probe targets a job lists and two its source `sites` finds, over r1 and r2: the spread's JSON counts 1 written and 3 discovered static targets by `file_sd_0` and 2 listed and 2 discovered probe targets by `sites`, and has a static row of the written target with no source and one of the entry `node` with its three targets over both members and its source; the page defines both kinds with their swatches, says `4 static targets: 1 written in the static target file and 3 discovered by file_sd_0. 4 probe targets: 2 listed in the probe jobs and 2 discovered by sites.`, groups the members table's columns under Static targets (Owned, Draining) and Probe targets (Routed), names the legend's segments by kind, has the static targets table with its two rows, the entry's anchored, before the probe jobs table, and a Feeds column linking the job and the entry; a member's view and a job's view mark their target headings with the kind's swatch.
+- `TestTheStatusPageHasAProbeJobsTable`, `TestTheTargetsTableShowsWeightsAndCapacities`, `TestTheJobViewListsItsTargets` and `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), changed: the members table's heading of two rows, the probe jobs heading with its swatch, a job view's *Probe targets*, and the sources table's Feeds cell.
+
+## 34.283 A static target's last scrapes on the status page
+
+- `TestATargetsRowShowsItsLastScrapes` (exporter): the strip of `ok` is one success, of `backing_off` a failure then a skip by backoff, of `stale` a success then a stale result served, each scrape with its time, and of `never` empty, `"recent":[]` in the JSON; the page's table has a Recent column after Result, the backed off target's strip ✗ then …, each mark titled with its time and result; after 13 scrapes `ok`'s strip has the last 10.
+
+## 34.284 Sorting and filtering the static targets table
+
+- `TestTheStaticTargetsTableSortsAndFilters` (exporter): the status page has the filter's form, hidden, its box and the count's live note; the table `static-targets-table` with headings of `data-sort` `text` or `num` and no button or `aria-sort` without the script; the rows with `data-order` from 0 and `data-match` of name, collector, target, labels and result, one a line, escaped; the Interval cell `data-value="60"`, the backed off target's strip `data-value="2"`, a target not yet scraped's Last scrape `data-value="0"`; and the shared script called on the table, its swap arranging the new table and putting back the caret, with the sort marks' style. (In headless Chromium, the rows sort by name both ways and by Recent, the heading `aria-sort="ascending"`, and `text` keeps 4 of the 7 targets, saying so.)
+- `TestTheStatusPageWritesDurationsWithoutZeroUnits` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), and `TestTheStatusPageHasAProbeJobsTable` (allocator), changed: an interval's cell carries its value, a row's `<tr` its order, and the allocator's refresh arranges the table through the shared script.
+
+## 34.285 The status page's collector links and the bundle in force
+
+- `TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce` (exporter): with generation `g7` in force, put in force 90s ago, and the member `pod 0&1` of the allocator `http://pue-allocator:9116/`, the page names the member linked to `http://pue-allocator:9116/?member=pod+0%261`, escaped, and says `The bundle in force is generation g7, in force since <time> (1m30s ago). The allocator was last heard from at …`; the JSON's `allocator` has the member, the view, `g7`, the time and `last_sync`; with the client's latest bundle `g8`, `g7` is said with no time; outside allocator mode the JSON has no `allocator`.
+- `TestTheStatusPageSaysItShowsThisReplicasTargets` (exporter), changed: with no bundle in force the page says so.
+- `TestATargetsCollectorLinksItsSection` (exporter): a row's collector links `../collectors#collector-text`, a section the collectors page has, and `../../../collectors#collector-text` under `--web.static-targets-path=/a/b/targets`.
+- `TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce`, changed: once the reload of the first bundle returned, the status page says since when it is in force and links the allocator's view of `pod-0`.
+- `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` and `TestARestartResumesFromTheCacheDirectory` (allocclient), changed: the status has `InForceAt`, just now after the bundle, since the start for the bundle of the cache directory, and none for a client without a bundle.
+
+## 34.286 A recent probe's debug link
+
+- `TestARecentProbeLinksItsDebugReport` (exporter): at `--web.debug=full`, of probes of a plain target, one with a credential in its URL, one longer than 512 bytes and one with `timeout=5s`, the plain one links `../probe?collector=text&target=…&debug=true` and the one with the timeout has it in its link, the others none; the page has the link beside the collector, escaped, and not the credential; the link, followed from the page, answers the debug report; at `edit` no row links one.
+- `TestARecentProbeKeyIsReplayableOnlyAsSent` (exporter): `param_tenant=a b` replays as `collector=c&param_tenant=a+b&target=http%3A%2F%2Fh`; `param_token`, a value with a URL's userinfo, a value of 65 bytes, eight parameters of 60 bytes and a target shown otherwise than sent make no replay.
+
+## 34.287 A discovered_targets entry's view
+
+- `TestAnEntrysViewListsItsTargets` (allocator): of the entry `node`, three targets a `file_sd` source finds over r1 and r2, `/v1/status?entry=node` has shard key `target`, the label `team=infra`, the source `file_sd_0`, a spread of 3 targets whose members' counts are the status's static spread's, the most first, and the three targets by name, each `demo`, an `http://` target, `team=infra` and the member whose view lists it as owned; filtered by a member's name it matches that member's count of 3; the page has the title, the way back, the heading, the filter of the entry with its label, the shard key, the source, the bars of the entry's targets owned, the targets table with each member linked and the JSON link `v1/status?entry=node`; an entry the file does not have is `404` as JSON and `200` with `unknown-entry` on the page; an empty `entry` is `400` on both.
+- `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: the entry's row in the static targets table and its source's Feeds cell link `?entry=node`.
+- `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator), changed: the follower's `/v1/status?entry=node` is `partial` with the leader's address and no spread or targets, and its page says the entry's view is on the leader's.
+
+## 34.288 The allocator links the exporters' pages
+
+- `TestAMembersViewLinksItsExportersPages` (allocator): r1, whose heartbeat says `[fd00::1]:9115` and `/st/targets`, has `static_targets_path` in its status, and its view links `http://[fd00::1]:9115/st/targets/status` beside its address and its first static target's name `http://[fd00::1]:9115/st/targets?targets=<name>`; r2, whose heartbeats say no path, has neither link.
+- `TestAHeartbeatsStaticTargetsPathIsKeptOnlyWhenLinkable` (allocator): heartbeats saying a static targets path `static-targets`, `/`, `/a/../b`, `/a/`, `/a?b`, `/a#b`, `/a%2fb`, `/a b` or one of 257 bytes are taken, the path dropped, and those saying `/static-targets`, `/a/b-c_d.e` or one of 256 bytes are taken with it kept. (It was refused with `400`, which kept a replica with a path of 257 bytes or more, which the exporter takes, out of the member list.)
+- `TestAMembersPagesAreLinkedOnlyAtItsOwnHost` (allocator): `r1:9115` and `[fd00::1]:9115` are linked, `evil.example/x:1`, `u@evil.example:1` and `a?b:1`, which a heartbeat takes, are not, nor a member without a path.
+- `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` (allocclient) and `TestAllocatorModeIsUnreadyUntilTheFirstBundle`, changed: the first heartbeat says the static targets path, `/static-targets` by default.
+
+## 34.289 Moments in the browser's time
+
+- `TestTheStatusPageWritesEachMomentAsATime` (exporter): a target's last scrape, a backoff's end and a last error's moment are each a `<time>` of RFC 3339 in UTC, a strip mark has `data-at` with its moment beginning its title, and the page's script defines `localTimes` and runs it on the content at the start and after a swap. (In headless Chromium in `Europe/Sofia`, the last scrape of today shows `10:52:00` titled `2026-11-07 08:52:00 UTC, 36s ago`, a backoff's end of another day its date with it, and a strip mark is titled `10:52:00 (2026-11-07 08:52:00 UTC) failed`.)
+- `TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted` (exporter), changed: the log and the trace export's Last export and Last success are `<time>`s. (Their Last export was written as plain text.)
+- `TestTheAllocatorsPagesWriteEachMomentAsATime` (allocator): the instance's start is a `<time>` and a member's last heartbeat a `<time class="ago">` titled with its moment on the status page and a member's view, and the script runs on the content at the start and after a refresh.
+- `TestTheStatusMarksAMemberLateByTheConfiguredInterval` (allocator), `TestTheStatusPageShowsTheReadinessOTLPFailuresMake`, `TestTheStatusPageShowsTheJSONsValuesEscaped`, `TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce`, `TestATargetsRowShowsItsLastScrapes` and the recovered errors' tests (exporter), changed: a late heartbeat is a `<time class="ago bad">` with its note, and the moments they read are `<time>`s.
+
+## 34.290 The pages from the keyboard and a screen reader
+
+- `TestThePagesColoursReadInBothThemes` (pagekit): of the light and the dark colours, `--fg`, `--muted`, `--accent`, `--bad` and `--good` read at 4.5:1 or more on `--bg`, `--panel` and `--code`, `--on-accent` on `--accent` too, and `--field` at 3:1 or more on `--bg` and `--panel`; the style has the `:focus-visible` outline and `.sr-only`, and no search box, select or text area has a `--line` border. (`--line`, 1.37:1 on white, was the fields' border.)
+- `TestTheBarsColoursStandOutInBothThemes` (allocator): the bars' static and probe colours stand out at 3:1 or more from `--bg` and `--panel` in both themes.
+- `TestAStripIsToldToAScreenReaderAsItsCounts` (exporter): `stripText` of no result is empty, of one success `last 1 scrape: 1 success; the latest success`, and of failed, success, failed, skipped `last 4 scrapes, oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped by backoff`; a static target's strip and a recent probe's carry it in an `.sr-only` span, the marks in an `aria-hidden` one.
+- `TestAnEntrysViewListsItsTargets` and `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: a filter's count is `role="status"` `aria-live="polite"`; `TestATargetsRowShowsItsLastScrapes` (exporter), changed: the marks are in their hidden span. (In headless Chromium, axe-core 4.10 finds no violation of WCAG 2.1 AA on the exporter's status page and the allocator's page and views in either theme; Tab reaches the bar's links, the theme and refresh controls, the filter, the seven sortable headings and each row's links in that order, each with a 2px outline.)
+
+## 34.291 The server's own time limit on MySQL, MariaDB and SQL Server; SQL Server's rolled-back transaction
+
+- `TestEachSQLDriverRunsTheStatementReadOnlyAsItCan` (fetch), changed: postgres and mysql begin a read-only transaction and sqlserver one that is not, each rolled back; before the statement postgres runs `SET LOCAL statement_timeout = `, mysql `SET SESSION max_execution_time = ` and sqlserver `SET LOCK_TIMEOUT `, each the scrape's five seconds less what passed, over 4000 milliseconds; a second mysql scrape on the kept connection does not ask the server's version again. (sqlserver ran with no transaction, and mysql and sqlserver set no limit.)
+- `TestTheMySQLServerIsToldTheScrapesTimeLeftAsItsKindTakesIt` (fetch): `8.0.36` with 2.5s is `max_execution_time = 2500`, `8.4.0-log` with 500µs `= 1`, `5.7.8` `= 1000`, `5.7.7` and `5.6.51` nothing; `10.11.6-MariaDB-…` with 2.5s is `max_statement_time = 2.500`, `5.5.5-10.6.16-MariaDB` with 61.001s `= 61.001`, `10.1.0-MariaDB` nothing and `10.1.1-MariaDB` `= 1.000`; no time left, `v8` and an empty version are set nothing. Errors 3024 and 1969 are the server's timeout, wrapped too, and 1317, 1045 and an error that is no server's are not.
+- `TestASQLServerLockTimeoutIsTheScrapesDeadline` (fetch): no time left sets nothing, 1.5s is `SET LOCK_TIMEOUT 1500` and a microsecond `1`; error 1222 is the lock timeout, wrapped too, and 18456 and an error that is no server's are not.
+
+## 34.292 Typed sql args
+
+- `TestSQLArgTypesAreCheckedWhenTheConfigurationLoads` (fetch): `arg_types` without `args`, with 1 type for 2 args and 2 for 1, `INT`, ` int` and `integer`, `ten`, `1.5`, ` 1` and `9223372036854775808` as int, `NaN` as float, `maybe` as bool, and `{{param_limit:lots}}` and `{{param_a:1}}{{param_b:x}}` as int, filled with their defaults, are refused naming the collector; no types, `-12`, `0.25`, `TRUE` and `it's` as int, float, bool and text, placeholders with a default and without, and an arg one of whose placeholders has no default, load.
+- `TestSQLArgsAreBoundAsTheirTypes` (fetch): `{{param_limit:100}}`, `1e-3`, `False`, `007` and `42` as int, float, bool, text and text are bound as `int64(100)`, `0.001`, `false`, `"007"` and `"42"`; `10 rows` as int, `Inf` as float and `yes` as bool are refused by the check of the parameters and by the scrape, which runs no statement.
+- `TestSQLTypedArgsReadOnlyTheirTypesValues` (fetch): the least int64, `+7`, `2.5e3`, `-0`, `.5`, `tRuE` and ` any ` as text are read; `0x10`, `1_000` and an empty int, `0x1p-2`, `1_000.5`, `-Inf`, `1e999` and an empty float, and `1`, `t` and an empty bool are not.
+- `TestASQLCollectorsArgTypesHoldItsStaticTargetsParams` (config): `arg_types: [int]` loads from YAML; a static target's `param_limit` of `25`, `-100` and empty (the default filling it) loads, and `ten`, `2.5` and `1e3` are refused naming the target, the collector and the arg; two types for one arg are refused.
+
+## 34.293 A sql statement in a file
+
+- `TestAStatementFileIsCheckedWhenItLoads` (fetch): a statement and a statement file both written, a path of blanks, one with blanks around it, a placeholder, a NUL, a relative path (`sql/jobs.sql`, `./jobs.sql`), a missing file, a directory, a file of 1MiB and a byte, Latin-1 text, a NUL byte, an empty file, one of blanks, one of a byte order mark alone, a statement with `{{ param_queue }}`, neither key and a statement of blanks are refused naming the collector and saying why; a file the exporter may not read is refused saying so, where the test does not run as root.
+- `TestAStatementFileThatIsANamedPipeIsRefusedUnopened` (fetch, unix): a named pipe is refused as no regular file within 5s, without being opened.
+- `TestAStatementFilesStatementIsTheOneRun` (fetch): a statement of four lines in a file behind a symbolic link, after a byte order mark and a blank line and before two, is read without them and is the statement a scrape runs.
+- `TestAStatementFileIsNotReadWhereTheFilesAreNot` (fetch): loaded without opening files, a missing file loads and a relative path is still refused; the playground needs no statement; the file is among the collector's named files and a statement written in place names none.
+- `TestAStatementFilesTextIsPartOfTheCollectorsDefinition` (fetch): the collector's YAML changes with the file's text, the path the same, and carries the path and `statement_file_sha256`.
+- `TestAVerticaStatementFileIsHeldToWhatAStatementIs` (fetch, vertica): `SELECT 1;\nCOMMIT` in the file is refused as more than one statement naming the file, and `SELECT 1` loads.
+- `TestAStatementFileEditedReloadsAtTheNextTick` (config): with the watch, the file edited to `SELECT 2 AS n` puts a configuration in force at the next tick, the reload naming the collector `db` changed; edited to blanks it is rejected, the configuration in force kept, the load saying the file holds no statement.
+- `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statement_file`, of a pattern, is held to text.
+- `TestAnEmptyStatementBesideAStatementFileIsTheKeyLeftOut` (config): `statement: ""` beside a statement file loads, the schema taking it too.
+- `TestASQLStatementFileAndTypedArgsThroughAProbe` (exporter): a configuration loaded with a statement file and `arg_types: [text, int]` probes with the file's statement, `param_limit=25` bound as `int64(25)`; `param_limit=lots` is answered 400 naming `request.args[1]` with no statement run; the file edited and the configuration reloaded, the probe runs the new statement.
+- `TestAMySQLServerThatDoesNotKnowTheLimitsVariableIsScrapedWithoutIt` (fetch): a server that refuses `max_execution_time` with error 1193 is scraped twice on one connection, the variable set once, the statement run twice; refused with 1227, the scrape fails at `running SET SESSION max_execution_time`.
+- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: a row of `statement_file` in a collector without `statement`: the absolute path of `testdata/sql/statement.sql` is taken by both, `statement.sql` refused by both, and the key left out or written `""` refused by both, the collector having no statement; the schema requires one of `statement` and `statement_file` written with something other than `""` (`oneOf`), which the schema as it was is taken to have held as it held `statement` required, `""` or not.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33303,8 +33455,31 @@ then one of the OTLP export. Of the static targets:
   result under `cache.stale_if_error`) or `skipped by backoff` (a scrape
   `failure_backoff` kept from the target); and whether the response cache
   answered it. A target not yet scraped MUST be shown as `not yet scraped`.
+  A scraped target's name MUST link to the endpoint narrowed to it,
+  `?targets=<name>`, relative to the page, so the link holds under a prefix
+  a proxy serves the exporter at, and one not yet scraped, of which the
+  endpoint has nothing, MUST have no link; under `--web.debug=full`, and
+  under no other level, a scraped target's row MUST link its debug scrape,
+  `?debug=<name>`, beside its name. The links MUST follow
+  `--web.static-targets-path`.
   A target whose collector or address a reload changed MUST be shown as not
   yet scraped until its own scrape.
+- With JavaScript, the table MUST sort by a column whose heading is
+  clicked, the other way at a second click, Interval, Last scrape, Recent
+  (by the strip's scrapes that were no success) and Failures by their
+  values and the rest as text with the numbers in it by value and case
+  ignored, ties in the page's order; each heading MUST be a button with
+  `aria-sort`. A filter box MUST keep the rows whose name, collector,
+  target, labels or result hold its text, in any case, and say how many of
+  the rows match, or that none does. The order and the filter MUST be kept
+  through a refresh, the box keeping focus and caret. Without JavaScript
+  the headings MUST be plain and the filter not shown. The allocator's
+  probe jobs table MUST sort and filter with the same script.
+- Each row MUST show a strip of the target's last 10 scrapes, oldest first,
+  marked ✓ for `success`, ✗ for `failed`, ~ for `stale result served` and …
+  for `skipped by backoff`, each with its start and result as its tooltip;
+  the JSON MUST give them as `recent`, each with `at`, `duration_seconds`
+  and `result`, `[]` for a target not yet scraped.
 - Each row MUST show the consecutive failed scrapes, the error of the last
   failed scrape, kept through later successes, with when that scrape began,
   and, while `failure_backoff` keeps scrapes from the target, until when, or
@@ -33392,7 +33567,19 @@ then one of the OTLP export. Of the static targets:
   5s to 24h, by default `off`; any other value, `0s` and the empty value
   among them, MUST be a command-line error, exit `2`.
 - In allocator mode the page MUST say that it shows the targets the
-  allocator gave this replica, and the probes this replica answered.
+  allocator gave this replica, and the probes this replica answered. It
+  MUST name the member the replica is, linked to the allocator's view of
+  it, `--allocator.url` followed by `/?member=<name>`; say the generation of
+  the bundle in force, the one the probes are answered from, or that none
+  is; say since when it is in force once the client has heard that the
+  reload that put it in force returned, the start for the bundle the
+  exporter started with, and say nothing of a time while the client's
+  latest bundle is another; and say when the allocator was last heard from.
+  The JSON MUST have them as `allocator`, with `member`, `member_view`,
+  `generation`, `in_force_since` and `last_sync`, a value missing left out,
+  and MUST NOT have `allocator` outside allocator mode.
+- Each row's collector MUST link its section of the collectors page,
+  `#collector-<name>`, relative to the page.
 - The page MUST be served with or without static targets in force; without
   them its static targets section MUST say that none are configured, and the
   JSON MUST have an empty `static_targets` array.
@@ -33430,6 +33617,11 @@ Of the recent probes:
   and cut as a static target's error is; a probe that panicked MUST be shown
   with the fixed error it was answered, the one a static target's scrape that
   panicked is shown with.
+- Under `--web.debug=full`, and under no other level, a row whose target
+  and parameters are shown as they were sent, none withheld, masked or cut,
+  MUST link the probe sent again with `debug=true`: `probe?` relative to the
+  page, with the collector, the target and the parameters; any other row
+  MUST have no such link.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to
@@ -34150,14 +34342,25 @@ instance)`, `live instances`) and its process's random id its `Instance ID`
 (`ID` beside each peer's address), with each member's capacity in the
 members table, one its heartbeats changed shown as the one in the list, an
 arrow and the new one until it takes effect, the spread's table's columns
-fixed (member, static, draining, probe, total, weight, draining weight,
-capacity, fair share and the bar, never a column per probe job), its weight
+fixed (member, static targets owned and draining under one heading,
+probe targets routed under another, total, weight, draining weight,
+capacity, fair share and the bar, never a column per probe job), the
+section opening with what a static target and a probe target are, each
+with its bar's colour, and how many of each the files write and the
+sources found, the sources named, its legend naming the segments static
+targets, owned and draining, and probe targets, routed, its weight
 the static and probe weight the member is placed by, its draining weight
 apart, its bar drawn in CSS alone of the static, draining and probe weight
 with the member's fair share marked on it, the imbalance of the weight the
 highest load ratio, an overloaded member's weight marked with a sentence
 saying how many are and why, and each heavy unit named, with its shard key,
-weight and member, in a warning above the table; a probe jobs table
+weight and member, in a warning above the table; a static targets table,
+before the probe jobs table, of a row of the targets the static target file
+writes and a row of each `discovered_targets` entry that found any, in file
+order, with its targets, their weight, the members, min, average, max and
+the imbalance of the row's targets each member owns, marked as a job's, and
+the entry's sources, an entry's name linking its view (`?entry=<name>`);
+a probe jobs table
 of a row per job with the job, linked to its view, collector, targets,
 their weight, members, min, average, max, the imbalance, marked where uneven, and the
 sources with their result or `listed`, sorted by a column at a click on its
@@ -34200,7 +34403,17 @@ saying so, the filter box hidden, so a view refreshing itself shows the
 member gone; an empty `member` MUST be answered `400` on both. A follower
 under `--peers.leader-only` MUST NOT serve a member's targets: its view
 names the leader and its JSON is `partial`, with the leader's address. A
-member's view MUST link each probe job's name to the job's view. Each probe
+member's view MUST link each probe job's name to the job's view. When the
+member's last heartbeat said its static targets path, its view MUST link
+its status page, `http://<address><path>/status`, beside its address, and
+each static target it owns or keeps draining the series it serves of it,
+`http://<address><path>?targets=<name>`; and no such link otherwise, nor
+when the address would not be the URL's host alone (a `/`, an `@`, a `?`
+in it). A heartbeat's `static_targets_path` other than a clean absolute
+path of at most 256 bytes, not `/`, without `?`, `#`, `%`, `\`, spaces or
+control characters, MUST be dropped and the heartbeat taken all the same:
+the exporter takes a `--web.static-targets-path` of any length, and a
+replica MUST NOT be kept out of the member list over a link. Each probe
 job's view, `GET /?job=<name>`, MUST be framed, refreshed and filtered as a
 member's view is: the job's collector, targets, their weight with the job's
 weight or its `weight_label` (`job_weight`, `weight_label`), shard key, labels (one
@@ -34230,8 +34443,24 @@ same, so a source label left out matches neither. `GET
 matches; a job the probe targets file does not have MUST be
 answered `404` as JSON and `200` saying so on the page and its fragment, the
 filter box hidden; an empty `job` MUST be answered `400` on both; a follower
-under `--peers.leader-only` MUST name the leader and answer `partial`. All
-take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
+under `--peers.leader-only` MUST name the leader and answer `partial`.
+Each `discovered_targets` entry's row of the static targets table, and a
+static source's Feeds cell, MUST link the entry's view, `GET
+/?entry=<name>`, framed, refreshed and filtered as a job's view is: the
+entry's targets, their weight, its shard key, labels (one written `""` left
+out) and discovery sources with their result; the members of the member
+list, linked, with the entry's targets each owns, as the spread counts them,
+their weight and a bar, the most first; and its static targets by name,
+each with its target as `fetch.DisplayTarget` shows it, its collector, the
+member that owns it, linked, its labels and its weight. `?filter=` MUST cut
+the targets to those whose name, target, collector, a label as `name=value`
+or member holds the text, before the first 1000, and a row's `data-match`
+MUST hold the same. `GET /v1/status?entry=<name>` MUST answer the same as
+JSON (`allocator.EntryView`); an entry the static target file does not have
+MUST be answered `404` as JSON and `200` saying so on the page and its
+fragment, the filter box hidden; an empty `entry` MUST be answered `400` on
+both; a follower under `--peers.leader-only` MUST name the leader and
+answer `partial`. All take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
 the page, the member's view, the probe job's view, the JSON and how a browser gives the token, and
 the chart README how to reach a pod's page and find the leader's.
 
@@ -34303,7 +34532,7 @@ to another; a heartbeat to one address, and the lookup of the addresses,
 made at once and every heartbeat interval, MUST be given up on after 5
 seconds or the heartbeat interval, whichever is shorter, and a lookup that
 fails MUST keep the addresses it resolved to last. A heartbeat MUST carry the member, the advertised
-address, the generation in force (empty before the first), the last refused
+address, its `--web.static-targets-path` as `static_targets_path`, the generation in force (empty before the first), the last refused
 generation with its error until a later bundle is put in force,
 `shutting_down` from the first `SIGTERM` or `SIGINT` on, the `instance`, a
 random name made once at the exporter's start, the `sequence`, 1 for the

@@ -3,6 +3,7 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -12,15 +13,20 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -50,11 +56,14 @@ import (
 //
 //   - The statement runs read-only where the database can make it so: in a
 //     read-only transaction (postgres, mysql, oracle, vertica) or with a
-//     read-only setting (clickhouse). SQL Server and Snowflake cannot, and
-//     need an account that can only read.
+//     read-only setting (clickhouse). SQL Server cannot, and runs it in a
+//     transaction always rolled back; Snowflake runs it as it is. Both need
+//     an account that can only read.
 //   - It is bounded by the scrape's deadline, which the drivers cancel it
-//     at, and by the database's own statement timeout where it has one the
-//     exporter can set (postgres).
+//     at, and by the database's own time limit where it has one the
+//     exporter can set: postgres's statement_timeout, MySQL's
+//     max_execution_time, MariaDB's max_statement_time and SQL Server's
+//     LOCK_TIMEOUT.
 //   - Connections are kept in a pool per collector, target and connection
 //     settings, shared by the collector's scrapes of the target, and closed
 //     when a reload removes or changes the collector (sqlpool.go).
@@ -71,14 +80,162 @@ import (
 // default; and how the type keeps connections to a target. The account and
 // its credential files are of the common part, which other types take too.
 type SQLConfig struct {
-	Driver      string                `yaml:"driver,omitempty"`
-	Database    string                `yaml:"database,omitempty"`
-	Statement   string                `yaml:"statement,omitempty"`
-	Args        []string              `yaml:"args,omitempty"`
+	Driver    string `yaml:"driver,omitempty"`
+	Database  string `yaml:"database,omitempty"`
+	Statement string `yaml:"statement,omitempty"`
+	// StatementFile is the file the statement is read from, in place of
+	// Statement, when the configuration loads (readSQLStatementFile); the
+	// text read is statementText, which the statement run is.
+	StatementFile string `yaml:"statement_file,omitempty"`
+	statementText string
+	Args          []string `yaml:"args,omitempty"`
+	// ArgTypes are the types args are bound as, one for each, by its
+	// place: text, int, float or bool (sqlArgTypes). Left out, every arg
+	// is bound as text.
+	ArgTypes    []string              `yaml:"arg_types,omitempty"`
 	Options     map[string]string     `yaml:"options,omitempty"`
 	ServiceName string                `yaml:"service_name,omitempty"`
 	MaxRows     int                   `yaml:"max_rows,omitempty"`
 	Connections *model.SQLConnections `yaml:"connections,omitempty"`
+}
+
+// MarshalYAML writes the keys as a configuration writes them, and, for a
+// statement read from statement_file, a digest of the text read: the YAML
+// of a collector is what a reload compares to tell a changed collector and
+// what a probe's cache key is made from (model.RequestConfig.MarshalYAML),
+// and a statement file edited changes the collector as much as its
+// statement edited in place would. Nothing reads the YAML back.
+func (s SQLConfig) MarshalYAML() (any, error) {
+	type plain SQLConfig
+	if s.StatementFile == "" {
+		return plain(s), nil
+	}
+	sum := sha256.Sum256([]byte(s.statementText))
+	return struct {
+		plain  `yaml:",inline"`
+		Digest string `yaml:"statement_file_sha256"`
+	}{plain(s), hex.EncodeToString(sum[:])}, nil
+}
+
+// sqlStatement is the statement a sql collector runs: its statement, or the
+// text read from its statement_file when the configuration loaded.
+func sqlStatement(c *model.Collector) string {
+	own := sqlRequest(c)
+	if own.StatementFile != "" {
+		return own.statementText
+	}
+	return own.Statement
+}
+
+// maxSQLStatementFileBytes bounds a statement file: a statement is a few
+// lines, and a file that is not one, a log or a dump at the path by
+// mistake, is refused rather than read whole when the configuration loads.
+const maxSQLStatementFileBytes = 1 << 20
+
+// sqlStatementPlaceholder is a {{param_...}} placeholder in a statement,
+// which no probe fills: a probe's values go in args.
+var sqlStatementPlaceholder = regexp.MustCompile(`\{\{\s*` + PathParamPrefix)
+
+// checkSQLStatementFileKey refuses a statement_file that is not an absolute
+// path written as it is meant: with blanks around it, a placeholder, which
+// nothing fills in a file's path, a NUL, or relative, which would be read
+// from whatever directory the exporter, or a replica of the target
+// allocator, was started in.
+func checkSQLStatementFileKey(path string) error {
+	switch {
+	case strings.TrimSpace(path) == "":
+		return errors.New("request.statement_file is written with blanks alone; name the file, or write the statement in request.statement")
+	case strings.TrimSpace(path) != path:
+		return fmt.Errorf("request.statement_file %q has blanks around it; write the path alone", path)
+	case strings.Contains(path, "{{"):
+		return fmt.Errorf("request.statement_file %q has a placeholder; the file is read when the configuration loads, with no probe to fill one, so write the path out", path)
+	case strings.ContainsRune(path, 0):
+		return fmt.Errorf("request.statement_file %q holds a NUL character, which no path does", path)
+	case !filepath.IsAbs(path):
+		return fmt.Errorf("request.statement_file %q is a relative path; write the absolute path of the file, such as /etc/exporter/sql/jobs.sql, which reads the same whatever directory the exporter starts in", path)
+	}
+	return nil
+}
+
+// readSQLStatementFile reads the statement of the file at path, refusing
+// what is no statement file: no regular file (a directory, a named pipe,
+// which would hold the load until something wrote to it, a device, a
+// socket), a file over maxSQLStatementFileBytes, text that is not UTF-8 or
+// holds a NUL, a file of blanks and nothing else, and a statement with a
+// placeholder. A UTF-8 byte order mark at its start, as some editors write,
+// and the blanks around the statement, are taken off.
+func readSQLStatementFile(path string) (string, error) {
+	where := "request.statement_file " + path
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", where, statementFileError(err))
+	}
+	if err := checkStatementFileInfo(where, info); err != nil {
+		return "", err
+	}
+	// Opened only once it is known to be a regular file: opening a named
+	// pipe would wait for a writer.
+	f, err := os.Open(path) // #nosec G304 -- the configuration names the file, as it names its other files
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", where, statementFileError(err))
+	}
+	defer func() { _ = f.Close() }()
+	// What was opened is checked again: the path may have been replaced
+	// between the two.
+	if info, err = f.Stat(); err != nil {
+		return "", fmt.Errorf("%s: %w", where, err)
+	}
+	if err := checkStatementFileInfo(where, info); err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxSQLStatementFileBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", where, err)
+	}
+	if len(raw) > maxSQLStatementFileBytes {
+		return "", fmt.Errorf("%s grew past %d bytes while it was read; a statement file holds one statement", where, maxSQLStatementFileBytes)
+	}
+	raw = bytes.TrimPrefix(raw, []byte("\ufeff"))
+	switch {
+	case !utf8.Valid(raw):
+		return "", fmt.Errorf("%s is not UTF-8 text; save the statement as UTF-8", where)
+	case bytes.IndexByte(raw, 0) >= 0:
+		return "", fmt.Errorf("%s holds a NUL byte, which no statement does; is it the file meant?", where)
+	}
+	statement := strings.TrimSpace(string(raw))
+	switch {
+	case statement == "":
+		return "", fmt.Errorf("%s holds no statement, only blanks; write the one statement the collector runs in it", where)
+	case sqlStatementPlaceholder.MatchString(statement):
+		return "", fmt.Errorf("%s has a {{param_...}} placeholder in its statement, which is not filled there and would be sent as written; write the driver's own placeholder in the statement and the probe's parameter in request.args", where)
+	}
+	return statement, nil
+}
+
+// checkStatementFileInfo refuses a statement file that is no regular file,
+// or is over maxSQLStatementFileBytes.
+func checkStatementFileInfo(where string, info os.FileInfo) error {
+	switch mode := info.Mode(); {
+	case mode.IsDir():
+		return fmt.Errorf("%s is a directory; name the file of the statement in it", where)
+	case !mode.IsRegular():
+		return fmt.Errorf("%s is no regular file (%s); name a file that holds the statement", where, mode.Type())
+	case info.Size() > maxSQLStatementFileBytes:
+		return fmt.Errorf("%s is %d bytes, over the %d a statement file may be; a statement file holds one statement", where, info.Size(), maxSQLStatementFileBytes)
+	}
+	return nil
+}
+
+// statementFileError is err, an error of finding or opening a statement
+// file, said plainly for the two a person meets.
+func statementFileError(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return errors.New("no such file")
+	case errors.Is(err, fs.ErrPermission):
+		return errors.New("the exporter may not read it (permission denied)")
+	}
+	return err
 }
 
 // sqlRequest is a sql collector's own request keys: the zero SQLConfig of a
@@ -112,11 +269,20 @@ func init() {
 		CheckTargetRequest: checkSQLTargetRequest,
 		Stage:              "sql",
 		CheckFiles:         checkSQLFiles,
-		Follow:             sqlPools.follow,
-		CloseConnections:   sqlPools.closeAll,
-		Connections:        sqlPools.collectorConnections,
-		ConnectionLimit:    sqlPools.limitCounts,
-		ConnectionPools:    sqlPools.collectorPools,
+		// The statement file, which the configuration is checked against
+		// and which a reload reads again, is watched with the files the
+		// configuration names (config.namedFiles).
+		NamedFiles: func(c *model.Collector) []string {
+			if file := sqlRequest(c).StatementFile; file != "" {
+				return []string{file}
+			}
+			return nil
+		},
+		Follow:           sqlPools.follow,
+		CloseConnections: sqlPools.closeAll,
+		Connections:      sqlPools.collectorConnections,
+		ConnectionLimit:  sqlPools.limitCounts,
+		ConnectionPools:  sqlPools.collectorPools,
 		Families: []string{
 			"http_exporter_sql_connections", "http_exporter_sql_idle_connections", "http_exporter_sql_targets",
 			"http_exporter_sql_connects_total", "http_exporter_sql_keepalive_failures_total",
@@ -124,6 +290,12 @@ func init() {
 		},
 	})
 	templateEscapers["database"] = escapeSQLDatabase
+	// An arg of a type but text is sent as a value, as one of text is, and
+	// checked against its type once filled.
+	for _, kind := range sqlArgKinds {
+		templateEscapers[kind] = func(_, _, value string) (string, error) { return value, nil }
+		templateRenderedRules[kind] = sqlArgRule(kind)
+	}
 }
 
 // sqlRequester is the sql request type's Requester.
@@ -199,13 +371,8 @@ func validateSQLRequest(x *model.Collector) error {
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(own.Statement) == "" {
-		return fmt.Errorf("collector %q has no request.statement; a sql collector runs one statement, such as SELECT state, count(*) AS n FROM jobs GROUP BY state", x.Name)
-	}
-	if d.statement != nil {
-		if err := d.statement(own.Statement); err != nil {
-			return fmt.Errorf("collector %q %w", x.Name, err)
-		}
+	if err := loadSQLStatement(x, d); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if strings.TrimSpace(r.Username) == "" {
 		return fmt.Errorf("collector %q request.username is required for request.type sql: the account the statement runs as", x.Name)
@@ -230,8 +397,16 @@ func validateSQLRequest(x *model.Collector) error {
 	if _, err := (templateField{"request.database", own.Database, "database"}).parse(); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	for i, arg := range own.Args {
-		if _, err := (templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"}).parse(); err != nil {
+	if err := checkSQLArgTypes(own.Args, own.ArgTypes); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	for i := range own.Args {
+		field := sqlArgField(own, i)
+		placeholders, err := field.parse()
+		if err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+		if err := checkSQLArgDefaults(field, placeholders); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
@@ -243,6 +418,54 @@ func validateSQLRequest(x *model.Collector) error {
 	}
 	if err := checkSQLConnections(own.Connections, false); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	return nil
+}
+
+// loadSQLStatement checks the collector's statement, written in
+// request.statement or in the file request.statement_file names, which it
+// reads into the collector's own keys, as the statement the collector runs.
+// The file is not read when the configuration is loaded without opening
+// the files it names, as the target allocator loads it
+// (model.Collector.DescriptorFilesUnread): the replicas, which mount it,
+// read and check it when they load the bundle. Nor is the statement
+// required of the debug page's playground, which never makes a request
+// and refuses a key naming a file (model.Collector.RequestNotMade): a copy
+// of a collector whose statement is in a file has none.
+func loadSQLStatement(x *model.Collector, d *sqlDriver) error {
+	own := sqlRequest(x)
+	switch {
+	case own.StatementFile != "" && own.Statement != "":
+		return errors.New("sets both request.statement and request.statement_file; write the statement in one of them")
+	case own.StatementFile != "":
+		if err := checkSQLStatementFileKey(own.StatementFile); err != nil {
+			return err
+		}
+		if x.DescriptorFilesUnread {
+			return nil
+		}
+		text, err := readSQLStatementFile(own.StatementFile)
+		if err != nil {
+			return err
+		}
+		own.statementText = text
+		x.Request.Own = own
+		if d.statement != nil {
+			if err := d.statement(text); err != nil {
+				return fmt.Errorf("request.statement_file %s: %w", own.StatementFile, err)
+			}
+		}
+		return nil
+	case strings.TrimSpace(own.Statement) == "":
+		if x.RequestNotMade && own.Statement == "" {
+			return nil
+		}
+		return errors.New("has no request.statement; a sql collector runs one statement, written in request.statement or in the file request.statement_file names, such as SELECT state, count(*) AS n FROM jobs GROUP BY state")
+	}
+	if d.statement != nil {
+		if err := d.statement(own.Statement); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -668,21 +891,155 @@ func sqlDatabase(c *model.Collector, overrides RequestOverrides) (string, error)
 	return templateField{"request.database", sqlRequest(c).Database, "database"}.render(overrides.Params)
 }
 
-// sqlArgs is the values bound to the statement, their placeholders filled.
+// sqlArgs is the values bound to the statement, their placeholders filled,
+// each of the type its arg_types gives it.
 func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
-	args := make([]any, len(sqlRequest(c).Args))
-	for i, arg := range sqlRequest(c).Args {
-		if !HasPathParams(arg) {
-			args[i] = arg
-			continue
+	own := sqlRequest(c)
+	args := make([]any, len(own.Args))
+	for i, arg := range own.Args {
+		field := sqlArgField(own, i)
+		value := arg
+		if HasPathParams(arg) {
+			var err error
+			if value, err = field.render(overrides.Params); err != nil {
+				return nil, err
+			}
 		}
-		value, err := templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"}.render(overrides.Params)
+		typed, err := sqlTypedArg(field.where, sqlArgType(own, i), value)
 		if err != nil {
 			return nil, err
 		}
-		args[i] = value
+		args[i] = typed
 	}
 	return args, nil
+}
+
+// The types an arg is bound as (request.arg_types): text, the default, as
+// written; int, a whole number of 64 bits; float, a floating-point number
+// of 64 bits; bool, true or false in any case. Each is handed to the
+// driver as Go's own type of it, which the driver binds as the database's:
+// MySQL's LIMIT ? takes no text before 8.0.22, and a comparison of a number
+// with text may compare them as text.
+const (
+	sqlArgText  = "text"
+	sqlArgInt   = "int"
+	sqlArgFloat = "float"
+	sqlArgBool  = "bool"
+)
+
+// sqlArgTypes are the types an arg may be bound as.
+var sqlArgTypes = []string{sqlArgText, sqlArgInt, sqlArgFloat, sqlArgBool}
+
+// sqlArgKinds are the kinds of templated field of the args of each type
+// but text, whose kind is arg: a value that a placeholder fills is checked
+// against its type when it is filled (sqlArgRule), so that a probe whose
+// parameter is no number is answered 400 before the server is asked, as a
+// static target's is refused when its file loads.
+var sqlArgKinds = map[string]string{sqlArgInt: "sql_int", sqlArgFloat: "sql_float", sqlArgBool: "sql_bool"}
+
+// sqlArgType is the type the arg at i is bound as.
+func sqlArgType(own SQLConfig, i int) string {
+	if i < len(own.ArgTypes) && own.ArgTypes[i] != "" {
+		return own.ArgTypes[i]
+	}
+	return sqlArgText
+}
+
+// sqlArgField is the arg at i as a templated field, of the kind its type
+// takes.
+func sqlArgField(own SQLConfig, i int) templateField {
+	kind := "arg"
+	if k, ok := sqlArgKinds[sqlArgType(own, i)]; ok {
+		kind = k
+	}
+	return templateField{fmt.Sprintf("request.args[%d]", i), own.Args[i], kind}
+}
+
+// sqlTypedArg is value, the arg at where, as its type takes it.
+func sqlTypedArg(where, typ, value string) (any, error) {
+	switch typ {
+	case sqlArgInt:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%s is %q, which is no whole number from -9223372036854775808 to 9223372036854775807, written in decimal digits with no blanks, as its type in request.arg_types, int, takes", where, value)
+		}
+		return n, nil
+	case sqlArgFloat:
+		f, err := strconv.ParseFloat(value, 64)
+		// A hexadecimal float, 0x1p-2, and one with underscores, which Go
+		// reads, are written no way a database does; Inf and NaN are no
+		// finite number, and a number past float64's range fails to parse.
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || strings.ContainsAny(value, "_xXpP") {
+			return nil, fmt.Errorf("%s is %q, which is no finite decimal number, such as 0.25 or 1e-3, as its type in request.arg_types, float, takes", where, value)
+		}
+		return f, nil
+	case sqlArgBool:
+		switch strings.ToLower(value) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return nil, fmt.Errorf("%s is %q, which is neither true nor false, as its type in request.arg_types, bool, takes", where, value)
+	}
+	return value, nil
+}
+
+// checkSQLArgTypes refuses arg_types that do not give a type for each arg,
+// in order, or that name a type there is not.
+func checkSQLArgTypes(args, types []string) error {
+	if len(types) == 0 {
+		return nil
+	}
+	if len(args) == 0 {
+		return errors.New("sets request.arg_types without request.args; the types are those of the args, by their places")
+	}
+	if len(types) != len(args) {
+		return fmt.Errorf("request.arg_types has %d types for %d args; give a type for each arg, in their order, text for one bound as text", len(types), len(args))
+	}
+	for i, typ := range types {
+		if !slices.Contains(sqlArgTypes, typ) {
+			return fmt.Errorf("request.arg_types[%d] is %q; want one of %s, in lower case", i, typ, strings.Join(sqlArgTypes, ", "))
+		}
+	}
+	return nil
+}
+
+// checkSQLArgDefaults refuses, when the configuration loads, an arg that is
+// not of its type as it is bound when no probe parameter fills it: one
+// with no placeholder, and one whose every placeholder has a default, which
+// a probe that gives none of them binds.
+func checkSQLArgDefaults(field templateField, placeholders []pathPlaceholder) error {
+	if field.kind == "arg" {
+		return nil
+	}
+	for _, p := range placeholders {
+		if !p.HasDefault {
+			return nil
+		}
+	}
+	if len(placeholders) == 0 {
+		return sqlArgRule(field.kind)(field.where, nil, field.text)
+	}
+	// Filling it checks it against its type (templateRenderedRules).
+	field.where += ", as its placeholders' defaults fill it,"
+	_, err := field.renderParsed(placeholders, nil)
+	return err
+}
+
+// sqlArgRule is the rule a filled arg of kind is checked by
+// (templateRenderedRules).
+func sqlArgRule(kind string) func(where string, _ []pathPlaceholder, value string) error {
+	typ := ""
+	for t, k := range sqlArgKinds {
+		if k == kind {
+			typ = t
+		}
+	}
+	return func(where string, _ []pathPlaceholder, value string) error {
+		_, err := sqlTypedArg(where, typ, value)
+		return err
+	}
 }
 
 // sqlMaxRows is the most rows a statement of c may return.
@@ -889,18 +1246,23 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 }
 
 // sqlSchemaRule is what a sql collector's request requires, as the exporter
-// does (validateSQLRequest): driver, statement and username, each
-// written with something other than ""; for the oracle driver, when it is
+// does (validateSQLRequest): driver and username, and statement or
+// statement_file but not both, each written with something other than "";
+// for the oracle driver, when it is
 // built, service_name; and for the snowflake driver, when it is built,
 // password_file or private_key_file; each driver named as the exporter
 // matches it (SchemaCaselessOneOf).
 func sqlSchemaRule() map[string]any {
-	keys := []string{"driver", "statement", "username"}
+	keys := []string{"driver", "username"}
 	properties := map[string]any{}
 	for _, key := range keys {
 		properties[key] = SchemaWrittenKey(key)["properties"].(map[string]any)[key]
 	}
-	rule := map[string]any{"required": keys, "properties": properties}
+	rule := map[string]any{"required": keys, "properties": properties,
+		// One of the two, written with something other than "", which is
+		// the key left out, as the exporter reads it: statement written ""
+		// beside statement_file is statement_file alone.
+		"oneOf": []any{SchemaWrittenKey("statement"), SchemaWrittenKey("statement_file")}}
 	driverIs := func(name string) map[string]any {
 		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(name)}}, "required": []string{"driver"}}
 	}
@@ -932,9 +1294,10 @@ func sqlTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 	if HasPathParams(sqlRequest(c).Database) {
 		out = append(out, templateField{"request.database", sqlRequest(c).Database, "database"})
 	}
-	for i, arg := range sqlRequest(c).Args {
+	own := sqlRequest(c)
+	for i, arg := range own.Args {
 		if HasPathParams(arg) {
-			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
+			out = append(out, sqlArgField(own, i))
 		}
 	}
 	return out
@@ -955,8 +1318,10 @@ func sqlKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
 		"driver":                          {"type": "string", "pattern": SchemaCaselessOneOf(BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
 		"database":                        {"not": SchemaOnlyBlanks(), "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only."},
-		"statement":                       {"not": SchemaOnlyBlanks(), "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
-		"args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
+		"statement_file":                  {"not": SchemaOnlyBlanks(), "pattern": "^/", "description": "sql: the absolute path of a file holding the one statement run, in place of statement, which it may not be written beside: read when the configuration loads, and again at each reload, which an edit of it triggers with --config.watch. A regular UTF-8 file of at most 1MiB, the statement with no {{param_...}} placeholder; a byte order mark and the blanks around the statement are taken off. Not read by the target allocator: mount it on every replica at the same path. See docs/SQL.md#the-statement."},
+		"statement":                       {"not": SchemaOnlyBlanks(), "description": "sql, required unless statement_file names the file of it: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
+		"args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders. Bound as text unless arg_types says otherwise."},
+		"arg_types":                       {"items": map[string]any{"enum": sqlArgTypes}, "description": "sql: the type each of args is bound as, one for each, in their order: text (as written), int (a whole number of 64 bits), float (a finite number) or bool (true or false, in any case). Left out, every arg is text. A value that is not of its type fails: when the configuration loads for an arg with no placeholder, or whose placeholders all have defaults; and a probe's parameter answered 400, a static target's params refused when its file loads. See docs/SQL.md#typed-args."},
 		"options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
 		"service_name":                    {"not": SchemaOnlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
 		"max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},

@@ -222,7 +222,9 @@ func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 	}
 	// What repair puts back from now on.
 	c.mu.Lock()
-	c.inForce = b.Generation
+	if c.inForce != b.Generation {
+		c.inForce, c.inForceAt = b.Generation, c.now()
+	}
 	c.mu.Unlock()
 	c.removeOtherGenerations(b.Generation)
 	return nil, nil

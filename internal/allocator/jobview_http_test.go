@@ -136,8 +136,11 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 
 	page := ask(h, "/", "").Body.String()
 	requireIn(t, page,
-		`<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>`,
-		"<h2>Probe jobs</h2>", `<table class="spread" id="probe-jobs">`,
+		`<thead>
+<tr><th rowspan="2">Member</th><th class="group" colspan="2"><b class="swatch seg-static"></b>Static targets</th><th class="group"><b class="swatch seg-probe"></b>Probe targets</th><th class="num" rowspan="2">Total</th><th class="num" rowspan="2">Weight</th><th class="num" rowspan="2">Draining weight</th><th class="num" rowspan="2">Capacity</th><th class="num" rowspan="2">Fair share</th><th rowspan="2">Share</th></tr>
+<tr><th class="num">Owned</th><th class="num">Draining</th><th class="num">Routed</th></tr>
+</thead>`,
+		`<h2 id="probe-jobs-section"><b class="swatch seg-probe"></b>Probe jobs</h2>`, `<table class="spread" id="probe-jobs">`,
 		`<th class="num" data-sort="num">Imbalance</th>`,
 		`<a href="?job=websites" title="the targets of the probe job websites"><strong>websites</strong></a>`,
 		"<tr data-order=\"2\" data-match=\"pods\ndemo\npod-files\">",
@@ -147,7 +150,7 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 		`<input id="jobs-filter" type="search"`, `<form class="filter jobs" id="jobs" role="search" hidden>`,
 		// The script puts the order and the filter back on the table a
 		// refresh swaps in, and the caret in the filter being typed in.
-		"      filterRows();\n      arrangeJobs();\n", `$("jobs-filter").setSelectionRange(caret[0], caret[1]);`,
+		"      arrangeJobs(() => {\n        content.innerHTML = text;\n", `box.setSelectionRange(typing[0], typing[1]);`,
 		`table.sortable th.num button::before { content: "\2195\00a0";`)
 	if strings.Contains(page, `title="probe job `) {
 		t.Error("the targets table still has a column of each probe job")
@@ -232,7 +235,7 @@ func TestTheJobViewListsItsTargets(t *testing.T) {
 		"looks through every target of the job, beyond the 1000 a list shows. Both match a target, the member it is routed to and the labels shown.",
 		`<tr><th>Collector</th><td>demo</td></tr>`, `<span class="label">team=web</span>`, `<span class="label">api_key=&lt;redacted&gt;</span>`, `<span class="label">timeout=10s</span>`,
 		"none: the probe targets file lists every target", `<table class="spread job-members">`, `<table class="targets" id="job-targets">`,
-		fmt.Sprintf(`<a href="?member=%s">%s</a>`, v.Targets.List[0].Member, v.Targets.List[0].Member), "Targets <span class=\"count\">6</span>")
+		fmt.Sprintf(`<a href="?member=%s">%s</a>`, v.Targets.List[0].Member, v.Targets.List[0].Member), "Probe targets <span class=\"count\">6</span>")
 	if strings.Contains(page, "s3cr3t") || strings.Contains(page, "gone=") {
 		t.Error("the page shows the credential param, or a label written empty")
 	}
@@ -315,4 +318,9 @@ func TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader(t *testing.T) {
 	if lv := jobViewOf(t, leader.a.Handler(""), "job="+job); lv.Partial || lv.Spread == nil || lv.Targets == nil {
 		t.Errorf("the leader's view is %+v", lv)
 	}
+	// A discovered_targets entry's view is left to the leader alike.
+	if ev := entryViewOf(t, follower.a.Handler(""), "entry=node"); !ev.Partial || ev.Leader != leader.addr.String() || ev.Spread != nil || ev.Targets != nil {
+		t.Errorf("the follower's entry view is %+v", ev)
+	}
+	requireIn(t, ask(follower.a.Handler(""), "/?entry=node", "").Body.String(), "this entry's at <code>/?entry=…</code> there")
 }

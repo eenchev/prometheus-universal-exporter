@@ -99,6 +99,9 @@ type Options struct {
 	// none, which the allocator takes for allocapi.DefaultCapacity.
 	Member, Advertise string
 	Capacity          float64
+	// StaticTargetsPath is the exporter's --web.static-targets-path, which
+	// the heartbeats say, for the allocator's page to link.
+	StaticTargetsPath string
 	// TokenFile, when set, holds the bearer token sent with every request,
 	// read again for each, so a rotated Secret is used from the next.
 	TokenFile string
@@ -168,6 +171,10 @@ const (
 // (config.Manager.Generation), stored with the configuration.
 type Status struct {
 	Generation string
+	// InForceAt is when Generation was put in force: when the reload that
+	// put it in force returned, or, for the bundle of the cache directory
+	// the exporter started with, when the client was made.
+	InForceAt  time.Time
 	LastSync   time.Time
 	SyncErrors map[string]uint64
 	Refused    uint64
@@ -204,6 +211,8 @@ type Client struct {
 	// still names the bundle before, for as long as the reload's end
 	// takes; the next heartbeat, sent at once, names the new one.
 	inForce, seen string
+	// inForceAt is when inForce was put in force (Status.InForceAt).
+	inForceAt time.Time
 	// interval is the heartbeat interval in force: Options' at the start,
 	// then the shortest of those announced holds, while one does.
 	// intervalChanged is closed, and made anew, when it changes, so each
@@ -300,7 +309,7 @@ func New(o Options) (*Client, error) {
 	if o.Transport == nil {
 		o.Transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	return &Client{
+	c := &Client{
 		o: o, base: base, client: &http.Client{Transport: o.Transport},
 		wake: make(chan struct{}, 1), beat: make(chan struct{}, 1),
 		instance: rand.Text(),
@@ -313,7 +322,11 @@ func New(o Options) (*Client, error) {
 		says: map[string]*said{}, sending: map[string]chan struct{}{},
 		syncErrors: map[string]uint64{StageHeartbeat: 0, StageFetch: 0, StageWrite: 0},
 		lastLogged: map[logKey]string{},
-	}, nil
+	}
+	if o.Generation != "" {
+		c.inForceAt = c.now()
+	}
+	return c, nil
 }
 
 // ParseURL checks --allocator.url: an http URL with a host, and nothing
@@ -358,7 +371,7 @@ func (c *Client) Status() Status {
 	for stage, n := range c.syncErrors {
 		errs[stage] = n
 	}
-	return Status{Generation: c.inForce, LastSync: c.lastSync, SyncErrors: errs, Refused: c.refusedTotal}
+	return Status{Generation: c.inForce, InForceAt: c.inForceAt, LastSync: c.lastSync, SyncErrors: errs, Refused: c.refusedTotal}
 }
 
 // event tells Options.Event of e.
@@ -615,7 +628,7 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity}
+		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity, StaticTargetsPath: c.o.StaticTargetsPath}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)

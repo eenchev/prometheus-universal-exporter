@@ -38,6 +38,25 @@ it before it is first drawn, so it never shows in the other theme first,
 and the status page's refresh keeps it. Without JavaScript the picker is
 hidden and the pages follow the browser.
 
+The status page, like the allocator's pages, writes each moment one way: in
+the browser's own time, the time of day alone when it is today and the date
+with it otherwise, its tooltip the moment in UTC and how long ago it was, or
+how long until it, as a backoff's end. A strip mark's tooltip begins with
+its moment in the browser's time, UTC after it. Without JavaScript the page
+shows each moment in UTC, as RFC 3339, as `?format=json` has it.
+
+The pages are made to be used from the keyboard and with a screen reader,
+on the exporter and the allocator alike: the keyboard reaches every link,
+field and sortable heading in reading order, and whatever it focuses has
+the accent's outline. Text, muted text and links read at 4.5:1 or more
+against every background in both themes, and a field's border, a search
+box's or a select's, at 3:1 or more. A strip of ✓ and ✗ marks is told to a
+screen reader as its counts and its latest result, such as *last 4 scrapes,
+oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped
+by backoff*, rather than as the symbols; the allocator's bars are images
+named by what they show; a filter's count of the rows it keeps is
+announced as it changes.
+
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
 or `same-site`, with Basic Auth on or off: a browser sends the exporter's
@@ -145,7 +164,12 @@ or shared: it is what Prometheus was given. A debug probe
 Each collector and target has a row, the failing ones first, then in order of
 collector, target and parameters:
 
-- the collector, target and parameters;
+- the collector, target and parameters. With `--web.debug=full`, a *debug*
+  link beside the collector sends the probe again with `&debug=true` and
+  shows its [debug report](CONFIGURATION.md#debug-probes), when the row shows the probe as it
+  was sent: a row whose target had a credential withheld, or a parameter
+  withheld, masked or cut, has no link, since the page has nothing to send
+  but what it shows;
 - when its latest probe began, how long ago that was and how long it took;
 - its result: `success`, `cached` (answered from the response cache),
   `failed`, `refused by policy` (`allowed_targets` or `denied_targets`

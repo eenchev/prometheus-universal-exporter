@@ -32,7 +32,7 @@ func TestTheStatusPageWritesDurationsWithoutZeroUnits(t *testing.T) {
 			}
 		}
 	}
-	requireIn("<td>1m</td>", "Exported http/json every 1m:", "exported every 2h.", "took 1m or longer", "exported every 1h30s", "threshold 1m;")
+	requireIn(`<td data-value="60">1m</td>`, "Exported http/json every 1m:", "exported every 2h.", "took 1m or longer", "exported every 1h30s", "threshold 1m;")
 	if strings.Contains(page, "m0s") || strings.Contains(page, "h0m") {
 		t.Errorf("the page writes a zero unit:\n%s", page)
 	}

@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"path"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +93,30 @@ type staticTargetStatus struct {
 	errorText string
 	failedAt  time.Time
 	failures  int
+	// recent are the last recentProbesPerKey scrapes, oldest first, for
+	// the row's strip: a target that fails now and then reads apart from
+	// one that failed once. Each keeps its start, length and result alone.
+	recent []staticRecentScrape
+}
+
+// staticRecentScrape is one scrape of a target's strip.
+type staticRecentScrape struct {
+	started  time.Time
+	duration time.Duration
+	result   string
+}
+
+// staticResult is the result a scrape that ended with status shows.
+func staticResult(status staticScrapeStatus) string {
+	switch {
+	case status.ok:
+		return statusSuccess
+	case status.skipped:
+		return statusBackoff
+	case status.stale:
+		return statusStale
+	}
+	return statusFailed
 }
 
 // noteStaticStatusLocked records status as the last scrape of the target
@@ -121,6 +149,10 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 	}
 	status.err = nil
 	st.last = status
+	if len(st.recent) == recentProbesPerKey {
+		st.recent = append(st.recent[:0:0], st.recent[1:]...)
+	}
+	st.recent = append(st.recent, staticRecentScrape{started: status.started, duration: status.duration, result: staticResult(status)})
 }
 
 // shownStatusError is err as the status page shows it. The page is read by
@@ -150,6 +182,59 @@ type callerShownError struct {
 func (e *callerShownError) Error() string { return e.text }
 
 func (e *callerShownError) Unwrap() error { return e.err }
+
+// staticStatusScrape is one scrape of a row's strip, in the JSON and as a
+// mark of the strip: ✓ success, ✗ failed, ~ stale result served, …
+// skipped by backoff, as the recent probes' strip marks them.
+type staticStatusScrape struct {
+	At       string  `json:"at"`
+	Duration float64 `json:"duration_seconds"`
+	Result   string  `json:"result"`
+	Mark     string  `json:"-"`
+	Good     bool    `json:"-"`
+}
+
+// stripText is a strip of the results, oldest first, of scrapes or probes
+// (noun), as a screen reader is told it: its marks, ✓ and ✗, read as
+// symbols one at a time, say nothing of what they stand for, so the strip
+// is told as how many it holds of each result, in the order each first
+// came, and how the latest went: "last 3 scrapes, oldest first: 2 success,
+// 1 failed; the latest failed". Empty for no strip.
+func stripText(results []string, noun string) string {
+	if len(results) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	var order []string
+	for _, r := range results {
+		if counts[r] == 0 {
+			order = append(order, r)
+		}
+		counts[r]++
+	}
+	parts := make([]string, len(order))
+	for i, r := range order {
+		parts[i] = strconv.Itoa(counts[r]) + " " + r
+	}
+	text := "last " + strconv.Itoa(len(results)) + " " + noun
+	if len(results) != 1 {
+		text += "s, oldest first"
+	}
+	return text + ": " + strings.Join(parts, ", ") + "; the latest " + results[len(results)-1]
+}
+
+// staticMark is the strip's mark of a scrape with result.
+func staticMark(result string) string {
+	switch result {
+	case statusSuccess:
+		return "✓"
+	case statusStale:
+		return "~"
+	case statusBackoff:
+		return "…"
+	}
+	return "✗"
+}
 
 // The results a row shows.
 const (
@@ -187,6 +272,8 @@ type staticStatusRow struct {
 	// so that a failure in the night can still be read in the morning, but
 	// the target is past it.
 	LastErrorRecovered *bool `json:"last_error_recovered,omitempty"`
+	// Recent are its last scrapes, oldest first, as the strip shows them.
+	Recent []staticStatusScrape `json:"recent"`
 	// LabelText, Age and DurationText are the row's values as the page
 	// writes them.
 	LabelText    string `json:"-"`
@@ -195,6 +282,17 @@ type staticStatusRow struct {
 	// LastErrorAge is how long ago the last error's scrape began, as the
 	// page writes it.
 	LastErrorAge string `json:"-"`
+	// IntervalSeconds, ScrapedAt (Unix seconds, 0 before the first scrape)
+	// and RecentBad (the strip's scrapes not a success) are the values the
+	// page's script sorts the row's numbers by, and Match is the text its
+	// filter matches: name, collector, target, labels and result, one a
+	// line.
+	IntervalSeconds float64 `json:"-"`
+	// StripText is the strip as a screen reader is told it (stripText).
+	StripText string `json:"-"`
+	ScrapedAt int64  `json:"-"`
+	RecentBad int    `json:"-"`
+	Match     string `json:"-"`
 }
 
 // staticStatusPage is the page, and the JSON: the static targets, then the
@@ -203,11 +301,14 @@ type staticStatusPage struct {
 	GeneratedAt string `json:"generated_at"`
 	// Allocator says the targets are those the allocator gave this
 	// replica, in allocator mode, and not every target there is.
-	Allocator  bool              `json:"allocator_mode"`
-	Total      int               `json:"targets"`
-	Failing    int               `json:"failing"`
-	NotScraped int               `json:"not_yet_scraped"`
-	Rows       []staticStatusRow `json:"static_targets"`
+	Allocator bool `json:"allocator_mode"`
+	// Bundle is, in allocator mode, the member this replica is, the
+	// allocator's view of it and the bundle in force.
+	Bundle     *allocatorBundleStatus `json:"allocator,omitempty"`
+	Total      int                    `json:"targets"`
+	Failing    int                    `json:"failing"`
+	NotScraped int                    `json:"not_yet_scraped"`
+	Rows       []staticStatusRow      `json:"static_targets"`
 	// ProbeKeys is how many keys the recent probes have, FailingProbes how
 	// many of them failed their latest probe.
 	ProbeKeys     int              `json:"probe_keys"`
@@ -219,8 +320,19 @@ type staticStatusPage struct {
 	// says them.
 	PerKey  int `json:"-"`
 	MaxKeys int `json:"-"`
-	// StaticTargetsPath is the static targets endpoint.
+	// StaticTargetsPath is the static targets endpoint, and SeriesLink
+	// the endpoint relative to the page, which is served at its path
+	// followed by /status: a target's name links to the endpoint narrowed
+	// to it, ?targets=, so the link holds behind a proxy that serves the
+	// exporter under a prefix, as the bar's links do. DebugLinks says
+	// --web.debug is full, under which a scraped target's row links its
+	// debug scrape too, ?debug=.
 	StaticTargetsPath string `json:"-"`
+	SeriesLink        string `json:"-"`
+	DebugLinks        bool   `json:"-"`
+	// CollectorsLink is the collectors page relative to this one: each
+	// row's collector links its section there, #collector-<name>.
+	CollectorsLink string `json:"-"`
 	// Chrome is the page's bar (pagechrome.go); the content section, which
 	// a refresh swaps in, has none.
 	Chrome pageChrome `json:"-"`
@@ -240,8 +352,14 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		Allocator:         s.allocatorStatus != nil,
 		Total:             len(targets),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
+		SeriesLink:        "../" + path.Base(s.staticTargetsEndpoint()),
+		DebugLinks:        s.debug == DebugFull,
+		CollectorsLink:    rootLink(s.staticTargetsStatusEndpoint()) + relativeLink(pageCollectors),
 		PerKey:            recentProbesPerKey,
 		MaxKeys:           recentProbeKeys,
+	}
+	if s.allocatorStatus != nil {
+		page.Bundle = allocatorBundleFor(s.allocatorStatus(), s.manager.Generation(), now)
 	}
 	page.Probes = s.probeRowsAt(now)
 	page.ProbeKeys = len(page.Probes)
@@ -257,6 +375,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 	for i := range targets {
 		if st := s.staticStatus[targets[i].Name]; st != nil && st.last.collector == targets[i].Collector && st.last.target == targets[i].Target {
 			kept := *st
+			kept.recent = slices.Clone(st.recent)
 			statuses[i] = &kept
 		}
 	}
@@ -277,6 +396,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			Interval:      time.Duration(target.Interval).String(),
 			ExportViaOTLP: target.ExportViaOTLP,
 			Result:        statusNotScraped,
+			Recent:        []staticStatusScrape{},
 		}
 		if c := collectors[target.Collector]; c != nil {
 			row.Target = fetch.DisplayTarget(c, target.Target)
@@ -297,6 +417,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			age := max(now.Sub(last.started), 0).Seconds()
 			duration := last.duration.Seconds()
 			row.LastScrape = last.started.UTC().Format(time.RFC3339)
+			row.ScrapedAt = last.started.Unix()
 			row.LastScrapeAge, row.Duration = &age, &duration
 			row.Age = shortDuration(time.Duration(age * float64(time.Second)))
 			row.DurationText = shownScrapeDuration(last.duration)
@@ -310,17 +431,11 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			// A scrape that succeeded began after every one that failed
 			// before it, so the error kept is older than it.
 			row.LastErrorRecovered = errorRecovered(st.errorText, last.ok)
-			switch {
-			case last.ok:
-				row.Result = statusSuccess
-			case last.skipped:
-				row.Result = statusBackoff
-			case last.stale:
-				row.Result = statusStale
-			default:
-				row.Result = statusFailed
-			}
+			row.Result = staticResult(last)
 			row.Failing = !last.ok
+			for _, r := range st.recent {
+				row.Recent = append(row.Recent, staticStatusScrape{At: r.started.UTC().Format(time.RFC3339), Duration: r.duration.Seconds(), Result: r.result, Mark: staticMark(r.result), Good: r.result == statusSuccess})
+			}
 			if b := s.backoffs.state(target.Collector, last.backoffKey); b.backingOff {
 				row.BackoffFailure = b.failures
 				row.BackoffTrial = b.trial
@@ -332,6 +447,18 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 				}
 			}
 		}
+		row.IntervalSeconds = time.Duration(target.Interval).Seconds()
+		results := make([]string, len(row.Recent))
+		for i, r := range row.Recent {
+			results[i] = r.Result
+		}
+		row.StripText = stripText(results, "scrape")
+		for _, r := range row.Recent {
+			if !r.Good {
+				row.RecentBad++
+			}
+		}
+		row.Match = strings.Join([]string{row.Name, row.Collector, row.Target, row.LabelText, row.Result}, "\n")
 		if row.Failing {
 			page.Failing++
 		}
@@ -348,6 +475,41 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		return page.Rows[i].Name < page.Rows[j].Name
 	})
 	return page
+}
+
+// allocatorBundleStatus is what the status page says of the allocator in
+// allocator mode: the member this replica is, with a link to the
+// allocator's view of it; the generation of the bundle in force, the
+// manager's, and since when, which the client says when the bundle it last
+// saw put in force is that one; and when the allocator was last heard
+// from. A time is RFC 3339, in UTC.
+type allocatorBundleStatus struct {
+	Member       string `json:"member"`
+	MemberView   string `json:"member_view"`
+	Generation   string `json:"generation,omitempty"`
+	InForceSince string `json:"in_force_since,omitempty"`
+	LastSync     string `json:"last_sync,omitempty"`
+	// InForceAge and LastSyncAge are how long ago, as the page writes it.
+	InForceAge  string `json:"-"`
+	LastSyncAge string `json:"-"`
+}
+
+// allocatorBundleFor is the page's allocatorBundleStatus of st, the
+// manager's bundle in force being generation.
+func allocatorBundleFor(st AllocatorStatus, generation string, now time.Time) *allocatorBundleStatus {
+	b := &allocatorBundleStatus{Member: st.Member, Generation: generation}
+	if st.URL != "" {
+		b.MemberView = strings.TrimSuffix(st.URL, "/") + "/?member=" + url.QueryEscape(st.Member)
+	}
+	if generation != "" && st.Generation == generation && !st.InForceAt.IsZero() {
+		b.InForceSince = st.InForceAt.UTC().Format(time.RFC3339)
+		b.InForceAge = shortDuration(max(now.Sub(st.InForceAt), 0))
+	}
+	if !st.LastSync.IsZero() {
+		b.LastSync = st.LastSync.UTC().Format(time.RFC3339)
+		b.LastSyncAge = shortDuration(max(now.Sub(st.LastSync), 0))
+	}
+	return b
 }
 
 // lastErrorCell is a Last error cell of the status page as the template
@@ -468,7 +630,8 @@ table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
-`+pagekit.RefreshStyle+`dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+`+pagekit.RefreshStyle+pagekit.SortableStyle+`p.note:empty { display: none; }
+dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
 dialog#whole::backdrop { background: rgb(0 0 0 / 0.5); }
 dialog#whole .box { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 34px); padding: 16px; }
 dialog#whole pre { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -535,10 +698,16 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
   // A swap takes away what had focus in the content, such as a long text's
   // control the dialog gave focus back to; the control at the same place in
   // the new content takes it.
+  // The static targets table sorts and filters as pagekit.SortableScript
+  // says, its order and filter kept through a swap.
+`+pagekit.SortableScript+pagekit.LocalTimesScript+`
+  const arrangeTargets = sortable(content, "static-targets-table", "static-filter", "static targets");
+  localTimes(content);
   function swap(fragment) {
     const summaries = () => [...content.querySelectorAll("details.long > summary")];
     const focused = summaries().indexOf(document.activeElement);
-    content.innerHTML = fragment;
+    arrangeTargets(() => { content.innerHTML = fragment; });
+    localTimes(content);
     if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
     refreshedAt = Date.now();
     state.className = "muted";
@@ -649,11 +818,13 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 </main>
 </body>
 </html>
-{{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{.At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{.At}}</span>{{end}}{{end}}
+{{define "at"}}<time datetime="{{.}}">{{.}}</time>{{end}}
+{{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{template "at" .At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{template "at" .At}}</span>{{end}}{{end}}
 {{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
-{{- if .Allocator}}
-<p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
+{{- with .Bundle}}
+<p>This exporter runs in allocator mode as the member {{if .MemberView}}<a href="{{.MemberView}}" title="the allocator's view of {{.Member}}">{{.Member}}</a>{{else}}{{.Member}}{{end}}: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
+<p class="meta" id="bundle">{{if .Generation}}The bundle in force is generation <code>{{.Generation}}</code>{{if .InForceSince}}, in force since {{template "at" .InForceSince}} ({{.InForceAge}} ago){{end}}.{{else}}No bundle from the allocator is in force yet.{{end}}{{if .LastSync}} The allocator was last heard from at {{template "at" .LastSync}} ({{.LastSyncAge}} ago).{{end}}</p>
 {{- end}}
 {{- if .OTLP.Enabled}}{{if .OTLP.Failing}}
 <p class="bad">OTLP export is failing: the last {{.OTLP.Failures}} export{{if ne .OTLP.Failures 1}}s{{end}} failed{{if eq .OTLP.Readiness "unready"}}, and the exporter is unready{{end}}. See <a href="#otlp">OTLP export</a>.</p>
@@ -662,21 +833,27 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 
 <h2>Static targets</h2>
 {{- if .Total}}
-<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>.</p>
+<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>; a scraped target's name links to its own. The last {{.PerKey}} scrapes of each are kept, oldest first in the strip (✓ success, ✗ failed, ~ stale result served, … skipped by backoff).</p>
+<form class="filter table" id="static-filter-form" role="search" hidden>
+<label for="static-filter">Filter: name, collector, target, labels or result</label>
+<input id="static-filter" type="search" autocomplete="off" spellcheck="false">
+</form>
+<p class="note muted" data-rows-of="static-targets-table" role="status" aria-live="polite"></p>
 <div class="scroll">
-<table>
-<thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Failures</th><th>Last error</th></tr></thead>
+<table id="static-targets-table">
+<thead><tr><th data-sort="text">Target</th><th data-sort="num">Interval</th><th data-sort="num">Last scrape</th><th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th><th data-sort="text">Last error</th></tr></thead>
 <tbody>
-{{- range .Rows}}
-<tr>
-<td class="what"><strong>{{.Name}}</strong><br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
-<td>{{duration .Interval}}</td>
-<td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
+{{- range $i, $row := .Rows}}{{with $row}}
+<tr data-order="{{$i}}" data-match="{{.Match}}">
+<td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> <a href="{{$.CollectorsLink}}#collector-{{.Collector}}" title="the collector {{.Collector}} on the collectors page">{{.Collector}}</a>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
+<td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{template "at" .LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
-<td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
+<td class="strip" data-value="{{.RecentBad}}">{{if .StripText}}<span class="sr-only">{{.StripText}}</span><span aria-hidden="true">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</span>{{end}}</td>
+<td data-value="{{.Failures}}">{{.Failures}}{{if .Backoff}}<br><span class="bad">{{if .BackoffUntil}}backing off until {{template "at" .BackoffUntil}}{{else}}{{.Backoff}}{{end}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
-{{- end}}
+{{- end}}{{end}}
 </tbody>
 </table>
 </div>
@@ -693,10 +870,10 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 {{- range .Probes}}
 <tr>
-<td class="what"><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
-<td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
+<td class="what"><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .DebugLink}} <a class="muted" href="{{.DebugLink}}" title="probe it once now, and report each stage">debug</a>{{end}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
+<td>{{template "at" .LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
-<td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
+<td class="strip"><span class="sr-only">{{.StripText}}</span><span aria-hidden="true">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</span></td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}
@@ -718,11 +895,11 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 {{- with .ExporterInstance}}
 <tr><th>Exporter instance</th><td><code>{{.Attribute}}</code> = {{.Value}}<br><span class="muted">on every resource the export sends</span></td></tr>
 {{- end}}
-<tr><th>Last export</th><td>{{with .LastExport}}{{.Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{with .LastExport}}{{template "at" .Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 {{- if .UnreadyAfter}}
-<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
+<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{template "at" .UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
 {{- end}}
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
@@ -739,8 +916,8 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
-<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{template "at" .LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} log record{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
@@ -761,8 +938,8 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <table class="facts">
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
-<tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{if .LastExport}}{{template "at" .LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Sampling rules</th><td>threshold {{duration .Threshold}}; errors {{.Errors}}; parent_based {{.ParentBased}}; sample_ratio {{.SampleRatioText}}; max_per_second {{if .MaxPerSecond}}{{.MaxPerSecond}}{{else}}no cap{{end}}</td></tr>

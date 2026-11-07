@@ -320,7 +320,7 @@ func TestTheStatusPageShowsTheReadinessOTLPFailuresMake(t *testing.T) {
 	if code, _ := ready(t, server); code != http.StatusServiceUnavailable {
 		t.Errorf("/ready answers %d while the page says unready", code)
 	}
-	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="bad">unready</span> since `+d.UnreadySince+`: the last 2 OTLP exports failed`, "OTLP export is failing: the last 2 exports failed, and the exporter is unready.")
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<span class="bad">unready</span> since <time datetime="`+d.UnreadySince+`">`+d.UnreadySince+`</time>: the last 2 OTLP exports failed`, "OTLP export is failing: the last 2 exports failed, and the exporter is unready.")
 
 	endpoint.mu.Lock()
 	endpoint.statuses = []int{http.StatusOK}

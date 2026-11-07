@@ -72,6 +72,15 @@ const (
 // hides share a key.
 type recentProbeKey struct {
 	collector, target, params string
+	// replay is, when the target and every parameter are shown as they
+	// were sent, neither withheld, masked nor cut, the probe's query
+	// (collector, target and parameters, encoded), which the page links
+	// with debug=true at --web.debug=full; and empty when anything is
+	// shown otherwise, since the page has nothing to send the probe again
+	// with but what it shows. It is made of the values shown, so it adds
+	// nothing to the key's identity but in the probe whose sent values
+	// read as redacted ones do.
+	replay string
 }
 
 // recentProbe is one probe as the page shows it.
@@ -214,11 +223,45 @@ func (r *recentProbes) snapshot() []recentProbeEntry {
 // recentProbeKeyFor is the key of a probe of collector c of target, shown
 // as logTarget, with the request query makes (probeKeyQuery).
 func recentProbeKeyFor(c *model.Collector, logTarget string, query url.Values) recentProbeKey {
-	return recentProbeKey{
+	key := recentProbeKey{
 		collector: c.Name,
 		target:    model.CutTo(logTarget, recentProbeTargetBytes, false),
 		params:    shownProbeParams(query),
 	}
+	if replayable(key, query) {
+		replay := url.Values{"collector": {c.Name}}
+		if target := query.Get("target"); target != "" {
+			replay.Set("target", target)
+		}
+		for name := range query {
+			if name != "target" && name != "collector" {
+				replay.Set(name, query.Get(name))
+			}
+		}
+		key.replay = replay.Encode()
+	}
+	return key
+}
+
+// replayable says the key of a probe of query shows the probe as it was
+// sent: its target as it came, and each parameter neither withheld,
+// masked nor cut.
+func replayable(key recentProbeKey, query url.Values) bool {
+	if key.target != query.Get("target") {
+		return false
+	}
+	length := -1
+	for name := range query {
+		if name == "target" || name == "collector" {
+			continue
+		}
+		value := query.Get(name)
+		if fetch.CredentialName(name) || fetch.RedactText(value) != value || len(name) > recentProbeParamBytes || len(value) > recentProbeParamBytes {
+			return false
+		}
+		length += 1 + len(name) + 1 + len(value)
+	}
+	return length <= recentProbeParamsBytes
 }
 
 // shownProbeParams is the parameters of a probe that change its request,
@@ -318,6 +361,12 @@ type probeStatusRow struct {
 	Age          string `json:"-"`
 	DurationText string `json:"-"`
 	LastErrorAge string `json:"-"`
+	// DebugLink is, at --web.debug=full, the probe sent again with
+	// debug=true, relative to the page, for a key that shows the probe as
+	// it was sent (recentProbeKey.replay); empty otherwise.
+	DebugLink string `json:"-"`
+	// StripText is the strip as a screen reader is told it (stripText).
+	StripText string `json:"-"`
 }
 
 // probeStatusProbe is one probe of a key, in the JSON and as a mark of the
@@ -358,6 +407,7 @@ func probeMark(result string) string {
 // first, each part in order of collector, target and parameters.
 func (s *Server) probeRowsAt(now time.Time) []probeStatusRow {
 	entries := s.recent.snapshot()
+	probeLink := rootLink(s.staticTargetsStatusEndpoint()) + "probe?"
 	rows := make([]probeStatusRow, 0, len(entries))
 	for _, entry := range entries {
 		if len(entry.probes) == 0 {
@@ -387,6 +437,14 @@ func (s *Server) probeRowsAt(now time.Time) []probeStatusRow {
 			}
 		}
 		row.LastErrorRecovered = errorRecovered(row.LastError, !row.Failing)
+		results := make([]string, len(row.Probes))
+		for i, p := range row.Probes {
+			results[i] = p.Result
+		}
+		row.StripText = stripText(results, "probe")
+		if s.debug == DebugFull && entry.key.replay != "" {
+			row.DebugLink = probeLink + entry.key.replay + "&" + probeDebugParam + "=true"
+		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {

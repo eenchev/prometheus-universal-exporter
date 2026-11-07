@@ -3,6 +3,7 @@ package allocator
 import (
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -272,6 +273,8 @@ func matchText(target any) string {
 		return strings.Join(t.matchTexts(), "\n")
 	case JobTarget:
 		return strings.Join(t.matchTexts(), "\n")
+	case EntryTarget:
+		return strings.Join(t.matchTexts(), "\n")
 	}
 	return ""
 }
@@ -326,7 +329,7 @@ p.back { margin: 0 0 4px; font-size: 14px; }
 form.filter { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 0; max-width: 640px; }
 form.filter label { font-size: 14px; font-weight: 600; }
 form.filter .filter-row { display: flex; gap: 8px; }
-form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--field); border-radius: 6px; }
 form.filter button { flex: none; height: 34px; padding: 0 12px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 form.filter .muted { font-size: 13px; }
 form.filter[hidden] { display: none; }
@@ -376,7 +379,7 @@ const memberContent = `{{define "content"}}
 
 <h2>This member</h2>
 <table class="facts">
-<tr><th>Address</th><td>{{.Address}}</td></tr>
+<tr><th>Address</th><td>{{.Address}}{{with exporterStatus .}} <a href="{{.}}" title="the member's own status page, its static targets' scrapes and its recent probes">status page</a>{{end}}</td></tr>
 <tr><th>State</th><td>{{template "state" .}}</td></tr>
 <tr><th>Last heartbeat</th><td>{{template "heartbeat" .}}</td></tr>
 <tr><th>Bundle in force</th><td>{{template "bundle" .}}</td></tr>
@@ -385,7 +388,7 @@ const memberContent = `{{define "content"}}
 {{- end}}
 <p>{{.Static.Total}} static target{{if ne .Static.Total 1}}s{{end}} owned, {{.Draining.Total}} draining and {{.Probes.Total}} probe target{{if ne .Probes.Total 1}}s{{end}} routed to this member.{{if .Filter}} Only those holding “{{.Filter}}” are listed.{{end}}</p>
 
-<h2>Static targets owned <span class="count">{{.Static.Total}}</span></h2>
+<h2><b class="swatch seg-static"></b>Static targets owned <span class="count">{{.Static.Total}}</span></h2>
 {{- with .Static}}{{template "list-note" (listNote .Total .Matching (len .List) $.Filter "owned")}}{{end}}
 {{- if .Static.List}}
 <div class="scroll">
@@ -393,7 +396,7 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Labels</th><th class="num">Interval</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Static.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id">{{with exporterSeries $.Status .Name}}<a href="{{.}}" title="the series the member serves of this target">{{end}}<strong>{{.Name}}</strong>{{if exporterSeries $.Status .Name}}</a>{{end}}</td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="labels" data-label="Labels"><span class="v">{{template "labels" .Labels}}</span></td><td class="num" data-label="Interval"><span class="v">{{duration .Interval}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -409,14 +412,14 @@ const memberContent = `{{define "content"}}
 <thead><tr><th>Name</th><th>Target</th><th>Collector</th><th>Moved to</th><th class="num">Drains for</th><th class="num">Weight</th></tr></thead>
 <tbody>
 {{- range .Draining.List}}
-<tr data-match="{{match .}}"><td class="id"><strong>{{.Name}}</strong></td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
+<tr data-match="{{match .}}"><td class="id">{{with exporterSeries $.Status .Name}}<a href="{{.}}" title="the series the member serves of this target while it drains">{{end}}<strong>{{.Name}}</strong>{{if exporterSeries $.Status .Name}}</a>{{end}}</td><td class="target" data-label="Target"><span class="v">{{template "target" .Target}}</span></td><td data-label="Collector"><span class="v">{{.Collector}}</span></td><td class="moved" data-label="Moved to"><span class="v">{{if .MovedTo}}<a href="?member={{.MovedTo}}">{{.MovedTo}}</a>{{else}}<span class="muted">–</span>{{end}}</span></td><td class="num" data-label="Drains for"><span class="v">{{age .DrainsForSeconds}}</span></td><td class="num" data-label="Weight"><span class="v">{{weight .Weight}}</span></td></tr>
 {{- end}}
 </tbody>
 </table>
 </div>
 {{- end}}
 
-<h2>Probe targets routed <span class="count">{{.Probes.Total}}</span></h2>
+<h2><b class="swatch seg-probe"></b>Probe targets routed <span class="count">{{.Probes.Total}}</span></h2>
 {{- if .Probes.Jobs}}
 <table class="jobs">
 <thead><tr><th>Probe job</th><th>Collector</th><th class="num">Targets</th><th class="num">Weight</th></tr></thead>
@@ -442,6 +445,41 @@ const memberContent = `{{define "content"}}
 {{- end}}
 {{- end}}
 {{end}}`
+
+// exporterStatus is the status page of the member m, as its heartbeats
+// advertise it, and exporterSeries the series it serves of its static
+// target name: the exporter serves its pages over plain HTTP at the
+// address it advertises, its static targets at the path its heartbeats say
+// and its status page at that path followed by /status. Each is "" for a
+// member whose heartbeats say no path.
+func exporterStatus(m *MemberStatus) string {
+	if base := exporterBase(m); base != "" {
+		return base + "/status"
+	}
+	return ""
+}
+
+func exporterSeries(m *MemberStatus, name string) string {
+	if base := exporterBase(m); base != "" {
+		return base + "?" + url.Values{"targets": {name}}.Encode()
+	}
+	return ""
+}
+
+// exporterBase is the member's static targets endpoint, "" without a path
+// or when its address, which a heartbeat takes as any host:port, would not
+// be the host of the URL alone: one with a / or an @ in its host would
+// send the link elsewhere.
+func exporterBase(m *MemberStatus) string {
+	if m == nil || m.StaticTargetsPath == "" {
+		return ""
+	}
+	u, err := url.Parse("http://" + m.Address)
+	if err != nil || u.Host != m.Address || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	return "http://" + m.Address + m.StaticTargetsPath
+}
 
 // listNoteData is what a list's note says: how many targets it has, how
 // many the filter matches, how many it shows, and its table's id.

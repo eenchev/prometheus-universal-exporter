@@ -417,13 +417,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var allocClient *allocclient.Client
 	stopAllocClient := func() {}
 	if alloc != nil {
+		alloc.staticTargetsPath = staticTargetsEndpoint
 		allocClient, stopAllocClient, err = alloc.startClient(manager, generation, logger)
 		if err != nil {
 			logger.Error("invalid command line; exiting", "error", err.Error())
 			return 2
 		}
 		defer stopAllocClient()
-		server.SetAllocatorStatus(allocatorStatus(allocClient))
+		server.SetAllocatorStatus(allocatorStatus(allocClient, alloc.url, alloc.member))
 	}
 
 	conf := manager.Get()

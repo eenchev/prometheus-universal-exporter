@@ -58,6 +58,13 @@ type AllocatorStatus struct {
 	LastSync   time.Time
 	SyncErrors map[string]uint64
 	Refused    uint64
+	// URL is the allocator's (--allocator.url) and Member this replica's
+	// member name, for the status page's link to the allocator's view of
+	// the member. Generation is the bundle the client last saw put in
+	// force and InForceAt when it was: the status page says it beside the
+	// manager's generation only when the two are the same bundle.
+	URL, Member, Generation string
+	InForceAt               time.Time
 }
 
 // SetAllocatorStatus makes status the source of the allocator self-metrics,

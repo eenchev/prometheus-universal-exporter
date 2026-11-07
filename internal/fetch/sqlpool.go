@@ -822,7 +822,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	// whose context has ended is abandoned by the driver, its connection
 	// closed with it.
 	stmtCtx, stop := context.WithCancel(ctx)
-	rows, done, err := p.driver.run(stmtCtx, conn, sqlRequest(col).Statement, args, timeout)
+	rows, done, err := p.driver.run(stmtCtx, conn, sqlStatement(col), args, timeout)
 	if err != nil {
 		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)

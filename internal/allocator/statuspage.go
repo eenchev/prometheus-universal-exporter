@@ -38,6 +38,10 @@ func (a *Allocator) serveStatus(w http.ResponseWriter, r *http.Request) {
 		a.serveJobView(w, r)
 		return
 	}
+	if r.URL.Query().Has("entry") {
+		a.serveEntryView(w, r)
+		return
+	}
 	writeStatusJSON(w, a.Status())
 }
 
@@ -111,6 +115,22 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 				SourceLabelsBox: len(view.Sources) > 0, SourceLabels: sourceLabels}
 		}
 		page, content = jobPageTemplate, jobContentTemplate
+	case query.Has("entry"):
+		entry := query.Get("entry")
+		if entry == "" {
+			http.Error(w, "the entry parameter names a discovered_targets entry; / without it is the whole status", http.StatusBadRequest)
+			return
+		}
+		// An entry the static target file does not have is a page that
+		// says so, answered 200, as a gone job's is. The JSON answers 404.
+		view, known := a.EntryView(entry, query.Get("filter"))
+		frame.Entry = entryPageOf(view, known)
+		frame.Content = frame.Entry
+		frame.JSON += "?" + url.Values{"entry": {entry}}.Encode()
+		if !view.Partial {
+			frame.Filter = &filterForm{Param: "entry", Value: entry, Text: view.Filter, Hidden: !known, Limit: view.Limit}
+		}
+		page, content = entryPageTemplate, entryContentTemplate
 	default:
 		frame.Content = statusPageOf(s)
 	}
@@ -147,9 +167,11 @@ type pageFrame struct {
 	Docs              string
 	// JSON is where the bar's JSON link points, relative to the page.
 	JSON string
-	// Member is the member's view and Job the probe job's, nil elsewhere.
+	// Member is the member's view, Job the probe job's and Entry the
+	// discovered_targets entry's, nil elsewhere.
 	Member *memberPage
 	Job    *jobPage
+	Entry  *entryPage
 	// Filter is a view's filter, nil on the status page and on a view a
 	// follower leaves to its leader.
 	Filter *filterForm
@@ -326,7 +348,22 @@ func jobMatch(j JobSpread) string {
 }
 
 var statusFuncs = template.FuncMap{"count": count, "weight": weight, "average": average, "imbalance": imbalance, "age": age, "interval": interval, "duration": pagekit.DurationText, "gen": shortGeneration,
-	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames}
+	"listNote": listNote, "match": matchText, "jobMatch": jobMatch, "sourceNames": sourceNames, "plus": plus, "andList": andList,
+	"exporterStatus": exporterStatus, "exporterSeries": exporterSeries}
+
+// plus is a + b, for a total of two counts.
+func plus(a, b int) int { return a + b }
+
+// andList writes names as prose: "a", "a and b", "a, b and c".
+func andList(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
 
 // statusStyle is the page's own style, after pagekit.Style: its tables, as
 // the exporter's status page draws them, numbers right-aligned in figures
@@ -396,23 +433,13 @@ td.bar { width: 32%; min-width: 120px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend b { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
 .legend b.avg { width: 0; height: 14px; border-radius: 0; border-left: 2px solid var(--fg); }
+/* A kind of target's colour, the bars', beside its name wherever the page
+   names it: the definitions, the members table's headings, the sections'
+   headings and what a discovery source feeds. */
+b.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+th.group { text-align: center; border-bottom: 1px solid var(--line); }
 @media (max-width: 640px) { td.bar { min-width: 90px; } }
-/* A sortable table's headings are buttons, marked as the exporter's debug
-   page marks its series table's: ↕ for a column not sorted by, ↑ or ↓ for
-   the one sorted by. A number's column has the mark before its name, so
-   the name ends where the column's numbers end. The script makes the
-   headings buttons and the table sortable, so a page without it has plain
-   headings. The space between a mark and the name is \00a0, a no-break
-   space: a space after an escape such as \2195 ends the escape and is no
-   part of the text, so "\2195 " is the mark alone, flush with the name. */
-table.sortable th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
-table.sortable th:not(.num) button::after { content: "\00a0\2195"; color: var(--muted); }
-table.sortable th.num button::before { content: "\2195\00a0"; color: var(--muted); }
-table.sortable th[aria-sort="ascending"]:not(.num) button::after { content: "\00a0\2191"; color: var(--accent); }
-table.sortable th[aria-sort="descending"]:not(.num) button::after { content: "\00a0\2193"; color: var(--accent); }
-table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191\00a0"; color: var(--accent); }
-table.sortable th.num[aria-sort="descending"] button::before { content: "\2193\00a0"; color: var(--accent); }
-/* A job's sources' names wrap, as the sources table's do, so a long one
+` + pagekit.SortableStyle + `/* A job's sources' names wrap, as the sources table's do, so a long one
    does not push the table past the page's edge. */
 td.sources { min-width: 10em; }
 td.sources span.source { overflow-wrap: anywhere; }
@@ -427,7 +454,7 @@ form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: bor
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-{{if or .Member .Job}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
+{{if or .Member .Job .Entry}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
 <span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 
@@ -443,6 +470,7 @@ var (
 	statusPageTemplate, statusContentTemplate = statusTemplate(statusContent)
 	memberPageTemplate, memberContentTemplate = statusTemplate(memberContent)
 	jobPageTemplate, jobContentTemplate       = statusTemplate(jobContent)
+	entryPageTemplate, entryContentTemplate   = statusTemplate(entryContent)
 )
 
 // statusFrame frames a page's content (pageFrame).
@@ -451,7 +479,7 @@ var statusFrame = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{with .Member}}Member {{.Member}}{{else}}{{with .Job}}Probe job {{.Job}}{{else}}Status{{end}}{{end}} · pue-allocator</title>
+<title>{{with .Member}}Member {{.Member}}{{else}}{{with .Job}}Probe job {{.Job}}{{else}}{{with .Entry}}Entry {{.Entry}}{{else}}Status{{end}}{{end}}{{end}} · pue-allocator</title>
 ` + pagekit.Icon + "\n" + pagekit.ThemeHead + `
 <style>` + pagekit.Style + pagekit.RefreshStyle + statusStyle + memberStyle + `</style>
 {{- if .Refresh.Seconds}}
@@ -467,6 +495,9 @@ var statusFrame = `<!DOCTYPE html>
 {{- else if .Job}}
 <p class="back"><a href="./">← Allocator status</a></p>
 <h1>Probe job <span class="member-id">{{.Job.Job}}</span></h1>
+{{- else if .Entry}}
+<p class="back"><a href="./">← Allocator status</a></p>
+<h1>Entry <span class="member-id">{{.Entry.Entry}}</span> <span class="muted kind">discovered_targets</span></h1>
 {{- else}}
 <h1>Allocator status</h1>
 {{- end}}
@@ -489,6 +520,8 @@ var statusFrame = `<!DOCTYPE html>
 {{- end}}
 {{- if eq .Param "member"}}
 <label for="target-filter">Filter: name, target, collector, label or job</label>
+{{- else if eq .Param "entry"}}
+<label for="target-filter">Filter: name, target, collector, label or member</label>
 {{- else}}
 <label for="target-filter">Filter: target, member or label</label>
 {{- end}}
@@ -496,7 +529,7 @@ var statusFrame = `<!DOCTYPE html>
 {{- if .SourceLabelsBox}}
 <label class="check" for="source-labels"><input id="source-labels" name="meta" value="1" type="checkbox"{{if .SourceLabels}} checked{{end}}>Show source labels <span class="muted">(names starting with <code>__</code>)</span></label>
 {{- end}}
-<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else}}Both match a target, the member it is routed to and the labels shown.{{end}}</span>
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else if eq .Param "entry"}}Both match a target's name, target, collector, labels and the member that owns it.{{else}}Both match a target, the member it is routed to and the labels shown.{{end}}</span>
 </form>
 {{- end}}
 <div id="status-content">
@@ -582,75 +615,11 @@ var statusFrame = `<!DOCTYPE html>
     });
     filterRows();
   }
-  // The status page's probe jobs table sorts by the column whose heading
-  // is clicked, the other way at a second click, numbers by their value
-  // (data-value) and text as it reads, the numbers in it by their value,
-  // job2 before job10, and a letter's case no matter, a tie in file order
-  // (data-order); and it filters its rows as its filter is typed, matching
-  // in any case the texts each row carries in data-match. The headings are
-  // made buttons here, the table marked sortable: without JavaScript they
-  // are plain headings, as nothing would sort the table. The table is in
-  // the content, which a refresh replaces, so the order chosen and the
-  // text typed are kept here and put back on the new table, the caret
-  // where it was.
-  let jobSort = -1, jobDown = false, jobFilter = "";
-  const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
-  function arrangeJobs() {
-    const table = content.querySelector("table#probe-jobs"), box = $("jobs-filter");
-    if (!table) return;
-    if (box) {
-      box.value = jobFilter;
-      box.form.hidden = false;
-    }
-    const heads = table.tHead.rows[0].cells, body = table.tBodies[0];
-    if (!table.classList.contains("sortable")) {
-      for (const head of heads) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.append(...head.childNodes);
-        head.append(button);
-      }
-      table.classList.add("sortable");
-    }
-    const numeric = jobSort >= 0 && heads[jobSort].dataset.sort === "num";
-    const key = (row) => {
-      const cell = row.cells[jobSort];
-      return numeric ? Number(cell.dataset.value) : cell.textContent.trim();
-    };
-    const rows = Array.from(body.rows).sort((x, y) => {
-      let c = 0;
-      if (jobSort >= 0) c = numeric ? key(x) - key(y) : collator.compare(key(x), key(y));
-      if (jobDown) c = -c;
-      return c || Number(x.dataset.order) - Number(y.dataset.order);
-    });
-    for (const row of rows) body.appendChild(row);
-    for (let i = 0; i < heads.length; i++) heads[i].setAttribute("aria-sort", i === jobSort ? (jobDown ? "descending" : "ascending") : "none");
-    const needle = jobFilter.trim().toLowerCase();
-    let shown = 0;
-    for (const row of rows) {
-      row.hidden = needle !== "" && !(row.dataset.match || "").toLowerCase().includes(needle);
-      if (!row.hidden) shown++;
-    }
-    const count = content.querySelector('[data-rows-of="probe-jobs"]');
-    if (count) count.textContent = needle === "" ? "" : shown === 0 ? "No probe job holds what is typed in the filter." : shown + " of the " + rows.length + " probe jobs match.";
-  }
-  content.addEventListener("click", (event) => {
-    const button = event.target.closest("table#probe-jobs th button");
-    if (!button) return;
-    const column = button.parentElement.cellIndex;
-    jobDown = column === jobSort ? !jobDown : false;
-    jobSort = column;
-    arrangeJobs();
-  });
-  content.addEventListener("input", (event) => {
-    if (event.target.id !== "jobs-filter") return;
-    jobFilter = event.target.value;
-    arrangeJobs();
-  });
-  content.addEventListener("submit", (event) => {
-    if (event.target.id === "jobs") event.preventDefault();
-  });
-  arrangeJobs();
+  // The status page's probe jobs table sorts and filters as
+  // pagekit.SortableScript says.
+` + pagekit.SortableScript + pagekit.LocalTimesScript + `
+  const arrangeJobs = sortable(content, "probe-jobs", "jobs-filter", "probe jobs");
+  localTimes(content);
   // A refresh asked while another waits for the URL as it is now is that
   // one: the answer coming is the one asked for, and a slow allocator is
   // not asked again at every tick of the auto-refresh. One asked after the
@@ -671,17 +640,13 @@ var statusFrame = `<!DOCTYPE html>
       if (!response.ok) throw new Error("HTTP " + response.status);
       const text = await response.text();
       if (inFlight !== mine) return;
-      const typing = document.activeElement && document.activeElement.id === "jobs-filter" ? document.activeElement : null;
-      const caret = typing && [typing.selectionStart, typing.selectionEnd];
-      content.innerHTML = text;
-      refreshedAt = Date.now();
-      asOf();
-      filterRows();
-      arrangeJobs();
-      if (typing && $("jobs-filter")) {
-        $("jobs-filter").focus();
-        $("jobs-filter").setSelectionRange(caret[0], caret[1]);
-      }
+      arrangeJobs(() => {
+        content.innerHTML = text;
+        refreshedAt = Date.now();
+        asOf();
+        filterRows();
+        localTimes(content);
+      });
     } catch (error) {
       // A refresh aborted for a later one says nothing: the later one says
       // how it went.
@@ -726,7 +691,7 @@ var statusFrame = `<!DOCTYPE html>
 // its state; a discovery source's result; and a view's targets, labels
 // and the note over a list.
 const statusParts = `
-{{- define "heartbeat"}}{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}{{end}}
+{{- define "heartbeat"}}{{if .Late}}<time class="ago bad" datetime="{{.LastHeartbeat}}" data-note="a heartbeat is overdue" title="a heartbeat is overdue; {{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{else}}<time class="ago" datetime="{{.LastHeartbeat}}" title="{{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{end}}
 {{- define "capacity"}}{{if and .InList (ne .CapacityInList .Capacity)}}<span title="the member list places it by {{weight .CapacityInList}} until its heartbeats' {{weight .Capacity}} has held for the settle time">{{weight .CapacityInList}} <span class="bad">→</span> {{weight .Capacity}}</span>{{else}}{{weight .Capacity}}{{end}}{{end}}
@@ -745,7 +710,7 @@ const statusParts = `
 {{- if lt .Shown .Matching}}
 <p class="note"><span class="bad">Only the first {{.Shown}} are listed</span>; {{.Hidden}} more are left out. Filter to narrow the list.</p>
 {{- end}}
-<p class="note muted" data-rows-of="{{.Table}}"></p>
+<p class="note muted" data-rows-of="{{.Table}}" role="status" aria-live="polite"></p>
 <p class="muted" data-none-of="{{.Table}}" hidden>No row below holds what is typed in the filter; Search all looks through every target.</p>
 {{- end}}
 {{- end}}
@@ -762,7 +727,7 @@ const statusContent = `{{define "content"}}
 <table class="facts">
 <tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
 <tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
-<tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
+<tr><th>Started</th><td><time datetime="{{.Instance.StartedAt}}">{{.Instance.StartedAt}}</time> <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
 <tr><th>Input files</th><td>{{if .Instance.WatchIntervalSeconds}}read again every {{interval .Instance.WatchIntervalSeconds}} for changes{{else}}<span class="muted">read once, at the start</span> (<code class="flag">--config.watch-interval=0</code>){{end}}</td></tr>
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
@@ -782,7 +747,7 @@ const statusContent = `{{define "content"}}
 <td>{{if .Live}}<span class="good">live</span>{{else}}<span class="bad">down</span>{{end}}</td>
 <td>{{if .Discovering}}yes{{else}}<span class="muted">no</span>{{end}}</td>
 <td>{{if .AddressKnown}}yes{{else}}<span class="bad">no</span>{{end}}</td>
-<td class="num">{{if .Self}}<span class="muted">–</span>{{else if .LastCheck}}{{age .LastCheckAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
+<td class="num">{{if .Self}}<span class="muted">–</span>{{else if .LastCheck}}<time class="ago" datetime="{{.LastCheck}}" title="{{.LastCheck}}">{{age .LastCheckAgeSeconds}} ago</time>{{else}}<span class="muted">never</span>{{end}}</td>
 <td class="num">{{if .Failures}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td>
 </tr>
 {{- end}}
@@ -833,6 +798,10 @@ const statusContent = `{{define "content"}}
 {{- with .View}}{{if .Shown}}
 
 <h2>Targets</h2>
+<p class="kinds"><b class="swatch seg-static"></b><strong>Static targets</strong> are scraped by the member that owns them, on their own interval, and served on its <code>/static-targets</code>. <b class="swatch seg-probe"></b><strong>Probe targets</strong> are what Prometheus asks this allocator for, <code>/v1/sd/&lt;job&gt;</code>, each pointed at the member that probes it, and Prometheus probes them through that member.</p>
+{{- with $.Spread}}
+<p id="kinds-summary">{{plus .StaticWritten .StaticDiscovered}} static target{{if ne (plus .StaticWritten .StaticDiscovered) 1}}s{{end}}: {{.StaticWritten}} written in the static target file{{if .StaticDiscovered}} and {{.StaticDiscovered}} discovered by {{andList .StaticSources}}{{end}}. {{plus .ProbeListed .ProbeDiscovered}} probe target{{if ne (plus .ProbeListed .ProbeDiscovered) 1}}s{{end}}: {{.ProbeListed}} listed in the probe jobs{{if .ProbeDiscovered}} and {{.ProbeDiscovered}} discovered by {{andList .ProbeSources}}{{end}}.</p>
+{{- end}}
 <p>{{count .Total.Static}} static target{{if ne .Total.Static 1.0}}s{{end}}{{if .Total.Draining}}, {{count .Total.Draining}} draining,{{end}} and {{count .Total.Probe}} probe target{{if ne .Total.Probe 1.0}}s{{end}} over {{len .Members}} member{{if ne (len .Members) 1}}s{{end}}: {{average .Average.Total}} per member on average, the most {{imbalance .Imbalance.Total}} the average. They weigh {{weight .Total.Weight}}{{if .Total.DrainingWeight}}, and those draining {{weight .Total.DrainingWeight}} more on the members that keep them,{{end}} over a capacity of {{weight .Total.Capacity}}: a member's fair share is the weight times its capacity over the capacity of all, and the most loaded holds {{imbalance .Imbalance.Weight}} its fair share. A target goes to the member its hash prefers while that member's weight stays within {{weight $.Spread.BalanceFactor}} times its fair share (<code class="flag">--allocation.balance-factor</code>), and to the next otherwise.</p>
 {{- if $.Spread.Overloaded}}
 <p><span class="bad">{{$.Spread.Overloaded}} member{{if ne $.Spread.Overloaded 1}}s are{{else}} is{{end}} overloaded</span>, {{if ne $.Spread.Overloaded 1}}their weights{{else}}its weight{{end}} marked: above {{weight $.Spread.BalanceFactor}} times {{if ne $.Spread.Overloaded 1}}their fair shares{{else}}its fair share{{end}}, which only a target, or the targets of one shard key, too heavy for the room any member has left puts a member.</p>
@@ -849,7 +818,10 @@ const statusContent = `{{define "content"}}
 {{- end}}
 <div class="scroll">
 <table class="spread">
-<thead><tr><th>Member</th><th class="num">Static</th><th class="num">Draining</th><th class="num">Probe</th><th class="num">Total</th><th class="num">Weight</th><th class="num">Draining weight</th><th class="num">Capacity</th><th class="num">Fair share</th><th>Share</th></tr></thead>
+<thead>
+<tr><th rowspan="2">Member</th><th class="group" colspan="2"><b class="swatch seg-static"></b>Static targets</th><th class="group"><b class="swatch seg-probe"></b>Probe targets</th><th class="num" rowspan="2">Total</th><th class="num" rowspan="2">Weight</th><th class="num" rowspan="2">Draining weight</th><th class="num" rowspan="2">Capacity</th><th class="num" rowspan="2">Fair share</th><th rowspan="2">Share</th></tr>
+<tr><th class="num">Owned</th><th class="num">Draining</th><th class="num">Routed</th></tr>
+</thead>
 <tbody>
 {{- range .Members}}
 <tr>
@@ -879,18 +851,47 @@ const statusContent = `{{define "content"}}
 </tfoot>
 </table>
 </div>
-<p class="legend"><span><b class="seg-static"></b>static, owned</span><span><b class="seg-draining"></b>static, draining</span><span><b class="seg-probe"></b>probe, routed</span><span><b class="avg"></b>the member's fair share</span><span>Bars are weight, and run to the most a member weighs or a fair share comes to.</span></p>
+<p class="legend"><span><b class="seg-static"></b>static targets, owned</span><span><b class="seg-draining"></b>static targets, draining</span><span><b class="seg-probe"></b>probe targets, routed</span><span><b class="avg"></b>the member's fair share</span><span>Bars are weight, and run to the most a member weighs or a fair share comes to.</span></p>
+{{- end}}{{end}}
+{{- with .Spread}}{{if .Static}}
+
+<h2 id="static-targets"><b class="swatch seg-static"></b>Static targets</h2>
+<p>The static targets by where they come from: those the static target file writes, and each <code>discovered_targets</code> entry's. Each row's targets are spread over the member list: Min, Avg and Max count the row's targets a member owns, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> as a probe job's is below.</p>
+<div class="scroll">
+<table class="spread" id="static-origins">
+<thead><tr><th>From</th><th class="num">Targets</th><th class="num">Weight</th><th class="num">Members</th><th class="num">Min</th><th class="num">Avg</th><th class="num">Max</th><th class="num">Imbalance</th><th>Sources</th></tr></thead>
+<tbody>
+{{- range .Static}}
+<tr{{if .Entry}} id="static-entry-{{.Entry}}"{{end}}>
+<td class="id">{{if .Entry}}<a href="?entry={{.Entry}}" title="the static targets of the discovered_targets entry {{.Entry}}"><strong>{{.Entry}}</strong></a><br><span class="muted kind">discovered_targets entry</span>{{else}}<strong>written</strong><br><span class="muted kind">in the static target file</span>{{end}}</td>
+<td class="num">{{.Targets}}</td>
+<td class="num">{{weight .Weight}}</td>
+<td class="num">{{len .Members}}</td>
+{{- if .Members}}
+<td class="num">{{.Min}}</td>
+<td class="num">{{average .Average}}</td>
+<td class="num">{{.Max}}</td>
+<td class="num">{{if .Uneven}}<span class="bad" title="Max is further above Avg than hashing puts a member's targets by chance">{{imbalance .Imbalance}}</span>{{else}}{{imbalance .Imbalance}}{{end}}</td>
+{{- else}}
+<td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td><td class="num"><span class="muted">–</span></td>
+{{- end}}
+<td class="sources">{{range $k, $s := .Sources}}{{if $k}}<br>{{end}}<span class="source">{{.Name}} {{template "result" .Result}}</span>{{else}}<span class="muted">written</span>{{end}}</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
 {{- end}}{{end}}
 {{- with .Spread}}{{if .Jobs}}
 
-<h2>Probe jobs</h2>
-<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}. A job's Weight is what its targets weigh together, and its targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
+<h2 id="probe-jobs-section"><b class="swatch seg-probe"></b>Probe jobs</h2>
+<p>{{len .Jobs}} probe job{{if ne (len .Jobs) 1}}s{{end}}, their probe targets by job. A job's Weight is what its targets weigh together, and its targets are spread over the members its probes are routed among: Min, Avg and Max count the targets of the job a member has, and Imbalance is Max ÷ Avg, <span class="bad">marked</span> where Max is further above Avg than hashing puts a member's targets by chance: by 3 targets or more, and by 3 standard deviations of a member's count or more, √(Targets × (1 − 1/Members) ÷ Members).</p>
 <form class="filter jobs" id="jobs" role="search" hidden>
 <label for="jobs-filter">Filter: job, collector or source</label>
 <input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
 <span class="muted">Click a column's heading to sort by it, again for the other way.</span>
 </form>
-<p class="note muted" data-rows-of="probe-jobs"></p>
+<p class="note muted" data-rows-of="probe-jobs" role="status" aria-live="polite"></p>
 <div class="scroll">
 <table class="spread" id="probe-jobs">
 <thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th><th class="num" data-sort="num">Weight</th><th class="num" data-sort="num">Members</th><th class="num" data-sort="num">Min</th><th class="num" data-sort="num">Avg</th><th class="num" data-sort="num">Max</th><th class="num" data-sort="num">Imbalance</th><th data-sort="text">Sources</th></tr></thead>
@@ -923,16 +924,16 @@ const statusContent = `{{define "content"}}
 {{- if .Sources}}
 <div class="scroll">
 <table class="sources">
-<thead><tr><th>Source</th><th>Owner</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
+<thead><tr><th>Source</th><th>Feeds</th><th>Result</th><th class="num">Targets</th><th class="num">Refreshed every</th><th class="num">Last refresh</th><th>From</th></tr></thead>
 <tbody>
 {{- range .Sources}}
 <tr>
 <td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted kind">{{.Type}}</span></td>
-<td class="owner">{{.Owner}}<br><span class="muted kind">{{if eq .Kind "probe"}}probe job{{else}}discovered_targets{{end}}</span></td>
+<td class="owner">{{if eq .Kind "probe"}}<b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job={{.Owner}}" title="the targets of the probe job {{.Owner}}">{{.Owner}}</a>{{else}}<b class="swatch seg-static"></b>static targets<br><span class="muted kind">of the entry</span> <a href="?entry={{.Owner}}" title="the static targets of the discovered_targets entry {{.Owner}}">{{.Owner}}</a>{{end}}</td>
 <td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}{{if .WeightFallbacks}}<br><span class="bad">{{.WeightFallbacks}} weight{{if ne .WeightFallbacks 1}}s{{end}} fell back</span> <span class="muted">on the owner's: their weight label gave no weight</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{interval .RefreshIntervalSeconds}}</td>
-<td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
+<td class="num">{{if .LastRefresh}}<time class="ago" datetime="{{.LastRefresh}}" title="{{.LastRefresh}}">{{age .LastRefreshAgeSeconds}} ago</time>{{else}}<span class="muted">never</span>{{end}}</td>
 <td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
 </tr>
 {{- end}}

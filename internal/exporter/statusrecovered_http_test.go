@@ -23,7 +23,7 @@ const recoveredLabel = `<span class="recovered-label">Earlier failure, recovered
 
 // recoveredAt is the time line under a recovered error: when, and how long
 // ago as the page writes an age.
-var recoveredAt = regexp.MustCompile(`</div><span class="muted">at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \((\d+[hm])*\d+[hms] ago\)</span>`)
+var recoveredAt = regexp.MustCompile(`</div><span class="muted">at <time datetime="(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)">\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ</time> \((\d+[hm])*\d+[hms] ago\)</span>`)
 
 // isRecovered is a last_error_recovered given and true, isFailing one given
 // and false: an error is there, and what failed has not succeeded since.
@@ -42,7 +42,7 @@ func shown(p *bool) string {
 // statusPageRow is the row of the page's table that holds marker.
 func statusPageRow(t *testing.T, page, marker string) string {
 	t.Helper()
-	for _, row := range strings.Split(page, "<tr>") {
+	for _, row := range regexp.MustCompile(`<tr[ >]`).Split(page, -1) {
 		if strings.Contains(row, marker) {
 			return row
 		}
@@ -214,6 +214,19 @@ func TestTheLogAndTraceExportsRecoveredErrorsAreShownMuted(t *testing.T) {
 	for what, cell := range map[string]string{"log": logsCell, "trace": tracesCell} {
 		if !strings.Contains(cell, "(35m ago)") {
 			t.Errorf("the recovered %s export's error does not say it was 35m ago:\n%s", what, cell)
+		}
+	}
+	// Their Last export and Last success are moments, as every moment of
+	// the page is (pagekit.LocalTimesScript).
+	d := otlpDetails(t, server)
+	for _, at := range []string{d.Logs.LastExport, d.Traces.LastExport} {
+		if at == "" || !strings.Contains(page, `<tr><th>Last export</th><td><time datetime="`+at+`">`+at+`</time><br>`) || strings.Contains(page, `<tr><th>Last export</th><td>`+at) {
+			t.Errorf("the page does not write the log and trace exports' last export %q as a <time>", at)
+		}
+	}
+	for _, at := range []string{d.Logs.LastSuccess, d.Traces.LastSuccess} {
+		if at == "" || !strings.Contains(page, `<tr><th>Last success</th><td><time datetime="`+at+`">`+at+`</time></td></tr>`) {
+			t.Errorf("the page does not write a last success %q as a <time>", at)
 		}
 	}
 	if d := otlpDetails(t, server); !isRecovered(d.Logs.LastErrorRecovered) || !isRecovered(d.Traces.LastErrorRecovered) {

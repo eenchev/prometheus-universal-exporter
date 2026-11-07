@@ -116,7 +116,8 @@ own checks:
   dot and one, as `*/x.yaml` does — since on the replica it would match
   `..data/config.yaml` too. Begin such an entry with a directory's name.
 - Files the configuration names by path — a grpc collector's descriptor
-  files, `otlp.tls` files, `web.basic_auth` files, credential files — travel
+  files, a sql collector's `statement_file`, `otlp.tls` files,
+  `web.basic_auth` files, credential files — travel
   as paths, never as content. They must be mounted on every replica at the
   same path, as without the allocator, and need not be mounted on the
   allocator: it checks the configuration without opening them. The checks
@@ -960,12 +961,20 @@ must not be one of them. The token is never taken from the URL.
 ```json
 {"member": "exporter-0", "advertise": "10.0.3.7:9115",
  "instance": "J7KTZ3TQWK76RFHIUQJRRUD646", "sequence": 42, "generation": "8117cfab…",
- "shutting_down": false, "refused": {"generation": "…", "error": "…"}, "interval_seconds": 10}
+ "shutting_down": false, "refused": {"generation": "…", "error": "…"}, "interval_seconds": 10,
+ "static_targets_path": "/static-targets"}
 ```
 
 `member`, `advertise`, a `host:port` with a host and a decimal port from 1
 to 65535, `instance`, the replica process's name of 1 to 64 bytes, and
-`sequence`, from 1, are required; anything else is answered `400`. A
+`sequence`, from 1, are required; anything else is answered `400`.
+`static_targets_path` is the replica's `--web.static-targets-path`, which the
+member's view links ([A member's targets](#a-members-targets)); one that is
+not a clean absolute path of at most 256 bytes other than `/`, without `?`,
+`#`, `%`, `\`, spaces or control characters, is dropped and the heartbeat
+taken all the same, the member's view then linking none of its pages. The
+links are also left out when the advertised address would not be the
+link's host alone, as one with a `/` or an `@` in it. A
 heartbeat whose sequence is not greater than the last applied of its member
 and instance, or whose instance is the one its member's current instance
 replaced, is answered as any other but changes nothing. A member that said
@@ -1080,7 +1089,11 @@ for more reads of the files, and more asks of a source's API.
 ## Status page
 
 `GET /` is a page for a person: what this instance holds, without a Prometheus
-to ask. The page calls each allocator process an instance, and the random
+to ask. Its moments read as the exporter's status page's do
+([Endpoints](ENDPOINTS.md)): the instance's start in the browser's time,
+UTC and how long ago in its tooltip, and where a time is said as how long
+ago, a heartbeat's, a peer's check's or a source's refresh's, the moment in
+the browser's time and in UTC in its tooltip. The page calls each allocator process an instance, and the random
 id its process takes at its start, the `id` of `instance` in `/v1/status`,
 its instance ID. It shows
 
@@ -1106,15 +1119,26 @@ its instance ID. It shows
   down, its capacity, and the static targets it keeps draining. A capacity
   its heartbeats changed is shown as the one the member list places it by,
   an arrow and the new one, until it has held for `--settle`;
-- how the targets are spread: for each member, the static targets it owns,
-  those it keeps draining, the probe targets service discovery routes to it
-  and the total; its weight, what the static targets it owns and the
+- how the targets are spread. Two sentences open it: what the two kinds
+  of target are — a *static target* is scraped by the member that owns it,
+  on its own interval, and served on that member's `/static-targets`; a
+  *probe target* is what Prometheus asks the allocator for
+  (`/v1/sd/<job>`), pointed at a member, and probes through it — each
+  with its colour, the bars' (orange and blue); and how many of each there
+  are, by where they come from: `27 static targets: 3 written in the
+  static target file and 24 discovered by services. 25 probe targets: 3
+  listed in the probe jobs and 22 discovered by sites.` Then, for each
+  member, under the heading *Static targets*, the static targets it owns
+  and those it keeps draining, under *Probe targets* the probe targets
+  service discovery routes to it, and the total; its weight, what the static targets it owns and the
   probes routed to it weigh, the weight it is placed by; the weight of
   the targets it keeps draining, apart, since they weigh on their new
   owners; its capacity and its fair share, the weight times its capacity
   over the capacity of all ([Weights and capacity](#weights-and-capacity));
   and a bar of its weight, a segment each of the static, the draining and
-  the probe weight, with its fair share marked on it. Then the totals, the
+  the probe weight, with its fair share marked on it; the legend under it
+  names them *static targets, owned*, *static targets, draining* and *probe
+  targets, routed*. Then the totals, the
   average per member and the imbalance, the most any member has divided by
   the average, `1.00×` for targets spread evenly, and for the weight the
   most any member holds of its fair share, which for members of one
@@ -1126,7 +1150,15 @@ its instance ID. It shows
   the member of the largest capacity, a target or the targets of one shard
   key, is named in a warning above the table with its weight and its
   member. The columns stay these whatever the number of probe jobs;
-- the probe jobs, a row each: the job, which links to its view
+- the static targets by where they come from, under the heading *Static
+  targets*: a row of those the static target file writes, and one of each
+  `discovered_targets` entry, in file order, the entry linking to its view
+  ([A discovered_targets entry's targets](#a-discovered_targets-entrys-targets)),
+  with its targets, what they
+  weigh together, the members of the member list, the fewest, the average
+  and the most of the row's targets a member owns, the imbalance, marked as
+  a probe job's is below, and its discovery sources with their result;
+- the probe jobs, under the heading *Probe jobs*, a row each: the job, which links to its view
   ([A probe job's targets](#a-probe-jobs-targets)), its collector, its
   targets, what they weigh together, the members it is routed among, the fewest, the average and the
   most targets of the job a member of them has, the imbalance, the most
@@ -1152,7 +1184,10 @@ its instance ID. It shows
   whose name, collector and sources' names do not hold its text, in any
   case; a refresh keeps the order, the filter and the caret. Without
   JavaScript the headings are plain, as nothing sorts the table then;
-- the discovery sources: each one's kind, owner, result, with the error
+- the discovery sources: each one's kind; what it feeds, *probe targets of
+  the job* and the job, linked to its view, or *static targets of the
+  entry* and the `discovered_targets` entry, linked to its view, each with
+  its kind's colour; its result, with the error
   while it fails and how many of its targets' weights fell back on their
   owner's, their `weight_label` giving none, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
@@ -1191,7 +1226,7 @@ its `address`, `self`, `leader`, `live`, `id`, `discovering`,
 and its `value`); `partial`, true on a follower under `--peers.leader-only`,
 whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
 `in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds`,
-`settle_seconds` and `list`, each with `id`, `address`, `last_heartbeat`, `late`, `live`,
+`settle_seconds` and `list`, each with `id`, `address`, `static_targets_path`, the one its last heartbeat said, left out when it said none the page can link, `last_heartbeat`, `late`, `live`,
 `in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`,
 `draining`, `capacity`, the one its last heartbeat said as the allocator
 takes it, and `capacity_in_list`, the one the member list places by, left
@@ -1209,7 +1244,13 @@ lightest unit, or by a unit alone (`pue_allocator_overloaded_members`); `total`,
 `jobs`, in file order, each with `job`, `collector`, `targets`, `weight`,
 `members`, the members it is routed among by id, each with its `member`,
 `targets` and `weight`, `min`, `average`, `max`, `imbalance`, `uneven`, the
-mark above, and `sources`, each with its `name`, `type` and `result`); and
+mark above, and `sources`, each with its `name`, `type` and `result`;
+`static`, the static targets by origin, each with `entry`, `""` for those
+the file writes, `targets`, `weight`, `members`, `min`, `average`, `max`,
+`imbalance`, `uneven` and `sources`, as a job's; and `static_written`,
+`static_discovered` and `static_sources`, `probe_listed`,
+`probe_discovered` and `probe_sources`, the counts and the names of the
+sources of the summary above the table); and
 `sources` (`name`, `kind`, `owner`, `type`, `result`, `ok`, `failing` or
 `pending`, `error`, `targets`, `refresh_interval_seconds`, `last_refresh`,
 `last_success`, `from`, `own` or `snapshot`, and `weight_fallbacks`, its
@@ -1229,15 +1270,25 @@ the first visit: give any user name, and the token as the password
 A member's id in the members and in the spread links to its view,
 `GET /?member=<id>`: what that one exporter replica has, to answer "which
 targets does this pod scrape?" without reading its bundle. It shows the
-member as the members do, its capacity among them, then
+member as the members do, its capacity among them, and beside its address
+a link to its own [status page](STATIC-TARGETS.md#status-page),
+`http://<address><static targets path>/status`, then
 
-- the static targets it owns, by name, each with its target, collector,
-  labels, interval and weight;
-- the static targets it keeps draining, each with the member it moved to,
+- the static targets it owns, by name, each name linking the series the
+  member serves of it, `http://<address><static targets path>?targets=<name>`,
+  each with its target, collector, labels, interval and weight;
+- the static targets it keeps draining, each name linking its series on the
+  member as an owned one's does, each with the member it moved to,
   which links to that member's view, how much longer it drains and its
   weight;
 - the probe targets service discovery routes to it, counted and weighed by
   probe job, then each with its job, collector and weight.
+
+The links to the member's own pages are to the address its heartbeats
+advertise, a pod IP on Kubernetes: they open where the browser reaches that
+address, inside the cluster or over a VPN to it. From a `kubectl
+port-forward` of the allocator they do not; forward the member's pod, and
+open the same path on the forwarded port.
 
 The counts are the spread's for the member. A target is shown as the
 exporter's pages show it, its credentials withheld: a URL's user and
@@ -1327,6 +1378,39 @@ hidden, so a view left open over a reload that renamed the job shows it;
 `?job=` without a name is answered `400`. Under `--peers.leader-only` a
 follower serves no job's view: the page names the leader, and the JSON is
 `partial` with the leader's address.
+
+### A discovered_targets entry's targets
+
+A `discovered_targets` entry's name in the static targets table, and in the
+discovery sources table's Feeds column, links to its view,
+`GET /?entry=<name>`: where the static targets the entry makes of what its
+sources find go, to answer "which pod scrapes this node?". It shows
+
+- the entry: its targets and their weight, its shard key, its labels, a
+  label written `""` left out, and its discovery sources, each with its
+  kind, result and how often it is asked, and its error while it fails;
+- the members of the member list, each linking to its view, with the
+  entry's targets it owns, their weight and a bar of them, the most first,
+  the fewest to the most and the average above them, the imbalance marked
+  as in the static targets table;
+- its static targets, by name, each with its target, its credentials
+  withheld as on a member's view, its collector, the member that owns it,
+  linked to its view, its labels and its weight.
+
+The counts are the spread's for the entry. The filter box, Search all
+(`?filter=<text>`), the bound of 1000 targets and the refresh are a
+member's view's; the filter matches a target's name, target, collector,
+labels as `name=value` and the member that owns it. Its bar's JSON link is
+`GET /v1/status?entry=<name>`, the same as JSON: `generated_at`, `entry`,
+`filter`, `limit`, `partial`, `leader`, `spread` (the entry as
+`spread.static` has it, its `members` the most first), `shard_key`,
+`labels`, `sources` and `targets` (`total`, `matching` and `list`, each
+with `name`, `collector`, `target`, `labels`, `interval`, `weight` and
+`member`). An entry the static target file does not have is answered `404`
+as JSON, and `200` saying so on the page and its fragment, its filter box
+hidden; `?entry=` without a name is answered `400`. Under
+`--peers.leader-only` a follower serves no entry's view: the page names the
+leader, and the JSON is `partial`.
 
 ## Metrics
 

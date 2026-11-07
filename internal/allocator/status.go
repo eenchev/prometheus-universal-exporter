@@ -149,8 +149,11 @@ type MembersStatus struct {
 // MemberStatus is one member.
 type MemberStatus struct {
 	ID string `json:"id"`
-	// Address is the host:port its heartbeats advertise.
-	Address string `json:"address"`
+	// Address is the host:port its heartbeats advertise, and
+	// StaticTargetsPath where it serves its static targets, its status
+	// page at it followed by /status, as its last heartbeat said.
+	Address           string `json:"address"`
+	StaticTargetsPath string `json:"static_targets_path,omitempty"`
 	// LastHeartbeat is when its last heartbeat came, RFC 3339 in UTC, and
 	// LastHeartbeatAgeSeconds how long ago.
 	LastHeartbeat           string  `json:"last_heartbeat"`
@@ -212,6 +215,37 @@ type SpreadStatus struct {
 	// are spread: one column of the members' table each would not fit a
 	// page beside a few jobs.
 	Jobs []JobSpread `json:"jobs"`
+	// Static are the static targets by where they came from, the targets
+	// the file writes first and then each discovered_targets entry's, in
+	// file order, each with how its targets are spread over the member
+	// list, as Jobs are: a static target and a probe target are told
+	// apart by where each is, and a static target's origin by its row.
+	Static []StaticSpread `json:"static"`
+	// The targets of each kind, by whether the files write them or a
+	// discovery source found them, and the sources that found them.
+	StaticWritten    int      `json:"static_written"`
+	StaticDiscovered int      `json:"static_discovered"`
+	StaticSources    []string `json:"static_sources"`
+	ProbeListed      int      `json:"probe_listed"`
+	ProbeDiscovered  int      `json:"probe_discovered"`
+	ProbeSources     []string `json:"probe_sources"`
+}
+
+// StaticSpread is the static targets of one origin and how they are spread
+// over the member list: Entry is the discovered_targets entry that made
+// them, "" for those the file writes, and the rest is as a JobSpread's,
+// Members counting the targets each member owns.
+type StaticSpread struct {
+	Entry     string      `json:"entry"`
+	Targets   int         `json:"targets"`
+	Weight    float64     `json:"weight"`
+	Members   []JobMember `json:"members"`
+	Min       int         `json:"min"`
+	Average   float64     `json:"average"`
+	Max       int         `json:"max"`
+	Imbalance float64     `json:"imbalance"`
+	Uneven    bool        `json:"uneven"`
+	Sources   []JobSource `json:"sources"`
 }
 
 // SpreadMember is one member's targets.
@@ -428,7 +462,7 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 		draining[key.member]++
 	}
 	for id, m := range a.members {
-		ms := MemberStatus{ID: id, Address: m.advertise, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
+		ms := MemberStatus{ID: id, Address: m.advertise, StaticTargetsPath: m.staticTargetsPath, LastHeartbeat: m.lastSeen.UTC().Format(time.RFC3339),
 			LastHeartbeatAgeSeconds: ageSeconds(now.Sub(m.lastSeen).Seconds()), Live: a.live(m, now),
 			InList: a.settled && contains(a.effective, id), ShuttingDown: m.shuttingDown, Generation: m.generation,
 			Refused: a.refusals[id], Draining: draining[id], Capacity: float64(m.capacity) / milli}
@@ -463,9 +497,24 @@ func contains(list []string, s string) bool {
 // service discovery routes it to, as /metrics counts them, and their
 // weights alike. Called under a.mu.
 func (a *Allocator) spreadLocked() *SpreadStatus {
-	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}, Heavy: []HeavyUnit{}, BalanceFactor: float64(a.balanceFactor) / milli}
+	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}, Heavy: []HeavyUnit{}, BalanceFactor: float64(a.balanceFactor) / milli, StaticSources: []string{}, ProbeSources: []string{}}
 	loads := a.loadsLocked()
 	out.Jobs = append(out.Jobs, loads.jobs...)
+	out.Static = a.staticSpreadLocked()
+	for _, s := range out.Static {
+		if s.Entry == "" {
+			out.StaticWritten += s.Targets
+		} else {
+			out.StaticDiscovered += s.Targets
+		}
+	}
+	if in := a.inputs; in != nil && in.Probes != nil {
+		for i := range in.Probes.Jobs {
+			j := &in.Probes.Jobs[i]
+			out.ProbeDiscovered += len(j.labelsOf)
+			out.ProbeListed += len(j.Targets) - len(j.labelsOf)
+		}
+	}
 	for _, name := range loads.names {
 		l := loads.rows[name]
 		r := SpreadMember{Member: name, Capacity: float64(l.capacity) / milli,
@@ -682,6 +731,89 @@ func sourcesOfJobs(sp *SpreadStatus, sources []SourceStatus) {
 			}
 		}
 	}
+	// And each discovered_targets entry's, and the names of the sources
+	// of each kind of target, for the page's summary.
+	for i := range sp.Static {
+		for _, s := range sources {
+			if s.Kind == "static" && sp.Static[i].Entry != "" && s.Owner == sp.Static[i].Entry {
+				sp.Static[i].Sources = append(sp.Static[i].Sources, JobSource{Name: s.Name, Type: s.Type, Result: s.Result})
+			}
+		}
+	}
+	for _, s := range sources {
+		// A source the file names not, as the sources table shows it.
+		name := s.Name
+		if name == "" {
+			name = "an unnamed " + s.Type
+		}
+		if s.Kind == "probe" {
+			sp.ProbeSources = append(sp.ProbeSources, name)
+		} else {
+			sp.StaticSources = append(sp.StaticSources, name)
+		}
+	}
+}
+
+// staticSpreadLocked is the static targets of the inputs in force by
+// origin, each origin's spread over the member list as the placement owns
+// them; the targets the file writes first, then each entry's in file
+// order, an entry that found none left out. Called under a.mu.
+func (a *Allocator) staticSpreadLocked() []StaticSpread {
+	in := a.inputs
+	if in == nil || in.Targets == nil {
+		return []StaticSpread{}
+	}
+	plan := a.currentPlan()
+	order := []string{""}
+	for _, e := range in.entries {
+		order = append(order, e.name)
+	}
+	groups := map[string]*StaticSpread{}
+	counts := map[string]map[string]int{}
+	weights := map[string]map[string]int64{}
+	for i := range in.Targets.Targets {
+		origin := ""
+		if i < len(in.origins) {
+			origin = in.origins[i]
+		}
+		g := groups[origin]
+		if g == nil {
+			g = &StaticSpread{Entry: origin, Members: []JobMember{}, Sources: []JobSource{}}
+			groups[origin], counts[origin], weights[origin] = g, map[string]int{}, map[string]int64{}
+		}
+		w := in.staticWeight(i)
+		g.Targets++
+		g.Weight += float64(w) / milli
+		if owner := plan.owner[in.shardKeys[i]]; owner != "" {
+			counts[origin][owner]++
+			weights[origin][owner] += w
+		}
+	}
+	out := []StaticSpread{}
+	for _, origin := range order {
+		g := groups[origin]
+		if g == nil {
+			continue
+		}
+		for _, name := range a.effective {
+			g.Members = append(g.Members, JobMember{Member: name, Targets: counts[origin][name], Weight: float64(weights[origin][name]) / milli})
+		}
+		if len(g.Members) > 0 {
+			owned := 0
+			g.Min = g.Members[0].Targets
+			for _, m := range g.Members {
+				owned += m.Targets
+				g.Min, g.Max = min(g.Min, m.Targets), max(g.Max, m.Targets)
+			}
+			g.Average = float64(owned) / float64(len(g.Members))
+			if g.Average > 0 {
+				g.Imbalance = float64(g.Max) / g.Average
+				g.Uneven = uneven(g.Max, owned, len(g.Members))
+			}
+		}
+		out = append(out, *g)
+	}
+	return out
 }
 
 // sourcesStatus is every discovery source, in the order of /metrics.

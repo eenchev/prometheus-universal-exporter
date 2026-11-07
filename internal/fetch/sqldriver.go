@@ -103,7 +103,9 @@ type sqlDriver struct {
 	// caller is told the code alone (sqlServerAnswer).
 	serverError func(err error) (code string, ok bool)
 	// readOnly says how run makes a statement read-only, for the docs and
-	// the debug report: "transaction", "setting", or "" for not at all.
+	// the tests: "transaction", "setting", "rollback" for a transaction
+	// that is rolled back, undoing what the statement wrote but what
+	// commits by itself (sqlserver), or "" for not at all.
 	readOnly string
 	// statement, when set, refuses a statement the driver would not run as
 	// the one statement it makes read-only, when the configuration is
@@ -316,7 +318,11 @@ func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(
 		tx, err := conn.BeginTx(txCtx, &opts)
 		if err != nil {
 			cancel()
-			return nil, nil, &sqlStepError{step: "beginning the read-only transaction", err: err}
+			step := "beginning the transaction"
+			if opts.ReadOnly {
+				step = "beginning the read-only transaction"
+			}
+			return nil, nil, &sqlStepError{step: step, err: err}
 		}
 		rollback := func() {
 			ended := ctx.Err() != nil
@@ -380,16 +386,6 @@ func (d *sqlDriver) sqlServerAnswer(err error) error {
 // is bounded by, which the guarded connection gives the driver in place of
 // the transaction's own (sqlTx).
 type sqlBeginContext struct{}
-
-// sqlPlain runs a statement as it is, for a driver that has no read-only
-// transaction: the account must be one that can only read.
-func sqlPlain(ctx context.Context, conn *sql.Conn, statement string, args []any, _ time.Duration) (*sql.Rows, func(), error) {
-	rows, err := conn.QueryContext(ctx, statement, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return rows, func() { _ = rows.Close() }, nil
-}
 
 // sqlTLSModeOf is the TLS a collector's request asks of d: by its TLS
 // option, or, left out, verified TLS when a tls key is set and none

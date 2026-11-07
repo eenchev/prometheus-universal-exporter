@@ -164,7 +164,7 @@ func TestTheStatusPagesShortColumnsKeepTheirWordsWhole(t *testing.T) {
 		`td { overflow-wrap: normal; }`,
 		`td.what { overflow-wrap: anywhere; min-width: 14em; max-width: 26em; }`,
 		`overflow-wrap: anywhere; }`,
-		`<td class="what"><strong>`,
+		`<td class="what"><a href="../static-targets?targets=`,
 		// A facts table, two columns with no scroll of its own, holds an
 		// error too, which must not hold it wider than a phone.
 		`table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }`,

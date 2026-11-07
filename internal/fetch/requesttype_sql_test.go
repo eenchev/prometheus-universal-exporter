@@ -7,6 +7,8 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -23,6 +25,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/sqltest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/go-sql-driver/mysql"
+	mssql "github.com/microsoft/go-mssqldb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -261,11 +265,13 @@ func TestASQLStatementEndsAtTheScrapesDeadline(t *testing.T) {
 	}
 }
 
-// Each driver runs a statement as it can make it read-only: postgres and
-// mysql in a transaction begun read-only through database/sql, postgres
-// with the statement timeout set to the scrape's time left first; sqlserver
-// has no read-only transaction and runs it as it is. The transaction is
-// rolled back.
+// Each driver runs a statement as it can make it read-only, with the
+// server's own time limit set to the scrape's time left first where it has
+// one the exporter can set: postgres in a transaction begun read-only after
+// SET LOCAL statement_timeout, mysql in one begun read-only after SET
+// SESSION max_execution_time, the server's version asked once on the
+// connection, and sqlserver, which has no read-only transaction, in a
+// transaction after SET LOCK_TIMEOUT. Every transaction is rolled back.
 func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["SELECT 1 AS one"] = sqltest.Result{Columns: []string{"one"}, Rows: [][]driver.Value{{int64(1)}}}
@@ -275,8 +281,8 @@ func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 		executed string
 	}{
 		{SQLDriverPostgres, true, "SET LOCAL statement_timeout = "},
-		{SQLDriverMySQL, true, ""},
-		{SQLDriverSQLServer, false, ""},
+		{SQLDriverMySQL, true, "SET SESSION max_execution_time = "},
+		{SQLDriverSQLServer, false, "SET LOCK_TIMEOUT "},
 	} {
 		begun, executed, rolled := len(f.db.TxOptions()), len(f.db.Executed()), f.db.RolledBack()
 		c := f.collector(t, tc.driver, tc.driver, "SELECT 1 AS one")
@@ -284,21 +290,77 @@ func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 			t.Fatalf("%s: %v", tc.driver, err)
 		}
 		tx := f.db.TxOptions()[begun:]
-		switch {
-		case tc.readOnly && (len(tx) != 1 || !tx[0].ReadOnly || f.db.RolledBack() != rolled+1):
-			t.Errorf("%s: transactions %+v, rolled back %d, want one read-only, rolled back", tc.driver, tx, f.db.RolledBack()-rolled)
-		case !tc.readOnly && len(tx) != 0:
-			t.Errorf("%s: transactions %+v, want none", tc.driver, tx)
+		if len(tx) != 1 || tx[0].ReadOnly != tc.readOnly || f.db.RolledBack() != rolled+1 {
+			t.Errorf("%s: transactions %+v, rolled back %d, want one, read-only %v, rolled back", tc.driver, tx, f.db.RolledBack()-rolled, tc.readOnly)
 		}
 		ran := f.db.Executed()[executed:]
-		if tc.executed == "" && len(ran) != 0 || tc.executed != "" && (len(ran) != 1 || !strings.HasPrefix(ran[0], tc.executed)) {
+		if len(ran) != 1 || !strings.HasPrefix(ran[0], tc.executed) {
 			t.Errorf("%s: ran %q before the statement, want %q", tc.driver, ran, tc.executed)
+			continue
+		}
+		// The scrape's five seconds, less what passed before the statement.
+		if ms, err := strconv.Atoi(strings.TrimPrefix(ran[0], tc.executed)); err != nil || ms <= 4000 || ms > 5000 {
+			t.Errorf("%s: %q", tc.driver, ran[0])
 		}
 	}
-	// The scrape's five seconds, less what passed before the statement.
-	ran := f.db.Executed()
-	if ms, err := strconv.Atoi(strings.TrimPrefix(ran[0], "SET LOCAL statement_timeout = ")); err != nil || ms <= 4000 || ms > 5000 {
-		t.Errorf("statement_timeout %q", ran[0])
+	// The mysql connection, kept, is not asked its version again.
+	c := f.collector(t, SQLDriverMySQL, SQLDriverMySQL, "SELECT 1 AS one")
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.db.Versions(); n != 1 {
+		t.Errorf("the server was asked its version %d times over two scrapes on one connection, want once", n)
+	}
+}
+
+// The server's own time limit is set by its kind and version: MySQL's
+// max_execution_time, in milliseconds, from 5.7.8, MariaDB's
+// max_statement_time, in seconds, from 10.1.1, and nothing for an older
+// server or a version that reads as neither, so that it refuses no scrape
+// over a variable it does not know. A statement the server ended at it is
+// told apart, as one the scrape's deadline ended.
+func TestTheMySQLServerIsToldTheScrapesTimeLeftAsItsKindTakesIt(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		timeout time.Duration
+		want    string
+	}{
+		{"8.0.36", 2500 * time.Millisecond, "SET SESSION max_execution_time = 2500"},
+		{"8.4.0-log", 500 * time.Microsecond, "SET SESSION max_execution_time = 1"},
+		{"5.7.8", time.Second, "SET SESSION max_execution_time = 1000"},
+		{"5.7.7", time.Second, ""},
+		{"5.6.51", time.Second, ""},
+		{"10.11.6-MariaDB-1:10.11.6+maria~ubu2204", 2500 * time.Millisecond, "SET SESSION max_statement_time = 2.500"},
+		{"5.5.5-10.6.16-MariaDB", 61001 * time.Millisecond, "SET SESSION max_statement_time = 61.001"},
+		{"10.1.0-MariaDB", time.Second, ""},
+		{"10.1.1-MariaDB", time.Second, "SET SESSION max_statement_time = 1.000"},
+		{"8.0.36", 0, ""},
+		{"v8", time.Second, ""},
+		{"", time.Second, ""},
+	} {
+		got := strings.Join(mysqlStatementTimeout(tc.version, tc.timeout), "; ")
+		if got != tc.want {
+			t.Errorf("%q, %s: %q, want %q", tc.version, tc.timeout, got, tc.want)
+		}
+	}
+	for number, want := range map[uint16]bool{3024: true, 1969: true, 1317: false, 1045: false} {
+		if got := mysqlTimedOut(fmt.Errorf("wrapped: %w", &mysql.MySQLError{Number: number})); got != want {
+			t.Errorf("error %d: timed out %v, want %v", number, got, want)
+		}
+	}
+	if mysqlTimedOut(errors.New("other")) {
+		t.Error("an error that is no server's timed out")
+	}
+}
+
+// A SQL Server statement given up at the lock timeout, error 1222, is told
+// apart as one the scrape's deadline ended; no other error is.
+func TestASQLServerLockTimeoutIsTheScrapesDeadline(t *testing.T) {
+	if sqlServerLockTimeout(0) != nil || strings.Join(sqlServerLockTimeout(1500*time.Millisecond), "") != "SET LOCK_TIMEOUT 1500" || strings.Join(sqlServerLockTimeout(time.Microsecond), "") != "SET LOCK_TIMEOUT 1" {
+		t.Errorf("the lock timeouts are %q, %q, %q", sqlServerLockTimeout(0), sqlServerLockTimeout(1500*time.Millisecond), sqlServerLockTimeout(time.Microsecond))
+	}
+	if !sqlServerTimedOut(fmt.Errorf("wrapped: %w", mssql.Error{Number: 1222})) || sqlServerTimedOut(mssql.Error{Number: 18456}) || sqlServerTimedOut(errors.New("other")) {
+		t.Error("error 1222 alone is the lock timeout")
 	}
 }
 
@@ -994,5 +1056,167 @@ func TestASQLStatementsSpanTellsItsFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 		requireFacts(t, "the statement", factsOf(t, trace.Requests()[0]), map[string]string{"db.response.returned_rows": "2", "sql.columns": "2", "sql.connection.reused": reused})
+	}
+}
+
+// sqlArgsCollector is a postgres collector of args typed as types, not
+// validated.
+func sqlArgsCollector(args, types []string) *model.Collector {
+	return &model.Collector{
+		Name:    "typed",
+		Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Args: args, ArgTypes: types}},
+	}
+}
+
+// arg_types gives each arg the type it is bound as, by its place, and is
+// checked when the configuration loads: a type for each arg, each one of
+// text, int, float and bool as written, and an arg that no probe parameter
+// fills — one without a placeholder, or whose placeholders all have
+// defaults — of its type.
+func TestSQLArgTypesAreCheckedWhenTheConfigurationLoads(t *testing.T) {
+	for _, tc := range []struct {
+		args, types []string
+		want        string
+	}{
+		{nil, []string{"int"}, "sets request.arg_types without request.args"},
+		{[]string{"1", "2"}, []string{"int"}, "request.arg_types has 1 types for 2 args"},
+		{[]string{"1"}, []string{"int", "int"}, "request.arg_types has 2 types for 1 args"},
+		{[]string{"1"}, []string{"INT"}, `request.arg_types[0] is "INT"; want one of text, int, float, bool, in lower case`},
+		{[]string{"1"}, []string{" int"}, `request.arg_types[0] is " int"`},
+		{[]string{"1"}, []string{"integer"}, `request.arg_types[0] is "integer"`},
+		{[]string{"ten"}, []string{"int"}, `request.args[0] is "ten", which is no whole number`},
+		{[]string{"1.5"}, []string{"int"}, `request.args[0] is "1.5", which is no whole number`},
+		{[]string{" 1"}, []string{"int"}, `request.args[0] is " 1", which is no whole number`},
+		{[]string{"9223372036854775808"}, []string{"int"}, "which is no whole number from -9223372036854775808 to 9223372036854775807"},
+		{[]string{"NaN"}, []string{"float"}, `request.args[0] is "NaN", which is no finite decimal number`},
+		{[]string{"x", "maybe"}, []string{"text", "bool"}, `request.args[1] is "maybe", which is neither true nor false`},
+		{[]string{"{{param_limit:lots}}"}, []string{"int"}, `request.args[0], as its placeholders' defaults fill it, is "lots", which is no whole number`},
+		{[]string{"{{param_a:1}}{{param_b:x}}"}, []string{"int"}, `request.args[0], as its placeholders' defaults fill it, is "1x"`},
+	} {
+		err := ValidateRequest(sqlArgsCollector(tc.args, tc.types))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.HasPrefix(err.Error(), `collector "typed" `) {
+			t.Errorf("args %q, arg_types %q: %v, want %q", tc.args, tc.types, err, tc.want)
+		}
+	}
+	for _, ok := range []struct{ args, types []string }{
+		{[]string{"1", "x"}, nil},
+		{[]string{"-12", "0.25", "TRUE", "it's"}, []string{"int", "float", "bool", "text"}},
+		{[]string{"{{param_limit:100}}", "{{param_ratio}}"}, []string{"int", "float"}},
+		// A placeholder with no default leaves the value to the probe.
+		{[]string{"{{param_a:x}}{{param_b}}"}, []string{"int"}},
+	} {
+		if err := ValidateRequest(sqlArgsCollector(ok.args, ok.types)); err != nil {
+			t.Errorf("args %q, arg_types %q: %v", ok.args, ok.types, err)
+		}
+	}
+}
+
+// Each arg is bound as Go's own value of its type, which the driver binds
+// as the database's; a probe parameter that is no value of its arg's type
+// is refused before anything is sent, as the check of a probe's or a
+// static target's parameters refuses it.
+func TestSQLArgsAreBoundAsTheirTypes(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
+	c := f.collector(t, "typed", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) {
+			o.Args = []string{"{{param_limit:100}}", "{{param_ratio}}", "{{param_on}}", "007", "{{param_name}}"}
+			o.ArgTypes = []string{"int", "float", "bool", "text", "text"}
+		})
+	})
+	params := map[string]string{"param_ratio": "1e-3", "param_on": "False", "param_name": "42"}
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Params: params}, nil); err != nil {
+		t.Fatal(err)
+	}
+	queries := f.db.Queries()
+	if got := queries[len(queries)-1].Args; !reflect.DeepEqual(got, []any{int64(100), 0.001, false, "007", "42"}) {
+		t.Errorf("args %#v", got)
+	}
+	for param, want := range map[string]string{
+		"param_limit": `request.args[0] is "10 rows", which is no whole number`,
+		"param_ratio": `request.args[1] is "Inf", which is no finite decimal number`,
+		"param_on":    `request.args[2] is "yes", which is neither true nor false`,
+	} {
+		bad := maps.Clone(params)
+		bad[param] = map[string]string{"param_limit": "10 rows", "param_ratio": "Inf", "param_on": "yes"}[param]
+		before := len(f.db.Queries())
+		if _, err := CheckRequestParams(c, RequestOverrides{Params: bad}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: the parameters' check says %v, want %q", param, err, want)
+		}
+		if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Params: bad}, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", param, err, want)
+		}
+		if len(f.db.Queries()) != before {
+			t.Errorf("%s: the statement ran with a value not of its type", param)
+		}
+	}
+}
+
+// A float arg is a finite number written in decimal: Go's hexadecimal
+// floats and underscores, which no database writes a number with, Inf, NaN
+// and a number past float64's range are refused; a bool is true or false
+// in any case.
+func TestSQLTypedArgsReadOnlyTheirTypesValues(t *testing.T) {
+	for _, tc := range []struct {
+		typ, value string
+		want       any
+	}{
+		{"int", "-9223372036854775808", int64(-9223372036854775808)},
+		{"int", "+7", int64(7)},
+		{"float", "2.5e3", 2500.0},
+		{"float", "-0", 0.0},
+		{"float", ".5", 0.5},
+		{"bool", "tRuE", true},
+		{"text", " any ", " any "},
+		{"int", "0x10", nil},
+		{"int", "1_000", nil},
+		{"int", "", nil},
+		{"float", "0x1p-2", nil},
+		{"float", "1_000.5", nil},
+		{"float", "-Inf", nil},
+		{"float", "1e999", nil},
+		{"float", "", nil},
+		{"bool", "1", nil},
+		{"bool", "t", nil},
+		{"bool", "", nil},
+	} {
+		got, err := sqlTypedArg("request.args[0]", tc.typ, tc.value)
+		if tc.want == nil && err == nil || tc.want != nil && (err != nil || got != tc.want) {
+			t.Errorf("%s %q: %#v, %v; want %#v", tc.typ, tc.value, got, err, tc.want)
+		}
+	}
+}
+
+// A server that says it is a version with the time limit's variable and
+// refuses it as one it does not know (error 1193), as a proxy speaking for
+// another server may, has the statement run without it, and is set it no
+// more on that connection; any other refusal of it fails the scrape.
+func TestAMySQLServerThatDoesNotKnowTheLimitsVariableIsScrapedWithoutIt(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["SELECT 1 AS one"] = sqltest.Result{Columns: []string{"one"}, Rows: [][]driver.Value{{int64(1)}}}
+	refusal := &mysql.MySQLError{Number: 1193, Message: "Unknown system variable 'max_execution_time'"}
+	f.db.ExecErr = func(statement string) error {
+		if strings.HasPrefix(statement, "SET SESSION max_execution_time") {
+			return refusal
+		}
+		return nil
+	}
+	c := f.collector(t, SQLDriverMySQL, SQLDriverMySQL, "SELECT 1 AS one")
+	for scrape := range 2 {
+		if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+			t.Fatalf("scrape %d: %v", scrape, err)
+		}
+	}
+	if sets := len(f.db.Executed()); sets != 1 {
+		t.Errorf("the variable was set %d times over two scrapes on one connection, want once: %q", sets, f.db.Executed())
+	}
+	if n := len(f.db.Queries()); n != 2 {
+		t.Errorf("the statement ran %d times, want 2", n)
+	}
+	sqlPools.closeAll()
+	refusal.Number = 1227
+	_, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil)
+	if err == nil || !strings.Contains(err.Error(), "running SET SESSION max_execution_time") {
+		t.Errorf("another refusal of the variable: %v", err)
 	}
 }

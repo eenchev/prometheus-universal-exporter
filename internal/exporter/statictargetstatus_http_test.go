@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -177,7 +179,7 @@ func TestTheStatusPageShowsTheJSONsValuesEscaped(t *testing.T) {
 	for _, row := range page.Rows {
 		// The interval, Go's 1m0s in the JSON, is written as the page
 		// writes a duration, 1m.
-		for _, value := range []string{row.Name, row.Collector, row.Target, pagekit.DurationText(row.Interval), row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.Backoff} {
+		for _, value := range []string{row.Name, row.Collector, row.Target, pagekit.DurationText(row.Interval), row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.BackoffUntil} {
 			if value != "" && !strings.Contains(body, templateEscaped(value)) {
 				t.Errorf("the page does not show %q of the row %s", value, row.Name)
 			}
@@ -274,10 +276,62 @@ func TestTheStatusPageSaysItShowsThisReplicasTargets(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
 	server := newStaticServer(t, weatherConfig(), file)
 	server.SetAllocatorStatus(func() AllocatorStatus { return AllocatorStatus{SyncErrors: map[string]uint64{}} })
-	requireContains(t, getPage(t, server, "/static-targets/status"), "the static targets the allocator gave this replica")
+	requireContains(t, getPage(t, server, "/static-targets/status"), "the static targets the allocator gave this replica", "No bundle from the allocator is in force yet.")
 	if !statusJSON(t, server, "/static-targets/status").Allocator {
 		t.Error("the JSON does not say the exporter is in allocator mode")
 	}
+}
+
+// In allocator mode the page names the member this replica is, linking the
+// allocator's view of it, and says which bundle is in force and since
+// when, and when the allocator was last heard from; the time the bundle
+// came is said only when the client's bundle is the manager's.
+func TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce(t *testing.T) {
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
+	server := newStaticServer(t, weatherConfig(), file)
+	server.manager.SetGeneration("g7")
+	now := time.Now()
+	st := AllocatorStatus{SyncErrors: map[string]uint64{}, URL: "http://pue-allocator:9116/", Member: "pod 0&1", Generation: "g7", InForceAt: now.Add(-90 * time.Second), LastSync: now.Add(-5 * time.Second)}
+	server.SetAllocatorStatus(func() AllocatorStatus { return st })
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`as the member <a href="http://pue-allocator:9116/?member=pod&#43;0%261" title="the allocator's view of pod 0&amp;1">pod 0&amp;1</a>:`,
+		`<p class="meta" id="bundle">The bundle in force is generation <code>g7</code>, in force since <time datetime="`+st.InForceAt.UTC().Format(time.RFC3339)+`">`+st.InForceAt.UTC().Format(time.RFC3339)+`</time> (1m30s ago). The allocator was last heard from at <time datetime="`)
+	b := statusJSON(t, server, "/static-targets/status").Bundle
+	if b == nil || b.Member != "pod 0&1" || b.MemberView != "http://pue-allocator:9116/?member=pod+0%261" || b.Generation != "g7" || b.InForceSince != st.InForceAt.UTC().Format(time.RFC3339) || b.LastSync == "" {
+		t.Errorf("the JSON's allocator is %+v", b)
+	}
+	// The client has seen a bundle the manager has not put in force yet.
+	st.Generation = "g8"
+	if b := statusJSON(t, server, "/static-targets/status").Bundle; b.Generation != "g7" || b.InForceSince != "" {
+		t.Errorf("with the client a bundle ahead, the JSON's allocator is %+v; want g7 with no time", b)
+	}
+	if strings.Contains(getPage(t, server, "/static-targets/status"), "in force since") {
+		t.Error("the page says when a bundle other than the one in force came")
+	}
+	if strings.Contains(newStaticServerJSON(t), `"allocator"`) {
+		t.Error("outside allocator mode the JSON has an allocator")
+	}
+}
+
+// newStaticServerJSON is the status page's JSON of an exporter outside
+// allocator mode.
+func newStaticServerJSON(t *testing.T) string {
+	t.Helper()
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
+	return getPath(newStaticServer(t, weatherConfig(), file), http.MethodGet, "/static-targets/status?format=json").Body.String()
+}
+
+// Each row's collector links its section on the collectors page, relative
+// to the page, so the link holds under a prefix and follows the static
+// targets path.
+func TestATargetsCollectorLinksItsSection(t *testing.T) {
+	server := statusTargets(t)
+	requireContains(t, getPage(t, server, "/static-targets/status"),
+		`<span class="muted">collector</span> <a href="../collectors#collector-text" title="the collector text on the collectors page">text</a>`)
+	requireContains(t, getPage(t, server, "/collectors"), `id="collector-text"`)
+	server.SetStaticTargetsPath("/a/b/targets")
+	requireContains(t, getPage(t, server, "/a/b/targets/status"), `href="../../../collectors#collector-text"`)
 }
 
 // A scrape failure_backoff skips is shown as skipped, and is no failed
@@ -422,4 +476,154 @@ func TestARemovedTargetIsForgottenWithoutAReadOfTheEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("after a bundle from the allocator moved a target away", "otlp_only")
+}
+
+// A scraped target's name links to the endpoint narrowed to it,
+// ?targets=, relative to the page, which serves that target's series and
+// no other's; a target not yet scraped, which the endpoint has nothing of,
+// has no link. Under --web.debug=full the row links the target's debug
+// scrape too, and below it does not. The links follow
+// --web.static-targets-path.
+func TestATargetsNameLinksItsSeries(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page, `<a href="../static-targets?targets=ok" title="the series the endpoint serves of ok"><strong>ok</strong></a>`)
+	if strings.Contains(page, "targets=never") || !strings.Contains(page, "<strong>never</strong>") {
+		t.Errorf("the target not yet scraped is linked")
+	}
+	if strings.Contains(page, "?debug=") {
+		t.Errorf("below --web.debug=full the page links a debug scrape")
+	}
+	base, _ := url.Parse("http://exporter/static-targets/status")
+	link, _ := base.Parse("../static-targets?targets=ok")
+	series := getPath(server, http.MethodGet, link.RequestURI()).Body.String()
+	if !strings.Contains(series, `static_target="ok"`) || strings.Contains(series, `static_target="broken"`) {
+		t.Errorf("%s serves:\n%s", link.RequestURI(), series)
+	}
+	server.SetDebug(DebugFull)
+	requireContains(t, getPage(t, server, "/static-targets/status"), `<a class="muted" href="../static-targets?debug=ok" title="scrape ok once now, and report each stage">debug</a>`)
+	server.SetStaticTargetsPath("/static/targets")
+	requireContains(t, getPage(t, server, "/static/targets/status"), `href="../targets?targets=ok"`)
+}
+
+// Each row has a strip of the target's last scrapes, oldest first, marked
+// as the recent probes' are, so that a target failing now and then reads
+// apart from one that failed once. The strip keeps the last ten.
+func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
+	server := statusTargets(t)
+	results := func(row staticStatusRow) string {
+		var got []string
+		for _, r := range row.Recent {
+			if r.At == "" {
+				t.Errorf("a scrape of %s has no time", row.Name)
+			}
+			got = append(got, r.Result)
+		}
+		return strings.Join(got, " ")
+	}
+	for name, want := range map[string]string{
+		"ok":          statusSuccess,
+		"backing_off": statusFailed + " " + statusBackoff,
+		"stale":       statusSuccess + " " + statusStale,
+		"never":       "",
+	} {
+		if got := results(statusRow(t, server, name)); got != want {
+			t.Errorf("the strip of %s is %q, want %q", name, got, want)
+		}
+	}
+	r := getPath(server, http.MethodGet, "/static-targets/status?format=json")
+	requireContains(t, r.Body.String(), `"name":"never"`)
+	if !strings.Contains(r.Body.String(), `"recent":[]`) {
+		t.Errorf("the target never scraped has no empty recent list in the JSON")
+	}
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page, `<th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th>`)
+	requireContains(t, page, `">✗</span><span class="bad" data-at="`)
+	requireContains(t, page, ` backoff">…</span></span></td>`)
+	for _, target := range server.manager.StaticTargets() {
+		if target.Name == "ok" {
+			for range 12 {
+				server.scrapeTarget(t.Context(), server.manager.Get(), target)
+			}
+		}
+	}
+	if got := len(statusRow(t, server, "ok").Recent); got != recentProbesPerKey {
+		t.Errorf("after 13 scrapes the strip has %d, want the last %d", got, recentProbesPerKey)
+	}
+}
+
+// The static targets table sorts by a column and filters its rows as the
+// probe jobs table of the allocator's page does, with the same script:
+// the rows carry their order and the text the filter matches, a number's
+// cell its value, and the filter's form is hidden until the script shows
+// it. The script keeps the order and the filter through a refresh's swap.
+func TestTheStaticTargetsTableSortsAndFilters(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`<form class="filter table" id="static-filter-form" role="search" hidden>`,
+		`<input id="static-filter" type="search" autocomplete="off" spellcheck="false">`,
+		`<p class="note muted" data-rows-of="static-targets-table" role="status" aria-live="polite"></p>`,
+		`<table id="static-targets-table">`+"\n"+`<thead><tr><th data-sort="text">Target</th><th data-sort="num">Interval</th><th data-sort="num">Last scrape</th>`,
+		`<tr data-order="0" data-match="backing_off`+"\ndead\n",
+		`<td data-value="60">1m</td>`,
+		`<td class="strip" data-value="2">`,
+		`<td data-value="0">`+"<span class=\"muted\">none yet</span></td>",
+		`const arrangeTargets = sortable(content, "static-targets-table", "static-filter", "static targets");`,
+		`arrangeTargets(() => { content.innerHTML = fragment; });`,
+		`box.setSelectionRange(typing[0], typing[1]);`,
+		`table.sortable th:not(.num) button::after { content: "\00a0\2195";`)
+	_, table, _ := strings.Cut(page, `id="static-targets-table"`)
+	table, _, _ = strings.Cut(table, "</table>")
+	if strings.Contains(table, "<button") || strings.Contains(table, "aria-sort") {
+		t.Errorf("the table's headings are buttons without the script:\n%s", table)
+	}
+	if !strings.Contains(table, `data-match="ok`+"\ntext\n") || !strings.Contains(table, "team=&lt;b onmouseover=&#34;x&#34;&gt;\nsuccess\"") {
+		t.Errorf("the row of ok does not match its name, collector, labels and result:\n%s", table)
+	}
+}
+
+// Every moment the status page shows is a <time> of RFC 3339 in UTC, which
+// a page without JavaScript shows as it is; the page's script shows it in
+// the browser's time with UTC and how long ago in its tooltip, after a
+// refresh too, and writes a strip mark's moment the same way.
+func TestTheStatusPageWritesEachMomentAsATime(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	row := statusRow(t, server, "ok")
+	b := statusRow(t, server, "backing_off")
+	requireContains(t, page,
+		`<td data-value="`, `<time datetime="`+row.LastScrape+`">`+row.LastScrape+`</time><br><span class="muted">`,
+		`backing off until <time datetime="`+b.BackoffUntil+`">`+b.BackoffUntil+`</time>`,
+		`at <time datetime="`+b.LastErrorAt+`">`+b.LastErrorAt+`</time>`,
+		`data-at="`+row.Recent[0].At+`" title="`+row.Recent[0].At+` success"`,
+		"function localTimes(root) {", "localTimes(content);\n  function swap(fragment) {", "arrangeTargets(() => { content.innerHTML = fragment; });\n    localTimes(content);")
+	if strings.Contains(page, `<td data-value="`+strconv.FormatInt(row.ScrapedAt, 10)+`">`+row.LastScrape) {
+		t.Error("a last scrape's moment is no <time>")
+	}
+}
+
+// A strip's marks, read one symbol at a time, say nothing of what they
+// stand for: a screen reader is told the strip as its counts and its
+// latest result, and not the marks, which stay for the eye.
+func TestAStripIsToldToAScreenReaderAsItsCounts(t *testing.T) {
+	for _, c := range []struct {
+		results []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{statusSuccess}, "last 1 scrape: 1 success; the latest success"},
+		{[]string{statusFailed, statusSuccess, statusFailed, statusBackoff}, "last 4 scrapes, oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped by backoff"},
+	} {
+		if got := stripText(c.results, "scrape"); got != c.want {
+			t.Errorf("stripText(%v) = %q, want %q", c.results, got, c.want)
+		}
+	}
+	server := statusTargets(t)
+	probeOnce(t, server, probeOf("text", textTarget(t, "value=1\n").URL), nil)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`<td class="strip" data-value="2"><span class="sr-only">last 2 scrapes, oldest first: 1 failed, 1 skipped by backoff; the latest skipped by backoff</span><span aria-hidden="true"><span class="bad" data-at="`,
+		`<td class="strip"><span class="sr-only">last 1 probe: 1 success; the latest success</span><span aria-hidden="true">`,
+		`.sr-only { position: absolute; width: 1px; height: 1px;`)
 }

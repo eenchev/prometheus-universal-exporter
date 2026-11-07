@@ -104,5 +104,6 @@ const RefreshStyle = `
 form.refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0; }
 form.refresh label { display: inline-flex; align-items: center; gap: 6px; }
 form.refresh a.button, form.refresh button, form.refresh select { display: inline-flex; align-items: center; height: 30px; font: inherit; line-height: 1; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; text-decoration: none; }
+form.refresh select { border-color: var(--field); }
 form.refresh a.button { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 `

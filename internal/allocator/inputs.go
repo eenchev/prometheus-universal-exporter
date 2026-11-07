@@ -71,6 +71,11 @@ type Inputs struct {
 	// digest identifies the files as read (snapshot.digest) and, once
 	// discovered targets are added (expand), what was discovered.
 	digest string
+	// origins are where each static target came from, by its place in
+	// Targets: "" for one the file writes, and the name of the
+	// discovered_targets entry that made one (expandStatic). A place past
+	// its end is a written target's.
+	origins []string
 	// entries are the static target file's discovered_targets, and
 	// sources every discovery source of them and of the probe jobs.
 	entries []*discoveredEntry

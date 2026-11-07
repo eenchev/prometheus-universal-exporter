@@ -153,7 +153,24 @@ func TestTheStatusMarksAMemberLateByTheConfiguredInterval(t *testing.T) {
 		t.Errorf("want r2 alone late and still live: %+v, %+v", r1, r2)
 	}
 	requireIn(t, ask(h, "/", "").Body.String(), "The replicas heartbeat every 4s; a member not heard from for 12s stops being live.",
-		`<span class="bad" title="a heartbeat is overdue">7s ago</span>`)
+		`<time class="ago bad" datetime="`+s.Members.List[1].LastHeartbeat+`" data-note="a heartbeat is overdue" title="a heartbeat is overdue; `+s.Members.List[1].LastHeartbeat+`">7s ago</time>`)
+}
+
+// The allocator's pages write each moment as the exporter's status page
+// does (pagekit.LocalTimesScript): the instance's start as a <time> of RFC
+// 3339 in UTC, a heartbeat's, a peer check's and a source's refresh as a
+// <time class="ago"> whose text says how long ago and whose datetime and
+// tooltip say when; the script runs on the content, after a refresh too.
+func TestTheAllocatorsPagesWriteEachMomentAsATime(t *testing.T) {
+	a, _ := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), "")), "r1")
+	t.Cleanup(a.BeginShutdown)
+	h := a.Handler("")
+	s := statusOf(t, h, "")
+	page := ask(h, "/", "").Body.String()
+	requireIn(t, page, `<tr><th>Started</th><td><time datetime="`+s.Instance.StartedAt+`">`+s.Instance.StartedAt+`</time>`,
+		`<time class="ago" datetime="`+s.Members.List[0].LastHeartbeat+`" title="`+s.Members.List[0].LastHeartbeat+`">`,
+		"function localTimes(root) {", "        filterRows();\n        localTimes(content);\n", "probe jobs\");\n  localTimes(content);")
+	requireIn(t, ask(h, "/?member=r1", "").Body.String(), `<tr><th>Last heartbeat</th><td><time class="ago" datetime="`)
 }
 
 // metricsOf is a's /metrics text.

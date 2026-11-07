@@ -246,6 +246,8 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				}
 			}
 		}
+		// A connection grpc-go made for the call: its dial and handshake.
+		traceAddPhases(ctx, entry.phases.take())
 		if codec.over != nil {
 			// The call was answered OK; the answer is over the limit.
 			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))

@@ -618,8 +618,9 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
 	label := address.url(security)
+	timedCtx, timing := withConnTiming(ctx)
 	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", hostPort)
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", hostPort)
 	if err != nil {
 		if !errors.Is(err, ErrTargetRefused) {
 			err = ldapFailure(ctx, fmt.Errorf("connecting to %s: %w", hostPort, err))
@@ -635,11 +636,14 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 	defer stop()
 	if security == ldapImplicitTLS {
 		tlsConn := tls.Client(conn, cfg)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 			return nil, ldapFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", hostPort, err))
 		}
 		conn = tlsConn
 	}
+	// The connection's phases are the first operation's, sent on it next:
+	// STARTTLS, whose handshake is added to them, or BIND.
+	traceNextPhases(ctx, timing.phases())
 	session := newLDAPConn(conn, responseLimit(c))
 	if security == ldapStartTLS {
 		if err := ldapStartTLSOn(ctx, session, label, cfg, hostPort); err != nil {
@@ -696,10 +700,14 @@ func ldapStartTLSOn(ctx context.Context, session *ldapConn, label string, cfg *t
 		return err
 	}
 	tlsConn := tls.Client(session.conn, cfg)
+	began := time.Now()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: TLS handshake with %s: %w", hostPort, err))
 		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
+	}
+	if tracing(ctx) {
+		traceAddPhases(ctx, []TracedPhase{{Name: "connection.tls", Start: began, End: time.Now()}})
 	}
 	if err := session.startTLS(tlsConn); err != nil {
 		err = fmt.Errorf("STARTTLS: %w", err)

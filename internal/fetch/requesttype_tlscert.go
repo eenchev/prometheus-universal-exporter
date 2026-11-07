@@ -422,8 +422,12 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		traced.Set("Tls-Starttls", protocol)
 	}
 	traceRequest(ctx, tlsCertMethod, "tls://"+address.hostPort, traced, "", false)
+	// The lookup, the connection and the handshake are the request's
+	// phases, whether the handshake went through or not.
+	timedCtx, timing := withConnTiming(ctx)
+	defer func() { tracePhases(ctx, timing.phases()) }()
 	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", address.hostPort)
 	if err != nil {
 		if !errors.Is(err, ErrTargetRefused) {
 			err = fmt.Errorf("connecting to %s: %w", address.hostPort, err)
@@ -441,7 +445,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	}
 	tlsConn := tls.Client(conn, cfg)
 	defer func() { _ = tlsConn.Close() }()
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 		err = fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err)
 		// After STARTTLS the report tells the dialogue that led to the
 		// handshake, as it does before a handshake that succeeds.

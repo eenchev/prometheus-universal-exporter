@@ -763,10 +763,12 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 // redisDial makes a connection to address, over TLS when secure, cfg's
 // server name the address's host unless the tls block names one, whose
 // every read and write ends at the scrape's deadline, or as soon as it is
-// cancelled; done closes it.
+// cancelled; done closes it. Its lookup, connection and handshake are the
+// phases of the first command sent on it.
 func redisDial(ctx context.Context, address redisAddress, secure bool, cfg *tls.Config, limit int64) (*redisConn, func(), error) {
+	timedCtx, timing := withConnTiming(ctx)
 	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", address.hostPort)
 	if err != nil {
 		if !errors.Is(err, ErrTargetRefused) {
 			err = redisFailure(ctx, fmt.Errorf("connecting to %s: %w", address.hostPort, err))
@@ -782,13 +784,15 @@ func redisDial(ctx context.Context, address redisAddress, secure bool, cfg *tls.
 			own.ServerName = address.host
 		}
 		tlsConn := tls.Client(conn, own)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 			stop()
 			_ = conn.Close()
 			return nil, nil, redisFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err))
 		}
 		conn = tlsConn
 	}
+	// The connection's phases are the first command's, sent on it next.
+	traceNextPhases(ctx, timing.phases())
 	return newRedisConn(conn, limit), func() { stop(); _ = conn.Close() }, nil
 }
 

@@ -551,7 +551,11 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 		traced.Set("Tcp-Starttls", protocol)
 	}
 	traceRequest(ctx, tcpMethod(c, overrides), label, traced, "", false)
-	x, err := tcpExchange(ctx, address, cfg, send, steps, c)
+	// The connection's lookup, connection and TLS handshake are the
+	// request's phases, whether it went on to an answer or not.
+	timedCtx, timing := withConnTiming(ctx)
+	x, err := tcpExchange(timedCtx, address, cfg, send, steps, c)
+	tracePhases(ctx, timing.phases())
 	if err != nil {
 		traceFailedOutcome(ctx, x.begun()+"error: "+err.Error())
 		return nil, err
@@ -835,7 +839,7 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	handshake := func() error {
 		began := time.Now()
 		tlsConn := tls.Client(raw, cfg)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if err := connTimingOf(ctx).handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 			return tcpFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err))
 		}
 		x.handshake, x.version = time.Since(began), tlsConn.ConnectionState().Version

@@ -80,6 +80,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Exported traces time the connections of `tcp`, `tlscert`, `ldap`,
+  `redis`, `sshexec`, `sshfile` and `grpc` requests, as an http request's
+  are: `connection.dns`, `connection.connect` and `connection.tls`, or
+  `connection.handshake` for SSH, under the request's span
+  ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).
 - A `dns` collector answers each record's TTL, the response code as
   `rcode`, the answer's AA, RA and AD bits, and records of `SOA`, `CAA` and
   `DNSKEY` ([The document](docs/DNS.md#the-document)).

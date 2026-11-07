@@ -31467,6 +31467,17 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADNSCollectorAnswersEachRecordTypeAsADocument` (fetch, dns), changed: each answer carries its `ttl`.
 - `TestDNSDocumentationExamples` (repository, dns), changed: the TTL and SOA serial examples load.
 
+## 34.305 The connections of tcp, tlscert, ldap, redis, sshexec, sshfile and grpc have phase spans
+
+- `TestATCPRequestHasItsConnectionsPhases` (fetch, tcp): a request to `localhost` has `connection.dns` and `connection.connect`; one over TLS to an address `connection.connect` and `connection.tls`, each within the request.
+- `TestATLSCertRequestHasItsConnectionsPhases` (fetch, tlscert): the handshake's request has `connection.connect` and `connection.tls`.
+- `TestARedisConnectionsPhasesAreItsFirstCommands` (fetch, redis): over TLS the first INFO has `connection.connect` and `connection.tls` and the second none; with a Sentinel the first SENTINEL command has the Sentinel's connection, the second none, and the primary's INFO its own.
+- `TestAnLDAPConnectionsPhasesAreItsFirstOperations` (fetch, ldap): with StartTLS, STARTTLS has `connection.connect` and then `connection.tls`; BIND and SEARCH none.
+- `TestAnSSHExecConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshexec) and `TestAnSSHFileConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshfile): the first scrape's request has `connection.connect` and `connection.handshake`, the next scrape's, on the kept connection, none.
+- `TestAGRPCCallsConnectionPhasesAreTheCallThatMadeIt` (fetch, grpc): without and with target lists, the first call over TLS has `connection.connect` and `connection.tls`, the next none.
+- `TestAConnectionOfAnUntracedTripIsNotTimed` and `TestHeldPhasesAreTheNextRequestsAndAddedOnesTheLasts` (fetch): no timing without a trace; phases held go to the next request, its start moved to theirs, and phases added go to the last.
+- `TestAConnectionsPhasesAreSpansUnderItsRequest` (exporter): `connection.*` phases are spans of their names under the request's span; an http request's are `http.*` under `http.first_byte`.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -31994,7 +32005,20 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   its own span. The phases MUST be timed while the trip is traced whether or
   not a rule reads `$timings`, and each request's MUST be its own, a
   redirect's not the request's before it, and a redirect the trip refused
-  to follow, never sent, MUST have none. Trace and span ids MUST come from `crypto/rand` and be written in
+  to follow, never sent, MUST have none. Under the CLIENT span of a tcp,
+  tlscert, ldap, redis, sshexec, sshfile or grpc request there MUST be
+  INTERNAL `connection.dns`, `connection.connect` and `connection.tls`
+  spans, `connection.handshake` for an SSH handshake, for the connection
+  made for it, each only when it was made: of tcp's and tlscert's request,
+  whose connection is made for it; of the first command, operation or
+  call sent on an ldap or redis connection, a redis Sentinel's and its
+  primary's each their own, and `connection.tls` of ldap's StartTLS that
+  of the STARTTLS operation; of each request of an sshexec or sshfile
+  scrape that waited for its connection to be made, and none on one kept;
+  of the grpc call during which grpc-go made its connection, without
+  `connection.dns`, the name's lookup being grpc-go's resolver's, and none
+  on a connection kept or behind a proxy for `connection.connect`. A
+  request's span MUST begin no later than the phases under it. Trace and span ids MUST come from `crypto/rand` and be written in
   lowercase hex; times MUST be decimal nanoseconds.
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its

@@ -127,6 +127,10 @@ type sshConn struct {
 	// collector while the connection was made, so it is not counted.
 	maker     string
 	makerGone bool
+	// phases are the lookup, connection and SSH handshake of the making,
+	// set before ready is closed: the phases of the first request of each
+	// scrape that waited for it (sshPhases).
+	phases []TracedPhase
 	// calls is how many reads hold the connection now. retired says the
 	// cache has forgotten it, so it is closed when the last of them ends;
 	// givenUp that its making was cancelled (giveUpLocked); closed that it
@@ -319,8 +323,9 @@ func (c *sshConnCache) startLocked(ctx context.Context, key sshConnKey, stamp, c
 // cache forgot while a scrape waited for it is counted, since that scrape
 // reads on it.
 func (c *sshConnCache) dial(ctx context.Context, entry *sshConn, collector string) {
-	client, attached, err := dialSSH(ctx, entry.key, &entry.stage, c.attach)
+	client, attached, phases, err := dialSSH(ctx, entry.key, &entry.stage, c.attach)
 	c.mu.Lock()
+	entry.phases = phases
 	delete(c.making, entry)
 	if err != nil {
 		entry.err = err
@@ -736,7 +741,7 @@ func (c *sshConnCache) limitCounts(collector string) (waited, failed uint64) {
 // account, the file, directory or command, whether the connection was kept
 // from an earlier scrape or made for this one, and what more the type
 // shows, extra, such as the command line.
-func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, extra http.Header, reused bool, err error) {
+func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, extra http.Header, entry *sshConn, reused bool, err error) {
 	connection := "new"
 	if reused {
 		connection = "reused"
@@ -746,6 +751,11 @@ func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, 
 		header[name] = values
 	}
 	traceRequest(ctx, method, shown, header, "", false)
+	if entry != nil && !reused {
+		// The connection made for the scrape: its lookup, connection and
+		// handshake, and the span from the connection's start.
+		traceAddPhases(ctx, entry.phases)
+	}
 	if err != nil {
 		traceFailedOutcome(ctx, "error: "+err.Error())
 	}
@@ -788,10 +798,18 @@ func sshFilesStamp(s sshSettings) string {
 // starts on it, an SFTP session, when it is not nil, all within ctx, or
 // sshConnectTimeout when ctx has no deadline. stage is set to each stage as
 // it starts.
-func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error)) (*ssh.Client, io.Closer, error) {
+func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error)) (*ssh.Client, io.Closer, []TracedPhase, error) {
+	client, attached, timing, err := dialSSHTimed(ctx, key, stage, attach)
+	return client, attached, timing.phases(), err
+}
+
+// dialSSHTimed is dialSSH, the lookup, the connection and the handshake
+// timed.
+func dialSSHTimed(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error)) (*ssh.Client, io.Closer, *connTiming, error) {
+	ctx, timing := timeConns(ctx)
 	config, hostKeyFailure, err := sshClientConfig(key)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -801,7 +819,7 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach fu
 	if key.policy != nil {
 		guard := &policyGuard{policy: key.policy, hosts: map[string]bool{}}
 		if err := guard.check(ctx, &url.URL{Scheme: "ssh", Host: key.address}); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
@@ -809,9 +827,9 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach fu
 	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", key.address)
 	if err != nil {
 		if errors.Is(err, ErrTargetRefused) {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return nil, nil, fmt.Errorf("connecting to %s: %w", key.address, err)
+		return nil, nil, nil, fmt.Errorf("connecting to %s: %w", key.address, err)
 	}
 	// The handshake and the start of the session take no context: the
 	// socket's deadline bounds them, and is brought forward when ctx ends.
@@ -820,10 +838,17 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach fu
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 	stage.Store(sshStageHandshake)
-	clientConn, channels, requests, err := ssh.NewClientConn(conn, key.address, config)
+	var clientConn ssh.Conn
+	var channels <-chan ssh.NewChannel
+	var requests <-chan *ssh.Request
+	err = timing.handshake("handshake", func() error {
+		var err error
+		clientConn, channels, requests, err = ssh.NewClientConn(conn, key.address, config)
+		return err
+	})
 	if err != nil {
 		_ = conn.Close()
-		return nil, nil, sshHandshakeError(ctx, key, err, *hostKeyFailure)
+		return nil, nil, nil, sshHandshakeError(ctx, key, err, *hostKeyFailure)
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
 	var attached io.Closer
@@ -831,7 +856,7 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach fu
 		stage.Store(sshStageSession)
 		if attached, err = attach(ctx, key, client); err != nil {
 			_ = client.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	if !stop() {
@@ -841,10 +866,10 @@ func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach fu
 			_ = attached.Close()
 		}
 		_ = client.Close()
-		return nil, nil, fmt.Errorf("connecting to %s over SSH: %w", key.address, ctx.Err())
+		return nil, nil, nil, fmt.Errorf("connecting to %s over SSH: %w", key.address, ctx.Err())
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return client, attached, nil
+	return client, attached, timing, nil
 }
 
 // sshHandshakeError says in plain words why a handshake failed: the host

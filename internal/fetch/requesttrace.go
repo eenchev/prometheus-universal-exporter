@@ -31,6 +31,10 @@ type RequestTrace struct {
 	mu       sync.Mutex
 	requests []TracedRequest
 	spans    bool
+	// pending are the phases of a connection made before the request sent
+	// on it was recorded, which the next request recorded is given
+	// (traceNextPhases).
+	pending []TracedPhase
 }
 
 // TracedRequest is one request a trip sent.
@@ -90,15 +94,19 @@ type TracedRequest struct {
 	// Phases are the phases of an HTTP request that were timed, as
 	// $timings has them (HTTPTrip): the name's lookup, the connection, the
 	// TLS handshake, each only when the request made it, and the time to
-	// the answer's first byte, from the request's start; nil when none
-	// was, as for a request of another type, or one that got no
-	// connection.
+	// the answer's first byte, from the request's start; or of a
+	// connection another type made for the request (connTiming): its
+	// lookup, connection and TLS or SSH handshake, without first_byte. nil
+	// when none was, as for a request on a connection kept from before.
 	Phases  []TracedPhase
 	started time.Time
 }
 
-// TracedPhase is one phase of a request: dns, connect, tls or first_byte,
-// with when it began and ended.
+// TracedPhase is one phase of a request: an http request's dns, connect,
+// tls or first_byte, or a connection's another type made for its request,
+// connection.dns, connection.connect, connection.tls or
+// connection.handshake (an SSH connection's), with when it began and
+// ended.
 type TracedPhase struct {
 	Name       string
 	Start, End time.Time
@@ -179,6 +187,14 @@ func tracePhases(ctx context.Context, phases []TracedPhase) {
 	}
 }
 
+// earlier is the earlier of a and b.
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
 // debugRun reports whether ctx is a debug run's — a debug probe, a debug
 // scrape of a static target or a debug page's fetch — whose trips record
 // their requests (WithRequestTrace) and count in no self-metric of the
@@ -234,7 +250,14 @@ func traceRequestAt(ctx context.Context, method, url string, header http.Header,
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	page, _ := ctx.Value(pageKey{}).(int)
-	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()})
+	request := TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()}
+	if t.pending != nil {
+		// The connection the request is the first sent on, made before it
+		// was recorded: its span begins with the connection.
+		request.Phases, request.started = t.pending, earlier(request.started, t.pending[0].Start)
+		t.pending = nil
+	}
+	t.requests = append(t.requests, request)
 	return tracedAt{t: t, i: len(t.requests) - 1}
 }
 

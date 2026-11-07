@@ -47,7 +47,8 @@ collectors:
 | --- | --- | --- |
 | `type` | — | **Required.** `sql`. |
 | `driver` | — | **Required.** `mysql`, `postgres` or `sqlserver`; `oracle`, `clickhouse`, `snowflake` or `vertica` in a build that has them. In any case, blanks around it aside. |
-| `statement` | — | **Required.** The one statement run, with the driver's own placeholders for `args` (see [The statement](#the-statement)). Not blanks alone. |
+| `statement` | — | **Required**, unless `statement_file` names the file of it. The one statement run, with the driver's own placeholders for `args` (see [The statement](#the-statement)). Not blanks alone. |
+| `statement_file` | — | The absolute path of a file holding the statement, in place of `statement` (see [A statement in a file](#a-statement-in-a-file)). |
 | `args` | — | The values bound to the statement's placeholders, in order, as text unless `arg_types` says otherwise. May use [placeholders](REQUESTS.md#path-parameters), `{{param_name}}` and `{{param_name:default}}`. |
 | `arg_types` | all `text` | The type each of `args` is bound as, one for each, in their order: `text`, `int`, `float` or `bool` (see [Typed args](#typed-args)). |
 | `database` | the account's | The database the statement runs on. May use placeholders, filled with letters, digits and `_ - . $` only. Not for `oracle`. Not blanks alone. |
@@ -235,6 +236,57 @@ outside any scrape too: for a driver that fails so closing a connection past
 its `max_lifetime` or `idle_timeout`, or rolling back the transaction of a
 scrape whose deadline came. One that fails so while connecting holds no
 place at `max_per_target` after it.
+
+### A statement in a file
+
+A long statement reads better, and is reviewed better, in a file of its
+own. `statement_file` names it, in place of `statement`:
+
+```yaml
+    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      password_file: /etc/exporter/db/password
+      statement_file: /etc/exporter/sql/jobs.sql
+      args: ["{{param_queue:default}}"]
+```
+
+The file is read when the configuration loads, and again at each reload;
+with [`--config.watch`](CONFIGURATION.md#watching-the-configuration), an edit of
+it reloads at the next tick, as an edit of the configuration does, so the
+statement in force is always the one on disk that the configuration was
+checked with. A collector whose statement file changed counts as changed
+in the reload's log line and its [cached results](CONFIGURATION.md#response-caching)
+are not reused. What the file must be is checked as the configuration
+loads, and a file that is not refuses the load, or the reload, saying why:
+
+- `statement_file` is an absolute path, written as it is: no blanks around
+  it, no placeholder, which nothing fills in a path read at the load. A
+  relative path would be read from whatever directory the exporter started
+  in;
+- the file is there, readable by the exporter, and a regular file: a
+  directory, a named pipe (which would hold the load until something wrote
+  to it, so it is refused without being opened), a device or a socket is
+  refused. A symbolic link to a file is followed, as a mounted ConfigMap's
+  files are reached;
+- it is at most 1 MiB, and UTF-8 text with no NUL byte;
+- it holds a statement: a UTF-8 byte order mark at its start and the blanks
+  around the statement are taken off, and a file of blanks alone is
+  refused;
+- the statement has no `{{param_...}}` placeholder, as a statement written in
+  place may not: a probe's values go in `args`;
+- it is held to what a statement written in place is held to: one
+  statement, and for `vertica` one its driver prepares.
+
+`statement` and `statement_file` are not written together. A static target
+uses its collector's statement and sets no file of its own. The [target
+allocator](ALLOCATOR.md) checks the key but does not open the file, which
+travels as a path: mount it on every replica at the same path, where each
+reads and checks it when it loads the bundle. The [debug page's
+playground](CONFIGURATION.md#debugging-collectors) reads no file of the
+server's, and a copy of a collector with a statement file leaves the key
+out.
 
 ### Typed args
 

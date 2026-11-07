@@ -116,7 +116,8 @@ own checks:
   dot and one, as `*/x.yaml` does — since on the replica it would match
   `..data/config.yaml` too. Begin such an entry with a directory's name.
 - Files the configuration names by path — a grpc collector's descriptor
-  files, `otlp.tls` files, `web.basic_auth` files, credential files — travel
+  files, a sql collector's `statement_file`, `otlp.tls` files,
+  `web.basic_auth` files, credential files — travel
   as paths, never as content. They must be mounted on every replica at the
   same path, as without the allocator, and need not be mounted on the
   allocator: it checks the configuration without opening them. The checks

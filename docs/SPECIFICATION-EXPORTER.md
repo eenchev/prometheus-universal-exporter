@@ -2014,7 +2014,21 @@ of objects, one a row, of its columns by name. Its keys:
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
   into the statement quoted as a literal of its type, and the documentation
-  MUST say which. `arg_types` MUST give each arg, by its place, the type it
+  MUST say which. `statement_file` MUST name, in place of `statement`, the
+  file the statement is read from when the configuration loads and at each
+  reload; both written MUST be refused, and neither but on the debug page's
+  playground, which makes no request. It MUST be refused at load: with
+  blanks alone or around it, with a placeholder, with a NUL, or relative;
+  a file missing, unreadable or no regular file — a named pipe MUST be
+  refused without being opened —, over 1 MiB, not UTF-8 or holding a NUL
+  byte, of blanks alone once a UTF-8 byte order mark and the blanks around
+  it are taken off, or holding a `{{param_...}}` placeholder; and a
+  statement the driver's own check refuses (`vertica`) MUST be refused
+  naming the file. A symbolic link MUST be followed. The text read MUST be
+  part of the collector's definition, so that a reload names the collector
+  changed and its cached results are not reused; a load that opens no file
+  (the target allocator's) MUST check the key without reading the file.
+  `arg_types` MUST give each arg, by its place, the type it
   is bound as — `text`, the default, as written; `int`, Go's `int64` of a
   decimal whole number, a sign allowed; `float`, a finite `float64` of a
   decimal number, no hexadecimal float, underscore, `Inf`, `NaN` or number
@@ -8779,7 +8793,10 @@ that configuration is refused, so a configuration adding a collector file with
 a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
 reload a configuration that has not changed since it was loaded.
 
-The watch MUST cover the descriptor files of the configuration in force: the
+The watch MUST cover a sql collector's `request.statement_file` in force as
+it covers a descriptor file, below: one changing, appearing or disappearing
+MUST reload at the next tick, the statement read again and checked as the
+load checks it. The watch MUST cover the descriptor files of the configuration in force: the
 `request.protoset_file` and `request.proto_files` of its collectors, which
 only a `grpc` collector may set (§ 5.1), and the files those `.proto` files
 import, through however many files, which are every path the compile of the
@@ -31125,6 +31142,18 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestSQLArgsAreBoundAsTheirTypes` (fetch): `{{param_limit:100}}`, `1e-3`, `False`, `007` and `42` as int, float, bool, text and text are bound as `int64(100)`, `0.001`, `false`, `"007"` and `"42"`; `10 rows` as int, `Inf` as float and `yes` as bool are refused by the check of the parameters and by the scrape, which runs no statement.
 - `TestSQLTypedArgsReadOnlyTheirTypesValues` (fetch): the least int64, `+7`, `2.5e3`, `-0`, `.5`, `tRuE` and ` any ` as text are read; `0x10`, `1_000` and an empty int, `0x1p-2`, `1_000.5`, `-Inf`, `1e999` and an empty float, and `1`, `t` and an empty bool are not.
 - `TestASQLCollectorsArgTypesHoldItsStaticTargetsParams` (config): `arg_types: [int]` loads from YAML; a static target's `param_limit` of `25`, `-100` and empty (the default filling it) loads, and `ten`, `2.5` and `1e3` are refused naming the target, the collector and the arg; two types for one arg are refused.
+
+## 34.293 A sql statement in a file
+
+- `TestAStatementFileIsCheckedWhenItLoads` (fetch): a statement and a statement file both written, a path of blanks, one with blanks around it, a placeholder, a NUL, a relative path (`sql/jobs.sql`, `./jobs.sql`), a missing file, a directory, a file of 1MiB and a byte, Latin-1 text, a NUL byte, an empty file, one of blanks, one of a byte order mark alone, a statement with `{{ param_queue }}`, neither key and a statement of blanks are refused naming the collector and saying why; a file the exporter may not read is refused saying so, where the test does not run as root.
+- `TestAStatementFileThatIsANamedPipeIsRefusedUnopened` (fetch, unix): a named pipe is refused as no regular file within 5s, without being opened.
+- `TestAStatementFilesStatementIsTheOneRun` (fetch): a statement of four lines in a file behind a symbolic link, after a byte order mark and a blank line and before two, is read without them and is the statement a scrape runs.
+- `TestAStatementFileIsNotReadWhereTheFilesAreNot` (fetch): loaded without opening files, a missing file loads and a relative path is still refused; the playground needs no statement; the file is among the collector's named files and a statement written in place names none.
+- `TestAStatementFilesTextIsPartOfTheCollectorsDefinition` (fetch): the collector's YAML changes with the file's text, the path the same, and carries the path and `statement_file_sha256`.
+- `TestAVerticaStatementFileIsHeldToWhatAStatementIs` (fetch, vertica): `SELECT 1;\nCOMMIT` in the file is refused as more than one statement naming the file, and `SELECT 1` loads.
+- `TestAStatementFileEditedReloadsAtTheNextTick` (config): with the watch, the file edited to `SELECT 2 AS n` puts a configuration in force at the next tick, the reload naming the collector `db` changed; edited to blanks it is rejected, the configuration in force kept, the load saying the file holds no statement.
+- `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statement_file`, of a pattern, is held to text.
+- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: a row of `statement_file` in a collector without `statement`: the absolute path of `testdata/sql/statement.sql` is taken by both, `statement.sql` refused by both, and the key left out or written `""` refused by both, the collector having no statement; the schema requires one of `statement` and `statement_file` (`oneOf`), which the schema as it was is taken to have held as it held `statement` required.
 
 ## 42.1 OTLP export
 

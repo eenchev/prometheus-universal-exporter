@@ -3,6 +3,8 @@
 package repository
 
 import (
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -81,6 +83,10 @@ func sqlSchemaKeys() []schemaKey {
 		// both, whatever its value, "" as every whole number's is.
 		schemaKey{key: "targets[].request.connections.max_targets", file: inTargetFile, configuration: sqlCollector, document: sqlTarget, at: target, setting: "    request:\n      connections:\n        max_targets: %s\n", invalid: "5", absent: true},
 		schemaKey{key: "collectors[].request.statement", document: sqlCollector, at: "      statement: SELECT 1 AS v\n", setting: "      statement: %s\n", valid: "SELECT 2 AS v", invalid: `" "`, emptyWas: taken},
+		// The statement in a file, in place of statement: an absolute path
+		// both take, a relative one both refuse; left out or written "",
+		// the collector has no statement, which both refuse.
+		schemaKey{key: "collectors[].request.statement_file", document: strings.Replace(sqlCollector, "      statement: SELECT 1 AS v\n", "", 1), at: request, setting: "      statement_file: %s\n", valid: sqlStatementFile(), invalid: "statement.sql"},
 		schemaKey{key: "collectors[].request.database", document: sqlCollector, at: request, setting: "      database: %s\n", valid: "app", invalid: `" "`, absent: true, empty: true},
 		schemaKey{key: "collectors[].request.service_name", document: sqlCollector, at: request, setting: "      service_name: %s\n", invalid: `" "`, absent: true, empty: true,
 			booleanAlone: "sets request.service_name, which only the oracle driver takes", numberAlone: "sets request.service_name, which only the oracle driver takes"},
@@ -89,6 +95,13 @@ func sqlSchemaKeys() []schemaKey {
 		schemaKey{key: "targets[].request.username", of: "a sql target's, with a placeholder", file: inTargetFile, configuration: sqlCollector, document: sqlTarget, at: target, setting: "    request:\n      username: %s\n", valid: "reader", invalid: `"{{param_user}}"`, absent: true, empty: true, invalidWas: taken},
 		schemaKey{key: "targets[].request.password_file", of: "a sql target's, with a placeholder", file: inTargetFile, configuration: sqlCollector, document: sqlTarget, at: target, setting: "    request:\n      password_file: %s\n", valid: "/p", invalid: `"/run/{{param_db}}/password"`, absent: true, empty: true, invalidWas: taken},
 	)
+}
+
+// sqlStatementFile is the absolute path of the repository's statement file
+// of SELECT 1 AS v, which a statement_file names.
+func sqlStatementFile() string {
+	_, here, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(here), "..", "..", "testdata", "sql", "statement.sql")
 }
 
 // The keys of a sql collector get one verdict from the schema and the

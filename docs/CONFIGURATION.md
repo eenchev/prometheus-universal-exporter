@@ -5198,7 +5198,11 @@ edited, a new file matching a pattern, or a file removed triggers a reload.
 
 ### Descriptor files
 
-The watch also follows the descriptor files of the grpc collectors in force:
+The watch also follows the statement files of the sql collectors in force,
+`request.statement_file` (see [A statement in a file](SQL.md#a-statement-in-a-file)):
+the statement is read when the configuration loads, so a file edited reloads
+at the next tick, a statement the file no longer holds rejected as the load
+would reject it. And it follows the descriptor files of the grpc collectors in force:
 a collector's `request.protoset_file` and `request.proto_files`, and the
 files those `.proto` files import, through however many files. The
 configuration is checked against them when it loads — the collector's `rpc`
@@ -5329,6 +5333,7 @@ and the load opens, and those of the configuration in force:
 
 - `otlp.tls.ca_file`, `cert_file` and `key_file`, when `otlp` is enabled;
 - `web.basic_auth.username_file` and `password_file`, when it is enabled;
+- a sql collector's `request.statement_file`;
 - a grpc collector's `request.protoset_file` and `request.proto_files`, and
   the files those `.proto` files import, through however many files, which
   the configuration does not name and the compile reads all the same: each

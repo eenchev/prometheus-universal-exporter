@@ -62,6 +62,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `sql` collector's `statement_file` names a file holding its statement,
+  read when the configuration loads and at each reload, an edit of it
+  reloading with `--config.watch`; a file that is no statement file is
+  refused, saying why ([A statement in a file](docs/SQL.md#a-statement-in-a-file)).
 - A `sql` collector's `arg_types` binds each of its `args` as `text`, `int`,
   `float` or `bool`, for a statement that takes no text there, such as
   `LIMIT ?` on MySQL before 8.0.22; a value not of its type is refused when the

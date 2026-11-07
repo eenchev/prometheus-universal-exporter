@@ -299,3 +299,20 @@ func TestAVerticaConnectionTakesItsOwnTLSConfigurationAndTheRegistryStaysBounded
 func TestTheGuardedVerticaConnectionIsWhatItIs(t *testing.T) {
 	assertGuardedLike(t, SQLDriverVertica, &verticaConn{})
 }
+
+// A statement read from request.statement_file is held to what a vertica
+// statement written in place is: one of several statements is refused when
+// the configuration loads, naming the file.
+func TestAVerticaStatementFileIsHeldToWhatAStatementIs(t *testing.T) {
+	dir := t.TempDir()
+	path := testutil.WriteIn(t, dir, "two.sql", "SELECT 1;\nCOMMIT")
+	c := &model.Collector{Name: "v", Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverVertica, StatementFile: path}}}
+	err := ValidateRequest(c)
+	if err == nil || !strings.Contains(err.Error(), `collector "v" request.statement_file `+path+": request.statement holds more than one statement") {
+		t.Errorf("%v", err)
+	}
+	testutil.WriteIn(t, dir, "two.sql", "SELECT 1")
+	if err := ValidateRequest(c); err != nil {
+		t.Errorf("one statement: %v", err)
+	}
+}

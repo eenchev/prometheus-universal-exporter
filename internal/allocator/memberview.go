@@ -272,6 +272,8 @@ func matchText(target any) string {
 		return strings.Join(t.matchTexts(), "\n")
 	case JobTarget:
 		return strings.Join(t.matchTexts(), "\n")
+	case EntryTarget:
+		return strings.Join(t.matchTexts(), "\n")
 	}
 	return ""
 }

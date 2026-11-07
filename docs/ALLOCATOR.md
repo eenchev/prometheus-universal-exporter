@@ -1139,7 +1139,9 @@ its instance ID. It shows
   member. The columns stay these whatever the number of probe jobs;
 - the static targets by where they come from, under the heading *Static
   targets*: a row of those the static target file writes, and one of each
-  `discovered_targets` entry, in file order, with its targets, what they
+  `discovered_targets` entry, in file order, the entry linking to its view
+  ([A discovered_targets entry's targets](#a-discovered_targets-entrys-targets)),
+  with its targets, what they
   weigh together, the members of the member list, the fewest, the average
   and the most of the row's targets a member owns, the imbalance, marked as
   a probe job's is below, and its discovery sources with their result;
@@ -1171,8 +1173,8 @@ its instance ID. It shows
   JavaScript the headings are plain, as nothing sorts the table then;
 - the discovery sources: each one's kind; what it feeds, *probe targets of
   the job* and the job, linked to its view, or *static targets of the
-  entry* and the `discovered_targets` entry, linked to its row in the
-  static targets table, each with its kind's colour; its result, with the error
+  entry* and the `discovered_targets` entry, linked to its view, each with
+  its kind's colour; its result, with the error
   while it fails and how many of its targets' weights fell back on their
   owner's, their `weight_label` giving none, its targets, how often it is asked (its
   `refresh_interval`, or the default it takes), when it was last refreshed,
@@ -1353,6 +1355,39 @@ hidden, so a view left open over a reload that renamed the job shows it;
 `?job=` without a name is answered `400`. Under `--peers.leader-only` a
 follower serves no job's view: the page names the leader, and the JSON is
 `partial` with the leader's address.
+
+### A discovered_targets entry's targets
+
+A `discovered_targets` entry's name in the static targets table, and in the
+discovery sources table's Feeds column, links to its view,
+`GET /?entry=<name>`: where the static targets the entry makes of what its
+sources find go, to answer "which pod scrapes this node?". It shows
+
+- the entry: its targets and their weight, its shard key, its labels, a
+  label written `""` left out, and its discovery sources, each with its
+  kind, result and how often it is asked, and its error while it fails;
+- the members of the member list, each linking to its view, with the
+  entry's targets it owns, their weight and a bar of them, the most first,
+  the fewest to the most and the average above them, the imbalance marked
+  as in the static targets table;
+- its static targets, by name, each with its target, its credentials
+  withheld as on a member's view, its collector, the member that owns it,
+  linked to its view, its labels and its weight.
+
+The counts are the spread's for the entry. The filter box, Search all
+(`?filter=<text>`), the bound of 1000 targets and the refresh are a
+member's view's; the filter matches a target's name, target, collector,
+labels as `name=value` and the member that owns it. Its bar's JSON link is
+`GET /v1/status?entry=<name>`, the same as JSON: `generated_at`, `entry`,
+`filter`, `limit`, `partial`, `leader`, `spread` (the entry as
+`spread.static` has it, its `members` the most first), `shard_key`,
+`labels`, `sources` and `targets` (`total`, `matching` and `list`, each
+with `name`, `collector`, `target`, `labels`, `interval`, `weight` and
+`member`). An entry the static target file does not have is answered `404`
+as JSON, and `200` saying so on the page and its fragment, its filter box
+hidden; `?entry=` without a name is answered `400`. Under
+`--peers.leader-only` a follower serves no entry's view: the page names the
+leader, and the JSON is `partial`.
 
 ## Metrics
 

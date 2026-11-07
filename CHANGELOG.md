@@ -53,6 +53,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The allocator's page has a view of each `discovered_targets` entry,
+  `/?entry=<name>`, as a probe job has: its sources, how its targets are
+  spread over the members and which member owns each, linked from the static
+  targets table and the discovery sources' Feeds column; `/v1/status?entry=`
+  serves it as JSON
+  ([A discovered_targets entry's targets](docs/ALLOCATOR.md#a-discovered_targets-entrys-targets)).
 - With `--web.debug=full`, a recent probe on the status page links its
   debug report, the probe sent again with `&debug=true`, when the page shows
   it as it was sent ([Recent probes](docs/ENDPOINTS.md#recent-probes)).

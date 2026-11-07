@@ -38,6 +38,10 @@ func (a *Allocator) serveStatus(w http.ResponseWriter, r *http.Request) {
 		a.serveJobView(w, r)
 		return
 	}
+	if r.URL.Query().Has("entry") {
+		a.serveEntryView(w, r)
+		return
+	}
 	writeStatusJSON(w, a.Status())
 }
 
@@ -111,6 +115,22 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 				SourceLabelsBox: len(view.Sources) > 0, SourceLabels: sourceLabels}
 		}
 		page, content = jobPageTemplate, jobContentTemplate
+	case query.Has("entry"):
+		entry := query.Get("entry")
+		if entry == "" {
+			http.Error(w, "the entry parameter names a discovered_targets entry; / without it is the whole status", http.StatusBadRequest)
+			return
+		}
+		// An entry the static target file does not have is a page that
+		// says so, answered 200, as a gone job's is. The JSON answers 404.
+		view, known := a.EntryView(entry, query.Get("filter"))
+		frame.Entry = entryPageOf(view, known)
+		frame.Content = frame.Entry
+		frame.JSON += "?" + url.Values{"entry": {entry}}.Encode()
+		if !view.Partial {
+			frame.Filter = &filterForm{Param: "entry", Value: entry, Text: view.Filter, Hidden: !known, Limit: view.Limit}
+		}
+		page, content = entryPageTemplate, entryContentTemplate
 	default:
 		frame.Content = statusPageOf(s)
 	}
@@ -147,9 +167,11 @@ type pageFrame struct {
 	Docs              string
 	// JSON is where the bar's JSON link points, relative to the page.
 	JSON string
-	// Member is the member's view and Job the probe job's, nil elsewhere.
+	// Member is the member's view, Job the probe job's and Entry the
+	// discovered_targets entry's, nil elsewhere.
 	Member *memberPage
 	Job    *jobPage
+	Entry  *entryPage
 	// Filter is a view's filter, nil on the status page and on a view a
 	// follower leaves to its leader.
 	Filter *filterForm
@@ -431,7 +453,7 @@ form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: bor
 // statusChrome is the page's bar, the exporter's in its shape (pagekit),
 // with the allocator's own links.
 const statusChrome = `<header class="site"><nav aria-label="The allocator's pages">
-{{if or .Member .Job}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
+{{if or .Member .Job .Entry}}<a class="home" href="./">Prometheus Universal Exporter · Target Allocator</a>{{else}}<span class="home" aria-current="page">Prometheus Universal Exporter · Target Allocator</span>{{end}}
 <span class="pages"><a href="{{.JSON}}">JSON</a><a href="metrics">Metrics</a><a href="{{.Docs}}">Documentation</a>` + pagekit.ThemePicker + `</span>
 </nav></header>`
 
@@ -447,6 +469,7 @@ var (
 	statusPageTemplate, statusContentTemplate = statusTemplate(statusContent)
 	memberPageTemplate, memberContentTemplate = statusTemplate(memberContent)
 	jobPageTemplate, jobContentTemplate       = statusTemplate(jobContent)
+	entryPageTemplate, entryContentTemplate   = statusTemplate(entryContent)
 )
 
 // statusFrame frames a page's content (pageFrame).
@@ -455,7 +478,7 @@ var statusFrame = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{with .Member}}Member {{.Member}}{{else}}{{with .Job}}Probe job {{.Job}}{{else}}Status{{end}}{{end}} · pue-allocator</title>
+<title>{{with .Member}}Member {{.Member}}{{else}}{{with .Job}}Probe job {{.Job}}{{else}}{{with .Entry}}Entry {{.Entry}}{{else}}Status{{end}}{{end}}{{end}} · pue-allocator</title>
 ` + pagekit.Icon + "\n" + pagekit.ThemeHead + `
 <style>` + pagekit.Style + pagekit.RefreshStyle + statusStyle + memberStyle + `</style>
 {{- if .Refresh.Seconds}}
@@ -471,6 +494,9 @@ var statusFrame = `<!DOCTYPE html>
 {{- else if .Job}}
 <p class="back"><a href="./">← Allocator status</a></p>
 <h1>Probe job <span class="member-id">{{.Job.Job}}</span></h1>
+{{- else if .Entry}}
+<p class="back"><a href="./">← Allocator status</a></p>
+<h1>Entry <span class="member-id">{{.Entry.Entry}}</span> <span class="muted kind">discovered_targets</span></h1>
 {{- else}}
 <h1>Allocator status</h1>
 {{- end}}
@@ -493,6 +519,8 @@ var statusFrame = `<!DOCTYPE html>
 {{- end}}
 {{- if eq .Param "member"}}
 <label for="target-filter">Filter: name, target, collector, label or job</label>
+{{- else if eq .Param "entry"}}
+<label for="target-filter">Filter: name, target, collector, label or member</label>
 {{- else}}
 <label for="target-filter">Filter: target, member or label</label>
 {{- end}}
@@ -500,7 +528,7 @@ var statusFrame = `<!DOCTYPE html>
 {{- if .SourceLabelsBox}}
 <label class="check" for="source-labels"><input id="source-labels" name="meta" value="1" type="checkbox"{{if .SourceLabels}} checked{{end}}>Show source labels <span class="muted">(names starting with <code>__</code>)</span></label>
 {{- end}}
-<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else}}Both match a target, the member it is routed to and the labels shown.{{end}}</span>
+<span class="muted" id="filter-hint">Typing filters the rows shown; Search all asks the allocator, which looks through every target of the {{.Param}}{{if gt .Limit 0}}, beyond the {{.Limit}} a list shows{{end}}. {{if eq .Param "member"}}Both match a target's name, target, collector, labels, probe job and the member it moved to.{{else if eq .Param "entry"}}Both match a target's name, target, collector, labels and the member that owns it.{{else}}Both match a target, the member it is routed to and the labels shown.{{end}}</span>
 </form>
 {{- end}}
 <div id="status-content">
@@ -832,7 +860,7 @@ const statusContent = `{{define "content"}}
 <tbody>
 {{- range .Static}}
 <tr{{if .Entry}} id="static-entry-{{.Entry}}"{{end}}>
-<td class="id">{{if .Entry}}<strong>{{.Entry}}</strong><br><span class="muted kind">discovered_targets entry</span>{{else}}<strong>written</strong><br><span class="muted kind">in the static target file</span>{{end}}</td>
+<td class="id">{{if .Entry}}<a href="?entry={{.Entry}}" title="the static targets of the discovered_targets entry {{.Entry}}"><strong>{{.Entry}}</strong></a><br><span class="muted kind">discovered_targets entry</span>{{else}}<strong>written</strong><br><span class="muted kind">in the static target file</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{weight .Weight}}</td>
 <td class="num">{{len .Members}}</td>
@@ -898,7 +926,7 @@ const statusContent = `{{define "content"}}
 {{- range .Sources}}
 <tr>
 <td class="id"><strong>{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</strong><br><span class="muted kind">{{.Type}}</span></td>
-<td class="owner">{{if eq .Kind "probe"}}<b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job={{.Owner}}" title="the targets of the probe job {{.Owner}}">{{.Owner}}</a>{{else}}<b class="swatch seg-static"></b>static targets<br><span class="muted kind">of the entry</span> <a href="#static-entry-{{.Owner}}" title="the static targets of the discovered_targets entry {{.Owner}}">{{.Owner}}</a>{{end}}</td>
+<td class="owner">{{if eq .Kind "probe"}}<b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job={{.Owner}}" title="the targets of the probe job {{.Owner}}">{{.Owner}}</a>{{else}}<b class="swatch seg-static"></b>static targets<br><span class="muted kind">of the entry</span> <a href="?entry={{.Owner}}" title="the static targets of the discovered_targets entry {{.Owner}}">{{.Owner}}</a>{{end}}</td>
 <td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}{{if .WeightFallbacks}}<br><span class="bad">{{.WeightFallbacks}} weight{{if ne .WeightFallbacks 1}}s{{end}} fell back</span> <span class="muted">on the owner's: their weight label gave no weight</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{interval .RefreshIntervalSeconds}}</td>

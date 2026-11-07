@@ -318,4 +318,9 @@ func TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader(t *testing.T) {
 	if lv := jobViewOf(t, leader.a.Handler(""), "job="+job); lv.Partial || lv.Spread == nil || lv.Targets == nil {
 		t.Errorf("the leader's view is %+v", lv)
 	}
+	// A discovered_targets entry's view is left to the leader alike.
+	if ev := entryViewOf(t, follower.a.Handler(""), "entry=node"); !ev.Partial || ev.Leader != leader.addr.String() || ev.Spread != nil || ev.Targets != nil {
+		t.Errorf("the follower's entry view is %+v", ev)
+	}
+	requireIn(t, ask(follower.a.Handler(""), "/?entry=node", "").Body.String(), "this entry's at <code>/?entry=…</code> there")
 }

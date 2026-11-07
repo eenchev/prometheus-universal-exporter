@@ -31042,6 +31042,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestARecentProbeLinksItsDebugReport` (exporter): at `--web.debug=full`, of probes of a plain target, one with a credential in its URL, one longer than 512 bytes and one with `timeout=5s`, the plain one links `../probe?collector=text&target=…&debug=true` and the one with the timeout has it in its link, the others none; the page has the link beside the collector, escaped, and not the credential; the link, followed from the page, answers the debug report; at `edit` no row links one.
 - `TestARecentProbeKeyIsReplayableOnlyAsSent` (exporter): `param_tenant=a b` replays as `collector=c&param_tenant=a+b&target=http%3A%2F%2Fh`; `param_token`, a value with a URL's userinfo, a value of 65 bytes, eight parameters of 60 bytes and a target shown otherwise than sent make no replay.
 
+## 34.287 A discovered_targets entry's view
+
+- `TestAnEntrysViewListsItsTargets` (allocator): of the entry `node`, three targets a `file_sd` source finds over r1 and r2, `/v1/status?entry=node` has shard key `target`, the label `team=infra`, the source `file_sd_0`, a spread of 3 targets whose members' counts are the status's static spread's, the most first, and the three targets by name, each `demo`, an `http://` target, `team=infra` and the member whose view lists it as owned; filtered by a member's name it matches that member's count of 3; the page has the title, the way back, the heading, the filter of the entry with its label, the shard key, the source, the bars of the entry's targets owned, the targets table with each member linked and the JSON link `v1/status?entry=node`; an entry the file does not have is `404` as JSON and `200` with `unknown-entry` on the page; an empty `entry` is `400` on both.
+- `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: the entry's row in the static targets table and its source's Feeds cell link `?entry=node`.
+- `TestALeaderOnlyFollowerLeavesTheJobViewToTheLeader` (allocator), changed: the follower's `/v1/status?entry=node` is `partial` with the leader's address and no spread or targets, and its page says the entry's view is on the leader's.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -34313,8 +34319,24 @@ same, so a source label left out matches neither. `GET
 matches; a job the probe targets file does not have MUST be
 answered `404` as JSON and `200` saying so on the page and its fragment, the
 filter box hidden; an empty `job` MUST be answered `400` on both; a follower
-under `--peers.leader-only` MUST name the leader and answer `partial`. All
-take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
+under `--peers.leader-only` MUST name the leader and answer `partial`.
+Each `discovered_targets` entry's row of the static targets table, and a
+static source's Feeds cell, MUST link the entry's view, `GET
+/?entry=<name>`, framed, refreshed and filtered as a job's view is: the
+entry's targets, their weight, its shard key, labels (one written `""` left
+out) and discovery sources with their result; the members of the member
+list, linked, with the entry's targets each owns, as the spread counts them,
+their weight and a bar, the most first; and its static targets by name,
+each with its target as `fetch.DisplayTarget` shows it, its collector, the
+member that owns it, linked, its labels and its weight. `?filter=` MUST cut
+the targets to those whose name, target, collector, a label as `name=value`
+or member holds the text, before the first 1000, and a row's `data-match`
+MUST hold the same. `GET /v1/status?entry=<name>` MUST answer the same as
+JSON (`allocator.EntryView`); an entry the static target file does not have
+MUST be answered `404` as JSON and `200` saying so on the page and its
+fragment, the filter box hidden; an empty `entry` MUST be answered `400` on
+both; a follower under `--peers.leader-only` MUST name the leader and
+answer `partial`. All take the token as the status page does. `docs/ALLOCATOR.md` MUST describe
 the page, the member's view, the probe job's view, the JSON and how a browser gives the token, and
 the chart README how to reach a pod's page and find the leader's.
 

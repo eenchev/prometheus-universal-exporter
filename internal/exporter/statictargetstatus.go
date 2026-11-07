@@ -251,6 +251,15 @@ type staticStatusRow struct {
 	// LastErrorAge is how long ago the last error's scrape began, as the
 	// page writes it.
 	LastErrorAge string `json:"-"`
+	// IntervalSeconds, ScrapedAt (Unix seconds, 0 before the first scrape)
+	// and RecentBad (the strip's scrapes not a success) are the values the
+	// page's script sorts the row's numbers by, and Match is the text its
+	// filter matches: name, collector, target, labels and result, one a
+	// line.
+	IntervalSeconds float64 `json:"-"`
+	ScrapedAt       int64   `json:"-"`
+	RecentBad       int     `json:"-"`
+	Match           string  `json:"-"`
 }
 
 // staticStatusPage is the page, and the JSON: the static targets, then the
@@ -365,6 +374,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			age := max(now.Sub(last.started), 0).Seconds()
 			duration := last.duration.Seconds()
 			row.LastScrape = last.started.UTC().Format(time.RFC3339)
+			row.ScrapedAt = last.started.Unix()
 			row.LastScrapeAge, row.Duration = &age, &duration
 			row.Age = shortDuration(time.Duration(age * float64(time.Second)))
 			row.DurationText = shownScrapeDuration(last.duration)
@@ -394,6 +404,13 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 				}
 			}
 		}
+		row.IntervalSeconds = time.Duration(target.Interval).Seconds()
+		for _, r := range row.Recent {
+			if !r.Good {
+				row.RecentBad++
+			}
+		}
+		row.Match = strings.Join([]string{row.Name, row.Collector, row.Target, row.LabelText, row.Result}, "\n")
 		if row.Failing {
 			page.Failing++
 		}
@@ -530,7 +547,8 @@ table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .strip { font-family: ui-monospace, monospace; letter-spacing: 2px; white-space: nowrap; }
 table.facts { width: auto; }
 table.facts th { background: none; font-weight: 600; white-space: nowrap; }
-`+pagekit.RefreshStyle+`dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+`+pagekit.RefreshStyle+pagekit.SortableStyle+`p.note:empty { display: none; }
+dialog#whole { width: min(860px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
 dialog#whole::backdrop { background: rgb(0 0 0 / 0.5); }
 dialog#whole .box { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 34px); padding: 16px; }
 dialog#whole pre { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -597,10 +615,14 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
   // A swap takes away what had focus in the content, such as a long text's
   // control the dialog gave focus back to; the control at the same place in
   // the new content takes it.
+  // The static targets table sorts and filters as pagekit.SortableScript
+  // says, its order and filter kept through a swap.
+`+pagekit.SortableScript+`
+  const arrangeTargets = sortable(content, "static-targets-table", "static-filter", "static targets");
   function swap(fragment) {
     const summaries = () => [...content.querySelectorAll("details.long > summary")];
     const focused = summaries().indexOf(document.activeElement);
-    content.innerHTML = fragment;
+    arrangeTargets(() => { content.innerHTML = fragment; });
     if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
     refreshedAt = Date.now();
     state.className = "muted";
@@ -725,21 +747,26 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <h2>Static targets</h2>
 {{- if .Total}}
 <p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>; a scraped target's name links to its own. The last {{.PerKey}} scrapes of each are kept, oldest first in the strip (✓ success, ✗ failed, ~ stale result served, … skipped by backoff).</p>
+<form class="filter table" id="static-filter-form" role="search" hidden>
+<label for="static-filter">Filter: name, collector, target, labels or result</label>
+<input id="static-filter" type="search" autocomplete="off" spellcheck="false">
+</form>
+<p class="note muted" data-rows-of="static-targets-table" role="status" aria-live="polite"></p>
 <div class="scroll">
-<table>
-<thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Recent</th><th>Failures</th><th>Last error</th></tr></thead>
+<table id="static-targets-table">
+<thead><tr><th data-sort="text">Target</th><th data-sort="num">Interval</th><th data-sort="num">Last scrape</th><th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th><th data-sort="text">Last error</th></tr></thead>
 <tbody>
-{{- range .Rows}}
-<tr>
+{{- range $i, $row := .Rows}}{{with $row}}
+<tr data-order="{{$i}}" data-match="{{.Match}}">
 <td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
-<td>{{duration .Interval}}</td>
-<td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
+<td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
+<td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
-<td class="strip">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
-<td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
+<td class="strip" data-value="{{.RecentBad}}">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
+<td data-value="{{.Failures}}">{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
-{{- end}}
+{{- end}}{{end}}
 </tbody>
 </table>
 </div>

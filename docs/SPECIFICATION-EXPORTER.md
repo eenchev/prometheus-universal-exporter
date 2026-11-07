@@ -31024,6 +31024,11 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestATargetsRowShowsItsLastScrapes` (exporter): the strip of `ok` is one success, of `backing_off` a failure then a skip by backoff, of `stale` a success then a stale result served, each scrape with its time, and of `never` empty, `"recent":[]` in the JSON; the page's table has a Recent column after Result, the backed off target's strip ✗ then …, each mark titled with its time and result; after 13 scrapes `ok`'s strip has the last 10.
 
+## 34.284 Sorting and filtering the static targets table
+
+- `TestTheStaticTargetsTableSortsAndFilters` (exporter): the status page has the filter's form, hidden, its box and the count's live note; the table `static-targets-table` with headings of `data-sort` `text` or `num` and no button or `aria-sort` without the script; the rows with `data-order` from 0 and `data-match` of name, collector, target, labels and result, one a line, escaped; the Interval cell `data-value="60"`, the backed off target's strip `data-value="2"`, a target not yet scraped's Last scrape `data-value="0"`; and the shared script called on the table, its swap arranging the new table and putting back the caret, with the sort marks' style. (In headless Chromium, the rows sort by name both ways and by Recent, the heading `aria-sort="ascending"`, and `text` keeps 4 of the 7 targets, saying so.)
+- `TestTheStatusPageWritesDurationsWithoutZeroUnits` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), and `TestTheStatusPageHasAProbeJobsTable` (allocator), changed: an interval's cell carries its value, a row's `<tr` its order, and the allocator's refresh arranges the table through the shared script.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33326,6 +33331,17 @@ then one of the OTLP export. Of the static targets:
   `--web.static-targets-path`.
   A target whose collector or address a reload changed MUST be shown as not
   yet scraped until its own scrape.
+- With JavaScript, the table MUST sort by a column whose heading is
+  clicked, the other way at a second click, Interval, Last scrape, Recent
+  (by the strip's scrapes that were no success) and Failures by their
+  values and the rest as text with the numbers in it by value and case
+  ignored, ties in the page's order; each heading MUST be a button with
+  `aria-sort`. A filter box MUST keep the rows whose name, collector,
+  target, labels or result hold its text, in any case, and say how many of
+  the rows match, or that none does. The order and the filter MUST be kept
+  through a refresh, the box keeping focus and caret. Without JavaScript
+  the headings MUST be plain and the filter not shown. The allocator's
+  probe jobs table MUST sort and filter with the same script.
 - Each row MUST show a strip of the target's last 10 scrapes, oldest first,
   marked ✓ for `success`, ✗ for `failed`, ~ for `stale result served` and …
   for `skipped by backoff`, each with its start and result as its tooltip;

@@ -416,22 +416,7 @@ td.bar { width: 32%; min-width: 120px; }
 b.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 th.group { text-align: center; border-bottom: 1px solid var(--line); }
 @media (max-width: 640px) { td.bar { min-width: 90px; } }
-/* A sortable table's headings are buttons, marked as the exporter's debug
-   page marks its series table's: ↕ for a column not sorted by, ↑ or ↓ for
-   the one sorted by. A number's column has the mark before its name, so
-   the name ends where the column's numbers end. The script makes the
-   headings buttons and the table sortable, so a page without it has plain
-   headings. The space between a mark and the name is \00a0, a no-break
-   space: a space after an escape such as \2195 ends the escape and is no
-   part of the text, so "\2195 " is the mark alone, flush with the name. */
-table.sortable th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
-table.sortable th:not(.num) button::after { content: "\00a0\2195"; color: var(--muted); }
-table.sortable th.num button::before { content: "\2195\00a0"; color: var(--muted); }
-table.sortable th[aria-sort="ascending"]:not(.num) button::after { content: "\00a0\2191"; color: var(--accent); }
-table.sortable th[aria-sort="descending"]:not(.num) button::after { content: "\00a0\2193"; color: var(--accent); }
-table.sortable th.num[aria-sort="ascending"] button::before { content: "\2191\00a0"; color: var(--accent); }
-table.sortable th.num[aria-sort="descending"] button::before { content: "\2193\00a0"; color: var(--accent); }
-/* A job's sources' names wrap, as the sources table's do, so a long one
+` + pagekit.SortableStyle + `/* A job's sources' names wrap, as the sources table's do, so a long one
    does not push the table past the page's edge. */
 td.sources { min-width: 10em; }
 td.sources span.source { overflow-wrap: anywhere; }
@@ -601,75 +586,10 @@ var statusFrame = `<!DOCTYPE html>
     });
     filterRows();
   }
-  // The status page's probe jobs table sorts by the column whose heading
-  // is clicked, the other way at a second click, numbers by their value
-  // (data-value) and text as it reads, the numbers in it by their value,
-  // job2 before job10, and a letter's case no matter, a tie in file order
-  // (data-order); and it filters its rows as its filter is typed, matching
-  // in any case the texts each row carries in data-match. The headings are
-  // made buttons here, the table marked sortable: without JavaScript they
-  // are plain headings, as nothing would sort the table. The table is in
-  // the content, which a refresh replaces, so the order chosen and the
-  // text typed are kept here and put back on the new table, the caret
-  // where it was.
-  let jobSort = -1, jobDown = false, jobFilter = "";
-  const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
-  function arrangeJobs() {
-    const table = content.querySelector("table#probe-jobs"), box = $("jobs-filter");
-    if (!table) return;
-    if (box) {
-      box.value = jobFilter;
-      box.form.hidden = false;
-    }
-    const heads = table.tHead.rows[0].cells, body = table.tBodies[0];
-    if (!table.classList.contains("sortable")) {
-      for (const head of heads) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.append(...head.childNodes);
-        head.append(button);
-      }
-      table.classList.add("sortable");
-    }
-    const numeric = jobSort >= 0 && heads[jobSort].dataset.sort === "num";
-    const key = (row) => {
-      const cell = row.cells[jobSort];
-      return numeric ? Number(cell.dataset.value) : cell.textContent.trim();
-    };
-    const rows = Array.from(body.rows).sort((x, y) => {
-      let c = 0;
-      if (jobSort >= 0) c = numeric ? key(x) - key(y) : collator.compare(key(x), key(y));
-      if (jobDown) c = -c;
-      return c || Number(x.dataset.order) - Number(y.dataset.order);
-    });
-    for (const row of rows) body.appendChild(row);
-    for (let i = 0; i < heads.length; i++) heads[i].setAttribute("aria-sort", i === jobSort ? (jobDown ? "descending" : "ascending") : "none");
-    const needle = jobFilter.trim().toLowerCase();
-    let shown = 0;
-    for (const row of rows) {
-      row.hidden = needle !== "" && !(row.dataset.match || "").toLowerCase().includes(needle);
-      if (!row.hidden) shown++;
-    }
-    const count = content.querySelector('[data-rows-of="probe-jobs"]');
-    if (count) count.textContent = needle === "" ? "" : shown === 0 ? "No probe job holds what is typed in the filter." : shown + " of the " + rows.length + " probe jobs match.";
-  }
-  content.addEventListener("click", (event) => {
-    const button = event.target.closest("table#probe-jobs th button");
-    if (!button) return;
-    const column = button.parentElement.cellIndex;
-    jobDown = column === jobSort ? !jobDown : false;
-    jobSort = column;
-    arrangeJobs();
-  });
-  content.addEventListener("input", (event) => {
-    if (event.target.id !== "jobs-filter") return;
-    jobFilter = event.target.value;
-    arrangeJobs();
-  });
-  content.addEventListener("submit", (event) => {
-    if (event.target.id === "jobs") event.preventDefault();
-  });
-  arrangeJobs();
+  // The status page's probe jobs table sorts and filters as
+  // pagekit.SortableScript says.
+` + pagekit.SortableScript + `
+  const arrangeJobs = sortable(content, "probe-jobs", "jobs-filter", "probe jobs");
   // A refresh asked while another waits for the URL as it is now is that
   // one: the answer coming is the one asked for, and a slow allocator is
   // not asked again at every tick of the auto-refresh. One asked after the
@@ -690,17 +610,12 @@ var statusFrame = `<!DOCTYPE html>
       if (!response.ok) throw new Error("HTTP " + response.status);
       const text = await response.text();
       if (inFlight !== mine) return;
-      const typing = document.activeElement && document.activeElement.id === "jobs-filter" ? document.activeElement : null;
-      const caret = typing && [typing.selectionStart, typing.selectionEnd];
-      content.innerHTML = text;
-      refreshedAt = Date.now();
-      asOf();
-      filterRows();
-      arrangeJobs();
-      if (typing && $("jobs-filter")) {
-        $("jobs-filter").focus();
-        $("jobs-filter").setSelectionRange(caret[0], caret[1]);
-      }
+      arrangeJobs(() => {
+        content.innerHTML = text;
+        refreshedAt = Date.now();
+        asOf();
+        filterRows();
+      });
     } catch (error) {
       // A refresh aborted for a later one says nothing: the later one says
       // how it went.

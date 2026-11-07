@@ -42,7 +42,7 @@ func shown(p *bool) string {
 // statusPageRow is the row of the page's table that holds marker.
 func statusPageRow(t *testing.T, page, marker string) string {
 	t.Helper()
-	for _, row := range strings.Split(page, "<tr>") {
+	for _, row := range regexp.MustCompile(`<tr[ >]`).Split(page, -1) {
 		if strings.Contains(row, marker) {
 			return row
 		}

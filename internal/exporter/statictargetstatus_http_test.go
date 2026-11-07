@@ -484,7 +484,7 @@ func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
 		t.Errorf("the target never scraped has no empty recent list in the JSON")
 	}
 	page := getPage(t, server, "/static-targets/status")
-	requireContains(t, page, `<th>Result</th><th>Recent</th><th>Failures</th>`)
+	requireContains(t, page, `<th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th>`)
 	requireContains(t, page, `">✗</span><span class="bad" title="`)
 	requireContains(t, page, ` backoff">…</span></td>`)
 	for _, target := range server.manager.StaticTargets() {
@@ -496,5 +496,36 @@ func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
 	}
 	if got := len(statusRow(t, server, "ok").Recent); got != recentProbesPerKey {
 		t.Errorf("after 13 scrapes the strip has %d, want the last %d", got, recentProbesPerKey)
+	}
+}
+
+// The static targets table sorts by a column and filters its rows as the
+// probe jobs table of the allocator's page does, with the same script:
+// the rows carry their order and the text the filter matches, a number's
+// cell its value, and the filter's form is hidden until the script shows
+// it. The script keeps the order and the filter through a refresh's swap.
+func TestTheStaticTargetsTableSortsAndFilters(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`<form class="filter table" id="static-filter-form" role="search" hidden>`,
+		`<input id="static-filter" type="search" autocomplete="off" spellcheck="false">`,
+		`<p class="note muted" data-rows-of="static-targets-table" role="status" aria-live="polite"></p>`,
+		`<table id="static-targets-table">`+"\n"+`<thead><tr><th data-sort="text">Target</th><th data-sort="num">Interval</th><th data-sort="num">Last scrape</th>`,
+		`<tr data-order="0" data-match="backing_off`+"\ndead\n",
+		`<td data-value="60">1m</td>`,
+		`<td class="strip" data-value="2">`,
+		`<td data-value="0">`+"<span class=\"muted\">none yet</span></td>",
+		`const arrangeTargets = sortable(content, "static-targets-table", "static-filter", "static targets");`,
+		`arrangeTargets(() => { content.innerHTML = fragment; });`,
+		`box.setSelectionRange(typing[0], typing[1]);`,
+		`table.sortable th:not(.num) button::after { content: "\00a0\2195";`)
+	_, table, _ := strings.Cut(page, `id="static-targets-table"`)
+	table, _, _ = strings.Cut(table, "</table>")
+	if strings.Contains(table, "<button") || strings.Contains(table, "aria-sort") {
+		t.Errorf("the table's headings are buttons without the script:\n%s", table)
+	}
+	if !strings.Contains(table, `data-match="ok`+"\ntext\n") || !strings.Contains(table, "team=&lt;b onmouseover=&#34;x&#34;&gt;\nsuccess\"") {
+		t.Errorf("the row of ok does not match its name, collector, labels and result:\n%s", table)
 	}
 }

@@ -698,7 +698,15 @@ target:
   exporter's log has the panic`: the panic's own text is only in the log.
 
 A summary line above says how many targets there are, how many are failing
-and how many have not been scraped yet; the failing targets come first. The
+and how many have not been scraped yet; the failing targets come first. A
+click on a column's heading sorts the table by it, the other way at a second
+click: Interval, Last scrape, Recent (by the scrapes in the strip that were no
+success) and Failures by their numbers, the others as they read, `t2` before
+`t10`. The filter above the table keeps the rows whose name, collector,
+target, labels or result hold what is typed, in any case, and says how many
+do. The order and the filter stay through a refresh. Without JavaScript the
+headings are plain and the filter is not shown; the probe jobs table of the
+[allocator's page](ALLOCATOR.md) sorts and filters with the same script. The
 page shows the moment it was served; its Refresh button and auto-refresh
 selector fetch it again without reloading it (see
 [Refreshing](ENDPOINTS.md#refreshing) in Endpoints), and

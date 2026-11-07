@@ -53,6 +53,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The status page's static targets table sorts by a column's heading and
+  has a filter of name, collector, target, labels or result, kept through a
+  refresh ([Status page](docs/STATIC-TARGETS.md#status-page)).
 - Each static target's row on the status page has a strip of its last 10
   scrapes, ✓ ✗ ~ …, as the recent probes have, and the JSON has them as
   `recent` ([Status page](docs/STATIC-TARGETS.md#status-page)).

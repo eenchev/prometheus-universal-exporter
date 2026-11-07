@@ -150,7 +150,7 @@ func TestTheStatusPageHasAProbeJobsTable(t *testing.T) {
 		`<input id="jobs-filter" type="search"`, `<form class="filter jobs" id="jobs" role="search" hidden>`,
 		// The script puts the order and the filter back on the table a
 		// refresh swaps in, and the caret in the filter being typed in.
-		"      filterRows();\n      arrangeJobs();\n", `$("jobs-filter").setSelectionRange(caret[0], caret[1]);`,
+		"      arrangeJobs(() => {\n        content.innerHTML = text;\n", `box.setSelectionRange(typing[0], typing[1]);`,
 		`table.sortable th.num button::before { content: "\2195\00a0";`)
 	if strings.Contains(page, `title="probe job `) {
 		t.Error("the targets table still has a column of each probe job")

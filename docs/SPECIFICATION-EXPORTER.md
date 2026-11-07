@@ -2770,8 +2770,13 @@ keys:
   answered none, the error naming no address: `the kubelet answered
   <status>`, that the Node has no address, that the summary is larger than
   the response limit, that the answer is not JSON, or `the request to the
-  kubelet failed`, with `: context deadline exceeded` when the scrape's
-  time ran out. A collector of nodes none of whose kubelets answered MUST
+  kubelet failed`, with `: context deadline exceeded` when its time ran
+  out. The kubelets' requests MUST end a tenth of the scrape's time left
+  when they begin before its deadline, at most a second before, so that a
+  kubelet that does not answer is among the failed and the others'
+  summaries are answered; the scrape's own end before then MUST fail it,
+  saying it ended while the kubelets were asked. A collector of nodes none
+  of whose kubelets answered MUST
   fail the scrape with the first's failure, for `403` naming `nodes/stats`,
   or `nodes/proxy` with `kubelet_via_api_server`, and the chart's
   `kubernetesAccess.kubelet`, and for a certificate no CA signs
@@ -31255,6 +31260,8 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAKubernetesListingNamesItselfAndIsTimed` (fetch): every request carries `kubeapi.UserAgent`; of an exported trace, each of two namespaces' requests, listed at once, has its own phases within its time, `connect tls first_byte` on a connection of its own, and its own outcome.
 - `TestAKubeletCollectorAsksEachNodesKubelet` (fetch): of five nodes listed with the label selector, the kubelets of two answer, each asked at its InternalIP and port with the token and `Accept: application/json`, and the document is `Summary`, `stats/v1alpha1`, their summaries in the nodes' order and as failed a 403, a Node without an address and a summary over the response limit, in words naming no address.
 - `TestAKubeletCollectorWithNoKubeletAnsweringFails` (fetch): a single kubelet's 403 fails the scrape naming `nodes/stats` and `kubernetesAccess.kubelet: stats`, a probe's caller told without the address; a `kubelet_ca_file` of another CA fails naming `kubelet_ca_file` and `kubelet_via_api_server`, and the kubelet's own CA verifies it; no node is an empty document.
+- `TestAKubeletThatDoesNotAnswerIsAmongTheFailed` (fetch): of two nodes, one kubelet holding its answer, a scrape of a second answers the other's summary with more than 50ms to spare and the silent node failed with `the request to the kubelet failed: context deadline exceeded`.
+- `TestKubernetesEachRunsEachFourAtATime` (fetch): of ten, four run at once and every one runs; a context that ends once every one began is no error, one ended before is its cause, and the first error is returned.
 - `TestAKubeletCollectorAsksThroughTheAPIServer` (fetch): with `kubelet_via_api_server` each kubelet is asked at the API server's `/api/v1/nodes/<name>/proxy/stats/summary`; a 403 names `nodes/proxy` and `kubernetesAccess.kubelet: proxy`.
 - `TestAKubernetesCollectorsKeysAreCheckedAtLoad` (fetch), changed: `kubelet` other than `stats/summary`, of a resource other than the core group's nodes, without `all_namespaces` or with `metadata_only`; `kubelet_via_api_server` with `kubelet_ca_file`; and either without `kubelet`, are refused; secrets with `metadata_only` and kubelet collectors either way load.
 - `TestAKubernetesCollectorOfSecretsIsRefusedAtLoad` (config), changed: the refusal names `metadata_only: true`, with which the collector loads.

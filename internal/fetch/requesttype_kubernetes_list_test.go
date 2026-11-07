@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -220,5 +221,55 @@ func TestAKubernetesListingNamesItselfAndIsTimed(t *testing.T) {
 	}
 	if !slices.ContainsFunc(requests, func(r TracedRequest) bool { return len(r.Phases) == 3 }) {
 		t.Errorf("no request made its connection: %+v", requests)
+	}
+}
+
+// kubernetesEach runs each, four at a time, and is the first error; a
+// context that ends after every one ran is no error, and one that ended
+// before they all began is its cause.
+func TestKubernetesEachRunsEachFourAtATime(t *testing.T) {
+	var mu sync.Mutex
+	running, most := 0, 0
+	ran := make([]bool, 10)
+	err := kubernetesEach(context.Background(), 10, func(_ context.Context, i int) error {
+		mu.Lock()
+		running++
+		most = max(most, running)
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		mu.Lock()
+		running--
+		ran[i] = true
+		mu.Unlock()
+		return nil
+	})
+	if err != nil || most != kubernetesConcurrency || slices.Contains(ran, false) {
+		t.Errorf("%v, %d at once, ran %v", err, most, ran)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err = kubernetesEach(ctx, 3, func(_ context.Context, i int) error {
+		if i == 2 {
+			cancel()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("a context that ended once every one began: %v", err)
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	if err := kubernetesEach(ctx, 3, func(context.Context, int) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Errorf("a context ended before: %v", err)
+	}
+	boom := errors.New("boom")
+	if err := kubernetesEach(context.Background(), 6, func(_ context.Context, i int) error {
+		if i == 1 {
+			return boom
+		}
+		return nil
+	}); !errors.Is(err, boom) {
+		t.Errorf("the first error is %v", err)
 	}
 }

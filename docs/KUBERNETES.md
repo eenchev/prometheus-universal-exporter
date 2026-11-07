@@ -117,9 +117,9 @@ collector of many takes about as long as its slowest few rather than as all
 of them added up; the document holds their objects in the order
 `namespaces` names them, and the first listing to fail ends the others and
 fails the scrape. The whole listing, every page of every namespace and
-every page asked for again, takes at most the probe's timeout; a listing
-with no deadline of its own, as a static target's without one, gives up
-after 30 seconds.
+every page asked for again, and with `kubelet` every kubelet's request,
+takes at most the probe's timeout; a listing with no deadline of its own,
+as a static target's without one, gives up after 30 seconds.
 
 Two answers of a busy API server are taken in stride:
 
@@ -155,7 +155,8 @@ request's its own though the namespaces are listed at once.
 The request goes through the proxy the environment names, as every request
 of the exporter does ([Proxies](REQUESTS.md#proxies)). Where the pod has
 `HTTPS_PROXY` set, put the API server in `NO_PROXY`: `kubernetes.default.svc`
-and the address of `KUBERNETES_SERVICE_HOST`.
+and the address of `KUBERNETES_SERVICE_HOST`; and for a collector of the
+kubelets asked directly, the nodes' addresses, such as their CIDR.
 
 ### Permissions
 
@@ -187,8 +188,9 @@ exporter's log`. See
 
 The Helm chart grants it with `kubernetesAccess`: the rules name each
 resource's `apiGroups` (`""` for the core group) and `resources`, the verb
-is always `list`, and the chart mounts the pods' token, which it does not
-otherwise ([kubernetesAccess](../charts/prometheus-universal-exporter/README.md#kubernetes-collectors)):
+is always `list`, `kubelet` adds `get` on the kubelets' statistics
+([Kubelet statistics](#kubelet-statistics)), and the chart mounts the pods'
+token, which it does not otherwise ([kubernetesAccess](../charts/prometheus-universal-exporter/README.md#kubernetes-collectors)):
 
 ```yaml
 kubernetesAccess:
@@ -440,9 +442,12 @@ The document is the summaries, and the nodes that gave none:
 - `failed` are the nodes whose kubelet answered none, and why, in words that
   name no address: its status, that the request failed, that its Node has
   no address, that its answer is not JSON, or that its summary is larger
-  than the response limit. One node down leaves the others' series; when no
-  kubelet answers, the scrape fails as the first one did, saying what to do
-  about it.
+  than the response limit. One node down leaves the others' series: a
+  kubelet that does not answer is given up on a tenth of the scrape's time
+  left before its deadline, at most a second before, and its node is among
+  the failed with `the request to the kubelet failed: context deadline
+  exceeded`. When no kubelet answers, the scrape fails as the first one
+  did, saying what to do about it.
 - Each summary is held to the response limit, and so are all of them
   together: a large cluster's need a `max_response_bytes` above 10 MiB, or
   a collector of each pool, chosen by `label_selector`.

@@ -213,3 +213,32 @@ func writeOtherCA(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+// A kubelet that does not answer is given up on before the scrape's
+// deadline: the others' summaries are answered, and its node is among the
+// failed, its request having run out of time, rather than the scrape
+// failing at its deadline for one node.
+func TestAKubeletThatDoesNotAnswerIsAmongTheFailed(t *testing.T) {
+	s := kubeAPI(t)
+	answering, silent := kubetest.New(t), kubetest.New(t)
+	answering.Answer("/stats/summary", summary("node-0", 1))
+	silent.HoldFrom(1)
+	s.Serve("/api/v1/nodes", kubetest.List{Kind: "NodeList", APIVersion: "v1", Items: []map[string]any{kubeletNodeObject(t, "node-0", answering.URL), kubeletNodeObject(t, "node-1", silent.URL)}})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := FetchCollector(ctx, "", kubeletCollector(t), RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc kubeletDocument
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Count != 1 || !slices.Equal(doc.Failed, []kubeletFailure{{Node: "node-1", Error: "the request to the kubelet failed: context deadline exceeded"}}) {
+		t.Errorf("document %+v", doc)
+	}
+	// A tenth of the second is left when the kubelet is given up on.
+	if deadline, _ := ctx.Deadline(); time.Until(deadline) < 50*time.Millisecond {
+		t.Errorf("the scrape ran to %s before its deadline", time.Until(deadline))
+	}
+}

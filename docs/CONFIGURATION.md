@@ -2792,7 +2792,9 @@ address the request is sent to. The decoder is `json`; its table is in
 
 For `kubernetes`, `resource` is required; `group` and `version`,
 `namespaces` or `all_namespaces`, `label_selector`, `field_selector`,
-`max_objects`, `max_response_bytes`, and `api_server` with `tls` and
+`max_objects`, `max_response_bytes`, `metadata_only`, `kubelet` with
+`kubelet_via_api_server` or `kubelet_ca_file` for the nodes' kubelets'
+statistics, and `api_server` with `tls` and
 `bearer_token_file` for a cluster other than the exporter's own apply too,
 and `allowed_targets` and `denied_targets` do not, there being no target.
 The decoder is `json`; its table is in [Kubernetes objects](KUBERNETES.md#a-collector).

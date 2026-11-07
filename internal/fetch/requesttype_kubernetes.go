@@ -555,6 +555,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 		wg    sync.WaitGroup
 	)
 	turns := make(chan struct{}, kubernetesConcurrency)
+	started := 0
 	for i := range n {
 		select {
 		case turns <- struct{}{}:
@@ -564,6 +565,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 			break
 		}
 		wg.Add(1)
+		started++
 		go func() {
 			defer wg.Done()
 			defer func() { <-turns }()
@@ -578,7 +580,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 		}()
 	}
 	wg.Wait()
-	if first == nil && ctx.Err() != nil {
+	if first == nil && started < n {
 		// The scrape's own context ended before every one was begun.
 		return context.Cause(ctx)
 	}
@@ -895,13 +897,19 @@ func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error)
 			return nil, fmt.Errorf("the kubelets' CA or the client certificate: %w", err)
 		}
 	}
+	// A kubelet that does not answer, a node gone dark, is given up on a
+	// little before the scrape's deadline, so the others' summaries are
+	// answered with it among the failed, rather than the scrape failing
+	// at its deadline for one node.
+	asking, stop := context.WithDeadline(ctx, kubeletDeadline(ctx))
+	defer stop()
 	summaries := make([]json.RawMessage, len(nodes))
 	failures := make([]error, len(nodes))
 	var total int64
 	var mu sync.Mutex
 	err := kubernetesEach(ctx, len(nodes), func(ctx context.Context, i int) error {
 		node := nodes[i]
-		get := kubeapi.Get{Client: client, Token: l.token, What: "kubelet of node " + node.Metadata.Name, MaxBytes: l.limit, Prepare: kubernetesPrepare(ctx)}
+		get := kubeapi.Get{Client: client, Token: l.token, What: "kubelet of node " + node.Metadata.Name, MaxBytes: l.limit, Prepare: kubernetesPrepare(asking)}
 		if own.KubeletViaAPIServer {
 			get.Address = l.conn.server + "/api/v1/nodes/" + url.PathEscape(node.Metadata.Name) + "/proxy/" + own.Kubelet
 		} else if address := node.address(); address != "" {
@@ -910,14 +918,14 @@ func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error)
 			failures[i] = errKubeletNoAddress
 			return nil
 		}
-		raw, err := get.Do(ctx)
+		raw, err := get.Do(asking)
 		if err == nil && !json.Valid(raw) {
 			err = errKubeletNotJSON
 		}
 		if err != nil {
 			failures[i] = err
-			// The scrape's own end ends them all: what failed is the
-			// scrape, not the node.
+			// The scrape's own end, or a sibling's limit, ends them all:
+			// what failed is the scrape, not the node.
 			if ctx.Err() != nil {
 				return err
 			}
@@ -935,10 +943,18 @@ func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error)
 		if errors.Is(err, model.ErrLimitExceeded) {
 			return nil, err
 		}
-		return nil, kubeletFailed(ctx, own, err)
+		// The scrape ended before the kubelets were asked: its caller
+		// left, or its time ran out before the kubelets' deadline.
+		return nil, model.WithOperatorDetail(fmt.Errorf("asking the nodes' kubelets for their %s: %w", own.Kubelet, err),
+			fmt.Sprintf("asking the nodes' kubelets for their %s: %s", own.Kubelet, context.Cause(ctx)))
 	}
 	doc := kubeletDocument{Kind: "Summary", APIVersion: kubeletSummaryVersion, Items: []json.RawMessage{}, Failed: []kubeletFailure{}}
 	for i, node := range nodes {
+		if failures[i] == nil && summaries[i] == nil {
+			// None is left unasked but by the scrape's end, which fails it
+			// above; this is that rule kept.
+			failures[i] = context.DeadlineExceeded
+		}
 		if failures[i] != nil {
 			doc.Failed = append(doc.Failed, kubeletFailure{Node: node.Metadata.Name, Error: kubeletShown(failures[i])})
 			continue
@@ -950,6 +966,17 @@ func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error)
 		return nil, kubeletFailed(ctx, own, failures[0])
 	}
 	return json.Marshal(doc)
+}
+
+// kubeletDeadline is when a scrape gives up on the kubelets that have not
+// answered: a tenth of its time left before its deadline, at most a
+// second, so the document of those that did is answered in time.
+func kubeletDeadline(ctx context.Context) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Now().Add(kubernetesTimeout)
+	}
+	return deadline.Add(-min(time.Until(deadline)/10, time.Second))
 }
 
 var (

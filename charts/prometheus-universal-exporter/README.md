@@ -702,7 +702,7 @@ and name `password_file: /var/run/prometheus-universal-exporter/ldap/password` b
 
 ## Kubernetes collectors
 
-A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it:
+A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it, but for the `get` of the kubelets' statistics `kubernetesAccess.kubelet` adds (below):
 
 ```yaml
 kubernetesAccess:

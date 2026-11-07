@@ -386,8 +386,8 @@ func TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat(t *testing.T) {
 	if hb.Generation != generation || hb.Refused != nil {
 		t.Errorf("the heartbeat after the bundle: %+v", hb.Heartbeat)
 	}
-	if st := c.Status(); st.Generation != generation || st.LastSync.IsZero() || st.Refused != 0 {
-		t.Errorf("status %+v", st)
+	if st := c.Status(); st.Generation != generation || st.LastSync.IsZero() || st.Refused != 0 || st.InForceAt.IsZero() || time.Since(st.InForceAt) > time.Minute {
+		t.Errorf("status %+v; want the generation, put in force just now", st)
 	}
 	err := filepath.WalkDir(filepath.Join(c.dir, genPrefix+generation), func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -942,8 +942,11 @@ func TestARestartResumesFromTheCacheDirectory(t *testing.T) {
 	generation := a.serveFiles(map[string]string{"config.yaml": "c\n"})
 	c.waitFor(t, EventInstalled)
 	again := newTestClient(t, a, c.dir, func(o *Options) { o.Generation = CachedGeneration(c.dir) })
-	if again.Status().Generation != generation {
-		t.Fatalf("resumed with %q, want %q", again.Status().Generation, generation)
+	if again.Status().Generation != generation || again.Status().InForceAt.IsZero() {
+		t.Fatalf("resumed with %+v, want %q in force since the start", again.Status(), generation)
+	}
+	if fresh := newTestClient(t, a, t.TempDir(), nil); !fresh.Status().InForceAt.IsZero() {
+		t.Errorf("a client with no bundle has one in force since %v", fresh.Status().InForceAt)
 	}
 	again.heartbeat(context.Background())
 	if hb := a.heartbeatWhere(t, "from the restart", func(hb sentHeartbeat) bool { return hb.Generation == generation }); hb.Refused != nil {

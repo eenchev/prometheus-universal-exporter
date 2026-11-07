@@ -660,7 +660,8 @@ the recent probes and how the OTLP export is going, which
 as a whole. The static targets section has a row per
 target:
 
-- its name, collector, target and labels, its interval, and whether it is
+- its name, collector, linked to its section on the
+  [collectors page](ENDPOINTS.md), target and labels, its interval, and whether it is
   exported over OTLP. Once the target has been scraped, its name links to
   the series the endpoint serves of it, `/static-targets?targets=<name>`
   ([above](#the-static-targets-endpoint)), and with `--web.debug=full` a
@@ -756,7 +757,21 @@ protected by `web.basic_auth` like every endpoint and answers `GET` and `HEAD`
 only. While no static target is configured it is served all the same, for its
 recent probes, and its static targets section says that none are configured.
 In allocator mode it shows the targets the allocator gave this replica, and
-says so: each replica has a page of its own. It moves with
+says so: each replica has a page of its own. It names the member the replica
+is, linked to the allocator's view of it (`<--allocator.url>/?member=<name>`,
+[A member's targets](ALLOCATOR.md#a-members-targets)), says which bundle is in
+force and since when, and when the allocator was last heard from; the JSON
+has them as `allocator`:
+
+```json
+"allocator": {"member": "pod-0", "member_view": "http://pue-allocator:9116/?member=pod-0",
+              "generation": "a1b2c3", "in_force_since": "2026-10-24T08:40:12Z", "last_sync": "2026-10-24T08:59:58Z"}
+```
+
+`generation` is that of the bundle the probes are answered from, and
+`in_force_since` is left out while the client has not yet heard that the
+reload that put it in force returned. A bundle that was in the cache
+directory at the start is in force since the start. It moves with
 `--web.static-targets-path`, so a `--web.self-metrics-path` on it is refused.
 
 ## Exporting over OTLP

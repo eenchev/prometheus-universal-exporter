@@ -53,6 +53,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- On the status page each static target's collector links its section of
+  the collectors page, and in allocator mode the page names the member,
+  linked to the allocator's view of it, the bundle in force and since when,
+  and when the allocator was last heard from; the JSON has them as
+  `allocator` ([Status page](docs/STATIC-TARGETS.md#status-page)).
 - The status page's static targets table sorts by a column's heading and
   has a filter of name, collector, target, labels or result, kept through a
   refresh ([Status page](docs/STATIC-TARGETS.md#status-page)).

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"path"
 	"slices"
 	"sort"
@@ -268,11 +269,14 @@ type staticStatusPage struct {
 	GeneratedAt string `json:"generated_at"`
 	// Allocator says the targets are those the allocator gave this
 	// replica, in allocator mode, and not every target there is.
-	Allocator  bool              `json:"allocator_mode"`
-	Total      int               `json:"targets"`
-	Failing    int               `json:"failing"`
-	NotScraped int               `json:"not_yet_scraped"`
-	Rows       []staticStatusRow `json:"static_targets"`
+	Allocator bool `json:"allocator_mode"`
+	// Bundle is, in allocator mode, the member this replica is, the
+	// allocator's view of it and the bundle in force.
+	Bundle     *allocatorBundleStatus `json:"allocator,omitempty"`
+	Total      int                    `json:"targets"`
+	Failing    int                    `json:"failing"`
+	NotScraped int                    `json:"not_yet_scraped"`
+	Rows       []staticStatusRow      `json:"static_targets"`
 	// ProbeKeys is how many keys the recent probes have, FailingProbes how
 	// many of them failed their latest probe.
 	ProbeKeys     int              `json:"probe_keys"`
@@ -294,6 +298,9 @@ type staticStatusPage struct {
 	StaticTargetsPath string `json:"-"`
 	SeriesLink        string `json:"-"`
 	DebugLinks        bool   `json:"-"`
+	// CollectorsLink is the collectors page relative to this one: each
+	// row's collector links its section there, #collector-<name>.
+	CollectorsLink string `json:"-"`
 	// Chrome is the page's bar (pagechrome.go); the content section, which
 	// a refresh swaps in, has none.
 	Chrome pageChrome `json:"-"`
@@ -315,8 +322,12 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		StaticTargetsPath: s.staticTargetsEndpoint(),
 		SeriesLink:        "../" + path.Base(s.staticTargetsEndpoint()),
 		DebugLinks:        s.debug == DebugFull,
+		CollectorsLink:    rootLink(s.staticTargetsStatusEndpoint()) + relativeLink(pageCollectors),
 		PerKey:            recentProbesPerKey,
 		MaxKeys:           recentProbeKeys,
+	}
+	if s.allocatorStatus != nil {
+		page.Bundle = allocatorBundleFor(s.allocatorStatus(), s.manager.Generation(), now)
 	}
 	page.Probes = s.probeRowsAt(now)
 	page.ProbeKeys = len(page.Probes)
@@ -427,6 +438,41 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 		return page.Rows[i].Name < page.Rows[j].Name
 	})
 	return page
+}
+
+// allocatorBundleStatus is what the status page says of the allocator in
+// allocator mode: the member this replica is, with a link to the
+// allocator's view of it; the generation of the bundle in force, the
+// manager's, and since when, which the client says when the bundle it last
+// saw put in force is that one; and when the allocator was last heard
+// from. A time is RFC 3339, in UTC.
+type allocatorBundleStatus struct {
+	Member       string `json:"member"`
+	MemberView   string `json:"member_view"`
+	Generation   string `json:"generation,omitempty"`
+	InForceSince string `json:"in_force_since,omitempty"`
+	LastSync     string `json:"last_sync,omitempty"`
+	// InForceAge and LastSyncAge are how long ago, as the page writes it.
+	InForceAge  string `json:"-"`
+	LastSyncAge string `json:"-"`
+}
+
+// allocatorBundleFor is the page's allocatorBundleStatus of st, the
+// manager's bundle in force being generation.
+func allocatorBundleFor(st AllocatorStatus, generation string, now time.Time) *allocatorBundleStatus {
+	b := &allocatorBundleStatus{Member: st.Member, Generation: generation}
+	if st.URL != "" {
+		b.MemberView = strings.TrimSuffix(st.URL, "/") + "/?member=" + url.QueryEscape(st.Member)
+	}
+	if generation != "" && st.Generation == generation && !st.InForceAt.IsZero() {
+		b.InForceSince = st.InForceAt.UTC().Format(time.RFC3339)
+		b.InForceAge = shortDuration(max(now.Sub(st.InForceAt), 0))
+	}
+	if !st.LastSync.IsZero() {
+		b.LastSync = st.LastSync.UTC().Format(time.RFC3339)
+		b.LastSyncAge = shortDuration(max(now.Sub(st.LastSync), 0))
+	}
+	return b
 }
 
 // lastErrorCell is a Last error cell of the status page as the template
@@ -736,8 +782,9 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 {{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{.At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{.At}}</span>{{end}}{{end}}
 {{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
-{{- if .Allocator}}
-<p>This exporter runs in allocator mode: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
+{{- with .Bundle}}
+<p>This exporter runs in allocator mode as the member {{if .MemberView}}<a href="{{.MemberView}}" title="the allocator's view of {{.Member}}">{{.Member}}</a>{{else}}{{.Member}}{{end}}: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
+<p class="meta" id="bundle">{{if .Generation}}The bundle in force is generation <code>{{.Generation}}</code>{{if .InForceSince}}, in force since {{.InForceSince}} ({{.InForceAge}} ago){{end}}.{{else}}No bundle from the allocator is in force yet.{{end}}{{if .LastSync}} The allocator was last heard from at {{.LastSync}} ({{.LastSyncAge}} ago).{{end}}</p>
 {{- end}}
 {{- if .OTLP.Enabled}}{{if .OTLP.Failing}}
 <p class="bad">OTLP export is failing: the last {{.OTLP.Failures}} export{{if ne .OTLP.Failures 1}}s{{end}} failed{{if eq .OTLP.Readiness "unready"}}, and the exporter is unready{{end}}. See <a href="#otlp">OTLP export</a>.</p>
@@ -758,7 +805,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 {{- range $i, $row := .Rows}}{{with $row}}
 <tr data-order="{{$i}}" data-match="{{.Match}}">
-<td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> {{.Collector}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> <a href="{{$.CollectorsLink}}#collector-{{.Collector}}" title="the collector {{.Collector}} on the collectors page">{{.Collector}}</a>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
 <td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>

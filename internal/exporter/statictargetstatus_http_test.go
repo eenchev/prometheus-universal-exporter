@@ -275,10 +275,62 @@ func TestTheStatusPageSaysItShowsThisReplicasTargets(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
 	server := newStaticServer(t, weatherConfig(), file)
 	server.SetAllocatorStatus(func() AllocatorStatus { return AllocatorStatus{SyncErrors: map[string]uint64{}} })
-	requireContains(t, getPage(t, server, "/static-targets/status"), "the static targets the allocator gave this replica")
+	requireContains(t, getPage(t, server, "/static-targets/status"), "the static targets the allocator gave this replica", "No bundle from the allocator is in force yet.")
 	if !statusJSON(t, server, "/static-targets/status").Allocator {
 		t.Error("the JSON does not say the exporter is in allocator mode")
 	}
+}
+
+// In allocator mode the page names the member this replica is, linking the
+// allocator's view of it, and says which bundle is in force and since
+// when, and when the allocator was last heard from; the time the bundle
+// came is said only when the client's bundle is the manager's.
+func TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce(t *testing.T) {
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
+	server := newStaticServer(t, weatherConfig(), file)
+	server.manager.SetGeneration("g7")
+	now := time.Now()
+	st := AllocatorStatus{SyncErrors: map[string]uint64{}, URL: "http://pue-allocator:9116/", Member: "pod 0&1", Generation: "g7", InForceAt: now.Add(-90 * time.Second), LastSync: now.Add(-5 * time.Second)}
+	server.SetAllocatorStatus(func() AllocatorStatus { return st })
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`as the member <a href="http://pue-allocator:9116/?member=pod&#43;0%261" title="the allocator's view of pod 0&amp;1">pod 0&amp;1</a>:`,
+		`<p class="meta" id="bundle">The bundle in force is generation <code>g7</code>, in force since `+st.InForceAt.UTC().Format(time.RFC3339)+` (1m30s ago). The allocator was last heard from at `)
+	b := statusJSON(t, server, "/static-targets/status").Bundle
+	if b == nil || b.Member != "pod 0&1" || b.MemberView != "http://pue-allocator:9116/?member=pod+0%261" || b.Generation != "g7" || b.InForceSince != st.InForceAt.UTC().Format(time.RFC3339) || b.LastSync == "" {
+		t.Errorf("the JSON's allocator is %+v", b)
+	}
+	// The client has seen a bundle the manager has not put in force yet.
+	st.Generation = "g8"
+	if b := statusJSON(t, server, "/static-targets/status").Bundle; b.Generation != "g7" || b.InForceSince != "" {
+		t.Errorf("with the client a bundle ahead, the JSON's allocator is %+v; want g7 with no time", b)
+	}
+	if strings.Contains(getPage(t, server, "/static-targets/status"), "in force since") {
+		t.Error("the page says when a bundle other than the one in force came")
+	}
+	if strings.Contains(newStaticServerJSON(t), `"allocator"`) {
+		t.Error("outside allocator mode the JSON has an allocator")
+	}
+}
+
+// newStaticServerJSON is the status page's JSON of an exporter outside
+// allocator mode.
+func newStaticServerJSON(t *testing.T) string {
+	t.Helper()
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "w", Collector: "weather", Target: "http://127.0.0.1:1/"}}}
+	return getPath(newStaticServer(t, weatherConfig(), file), http.MethodGet, "/static-targets/status?format=json").Body.String()
+}
+
+// Each row's collector links its section on the collectors page, relative
+// to the page, so the link holds under a prefix and follows the static
+// targets path.
+func TestATargetsCollectorLinksItsSection(t *testing.T) {
+	server := statusTargets(t)
+	requireContains(t, getPage(t, server, "/static-targets/status"),
+		`<span class="muted">collector</span> <a href="../collectors#collector-text" title="the collector text on the collectors page">text</a>`)
+	requireContains(t, getPage(t, server, "/collectors"), `id="collector-text"`)
+	server.SetStaticTargetsPath("/a/b/targets")
+	requireContains(t, getPage(t, server, "/a/b/targets/status"), `href="../../../collectors#collector-text"`)
 }
 
 // A scrape failure_backoff skips is shown as skipped, and is no failed

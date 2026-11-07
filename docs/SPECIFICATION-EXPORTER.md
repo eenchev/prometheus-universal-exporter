@@ -31029,6 +31029,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheStaticTargetsTableSortsAndFilters` (exporter): the status page has the filter's form, hidden, its box and the count's live note; the table `static-targets-table` with headings of `data-sort` `text` or `num` and no button or `aria-sort` without the script; the rows with `data-order` from 0 and `data-match` of name, collector, target, labels and result, one a line, escaped; the Interval cell `data-value="60"`, the backed off target's strip `data-value="2"`, a target not yet scraped's Last scrape `data-value="0"`; and the shared script called on the table, its swap arranging the new table and putting back the caret, with the sort marks' style. (In headless Chromium, the rows sort by name both ways and by Recent, the heading `aria-sort="ascending"`, and `text` keeps 4 of the 7 targets, saying so.)
 - `TestTheStatusPageWritesDurationsWithoutZeroUnits` and `TestTheStatusPageShowsAStaticTargetsRecoveredErrorMuted` (exporter), and `TestTheStatusPageHasAProbeJobsTable` (allocator), changed: an interval's cell carries its value, a row's `<tr` its order, and the allocator's refresh arranges the table through the shared script.
 
+## 34.285 The status page's collector links and the bundle in force
+
+- `TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce` (exporter): with generation `g7` in force, put in force 90s ago, and the member `pod 0&1` of the allocator `http://pue-allocator:9116/`, the page names the member linked to `http://pue-allocator:9116/?member=pod+0%261`, escaped, and says `The bundle in force is generation g7, in force since <time> (1m30s ago). The allocator was last heard from at …`; the JSON's `allocator` has the member, the view, `g7`, the time and `last_sync`; with the client's latest bundle `g8`, `g7` is said with no time; outside allocator mode the JSON has no `allocator`.
+- `TestTheStatusPageSaysItShowsThisReplicasTargets` (exporter), changed: with no bundle in force the page says so.
+- `TestATargetsCollectorLinksItsSection` (exporter): a row's collector links `../collectors#collector-text`, a section the collectors page has, and `../../../collectors#collector-text` under `--web.static-targets-path=/a/b/targets`.
+- `TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce`, changed: once the reload of the first bundle returned, the status page says since when it is in force and links the allocator's view of `pod-0`.
+- `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` and `TestARestartResumesFromTheCacheDirectory` (allocclient), changed: the status has `InForceAt`, just now after the bundle, since the start for the bundle of the cache directory, and none for a client without a bundle.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33434,7 +33442,19 @@ then one of the OTLP export. Of the static targets:
   5s to 24h, by default `off`; any other value, `0s` and the empty value
   among them, MUST be a command-line error, exit `2`.
 - In allocator mode the page MUST say that it shows the targets the
-  allocator gave this replica, and the probes this replica answered.
+  allocator gave this replica, and the probes this replica answered. It
+  MUST name the member the replica is, linked to the allocator's view of
+  it, `--allocator.url` followed by `/?member=<name>`; say the generation of
+  the bundle in force, the one the probes are answered from, or that none
+  is; say since when it is in force once the client has heard that the
+  reload that put it in force returned, the start for the bundle the
+  exporter started with, and say nothing of a time while the client's
+  latest bundle is another; and say when the allocator was last heard from.
+  The JSON MUST have them as `allocator`, with `member`, `member_view`,
+  `generation`, `in_force_since` and `last_sync`, a value missing left out,
+  and MUST NOT have `allocator` outside allocator mode.
+- Each row's collector MUST link its section of the collectors page,
+  `#collector-<name>`, relative to the page.
 - The page MUST be served with or without static targets in force; without
   them its static targets section MUST say that none are configured, and the
   JSON MUST have an empty `static_targets` array.

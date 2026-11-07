@@ -277,10 +277,11 @@ func (a *allocatorMode) startClient(manager allocclient.Reloader, generation str
 
 // allocatorStatus is the source of the allocator self-metrics: how client
 // keeps up with the allocator. The generation in force is the manager's.
-func allocatorStatus(client *allocclient.Client) func() exporter.AllocatorStatus {
+func allocatorStatus(client *allocclient.Client, allocatorURL, member string) func() exporter.AllocatorStatus {
 	return func() exporter.AllocatorStatus {
 		st := client.Status()
-		return exporter.AllocatorStatus{LastSync: st.LastSync, SyncErrors: st.SyncErrors, Refused: st.Refused}
+		return exporter.AllocatorStatus{LastSync: st.LastSync, SyncErrors: st.SyncErrors, Refused: st.Refused,
+			URL: allocatorURL, Member: member, Generation: st.Generation, InForceAt: st.InForceAt}
 	}
 }
 

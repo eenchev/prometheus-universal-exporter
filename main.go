@@ -423,7 +423,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		defer stopAllocClient()
-		server.SetAllocatorStatus(allocatorStatus(allocClient))
+		server.SetAllocatorStatus(allocatorStatus(allocClient, alloc.url, alloc.member))
 	}
 
 	conf := manager.Get()

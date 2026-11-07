@@ -549,3 +549,80 @@ func BenchmarkNoteProbe(b *testing.B) {
 		record()
 	}
 }
+
+// At --web.debug=full a recent probe that shows the probe as it was sent,
+// its target and parameters neither withheld, masked nor cut, links it
+// sent again with debug=true, relative to the page; one that shows less
+// than was sent has no link, nor has any below full.
+func TestARecentProbeLinksItsDebugReport(t *testing.T) {
+	up := textTarget(t, "value=42\n")
+	server := modeServer(t, testutil.Collector("text", "text"))
+	server.SetDebug(DebugFull)
+	secret := strings.Replace(up.URL, "http://", "http://reader:hunter2@", 1)
+	long := up.URL + "/?" + strings.Repeat("a", recentProbeTargetBytes)
+	for _, target := range []string{up.URL, secret, long} {
+		probeOnce(t, server, probeOf("text", target), nil)
+	}
+	probeOnce(t, server, probeOf("text", up.URL+"/q")+"&timeout=5s", nil)
+	rows := map[string]probeStatusRow{}
+	for _, row := range server.probeRowsAt(time.Now()) {
+		rows[row.Collector+" "+row.Target] = row
+	}
+	plain := rows["text "+up.URL]
+	want := "../probe?collector=text&target=" + url.QueryEscape(up.URL) + "&debug=true"
+	if plain.DebugLink != want {
+		t.Errorf("the plain probe links %q, want %q", plain.DebugLink, want)
+	}
+	if q := rows["text "+up.URL+"/q"]; q.DebugLink != "../probe?collector=text&target="+url.QueryEscape(up.URL+"/q")+"&timeout=5s&debug=true" {
+		t.Errorf("the probe with a parameter links %q", q.DebugLink)
+	}
+	for key, row := range rows {
+		if key != "text "+up.URL && key != "text "+up.URL+"/q" && row.DebugLink != "" {
+			t.Errorf("the probe %s, shown otherwise than sent, links %q", key, row.DebugLink)
+		}
+	}
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page, `<strong>text</strong> <a class="muted" href="`+strings.ReplaceAll(want, "&", "&amp;")+`" title="probe it once now, and report each stage">debug</a>`)
+	if strings.Contains(page, "hunter2") {
+		t.Error("the page shows the credential")
+	}
+	base, _ := url.Parse("http://exporter/static-targets/status")
+	link, _ := base.Parse(want)
+	if r := getPath(server, http.MethodGet, link.RequestURI()); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "value=42") {
+		t.Errorf("%s answered %d:\n%s", link.RequestURI(), r.Code, r.Body)
+	}
+	server.SetDebug(DebugEdit)
+	if strings.Contains(getPage(t, server, "/static-targets/status"), "debug=true") {
+		t.Error("below --web.debug=full a recent probe links its debug report")
+	}
+}
+
+// A key is replayable only when it shows the probe as it was sent: a
+// parameter whose name reads as a credential's, a value masked, a value or
+// the parameters cut, or a target shown otherwise make it not.
+func TestARecentProbeKeyIsReplayableOnlyAsSent(t *testing.T) {
+	c := &model.Collector{Name: "c"}
+	query := func(pairs ...string) url.Values {
+		q := url.Values{"collector": {"c"}, "target": {"http://h"}}
+		for i := 0; i < len(pairs); i += 2 {
+			q.Set(pairs[i], pairs[i+1])
+		}
+		return q
+	}
+	if key := recentProbeKeyFor(c, "http://h", query("param_tenant", "a b")); key.replay != "collector=c&param_tenant=a+b&target=http%3A%2F%2Fh" {
+		t.Errorf("the replay is %q", key.replay)
+	}
+	for what, q := range map[string]url.Values{
+		"a credential's name": query("param_token", "x"),
+		"a masked value":      query("param_x", "http://u:p@h"),
+		"a value cut":         query("param_x", strings.Repeat("v", recentProbeParamBytes+1)),
+		"the parameters cut":  query("param_a", strings.Repeat("v", 60), "param_b", strings.Repeat("v", 60), "param_c", strings.Repeat("v", 60), "param_d", strings.Repeat("v", 60), "param_e", strings.Repeat("v", 60), "param_f", strings.Repeat("v", 60), "param_g", strings.Repeat("v", 60), "param_h", strings.Repeat("v", 60)),
+	} {
+		if key := recentProbeKeyFor(c, "http://h", q); key.replay != "" {
+			t.Errorf("with %s the key replays %q", what, key.replay)
+		}
+	}
+	if key := recentProbeKeyFor(c, "http://<redacted>@h", query()); key.replay != "" {
+		t.Errorf("a target shown otherwise is replayed as %q", key.replay)
+	}
+}

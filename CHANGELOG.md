@@ -53,6 +53,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- With `--web.debug=full`, a recent probe on the status page links its
+  debug report, the probe sent again with `&debug=true`, when the page shows
+  it as it was sent ([Recent probes](docs/ENDPOINTS.md#recent-probes)).
 - On the status page each static target's collector links its section of
   the collectors page, and in allocator mode the page names the member,
   linked to the allocator's view of it, the bundle in force and since when,

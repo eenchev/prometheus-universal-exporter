@@ -145,7 +145,12 @@ or shared: it is what Prometheus was given. A debug probe
 Each collector and target has a row, the failing ones first, then in order of
 collector, target and parameters:
 
-- the collector, target and parameters;
+- the collector, target and parameters. With `--web.debug=full`, a *debug*
+  link beside the collector sends the probe again with `&debug=true` and
+  shows its [debug report](CONFIGURATION.md#debug-probes), when the row shows the probe as it
+  was sent: a row whose target had a credential withheld, or a parameter
+  withheld, masked or cut, has no link, since the page has nothing to send
+  but what it shows;
 - when its latest probe began, how long ago that was and how long it took;
 - its result: `success`, `cached` (answered from the response cache),
   `failed`, `refused by policy` (`allowed_targets` or `denied_targets`

@@ -31037,6 +31037,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAllocatorModeNamesTheGenerationOfTheConfigurationInForce`, changed: once the reload of the first bundle returned, the status page says since when it is in force and links the allocator's view of `pod-0`.
 - `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` and `TestARestartResumesFromTheCacheDirectory` (allocclient), changed: the status has `InForceAt`, just now after the bundle, since the start for the bundle of the cache directory, and none for a client without a bundle.
 
+## 34.286 A recent probe's debug link
+
+- `TestARecentProbeLinksItsDebugReport` (exporter): at `--web.debug=full`, of probes of a plain target, one with a credential in its URL, one longer than 512 bytes and one with `timeout=5s`, the plain one links `../probe?collector=text&target=…&debug=true` and the one with the timeout has it in its link, the others none; the page has the link beside the collector, escaped, and not the credential; the link, followed from the page, answers the debug report; at `edit` no row links one.
+- `TestARecentProbeKeyIsReplayableOnlyAsSent` (exporter): `param_tenant=a b` replays as `collector=c&param_tenant=a+b&target=http%3A%2F%2Fh`; `param_token`, a value with a URL's userinfo, a value of 65 bytes, eight parameters of 60 bytes and a target shown otherwise than sent make no replay.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33492,6 +33497,11 @@ Of the recent probes:
   and cut as a static target's error is; a probe that panicked MUST be shown
   with the fixed error it was answered, the one a static target's scrape that
   panicked is shown with.
+- Under `--web.debug=full`, and under no other level, a row whose target
+  and parameters are shown as they were sent, none withheld, masked or cut,
+  MUST link the probe sent again with `debug=true`: `probe?` relative to the
+  page, with the collector, the target and the parameters; any other row
+  MUST have no such link.
 - The last 10 probes of each collector and target MUST be kept, and no more
   than 500 collectors and targets: a new one MUST make the one probed least
   recently forgotten. A target MUST be cut to 512 bytes and the parameters to

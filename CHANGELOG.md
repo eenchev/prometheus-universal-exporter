@@ -74,6 +74,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `redis` collector reads the primary a Sentinel names with `sentinel`:
+  its target is the Sentinel, asked which server is the primary of
+  `sentinel.master` now, and the document's `sentinel` holds what the
+  Sentinel knows of it, its flags, replicas and quorum
+  ([Sentinel](docs/REDIS.md#sentinel)).
 - A `tcp` collector speaks a conversation with `steps`, each a `send` and
   the `until` its answer matches, as SMTP's `EHLO` then `QUIT`
   ([A conversation](docs/TCP.md#a-conversation)).

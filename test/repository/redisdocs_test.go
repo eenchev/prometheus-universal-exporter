@@ -3,6 +3,7 @@
 package repository
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,5 +91,52 @@ func TestRedisDocumentationExamples(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The Sentinel example of docs/REDIS.md works as written against a
+// stand-in Sentinel and primary, each with its own password: the known
+// replicas, and the primary not down.
+func TestRedisSentinelDocumentationExample(t *testing.T) {
+	blocks := pageBlocks(t, "docs/REDIS.md", "yaml")
+	primary := redistest.New(t)
+	primary.RequirePassword("", "server-pass")
+	primary.SetInfo(redistest.Section{Name: "Replication", Lines: []string{"role:master", "connected_slaves:2"}}, redistest.Section{Name: "Memory", Lines: []string{"used_memory:1048576"}})
+	host, port, err := net.SplitHostPort(primary.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := redistest.New(t)
+	sentinel.RequirePassword("", "sentinel-pass")
+	sentinel.Reply("SENTINEL GET-MASTER-ADDR-BY-NAME mymaster", "*2\r\n"+redistest.Bulk(host)+redistest.Bulk(port))
+	var master strings.Builder
+	master.WriteString("*10\r\n")
+	for _, field := range []string{"name", "mymaster", "ip", host, "port", port, "flags", "master", "num-slaves", "2"} {
+		master.WriteString(redistest.Bulk(field))
+	}
+	sentinel.Reply("SENTINEL MASTER mymaster", master.String())
+	dir := t.TempDir()
+	serverFile, sentinelFile := filepath.Join(dir, "server"), filepath.Join(dir, "sentinel")
+	for file, password := range map[string]string{serverFile: "server-pass", sentinelFile: "sentinel-pass"} {
+		if err := os.WriteFile(file, []byte(password), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := strings.TrimSuffix(pageBlock(t, blocks, "request:\n  type: redis\n  password_file: /var/run/secrets/redis/password     # the servers'\n"), "\n")
+	request = strings.NewReplacer("/var/run/secrets/redis/password", serverFile, "/var/run/secrets/redis/sentinel", sentinelFile).Replace(request)
+	metrics := strings.TrimSuffix(pageBlock(t, blocks, "metrics:\n  - name: redis_sentinel_known_replicas\n"), "\n")
+	conf := "collectors:\n  - name: sentinel\n    " + strings.ReplaceAll(request, "\n", "\n    ") + "\n    transform:\n      type: jq\n    " + strings.ReplaceAll(metrics, "\n", "\n    ") + "\n"
+	path := testutil.WriteIn(t, dir, "config.yaml", conf)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, conf)
+	}
+	exp := exporter.NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	recorder := httptest.NewRecorder()
+	exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+sentinel.Addr+"&collector=sentinel", nil))
+	for _, want := range []string{"redis_sentinel_known_replicas 2", "redis_sentinel_primary_down 0"} {
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), want) {
+			t.Errorf("%d, want %q in\n%s", recorder.Code, want, recorder.Body)
+		}
 	}
 }

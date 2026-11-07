@@ -2863,6 +2863,7 @@ carries it. Its keys:
 | `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
 | `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
 | `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
+| `sentinel` | none | `master`, required, not blanks, with no blank at an end, control character or placeholder; `username`, only with `password_file`, and `password_file`, not blanks alone: the Sentinel's own account. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
@@ -2923,6 +2924,23 @@ carries it. Its keys:
   deeper than 16, nor a line other than a bulk string's data be longer than
   64 KiB. Each failure past the limit MUST be a limit exceeded; a reply
   that is no RESP2 reply MUST fail the scrape saying so.
+- With `sentinel`, the target MUST be read as a Sentinel: on a connection
+  of its own, logged in with `sentinel.username` and
+  `sentinel.password_file` (read at every scrape, as `password_file` is,
+  and by `--dry-run`), never the collector's, the scrape MUST send
+  `SENTINEL GET-MASTER-ADDR-BY-NAME <master>` then
+  `SENTINEL MASTER <master>`, close that connection, and read the server
+  at the address answered as it reads a target, with the collector's
+  account. A nil or empty answer MUST fail the scrape saying the Sentinel
+  knows no primary of that name; an answer that is no address and port
+  MUST fail it saying so. The primary MUST be held to the target lists
+  as the target is, before it is dialed and at the address dialed, and
+  one refused MUST never be connected to. Over TLS both connections MUST
+  speak it, the primary's certificate verified for `tls.server_name` or
+  else the address answered. The document MUST hold `sentinel`, an
+  object of `SENTINEL MASTER`'s fields, each value read as an INFO value
+  is, and `address`, the `host:port` read. The Sentinel's replies and the
+  primary's MUST be held to the response limit together.
 - The target MUST be `host`, `host:port`, `[v6]:port`, or a `redis://` or
   `rediss://` URL of one, port 6379 when it names none, with no user,
   path, query or other scheme, which MUST be answered `400` before
@@ -31395,6 +31413,17 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestATCPStepThatIsNotAnsweredFailsTheScrape` (fetch, tcp): an answer that does not come to match its until fails at the deadline quoting it; a last step without until on a server that keeps the connection open fails saying so; a server that closes the connection before the answer matches fails naming the step.
 - `TestTCPStepsAreCheckedAtLoad` (fetch, tcp): `steps` beside `send`, `send_hex`, `terminator`, `answer_bytes` or `udp`, 17 steps, a step without send, a step but the last without until, an until that is no regular expression or has a placeholder, and a send whose default a line refuses, are refused.
 - `TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty` (repository, tcp), changed: a row of `steps[].send`, `"HELO x\r\n"` taken by both, left out or `""` refused by both.
+
+## 34.302 A redis collector reads the primary its Sentinel names
+
+- `TestARedisCollectorAsksItsSentinelForThePrimary` (fetch, redis): the Sentinel is sent `AUTH watcher sentinel-pass`, `SENTINEL GET-MASTER-ADDR-BY-NAME mymaster` and `SENTINEL MASTER mymaster`, and the primary it names `AUTH server-pass` and `INFO`; the document holds the primary's `info` and `sentinel` with `num-slaves` a number, `flags`, `name` and `address`.
+- `TestARedisSentinelsUnknownMasterFailsTheScrape` (fetch, redis): a nil answer fails saying the Sentinel knows no primary named `mymaster`; an array of one element, and an address of port 0, fail saying so.
+- `TestTheRedisPrimaryASentinelNamesIsHeldToTheTargetLists` (fetch, redis): a primary at the cloud metadata service is refused as a target and never dialed.
+- `TestARedisSentinelsRepliesCountTowardTheResponseLimit` (fetch, redis): a limit the Sentinel's replies and INFO each fit alone but not together fails the scrape as a limit exceeded; a larger one does not.
+- `TestARedisSentinelsKeysAreChecked` (fetch, redis): no master, a master with a blank at an end or a placeholder, a username without a password file, a username with a blank and a password file of blanks are refused.
+- `TestADryRunReadsTheRedisSentinelsPasswordFile` (fetch, redis): a missing `sentinel.password_file` is a `--dry-run` warning naming the key.
+- `TestRedisSentinelDocumentationExample` (repository, redis): docs/REDIS.md's Sentinel example answers the known replicas and the primary not down.
+- `TestSchemaAndExporterAgreeOnRedisKeysWrittenEmpty` (repository, redis), changed: rows of `sentinel.master` and `sentinel.password_file` beside `sentinel.username`.
 
 ## 42.1 OTLP export
 

@@ -4148,6 +4148,73 @@
                   "boolean"
                 ]
               },
+              "sentinel": {
+                "additionalProperties": false,
+                "description": "redis: the target is a Sentinel, asked which server is the primary of master now (SENTINEL GET-MASTER-ADDR-BY-NAME); the scrape reads that server, held to the target lists as the target is, and the document's sentinel holds what the Sentinel knows of it (SENTINEL MASTER). See docs/REDIS.md#sentinel.",
+                "if": {
+                  "properties": {
+                    "username": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "username"
+                  ]
+                },
+                "properties": {
+                  "master": {
+                    "description": "The name the Sentinels know the primary by, as sentinel.conf's sentinel monitor names it, such as mymaster. No placeholder.",
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "password_file": {
+                    "description": "The file of the Sentinel's password (sentinel.conf's requirepass), read at every scrape, sent with AUTH before the Sentinel is asked. The servers' password is request.password_file's.",
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "description": "The Sentinel's ACL user, which logs in with sentinel.password_file. The servers' account is request.username's.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "master"
+                ],
+                "then": {
+                  "properties": {
+                    "password_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "password_file"
+                  ]
+                },
+                "type": "object"
+              },
               "server": {
                 "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
                 "not": {

@@ -114,5 +114,5 @@ table.sortable th.num[aria-sort="descending"] button::before { content: "\2193\0
 form.filter.table { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; max-width: 640px; }
 form.filter.table[hidden] { display: none; }
 form.filter.table label { font-size: 14px; font-weight: 600; }
-form.filter.table input[type="search"] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+form.filter.table input[type="search"] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--field); border-radius: 6px; }
 `

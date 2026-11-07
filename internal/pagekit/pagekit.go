@@ -27,17 +27,24 @@ h1 { font-size: 26px; margin: 0 0 4px; }
 h2 { font-size: 17px; margin: 32px 0 8px; }
 p.meta { color: var(--muted); margin: 0; }
 a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 ul.links { padding-left: 20px; }
 ` + selectStyle + ChromeStyle
 
-// LightColours and DarkColours are the pages' colours in each theme. The
+// LightColours and DarkColours are the pages' colours in each theme.
+// --field is the border of a field one types in or picks from, a search
+// box, a select or a text area: 3:1 or more against --bg and --panel, as a
+// control's boundary needs to be seen (WCAG 1.4.11), where --line, a
+// table's rules, is lighter. Every element focused by the keyboard has the
+// accent's outline (:focus-visible), in both themes. The
 // dark ones apply when the browser prefers dark and no theme is chosen, and
 // when Dark is; color-scheme follows, so the browser's own parts of the page,
 // its scrollbars and form controls, match.
 const (
-	LightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; --danger-bg: #fef2f2; " + lightJSONColours + " " + lightYAMLColours
-	DarkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; --danger-bg: #2c1517; " + darkJSONColours + " " + darkYAMLColours
+	LightColours = "--fg: #1d1d1f; --muted: #5f6368; --bg: #ffffff; --panel: #f7f7f8; --line: #d9dce1; --field: #868b94; --accent: #c2410c; --on-accent: #ffffff; --code: #f3f4f6; --bad: #b91c1c; --good: #15803d; --danger-bg: #fef2f2; " + lightJSONColours + " " + lightYAMLColours
+	DarkColours  = "--fg: #e8eaed; --muted: #9aa0a6; --bg: #16181b; --panel: #1d2024; --line: #34373c; --field: #737882; --accent: #ff8a5c; --on-accent: #16181b; --code: #23262b; --bad: #f87171; --good: #4ade80; --danger-bg: #2c1517; " + darkJSONColours + " " + darkYAMLColours
 )
 
 // lightJSONColours and darkJSONColours are the colours of the debug page's
@@ -134,7 +141,7 @@ header.site [aria-current="page"] { color: var(--fg); font-weight: 600; }
 header.site label.theme { color: var(--muted); }
 header.site .danger-badge { padding: 1px 8px; border: 1px solid var(--bad); border-radius: 999px; background: var(--danger-bg); color: var(--bad); font-size: 12px; font-weight: 600; }
 header.site label.theme[hidden] { display: none; }
-header.site label.theme select { width: auto; height: 26px; margin: 0 0 0 4px; padding: 0 30px 0 8px; border: 1px solid var(--line); border-radius: 6px; background-color: var(--bg); color: var(--fg); font: inherit; font-size: 13px; background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; }
+header.site label.theme select { width: auto; height: 26px; margin: 0 0 0 4px; padding: 0 30px 0 8px; border: 1px solid var(--field); border-radius: 6px; background-color: var(--bg); color: var(--fg); font: inherit; font-size: 13px; background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; }
 `
 
 // Logo is the project's logo, docs/logo.svg, which the go:embed pattern

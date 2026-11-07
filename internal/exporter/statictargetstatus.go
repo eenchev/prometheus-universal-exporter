@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,6 +194,35 @@ type staticStatusScrape struct {
 	Good     bool    `json:"-"`
 }
 
+// stripText is a strip of the results, oldest first, of scrapes or probes
+// (noun), as a screen reader is told it: its marks, ✓ and ✗, read as
+// symbols one at a time, say nothing of what they stand for, so the strip
+// is told as how many it holds of each result, in the order each first
+// came, and how the latest went: "last 3 scrapes, oldest first: 2 success,
+// 1 failed; the latest failed". Empty for no strip.
+func stripText(results []string, noun string) string {
+	if len(results) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	var order []string
+	for _, r := range results {
+		if counts[r] == 0 {
+			order = append(order, r)
+		}
+		counts[r]++
+	}
+	parts := make([]string, len(order))
+	for i, r := range order {
+		parts[i] = strconv.Itoa(counts[r]) + " " + r
+	}
+	text := "last " + strconv.Itoa(len(results)) + " " + noun
+	if len(results) != 1 {
+		text += "s, oldest first"
+	}
+	return text + ": " + strings.Join(parts, ", ") + "; the latest " + results[len(results)-1]
+}
+
 // staticMark is the strip's mark of a scrape with result.
 func staticMark(result string) string {
 	switch result {
@@ -258,9 +288,11 @@ type staticStatusRow struct {
 	// filter matches: name, collector, target, labels and result, one a
 	// line.
 	IntervalSeconds float64 `json:"-"`
-	ScrapedAt       int64   `json:"-"`
-	RecentBad       int     `json:"-"`
-	Match           string  `json:"-"`
+	// StripText is the strip as a screen reader is told it (stripText).
+	StripText string `json:"-"`
+	ScrapedAt int64  `json:"-"`
+	RecentBad int    `json:"-"`
+	Match     string `json:"-"`
 }
 
 // staticStatusPage is the page, and the JSON: the static targets, then the
@@ -416,6 +448,11 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			}
 		}
 		row.IntervalSeconds = time.Duration(target.Interval).Seconds()
+		results := make([]string, len(row.Recent))
+		for i, r := range row.Recent {
+			results[i] = r.Result
+		}
+		row.StripText = stripText(results, "scrape")
 		for _, r := range row.Recent {
 			if !r.Good {
 				row.RecentBad++
@@ -812,7 +849,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
 <td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{template "at" .LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
-<td class="strip" data-value="{{.RecentBad}}">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
+<td class="strip" data-value="{{.RecentBad}}">{{if .StripText}}<span class="sr-only">{{.StripText}}</span><span aria-hidden="true">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</span>{{end}}</td>
 <td data-value="{{.Failures}}">{{.Failures}}{{if .Backoff}}<br><span class="bad">{{if .BackoffUntil}}backing off until {{template "at" .BackoffUntil}}{{else}}{{.Backoff}}{{end}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
@@ -836,7 +873,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <td class="what"><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .DebugLink}} <a class="muted" href="{{.DebugLink}}" title="probe it once now, and report each stage">debug</a>{{end}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
 <td>{{template "at" .LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
-<td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
+<td class="strip"><span class="sr-only">{{.StripText}}</span><span aria-hidden="true">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</span></td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}

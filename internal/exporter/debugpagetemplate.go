@@ -100,7 +100,7 @@ main { max-width: 1200px; }
 section.panel { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--panel); min-width: 0; }
 section.panel h2 { margin: 0 0 8px; font-size: 17px; }
 label { display: block; font-size: 13px; margin: 8px 0 2px; }
-input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
+input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--field); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; resize: vertical; tab-size: 2; }
 textarea[readonly] { background: var(--code); }
 /* The collector's editor: a gutter of line numbers beside the textarea, and

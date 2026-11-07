@@ -53,6 +53,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The exporter's and the allocator's pages show an outline on what the
+  keyboard focuses, give search boxes and selects a border that can be seen
+  (3:1), tell a screen reader each ✓ ✗ strip as its counts and its latest
+  result, and announce a filter's count of the rows it keeps
+  ([Endpoints](docs/ENDPOINTS.md)).
 - The exporter's status page and the allocator's pages show each moment in
   the browser's time, with UTC and how long ago in its tooltip; without
   JavaScript they show UTC as before ([Endpoints](docs/ENDPOINTS.md)).

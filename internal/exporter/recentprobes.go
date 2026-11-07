@@ -365,6 +365,8 @@ type probeStatusRow struct {
 	// debug=true, relative to the page, for a key that shows the probe as
 	// it was sent (recentProbeKey.replay); empty otherwise.
 	DebugLink string `json:"-"`
+	// StripText is the strip as a screen reader is told it (stripText).
+	StripText string `json:"-"`
 }
 
 // probeStatusProbe is one probe of a key, in the JSON and as a mark of the
@@ -435,6 +437,11 @@ func (s *Server) probeRowsAt(now time.Time) []probeStatusRow {
 			}
 		}
 		row.LastErrorRecovered = errorRecovered(row.LastError, !row.Failing)
+		results := make([]string, len(row.Probes))
+		for i, p := range row.Probes {
+			results[i] = p.Result
+		}
+		row.StripText = stripText(results, "probe")
 		if s.debug == DebugFull && entry.key.replay != "" {
 			row.DebugLink = probeLink + entry.key.replay + "&" + probeDebugParam + "=true"
 		}

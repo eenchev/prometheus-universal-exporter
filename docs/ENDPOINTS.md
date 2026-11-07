@@ -45,6 +45,18 @@ how long until it, as a backoff's end. A strip mark's tooltip begins with
 its moment in the browser's time, UTC after it. Without JavaScript the page
 shows each moment in UTC, as RFC 3339, as `?format=json` has it.
 
+The pages are made to be used from the keyboard and with a screen reader,
+on the exporter and the allocator alike: the keyboard reaches every link,
+field and sortable heading in reading order, and whatever it focuses has
+the accent's outline. Text, muted text and links read at 4.5:1 or more
+against every background in both themes, and a field's border, a search
+box's or a select's, at 3:1 or more. A strip of ✓ and ✗ marks is told to a
+screen reader as its counts and its latest result, such as *last 4 scrapes,
+oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped
+by backoff*, rather than as the symbols; the allocator's bars are images
+named by what they show; a filter's count of the rows it keeps is
+announced as it changes.
+
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
 or `same-site`, with Basic Auth on or off: a browser sends the exporter's

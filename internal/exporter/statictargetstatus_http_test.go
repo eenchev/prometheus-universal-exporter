@@ -538,7 +538,7 @@ func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
 	page := getPage(t, server, "/static-targets/status")
 	requireContains(t, page, `<th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th>`)
 	requireContains(t, page, `">✗</span><span class="bad" data-at="`)
-	requireContains(t, page, ` backoff">…</span></td>`)
+	requireContains(t, page, ` backoff">…</span></span></td>`)
 	for _, target := range server.manager.StaticTargets() {
 		if target.Name == "ok" {
 			for range 12 {
@@ -600,4 +600,29 @@ func TestTheStatusPageWritesEachMomentAsATime(t *testing.T) {
 	if strings.Contains(page, `<td data-value="`+fmt.Sprint(row.ScrapedAt)+`">`+row.LastScrape) {
 		t.Error("a last scrape's moment is no <time>")
 	}
+}
+
+// A strip's marks, read one symbol at a time, say nothing of what they
+// stand for: a screen reader is told the strip as its counts and its
+// latest result, and not the marks, which stay for the eye.
+func TestAStripIsToldToAScreenReaderAsItsCounts(t *testing.T) {
+	for _, c := range []struct {
+		results []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{statusSuccess}, "last 1 scrape: 1 success; the latest success"},
+		{[]string{statusFailed, statusSuccess, statusFailed, statusBackoff}, "last 4 scrapes, oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped by backoff"},
+	} {
+		if got := stripText(c.results, "scrape"); got != c.want {
+			t.Errorf("stripText(%v) = %q, want %q", c.results, got, c.want)
+		}
+	}
+	server := statusTargets(t)
+	probeOnce(t, server, probeOf("text", textTarget(t, "value=1\n").URL), nil)
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page,
+		`<td class="strip" data-value="2"><span class="sr-only">last 2 scrapes, oldest first: 1 failed, 1 skipped by backoff; the latest skipped by backoff</span><span aria-hidden="true"><span class="bad" data-at="`,
+		`<td class="strip"><span class="sr-only">last 1 probe: 1 success; the latest success</span><span aria-hidden="true">`,
+		`.sr-only { position: absolute; width: 1px; height: 1px;`)
 }

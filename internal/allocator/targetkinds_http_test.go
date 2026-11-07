@@ -61,6 +61,7 @@ func TestTheStatusPageTellsStaticAndProbeTargetsApart(t *testing.T) {
 		`<thead><tr><th>Source</th><th>Feeds</th><th>Result</th>`,
 		`<b class="swatch seg-probe"></b>probe targets<br><span class="muted kind">of the job</span> <a href="?job=websites"`,
 		`<b class="swatch seg-static"></b>static targets<br><span class="muted kind">of the entry</span> <a href="?entry=node"`,
+		`<p class="note muted" data-rows-of="probe-jobs" role="status" aria-live="polite"></p>`,
 	)
 	// The static targets table comes before the probe jobs table, as the
 	// members table's columns do.
@@ -140,7 +141,7 @@ func TestAnEntrysViewListsItsTargets(t *testing.T) {
 		`<span class="seg-static" style="width: `, `static targets of the entry owned`,
 		`<h2><b class="swatch seg-static"></b>Static targets <span class="count">3</span></h2>`,
 		`<table class="targets" id="entry-targets">`, `<td class="moved" data-label="Member"><span class="v"><a href="?member=`,
-		`<a href="v1/status?entry=node">JSON</a>`)
+		`<a href="v1/status?entry=node">JSON</a>`, `<p class="note muted" data-rows-of="entry-targets" role="status" aria-live="polite"></p>`)
 	if r := ask(h, StatusPath+"?entry=gone", ""); r.Code != http.StatusNotFound {
 		t.Errorf("the JSON of an entry the file does not have answered %d", r.Code)
 	}

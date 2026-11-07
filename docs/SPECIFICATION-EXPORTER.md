@@ -8565,6 +8565,16 @@ Recommended behavior:
   of a page a script swaps in, as the status page's fragment, MUST NOT touch
   it. Without JavaScript the picker MUST be hidden and the pages MUST follow
   the browser.
+- Every HTML page of the exporter and the allocator MUST show an outline in
+  the accent's colour on what the keyboard focuses (`:focus-visible`); its
+  text colours (`--fg`, `--muted`, `--accent`, `--bad`, `--good`) MUST read
+  at 4.5:1 or more on `--bg`, `--panel` and `--code` in both themes, and a
+  field's border (`--field`: a search box, a select, a text area) at 3:1 or
+  more on `--bg` and `--panel`; the allocator's bar colours MUST stand out
+  at 3:1 or more from both. A strip of marks MUST be told to a screen reader
+  as its counts by result, in the order each first came, and its latest
+  result, the marks hidden from it (`aria-hidden`); a filter's count of the
+  rows it keeps MUST be a polite live region.
 - The status page and the allocator's pages MUST write each moment as a
   `<time>` whose `datetime` is RFC 3339 in UTC: with its text the moment
   itself, which a page without JavaScript shows as it is, and with
@@ -31070,6 +31080,13 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheStatusPageWritesEachMomentAsATime` (exporter): a target's last scrape, a backoff's end and a last error's moment are each a `<time>` of RFC 3339 in UTC, a strip mark has `data-at` with its moment beginning its title, and the page's script defines `localTimes` and runs it on the content at the start and after a swap. (In headless Chromium in `Europe/Sofia`, the last scrape of today shows `10:52:00` titled `2026-11-07 08:52:00 UTC, 36s ago`, a backoff's end of another day its date with it, and a strip mark is titled `10:52:00 (2026-11-07 08:52:00 UTC) failed`.)
 - `TestTheAllocatorsPagesWriteEachMomentAsATime` (allocator): the instance's start is a `<time>` and a member's last heartbeat a `<time class="ago">` titled with its moment on the status page and a member's view, and the script runs on the content at the start and after a refresh.
 - `TestTheStatusMarksAMemberLateByTheConfiguredInterval` (allocator), `TestTheStatusPageShowsTheReadinessOTLPFailuresMake`, `TestTheStatusPageShowsTheJSONsValuesEscaped`, `TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce`, `TestATargetsRowShowsItsLastScrapes` and the recovered errors' tests (exporter), changed: a late heartbeat is a `<time class="ago bad">` with its note, and the moments they read are `<time>`s.
+
+## 34.290 The pages from the keyboard and a screen reader
+
+- `TestThePagesColoursReadInBothThemes` (pagekit): of the light and the dark colours, `--fg`, `--muted`, `--accent`, `--bad` and `--good` read at 4.5:1 or more on `--bg`, `--panel` and `--code`, `--on-accent` on `--accent` too, and `--field` at 3:1 or more on `--bg` and `--panel`; the style has the `:focus-visible` outline and `.sr-only`, and no search box, select or text area has a `--line` border. (`--line`, 1.37:1 on white, was the fields' border.)
+- `TestTheBarsColoursStandOutInBothThemes` (allocator): the bars' static and probe colours stand out at 3:1 or more from `--bg` and `--panel` in both themes.
+- `TestAStripIsToldToAScreenReaderAsItsCounts` (exporter): `stripText` of no result is empty, of one success `last 1 scrape: 1 success; the latest success`, and of failed, success, failed, skipped `last 4 scrapes, oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped by backoff`; a static target's strip and a recent probe's carry it in an `.sr-only` span, the marks in an `aria-hidden` one.
+- `TestAnEntrysViewListsItsTargets` and `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: a filter's count is `role="status"` `aria-live="polite"`; `TestATargetsRowShowsItsLastScrapes` (exporter), changed: the marks are in their hidden span. (In headless Chromium, axe-core 4.10 finds no violation of WCAG 2.1 AA on the exporter's status page and the allocator's page and views in either theme; Tab reaches the bar's links, the theme and refresh controls, the filter, the seven sortable headings and each row's links in that order, each with a 2px outline.)
 
 ## 42.1 OTLP export
 

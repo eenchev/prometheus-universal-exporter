@@ -329,7 +329,7 @@ p.back { margin: 0 0 4px; font-size: 14px; }
 form.filter { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 0; max-width: 640px; }
 form.filter label { font-size: 14px; font-weight: 600; }
 form.filter .filter-row { display: flex; gap: 8px; }
-form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+form.filter input[type="search"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--field); border-radius: 6px; }
 form.filter button { flex: none; height: 34px; padding: 0 12px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 form.filter .muted { font-size: 13px; }
 form.filter[hidden] { display: none; }

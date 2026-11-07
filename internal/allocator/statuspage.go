@@ -710,7 +710,7 @@ const statusParts = `
 {{- if lt .Shown .Matching}}
 <p class="note"><span class="bad">Only the first {{.Shown}} are listed</span>; {{.Hidden}} more are left out. Filter to narrow the list.</p>
 {{- end}}
-<p class="note muted" data-rows-of="{{.Table}}"></p>
+<p class="note muted" data-rows-of="{{.Table}}" role="status" aria-live="polite"></p>
 <p class="muted" data-none-of="{{.Table}}" hidden>No row below holds what is typed in the filter; Search all looks through every target.</p>
 {{- end}}
 {{- end}}
@@ -891,7 +891,7 @@ const statusContent = `{{define "content"}}
 <input id="jobs-filter" type="search" autocomplete="off" spellcheck="false">
 <span class="muted">Click a column's heading to sort by it, again for the other way.</span>
 </form>
-<p class="note muted" data-rows-of="probe-jobs"></p>
+<p class="note muted" data-rows-of="probe-jobs" role="status" aria-live="polite"></p>
 <div class="scroll">
 <table class="spread" id="probe-jobs">
 <thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th><th class="num" data-sort="num">Weight</th><th class="num" data-sort="num">Members</th><th class="num" data-sort="num">Min</th><th class="num" data-sort="num">Avg</th><th class="num" data-sort="num">Max</th><th class="num" data-sort="num">Imbalance</th><th data-sort="text">Sources</th></tr></thead>

@@ -2522,8 +2522,11 @@ types at build time). Its keys:
 An `ntp` collector sends one SNTP client request (RFC 4330, the packet of
 NTPv4, RFC 5905) to the probe's `target` and hands the server's reply to
 the transforms as a JSON document. It MUST need nothing outside Go's
-standard library, and MUST be in the default build. It has no keys of its
-own; of the common part it takes `allowed_targets` and `denied_targets`,
+standard library, and MUST be in the default build. Its keys are
+`samples`, how many requests a scrape sends each server, from 1 to 8, 1
+when left out, and `sample_interval`, how long apart, at least 1s, 2s when
+left out, anything else refused at load; of the common part it takes
+`allowed_targets` and `denied_targets`,
 as for `http`, the host's name before the request and the address the UDP
 socket is connected to before anything is sent (§ 26.1).
 
@@ -2532,9 +2535,29 @@ socket is connected to before anything is sent (§ 26.1).
   on port 123, as every `host[:port]` target is read. A scheme, path,
   query or user and a port outside 1–65535 MUST be
   refused, a probe's with `400` before anything is sent and a static
-  target's at load. A probe MUST take `timeout` and `param_<name>`
-  parameters, and a static target's request block `timeout`.
-- A scrape MUST send one request, of 48 bytes, version 4, mode 3, whose
+  target's at load. A target MAY name up to 8 servers by commas, each held
+  to those rules; more, an empty one, and one named twice MUST be refused
+  likewise, and the target lists MUST hold each. A probe MUST take
+  `timeout` and `param_<name>` parameters, and a static target's request
+  block `timeout`.
+- A scrape MUST send each server `samples` requests, `sample_interval`
+  apart, each as one request is below, waiting for the reply of each but
+  the last until the next is due, and of the last until the deadline: one
+  unanswered then is unanswered, and one that fails otherwise, or a reply
+  that fails the scrape below, MUST end the server's requests with that
+  failure. The server's answer MUST be the reply of the least delay, with
+  `samples`, `samples_answered` and `jitter_seconds`, the population
+  standard deviation of the answered offsets, in its document; a server
+  that answered none MUST fail with the last request's failure. Each
+  request MUST be one of a debug report and of an exported trace.
+- A target of several servers MUST ask each at once, and its document
+  MUST be of `servers`, each server's document in the target's order, a
+  server that failed with its `host`, `port` and `error` alone;
+  `servers_answered`; `offset_median_seconds` and `offset_spread_seconds`,
+  the greatest offset less the least, of those that answered, left out when
+  none did; and `duration_seconds`. It MUST fail only when no server
+  answered, with the first's failure.
+- A scrape MUST send one request to a server of one sample, of 48 bytes, version 4, mode 3, whose
   only field set besides is the transmit timestamp, which MUST be a random
   number and not the exporter's clock. Nothing MUST be sent again within
   the scrape. The scrape's deadline — the probe's `timeout`, the scrape's
@@ -2577,8 +2600,9 @@ socket is connected to before anything is sent (§ 26.1).
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `QUERY`, `ntp://host:port` and
   the version sent, with the stratum, offset and delay, or the error, as
-  its outcome. The verbose `url` label MUST be `ntp://host:port` and
-  `http_method` MUST be `QUERY`.
+  its outcome. The verbose `url` label MUST be `ntp://host:port`, of several
+  servers each `host:port` by commas after `ntp://`, and `http_method` MUST
+  be `QUERY`.
 
 #### `s3file`
 
@@ -31328,6 +31352,13 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestAnICMPCollectorPingsEveryAddressOfAName` (fetch, icmp): with `all_addresses`, a name resolving to 127.0.0.1, ::1 and 127.0.0.2 of `ip4` pings the two IPv4 addresses, each in `addresses` with its two replies and a request of its own in the trace, `addresses_found` 2, the top of four echoes and four replies with no address; of both families, three addresses, the second of family 6; without it, 127.0.0.1 alone, with no `addresses`. Skipped where the system opens no ICMP datagram socket.
 - `TestICMPTargetsAndFamilies` (fetch, icmp), changed: `icmpAddresses`, the addresses a host may be pinged at.
+
+## 34.299 An ntp collector samples a server, and compares several
+
+- `TestNTPSamplesAndServersAreChecked` (fetch): `samples` and `sample_interval` default to 1 and 2s; 9 samples, -1 and an interval of 500ms are refused; a target of 9 servers, with an empty server, naming one twice in another case, or with a path in one is refused; a target of two servers is labelled with both.
+- `TestAnNTPServerIsSampled` (fetch): of four samples a second apart, the first answered after 60ms, the second not, the third and fourth at once, 5, 7 and 6 seconds ahead, the scrape takes 3 to 5 seconds and answers the offset of an immediate reply, 4 samples, 3 answered, a jitter of about 0.82s; the trace has four requests, the second failed with no reply.
+- `TestAnNTPTargetOfSeveralServers` (fetch): of three servers, 5s ahead, one answering a Kiss-o'-Death `DENY` and one 1s behind, the document has each in order, the second with its error, 2 answered, a median of 2s and a spread of 6s; of servers none of which answers the time, the scrape fails with the first's.
+- `TestSchemaAndExporterAgreeOnNTPKeysWrittenEmpty` (repository), changed: rows of `sample_interval`, `5s` taken and `often` refused by both, and `1s` taken and `500ms` refused by both, the schema as it was having taken it.
 
 ## 42.1 OTLP export
 

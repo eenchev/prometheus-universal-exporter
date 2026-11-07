@@ -74,6 +74,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `ntp` collector sends a server `samples` requests, `sample_interval`
+  apart, and answers the one of the least delay with the jitter of their
+  offsets; a target may name several servers by commas, compared by the
+  median and spread of their offsets
+  ([Several samples](docs/NTP.md#several-samples),
+  [Several servers](docs/NTP.md#several-servers)).
 - An `icmp` collector pings every address of a name with `all_addresses`,
   each in the document's `addresses` and the top of all of them together
   ([Every address](docs/ICMP.md#every-address)).

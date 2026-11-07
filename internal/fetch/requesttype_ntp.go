@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -64,10 +66,39 @@ import (
 //
 // This file imports nothing outside the standard library.
 
+// NTPConfig is an ntp collector's own keys: how many requests a scrape
+// sends each server, samples, from 1 to ntpMaxSamples, and how long apart,
+// sample_interval. The reply of the least delay is the server's answer, as
+// NTP's clock filter takes it, and the spread of the offsets its jitter.
+type NTPConfig struct {
+	Samples        int            `yaml:"samples,omitempty"`
+	SampleInterval model.Duration `yaml:"sample_interval,omitempty"`
+}
+
+// ntpRequest is an ntp collector's own keys.
+func ntpRequest(c *model.Collector) NTPConfig {
+	own, _ := c.Request.Own.(NTPConfig)
+	return own
+}
+
+// The bounds and defaults of the keys, and of a target's servers.
+const (
+	ntpMaxSamples            = 8
+	ntpDefaultSampleInterval = 2 * time.Second
+	// ntpMinSampleInterval is the least time between two requests to a
+	// server, as ntpd's and chrony's least poll, 2^0 seconds, would allow
+	// a client: one that asks faster is answered with a Kiss-o'-Death RATE.
+	ntpMinSampleInterval = time.Second
+	// ntpMaxServers is how many servers a target may name.
+	ntpMaxServers = 8
+)
+
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeNTP,
 		Fields:       []string{"allowed_targets", "denied_targets"},
+		Config:       NTPConfig{},
+		KeyRules:     ntpKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
 		TargetFields: []string{"timeout"},
 		Requester:    ntpRequester{},
@@ -85,9 +116,34 @@ func init() {
 // ntpRequester is the ntp request type's Requester.
 type ntpRequester struct{}
 
-// Validate checks an ntp collector's request: it has no keys of its own, and
+// Validate checks an ntp collector's request and fills in its defaults;
 // those of the common part it does not take are refused before it is asked.
-func (ntpRequester) Validate(*model.Collector) error { return nil }
+func (ntpRequester) Validate(c *model.Collector) error {
+	r := ntpRequest(c)
+	switch {
+	case r.Samples == 0:
+		r.Samples = 1
+	case r.Samples < 0 || r.Samples > ntpMaxSamples:
+		return fmt.Errorf("collector %q request.samples is %d; it is how many requests a scrape sends each server, from 1 to %d", c.Name, r.Samples, ntpMaxSamples)
+	}
+	switch {
+	case r.SampleInterval == 0:
+		r.SampleInterval = model.Duration(ntpDefaultSampleInterval)
+	case time.Duration(r.SampleInterval) < ntpMinSampleInterval:
+		return fmt.Errorf("collector %q request.sample_interval is %s; it is how long apart the requests to a server are sent, at least %s, as a server that limits its clients' rate takes them", c.Name, time.Duration(r.SampleInterval), ntpMinSampleInterval)
+	}
+	c.Request.Own = r
+	return nil
+}
+
+// ntpKeyRules is what the configuration schema says of an ntp collector's
+// own keys.
+func ntpKeyRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"samples":         {"minimum": 0, "maximum": ntpMaxSamples, "description": "ntp: how many requests a scrape sends each server, sample_interval apart, from 1 to 8; 1 when left out. The reply of the least delay is the server's answer, and the spread of the offsets its jitter. See docs/NTP.md#several-samples."},
+		"sample_interval": {"not": SchemaLeastDuration(ntpMinSampleInterval, true), "description": "ntp: how long apart the requests to a server are sent, at least 1s; 2s when left out. A scrape of samples takes about (samples - 1) × sample_interval, within its deadline."},
+	}
+}
 
 // Fetch performs one request of an ntp collector.
 func (ntpRequester) Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
@@ -96,17 +152,22 @@ func (ntpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 
 // CheckTarget checks an ntp collector's target.
 func (ntpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseNTPTarget(target)
+	_, err := parseNTPTargets(target)
 	return err
 }
 
-// Label is the url label of an ntp request.
+// Label is the url label of an ntp request: ntp:// and the server, or
+// each of the servers, by commas.
 func (ntpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseNTPTarget(target)
+	addresses, err := parseNTPTargets(target)
 	if err != nil {
 		return "", err
 	}
-	return ntpURL(address), nil
+	hosts := make([]string, len(addresses))
+	for i, a := range addresses {
+		hosts[i] = a.hostPort
+	}
+	return "ntp://" + strings.Join(hosts, ","), nil
 }
 
 // Method is the http_method label of an ntp request.
@@ -115,7 +176,7 @@ func (ntpRequester) Method(*model.Collector, RequestOverrides) string { return n
 // Display renders an ntp target for logs and labels: as written, since it
 // holds no credentials, when it is one at all.
 func (ntpRequester) Display(target string) string {
-	if _, err := parseNTPTarget(target); err != nil {
+	if _, err := parseNTPTargets(target); err != nil {
 		return "<invalid target>"
 	}
 	return strings.TrimSpace(target)
@@ -166,6 +227,35 @@ type ntpAddress struct {
 
 // ntpURL is the url label of a request to address.
 func ntpURL(address ntpAddress) string { return "ntp://" + address.hostPort }
+
+// parseNTPTargets reads a target of one server, or of several, at most
+// ntpMaxServers, by commas, each as parseNTPTarget reads it and none twice.
+func parseNTPTargets(raw string) ([]ntpAddress, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, ErrMissingTarget
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > ntpMaxServers {
+		return nil, fmt.Errorf("target %q names %d servers; a scrape asks at most %d", raw, len(parts), ntpMaxServers)
+	}
+	out := make([]ntpAddress, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			return nil, fmt.Errorf("target %q has an empty server between its commas; an ntp target is host or host:port, or several of them by commas", raw)
+		}
+		address, err := parseNTPTarget(part)
+		if err != nil {
+			return nil, err
+		}
+		for _, seen := range out {
+			if seen.hostPort == address.hostPort {
+				return nil, fmt.Errorf("target %q names %s twice", raw, address.hostPort)
+			}
+		}
+		out = append(out, address)
+	}
+	return out, nil
+}
 
 // parseNTPTarget reads a target: host, host:port or [v6]:port, port 123
 // when it names none. Nothing else may come with it.
@@ -229,7 +319,33 @@ type ntpDocument struct {
 	ReferenceTimeRFC3339  string  `json:"reference_time_rfc3339"`
 	TransmitTime          float64 `json:"transmit_time"`
 	TransmitTimeRFC3339   string  `json:"transmit_time_rfc3339"`
-	DurationSeconds       float64 `json:"duration_seconds"`
+	// Samples is how many requests were sent, SamplesAnswered how many
+	// were answered, and JitterSeconds the population standard deviation of
+	// their offsets, 0 of one: the rest of the document is of the reply of
+	// the least delay.
+	Samples         int     `json:"samples"`
+	SamplesAnswered int     `json:"samples_answered"`
+	JitterSeconds   float64 `json:"jitter_seconds"`
+	DurationSeconds float64 `json:"duration_seconds"`
+}
+
+// ntpServersDocument is the document of a target of several servers: each
+// one's, in the target's order, a server that did not answer the time with
+// its error alone; how many answered; and of their offsets the median and
+// the spread, the greatest less the least, left out when none answered.
+type ntpServersDocument struct {
+	Servers             []ntpServerResult `json:"servers"`
+	ServersAnswered     int               `json:"servers_answered"`
+	OffsetMedianSeconds *float64          `json:"offset_median_seconds,omitempty"`
+	OffsetSpreadSeconds *float64          `json:"offset_spread_seconds,omitempty"`
+	DurationSeconds     float64           `json:"duration_seconds"`
+}
+
+// ntpServerResult is one server of a target of several: its document, or
+// its host, port and why it answered no time.
+type ntpServerResult struct {
+	ntpDocument
+	Error string `json:"error,omitempty"`
 }
 
 // ntpNow is the wall clock the request's time is read from; a test sets it.
@@ -240,7 +356,7 @@ var ntpNow = time.Now
 // JSON.
 func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
-	address, err := parseNTPTarget(target)
+	addresses, err := parseNTPTargets(target)
 	if err != nil {
 		return nil, err
 	}
@@ -258,24 +374,34 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 	// is connected, as an http request's connections are checked.
 	if policy := policyOf(c); policy != nil {
 		guard := &policyGuard{policy: policy, hosts: map[string]bool{}}
-		if err := guard.check(ctx, &url.URL{Scheme: "ntp", Host: address.hostPort}); err != nil {
-			return nil, err
+		for _, address := range addresses {
+			if err := guard.check(ctx, &url.URL{Scheme: "ntp", Host: address.hostPort}); err != nil {
+				return nil, err
+			}
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
-	traceRequest(ctx, ntpMethod, ntpURL(address), http.Header{"Ntp-Version": {strconv.Itoa(ntpVersion)}}, "", false)
-	doc, err := ntpExchange(ctx, address)
-	if err != nil {
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return nil, err
+	r := ntpRequest(c)
+	var body []byte
+	if len(addresses) == 1 {
+		doc, err := ntpServer(ctx, addresses[0], r)
+		if err != nil {
+			return nil, err
+		}
+		doc.DurationSeconds = time.Since(start).Seconds()
+		if body, err = json.Marshal(doc); err != nil {
+			return nil, err
+		}
+	} else {
+		doc, err := ntpServers(ctx, addresses, r)
+		if err != nil {
+			return nil, err
+		}
+		doc.DurationSeconds = time.Since(start).Seconds()
+		if body, err = json.Marshal(doc); err != nil {
+			return nil, err
+		}
 	}
-	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	traceOutcome(ctx, fmt.Sprintf("stratum %d, offset %gs, delay %gs", doc.Stratum, doc.OffsetSeconds, doc.DelaySeconds))
-	traceFacts(ctx, intFact("ntp.stratum", doc.Stratum), doubleFact("ntp.offset_seconds", doc.OffsetSeconds), doubleFact("ntp.delay_seconds", doc.DelaySeconds))
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
 		NoStatus:   true,
@@ -285,6 +411,113 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 		Collector:  c.Name,
 		Duration:   time.Since(start),
 	}, nil
+}
+
+// ntpServer asks address for the time, samples times, each request a
+// request of the trace: the reply of the least delay is its document, with
+// how many were sent and answered and the jitter of their offsets. A
+// request a later one follows waits for its reply until that one is due,
+// and is unanswered without one; a server that answers it does not keep the
+// time, or a failure of the socket, ends the server's samples with its
+// error, as does one whose every request is unanswered.
+func ntpServer(ctx context.Context, address ntpAddress, r NTPConfig) (ntpDocument, error) {
+	var answered []ntpDocument
+	var last error
+	interval := time.Duration(r.SampleInterval)
+	for i := range r.Samples {
+		begun := time.Now()
+		at := traceRequestAt(ctx, ntpMethod, ntpURL(address), http.Header{"Ntp-Version": {strconv.Itoa(ntpVersion)}}, "", false)
+		sampleCtx, cancel := ctx, context.CancelFunc(func() {})
+		if i < r.Samples-1 {
+			sampleCtx, cancel = context.WithDeadline(ctx, begun.Add(interval))
+		}
+		doc, err := ntpExchange(sampleCtx, address)
+		cancel()
+		if err != nil {
+			at.outcome("error: "+err.Error(), true)
+			last = err
+			if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+		} else {
+			at.outcome(fmt.Sprintf("stratum %d, offset %gs, delay %gs", doc.Stratum, doc.OffsetSeconds, doc.DelaySeconds), false)
+			at.facts(intFact("ntp.stratum", doc.Stratum), doubleFact("ntp.offset_seconds", doc.OffsetSeconds), doubleFact("ntp.delay_seconds", doc.DelaySeconds))
+			answered = append(answered, doc)
+		}
+		if i == r.Samples-1 {
+			break
+		}
+		// The next request is sent sample_interval after this one.
+		timer := time.NewTimer(time.Until(begun.Add(interval)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if len(answered) == 0 {
+		return ntpDocument{}, last
+	}
+	best := answered[0]
+	var sum float64
+	for _, d := range answered {
+		if d.DelaySeconds < best.DelaySeconds {
+			best = d
+		}
+		sum += d.OffsetSeconds
+	}
+	mean := sum / float64(len(answered))
+	var squares float64
+	for _, d := range answered {
+		squares += (d.OffsetSeconds - mean) * (d.OffsetSeconds - mean)
+	}
+	best.Samples, best.SamplesAnswered, best.JitterSeconds = r.Samples, len(answered), math.Sqrt(squares/float64(len(answered)))
+	return best, nil
+}
+
+// ntpServers asks each of addresses for the time at once, as ntpServer
+// does: the document has each, a server that answered none with its error,
+// and of the offsets of those that answered their median and spread. When
+// none answered, the scrape fails with the first's error.
+func ntpServers(ctx context.Context, addresses []ntpAddress, r NTPConfig) (ntpServersDocument, error) {
+	results := make([]ntpServerResult, len(addresses))
+	errs := make([]error, len(addresses))
+	var wg sync.WaitGroup
+	for i, address := range addresses {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			doc, err := ntpServer(ctx, address, r)
+			if err != nil {
+				doc = ntpDocument{Host: address.host, Port: address.port}
+				results[i].Error = err.Error()
+			}
+			results[i].ntpDocument, errs[i] = doc, err
+		}()
+	}
+	wg.Wait()
+	doc := ntpServersDocument{Servers: results}
+	var offsets []float64
+	for i, result := range results {
+		if errs[i] == nil {
+			offsets = append(offsets, result.OffsetSeconds)
+		}
+	}
+	doc.ServersAnswered = len(offsets)
+	if len(offsets) == 0 {
+		return doc, errs[0]
+	}
+	slices.Sort(offsets)
+	median := offsets[len(offsets)/2]
+	if len(offsets)%2 == 0 {
+		median = (offsets[len(offsets)/2-1] + offsets[len(offsets)/2]) / 2
+	}
+	spread := offsets[len(offsets)-1] - offsets[0]
+	doc.OffsetMedianSeconds, doc.OffsetSpreadSeconds = &median, &spread
+	return doc, nil
 }
 
 // ntpExchange sends the request to address and reads datagrams until the

@@ -4034,6 +4034,29 @@
                 "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
               },
+              "sample_interval": {
+                "description": "ntp: how long apart the requests to a server are sent, at least 1s; 2s when left out. A scrape of samples takes about (samples - 1) × sample_interval, within its deadline.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "samples": {
+                "description": "ntp: how many requests a scrape sends each server, sample_interval apart, from 1 to 8; 1 when left out. The reply of the least delay is the server's answer, and the spread of the offsets its jitter. See docs/NTP.md#several-samples.",
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              },
               "searches": {
                 "description": "ldap, required: the searches whose results the document holds under .searches.\u003cname\u003e, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches.",
                 "items": {

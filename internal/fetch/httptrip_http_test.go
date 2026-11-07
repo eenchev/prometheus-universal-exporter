@@ -266,3 +266,32 @@ func TestATracedTripRecordsEachRequestsPhases(t *testing.T) {
 		t.Errorf("an untraced trip of a collector that reads no $timings is timed: %v %+v", err, untraced.Trip)
 	}
 }
+
+// A redirect the trip refuses to follow, recorded but never sent, has no
+// phases: none of the request it was a redirect of, whose phases the trip
+// still holds when it fails.
+func TestARefusedRedirectHasNoPhases(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, server.URL+"/again", http.StatusFound)
+	}))
+	defer server.Close()
+	c := httpCollector(t, func(c *model.Collector) { c.Request.FollowRedirects = true })
+	c.TimingsUnread = true
+	ctx, trace := WithSpanTrace(context.Background())
+	if _, err := FetchCollector(ctx, server.URL, c, RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") {
+		t.Fatalf("the trip ended with %v, want the redirects stopped", err)
+	}
+	requests := trace.Requests()
+	if len(requests) < 2 {
+		t.Fatalf("the requests are %+v", requests)
+	}
+	for i, r := range requests[:len(requests)-1] {
+		if len(r.Phases) == 0 || r.Phases[len(r.Phases)-1].Name != "first_byte" {
+			t.Errorf("request %d, which was answered, has the phases %+v", i, r.Phases)
+		}
+	}
+	if refused := requests[len(requests)-1]; refused.Phases != nil {
+		t.Errorf("the refused redirect, never sent, has the phases %+v", refused.Phases)
+	}
+}

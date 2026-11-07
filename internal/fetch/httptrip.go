@@ -256,6 +256,10 @@ type tripTrace struct {
 	// phases (tracePhases) once they are known: at the answer's first
 	// byte, or when the request failed before it (recordPhases).
 	ctx context.Context
+	// given says the phases held are given already, to the request that
+	// was answered: a redirect the trip then refused, recorded but never
+	// sent, asked for no connection (GetConn), and has none of them.
+	given bool
 }
 
 func newTripTrace(ctx context.Context, start time.Time) *tripTrace {
@@ -280,13 +284,18 @@ func (t *tripTrace) phasesLocked() []TracedPhase {
 
 // recordPhases gives the request being sent its phases timed so far, as
 // one that failed before its first byte has them: a lookup or a
-// connection that went through before what failed.
+// connection that went through before what failed. The phases of a
+// request answered (given) are its own, not those of a redirect of it the
+// trip refused.
 func (t *tripTrace) recordPhases() {
 	if t == nil {
 		return
 	}
 	t.mu.Lock()
 	phases := t.phasesLocked()
+	if t.given {
+		phases = nil
+	}
 	t.mu.Unlock()
 	tracePhases(t.ctx, phases)
 }
@@ -305,7 +314,7 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.start, t.dnsStart, t.dialStart, t.handshakeStart = time.Now(), time.Time{}, time.Time{}, time.Time{}
-			t.dns, t.connect, t.tls, t.firstByte, t.connected, t.remote = nil, nil, nil, nil, false, nil
+			t.dns, t.connect, t.tls, t.firstByte, t.connected, t.remote, t.given = nil, nil, nil, nil, false, nil, false
 		},
 		DNSStart: func(httptrace.DNSStartInfo) {
 			t.mu.Lock()
@@ -369,6 +378,7 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 				t.firstByte = since(t.start)
 			}
 			phases := t.phasesLocked()
+			t.given = true
 			t.mu.Unlock()
 			// The request's own, before a redirect's GetConn starts
 			// another's.

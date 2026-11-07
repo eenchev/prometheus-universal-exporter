@@ -198,9 +198,25 @@ func (t *RequestTrace) Requests() []TracedRequest {
 
 // traceRequest records a request about to be sent.
 func traceRequest(ctx context.Context, method, url string, header http.Header, host string, redirect bool) {
+	traceRequestAt(ctx, method, url, header, host, redirect)
+}
+
+// tracedAt is a request recorded by traceRequestAt, at which what is known
+// of it later is recorded, rather than at the last request recorded, as
+// the trace* functions record it: requests sent at once, as a kubernetes
+// collector's listings of several namespaces are, each end at their own.
+// The zero tracedAt is of a trip without a trace, and records nothing.
+type tracedAt struct {
+	t *RequestTrace
+	i int
+}
+
+// traceRequestAt records a request about to be sent, as traceRequest does,
+// and returns where it is recorded.
+func traceRequestAt(ctx context.Context, method, url string, header http.Header, host string, redirect bool) tracedAt {
 	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
 	if !ok {
-		return
+		return tracedAt{}
 	}
 	if !t.spans {
 		header = header.Clone()
@@ -219,6 +235,29 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	defer t.mu.Unlock()
 	page, _ := ctx.Value(pageKey{}).(int)
 	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()})
+	return tracedAt{t: t, i: len(t.requests) - 1}
+}
+
+// edit edits the request a is, under the trace's lock.
+func (a tracedAt) edit(edit func(r *TracedRequest)) {
+	if a.t == nil {
+		return
+	}
+	a.t.mu.Lock()
+	defer a.t.mu.Unlock()
+	edit(&a.t.requests[a.i])
+}
+
+// phases records the request's phases, unless it has them already
+// (tracePhases).
+func (a tracedAt) phases(phases []TracedPhase) {
+	if len(phases) > 0 {
+		a.edit(func(r *TracedRequest) {
+			if r.Phases == nil {
+				r.Phases = phases
+			}
+		})
+	}
 }
 
 // traceWithheld records the names of the headers the last request recorded,

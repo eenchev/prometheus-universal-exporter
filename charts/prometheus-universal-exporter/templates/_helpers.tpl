@@ -1051,9 +1051,11 @@ true
 {{- /* What kubernetesAccess is held to, beside its schema, so that values
        rendered without the schema fail the same way: rules that grant
        something, each naming API groups and resources; never a wildcard,
-       nor the core group's secrets, which no kubernetes collector may list
-       (the exporter refuses one at load), so the account cannot read them
-       either; and namespaces or clusterWide, not both. */ -}}
+       nor the core group's secrets, whose list would let the account read
+       their values, which a kubernetes collector, of their metadata alone,
+       never asks for (the exporter refuses one of them whole at load);
+       namespaces or clusterWide, not both; and kubelet stats, proxy or
+       empty, and with clusterWide. */ -}}
 {{- define "prometheus-universal-exporter.validateKubernetesAccess" -}}
 {{- $access := .Values.kubernetesAccess -}}
 {{- if not $access.rules -}}
@@ -1061,6 +1063,13 @@ true
 {{- end -}}
 {{- if and $access.clusterWide $access.namespaces -}}
 {{- fail "kubernetesAccess sets both clusterWide and namespaces; clusterWide grants every namespace's objects, so list namespaces or set clusterWide, not both" -}}
+{{- end -}}
+{{- $kubelet := $access.kubelet | default "" -}}
+{{- if not (has $kubelet (list "" "stats" "proxy")) -}}
+{{- fail (printf "kubernetesAccess.kubelet is %q; it is stats, for get on nodes/stats, proxy, for get on nodes/proxy with kubelet_via_api_server, or empty" $kubelet) -}}
+{{- end -}}
+{{- if and $kubelet (not $access.clusterWide) -}}
+{{- fail "kubernetesAccess.kubelet needs kubernetesAccess.clusterWide: nodes, and their kubelets, are of no namespace, so only a ClusterRole grants them" -}}
 {{- end -}}
 {{- range $i, $rule := $access.rules -}}
 {{- if or (not $rule.apiGroups) (not $rule.resources) -}}
@@ -1072,7 +1081,7 @@ true
 {{- end -}}
 {{- end -}}
 {{- if and (has "" $rule.apiGroups) (has "secrets" $rule.resources) -}}
-{{- fail (printf "kubernetesAccess.rules[%d] grants secrets of the core group, which no kubernetes collector may list; take secrets out" $i) -}}
+{{- fail (printf "kubernetesAccess.rules[%d] grants secrets of the core group, whose list lets the account read their values, which a kubernetes collector, of their metadata alone, never asks for; take secrets out, and grant a collector of metadata_only its list with a Role of your own" $i) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

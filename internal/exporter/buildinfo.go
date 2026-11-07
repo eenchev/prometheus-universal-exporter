@@ -59,6 +59,10 @@ func computeBuildVersion() buildInformation {
 	return out
 }
 
+// UserAgent is the User-Agent of program's requests that name it: its name
+// and its version, as prometheus-universal-exporter/2.1.0.
+func UserAgent(program string) string { return program + "/" + BuildVersion().Version }
+
 // VersionString is what --version prints: the sql drivers only in a build
 // with the sql request type, which a build without it has none of.
 func VersionString() string {

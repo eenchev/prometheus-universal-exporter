@@ -52,8 +52,8 @@ func names(t *testing.T, l *Listing) ([]string, error) {
 }
 
 // A listing asks for pages of the page size, follows each continue token
-// to the last page, sends the token, both selectors and an Accept of JSON,
-// and tells of each request and how it was answered.
+// to the last page, sends the token, both selectors, an Accept of JSON and
+// the User-Agent, and tells of each request and how it was answered.
 func TestAListingFollowsEveryPage(t *testing.T) {
 	s := kubetest.New(t)
 	s.Serve("/api/v1/namespaces/shop/pods", kubetest.List{Kind: "PodList", APIVersion: "v1", Items: items(7)})
@@ -61,8 +61,10 @@ func TestAListingFollowsEveryPage(t *testing.T) {
 	l := &Listing{
 		Client: s.Client(), Server: s.URL, Path: "/api/v1/namespaces/shop/pods", Token: "token-1", What: "pods",
 		LabelSelector: "app=shop", FieldSelector: "status.phase=Running", PageSize: 3, MaxPageBytes: 1 << 20,
-		Sent:     func(req *http.Request) { sent = append(sent, req.URL.Query().Get("continue")) },
-		Answered: func(outcome string) { answered = append(answered, outcome) },
+		Prepare: func(req *http.Request) (*http.Request, Sent) {
+			sent = append(sent, req.URL.Query().Get("continue"))
+			return req, Sent{Answered: func(outcome string) { answered = append(answered, outcome) }}
+		},
 	}
 	got, err := names(t, l)
 	if err != nil {
@@ -76,7 +78,7 @@ func TestAListingFollowsEveryPage(t *testing.T) {
 		t.Fatalf("requests %+v, sent %v, answered %v", requests, sent, answered)
 	}
 	for _, r := range requests {
-		if r.Query.Get("limit") != "3" || r.Query.Get("labelSelector") != "app=shop" || r.Query.Get("fieldSelector") != "status.phase=Running" || r.Authorization != "Bearer token-1" {
+		if r.Query.Get("limit") != "3" || r.Query.Get("labelSelector") != "app=shop" || r.Query.Get("fieldSelector") != "status.phase=Running" || r.Authorization != "Bearer token-1" || r.Accept != "application/json" || r.UserAgent != UserAgent {
 			t.Errorf("request %+v", r)
 		}
 	}
@@ -177,8 +179,10 @@ func TestAPageOverTheBoundIsAskedForAgainSmaller(t *testing.T) {
 	var smaller []int
 	l := &Listing{
 		Client: s.Client(), Server: s.URL, Path: "/api/v1/configmaps", Token: "token-1", What: "configmaps", MaxPageBytes: 30000,
-		Answered: func(outcome string) { answered = append(answered, outcome) },
-		Smaller:  func(size int) { smaller = append(smaller, size) },
+		Prepare: func(req *http.Request) (*http.Request, Sent) {
+			return req, Sent{Answered: func(outcome string) { answered = append(answered, outcome) }}
+		},
+		Smaller: func(size int) { smaller = append(smaller, size) },
 	}
 	got, err := names(t, l)
 	if err != nil {
@@ -260,5 +264,136 @@ func TestPagesAskedForAgainAreBoundedByTheListingsDeadline(t *testing.T) {
 	}
 	if got := asked(s); len(got) != 3 || got[2] != "25@" {
 		t.Errorf("asked %v, want pages of 100, 50 and 25", got)
+	}
+}
+
+// A listing of metadata alone is asked for with the Accept of a
+// PartialObjectMetadataList, and the API server answers that list, each
+// object's metadata without the rest of it.
+func TestAListingOfMetadataAloneAsksForIt(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/namespaces/shop/configmaps", kubetest.List{Kind: "ConfigMapList", APIVersion: "v1", Items: []map[string]any{{"metadata": map[string]any{"name": "a"}, "data": map[string]any{"key": "value"}}}})
+	var body string
+	l := &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/namespaces/shop/configmaps", Token: "token-1", What: "configmaps", Accept: AcceptMetadataList, MaxPageBytes: 1 << 20}
+	if err := l.List(context.Background(), func(raw []byte) (string, error) { body = string(raw); return "", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"kind":"PartialObjectMetadataList"`) || strings.Contains(body, "value") {
+		t.Errorf("the page is %s", body)
+	}
+	if got := s.Requests()[0].Accept; got != AcceptMetadataList {
+		t.Errorf("asked with Accept %q", got)
+	}
+}
+
+// A page Retry says to ask for again is asked for again after the wait it
+// says, told to Prepare's Waiting, with the count of the times before; one
+// it says not to is the StatusError of the answer, with that count.
+func TestAPageIsAskedForAgainAsRetrySays(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/pods", kubetest.List{Kind: "PodList", APIVersion: "v1", Items: items(3)})
+	s.Throttle("/api/v1/pods", 2, "0")
+	var retried []int
+	var waits, answered []string
+	l := &Listing{
+		Client: s.Client(), Server: s.URL, Path: "/api/v1/pods", Token: "token-1", What: "pods", MaxPageBytes: 1 << 20,
+		Prepare: func(req *http.Request) (*http.Request, Sent) {
+			return req, Sent{
+				Answered: func(outcome string) { answered = append(answered, outcome) },
+				Waiting:  func(wait time.Duration, why string) { waits = append(waits, fmt.Sprint(wait, " ", why)) },
+			}
+		},
+		Retry: func(_ context.Context, answer *StatusError, header http.Header, n int) (time.Duration, bool) {
+			retried = append(retried, n)
+			return time.Millisecond, answer.Code == http.StatusTooManyRequests && header.Get("Retry-After") == "0"
+		},
+	}
+	got, err := names(t, l)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("listed %v: %v", got, err)
+	}
+	if !slices.Equal(retried, []int{0, 1}) || !slices.Equal(waits, []string{"1ms 429 Too Many Requests", "1ms 429 Too Many Requests"}) || !slices.Equal(answered, []string{"429 Too Many Requests", "429 Too Many Requests", "200 OK"}) {
+		t.Errorf("retried %v, waited %q, answered %q", retried, waits, answered)
+	}
+
+	s.Throttle("/api/v1/pods", 5, "")
+	l.Retry = func(_ context.Context, _ *StatusError, _ http.Header, n int) (time.Duration, bool) {
+		return time.Millisecond, n < 2
+	}
+	_, err = names(t, l)
+	var status *StatusError
+	if !errors.As(err, &status) || status.Code != http.StatusTooManyRequests || status.Retried != 2 {
+		t.Errorf("a page throttled past Retry: %v", err)
+	}
+
+	// A wait the listing's context ends first fails the listing with the
+	// answer and the context's error.
+	s.Throttle("/api/v1/pods", 1, "")
+	l.Retry = func(context.Context, *StatusError, http.Header, int) (time.Duration, bool) { return time.Hour, true }
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = l.List(ctx, func([]byte) (string, error) { return "", nil })
+	if !errors.As(err, &status) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a wait past the deadline: %v", err)
+	}
+}
+
+// A listing whose continue token expired goes on with the token of the
+// 410's Status, the objects listed once each; without one it starts over,
+// once, Restart told, and a second expiry fails it; without ResumeExpired
+// the 410 fails it.
+func TestAnExpiredListingGoesOn(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/pods", kubetest.List{Kind: "PodList", APIVersion: "v1", Items: items(5)})
+	restarts := 0
+	l := &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/pods", Token: "token-1", What: "pods", PageSize: 2, MaxPageBytes: 1 << 20, ResumeExpired: true, Restart: func() { restarts++ }}
+
+	s.Expire("/api/v1/pods", true)
+	got, err := names(t, l)
+	if err != nil || !slices.Equal(got, []string{"obj-0", "obj-1", "obj-2", "obj-3", "obj-4"}) || restarts != 0 {
+		t.Errorf("an inconsistent continue: listed %v, %v, restarted %d times", got, err, restarts)
+	}
+
+	s.Expire("/api/v1/pods", false)
+	got, err = names(t, l)
+	// The test's page function keeps what it was handed: Restart is the
+	// caller's to put away what came before.
+	if err != nil || restarts != 1 || !slices.Equal(got, []string{"obj-0", "obj-1", "obj-0", "obj-1", "obj-2", "obj-3", "obj-4"}) {
+		t.Errorf("no continue: listed %v, %v, restarted %d times", got, err, restarts)
+	}
+
+	var status *StatusError
+	twice := &Listing{Client: s.Client(), Server: s.URL, Path: "/api/v1/pods", Token: "token-1", What: "pods", PageSize: 2, MaxPageBytes: 1 << 20, ResumeExpired: true,
+		Restart: func() { s.Expire("/api/v1/pods", false) }}
+	s.Expire("/api/v1/pods", false)
+	if _, err := names(t, twice); !errors.As(err, &status) || status.Code != http.StatusGone {
+		t.Errorf("expired after starting over: %v", err)
+	}
+
+	l.ResumeExpired = false
+	s.Expire("/api/v1/pods", true)
+	if _, err := names(t, l); !errors.As(err, &status) || status.Code != http.StatusGone {
+		t.Errorf("without ResumeExpired: %v", err)
+	}
+}
+
+// A Get is answered its body; one over its bound is ErrTooLarge, and one
+// other than 200 OK a StatusError.
+func TestAGetIsAnsweredItsBody(t *testing.T) {
+	s := kubetest.New(t)
+	s.Answer("/stats/summary", `{"node":{"nodeName":"a"}}`)
+	g := Get{Client: s.Client(), Address: s.URL + "/stats/summary", Token: "token-1", What: "kubelet of node a", MaxBytes: 1 << 10}
+	body, err := g.Do(context.Background())
+	if err != nil || string(body) != `{"node":{"nodeName":"a"}}` || s.Requests()[0].UserAgent != UserAgent {
+		t.Errorf("answered %s, %v", body, err)
+	}
+	g.MaxBytes = 10
+	if _, err := g.Do(context.Background()); !errors.Is(err, ErrTooLarge) || err.Error() != "the kubelet of node a answered more than 10 bytes" {
+		t.Errorf("over the bound: %v", err)
+	}
+	g.Address = s.URL + "/nothing"
+	var status *StatusError
+	if _, err := g.Do(context.Background()); !errors.As(err, &status) || status.Code != http.StatusNotFound || !strings.HasPrefix(err.Error(), "the kubelet of node a at "+g.Address+" answered 404 Not Found: ") {
+		t.Errorf("a path not there: %v", err)
 	}
 }

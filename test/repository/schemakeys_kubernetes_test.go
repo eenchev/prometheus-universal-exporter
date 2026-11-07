@@ -6,7 +6,8 @@ import "testing"
 
 // kubernetesCollector is a configuration of one kubernetes collector, with
 // a comment where a row writes a key of its request; kubernetesNamed is one
-// that names its resource already.
+// that names its resource already, and kubernetesNodes one of the nodes
+// across the cluster, which a kubelet collector lists.
 const (
 	kubernetesCollector = `collectors:
   - name: demo
@@ -31,6 +32,19 @@ const (
       - name: v
         expression: .count
 `
+	kubernetesNodes = `collectors:
+  - name: demo
+    request:
+      type: kubernetes
+      resource: nodes
+      all_namespaces: true
+      # request
+    transform:
+      type: jq
+    metrics:
+      - name: v
+        expression: .count
+`
 )
 
 // kubernetesSchemaKeys are the keys of a kubernetes collector that a
@@ -39,7 +53,7 @@ const (
 // version and each namespace, a DNS label; the selectors, not blanks alone;
 // api_server, an https URL beside a credential; and its tls block's
 // insecure_skip_verify, refused true beside api_server, the token being
-// sent to whoever answers. "" is each key left out, as it is to the
+// sent to whoever answers; and kubelet, stats/summary alone. "" is each key left out, as it is to the
 // exporter: the resource is then missing.
 func kubernetesSchemaKeys() []schemaKey {
 	request := "      # request\n"
@@ -54,6 +68,7 @@ func kubernetesSchemaKeys() []schemaKey {
 		{key: "collectors[].request.label_selector", document: kubernetesNamed, at: request, setting: "      label_selector: %s\n", valid: "app=shop", invalid: `" "`, absent: true, empty: true},
 		{key: "collectors[].request.field_selector", document: kubernetesNamed, at: request, setting: "      field_selector: %s\n", valid: "status.phase=Running", invalid: `" "`, absent: true, empty: true},
 		{key: "collectors[].request.api_server", document: kubernetesNamed, at: request, setting: "      api_server: %s\n      bearer_token_file: /var/run/token\n      namespaces: [shop]\n", valid: "https://k8s.example:6443/proxy", invalid: "http://k8s.example:6443", absent: true},
+		{key: "collectors[].request.kubelet", document: kubernetesNodes, at: request, setting: "      kubelet: %s\n", valid: "stats/summary", invalid: "metrics/cadvisor", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.tls.insecure_skip_verify", of: "a kubernetes collector's", document: kubernetesNamed, at: request, setting: server + "      tls:\n        insecure_skip_verify: %s\n", valid: "false", invalid: "true", absent: true, invalidWas: taken},
 	}
 }

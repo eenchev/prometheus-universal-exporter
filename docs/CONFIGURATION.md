@@ -2176,7 +2176,8 @@ refused as `time_zone` without `time_format`. The
 
 Targets often write a value for people rather than as a number: Redis's
 `used_memory_human` is `1.00M`, an API reports an uptime as `1h2m` and a
-load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`. Four
+load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`, a
+Kubernetes object asks for `250m` of CPU and `2Gi` of memory. Five
 helpers read those forms, so a rule need not take them apart with a regular
 expression of its own. In every jq and yq expression they are functions of
 their input:
@@ -2190,6 +2191,8 @@ their input:
   expression: .backup.finished_at | parse_time              # "2026-10-03T09:00:00Z" -> 1791018000
 - name: app_cpu_ratio
   expression: .cpu | parse_percent                          # "55.12%" -> 0.5512
+- name: kube_pod_container_memory_request_bytes
+  expression: .resources.requests.memory | parse_quantity   # "2Gi" -> 2147483648
 ```
 
 and a [Python](PYTHON.md) script or pre-script has them as functions of the
@@ -2203,13 +2206,15 @@ test vectors, `testdata/values/helpers.json`.
 | `parse_duration` | A duration as Go writes one, as a clock, or in ISO 8601 | Seconds | `1h2m3.5s` → 3723.5; `500ms` → 0.5; `2d4h` → 187200; `01:02:03` → 3723; `1-02:03:04` → 93784; `PT1H2M3S` → 3723; `P1DT2H` → 93600 |
 | `parse_time` | A date and time with its zone: RFC 3339, or an HTTP date | Unix seconds | `2026-10-03T09:00:00Z`, `2026-10-03T12:00:00.25+03:00` → 1791018000, 1791018000.25; `Sat, 03 Oct 2026 09:00:00 GMT` → 1791018000 |
 | `parse_percent` | A number followed by `%` | A ratio | `55.12%` and `55.12 %` → 0.5512; `100%` → 1; `-3.5%` → -0.035 |
+| `parse_quantity` | A [Kubernetes quantity](https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/quantity/): a number, then a suffix or none | Its base unit: cores, bytes, a count | `250m` → 0.25; `2Gi` → 2147483648; `500M` → 500000000; `1e3` → 1000; `-100m` → -0.1 |
 
 What each reads, exactly:
 
 - **A number** is digits, with or without a fraction after a dot (`3`, `3.5`,
   `.5`, `5.`), and at most 100 digits. It has no sign, except
-  where `parse_duration` and `parse_percent` take one below, no exponent
-  (`1e3`), no thousands separator and no decimal comma. Blanks around the whole text — spaces,
+  where `parse_duration`, `parse_percent` and `parse_quantity` take one
+  below, no exponent (`1e3`) but as `parse_quantity`'s suffix, no thousands
+  separator and no decimal comma. Blanks around the whole text — spaces,
   tabs and line ends — are dropped, as a rule drops them around a value.
 - **`parse_bytes`**: no unit and `B` are bytes; `KiB`, `MiB`, `GiB`, `TiB`,
   `PiB` and `EiB` are powers of 1024 (IEC); `kB`, `MB`, `GB`, `TB`, `PB` and
@@ -2265,14 +2270,24 @@ What each reads, exactly:
   `55.12%` is `0.5512`, beside the other ratios of a target, and a query
   needs no division by 100. Multiply by 100 with the rule's `scale` to keep
   the percentage.
+- **`parse_quantity`**: a number with a sign or none, then, with no blank
+  before it, a suffix written in its case, as Kubernetes writes CPU,
+  memory, storage and counts: `Ki`, `Mi`, `Gi`, `Ti`, `Pi` and `Ei` are
+  powers of 1024; `n`, `u`, `m`, `k`, `M`, `G`, `T`, `P` and `E` are
+  powers of 1000, from a billionth to 10^18, so `m` is a thousandth and `M`
+  a million; and `e3` or `E-3`, `e` or `E` with a sign or none and one or
+  two digits, is a power of ten. It gives the quantity in its base unit,
+  `250m` of CPU 0.25 cores and `2Gi` of memory 2147483648 bytes. `K`, a
+  blank before the suffix, and anything after it fail.
 
 Each number is read exactly and rounded to a float once: `1.1GB` is
 1100000000 and `0.1s0.2s` 0.3, not 1100000000.0000002 and
 0.30000000000000004, as multiplying and adding floats on the way would give.
 
-Each reads text. `parse_bytes` and `parse_duration` also take a number, a
-JSON or YAML number in jq and an `int` or a `float` in Python, as being
-bytes or seconds already, and give it back unchanged, since an API that
+Each reads text. `parse_bytes`, `parse_duration` and `parse_quantity` also
+take a number, a JSON or YAML number in jq and an `int` or a `float` in
+Python, as being bytes, seconds or a quantity already, and give it back
+unchanged, since an API that
 writes `"1.5K"` for one value may write `1536` for another. Anything else —
 `null` (`None`), a boolean, an object, an array, and a number given to
 `parse_time` or `parse_percent` — fails, saying what the helper reads:
@@ -2295,6 +2310,7 @@ parse_bytes cannot read "12 KB/s" as a size: write a number, then optionally bla
 parse_duration cannot read "P1M" as a duration: years and months have no fixed length in seconds
 parse_time cannot read "2026-10-03 09:00:00" as a time: it names no zone or offset, so it is no single moment; add Z or an offset
 parse_percent cannot read "55.12" as a percentage: write a number followed by %, such as 55.12%
+parse_quantity cannot read "1K" as a quantity: write a number and a Kubernetes suffix or none: Ki to Ei, n, u, m, k, M to E, or an exponent such as e3
 ```
 
 The helpers are gojq functions the exporter adds, named so that none hides

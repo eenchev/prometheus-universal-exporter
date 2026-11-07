@@ -1581,18 +1581,29 @@
                   "allOf": [
                     {
                       "if": {
-                        "anyOf": [
+                        "allOf": [
                           {
-                            "not": {
-                              "required": [
-                                "group"
-                              ]
-                            }
+                            "anyOf": [
+                              {
+                                "not": {
+                                  "required": [
+                                    "group"
+                                  ]
+                                }
+                              },
+                              {
+                                "properties": {
+                                  "group": {
+                                    "const": ""
+                                  }
+                                }
+                              }
+                            ]
                           },
                           {
                             "properties": {
-                              "group": {
-                                "const": ""
+                              "resource": {
+                                "const": "secrets"
                               }
                             }
                           }
@@ -1600,12 +1611,112 @@
                       },
                       "then": {
                         "properties": {
-                          "resource": {
+                          "metadata_only": {
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "metadata_only"
+                        ]
+                      }
+                    },
+                    {
+                      "else": {
+                        "not": {
+                          "properties": {
+                            "kubelet_ca_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "kubelet_ca_file"
+                          ]
+                        },
+                        "properties": {
+                          "kubelet_via_api_server": {
                             "not": {
-                              "const": "secrets"
+                              "const": true
                             }
                           }
                         }
+                      },
+                      "if": {
+                        "properties": {
+                          "kubelet": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "kubelet"
+                        ]
+                      },
+                      "then": {
+                        "allOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "not": {
+                                  "required": [
+                                    "group"
+                                  ]
+                                }
+                              },
+                              {
+                                "properties": {
+                                  "group": {
+                                    "const": ""
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ],
+                        "not": {
+                          "allOf": [
+                            {
+                              "properties": {
+                                "kubelet_via_api_server": {
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "kubelet_via_api_server"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "kubelet_ca_file": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "kubelet_ca_file"
+                              ]
+                            }
+                          ]
+                        },
+                        "properties": {
+                          "all_namespaces": {
+                            "const": true
+                          },
+                          "metadata_only": {
+                            "not": {
+                              "const": true
+                            }
+                          },
+                          "resource": {
+                            "const": "nodes"
+                          }
+                        },
+                        "required": [
+                          "all_namespaces"
+                        ]
                       }
                     },
                     {
@@ -2618,6 +2729,22 @@
                   "boolean"
                 ]
               },
+              "kubelet": {
+                "description": "kubernetes: with resource nodes, all_namespaces and the core group, ask each node's kubelet for its Summary API, stats/summary, what each pod, container and volume uses of CPU, memory and file systems, ephemeral storage among them; the document is the summaries, and the nodes whose kubelet answered none. Needs get on nodes/stats (nodes/proxy with kubelet_via_api_server). See docs/KUBERNETES.md#kubelet-statistics.",
+                "enum": [
+                  "",
+                  "stats/summary"
+                ],
+                "type": "string"
+              },
+              "kubelet_ca_file": {
+                "description": "kubernetes, with kubelet: the CA the kubelets' serving certificates are verified against when each is asked directly, read at every scrape; the CA the API server is verified against when left out, the cluster's in its own cluster.",
+                "type": "string"
+              },
+              "kubelet_via_api_server": {
+                "description": "kubernetes, with kubelet: ask the kubelets through the API server's proxy of each node, for a cluster whose kubelets' certificates no CA the exporter has signs; needs get on nodes/proxy, which lets its holder do all a kubelet does. Not with kubelet_ca_file. Defaults to false.",
+                "type": "boolean"
+              },
               "label_selector": {
                 "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out.",
                 "not": {
@@ -3307,6 +3434,10 @@
                   "pattern": "^[0-9a-z_.-]+$"
                 },
                 "type": "object"
+              },
+              "metadata_only": {
+                "description": "kubernetes: list the objects' metadata alone, their names, namespaces, labels, annotations and times, as a PartialObjectMetadataList, without kubectl's last-applied-configuration annotation: smaller pages, and the one way to list the core group's secrets. Not with kubelet. Defaults to false. See docs/KUBERNETES.md#metadata-alone.",
+                "type": "boolean"
               },
               "method": {
                 "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET.",

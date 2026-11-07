@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 )
 
 // version and revision are set at build time as the exporter's are
@@ -146,6 +147,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stdout, "pue-allocator version %s (revision %s, %s, request types %s)\n", b.Version, b.Revision, b.GoVersion, strings.Join(b.RequestTypes, ","))
 		return 0
 	}
+	// Its listings of EndpointSlices name the allocator and its version
+	// (kubeapi).
+	kubeapi.UserAgent = exporter.UserAgent("pue-allocator")
 	if *printStaticTargetsSchema || *printProbeTargetsSchema {
 		render := allocator.StaticTargetsSchemaJSON
 		if *printProbeTargetsSchema {

@@ -385,8 +385,9 @@ is shown so too, and one that is no URL at all not at all.
 cluster the allocator runs in, every `refresh_interval`, `30s` by default,
 with plain HTTPS requests to the API server: at `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`, verified with the service account's `ca.crt`, and
-with its token, read again at every listing so a rotated token is used. It
-polls rather than watches, which keeps it small and is enough for targets
+with its token, read again at every listing so a rotated token is used, and
+the `User-Agent` `pue-allocator/<version>`, so the API server's audit log
+tells the allocator apart. It polls rather than watches, which keeps it small and is enough for targets
 that move at the pace of a rollout. `namespaces` lists the namespaces to
 list, by default the allocator's own; `all_namespaces: true` lists them all,
 which needs a ClusterRole. `label_selector` is a Kubernetes label selector,

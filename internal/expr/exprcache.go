@@ -118,7 +118,7 @@ func (c *exprCache[T]) len() int {
 }
 
 // Every jq program also has the value-parsing helpers, parse_bytes,
-// parse_duration, parse_time and parse_percent (values.go).
+// parse_duration, parse_time, parse_percent and parse_quantity (values.go).
 
 // JQVariables are bound in every jq program, in this order: $root, the whole
 // decoded document, so an expression evaluated against one item of a

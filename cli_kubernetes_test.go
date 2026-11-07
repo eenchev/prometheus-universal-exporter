@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -40,5 +42,42 @@ func TestDryRunWarnsOfTheTokenFileOfAKubernetesCollector(t *testing.T) {
 	warnings, _ := result.Details["warnings"].([]any)
 	if result.Status != checkOK || len(warnings) != 1 || !strings.HasPrefix(warnings[0].(string), `collector "deployments": request.bearer_token_file: open `+missing) {
 		t.Errorf("%+v", result)
+	}
+}
+
+// --dry-run reads a kubelet collector's kubelet_ca_file, and warns of one a
+// scrape would fail on; and, its flags read, the exporter's Kubernetes
+// requests name it and its version in their User-Agent.
+func TestDryRunWarnsOfTheKubeletCAFile(t *testing.T) {
+	old := kubeapi.UserAgent
+	t.Cleanup(func() { kubeapi.UserAgent = old })
+	kubeapi.UserAgent = ""
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "kubelet-ca.crt")
+	config := testutil.WriteIn(t, dir, "config.yaml", `collectors:
+  - name: ephemeral
+    request:
+      type: kubernetes
+      resource: nodes
+      all_namespaces: true
+      kubelet: stats/summary
+      kubelet_ca_file: `+missing+`
+    transform:
+      type: jq
+    metrics:
+      - name: kube_kubelets
+        expression: .count
+`)
+	out := runCheckCLI(t, "--config.file="+config)
+	if out.code != 0 {
+		t.Fatalf("exit=%d\n%s", out.code, out.stderr)
+	}
+	result := out.result(t, "config")
+	warnings, _ := result.Details["warnings"].([]any)
+	if result.Status != checkOK || len(warnings) != 1 || !strings.HasPrefix(warnings[0].(string), `collector "ephemeral": request.kubelet_ca_file: `) {
+		t.Errorf("%+v", result)
+	}
+	if want := "prometheus-universal-exporter/" + exporter.BuildVersion().Version; kubeapi.UserAgent != want {
+		t.Errorf("the User-Agent is %q, want %q", kubeapi.UserAgent, want)
 	}
 }

@@ -61,7 +61,8 @@ func TestKubernetesDecoderAndTransform(t *testing.T) {
 }
 
 // A configuration whose kubernetes collector lists the core group's
-// secrets is refused at load, naming the collector.
+// secrets whole is refused at load, naming the collector and
+// metadata_only, with which it loads.
 func TestAKubernetesCollectorOfSecretsIsRefusedAtLoad(t *testing.T) {
 	c := model.Collector{
 		Name:      "secrets",
@@ -69,8 +70,12 @@ func TestAKubernetesCollectorOfSecretsIsRefusedAtLoad(t *testing.T) {
 		Transform: model.TransformConfig{Type: "jq"},
 		Metrics:   []model.MetricRule{{Name: "v", Expression: ".count"}},
 	}
-	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err == nil || !strings.Contains(err.Error(), `collector "secrets" lists secrets, which a kubernetes collector may not`) {
+	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err == nil || !strings.Contains(err.Error(), `collector "secrets" lists secrets whole, which a kubernetes collector may not`) || !strings.Contains(err.Error(), "metadata_only: true") {
 		t.Errorf("err=%v", err)
+	}
+	c.Request.Own = fetch.KubernetesConfig{Resource: "secrets", AllNamespaces: true, MetadataOnly: true}
+	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
+		t.Errorf("their metadata alone: %v", err)
 	}
 }
 

@@ -16,6 +16,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- A `kubernetes` collector lists its namespaces at once, four at a time,
+  rather than one after another; the document keeps them in the order
+  `namespaces` names them. Its requests, and the allocator's listings of
+  EndpointSlices, carry the `User-Agent`
+  `prometheus-universal-exporter/<version>` (`pue-allocator/<version>`)
+  in place of Go's.
+- A `kubernetes` collector of the core group's `secrets` is refused whole
+  still, but loads with `metadata_only: true`
+  ([Secrets](docs/KUBERNETES.md#secrets)).
 - The debug page's series and OTLP tables sort text as the status pages'
   do, the numbers in it by their value and a letter's case no matter.
 
@@ -65,6 +74,25 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- `kubernetes` collectors ask the nodes' kubelets for their Summary API
+  with `kubelet: stats/summary`: what each pod, container and volume uses
+  of CPU, memory and file systems, ephemeral storage among them, directly
+  or with `kubelet_via_api_server` through the API server, the nodes whose
+  kubelet answered none in the document's `failed`. The chart's
+  `kubernetesAccess.kubelet` grants `get` on `nodes/stats` or `nodes/proxy`
+  ([Kubelet statistics](docs/KUBERNETES.md#kubelet-statistics)).
+- `metadata_only: true` lists the objects' metadata alone, a
+  `PartialObjectMetadataList`, kubectl's last-applied annotation taken out
+  ([Metadata alone](docs/KUBERNETES.md#metadata-alone)).
+- `parse_quantity`, in jq, yq and Python, reads a Kubernetes quantity in its
+  base unit: `250m` is 0.25, `2Gi` 2147483648
+  ([Value-parsing helpers](docs/CONFIGURATION.md#value-parsing-helpers)).
+- A `kubernetes` collector's page answered `429 Too Many Requests` is asked
+  for again, up to three times, after the wait its `Retry-After` asks for,
+  within the scrape's time; a listing whose `continue` token expired goes
+  on with the token the `410` carries, or starts over once.
+- An exported trace's `kubernetes` request spans have the DNS, connect, TLS
+  and first-byte phases under them, as an HTTP request's do.
 - A trace's HTTP request span has its phases under it: `http.first_byte`,
   and within it `http.dns`, `http.connect` and `http.tls`, the times
   `$timings` measures ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).

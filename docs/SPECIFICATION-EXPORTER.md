@@ -2624,8 +2624,9 @@ carries it. Its keys:
 #### `kubernetes`
 
 A `kubernetes` collector lists the objects of one resource of a Kubernetes
-API server, built in or custom, and hands them to the transforms as a JSON
-document. The listing MUST be made over the API's REST interface with the
+API server, built in or custom, or, with `kubelet`, asks the kubelet of
+each node it lists for its Summary API, and hands them to the transforms as
+a JSON document. The listing MUST be made over the API's REST interface with the
 standard library alone, through `internal/kubeapi`, the code the target
 allocator's Kubernetes discovery (§ 42.14d) lists EndpointSlices with. Its
 keys:
@@ -2642,9 +2643,24 @@ keys:
 | `max_response_bytes` | 10 MiB | As every type's response limit (below). |
 | `api_server` | the exporter's own cluster's | An `https` URL with a host, a path or not, and no user, query or fragment; anything else MUST be refused at load. |
 | `tls`, `bearer_token_file` | none | Only with `api_server`, MUST be refused at load without it, a written `tls` block even when empty (`tls: {}`). With it, `bearer_token_file` or `tls.cert_file` and `tls.key_file` (both or neither) MUST be set, and `tls.insecure_skip_verify` true MUST be refused. |
+| `metadata_only` | `false` | The objects' metadata alone; with `kubelet` MUST be refused at load. |
+| `kubelet` | none | `stats/summary`, anything else MUST be refused at load; only with `resource: nodes` of the core group and `all_namespaces: true`, MUST be refused at load otherwise. |
+| `kubelet_via_api_server` | `false` | Only with `kubelet`; with `kubelet_ca_file` MUST be refused at load. |
+| `kubelet_ca_file` | the API server's CA | Only with `kubelet`, MUST be refused at load without it; read at every scrape, and by `--dry-run`, which warns of one a scrape would fail on. |
 
-- The core group's `secrets` MUST be refused at load, by the exporter and
-  by the schema (§ 24.3): their values would pass through the transforms.
+- The core group's `secrets` MUST be refused at load without
+  `metadata_only: true`, by the exporter and by the schema (§ 24.3): their
+  values would pass through the transforms.
+- With `metadata_only`, every page MUST be asked for with `Accept:
+  application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1` and no
+  other media type, and a page whose `kind` is not
+  `PartialObjectMetadataList` MUST fail the scrape without anything of it
+  handed on, naming the kind it is; each object MUST keep its `kind`,
+  `apiVersion` and `metadata` alone, whatever else the answer carried, and
+  MUST lose its `metadata.managedFields` and the annotation
+  `kubectl.kubernetes.io/last-applied-configuration`, its other annotations
+  kept; the document's `kind` MUST be `PartialObjectMetadata` and its
+  `api_version` `meta.k8s.io/v1`, whether it has objects or not.
 - A collector MUST take no target: a probe with a `target` MUST be
   answered `400` before anything is listed, and a static target that names
   one MUST be refused at load; a probe without one is complete. A probe
@@ -2670,7 +2686,23 @@ keys:
   `/api/<version>/namespaces/<namespace>/<resource>` for the core group and
   `/apis/<group>/<version>/namespaces/<namespace>/<resource>` for the
   others, without `/namespaces/<namespace>` for `all_namespaces`, one
-  listing a namespace in the order of `namespaces`.
+  listing a namespace. The listings of a collector's namespaces MUST be
+  made at once, at most four at a time, and the document MUST hold the
+  objects in the order of `namespaces`; the first listing to fail MUST end
+  the others and fail the scrape.
+- Every request MUST carry the `User-Agent` `prometheus-universal-exporter/
+  <version>`, the allocator's `pue-allocator/<version>`, the version as
+  `--version` reports it.
+- A page answered `429 Too Many Requests` MUST be asked for again after the
+  wait its `Retry-After` asks for, in seconds or as an HTTP date, a second
+  without one the exporter can read, at most three times, and not when the
+  wait would end at or after the scrape's deadline; a debug report MUST
+  show each wait on the request it followed. A page asked for with a
+  `continue` token answered `410` with a Status of reason `Expired` MUST be
+  asked for again with the Status's `metadata.continue` when it has one;
+  without one the listing MUST start again from its first page once, the
+  objects it had listed put away, so each is in the document once, and a
+  second such answer MUST fail the scrape.
 - A listing MUST ask for pages with `limit=100` and follow each page's
   `metadata.continue` to the last, sending `labelSelector` and
   `fieldSelector` as written when they are set. A page larger than the
@@ -2699,7 +2731,10 @@ keys:
   not taken, for `403` that the service account needs `list` on the
   resource and the chart's `kubernetesAccess.rules` that grant it, for
   `404` how to name a resource and that a cluster-scoped one is listed with
-  `all_namespaces`. The token MUST NOT appear in an error. The Status
+  `all_namespaces`, for `429` how many times the page was asked for again,
+  for `410` that the listing expired again, and for `406` that the API
+  server does not answer the metadata alone. The token MUST NOT appear in
+  an error. The Status
   object's message, or the body that is none, MUST be the operator's alone
   (§ 19.4): a probe's caller MUST be answered the listing and the status,
   `; what it said is in the exporter's log`, and the advice. A page that is
@@ -2717,6 +2752,32 @@ keys:
   verbose `url` label MUST be `kubernetes:` and the path of the listing
   across the cluster, or with `api_server` its URL before that path, and
   `http_method` MUST be `LIST`.
+- With `kubelet`, after the nodes are listed, the kubelet of each MUST be
+  asked, at most four at a time, with `GET` of `/stats/summary` and the
+  listing's token: at `https://` and the Node's first address of type
+  `InternalIP`, `Hostname` or `ExternalIP`, in that order, and
+  `status.daemonEndpoints.kubeletEndpoint.Port`, 10250 when it names none,
+  the kubelet's certificate verified against `kubelet_ca_file`, or the CA
+  the API server is verified against without it, with the listing's
+  client certificate if any; or, with `kubelet_via_api_server`, at the API
+  server's `/api/v1/nodes/<name>/proxy/stats/summary` with the listing's
+  client. Each answer MUST be at most the response limit and JSON, and all
+  of them together at most the response limit, which past it MUST fail
+  the scrape as a limit exceeded. The document MUST be of `kind`
+  `Summary`, `api_version` `stats/v1alpha1`, `count`, `items`, each
+  summary as its kubelet answered it in the order the nodes were listed,
+  and `failed`, a `node` and an `error` for each node whose kubelet
+  answered none, the error naming no address: `the kubelet answered
+  <status>`, that the Node has no address, that the summary is larger than
+  the response limit, that the answer is not JSON, or `the request to the
+  kubelet failed`, with `: context deadline exceeded` when the scrape's
+  time ran out. A collector of nodes none of whose kubelets answered MUST
+  fail the scrape with the first's failure, for `403` naming `nodes/stats`,
+  or `nodes/proxy` with `kubelet_via_api_server`, and the chart's
+  `kubernetesAccess.kubelet`, and for a certificate no CA signs
+  `kubelet_ca_file` and `kubelet_via_api_server`; a probe's caller MUST be
+  answered it without the kubelet's address. No node is a document with
+  `items` and `failed` empty.
 
 #### `redis`
 
@@ -5294,11 +5355,11 @@ What a script prints MUST be kept to its first 4 KiB, logged at debug level,
 and counted against `limits.max_output_bytes` only as far as that.
 
 A script and a pre-script MUST have the value-parsing helpers of § 17,
-`parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`, as
-functions of one argument among the names they are given, as `metric` and
-`fail` are. Each MUST give the same number as the jq function of its name for
-every input, a `float`, or an `int` or a `float` given to `parse_bytes` or
-`parse_duration` back unchanged (a `bool` being no number), and MUST raise a
+`parse_bytes`, `parse_duration`, `parse_time`, `parse_percent` and
+`parse_quantity`, as functions of one argument among the names they are
+given, as `metric` and `fail` are. Each MUST give the same number as the jq
+function of its name for every input, a `float`, or an `int` or a `float`
+given to `parse_bytes`, `parse_duration` or `parse_quantity` back unchanged (a `bool` being no number), and MUST raise a
 `ValueError` with exactly the jq function's message where that fails on
 text, and a `TypeError` saying what the helper reads where it fails on
 anything else. The exception MUST fail the script as any other does (§
@@ -5973,7 +6034,8 @@ field of `null` `null`. Where a step is anything else, the program MUST run, so
 the error is gojq's.
 
 Every jq program MUST have the value-parsing helpers `parse_bytes`,
-`parse_duration`, `parse_time` and `parse_percent`, each a function of no
+`parse_duration`, `parse_time`, `parse_percent` and `parse_quantity`, each a
+function of no
 arguments reading its input, added as gojq custom functions (none MUST be
 the name of a gojq builtin, which it would hide or be hidden by), and the
 Python transform MUST have the same helpers (§ 16.2). The two MUST give the
@@ -6013,9 +6075,17 @@ nearest float once, so `1.1GB` is 1100000000 and `0.1s0.2s` 0.3.
 - `parse_percent` MUST read an optional sign, a number, blanks or none, and
   a `%` that MUST be there, and give the ratio, a hundredth of it, which is
   Prometheus's base unit.
+- `parse_quantity` MUST read a Kubernetes quantity: an optional sign, a
+  number, and, with no blank before it, a suffix in its case or none: `Ki`,
+  `Mi`, `Gi`, `Ti`, `Pi` and `Ei` powers of 1024; `n`, `u`, `m`, `k`, `M`,
+  `G`, `T`, `P` and `E` powers of 1000 from 10^-9 to 10^18; or `e` or `E`, a
+  sign or none and one or two digits, a power of ten. It MUST give the
+  quantity in its base unit, cores or bytes (`100m` 0.1, `2Gi` 2147483648),
+  and MUST refuse any other suffix, `K` among them, and anything after it.
 
-Each helper MUST read text; `parse_bytes` and `parse_duration` MUST give a
-number back unchanged, as being bytes or seconds already, and anything else
+Each helper MUST read text; `parse_bytes`, `parse_duration` and
+`parse_quantity` MUST give a number back unchanged, as being bytes,
+seconds or a quantity already, and anything else
 (`null`, a boolean, an object, an array, a number for `parse_time` and
 `parse_percent`) MUST fail saying what the helper reads and what it was
 given by its kind. Text a helper cannot read MUST fail with
@@ -27777,8 +27847,8 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
 
 ## 34.179 Value-parsing helpers for jq, yq and Python
 
-- Each of `parse_bytes`, `parse_duration`, `parse_time` and `parse_percent`,
-  compiled into a jq program by `CompileJQ`, gives every number of
+- Each of `parse_bytes`, `parse_duration`, `parse_time`, `parse_percent`
+  and `parse_quantity`, compiled into a jq program by `CompileJQ`, gives every number of
   `testdata/values/helpers.json` to the bit, fails with exactly each error
   it lists, and says what it reads of each input that is not text (§ 17).
 - None of the helpers is the name of a gojq builtin, and each is known to a
@@ -31171,6 +31241,29 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheDebugPagesTablesSortWithTheSharedCode` (exporter): the series table is `sortable`, the page has the shared marks' style and the shared `textOrder` and `markSorted`, the series table's text sorted with `textOrder`, and no copy of its own of the marks, a `<` comparison of text or the setting of `aria-sort`. (In headless Chromium, the example's rows sort by room both ways and by value, the heading `aria-sort="ascending"`.)
 - `TestTheDebugPageShowsTheSeriesAsATable` (exporter) and `TestTheProbeJobsTableSortsNaturallyAndOnlyWithItsScript` (allocator), changed: the table's class and the shared `textOrder`.
 
+## 34.295 Kubernetes: kubelet statistics, metadata alone, quantities, a busy API server, namespaces at once
+
+- `TestAListingOfMetadataAloneAsksForIt` (kubeapi): a listing with `AcceptMetadataList` is asked for with that `Accept`, and the stand-in answers a `PartialObjectMetadataList` without the objects' data.
+- `TestAPageIsAskedForAgainAsRetrySays` (kubeapi): a page answered 429 twice is asked for again after the wait `Retry` says, `Waiting` told of each with the status, `Retry` given the count before; past what `Retry` allows, the `StatusError` with `Retried` 2; a wait the context ends first fails with the answer and `context.DeadlineExceeded`.
+- `TestAnExpiredListingGoesOn` (kubeapi): with `ResumeExpired`, a 410 Expired carrying a continue token goes on with it, each object listed once, `Restart` not told; one carrying none starts over once, `Restart` told; a second expiry after starting over fails with the 410; without `ResumeExpired` the 410 fails the listing.
+- `TestAGetIsAnsweredItsBody` (kubeapi): a `Get` is answered its body, sent with `UserAgent`; over its bound it is `ErrTooLarge`, saying `the kubelet of node a answered more than 10 bytes`; a 404 is a `StatusError` whose text begins `the kubelet of node a at`.
+- `TestAListingFollowsEveryPage` and `TestAPageOverTheBoundIsAskedForAgainSmaller` (kubeapi), changed: each request carries `Accept: application/json` and the `User-Agent`, told of through `Prepare`.
+- `TestAKubernetesCollectorListsTheMetadataAlone` (fetch): a collector of secrets with `metadata_only` asks with the metadata list's `Accept`; its document is of `PartialObjectMetadata` and `meta.k8s.io/v1`, each object without its data, managed fields and last-applied annotation, its other annotations and times kept; of no objects the same kind and version; objects of a `PartialObjectMetadataList` that carry data are handed on with their kind, version and metadata alone; a `SecretList` answered to it fails the scrape naming the kind, without its values.
+- `TestAThrottledKubernetesListingIsAskedForAgain` (fetch): a page answered 429 twice with `Retry-After: 0` is listed, a debug trace showing both 429s and their waits; answered 429 four times the scrape fails saying the page was asked for again 3 times; with a `Retry-After` of 60 seconds past the scrape's deadline, it is not asked for again.
+- `TestAnExpiredKubernetesListingGoesOn` (fetch): of 250 Deployments, a listing whose continue token expired, with a token to go on with and without one, lists each once, in order.
+- `TestAKubernetesCollectorsNamespacesAreListedAtOnce` (fetch): of six namespaces, with every answer held, four are asked for before the scrape's time runs out; the document keeps the order of `namespaces`; one namespace forbidden fails the scrape naming it.
+- `TestAKubernetesListingNamesItselfAndIsTimed` (fetch): every request carries `kubeapi.UserAgent`; of an exported trace, each of two namespaces' requests, listed at once, has its own phases within its time, `connect tls first_byte` on a connection of its own, and its own outcome.
+- `TestAKubeletCollectorAsksEachNodesKubelet` (fetch): of five nodes listed with the label selector, the kubelets of two answer, each asked at its InternalIP and port with the token and `Accept: application/json`, and the document is `Summary`, `stats/v1alpha1`, their summaries in the nodes' order and as failed a 403, a Node without an address and a summary over the response limit, in words naming no address.
+- `TestAKubeletCollectorWithNoKubeletAnsweringFails` (fetch): a single kubelet's 403 fails the scrape naming `nodes/stats` and `kubernetesAccess.kubelet: stats`, a probe's caller told without the address; a `kubelet_ca_file` of another CA fails naming `kubelet_ca_file` and `kubelet_via_api_server`, and the kubelet's own CA verifies it; no node is an empty document.
+- `TestAKubeletCollectorAsksThroughTheAPIServer` (fetch): with `kubelet_via_api_server` each kubelet is asked at the API server's `/api/v1/nodes/<name>/proxy/stats/summary`; a 403 names `nodes/proxy` and `kubernetesAccess.kubelet: proxy`.
+- `TestAKubernetesCollectorsKeysAreCheckedAtLoad` (fetch), changed: `kubelet` other than `stats/summary`, of a resource other than the core group's nodes, without `all_namespaces` or with `metadata_only`; `kubelet_via_api_server` with `kubelet_ca_file`; and either without `kubelet`, are refused; secrets with `metadata_only` and kubelet collectors either way load.
+- `TestAKubernetesCollectorOfSecretsIsRefusedAtLoad` (config), changed: the refusal names `metadata_only: true`, with which the collector loads.
+- `TestEphemeralStorageFromTheKubeletsAndThePods` (exporter): a probe of a kubelet collector exports a pod's ephemeral storage used from its kubelet's summary and that one node answered none; one of the Pods exports a container's `2Gi` of ephemeral storage and `250m` of CPU requested, read by `parse_quantity`.
+- `TestValueHelpersInJQMatchTheSharedVectors` (expr) and `TestValueHelpersInPythonMatchTheSharedVectors` (transform), changed: `parse_quantity`'s vectors, its suffixes in their case, exponents, signs, numbers given back, and `1K`, a blank before the suffix, `1GiB` and an exponent of three digits refused.
+- `TestDryRunWarnsOfTheKubeletCAFile` (main): `--dry-run` warns of a `kubelet_ca_file` that is missing, the check passing, and the exporter's `kubeapi.UserAgent` is then `prometheus-universal-exporter/<version>`; `TestTheAllocatorNamesItselfToTheAPIServer` (pue-allocator): the allocator's is `pue-allocator/<version>`.
+- `TestSchemaAndExporterAgreeOnKubernetesKeysWrittenEmpty` (repository), changed: a row of `kubelet` in a collector of nodes across the cluster: left out and `""` taken by both, `stats/summary` taken and `metrics/cadvisor` refused by both, the schema as it was, without the key, refusing `""`.
+- `TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed` (repository), changed: `kubernetesAccess.kubelet` `stats` and `proxy` add `get` on `nodes/stats` and `nodes/proxy` after the rules of the ClusterRole; `TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing` (repository), changed: `kubelet` without `clusterWide` and `kubelet: exec` fail rendering, by the schema and by the templates.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -31687,7 +31780,8 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   `redirect` and `login`, ERROR for a request that got no answer, or an
   answer its request type takes for a failure, or an HTTP answer of 400 or
   more, and a `rate_limit` span before a request that waited for its
-  turn. Under an http or graphite request's CLIENT span there MUST be an
+  turn. Under an http, graphite or kubernetes request's CLIENT span (a
+  listing's page, or a kubelet's summary) there MUST be an
   INTERNAL `http.first_byte` span from the request's start, when it asked
   for a connection, to the answer's first byte, and under it `http.dns`,
   `http.connect` and `http.tls` for the lookup, the connection and the
@@ -33919,7 +34013,8 @@ shown. Both MUST read a list of
 that is no label name. `kubernetes` MUST list `discovery.k8s.io/v1`
 EndpointSlices with HTTPS `GET` requests to `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`, made by `internal/kubeapi` as the `kubernetes`
-request type's are (§ 5.1), verified with the service account's `ca.crt`,
+request type's are (§ 5.1), each with the `User-Agent`
+`pue-allocator/<version>`, verified with the service account's `ca.crt`,
 with its token read again at every listing, in pages of 100 (`limit=100`,
 following each `continue` token), a page larger than 16 MiB asked for
 again as § 5.1's `kubernetes` asks for a page larger than its response

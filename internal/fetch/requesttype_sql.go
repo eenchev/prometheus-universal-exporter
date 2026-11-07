@@ -50,11 +50,14 @@ import (
 //
 //   - The statement runs read-only where the database can make it so: in a
 //     read-only transaction (postgres, mysql, oracle, vertica) or with a
-//     read-only setting (clickhouse). SQL Server and Snowflake cannot, and
-//     need an account that can only read.
+//     read-only setting (clickhouse). SQL Server cannot, and runs it in a
+//     transaction always rolled back; Snowflake runs it as it is. Both need
+//     an account that can only read.
 //   - It is bounded by the scrape's deadline, which the drivers cancel it
-//     at, and by the database's own statement timeout where it has one the
-//     exporter can set (postgres).
+//     at, and by the database's own time limit where it has one the
+//     exporter can set: postgres's statement_timeout, MySQL's
+//     max_execution_time, MariaDB's max_statement_time and SQL Server's
+//     LOCK_TIMEOUT.
 //   - Connections are kept in a pool per collector, target and connection
 //     settings, shared by the collector's scrapes of the target, and closed
 //     when a reload removes or changes the collector (sqlpool.go).

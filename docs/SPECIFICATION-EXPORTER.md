@@ -2006,9 +2006,11 @@ of objects, one a row, of its columns by name. Its keys:
   transaction where the driver offers one — `postgres`, `mysql` and `vertica`
   through `database/sql`'s read-only transaction, `oracle` after `SET
   TRANSACTION READ ONLY` — rolled back afterwards, and for `clickhouse` with
-  the setting `readonly=1`. `sqlserver` and `snowflake`, whose drivers
-  refuse a read-only transaction, MUST run it as it is, and the
-  documentation MUST require an account that can only read. `args` MUST be
+  the setting `readonly=1`. `sqlserver`, whose driver refuses a read-only
+  transaction, MUST run it in a transaction always rolled back afterwards,
+  and `snowflake` MUST run it as it is; the documentation MUST require an
+  account that can only read of both, and MUST say that the rollback undoes
+  no commit the statement makes itself. `args` MUST be
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
   into the statement quoted as a literal of its type, and the documentation
@@ -2068,8 +2070,17 @@ of objects, one a row, of its columns by name. Its keys:
   as `database/sql` would without the rest, and the exporter's own use of
   the driver's connection (`Conn.Raw`) MUST reach the driver's.
   `postgres` MUST also set `statement_timeout` to the time left, in the
-  transaction, the server ending the statement at it reported as the
-  deadline coming first though the scrape's own deadline is a moment away, and its cancel request MUST go through the exporter's dialer,
+  transaction; `mysql` MUST set `max_execution_time` to it on MySQL 5.7.8
+  and later and `max_statement_time` on MariaDB 10.1.1 and later, by the
+  version the server gives when asked once on each connection (`SELECT
+  VERSION()`, MariaDB's `5.5.5-` prefix skipped), and nothing on an older
+  server or one whose version reads as neither, so that no scrape is
+  refused over a variable the server does not know; and `sqlserver` MUST
+  set `LOCK_TIMEOUT` to it, in the transaction: each in milliseconds, a
+  millisecond at least, MariaDB's in seconds to the millisecond. The server
+  ending the statement at its limit (postgres's SQLSTATE 57014 statement
+  timeout, MySQL's error 3024, MariaDB's 1969, SQL Server's 1222) MUST be
+  reported as the deadline coming first though the scrape's own deadline is a moment away. `postgres`'s cancel request MUST go through the exporter's dialer,
   under the policy, to the address the statement's connection reached, and
   to no other.
 - **Rows.** Integers and floating-point numbers MUST be numbers; the text of
@@ -31089,6 +31100,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheBarsColoursStandOutInBothThemes` (allocator): the bars' static and probe colours stand out at 3:1 or more from `--bg` and `--panel` in both themes.
 - `TestAStripIsToldToAScreenReaderAsItsCounts` (exporter): `stripText` of no result is empty, of one success `last 1 scrape: 1 success; the latest success`, and of failed, success, failed, skipped `last 4 scrapes, oldest first: 2 failed, 1 success, 1 skipped by backoff; the latest skipped by backoff`; a static target's strip and a recent probe's carry it in an `.sr-only` span, the marks in an `aria-hidden` one.
 - `TestAnEntrysViewListsItsTargets` and `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator), changed: a filter's count is `role="status"` `aria-live="polite"`; `TestATargetsRowShowsItsLastScrapes` (exporter), changed: the marks are in their hidden span. (In headless Chromium, axe-core 4.10 finds no violation of WCAG 2.1 AA on the exporter's status page and the allocator's page and views in either theme; Tab reaches the bar's links, the theme and refresh controls, the filter, the seven sortable headings and each row's links in that order, each with a 2px outline.)
+
+## 34.291 The server's own time limit on MySQL, MariaDB and SQL Server; SQL Server's rolled-back transaction
+
+- `TestEachSQLDriverRunsTheStatementReadOnlyAsItCan` (fetch), changed: postgres and mysql begin a read-only transaction and sqlserver one that is not, each rolled back; before the statement postgres runs `SET LOCAL statement_timeout = `, mysql `SET SESSION max_execution_time = ` and sqlserver `SET LOCK_TIMEOUT `, each the scrape's five seconds less what passed, over 4000 milliseconds; a second mysql scrape on the kept connection does not ask the server's version again. (sqlserver ran with no transaction, and mysql and sqlserver set no limit.)
+- `TestTheMySQLServerIsToldTheScrapesTimeLeftAsItsKindTakesIt` (fetch): `8.0.36` with 2.5s is `max_execution_time = 2500`, `8.4.0-log` with 500µs `= 1`, `5.7.8` `= 1000`, `5.7.7` and `5.6.51` nothing; `10.11.6-MariaDB-…` with 2.5s is `max_statement_time = 2.500`, `5.5.5-10.6.16-MariaDB` with 61.001s `= 61.001`, `10.1.0-MariaDB` nothing and `10.1.1-MariaDB` `= 1.000`; no time left, `v8` and an empty version are set nothing. Errors 3024 and 1969 are the server's timeout, wrapped too, and 1317, 1045 and an error that is no server's are not.
+- `TestASQLServerLockTimeoutIsTheScrapesDeadline` (fetch): no time left sets nothing, 1.5s is `SET LOCK_TIMEOUT 1500` and a microsecond `1`; error 1222 is the lock timeout, wrapped too, and 18456 and an error that is no server's are not.
 
 ## 42.1 OTLP export
 

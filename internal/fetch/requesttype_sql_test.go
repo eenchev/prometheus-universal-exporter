@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -23,6 +24,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/sqltest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/go-sql-driver/mysql"
+	mssql "github.com/microsoft/go-mssqldb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -261,11 +264,13 @@ func TestASQLStatementEndsAtTheScrapesDeadline(t *testing.T) {
 	}
 }
 
-// Each driver runs a statement as it can make it read-only: postgres and
-// mysql in a transaction begun read-only through database/sql, postgres
-// with the statement timeout set to the scrape's time left first; sqlserver
-// has no read-only transaction and runs it as it is. The transaction is
-// rolled back.
+// Each driver runs a statement as it can make it read-only, with the
+// server's own time limit set to the scrape's time left first where it has
+// one the exporter can set: postgres in a transaction begun read-only after
+// SET LOCAL statement_timeout, mysql in one begun read-only after SET
+// SESSION max_execution_time, the server's version asked once on the
+// connection, and sqlserver, which has no read-only transaction, in a
+// transaction after SET LOCK_TIMEOUT. Every transaction is rolled back.
 func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 	f := newSQLFixture(t)
 	f.db.Results["SELECT 1 AS one"] = sqltest.Result{Columns: []string{"one"}, Rows: [][]driver.Value{{int64(1)}}}
@@ -275,8 +280,8 @@ func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 		executed string
 	}{
 		{SQLDriverPostgres, true, "SET LOCAL statement_timeout = "},
-		{SQLDriverMySQL, true, ""},
-		{SQLDriverSQLServer, false, ""},
+		{SQLDriverMySQL, true, "SET SESSION max_execution_time = "},
+		{SQLDriverSQLServer, false, "SET LOCK_TIMEOUT "},
 	} {
 		begun, executed, rolled := len(f.db.TxOptions()), len(f.db.Executed()), f.db.RolledBack()
 		c := f.collector(t, tc.driver, tc.driver, "SELECT 1 AS one")
@@ -284,21 +289,77 @@ func TestEachSQLDriverRunsTheStatementReadOnlyAsItCan(t *testing.T) {
 			t.Fatalf("%s: %v", tc.driver, err)
 		}
 		tx := f.db.TxOptions()[begun:]
-		switch {
-		case tc.readOnly && (len(tx) != 1 || !tx[0].ReadOnly || f.db.RolledBack() != rolled+1):
-			t.Errorf("%s: transactions %+v, rolled back %d, want one read-only, rolled back", tc.driver, tx, f.db.RolledBack()-rolled)
-		case !tc.readOnly && len(tx) != 0:
-			t.Errorf("%s: transactions %+v, want none", tc.driver, tx)
+		if len(tx) != 1 || tx[0].ReadOnly != tc.readOnly || f.db.RolledBack() != rolled+1 {
+			t.Errorf("%s: transactions %+v, rolled back %d, want one, read-only %v, rolled back", tc.driver, tx, f.db.RolledBack()-rolled, tc.readOnly)
 		}
 		ran := f.db.Executed()[executed:]
-		if tc.executed == "" && len(ran) != 0 || tc.executed != "" && (len(ran) != 1 || !strings.HasPrefix(ran[0], tc.executed)) {
+		if len(ran) != 1 || !strings.HasPrefix(ran[0], tc.executed) {
 			t.Errorf("%s: ran %q before the statement, want %q", tc.driver, ran, tc.executed)
+			continue
+		}
+		// The scrape's five seconds, less what passed before the statement.
+		if ms, err := strconv.Atoi(strings.TrimPrefix(ran[0], tc.executed)); err != nil || ms <= 4000 || ms > 5000 {
+			t.Errorf("%s: %q", tc.driver, ran[0])
 		}
 	}
-	// The scrape's five seconds, less what passed before the statement.
-	ran := f.db.Executed()
-	if ms, err := strconv.Atoi(strings.TrimPrefix(ran[0], "SET LOCAL statement_timeout = ")); err != nil || ms <= 4000 || ms > 5000 {
-		t.Errorf("statement_timeout %q", ran[0])
+	// The mysql connection, kept, is not asked its version again.
+	c := f.collector(t, SQLDriverMySQL, SQLDriverMySQL, "SELECT 1 AS one")
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Timeout: 5 * time.Second}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.db.Versions(); n != 1 {
+		t.Errorf("the server was asked its version %d times over two scrapes on one connection, want once", n)
+	}
+}
+
+// The server's own time limit is set by its kind and version: MySQL's
+// max_execution_time, in milliseconds, from 5.7.8, MariaDB's
+// max_statement_time, in seconds, from 10.1.1, and nothing for an older
+// server or a version that reads as neither, so that it refuses no scrape
+// over a variable it does not know. A statement the server ended at it is
+// told apart, as one the scrape's deadline ended.
+func TestTheMySQLServerIsToldTheScrapesTimeLeftAsItsKindTakesIt(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		timeout time.Duration
+		want    string
+	}{
+		{"8.0.36", 2500 * time.Millisecond, "SET SESSION max_execution_time = 2500"},
+		{"8.4.0-log", 500 * time.Microsecond, "SET SESSION max_execution_time = 1"},
+		{"5.7.8", time.Second, "SET SESSION max_execution_time = 1000"},
+		{"5.7.7", time.Second, ""},
+		{"5.6.51", time.Second, ""},
+		{"10.11.6-MariaDB-1:10.11.6+maria~ubu2204", 2500 * time.Millisecond, "SET SESSION max_statement_time = 2.500"},
+		{"5.5.5-10.6.16-MariaDB", 61001 * time.Millisecond, "SET SESSION max_statement_time = 61.001"},
+		{"10.1.0-MariaDB", time.Second, ""},
+		{"10.1.1-MariaDB", time.Second, "SET SESSION max_statement_time = 1.000"},
+		{"8.0.36", 0, ""},
+		{"v8", time.Second, ""},
+		{"", time.Second, ""},
+	} {
+		got := strings.Join(mysqlStatementTimeout(tc.version, tc.timeout), "; ")
+		if got != tc.want {
+			t.Errorf("%q, %s: %q, want %q", tc.version, tc.timeout, got, tc.want)
+		}
+	}
+	for number, want := range map[uint16]bool{3024: true, 1969: true, 1317: false, 1045: false} {
+		if got := mysqlTimedOut(fmt.Errorf("wrapped: %w", &mysql.MySQLError{Number: number})); got != want {
+			t.Errorf("error %d: timed out %v, want %v", number, got, want)
+		}
+	}
+	if mysqlTimedOut(errors.New("other")) {
+		t.Error("an error that is no server's timed out")
+	}
+}
+
+// A SQL Server statement given up at the lock timeout, error 1222, is told
+// apart as one the scrape's deadline ended; no other error is.
+func TestASQLServerLockTimeoutIsTheScrapesDeadline(t *testing.T) {
+	if sqlServerLockTimeout(0) != nil || strings.Join(sqlServerLockTimeout(1500*time.Millisecond), "") != "SET LOCK_TIMEOUT 1500" || strings.Join(sqlServerLockTimeout(time.Microsecond), "") != "SET LOCK_TIMEOUT 1" {
+		t.Errorf("the lock timeouts are %q, %q, %q", sqlServerLockTimeout(0), sqlServerLockTimeout(1500*time.Millisecond), sqlServerLockTimeout(time.Microsecond))
+	}
+	if !sqlServerTimedOut(fmt.Errorf("wrapped: %w", mssql.Error{Number: 1222})) || sqlServerTimedOut(mssql.Error{Number: 18456}) || sqlServerTimedOut(errors.New("other")) {
+		t.Error("error 1222 alone is the lock timeout")
 	}
 }
 

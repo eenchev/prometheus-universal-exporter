@@ -30,6 +30,13 @@ type Result struct {
 	RowsErr error
 }
 
+// VersionQuery is how the mysql driver asks a server its version.
+const VersionQuery = "SELECT VERSION()"
+
+// Versions is how many times a connection asked the server its version
+// (VersionQuery) and was answered Version.
+func (db *DB) Versions() int64 { return db.versions.Load() }
+
 // Query is a statement as it was run, with the values bound to it.
 type Query struct {
 	Statement string
@@ -56,6 +63,12 @@ type DB struct {
 	// Closes, when set, is told each connection closed, without waiting for
 	// it to be read.
 	Closes chan struct{}
+	// Version is what SELECT VERSION() answers, which the mysql driver asks
+	// once on a connection: 8.0.36 when empty. The question is not recorded
+	// among the queries, nor held by Block, unless Results answers it.
+	Version string
+	// versions counts the times SELECT VERSION() was asked.
+	versions atomic.Int64
 
 	pingErr   error
 	txOptions []driver.TxOptions
@@ -250,6 +263,15 @@ func (c *conn) QueryContext(ctx context.Context, statement string, named []drive
 		args[i] = v.Value
 	}
 	c.db.mu.Lock()
+	if _, answered := c.db.Results[statement]; statement == VersionQuery && !answered {
+		version := c.db.Version
+		c.db.mu.Unlock()
+		c.db.versions.Add(1)
+		if version == "" {
+			version = "8.0.36"
+		}
+		return &rows{db: c.db, ctx: ctx, result: Result{Columns: []string{"VERSION()"}, Rows: [][]driver.Value{{version}}}}, nil
+	}
 	c.db.queries = append(c.db.queries, Query{Statement: statement, Args: args})
 	result, ok := c.db.Results[statement]
 	block, started, drain := c.db.Block, c.db.Started, c.db.DrainOnClose

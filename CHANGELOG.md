@@ -16,6 +16,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- A `sql` collector with `driver: sqlserver` runs its statement in a
+  transaction that is rolled back after it, with `SET LOCK_TIMEOUT` set to
+  the scrape's time left; one with `driver: mysql` sets
+  `max_execution_time` (MySQL 5.7.8 and later) or `max_statement_time`
+  (MariaDB 10.1.1 and later) to it, in its read-only transaction, after
+  asking the server's version once on each connection. A statement that
+  cannot run in a transaction, or that the server now ends at that limit,
+  fails where it ran before; one the limit ends fails as the scrape's
+  deadline ([Databases over SQL](docs/SQL.md#the-statement)).
 - A label built from `$url`, the static targets endpoint's `target` label
   and the OTLP `target` attribute show `<redacted>` where they showed the
   value of a query parameter with `code`, `ticket`, `sid`, `otp` or `hmac`

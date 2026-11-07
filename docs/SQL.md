@@ -153,13 +153,16 @@ so:
   rolled back afterwards;
 - `oracle`: after `SET TRANSACTION READ ONLY`, in a transaction rolled back
   afterwards;
-- `clickhouse`: with the setting `readonly=1`.
+- `clickhouse`: with the setting `readonly=1`;
+- `sqlserver`, which has no read-only transaction (its driver refuses one):
+  in a transaction that is always rolled back, which undoes what the
+  statement wrote — rows, and the DDL SQL Server keeps in a transaction —
+  but not what commits by itself, such as a `COMMIT` in the statement.
 
-SQL Server and Snowflake have no such transaction (their drivers refuse one):
-the statement runs as it is, and the account must be one that can only read.
+Snowflake has no read-only transaction either: the statement runs as it is.
 Give every collector an account that can read what its statements read and
-nothing more, whatever its database: read-only is a second line, not the
-first.
+nothing more, whatever its database, SQL Server's and Snowflake's above all:
+read-only is a second line, not the first.
 
 **One statement.** `postgres` sends every statement with the extended
 protocol, bound even without `args`, so the server refuses two joined with
@@ -198,13 +201,31 @@ its request, and sends every request with the setting
 `cancel_http_readonly_queries_on_client_close=1`, which has the server stop
 the statement then. `vertica`'s connection is given up at the deadline, and
 the server is not asked to stop the statement (see
-[Limitations](#limitations)). `postgres` also sets `statement_timeout` to
-the time the scrape has left, in the transaction, so the server ends a
-statement nobody waits for even if the cancel is lost. For the others, an
-account with a limit of its own (`MAX_EXECUTION_TIME` or `max_statement_time`
-in MySQL and MariaDB, `STATEMENT_TIMEOUT_IN_SECONDS` in Snowflake, a resource
-governor in SQL Server, a resource pool's `RUNTIMECAP` in Vertica) is the
-server's side of the same bound.
+[Limitations](#limitations)). The server is also told the time the scrape
+has left, in the transaction before the statement, so that it ends a
+statement nobody waits for even if the cancel is lost, or, with `mysql`,
+never sent:
+
+- `postgres`: `SET LOCAL statement_timeout`, in milliseconds;
+- `mysql`: `SET SESSION max_execution_time`, in milliseconds, on MySQL 5.7.8
+  and later, where it bounds a `SELECT`, and `SET SESSION
+  max_statement_time`, in seconds, on MariaDB 10.1.1 and later. Which the
+  server is, and its version, is asked once on each connection, `SELECT
+  VERSION()`, when its first statement runs; a server older than its
+  variable, or whose version reads as neither MySQL's nor MariaDB's, is set
+  nothing, rather than have every scrape refused over a variable it does
+  not know;
+- `sqlserver`: `SET LOCK_TIMEOUT`, in milliseconds, which bounds how long
+  the statement waits on a lock another session holds, where most of a
+  metrics query's waiting is; the cancel at the deadline bounds the rest.
+
+A statement the server ends at that limit fails as one the deadline ended,
+`running the statement: the scrape's deadline came first`, though the
+server's clock may end it a moment before the scrape's context ends. For
+the others, an account with a limit of its own
+(`STATEMENT_TIMEOUT_IN_SECONDS` in Snowflake, a resource pool's
+`RUNTIMECAP` in Vertica, `max_execution_time` in ClickHouse's profile) is
+the server's side of the same bound.
 
 A driver that fails on what a server sends — a panic, on an answer it reads
 without checking — fails the connection, the statement or the keepalive ping
@@ -541,8 +562,10 @@ label name the drivers a build has; of a build without the `sql` type,
 
 ## Limitations
 
-- **SQL Server and Snowflake run the statement as it is**, without a
-  read-only transaction; their accounts must be ones that can only read.
+- **SQL Server and Snowflake have no read-only transaction.** SQL Server's
+  statement runs in a transaction rolled back after it, which undoes no
+  `COMMIT` the statement makes itself, and Snowflake's runs as it is; their
+  accounts must be ones that can only read.
 - **A Snowflake result must come in one chunk.** Snowflake sends the first
   part of a result with the answer and leaves a larger result's other chunks
   at presigned cloud storage URLs, which the exporter does not connect to:

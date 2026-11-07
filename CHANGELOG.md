@@ -74,6 +74,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `ldap` collector follows an attribute answered in ranges, as Active
+  Directory answers a large group's `member;range=0-1499`, and holds every
+  value under `member`.
 - An `ntp` collector sends a server `samples` requests, `sample_interval`
   apart, and answers the one of the least delay with the jitter of their
   offsets; a target may name several servers by commas, compared by the

@@ -3346,6 +3346,17 @@ asked for it carries it. Its keys:
   name or a value that is not UTF-8 MUST fail the scrape naming the
   attribute and the entry, and MUST NOT be put in the document with U+FFFD
   in place of its bytes.
+- An attribute an entry holds with a range option, `member;range=0-1499`
+  as Active Directory answers one of more values than it sends at once,
+  the option among the name's in any case, MUST be followed, after the
+  search's pages, with a search of the entry alone, scope base, filter
+  `(objectClass=*)`, of the next range, `member;range=1500-*`, until a
+  range whose end is `*` or an answer with none, at most 1000 searches of
+  an attribute; a range whose start is not the one asked for MUST fail the
+  scrape. Every value MUST be under the attribute's name without the range
+  option, `member`, in the order answered. Each such search MUST be a
+  request of a debug report and an exported trace, `SEARCH` with its base
+  and the range asked for, its outcome the values it answered.
 - The messages of a scrape MUST be read against the response limit
   together, counted in their bytes as they come off the connection, a
   `count_only` search's among them. A message's declared length past what
@@ -31359,6 +31370,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAnNTPServerIsSampled` (fetch): of four samples a second apart, the first answered after 60ms, the second not, the third and fourth at once, 5, 7 and 6 seconds ahead, the scrape takes 3 to 5 seconds and answers the offset of an immediate reply, 4 samples, 3 answered, a jitter of about 0.82s; the trace has four requests, the second failed with no reply.
 - `TestAnNTPTargetOfSeveralServers` (fetch): of three servers, 5s ahead, one answering a Kiss-o'-Death `DENY` and one 1s behind, the document has each in order, the second with its error, 2 answered, a median of 2s and a spread of 6s; of servers none of which answers the time, the scrape fails with the first's.
 - `TestSchemaAndExporterAgreeOnNTPKeysWrittenEmpty` (repository), changed: rows of `sample_interval`, `5s` taken and `often` refused by both, and `1s` taken and `500ms` refused by both, the schema as it was having taken it.
+
+## 34.300 An ldap collector follows ranged attributes
+
+- `TestAnLDAPRangedAttributeIsFollowed` (fetch, ldap): a stand-in answering in ranges of 10 a group of 25 members, `member;range=0-9`, is asked with searches of the group alone for `member;range=10-*` and `member;range=20-*`, and the entry has the 25 under `member`, in order; a group of 3 is as the server sent it; each search of a range is traced, `success, 10 values` and `success, 5 values`.
+- `TestLDAPRangesAreRead` (fetch, ldap): the range option is read among other options and in any case, `*` its last; a name with none, a range that ends before it starts and one that is no number are no range.
 
 ## 42.1 OTLP export
 

@@ -2397,7 +2397,22 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
   `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
   `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
   `seconds_until_expiry` (negative once expired), `is_ca`,
-  `signature_algorithm` and `sha256_fingerprint`.
+  `signature_algorithm` and `sha256_fingerprint`; and `ocsp`, of the OCSP
+  response the server stapled, which the handshake MUST ask for.
+- `ocsp` MUST hold `stapled`, whether one was; `status`, `good`, `revoked`
+  or `unknown`, `""` without one or of one that cannot be read; `verified`,
+  whether `golang.org/x/crypto/ocsp` checked its signature against the
+  server certificate's issuer — the certificate after it in the first
+  chain it verified by, or as presented when it verified by none — or a
+  responder that issuer delegated to, and that it is of the server's
+  certificate; `error`, why not, or why it could not be read, a response
+  whose signature does not check read for its status and times all the
+  same; `produced_at`, `this_update` and `next_update` in Unix seconds,
+  `next_update` 0 when the responder names none, and
+  `seconds_until_next_update`, `next_update` less the time of the scrape;
+  and of a revoked certificate `revoked_at` and `revocation_reason`, RFC
+  5280's name of the reason (`keyCompromise`). A staple MUST NOT fail the
+  scrape, whatever it is.
 - `chain.length` MUST be the number of certificates presented. When the
   chain verifies, `chain.earliest_not_after` MUST be, over the chains the
   verification built from the server's certificate to a trusted root, the
@@ -31293,6 +31308,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestSQLStatementsRefuseACSVTransform` (config): a csv transform beside `statements` is refused at load, naming jq, yq and python.
 - `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: rows of `statements[].name`, `b` taken and `queue-size` refused by both, and `statements[].statement`, `SELECT 3 AS v` taken and blanks refused by both, either left out or written `""` refused by both; `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statements[].name` is held to text.
 
+## 34.297 A tlscert collector reads the stapled OCSP response
+
+- `TestATLSCertCollectorReadsTheStapledOCSPResponse` (fetch): a server stapling a good response its intermediate signed for its certificate has `ocsp` stapled, `good`, verified, with its this and next updates and a produced time; a revoked one has its revocation's time and `keyCompromise`; one signed with another key reads `good`, not verified, with why; one of another certificate is not verified; bytes that are no response are stapled with no status and why; none stapled is all zero; the span tells `tlscert.ocsp.stapled` and `tlscert.ocsp.status`.
+- `TestATLSCertHandshakesSpanTellsItsFacts` (fetch), changed: `tlscert.ocsp.stapled` false.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -31901,8 +31921,9 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   `ntp.delay_seconds`; for ldap `ldap.result_code` of each operation the
   server answered and `ldap.search.entries` of each `SEARCH` page; for
   tlscert `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`,
-  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and
-  `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
+  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified`,
+  `tlscert.ocsp.stapled`, `tlscert.ocsp.status` when a staple gives one,
+  and `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
   bulk string's `redis.reply.bytes` or an array's `redis.reply.elements`,
   never a reply's value; for sshfile `sshfile.files` and `sshfile.bytes`
   and for s3file `s3file.objects` and `s3file.bytes`, of the read that

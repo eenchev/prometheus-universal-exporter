@@ -117,7 +117,14 @@ func (c *testCert) writePEM(t *testing.T, name string) (certFile, keyFile string
 // connections and never answers.
 func tlsServer(t *testing.T, chain []*testCert, clientCAs *x509.CertPool, handshake bool) (string, <-chan string) {
 	t.Helper()
-	cert := tls.Certificate{PrivateKey: chain[0].key, Leaf: chain[0].cert}
+	return tlsServerStapling(t, chain, clientCAs, handshake, nil)
+}
+
+// tlsServerStapling is tlsServer stapling staple, an OCSP response, to its
+// handshakes; none when it is nil.
+func tlsServerStapling(t *testing.T, chain []*testCert, clientCAs *x509.CertPool, handshake bool, staple []byte) (string, <-chan string) {
+	t.Helper()
+	cert := tls.Certificate{PrivateKey: chain[0].key, Leaf: chain[0].cert, OCSPStaple: staple}
 	for _, c := range chain {
 		cert.Certificate = append(cert.Certificate, c.der)
 	}
@@ -565,8 +572,8 @@ func certPoolOf(certs ...*x509.Certificate) *x509.CertPool {
 
 // A handshake's span tells, by OpenTelemetry's conventions, the protocol,
 // its version and the cipher, and when the leaf expires, and how many
-// certificates were presented, whether the chain verified and the days the
-// leaf has left; never a subject, an issuer or why a chain did not verify.
+// certificates were presented, whether the chain verified, that no OCSP
+// response was stapled, and the days the leaf has left; never a subject, an issuer or why a chain did not verify.
 func TestATLSCertHandshakesSpanTellsItsFacts(t *testing.T) {
 	pki := newTestPKI(t)
 	leaf := makeCert(t, certSpec{cn: "www", dns: []string{"www.example.test"}, notBefore: pki.now.Add(-time.Hour), notAfter: pki.now.Add(10 * 24 * time.Hour), serial: 6}, pki.intermediate)
@@ -588,7 +595,7 @@ func TestATLSCertHandshakesSpanTellsItsFacts(t *testing.T) {
 		requireFacts(t, "the handshake", facts, map[string]string{
 			"tls.protocol.name": "tls", "tls.protocol.version": "1.3", "tls.cipher": "TLS_AES_128_GCM_SHA256",
 			"tls.server.not_after": leaf.cert.NotAfter.UTC().Format(time.RFC3339),
-			"tlscert.certificates": "2", "tlscert.verified": tc.verified,
+			"tlscert.certificates": "2", "tlscert.verified": tc.verified, "tlscert.ocsp.stapled": "false",
 		})
 	}
 }

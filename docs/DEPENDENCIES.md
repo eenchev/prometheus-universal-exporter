@@ -236,6 +236,12 @@ with either type, so a build of neither, such as `REQUEST_TYPES=grpc`, does
 not link it. A `json` login needs no module: it is a request the exporter
 makes itself, read with `gojq`.
 
+The [`tlscert`](TLSCERT.md) request type reads an OCSP response a server
+staples with `golang.org/x/crypto/ocsp`, which parses the response and checks
+its signature against the certificate's issuer: a package of a module the
+default build links already, for SSH and the `sqlserver` driver, so it adds
+no module.
+
 The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
 own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a
 host's key against a known_hosts file (`ssh/knownhosts`), and

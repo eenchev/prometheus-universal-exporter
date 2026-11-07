@@ -227,6 +227,7 @@ left and an alert-ready flag for one that expires within 14 days:
   "not_after": 1767225599,
   "seconds_until_expiry": 6220800,
   "chain": {"length": 2, "earliest_not_after": 1767225599, "seconds_until_earliest_expiry": 6220800, "earliest_from": "verified"},
+  "ocsp": {"stapled": true, "status": "good", "verified": true, "error": "", "produced_at": 1760983200, "this_update": 1760983200, "next_update": 1761588000, "seconds_until_next_update": 518400, "revoked_at": 0, "revocation_reason": ""},
   "certificates": [
     {
       "subject_cn": "www.example.com",
@@ -279,6 +280,29 @@ left and an alert-ready flag for one that expires within 14 days:
   `x509: certificate signed by unknown authority`, `x509: certificate has
   expired or is not yet valid: ...`, `x509: certificate is valid for
   a.example.com, not b.example.com`.
+- `ocsp` is the OCSP response the server stapled to the handshake, which
+  the exporter asks for, as every Go client does. A certificate can be in
+  date and revoked, and a server whose staple has gone stale makes clients
+  that require one, `Must-Staple`, refuse it:
+  - `stapled`: whether the server sent one. Without one the rest is empty.
+  - `status`: `good`, `revoked` or `unknown`, the status the response gives
+    the server's certificate; `""` for one that cannot be read.
+  - `verified`: whether its signature is the issuer's, or a responder's
+    the issuer delegated to, and it is of the server's certificate. The
+    issuer is the certificate after the server's in the chain it verified
+    by, or as presented when it verified by none. `error` says why not, or
+    why it could not be read; a response whose signature does not check is
+    read for its status and times all the same.
+  - `produced_at`, `this_update` and `next_update`, Unix seconds, and
+    `seconds_until_next_update`, negative once the staple is past its next
+    update: a server that kept serving an old one. `next_update` is `0`
+    when the responder names none.
+  - `revoked_at` and `revocation_reason` of a revoked certificate, the
+    reason as RFC 5280 names it: `keyCompromise`, `superseded`.
+
+  The responder is never asked: the exporter reads what the server sent,
+  and asks no third party about the target. A staple, whatever it says,
+  does not fail the scrape.
 - `tls_version` and `cipher_suite` are what the handshake settled on.
 - `starttls` is the protocol whose request began TLS, `smtp`, `imap`,
   `pop3` or `ftp`, and `""` without [`starttls`](#starttls). Nothing the
@@ -314,6 +338,18 @@ flag for one that expires within 14 days:
             expression: .certificates[0].subject_cn
       - name: tls_certificate_expiring
         expression: if .seconds_until_expiry < 14 * 86400 then 1 else 0 end
+```
+
+The stapled OCSP response: whether the certificate is revoked, and whether
+the staple is stale or missing, for a server that should staple one:
+
+```yaml
+      - name: tls_ocsp_stapled
+        expression: if .ocsp.stapled then 1 else 0 end
+      - name: tls_ocsp_revoked
+        expression: if .ocsp.status == "revoked" then 1 else 0 end
+      - name: tls_ocsp_seconds_until_next_update
+        expression: .ocsp | select(.next_update > 0) | .seconds_until_next_update
 ```
 
 ## Static targets

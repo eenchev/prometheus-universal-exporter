@@ -74,6 +74,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `tlscert` collector's document has `ocsp`, the OCSP response the server
+  stapled: its status, `good`, `revoked` or `unknown`, whether the issuer
+  signed it for the certificate, its updates, and a revocation's time and
+  reason ([The document](docs/TLSCERT.md#the-document)).
 - A `sql` collector runs several statements with `statements`, each with its
   name, its statement and its own `args` and `arg_types`, in order on one
   connection; the document holds each one's rows under its name

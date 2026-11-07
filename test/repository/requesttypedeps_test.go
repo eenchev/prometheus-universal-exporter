@@ -121,7 +121,8 @@ func optInRequestTypes(t *testing.T) []string {
 // SFTP module only when it is sshfile, and the AWS SDK only when it is
 // s3file; a build of graphite, http and localfile together links none
 // of them, nor does one of dns, tlscert, ntp and kubernetes, or of redis,
-// tcp, ldap or icmp alone, which need nothing outside the standard library; and the default
+// tcp, ldap or icmp alone, which need nothing outside the standard library
+// but, for tlscert, golang.org/x/crypto/ocsp; and the default
 // build, of every type but the opt-in s3file, redis, tcp and ldap, links gRPC's
 // and SSH's and no AWS SDK, which only a build asking for s3file
 // (OPT_IN_REQUEST_TYPES) links, and a build asking for redis, tcp or ldap alone

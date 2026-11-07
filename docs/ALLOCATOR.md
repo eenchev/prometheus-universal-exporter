@@ -1085,7 +1085,11 @@ for more reads of the files, and more asks of a source's API.
 ## Status page
 
 `GET /` is a page for a person: what this instance holds, without a Prometheus
-to ask. The page calls each allocator process an instance, and the random
+to ask. Its moments read as the exporter's status page's do
+([Endpoints](ENDPOINTS.md)): the instance's start in the browser's time,
+UTC and how long ago in its tooltip, and where a time is said as how long
+ago, a heartbeat's, a peer's check's or a source's refresh's, the moment in
+the browser's time and in UTC in its tooltip. The page calls each allocator process an instance, and the random
 id its process takes at its start, the `id` of `instance` in `/v1/status`,
 its instance ID. It shows
 

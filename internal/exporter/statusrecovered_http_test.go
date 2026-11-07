@@ -23,7 +23,7 @@ const recoveredLabel = `<span class="recovered-label">Earlier failure, recovered
 
 // recoveredAt is the time line under a recovered error: when, and how long
 // ago as the page writes an age.
-var recoveredAt = regexp.MustCompile(`</div><span class="muted">at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \((\d+[hm])*\d+[hms] ago\)</span>`)
+var recoveredAt = regexp.MustCompile(`</div><span class="muted">at <time datetime="(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)">\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ</time> \((\d+[hm])*\d+[hms] ago\)</span>`)
 
 // isRecovered is a last_error_recovered given and true, isFailing one given
 // and false: an error is there, and what failed has not succeeded since.

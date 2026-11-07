@@ -53,6 +53,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The exporter's status page and the allocator's pages show each moment in
+  the browser's time, with UTC and how long ago in its tooltip; without
+  JavaScript they show UTC as before ([Endpoints](docs/ENDPOINTS.md)).
 - An exporter in allocator mode says its `--web.static-targets-path` in its
   heartbeats, and a member's view on the allocator's page links the
   member's own status page and, of each static target it owns or keeps

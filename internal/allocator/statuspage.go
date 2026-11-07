@@ -617,8 +617,9 @@ var statusFrame = `<!DOCTYPE html>
   }
   // The status page's probe jobs table sorts and filters as
   // pagekit.SortableScript says.
-` + pagekit.SortableScript + `
+` + pagekit.SortableScript + pagekit.LocalTimesScript + `
   const arrangeJobs = sortable(content, "probe-jobs", "jobs-filter", "probe jobs");
+  localTimes(content);
   // A refresh asked while another waits for the URL as it is now is that
   // one: the answer coming is the one asked for, and a slow allocator is
   // not asked again at every tick of the auto-refresh. One asked after the
@@ -644,6 +645,7 @@ var statusFrame = `<!DOCTYPE html>
         refreshedAt = Date.now();
         asOf();
         filterRows();
+        localTimes(content);
       });
     } catch (error) {
       // A refresh aborted for a later one says nothing: the later one says
@@ -689,7 +691,7 @@ var statusFrame = `<!DOCTYPE html>
 // its state; a discovery source's result; and a view's targets, labels
 // and the note over a list.
 const statusParts = `
-{{- define "heartbeat"}}{{if .Late}}<span class="bad" title="a heartbeat is overdue">{{age .LastHeartbeatAgeSeconds}} ago</span>{{else}}{{age .LastHeartbeatAgeSeconds}} ago{{end}}{{end}}
+{{- define "heartbeat"}}{{if .Late}}<time class="ago bad" datetime="{{.LastHeartbeat}}" data-note="a heartbeat is overdue" title="a heartbeat is overdue; {{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{else}}<time class="ago" datetime="{{.LastHeartbeat}}" title="{{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{end}}
 {{- define "capacity"}}{{if and .InList (ne .CapacityInList .Capacity)}}<span title="the member list places it by {{weight .CapacityInList}} until its heartbeats' {{weight .Capacity}} has held for the settle time">{{weight .CapacityInList}} <span class="bad">→</span> {{weight .Capacity}}</span>{{else}}{{weight .Capacity}}{{end}}{{end}}
@@ -725,7 +727,7 @@ const statusContent = `{{define "content"}}
 <table class="facts">
 <tr><th>Address</th><td>{{.Instance.Address}}</td></tr>
 <tr><th class="wraps">Instance ID</th><td><code>{{.Instance.ID}}</code></td></tr>
-<tr><th>Started</th><td>{{.Instance.StartedAt}} <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
+<tr><th>Started</th><td><time datetime="{{.Instance.StartedAt}}">{{.Instance.StartedAt}}</time> <span class="muted">(up {{age .Instance.UptimeSeconds}})</span></td></tr>
 <tr><th>Input files</th><td>{{if .Instance.WatchIntervalSeconds}}read again every {{interval .Instance.WatchIntervalSeconds}} for changes{{else}}<span class="muted">read once, at the start</span> (<code class="flag">--config.watch-interval=0</code>){{end}}</td></tr>
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
@@ -745,7 +747,7 @@ const statusContent = `{{define "content"}}
 <td>{{if .Live}}<span class="good">live</span>{{else}}<span class="bad">down</span>{{end}}</td>
 <td>{{if .Discovering}}yes{{else}}<span class="muted">no</span>{{end}}</td>
 <td>{{if .AddressKnown}}yes{{else}}<span class="bad">no</span>{{end}}</td>
-<td class="num">{{if .Self}}<span class="muted">–</span>{{else if .LastCheck}}{{age .LastCheckAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
+<td class="num">{{if .Self}}<span class="muted">–</span>{{else if .LastCheck}}<time class="ago" datetime="{{.LastCheck}}" title="{{.LastCheck}}">{{age .LastCheckAgeSeconds}} ago</time>{{else}}<span class="muted">never</span>{{end}}</td>
 <td class="num">{{if .Failures}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td>
 </tr>
 {{- end}}
@@ -931,7 +933,7 @@ const statusContent = `{{define "content"}}
 <td class="result">{{template "result" .Result}}{{if eq .Result "failing"}}{{if .Targets}}, keeping its last answer{{end}}<br><span class="muted">{{.Error}}</span>{{end}}{{if .WeightFallbacks}}<br><span class="bad">{{.WeightFallbacks}} weight{{if ne .WeightFallbacks 1}}s{{end}} fell back</span> <span class="muted">on the owner's: their weight label gave no weight</span>{{end}}</td>
 <td class="num">{{.Targets}}</td>
 <td class="num">{{interval .RefreshIntervalSeconds}}</td>
-<td class="num">{{if .LastRefresh}}{{age .LastRefreshAgeSeconds}} ago{{else}}<span class="muted">never</span>{{end}}</td>
+<td class="num">{{if .LastRefresh}}<time class="ago" datetime="{{.LastRefresh}}" title="{{.LastRefresh}}">{{age .LastRefreshAgeSeconds}} ago</time>{{else}}<span class="muted">never</span>{{end}}</td>
 <td>{{if eq .From "own"}}this instance's discovery{{else if eq .From "snapshot"}}the leader's snapshot{{else}}<span class="muted">–</span>{{end}}</td>
 </tr>
 {{- end}}

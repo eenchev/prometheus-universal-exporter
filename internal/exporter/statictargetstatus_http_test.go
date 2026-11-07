@@ -178,7 +178,7 @@ func TestTheStatusPageShowsTheJSONsValuesEscaped(t *testing.T) {
 	for _, row := range page.Rows {
 		// The interval, Go's 1m0s in the JSON, is written as the page
 		// writes a duration, 1m.
-		for _, value := range []string{row.Name, row.Collector, row.Target, pagekit.DurationText(row.Interval), row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.Backoff} {
+		for _, value := range []string{row.Name, row.Collector, row.Target, pagekit.DurationText(row.Interval), row.Result, row.LastScrape, row.LastError, row.LastErrorAt, row.BackoffUntil} {
 			if value != "" && !strings.Contains(body, templateEscaped(value)) {
 				t.Errorf("the page does not show %q of the row %s", value, row.Name)
 			}
@@ -295,7 +295,7 @@ func TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce(t *testing.T
 	page := getPage(t, server, "/static-targets/status")
 	requireContains(t, page,
 		`as the member <a href="http://pue-allocator:9116/?member=pod&#43;0%261" title="the allocator's view of pod 0&amp;1">pod 0&amp;1</a>:`,
-		`<p class="meta" id="bundle">The bundle in force is generation <code>g7</code>, in force since `+st.InForceAt.UTC().Format(time.RFC3339)+` (1m30s ago). The allocator was last heard from at `)
+		`<p class="meta" id="bundle">The bundle in force is generation <code>g7</code>, in force since <time datetime="`+st.InForceAt.UTC().Format(time.RFC3339)+`">`+st.InForceAt.UTC().Format(time.RFC3339)+`</time> (1m30s ago). The allocator was last heard from at <time datetime="`)
 	b := statusJSON(t, server, "/static-targets/status").Bundle
 	if b == nil || b.Member != "pod 0&1" || b.MemberView != "http://pue-allocator:9116/?member=pod+0%261" || b.Generation != "g7" || b.InForceSince != st.InForceAt.UTC().Format(time.RFC3339) || b.LastSync == "" {
 		t.Errorf("the JSON's allocator is %+v", b)
@@ -537,7 +537,7 @@ func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
 	}
 	page := getPage(t, server, "/static-targets/status")
 	requireContains(t, page, `<th data-sort="text">Result</th><th data-sort="num">Recent</th><th data-sort="num">Failures</th>`)
-	requireContains(t, page, `">✗</span><span class="bad" title="`)
+	requireContains(t, page, `">✗</span><span class="bad" data-at="`)
 	requireContains(t, page, ` backoff">…</span></td>`)
 	for _, target := range server.manager.StaticTargets() {
 		if target.Name == "ok" {
@@ -579,5 +579,25 @@ func TestTheStaticTargetsTableSortsAndFilters(t *testing.T) {
 	}
 	if !strings.Contains(table, `data-match="ok`+"\ntext\n") || !strings.Contains(table, "team=&lt;b onmouseover=&#34;x&#34;&gt;\nsuccess\"") {
 		t.Errorf("the row of ok does not match its name, collector, labels and result:\n%s", table)
+	}
+}
+
+// Every moment the status page shows is a <time> of RFC 3339 in UTC, which
+// a page without JavaScript shows as it is; the page's script shows it in
+// the browser's time with UTC and how long ago in its tooltip, after a
+// refresh too, and writes a strip mark's moment the same way.
+func TestTheStatusPageWritesEachMomentAsATime(t *testing.T) {
+	server := statusTargets(t)
+	page := getPage(t, server, "/static-targets/status")
+	row := statusRow(t, server, "ok")
+	b := statusRow(t, server, "backing_off")
+	requireContains(t, page,
+		`<td data-value="`, `<time datetime="`+row.LastScrape+`">`+row.LastScrape+`</time><br><span class="muted">`,
+		`backing off until <time datetime="`+b.BackoffUntil+`">`+b.BackoffUntil+`</time>`,
+		`at <time datetime="`+b.LastErrorAt+`">`+b.LastErrorAt+`</time>`,
+		`data-at="`+row.Recent[0].At+`" title="`+row.Recent[0].At+` success"`,
+		"function localTimes(root) {", "localTimes(content);\n  function swap(fragment) {", "arrangeTargets(() => { content.innerHTML = fragment; });\n    localTimes(content);")
+	if strings.Contains(page, `<td data-value="`+fmt.Sprint(row.ScrapedAt)+`">`+row.LastScrape) {
+		t.Error("a last scrape's moment is no <time>")
 	}
 }

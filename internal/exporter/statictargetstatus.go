@@ -663,12 +663,14 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
   // the new content takes it.
   // The static targets table sorts and filters as pagekit.SortableScript
   // says, its order and filter kept through a swap.
-`+pagekit.SortableScript+`
+`+pagekit.SortableScript+pagekit.LocalTimesScript+`
   const arrangeTargets = sortable(content, "static-targets-table", "static-filter", "static targets");
+  localTimes(content);
   function swap(fragment) {
     const summaries = () => [...content.querySelectorAll("details.long > summary")];
     const focused = summaries().indexOf(document.activeElement);
     arrangeTargets(() => { content.innerHTML = fragment; });
+    localTimes(content);
     if (focused >= 0 && summaries()[focused]) summaries()[focused].focus();
     refreshedAt = Date.now();
     state.className = "muted";
@@ -779,12 +781,13 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 </main>
 </body>
 </html>
-{{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{.At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{.At}}</span>{{end}}{{end}}
+{{define "at"}}<time datetime="{{.}}">{{.}}</time>{{end}}
+{{define "lasterror"}}{{if .Recovered}}<span class="recovered-label">Earlier failure, recovered since</span><div class="recovered">{{template "long" (long "error" .Text)}}</div><span class="muted">at {{template "at" .At}} ({{.Age}} ago)</span>{{else}}{{template "long" (long "error" .Text)}}<br><span class="muted">at {{template "at" .At}}</span>{{end}}{{end}}
 {{define "content"}}
 <p class="meta" id="as-of">As of <time datetime="{{.GeneratedAt}}">{{.GeneratedAt}}</time>.</p>
 {{- with .Bundle}}
 <p>This exporter runs in allocator mode as the member {{if .MemberView}}<a href="{{.MemberView}}" title="the allocator's view of {{.Member}}">{{.Member}}</a>{{else}}{{.Member}}{{end}}: these are the static targets the allocator gave this replica, not every target the allocator holds, and the probes this replica answered.</p>
-<p class="meta" id="bundle">{{if .Generation}}The bundle in force is generation <code>{{.Generation}}</code>{{if .InForceSince}}, in force since {{.InForceSince}} ({{.InForceAge}} ago){{end}}.{{else}}No bundle from the allocator is in force yet.{{end}}{{if .LastSync}} The allocator was last heard from at {{.LastSync}} ({{.LastSyncAge}} ago).{{end}}</p>
+<p class="meta" id="bundle">{{if .Generation}}The bundle in force is generation <code>{{.Generation}}</code>{{if .InForceSince}}, in force since {{template "at" .InForceSince}} ({{.InForceAge}} ago){{end}}.{{else}}No bundle from the allocator is in force yet.{{end}}{{if .LastSync}} The allocator was last heard from at {{template "at" .LastSync}} ({{.LastSyncAge}} ago).{{end}}</p>
 {{- end}}
 {{- if .OTLP.Enabled}}{{if .OTLP.Failing}}
 <p class="bad">OTLP export is failing: the last {{.OTLP.Failures}} export{{if ne .OTLP.Failures 1}}s{{end}} failed{{if eq .OTLP.Readiness "unready"}}, and the exporter is unready{{end}}. See <a href="#otlp">OTLP export</a>.</p>
@@ -807,10 +810,10 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tr data-order="{{$i}}" data-match="{{.Match}}">
 <td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> <a href="{{$.CollectorsLink}}#collector-{{.Collector}}" title="the collector {{.Collector}} on the collectors page">{{.Collector}}</a>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
-<td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
+<td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{template "at" .LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
-<td class="strip" data-value="{{.RecentBad}}">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
-<td data-value="{{.Failures}}">{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
+<td class="strip" data-value="{{.RecentBad}}">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
+<td data-value="{{.Failures}}">{{.Failures}}{{if .Backoff}}<br><span class="bad">{{if .BackoffUntil}}backing off until {{template "at" .BackoffUntil}}{{else}}{{.Backoff}}{{end}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}{{end}}
@@ -831,9 +834,9 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 {{- range .Probes}}
 <tr>
 <td class="what"><span class="muted">collector</span> <strong>{{.Collector}}</strong>{{if .DebugLink}} <a class="muted" href="{{.DebugLink}}" title="probe it once now, and report each stage">debug</a>{{end}}{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .Params}}<br><span class="muted">parameters</span> {{template "long" (long "parameters" .Params)}}{{end}}</td>
-<td>{{.LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
+<td>{{template "at" .LastProbe}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span></td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else}}<span class="good">{{.Result}}</span>{{end}}{{if .Shared}} <span class="muted">(shared)</span>{{end}}<br><span class="muted">HTTP {{.Status}}, {{.Series}} series</span></td>
-<td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
+<td class="strip">{{range .Probes}}<span class="{{if .Good}}good{{else}}bad{{end}}" data-at="{{.At}}" title="{{.At}} {{.Result}}{{if .Shared}} (shared){{end}}, HTTP {{.Status}}">{{.Mark}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>
 {{- end}}
@@ -855,11 +858,11 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 {{- with .ExporterInstance}}
 <tr><th>Exporter instance</th><td><code>{{.Attribute}}</code> = {{.Value}}<br><span class="muted">on every resource the export sends</span></td></tr>
 {{- end}}
-<tr><th>Last export</th><td>{{with .LastExport}}{{.Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last export</th><td>{{with .LastExport}}{{template "at" .Started}}<br><span class="muted">{{.AgeText}} ago, took {{.DurationText}}</span><br>{{if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="bad">{{.Result}}</span>{{end}}{{if .Rejected}}, {{.Rejected}} data point{{if ne .Rejected 1}}s{{end}} rejected{{end}}<br><span class="muted">{{.Requests}} request{{if ne .Requests 1}}s{{end}}, {{.DataPoints}} data point{{if ne .DataPoints 1}}s{{end}}, {{.Retries}} retr{{if eq .Retries 1}}y{{else}}ies{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}} <span class="muted">({{.LastSuccessAge}} ago)</span>{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 {{- if .UnreadyAfter}}
-<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{.UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
+<tr><th>Readiness</th><td>{{if eq .Readiness "unready"}}<span class="bad">unready</span>{{if .UnreadySince}} since {{template "at" .UnreadySince}}{{end}}: {{range $i, $r := .UnreadyReasons}}{{if $i}}; {{end}}{{$r}}{{end}}{{else}}<span class="good">ready</span>{{end}} <span class="muted">(unready after {{.UnreadyAfter}} failed export{{if ne .UnreadyAfter 1}}s{{end}} in a row)</span></td></tr>
 {{- end}}
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} data point{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
@@ -877,7 +880,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
 <tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastRecords}} log record{{if ne .LastRecords 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Pending</th><td>{{.Pending}} log record{{if ne .Pending 1}}s{{end}} of at most {{.MaxPending}}</td></tr>
@@ -899,7 +902,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 <tr><th>Endpoint</th><td>{{.Endpoint}}</td></tr>
 <tr><th>Last export</th><td>{{if .LastExport}}{{.LastExport}}<br>{{if eq .LastResult "success"}}<span class="good">{{.LastResult}}</span>{{else}}<span class="bad">{{.LastResult}}</span>{{end}}<br><span class="muted">{{.LastSpans}} span{{if ne .LastSpans 1}}s{{end}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td></tr>
-<tr><th>Last success</th><td>{{if .LastSuccess}}{{.LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+<tr><th>Last success</th><td>{{if .LastSuccess}}{{template "at" .LastSuccess}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
 <tr><th>Failures in a row</th><td>{{if .Failing}}<span class="bad">{{.Failures}}</span>{{else}}0{{end}}</td></tr>
 <tr><th>Last error</th><td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
 <tr><th>Sampling rules</th><td>threshold {{duration .Threshold}}; errors {{.Errors}}; parent_based {{.ParentBased}}; sample_ratio {{.SampleRatioText}}; max_per_second {{if .MaxPerSecond}}{{.MaxPerSecond}}{{else}}no cap{{end}}</td></tr>

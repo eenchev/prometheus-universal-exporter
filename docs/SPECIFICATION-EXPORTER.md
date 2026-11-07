@@ -8565,6 +8565,17 @@ Recommended behavior:
   of a page a script swaps in, as the status page's fragment, MUST NOT touch
   it. Without JavaScript the picker MUST be hidden and the pages MUST follow
   the browser.
+- The status page and the allocator's pages MUST write each moment as a
+  `<time>` whose `datetime` is RFC 3339 in UTC: with its text the moment
+  itself, which a page without JavaScript shows as it is, and with
+  JavaScript in the browser's time, the time of day alone today and the
+  date with it otherwise, its tooltip UTC and how long ago or until; with
+  `class="ago"` its text how long ago, as the server wrote it, and its
+  tooltip the moment in the browser's time and in UTC, after its
+  `data-note`. A strip mark's tooltip MUST begin with its moment
+  (`data-at`), written in the browser's time with UTC after it by the
+  script. The script MUST run on the content after each refresh too, and
+  MUST be one, `pagekit.LocalTimesScript`, on both.
 - Every HTML page the exporter serves — `/`, `/collectors`, `/debug` and the
   status page (§ 42.14a) — MUST carry the same bar at its top, once, with
   the same style: a link back to `/` (on `/` itself, the exporter's name
@@ -31053,6 +31064,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAMembersViewLinksItsExportersPages` (allocator): r1, whose heartbeat says `[fd00::1]:9115` and `/st/targets`, has `static_targets_path` in its status, and its view links `http://[fd00::1]:9115/st/targets/status` beside its address and its first static target's name `http://[fd00::1]:9115/st/targets?targets=<name>`; r2, whose heartbeats say no path, has neither link.
 - `TestAHeartbeatWithoutMemberOrAddressIsRefused` (allocator), changed: a static targets path `static-targets`, `/`, `/a/../b`, `/a/`, `/a?b`, `/a#b`, `/a%2fb`, `/a b` and one of 257 bytes are refused, and `/static-targets`, `/a/b-c_d.e` and one of 256 bytes are not.
 - `TestTheFirstBundleIsPutInForceAndReportedInTheNextHeartbeat` (allocclient) and `TestAllocatorModeIsUnreadyUntilTheFirstBundle`, changed: the first heartbeat says the static targets path, `/static-targets` by default.
+
+## 34.289 Moments in the browser's time
+
+- `TestTheStatusPageWritesEachMomentAsATime` (exporter): a target's last scrape, a backoff's end and a last error's moment are each a `<time>` of RFC 3339 in UTC, a strip mark has `data-at` with its moment beginning its title, and the page's script defines `localTimes` and runs it on the content at the start and after a swap. (In headless Chromium in `Europe/Sofia`, the last scrape of today shows `10:52:00` titled `2026-11-07 08:52:00 UTC, 36s ago`, a backoff's end of another day its date with it, and a strip mark is titled `10:52:00 (2026-11-07 08:52:00 UTC) failed`.)
+- `TestTheAllocatorsPagesWriteEachMomentAsATime` (allocator): the instance's start is a `<time>` and a member's last heartbeat a `<time class="ago">` titled with its moment on the status page and a member's view, and the script runs on the content at the start and after a refresh.
+- `TestTheStatusMarksAMemberLateByTheConfiguredInterval` (allocator), `TestTheStatusPageShowsTheReadinessOTLPFailuresMake`, `TestTheStatusPageShowsTheJSONsValuesEscaped`, `TestTheStatusPageLinksTheAllocatorsViewAndSaysTheBundleInForce`, `TestATargetsRowShowsItsLastScrapes` and the recovered errors' tests (exporter), changed: a late heartbeat is a `<time class="ago bad">` with its note, and the moments they read are `<time>`s.
 
 ## 42.1 OTLP export
 

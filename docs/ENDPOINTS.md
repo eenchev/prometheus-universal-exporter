@@ -38,6 +38,13 @@ it before it is first drawn, so it never shows in the other theme first,
 and the status page's refresh keeps it. Without JavaScript the picker is
 hidden and the pages follow the browser.
 
+The status page, like the allocator's pages, writes each moment one way: in
+the browser's own time, the time of day alone when it is today and the date
+with it otherwise, its tooltip the moment in UTC and how long ago it was, or
+how long until it, as a backoff's end. A strip mark's tooltip begins with
+its moment in the browser's time, UTC after it. Without JavaScript the page
+shows each moment in UTC, as RFC 3339, as `?format=json` has it.
+
 Every endpoint but `/health` and `/ready` answers `403` to a request the
 browser marks as made by another site's page, `Sec-Fetch-Site: cross-site`
 or `same-site`, with Basic Auth on or off: a browser sends the exporter's

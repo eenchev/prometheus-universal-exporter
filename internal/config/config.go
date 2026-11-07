@@ -420,6 +420,9 @@ func checkSQLFormats(x *model.Collector) error {
 	default:
 		return fmt.Errorf("collector %q transforms with %s, which cannot read the rows of a statement; use csv, which reads a column by name, one series a row, or jq, yq or python, which read the rows as a list of objects", x.Name, x.Transform.Type)
 	}
+	if x.Transform.Type == "csv" && fetch.SQLNamedResults(x) {
+		return fmt.Errorf("collector %q transforms with csv, which reads the rows of one statement by column, and runs request.statements, whose document is an object of each one's rows by its name; use jq, yq or python, which read .<name>, or a collector of each statement", x.Name)
+	}
 	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) || r.Binary.Set() {
 		return fmt.Errorf("collector %q sets response settings, which apply to the body of a response, and a sql collector's rows have none; leave the response block out", x.Name)
 	}

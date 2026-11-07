@@ -1912,6 +1912,46 @@
                   ]
                 },
                 "then": {
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "statements": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "statements"
+                        ]
+                      },
+                      "then": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "args": {
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "args"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "arg_types": {
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "arg_types"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
                   "oneOf": [
                     {
                       "properties": {
@@ -1935,6 +1975,16 @@
                       },
                       "required": [
                         "statement_file"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "statements": {
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "statements"
                       ]
                     }
                   ],
@@ -4142,6 +4192,62 @@
                 },
                 "pattern": "^/",
                 "type": "string"
+              },
+              "statements": {
+                "description": "sql: several statements, in place of statement, statement_file, args and arg_types, run in order on one connection, each in a transaction of its own as the one statement is: the document is an object of each one's rows, a list of objects, under its name, which jq, yq and python read, and not a csv transform. At most 16. See docs/SQL.md#several-statements.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "arg_types": {
+                      "description": "The type each of the statement's args is bound as, as request.arg_types.",
+                      "items": {
+                        "enum": [
+                          "text",
+                          "int",
+                          "float",
+                          "bool"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "args": {
+                      "description": "The values of the statement's placeholders, in order, as request.args are of the one statement. May contain {{param_name}} placeholders.",
+                      "items": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "description": "The name the statement's rows are under in the document: letters, digits and _, not starting with a digit, unique among the collector's statements.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "statement": {
+                      "description": "The statement, with the driver's own placeholders for its args, as request.statement is written.",
+                      "minLength": 1,
+                      "not": {
+                        "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                        "type": "string"
+                      },
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "statement"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
               },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",

@@ -234,3 +234,19 @@ func TestAnEmptyStatementBesideAStatementFileIsTheKeyLeftOut(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+// A csv transform, which reads one statement's rows by column, is refused
+// beside request.statements, whose document is an object of each one's
+// rows by its name; jq reads it.
+func TestSQLStatementsRefuseACSVTransform(t *testing.T) {
+	document := strings.Replace(sqlCollector, "      statement: SELECT state, count(*) AS n FROM jobs GROUP BY state\n",
+		"      statements:\n        - name: jobs\n          statement: SELECT state, count(*) AS n FROM jobs GROUP BY state\n", 1)
+	_, err := Load(testutil.WriteFile(t, "config.yaml", document))
+	if err == nil || !strings.Contains(err.Error(), `collector "db" transforms with csv, which reads the rows of one statement by column, and runs request.statements`) {
+		t.Errorf("csv: %v", err)
+	}
+	document = strings.Replace(strings.Replace(document, "      type: csv\n", "      type: jq\n", 1), "        expression: n\n", "        items: .jobs[]\n        expression: .n\n", 1)
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", document)); err != nil {
+		t.Errorf("jq: %v", err)
+	}
+}

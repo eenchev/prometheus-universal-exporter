@@ -97,6 +97,38 @@ type SQLConfig struct {
 	ServiceName string                `yaml:"service_name,omitempty"`
 	MaxRows     int                   `yaml:"max_rows,omitempty"`
 	Connections *model.SQLConnections `yaml:"connections,omitempty"`
+	// Statements are several statements, each with its name and its own
+	// args, run in order on one connection, in place of statement,
+	// statement_file, args and arg_types: the document holds each one's
+	// rows under its name (docs/SQL.md#several-statements).
+	Statements []SQLStatement `yaml:"statements,omitempty"`
+}
+
+// SQLStatement is one entry of request.statements: its name, which its rows
+// are under in the document, the statement, and the values bound to its
+// placeholders, with their types, as request.args and request.arg_types
+// are of a collector's one statement.
+type SQLStatement struct {
+	Name      string   `yaml:"name"`
+	Statement string   `yaml:"statement"`
+	Args      []string `yaml:"args,omitempty"`
+	ArgTypes  []string `yaml:"arg_types,omitempty"`
+}
+
+// maxSQLStatements bounds request.statements: a handful of statements of
+// one database, not a script.
+const maxSQLStatements = 16
+
+// sqlStatementName is what a request.statements entry's name is made of,
+// which a rule reads its rows by: letters, digits and _, not beginning with
+// a digit, as a jq field written .name takes it.
+var sqlStatementName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// sqlRun is one statement a scrape runs: its name, "" for a collector's one
+// statement, its text, and its args, filled and typed.
+type sqlRun struct {
+	name, statement string
+	args            []any
 }
 
 // MarshalYAML writes the keys as a configuration writes them, and, for a
@@ -263,6 +295,9 @@ func init() {
 		AnswerHint:   "Paste the rows as JSON, a list of objects of each row's columns by name, as the Response of a run shows them",
 		Templates:    sqlTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
+			if len(sqlRequest(c).Statements) > 0 {
+				return unusedParamsIn(c, unused, "its request.database, its statements' args or its label values")
+			}
 			return unusedParamsIn(c, unused, "its request.database, its args or its label values")
 		},
 		SchemaRule:         sqlSchemaRule,
@@ -289,6 +324,7 @@ func init() {
 			"http_exporter_sql_limit_waits_total", "http_exporter_sql_limit_failures_total", "http_exporter_sql_rows",
 		},
 	})
+	sqlNamedResults = func(c *model.Collector) bool { return len(sqlRequest(c).Statements) > 0 }
 	templateEscapers["database"] = escapeSQLDatabase
 	// An arg of a type but text is sent as a value, as one of text is, and
 	// checked against its type once filled.
@@ -371,7 +407,11 @@ func validateSQLRequest(x *model.Collector) error {
 	if err != nil {
 		return err
 	}
-	if err := loadSQLStatement(x, d); err != nil {
+	if len(own.Statements) > 0 {
+		if err := checkSQLStatements(own, d); err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+	} else if err := loadSQLStatement(x, d); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if strings.TrimSpace(r.Username) == "" {
@@ -397,18 +437,8 @@ func validateSQLRequest(x *model.Collector) error {
 	if _, err := (templateField{"request.database", own.Database, "database"}).parse(); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if err := checkSQLArgTypes(own.Args, own.ArgTypes); err != nil {
+	if err := checkSQLArgs("request.", own.Args, own.ArgTypes); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
-	}
-	for i := range own.Args {
-		field := sqlArgField(own, i)
-		placeholders, err := field.parse()
-		if err != nil {
-			return fmt.Errorf("collector %q %w", x.Name, err)
-		}
-		if err := checkSQLArgDefaults(field, placeholders); err != nil {
-			return fmt.Errorf("collector %q %w", x.Name, err)
-		}
 	}
 	if err := checkSQLOptions(d, own.Options, r.TLS); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
@@ -418,6 +448,69 @@ func validateSQLRequest(x *model.Collector) error {
 	}
 	if err := checkSQLConnections(own.Connections, false); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	return nil
+}
+
+// checkSQLArgs checks the args of a statement, at prefix (request. or
+// request.statements[i].), and their types.
+func checkSQLArgs(prefix string, args, types []string) error {
+	if err := checkSQLArgTypes(prefix, args, types); err != nil {
+		return err
+	}
+	for i := range args {
+		field := sqlArgFieldOf(prefix, args, types, i)
+		placeholders, err := field.parse()
+		if err != nil {
+			return err
+		}
+		if err := checkSQLArgDefaults(field, placeholders); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSQLStatements checks request.statements: not beside statement,
+// statement_file, args or arg_types, which are those of a collector's one
+// statement; at most maxSQLStatements entries, each with a name of its own,
+// a statement the driver takes, and its args.
+func checkSQLStatements(own SQLConfig, d *sqlDriver) error {
+	for key, set := range map[string]bool{"statement": own.Statement != "", "statement_file": own.StatementFile != "", "args": len(own.Args) > 0, "arg_types": len(own.ArgTypes) > 0} {
+		if set {
+			return fmt.Errorf("sets both request.statements and request.%s; with statements, each entry has its statement and its args", key)
+		}
+	}
+	if len(own.Statements) > maxSQLStatements {
+		return fmt.Errorf("request.statements has %d entries, more than %d; a collector runs a few statements of one database on one connection, so split them into collectors", len(own.Statements), maxSQLStatements)
+	}
+	seen := map[string]int{}
+	for i, s := range own.Statements {
+		where := fmt.Sprintf("request.statements[%d]", i)
+		switch {
+		case s.Name == "":
+			return fmt.Errorf("%s has no name; its rows are under its name in the document", where)
+		case !sqlStatementName.MatchString(s.Name):
+			return fmt.Errorf("%s.name %q is not letters, digits and _, beginning with a letter or _, as a rule reads it, .%s", where, s.Name, "name")
+		}
+		if first, ok := seen[s.Name]; ok {
+			return fmt.Errorf("%s.name %q is request.statements[%d]'s too; each statement's rows are under a name of their own", where, s.Name, first)
+		}
+		seen[s.Name] = i
+		if strings.TrimSpace(s.Statement) == "" {
+			return fmt.Errorf("%s has no statement", where)
+		}
+		if sqlStatementPlaceholder.MatchString(s.Statement) {
+			return fmt.Errorf("%s.statement has a {{param_...}} placeholder, which is not filled there and would be sent as written; write the driver's own placeholder in the statement and the probe's parameter in its args", where)
+		}
+		if d.statement != nil {
+			if err := d.statement(s.Statement); err != nil {
+				return fmt.Errorf("%s.statement: %w", where, err)
+			}
+		}
+		if err := checkSQLArgs(where+".", s.Args, s.ArgTypes); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -891,13 +984,34 @@ func sqlDatabase(c *model.Collector, overrides RequestOverrides) (string, error)
 	return templateField{"request.database", sqlRequest(c).Database, "database"}.render(overrides.Params)
 }
 
-// sqlArgs is the values bound to the statement, their placeholders filled,
-// each of the type its arg_types gives it.
-func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
+// sqlRuns are the statements a scrape of c runs: its one statement, or
+// each of request.statements, in order, with its args filled.
+func sqlRuns(c *model.Collector, overrides RequestOverrides) ([]sqlRun, error) {
 	own := sqlRequest(c)
-	args := make([]any, len(own.Args))
-	for i, arg := range own.Args {
-		field := sqlArgField(own, i)
+	if len(own.Statements) == 0 {
+		args, err := sqlArgs("request.", own.Args, own.ArgTypes, overrides)
+		if err != nil {
+			return nil, err
+		}
+		return []sqlRun{{statement: sqlStatement(c), args: args}}, nil
+	}
+	runs := make([]sqlRun, len(own.Statements))
+	for i, s := range own.Statements {
+		args, err := sqlArgs(fmt.Sprintf("request.statements[%d].", i), s.Args, s.ArgTypes, overrides)
+		if err != nil {
+			return nil, err
+		}
+		runs[i] = sqlRun{name: s.Name, statement: s.Statement, args: args}
+	}
+	return runs, nil
+}
+
+// sqlArgs is the values bound to a statement, at prefix, their
+// placeholders filled, each of the type its arg_types gives it.
+func sqlArgs(prefix string, list, types []string, overrides RequestOverrides) ([]any, error) {
+	args := make([]any, len(list))
+	for i, arg := range list {
+		field := sqlArgFieldOf(prefix, list, types, i)
 		value := arg
 		if HasPathParams(arg) {
 			var err error
@@ -905,7 +1019,7 @@ func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
 				return nil, err
 			}
 		}
-		typed, err := sqlTypedArg(field.where, sqlArgType(own, i), value)
+		typed, err := sqlTypedArg(field.where, sqlArgTypeOf(types, i), value)
 		if err != nil {
 			return nil, err
 		}
@@ -937,22 +1051,22 @@ var sqlArgTypes = []string{sqlArgText, sqlArgInt, sqlArgFloat, sqlArgBool}
 // static target's is refused when its file loads.
 var sqlArgKinds = map[string]string{sqlArgInt: "sql_int", sqlArgFloat: "sql_float", sqlArgBool: "sql_bool"}
 
-// sqlArgType is the type the arg at i is bound as.
-func sqlArgType(own SQLConfig, i int) string {
-	if i < len(own.ArgTypes) && own.ArgTypes[i] != "" {
-		return own.ArgTypes[i]
+// sqlArgTypeOf is the type the arg at i is bound as, of types.
+func sqlArgTypeOf(types []string, i int) string {
+	if i < len(types) && types[i] != "" {
+		return types[i]
 	}
 	return sqlArgText
 }
 
-// sqlArgField is the arg at i as a templated field, of the kind its type
-// takes.
-func sqlArgField(own SQLConfig, i int) templateField {
+// sqlArgFieldOf is the arg at i of a statement's args, at prefix, as a
+// templated field, of the kind its type takes.
+func sqlArgFieldOf(prefix string, args, types []string, i int) templateField {
 	kind := "arg"
-	if k, ok := sqlArgKinds[sqlArgType(own, i)]; ok {
+	if k, ok := sqlArgKinds[sqlArgTypeOf(types, i)]; ok {
 		kind = k
 	}
-	return templateField{fmt.Sprintf("request.args[%d]", i), own.Args[i], kind}
+	return templateField{fmt.Sprintf("%sargs[%d]", prefix, i), args[i], kind}
 }
 
 // sqlTypedArg is value, the arg at where, as its type takes it.
@@ -985,21 +1099,21 @@ func sqlTypedArg(where, typ, value string) (any, error) {
 	return value, nil
 }
 
-// checkSQLArgTypes refuses arg_types that do not give a type for each arg,
-// in order, or that name a type there is not.
-func checkSQLArgTypes(args, types []string) error {
+// checkSQLArgTypes refuses arg_types, at prefix, that do not give a type
+// for each arg, in order, or that name a type there is not.
+func checkSQLArgTypes(prefix string, args, types []string) error {
 	if len(types) == 0 {
 		return nil
 	}
 	if len(args) == 0 {
-		return errors.New("sets request.arg_types without request.args; the types are those of the args, by their places")
+		return fmt.Errorf("sets %sarg_types without %sargs; the types are those of the args, by their places", prefix, prefix)
 	}
 	if len(types) != len(args) {
-		return fmt.Errorf("request.arg_types has %d types for %d args; give a type for each arg, in their order, text for one bound as text", len(types), len(args))
+		return fmt.Errorf("%sarg_types has %d types for %d args; give a type for each arg, in their order, text for one bound as text", prefix, len(types), len(args))
 	}
 	for i, typ := range types {
 		if !slices.Contains(sqlArgTypes, typ) {
-			return fmt.Errorf("request.arg_types[%d] is %q; want one of %s, in lower case", i, typ, strings.Join(sqlArgTypes, ", "))
+			return fmt.Errorf("%sarg_types[%d] is %q; want one of %s, in lower case", prefix, i, typ, strings.Join(sqlArgTypes, ", "))
 		}
 	}
 	return nil
@@ -1061,7 +1175,7 @@ func fetchSQL(ctx context.Context, target string, c *model.Collector, overrides 
 	if err != nil {
 		return nil, err
 	}
-	args, err := sqlArgs(c, overrides)
+	runs, err := sqlRuns(c, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -1087,7 +1201,7 @@ func fetchSQL(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 	}
 	key := sqlPoolKey{collector: c.Name, address: address, database: database, base: base}
-	result, err := sqlPools.query(ctx, key, c, args)
+	result, err := sqlPools.query(ctx, key, c, runs)
 	if err != nil {
 		return nil, onSQLHost(err, address.hostPort)
 	}
@@ -1097,6 +1211,7 @@ func fetchSQL(ctx context.Context, target string, c *model.Collector, overrides 
 		Headers:    http.Header{"Content-Type": {"application/json"}},
 		Body:       result.shown,
 		Rows:       result.rows,
+		NamedRows:  result.named,
 		Columns:    result.columns,
 		Target:     target,
 		Collector:  c.Name,
@@ -1246,8 +1361,9 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 }
 
 // sqlSchemaRule is what a sql collector's request requires, as the exporter
-// does (validateSQLRequest): driver and username, and statement or
-// statement_file but not both, each written with something other than "";
+// does (validateSQLRequest): driver and username, and one of statement,
+// statement_file and statements, each written with something other than ""
+// or an empty list, and with statements no args or arg_types;
 // for the oracle driver, when it is
 // built, service_name; and for the snowflake driver, when it is built,
 // password_file or private_key_file; each driver named as the exporter
@@ -1262,7 +1378,15 @@ func sqlSchemaRule() map[string]any {
 		// One of the two, written with something other than "", which is
 		// the key left out, as the exporter reads it: statement written ""
 		// beside statement_file is statement_file alone.
-		"oneOf": []any{SchemaWrittenKey("statement"), SchemaWrittenKey("statement_file")}}
+		"oneOf": []any{SchemaWrittenKey("statement"), SchemaWrittenKey("statement_file"),
+			map[string]any{"required": []string{"statements"}, "properties": map[string]any{"statements": map[string]any{"minItems": 1}}}}}
+	// statements is a collector's statements, beside which those of its
+	// one statement, args and arg_types, are refused, as the exporter
+	// refuses them.
+	rule["allOf"] = []any{map[string]any{
+		"if":   map[string]any{"required": []string{"statements"}, "properties": map[string]any{"statements": map[string]any{"minItems": 1}}},
+		"then": map[string]any{"not": map[string]any{"anyOf": []any{map[string]any{"required": []string{"args"}, "properties": map[string]any{"args": map[string]any{"minItems": 1}}}, map[string]any{"required": []string{"arg_types"}, "properties": map[string]any{"arg_types": map[string]any{"minItems": 1}}}}}},
+	}}
 	driverIs := func(name string) map[string]any {
 		return map[string]any{"properties": map[string]any{"driver": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(name)}}, "required": []string{"driver"}}
 	}
@@ -1275,9 +1399,7 @@ func sqlSchemaRule() map[string]any {
 			conditions = append(conditions, map[string]any{"if": driverIs(name), "then": map[string]any{"anyOf": []any{SchemaWrittenKey("password_file"), SchemaWrittenKey("private_key_file")}}})
 		}
 	}
-	if len(conditions) > 0 {
-		rule["allOf"] = conditions
-	}
+	rule["allOf"] = append(rule["allOf"].([]any), conditions...)
 	return rule
 }
 
@@ -1297,7 +1419,14 @@ func sqlTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 	own := sqlRequest(c)
 	for i, arg := range own.Args {
 		if HasPathParams(arg) {
-			out = append(out, sqlArgField(own, i))
+			out = append(out, sqlArgFieldOf("request.", own.Args, own.ArgTypes, i))
+		}
+	}
+	for j, s := range own.Statements {
+		for i, arg := range s.Args {
+			if HasPathParams(arg) {
+				out = append(out, sqlArgFieldOf(fmt.Sprintf("request.statements[%d].", j), s.Args, s.ArgTypes, i))
+			}
 		}
 	}
 	return out
@@ -1325,6 +1454,12 @@ func sqlKeyRules() map[string]map[string]any {
 		"options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
 		"service_name":                    {"not": SchemaOnlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
 		"max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},
+		"statements":                      {"maxItems": maxSQLStatements, "description": "sql: several statements, in place of statement, statement_file, args and arg_types, run in order on one connection, each in a transaction of its own as the one statement is: the document is an object of each one's rows, a list of objects, under its name, which jq, yq and python read, and not a csv transform. At most 16. See docs/SQL.md#several-statements."},
+		"statements[]":                    {"required": []string{"name", "statement"}},
+		"statements[].name":               {"pattern": sqlStatementName.String(), "description": "The name the statement's rows are under in the document: letters, digits and _, not starting with a digit, unique among the collector's statements."},
+		"statements[].statement":          {"minLength": 1, "not": SchemaOnlyBlanks(), "description": "The statement, with the driver's own placeholders for its args, as request.statement is written."},
+		"statements[].args":               {"description": "The values of the statement's placeholders, in order, as request.args are of the one statement. May contain {{param_name}} placeholders."},
+		"statements[].arg_types":          {"items": map[string]any{"enum": sqlArgTypes}, "description": "The type each of the statement's args is bound as, as request.arg_types."},
 		"connections":                     {"description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections."},
 		"connections.max_per_target":      {"minimum": 0, "description": "The most connections open to one target at once, across its databases and accounts, keepalive pings counted; a scrape beyond waits within its deadline for one. It bounds the target's pools, one for each database and account, too. Defaults to 2; 0 sets no limit to the connections and keeps at most 64 pools."},
 		"connections.max_idle_per_target": {"minimum": 0, "description": "How many connections to a target are kept idle between scrapes, across its databases and accounts. Defaults to 1; 0 keeps none."},

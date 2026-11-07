@@ -74,6 +74,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `sql` collector runs several statements with `statements`, each with its
+  name, its statement and its own `args` and `arg_types`, in order on one
+  connection; the document holds each one's rows under its name
+  ([Several statements](docs/SQL.md#several-statements)).
 - `kubernetes` collectors ask the nodes' kubelets for their Summary API
   with `kubelet: stats/summary`: what each pod, container and volume uses
   of CPU, memory and file systems, ephemeral storage among them, directly

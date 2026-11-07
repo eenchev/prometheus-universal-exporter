@@ -60,6 +60,10 @@ type HTTPResponse struct {
 	// shows an answer. The decoder hands Rows to the transforms as they are
 	// (requesttype_sql.go).
 	Rows []any
+	// NamedRows is, of a sql collector of several statements
+	// (request.statements), each one's rows, as Rows are, by its name; Rows
+	// and Columns are then nil.
+	NamedRows map[string]any
 	// Columns is the names of a sql collector's columns, in the statement's
 	// order, a column NULL in every row among them, which no row of Rows
 	// has: a csv rule that reads one is then reading empty cells, not a

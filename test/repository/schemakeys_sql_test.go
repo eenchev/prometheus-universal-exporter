@@ -29,6 +29,28 @@ const sqlCollector = `collectors:
         expression: v
 `
 
+// sqlStatements is a configuration of one sql collector of two statements,
+// read by jq, the first's name and statement where a row writes them, each
+// a line of its own after the entry's args, so that either may be left out.
+const sqlStatements = `collectors:
+  - name: demo
+    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      statements:
+        - args: []
+          name: a
+          statement: SELECT 1 AS v
+        - name: other
+          statement: SELECT 2 AS v
+    transform:
+      type: jq
+    metrics:
+      - name: v
+        expression: .other | length
+`
+
 // sqlTarget is a static target file of one target of sqlCollector's
 // collector, with a comment where a row writes its request.
 const sqlTarget = "interval: 1m\ntargets:\n  - name: a\n    collector: demo\n    target: db.example\n    # target\n"
@@ -87,6 +109,11 @@ func sqlSchemaKeys() []schemaKey {
 		// both take, a relative one both refuse; left out or written "",
 		// the collector has no statement, which both refuse.
 		schemaKey{key: "collectors[].request.statement_file", document: strings.Replace(sqlCollector, "      statement: SELECT 1 AS v\n", "", 1), at: request, setting: "      statement_file: %s\n", valid: sqlStatementFile(), invalid: "statement.sql"},
+		// An entry of statements: its name, letters, digits and _ unique
+		// among them, and its statement, not blanks alone; either left out
+		// or "" refused by both.
+		schemaKey{key: "collectors[].request.statements[].name", document: sqlStatements, at: "          name: a\n", setting: "          name: %s\n", valid: "b", invalid: "queue-size"},
+		schemaKey{key: "collectors[].request.statements[].statement", document: sqlStatements, at: "          statement: SELECT 1 AS v\n", setting: "          statement: %s\n", valid: "SELECT 3 AS v", invalid: `" "`},
 		schemaKey{key: "collectors[].request.database", document: sqlCollector, at: request, setting: "      database: %s\n", valid: "app", invalid: `" "`, absent: true, empty: true},
 		schemaKey{key: "collectors[].request.service_name", document: sqlCollector, at: request, setting: "      service_name: %s\n", invalid: `" "`, absent: true, empty: true,
 			booleanAlone: "sets request.service_name, which only the oracle driver takes", numberAlone: "sets request.service_name, which only the oracle driver takes"},

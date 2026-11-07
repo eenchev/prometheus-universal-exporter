@@ -2041,7 +2041,21 @@ of objects, one a row, of its columns by name. Its keys:
   with the defaults, is not of its type; and one a probe's parameters fill
   MUST be checked when they are, a value not of its type answered `400`
   before the server is asked and refused in a static target's `params` when
-  its file loads. A `vertica` statement its driver would not prepare, and
+  its file loads. `statements` MUST run, in place of `statement`,
+  `statement_file`, `args` and `arg_types`, which beside it MUST be refused
+  at load, up to 16 entries of a `name` — letters, digits and `_`, not
+  beginning with a digit, unique among the collector's —, a `statement`
+  and its own `args` and `arg_types`, held to the rules of the one
+  statement's, each placeholder of a `statement` refused naming its entry:
+  in order, on one connection of the pool, each in a transaction of its
+  own ended before the next begins, as the one statement's; `max_rows` MUST
+  hold each, and the response limit their rows together. The first that
+  fails MUST fail the scrape, `request.statements[<i>], <name>:` before its
+  error, the rest not run. The document MUST be an object of each one's rows
+  by its name, a `csv` transform MUST be refused at load beside it, and
+  `http_exporter_sql_rows` MUST count all of their rows; a debug report MUST
+  show each as a request, `Sql-Statement` its name, the connection of each
+  after the first `reused`. A `vertica` statement its driver would not prepare, and
   so would write the values into, doubling a `'` and leaving a `\` as it
   is, MUST be refused at load: any `COPY`, its first word as the driver
   reads the text (outside quotes, quoted identifiers, `--` and unnested
@@ -31270,6 +31284,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestDryRunWarnsOfTheKubeletCAFile` (main): `--dry-run` warns of a `kubelet_ca_file` that is missing, the check passing, and the exporter's `kubeapi.UserAgent` is then `prometheus-universal-exporter/<version>`; `TestTheAllocatorNamesItselfToTheAPIServer` (pue-allocator): the allocator's is `pue-allocator/<version>`.
 - `TestSchemaAndExporterAgreeOnKubernetesKeysWrittenEmpty` (repository), changed: a row of `kubelet` in a collector of nodes across the cluster: left out and `""` taken by both, `stats/summary` taken and `metrics/cadvisor` refused by both, the schema as it was, without the key, refusing `""`.
 - `TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed` (repository), changed: `kubernetesAccess.kubelet` `stats` and `proxy` add `get` on `nodes/stats` and `nodes/proxy` after the rules of the ClusterRole; `TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing` (repository), changed: `kubelet` without `clusterWide` and `kubelet: exec` fail rendering, by the schema and by the templates.
+
+## 34.296 Several sql statements
+
+- `TestSQLStatementsAreCheckedWhenTheConfigurationLoads` (fetch): `statements` beside `statement`, `statement_file`, `args` or `arg_types`; 17 entries; an entry without a name, of a name with a `-`, of another's name, without a statement, with a `{{param_...}}` placeholder in its statement, with `arg_types` and no `args`, and with an `int` arg of `ten`: each refused naming the entry; 16 entries load, and the collector has named results.
+- `TestSQLStatementsAreBoundedAndTracedTogether` (fetch): two statements answer an object of each one's rows by its name, `Rows` nil; a debug trace has two requests, `Sql-Statement` `a` and `b`, the second `reused` and `returned 1 rows`; under a response limit of 1000 bytes, two statements of a 600-byte value each fail as a limit exceeded, naming the second.
+- `TestASQLCollectorOfSeveralStatements` (exporter): two statements, a probe's parameter filling the first's arg and the second's an `int`, run on one connection, each rolled back, give a jq collector a series of the first's count and one of each of the second's rows, and a python one `data["jobs"]` and `data["queues"]`; a first statement that fails fails the probe naming `request.statements[0], first`, the second not run.
+- `TestSQLStatementsRefuseACSVTransform` (config): a csv transform beside `statements` is refused at load, naming jq, yq and python.
+- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: rows of `statements[].name`, `b` taken and `queue-size` refused by both, and `statements[].statement`, `SELECT 3 AS v` taken and blanks refused by both, either left out or written `""` refused by both; `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statements[].name` is held to text.
 
 ## 42.1 OTLP export
 

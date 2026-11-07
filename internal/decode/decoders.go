@@ -190,6 +190,10 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// are handed on as they are: they have no body to decode
 	// (fetch.RequestType.Rows).
 	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
+		// Of several statements, an object of each one's rows by its name.
+		if r.NamedRows != nil {
+			return &Decoded{Kind: KindRows, Data: r.NamedRows, Raw: r.Body}, nil
+		}
 		return &Decoded{Kind: KindRows, Data: r.Rows, Raw: r.Body, Columns: r.Columns}, nil
 	}
 	// decoder none reads no body, so it converts none either, and a body

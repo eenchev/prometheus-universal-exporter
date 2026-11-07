@@ -702,7 +702,7 @@ and name `password_file: /var/run/prometheus-universal-exporter/ldap/password` b
 
 ## Kubernetes collectors
 
-A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it:
+A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it, but for the `get` of the kubelets' statistics `kubernetesAccess.kubelet` adds (below):
 
 ```yaml
 kubernetesAccess:
@@ -734,7 +734,18 @@ config:
                   expression: .metadata.name
 ```
 
-and probe it with no target, `/probe?collector=deployments`. With `enabled`, the pods and the ServiceAccount mount the token, whatever `serviceAccount.automount` says, and the chart renders a Role and a RoleBinding `<fullname>` in each namespace of `namespaces`, the release's when it lists none, allowing `list` on each rule's `apiGroups` (`""` for the core group) and `resources`. A collector with `all_namespaces`, or of a cluster-scoped resource such as `nodes`, needs `clusterWide: true`, which renders a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` instead; `clusterWide` and `namespaces` together fail rendering. So do no rules, a rule with `*`, and a rule granting `secrets` of the core group, which no `kubernetes` collector may list. With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name` ([Service account](#service-account)). While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
+and probe it with no target, `/probe?collector=deployments`. With `enabled`, the pods and the ServiceAccount mount the token, whatever `serviceAccount.automount` says, and the chart renders a Role and a RoleBinding `<fullname>` in each namespace of `namespaces`, the release's when it lists none, allowing `list` on each rule's `apiGroups` (`""` for the core group) and `resources`. A collector with `all_namespaces`, or of a cluster-scoped resource such as `nodes`, needs `clusterWide: true`, which renders a ClusterRole and a ClusterRoleBinding `<namespace>-<fullname>` instead; `clusterWide` and `namespaces` together fail rendering. So do no rules, a rule with `*`, and a rule granting `secrets` of the core group: `list` on them lets the account read their values, which a collector of their metadata alone (`metadata_only`) never asks for, so grant such a collector its `list` with a Role of your own, knowing what it allows. A collector of the nodes' kubelets (`kubelet: stats/summary`, [Kubelet statistics](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md#kubelet-statistics)) needs `get` on `nodes/stats`, which `kubelet: stats` adds to the ClusterRole beside a rule of `nodes`, or with `kubelet_via_api_server` on `nodes/proxy`, `kubelet: proxy`, which lets the account do all a kubelet does; either needs `clusterWide`, and with `networkPolicy.egress` rules, one for the kubelets' port, 10250, on the nodes' addresses:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  kubelet: stats
+  rules:
+    - apiGroups: [""]
+      resources: [nodes]
+```
+ With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name` ([Service account](#service-account)). While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
 
 ## Common configuration
 
@@ -1899,7 +1910,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`; `name` is required, and `annotations` refused, with `create: false`. See [Service account](#service-account). |
-| `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`; see [Kubernetes collectors](#kubernetes-collectors). |
+| `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`, and `kubelet` (`stats` or `proxy`, `get` on `nodes/stats` or `nodes/proxy`, with `clusterWide`); see [Kubernetes collectors](#kubernetes-collectors). |
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`, the last two with `webAuth` or `exposure.allowWithoutWebAuth`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |
@@ -1982,7 +1993,7 @@ The chart runs the exporter with security-focused defaults:
 * All Linux capabilities dropped
 * Privilege escalation disabled
 * No Ingress, `NodePort` or `LoadBalancer` Service without the exporter's own authentication, `webAuth`, unless `exposure.allowWithoutWebAuth` says callers are authenticated elsewhere; see [Exposing the exporter](#exposing-the-exporter)
-* No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as, unless `kubernetesAccess` grants `kubernetes` collectors `list` on the resources its rules name, and never on the core group's Secrets
+* No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as, unless `kubernetesAccess` grants `kubernetes` collectors `list` on the resources its rules name, and never on the core group's Secrets, and with `kubernetesAccess.kubelet`, `get` on `nodes/stats` or `nodes/proxy`
 
 ## Uninstall
 

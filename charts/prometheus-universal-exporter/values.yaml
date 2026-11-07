@@ -36,8 +36,13 @@ serviceAccount:
 # release's when it is empty, or with clusterWide a ClusterRole and a
 # ClusterRoleBinding <namespace>-<fullname>, which a collector with
 # all_namespaces, or of a cluster-scoped resource such as nodes, needs. No
-# rule may name "*", nor the core group's secrets, which no kubernetes
-# collector may list.
+# rule may name "*", nor the core group's secrets: list on them lets the
+# account read their values, which a collector of their metadata alone
+# never asks for, so such a collector's grant is the operator's own Role.
+# kubelet, for a collector with request.kubelet, which needs clusterWide
+# and a rule of nodes, adds get on nodes/stats (stats) or, for
+# kubelet_via_api_server, on nodes/proxy (proxy), which lets the account do
+# all a kubelet does.
 #
 #   kubernetesAccess:
 #     enabled: true
@@ -51,6 +56,7 @@ kubernetesAccess:
   clusterWide: false
   namespaces: []
   rules: []
+  kubelet: ""
 service:
   enabled: true
   # ClusterIP, NodePort or LoadBalancer. Not ExternalName, a DNS alias with no

@@ -256,6 +256,10 @@ type tripTrace struct {
 	// phases (tracePhases) once they are known: at the answer's first
 	// byte, or when the request failed before it (recordPhases).
 	ctx context.Context
+	// at, when set, is the request the trace times, recorded by
+	// traceRequestAt, which is given the phases in place of the last
+	// request recorded: a kubernetes collector's requests are sent at once.
+	at *tracedAt
 	// given says the phases held are given already, to the request that
 	// was answered: a redirect the trip then refused, recorded but never
 	// sent, asked for no connection (GetConn), and has none of them.
@@ -297,6 +301,15 @@ func (t *tripTrace) recordPhases() {
 		phases = nil
 	}
 	t.mu.Unlock()
+	t.record(phases)
+}
+
+// record gives the request timed its phases.
+func (t *tripTrace) record(phases []TracedPhase) {
+	if t.at != nil {
+		t.at.phases(phases)
+		return
+	}
 	tracePhases(t.ctx, phases)
 }
 
@@ -382,7 +395,7 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 			t.mu.Unlock()
 			// The request's own, before a redirect's GetConn starts
 			// another's.
-			tracePhases(t.ctx, phases)
+			t.record(phases)
 		},
 	}
 }

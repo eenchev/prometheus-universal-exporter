@@ -7,10 +7,11 @@ first parses the response when applicable, then the Python script receives
 `target`, `collector`, and decoded `data`. `response.status_code` is the HTTP
 status, a `grpc` call's status code — `0` for `OK`, or one of its
 `accept_codes` — or `None` for a local file, which has no status. Scripts emit metrics with
-`metric(...)` and may call `fail(...)`, and read sizes, durations, times and
-percentages written as text with the [value-parsing
-helpers](#value-parsing-helpers), `parse_bytes(...)`, `parse_duration(...)`,
-`parse_time(...)` and `parse_percent(...)`.
+`metric(...)` and may call `fail(...)`, and read sizes, durations, times,
+percentages and Kubernetes quantities written as text with the
+[value-parsing helpers](#value-parsing-helpers), `parse_bytes(...)`,
+`parse_duration(...)`, `parse_time(...)`, `parse_percent(...)` and
+`parse_quantity(...)`.
 
 `response.headers` is a dict of each header's values as a list, by the
 header's canonical name (`Content-Type`, `X-Mode`), as the response carried
@@ -106,15 +107,16 @@ The worker runs the interpreter `--python.path` names, `python3` by default, whi
 
 ### Value-parsing helpers
 
-A script and a pre-script have four functions besides `metric` and `fail`,
+A script and a pre-script have five functions besides `metric` and `fail`,
 the [value-parsing helpers](CONFIGURATION.md#value-parsing-helpers) jq and
 yq expressions call as filters: `parse_bytes("1.00M")` is `1048576.0`,
 `parse_duration("1h2m")` `3720.0`, `parse_time("2026-10-03T09:00:00Z")`
-`1791018000.0` and `parse_percent("55.12%")` `0.5512`. Each takes one value
+`1791018000.0`, `parse_percent("55.12%")` `0.5512` and
+`parse_quantity("250m")` `0.25`. Each takes one value
 and gives a `float`, read and rounded exactly as the jq function of its name
 reads it, from the same forms: the two are tested against the same vectors.
-`parse_bytes` and `parse_duration` give an `int` or a `float` back as it is,
-as being bytes or seconds already. Text a helper cannot read raises a
+`parse_bytes`, `parse_duration` and `parse_quantity` give an `int` or a
+`float` back as it is, as being bytes, seconds or a quantity already. Text a helper cannot read raises a
 `ValueError`, and anything else that is not text a `TypeError`, which the
 script may catch, and which otherwise fails it as any exception does, its
 traceback showing the script's line and the helper's message:

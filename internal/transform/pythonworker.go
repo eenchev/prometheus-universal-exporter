@@ -1491,12 +1491,16 @@ def value_helpers():
     rfc3339=re.compile(r'([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt ]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]+))?([Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)?')
     http_date=re.compile(r'([A-Za-z]{3}), ([0-9]{1,2}) ([A-Za-z]{3}) ([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) ([A-Za-z]{3}|[+-][0-9]{4})')
     percent_syntax=re.compile(r'([+-]?)'+num+r'[ \t]*%')
+    quantity_syntax=re.compile(r'([+-]?)'+num+r'(Ki|Mi|Gi|Ti|Pi|Ei|[numkMGTPE]|[eE][+-]?[0-9]{1,2})?')
+    quantity_suffixes={'':(1,1),'n':(1,10**9),'u':(1,10**6),'m':(1,1000),'k':(10**3,1),'M':(10**6,1),'G':(10**9,1),'T':(10**12,1),'P':(10**15,1),'E':(10**18,1),
+                       'Ki':(1024,1),'Mi':(1024**2,1),'Gi':(1024**3,1),'Ti':(1024**4,1),'Pi':(1024**5,1),'Ei':(1024**6,1)}
     weekdays=['sun','mon','tue','wed','thu','fri','sat']
     months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
     bytes_hint='write a number, then optionally blanks and a unit: B, KiB to EiB, kB to EB, or K to E'
     duration_hint='write it as Go does (1h2m3.5s, 2d4h), as a clock (01:02:03, 1-02:03:04) or in ISO 8601 (PT1H2M3S)'
     time_hint='write it in RFC 3339 (2026-10-03T09:00:00Z) or as an HTTP date (Sat, 03 Oct 2026 09:00:00 GMT)'
     percent_hint='write a number followed by %, such as 55.12%'
+    quantity_hint='write a number and a Kubernetes suffix or none: Ki to Ei, n, u, m, k, M to E, or an exponent such as e3'
     digits_hint='a number in it has more than 100 digits'
     lower=str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')
     escapes={'"':'\\"','\\':'\\\\','\a':'\\a','\b':'\\b','\f':'\\f','\n':'\\n','\r':'\\r','\t':'\\t','\v':'\\v'}
@@ -1645,8 +1649,23 @@ def value_helpers():
         n=decimal(m.group(2))
         if n is None: raise unreadable('parse_percent',text,'a percentage',digits_hint)
         return (-n[0] if m.group(1)=='-' else n[0])/(n[1]*100)
-    return parse_bytes,parse_duration,parse_time,parse_percent
-parse_bytes,parse_duration,parse_time,parse_percent=value_helpers()
+    def parse_quantity(value):
+        # A Kubernetes quantity in its base unit, cores or bytes: 100m is
+        # 0.1, 2Gi 2147483648; the suffix in its case, no blank inside.
+        text=text_of('parse_quantity',value,True)
+        if text is None: return value
+        m=quantity_syntax.fullmatch(trim(text))
+        if not m: raise unreadable('parse_quantity',text,'a quantity',quantity_hint)
+        n=decimal(m.group(2))
+        if n is None: raise unreadable('parse_quantity',text,'a quantity',digits_hint)
+        suffix=m.group(3) or ''
+        if suffix in quantity_suffixes: un,ud=quantity_suffixes[suffix]
+        else:
+            e=int(suffix[1:])
+            un,ud=(10**e,1) if e>=0 else (1,10**-e)
+        return (-n[0] if m.group(1)=='-' else n[0])*un/(n[1]*ud)
+    return parse_bytes,parse_duration,parse_time,parse_percent,parse_quantity
+parse_bytes,parse_duration,parse_time,parse_percent,parse_quantity=value_helpers()
 del value_helpers
 blocked={'socket','_socket','ssl','_ssl','subprocess','_posixsubprocess','ctypes','_ctypes','multiprocessing','_multiprocessing','threading','mmap','pty','pathlib','shutil','tempfile'}
 script_blocked={'importlib','posix','nt','_io','_thread','select','selectors','fcntl','termios'}
@@ -2589,7 +2608,7 @@ while True:
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
-               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'data':p['data'],'metrics':metrics}
+               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'data':p['data'],'metrics':metrics}
         sink=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')

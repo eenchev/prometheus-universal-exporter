@@ -20,7 +20,7 @@ import (
 // place.
 const valueHelpersScript = `
 for name, helper in (('parse_bytes', parse_bytes), ('parse_duration', parse_duration),
-                     ('parse_time', parse_time), ('parse_percent', parse_percent)):
+                     ('parse_time', parse_time), ('parse_percent', parse_percent), ('parse_quantity', parse_quantity)):
     for i, v in enumerate(data[name]):
         labels = {'helper': name, 'i': str(i)}
         try:

@@ -4,7 +4,9 @@ package exporter
 
 import (
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -190,6 +192,80 @@ func TestAKubernetesCollectorsLabelValuesAndPython(t *testing.T) {
 		recorder := probeOnce(t, server, query, nil)
 		if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || len(got) != 1 || got[0] != want {
 			t.Errorf("%s: %d %v, want %s", query, recorder.Code, got, want)
+		}
+	}
+}
+
+// Ephemeral storage from configuration alone: a collector with kubelet:
+// stats/summary exports what each pod uses, from its node's kubelet asked
+// with the API server's CA and token, and the nodes whose kubelet
+// answered none; one of the Pods exports what each container requests,
+// its quantity read by parse_quantity.
+func TestEphemeralStorageFromTheKubeletsAndThePods(t *testing.T) {
+	api := kubetest.New(t)
+	kubelet := kubetest.New(t)
+	kubelet.Answer("/stats/summary", `{"node":{"nodeName":"node-0"},"pods":[{"podRef":{"name":"web","namespace":"shop"},"ephemeral-storage":{"usedBytes":1048576}}]}`)
+	u, err := url.Parse(kubelet.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(u.Port())
+	api.Serve("/api/v1/nodes", kubetest.List{Kind: "NodeList", APIVersion: "v1", Items: []map[string]any{
+		{"metadata": map[string]any{"name": "node-0"}, "status": map[string]any{"addresses": []any{map[string]any{"type": "InternalIP", "address": u.Hostname()}}, "daemonEndpoints": map[string]any{"kubeletEndpoint": map[string]any{"Port": port}}}},
+		{"metadata": map[string]any{"name": "node-1"}, "status": map[string]any{}},
+	}})
+	api.Serve("/api/v1/pods", kubetest.List{Kind: "PodList", APIVersion: "v1", Items: []map[string]any{
+		{"metadata": map[string]any{"name": "web"}, "spec": map[string]any{"containers": []any{map[string]any{"name": "app", "resources": map[string]any{"requests": map[string]any{"ephemeral-storage": "2Gi", "cpu": "250m"}}}}}},
+	}})
+	source := `      api_server: ` + api.URL + `
+      tls:
+        ca_file: ` + filepath.Join(api.Dir, "ca.crt") + `
+      bearer_token_file: ` + filepath.Join(api.Dir, "token") + `
+      all_namespaces: true
+`
+	server := labelServer(t, `collectors:
+  - name: ephemeral
+    request:
+      type: kubernetes
+`+source+`      resource: nodes
+      kubelet: stats/summary
+    transform:
+      type: jq
+    metrics:
+      - name: kube_pod_ephemeral_storage_used_bytes
+        items: '.items[].pods[]'
+        expression: '."ephemeral-storage".usedBytes'
+        labels:
+          - name: namespace
+            expression: .podRef.namespace
+          - name: pod
+            expression: .podRef.name
+      - name: kube_kubelet_summaries_failed
+        expression: .failed | length
+  - name: requests
+    request:
+      type: kubernetes
+`+source+`      resource: pods
+    transform:
+      type: jq
+    metrics:
+      - name: kube_pod_container_ephemeral_storage_request_bytes
+        items: '.items[] | .metadata.name as $pod | .spec.containers[] | {pod: $pod, container: .name, resources}'
+        expression: '.resources.requests["ephemeral-storage"] | parse_quantity'
+        labels:
+          - name: pod
+            expression: .pod
+      - name: kube_pod_container_cpu_request_cores
+        items: '.items[].spec.containers[]'
+        expression: '.resources.requests.cpu | parse_quantity'
+`)
+	for query, want := range map[string][]string{
+		"/probe?collector=ephemeral": {`kube_kubelet_summaries_failed 1`, `kube_pod_ephemeral_storage_used_bytes{namespace="shop",pod="web"} 1.048576e+06`},
+		"/probe?collector=requests":  {`kube_pod_container_cpu_request_cores 0.25`, `kube_pod_container_ephemeral_storage_request_bytes{pod="web"} 2.147483648e+09`},
+	} {
+		recorder := probeOnce(t, server, query, nil)
+		if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("%s: %d %v, want %v\n%s", query, recorder.Code, got, want, recorder.Body)
 		}
 	}
 }

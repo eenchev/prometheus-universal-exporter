@@ -15,7 +15,9 @@
 package kubeapi
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +28,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ServiceAccountDir is where Kubernetes mounts a pod's service account: its
@@ -37,6 +40,22 @@ const (
 	TokenFile     = "token"
 	CAFile        = "ca.crt"
 	NamespaceFile = "namespace"
+)
+
+// UserAgent is the User-Agent every request is sent with, so the API
+// server's audit log, and a FlowSchema of its priority and fairness, can
+// tell the program apart from other clients of its service account. Each
+// program sets it to its name and version as it starts; a test's requests
+// are sent with the name alone.
+var UserAgent = "prometheus-universal-exporter"
+
+// The Accept of a listing: JSON, or, with metadata alone, the
+// PartialObjectMetadataList the API server answers in place of the objects,
+// with no fallback, so a server that cannot answer it refuses (406) rather
+// than sending the objects whole.
+const (
+	AcceptJSON         = "application/json"
+	AcceptMetadataList = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
 )
 
 // PageSize is how many objects one request of a listing asks for at first;
@@ -103,6 +122,8 @@ type Listing struct {
 	What string
 	// LabelSelector and FieldSelector are sent as they are; "" sends none.
 	LabelSelector, FieldSelector string
+	// Accept is the Accept every page is asked with: AcceptJSON when "".
+	Accept string
 	// PageSize is the limit asked for the first page; 0 is PageSize.
 	PageSize int
 	// MaxPageBytes bounds the body of each page. A page over it is asked
@@ -111,20 +132,44 @@ type Listing struct {
 	// one object over it fails the listing with an error that is
 	// ErrPageTooLarge.
 	MaxPageBytes int64
-	// Sent, when set, is told of each page's request before it is sent, a
-	// page asked for again included, and Answered of how it ended: the
-	// status line, the status line and that the page was over the bound,
-	// or the error.
-	Sent     func(req *http.Request)
-	Answered func(outcome string)
+	// Prepare, when set, is given each page's request before it is sent, a
+	// page asked for again included, and returns the request to send, which
+	// may carry a context of its own, and what to tell of how it ended.
+	Prepare func(req *http.Request) (*http.Request, Sent)
+	// Retry, when set, is asked of every answer other than 200 OK, with the
+	// number of times the page was asked for again so far, whether to ask
+	// for it again, and after how long: it may, for an API server's 429 of
+	// its priority and fairness, wait as its Retry-After asks. The wait is
+	// bounded by the listing's context.
+	Retry func(ctx context.Context, answer *StatusError, header http.Header, retried int) (wait time.Duration, again bool)
+	// ResumeExpired has a listing whose continue token the API server no
+	// longer has, its 410 Expired, go on: with the token the Status
+	// carries for the rest of the listing as it is now (an inconsistent
+	// continue), or, the Status carrying none, from the first page again,
+	// once, Restart told first, so what the pages before were handed is
+	// put away. A listing that expires again fails.
+	ResumeExpired bool
+	Restart       func()
 	// Smaller, when set, is told of each smaller limit the listing falls
 	// to, after a page over MaxPageBytes.
 	Smaller func(size int)
 }
 
+// Sent is what a request's Prepare is told of it: Answered of how it ended,
+// the status line, the status line and that the page was over the bound,
+// or the error; and Waiting of the wait before it is asked for again
+// (Listing.Retry), with why. Either may be nil.
+type Sent struct {
+	Answered func(outcome string)
+	Waiting  func(wait time.Duration, why string)
+}
+
 // ErrPageTooLarge is the error of a page of one object over MaxPageBytes:
 // that object cannot be listed under the bound.
 var ErrPageTooLarge = errors.New("page too large")
+
+// ErrTooLarge is the error of an answer to Get over its bound.
+var ErrTooLarge = errors.New("answer too large")
 
 // StatusError is an API server's answer other than 200 OK: its status and
 // the start of its body, which for an API error is a Status object whose
@@ -134,9 +179,17 @@ type StatusError struct {
 	Code          int
 	Status        string
 	Body          string
+	// Retried is how many times the request was asked for again before
+	// this answer (Listing.Retry).
+	Retried int
+	// get says it answered a Get, which is no listing.
+	get bool
 }
 
 func (e *StatusError) Error() string {
+	if e.get {
+		return fmt.Sprintf("the %s at %s answered %s: %s", e.What, e.Address, e.Status, e.Body)
+	}
 	return fmt.Sprintf("listing %s at %s answered %s: %s", e.What, e.Address, e.Status, e.Body)
 }
 
@@ -153,6 +206,18 @@ func (e *pageTooLarge) Error() string {
 }
 
 func (e *pageTooLarge) Is(target error) bool { return target == ErrPageTooLarge }
+
+// tooLarge is the error of an answer to Get over its bound, ErrTooLarge.
+type tooLarge struct {
+	what  string
+	bound int64
+}
+
+func (e *tooLarge) Error() string {
+	return fmt.Sprintf("the %s answered more than %d bytes", e.what, e.bound)
+}
+
+func (e *tooLarge) Is(target error) bool { return target == ErrTooLarge }
 
 // List asks for every page of the listing in turn, handing each page's body
 // to page, which returns the page's continue token, "" after the last.
@@ -174,7 +239,7 @@ func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, 
 	if size <= 0 {
 		size = PageSize
 	}
-	next := ""
+	next, restarted := "", false
 	for {
 		raw, err := l.page(ctx, next, size)
 		if errors.Is(err, ErrPageTooLarge) && size > 1 {
@@ -183,6 +248,20 @@ func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, 
 				l.Smaller(size)
 			}
 			continue
+		}
+		var status *StatusError
+		if l.ResumeExpired && next != "" && errors.As(err, &status) && status.Code == http.StatusGone {
+			if token := expiredContinue(status.Body); token != "" {
+				next = token
+				continue
+			}
+			if !restarted {
+				restarted, next = true, ""
+				if l.Restart != nil {
+					l.Restart()
+				}
+				continue
+			}
 		}
 		if err != nil {
 			return err
@@ -194,6 +273,22 @@ func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, 
 			return nil
 		}
 	}
+}
+
+// expiredContinue is the continue token of a 410 Expired's Status, with
+// which the API server lets a listing whose token it no longer has go on
+// with what is there now; "" when it has none.
+func expiredContinue(body string) string {
+	var status struct {
+		Reason   string `json:"reason"`
+		Metadata struct {
+			Continue string `json:"continue"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal([]byte(body), &status) != nil || status.Reason != "Expired" {
+		return ""
+	}
+	return status.Metadata.Continue
 }
 
 // page asks for one page of the listing, of at most size objects.
@@ -208,49 +303,121 @@ func (l *Listing) page(ctx context.Context, next string, size int) ([]byte, erro
 	if next != "" {
 		query.Set("continue", next)
 	}
-	address := l.Server + l.Path
-	// The address is the API server's: from the pod's environment, which
-	// Kubernetes sets, or from the configuration.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address+"?"+query.Encode(), nil) // #nosec G704 -- the cluster's API server
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	if l.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+l.Token)
-	}
-	if l.Sent != nil {
-		l.Sent(req)
-	}
-	resp, err := l.Client.Do(req) // #nosec G704 -- the cluster's API server
-	if err != nil {
-		l.answered("error: " + err.Error())
-		return nil, err
-	}
-	// The body is closed without reading it to its end: the rest of a page
-	// over the bound may be of any size, and reading it to reuse the
-	// connection could take longer than asking again on another.
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		l.answered(resp.Status)
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, &StatusError{What: l.What, Address: address, Code: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body))}
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, l.MaxPageBytes+1))
-	if err != nil {
-		l.answered(resp.Status + ", then the body broke off: " + err.Error())
-		return nil, err
-	}
-	if int64(len(raw)) > l.MaxPageBytes {
-		l.answered(fmt.Sprintf("%s, a page of %d larger than %d bytes", resp.Status, size, l.MaxPageBytes))
-		return nil, &pageTooLarge{what: l.What, bound: l.MaxPageBytes}
-	}
-	l.answered(resp.Status)
-	return raw, nil
+	r := request{client: l.Client, address: l.Server + l.Path, query: query.Encode(), token: l.Token, accept: l.Accept, what: l.What, prepare: l.Prepare, retry: l.Retry}
+	return r.get(ctx, l.MaxPageBytes, func() error {
+		return &pageTooLarge{what: l.What, bound: l.MaxPageBytes}
+	}, func(status string) string {
+		return fmt.Sprintf("%s, a page of %d larger than %d bytes", status, size, l.MaxPageBytes)
+	})
 }
 
-func (l *Listing) answered(outcome string) {
-	if l.Answered != nil {
-		l.Answered(outcome)
+// Get is one GET of a path of an API server, or of a kubelet, that is no
+// listing: its body, answered 200 OK and of at most MaxBytes, as a node's
+// /stats/summary is asked for.
+type Get struct {
+	Client *http.Client
+	// Address is the URL asked for, Token sent as Lists' is, and What
+	// names what answers in errors, such as "kubelet of node a".
+	Address, Token, What string
+	MaxBytes             int64
+	Prepare              func(req *http.Request) (*http.Request, Sent)
+}
+
+// Do asks for g's address. An answer over MaxBytes is an error that is
+// ErrTooLarge; one other than 200 OK a StatusError.
+func (g Get) Do(ctx context.Context) ([]byte, error) {
+	r := request{client: g.Client, address: g.Address, token: g.Token, accept: AcceptJSON, what: g.What, prepare: g.Prepare, isGet: true}
+	return r.get(ctx, g.MaxBytes, func() error {
+		return &tooLarge{what: g.What, bound: g.MaxBytes}
+	}, func(status string) string {
+		return fmt.Sprintf("%s, larger than %d bytes", status, g.MaxBytes)
+	})
+}
+
+// request is one GET, asked for again as retry says.
+type request struct {
+	client                *http.Client
+	address, query, token string
+	accept, what          string
+	prepare               func(req *http.Request) (*http.Request, Sent)
+	retry                 func(ctx context.Context, answer *StatusError, header http.Header, retried int) (time.Duration, bool)
+	isGet                 bool
+}
+
+// statusBodyBytes is how much of an answer other than 200 OK is kept: a
+// Status's message, and the continue token of a 410 Expired.
+const statusBodyBytes = 4096
+
+func (r request) get(ctx context.Context, maxBytes int64, over func() error, overOutcome func(status string) string) ([]byte, error) {
+	address := r.address
+	if r.query != "" {
+		address += "?" + r.query
+	}
+	for retried := 0; ; retried++ {
+		// The address is the API server's: from the pod's environment,
+		// which Kubernetes sets, or from the configuration; or a kubelet's,
+		// from the API server's Node.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil) // #nosec G704 -- the cluster's API server
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", cmp.Or(r.accept, AcceptJSON))
+		req.Header.Set("User-Agent", UserAgent)
+		if r.token != "" {
+			req.Header.Set("Authorization", "Bearer "+r.token)
+		}
+		var sent Sent
+		if r.prepare != nil {
+			req, sent = r.prepare(req)
+		}
+		answered := func(outcome string) {
+			if sent.Answered != nil {
+				sent.Answered(outcome)
+			}
+		}
+		resp, err := r.client.Do(req) // #nosec G704 -- the cluster's API server
+		if err != nil {
+			answered("error: " + err.Error())
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			answered(resp.Status)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, statusBodyBytes))
+			_ = resp.Body.Close()
+			status := &StatusError{What: r.what, Address: r.address, Code: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body)), Retried: retried, get: r.isGet}
+			if r.retry == nil {
+				return nil, status
+			}
+			wait, again := r.retry(ctx, status, resp.Header, retried)
+			if !again {
+				return nil, status
+			}
+			if sent.Waiting != nil {
+				sent.Waiting(wait, resp.Status)
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, fmt.Errorf("%w, while waiting %s to ask again: %w", status, wait, ctx.Err())
+			case <-timer.C:
+			}
+			continue
+		}
+		// The body is closed without reading it to its end: the rest of an
+		// answer over the bound may be of any size, and reading it to reuse
+		// the connection could take longer than asking again on another.
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+		_ = resp.Body.Close()
+		if err != nil {
+			answered(resp.Status + ", then the body broke off: " + err.Error())
+			return nil, err
+		}
+		if int64(len(raw)) > maxBytes {
+			answered(overOutcome(resp.Status))
+			return nil, over()
+		}
+		answered(resp.Status)
+		return raw, nil
 	}
 }

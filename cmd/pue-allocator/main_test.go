@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -199,5 +201,20 @@ func TestTheStartReadsInputsAgainThatChangeWhileRead(t *testing.T) {
 		if errors.Is(c.want, allocator.ErrChanged) && !strings.Contains(fmt.Sprint(err), "5 times") {
 			t.Errorf("%s: the error %q does not say how often the files were read", name, err)
 		}
+	}
+}
+
+// Once its flags are read, the allocator's listings of EndpointSlices name
+// it and its version in their User-Agent (kubeapi.UserAgent).
+func TestTheAllocatorNamesItselfToTheAPIServer(t *testing.T) {
+	old := kubeapi.UserAgent
+	t.Cleanup(func() { kubeapi.UserAgent = old })
+	kubeapi.UserAgent = ""
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--static-targets-file-schema", "--config.file=/nonexistent/config.yaml"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exited %d: %s", code, stderr.String())
+	}
+	if want := "pue-allocator/" + exporter.BuildVersion().Version; kubeapi.UserAgent != want {
+		t.Errorf("the User-Agent is %q, want %q", kubeapi.UserAgent, want)
 	}
 }

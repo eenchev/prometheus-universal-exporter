@@ -163,7 +163,7 @@ which `--help` prints too.
 - [TLS certificates](docs/TLSCERT.md) — the `tlscert` request type: the certificates a server presents in a TLS handshake, from the start or after STARTTLS on a mail or FTP server, their names, issuers and expiry, and whether the chain verifies.
 - [NTP](docs/NTP.md) — the `ntp` request type: one SNTP request to an NTP server, the clock's offset from it and the round trip's delay, and the server's stratum, leap indicator and reference, as a JSON document.
 - [Ping over ICMP](docs/ICMP.md) — the `icmp` request type, in a build that asks for it: echo requests to a host, as ping sends them, on an unprivileged socket, and how many replies came and how long each took, as a JSON document.
-- [Kubernetes objects](docs/KUBERNETES.md) — the `kubernetes` request type: the objects of one resource, built in or custom, listed from the API server with the exporter's service account, as a JSON document, for metrics such as kube-state-metrics gives from configuration alone.
+- [Kubernetes objects](docs/KUBERNETES.md) — the `kubernetes` request type: the objects of one resource, built in or custom, or their metadata alone, listed from the API server with the exporter's service account, as a JSON document, for metrics such as kube-state-metrics gives from configuration alone; and the nodes' kubelets' statistics, each pod's ephemeral storage, CPU and memory.
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.

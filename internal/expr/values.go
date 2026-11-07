@@ -3,6 +3,7 @@ package expr
 import (
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -27,7 +28,7 @@ import (
 
 // ValueHelpers are the names of the helpers, each a jq function of no
 // arguments that reads its input.
-var ValueHelpers = []string{"parse_bytes", "parse_duration", "parse_time", "parse_percent"}
+var ValueHelpers = []string{"parse_bytes", "parse_duration", "parse_time", "parse_percent", "parse_quantity"}
 
 // valueFunctions registers the helpers with a jq program. They are custom
 // functions of the compiler, not jq definitions, so they cost nothing to an
@@ -38,6 +39,7 @@ var valueFunctions = []gojq.CompilerOption{
 	gojq.WithFunction("parse_duration", 0, 0, func(v any, _ []any) any { return parseValue("parse_duration", v, true, ParseDuration) }),
 	gojq.WithFunction("parse_time", 0, 0, func(v any, _ []any) any { return parseValue("parse_time", v, false, ParseTime) }),
 	gojq.WithFunction("parse_percent", 0, 0, func(v any, _ []any) any { return parseValue("parse_percent", v, false, ParsePercent) }),
+	gojq.WithFunction("parse_quantity", 0, 0, func(v any, _ []any) any { return parseValue("parse_quantity", v, true, ParseQuantity) }),
 }
 
 // parseValue runs a helper on a jq value: text is read by parse, and a
@@ -101,6 +103,7 @@ const (
 	durationHint = "write it as Go does (1h2m3.5s, 2d4h), as a clock (01:02:03, 1-02:03:04) or in ISO 8601 (PT1H2M3S)"
 	timeHint     = "write it in RFC 3339 (2026-10-03T09:00:00Z) or as an HTTP date (Sat, 03 Oct 2026 09:00:00 GMT)"
 	percentHint  = "write a number followed by %, such as 55.12%"
+	quantityHint = "write a number and a Kubernetes suffix or none: Ki to Ei, n, u, m, k, M to E, or an exponent such as e3"
 	digitsHint   = "a number in it has more than 100 digits"
 )
 
@@ -438,6 +441,50 @@ func ParsePercent(text string) (float64, error) {
 		return 0, valueError("parse_percent", text, "a percentage", digitsHint)
 	}
 	n.Quo(n, big.NewRat(100, 1))
+	if m[1] == "-" {
+		n.Neg(n)
+	}
+	return float(n), nil
+}
+
+var quantitySyntax = regexp.MustCompile(`^([+-]?)` + decimalPattern + `(Ki|Mi|Gi|Ti|Pi|Ei|[numkMGTPE]|[eE][+-]?[0-9]{1,2})?$`)
+
+// quantitySuffixes are what each suffix of a Kubernetes quantity multiplies
+// its number by: the binary Ki to Ei, and the decimal n, u, m, k and M to
+// E. An exponent, e3 or E-3, is read apart.
+var quantitySuffixes = map[string]*big.Rat{
+	"": rat(1, 0), "n": new(big.Rat).Inv(rat(10, 9)), "u": new(big.Rat).Inv(rat(10, 6)), "m": new(big.Rat).Inv(rat(10, 3)),
+	"k": rat(10, 3), "M": rat(10, 6), "G": rat(10, 9), "T": rat(10, 12), "P": rat(10, 15), "E": rat(10, 18),
+	"Ki": rat(1024, 1), "Mi": rat(1024, 2), "Gi": rat(1024, 3), "Ti": rat(1024, 4), "Pi": rat(1024, 5), "Ei": rat(1024, 6),
+}
+
+// ParseQuantity reads a Kubernetes quantity, as an object's resources write
+// a CPU, a size or a count: a number with a sign or none, then a suffix,
+// in its case, or none: 100m is 0.1 (cores), 2Gi is 2147483648 and 500M
+// 500000000 (bytes), 1e3 1000. It is in the base unit, cores or bytes.
+// Blanks are trimmed around it, and none is taken inside it, as Kubernetes
+// takes none.
+func ParseQuantity(text string) (float64, error) {
+	m := quantitySyntax.FindStringSubmatch(trimValue(text))
+	if m == nil {
+		return 0, valueError("parse_quantity", text, "a quantity", quantityHint)
+	}
+	n, ok := decimal(m[2])
+	if !ok {
+		return 0, valueError("parse_quantity", text, "a quantity", digitsHint)
+	}
+	suffix := m[3]
+	if scale, ok := quantitySuffixes[suffix]; ok {
+		n.Mul(n, scale)
+	} else {
+		// An exponent: e or E, a sign or none and one or two digits.
+		exponent, _ := strconv.Atoi(strings.TrimPrefix(suffix[1:], "+"))
+		power := rat(10, int64(max(exponent, -exponent)))
+		if exponent < 0 {
+			power.Inv(power)
+		}
+		n.Mul(n, power)
+	}
 	if m[1] == "-" {
 		n.Neg(n)
 	}

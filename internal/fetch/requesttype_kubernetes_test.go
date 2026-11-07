@@ -192,7 +192,9 @@ func TestAKubernetesCollectorListsTheNamespacesItNames(t *testing.T) {
 	for _, r := range s.Requests() {
 		paths = append(paths, r.Path)
 	}
-	want := []string{"/apis/apps/v1/namespaces/shop/deployments", "/apis/apps/v1/namespaces/billing/deployments", "/apis/apps/v1/deployments", "/api/v1/nodes", "/api/v1/namespaces/monitoring/pods"}
+	// The two namespaces are listed at once, in either order.
+	slices.Sort(paths[:2])
+	want := []string{"/apis/apps/v1/namespaces/billing/deployments", "/apis/apps/v1/namespaces/shop/deployments", "/apis/apps/v1/deployments", "/api/v1/nodes", "/api/v1/namespaces/monitoring/pods"}
 	if !slices.Equal(paths, want) {
 		t.Errorf("asked %v, want %v", paths, want)
 	}
@@ -439,7 +441,37 @@ func TestAKubernetesCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 		"group core":    {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Group = "core" }) }, "leave group out"},
 		"a bad group":   {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Group = "Apps" }) }, "not an API group"},
 		"a bad version": {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Version = "V1" }) }, "not an API version"},
-		"secrets":       {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "secrets" }) }, "lists secrets"},
+		"secrets":       {func(r *model.RequestConfig) { kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource = "secrets" }) }, "lists secrets whole"},
+		"another kubelet path": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource, o.AllNamespaces, o.Kubelet = "nodes", true, "metrics/cadvisor" })
+		}, "is asked for stats/summary, its Summary API, alone"},
+		"kubelet of pods": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.AllNamespaces, o.Kubelet = true, "stats/summary" })
+		}, "so list nodes"},
+		"kubelet of nodes of a group": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) {
+				o.Group, o.Resource, o.AllNamespaces, o.Kubelet = "example.com", "nodes", true, "stats/summary"
+			})
+		}, "so list nodes"},
+		"kubelet without all_namespaces": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource, o.Kubelet = "nodes", "stats/summary" })
+		}, "set all_namespaces: true"},
+		"kubelet of metadata alone": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) {
+				o.Resource, o.AllNamespaces, o.Kubelet, o.MetadataOnly = "nodes", true, "stats/summary", true
+			})
+		}, "both request.kubelet and request.metadata_only"},
+		"kubelet both ways": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) {
+				o.Resource, o.AllNamespaces, o.Kubelet, o.KubeletViaAPIServer, o.KubeletCAFile = "nodes", true, "stats/summary", true, "/ca"
+			})
+		}, "both request.kubelet_via_api_server and request.kubelet_ca_file"},
+		"kubelet_via_api_server alone": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.KubeletViaAPIServer = true })
+		}, "kubelet_via_api_server without request.kubelet"},
+		"kubelet_ca_file alone": {func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.KubeletCAFile = "/ca" })
+		}, "kubelet_ca_file without request.kubelet"},
 		"both namespace keys": {func(r *model.RequestConfig) {
 			kubernetesOwn(r, func(o *KubernetesConfig) { o.Namespaces, o.AllNamespaces = []string{"a"}, true })
 		}, "not both"},
@@ -495,6 +527,19 @@ func TestAKubernetesCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 		},
 		"a version": func(r *model.RequestConfig) {
 			kubernetesOwn(r, func(o *KubernetesConfig) { o.Group, o.Version = "example.com", "v1beta2" })
+		},
+		"the metadata of secrets": func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) { o.Resource, o.MetadataOnly = "secrets", true })
+		},
+		"kubelet statistics": func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) {
+				o.Resource, o.AllNamespaces, o.Kubelet, o.KubeletCAFile = "nodes", true, "stats/summary", "/ca"
+			})
+		},
+		"kubelet statistics through the API server": func(r *model.RequestConfig) {
+			kubernetesOwn(r, func(o *KubernetesConfig) {
+				o.Resource, o.AllNamespaces, o.Kubelet, o.KubeletViaAPIServer = "nodes", true, "stats/summary", true
+			})
 		},
 	} {
 		collector := &model.Collector{Name: "kube", Request: model.RequestConfig{Type: RequestTypeKubernetes, Own: KubernetesConfig{Resource: "pods"}}}

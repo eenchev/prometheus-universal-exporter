@@ -4,17 +4,22 @@ package fetch
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
@@ -67,7 +72,8 @@ import (
 // for the core group, and its version, v1 when left out; which of them are
 // listed, by namespace and by selector; how many a listing may hold, 0 for
 // the default; and the API server's URL when the exporter does not list
-// its own cluster's.
+// its own cluster's; whether it lists the objects' metadata alone; and
+// what each node's kubelet is asked for, of a listing of nodes.
 type KubernetesConfig struct {
 	Resource      string   `yaml:"resource,omitempty"`
 	Group         string   `yaml:"group,omitempty"`
@@ -78,6 +84,17 @@ type KubernetesConfig struct {
 	FieldSelector string   `yaml:"field_selector,omitempty"`
 	MaxObjects    int      `yaml:"max_objects,omitempty"`
 	APIServer     string   `yaml:"api_server,omitempty"`
+	// MetadataOnly lists the objects' metadata alone, a
+	// PartialObjectMetadataList (docs/KUBERNETES.md#metadata-alone).
+	MetadataOnly bool `yaml:"metadata_only,omitempty"`
+	// Kubelet is what each node's kubelet is asked for, stats/summary, of a
+	// listing of nodes (docs/KUBERNETES.md#kubelet-statistics);
+	// KubeletViaAPIServer asks it through the API server's proxy of the
+	// node, and KubeletCAFile is the CA the kubelets' certificates are
+	// verified against when they are asked directly.
+	Kubelet             string `yaml:"kubelet,omitempty"`
+	KubeletViaAPIServer bool   `yaml:"kubelet_via_api_server,omitempty"`
+	KubeletCAFile       string `yaml:"kubelet_ca_file,omitempty"`
 }
 
 // kubernetesRequest is a kubernetes collector's own request keys: the zero
@@ -218,8 +235,11 @@ func validateKubernetesRequest(x *model.Collector) error {
 	if own.Version != "" && (len(own.Version) > 63 || !kubernetesName.MatchString(own.Version)) {
 		return fmt.Errorf("collector %q request.version %q is not an API version, such as v1 or v1beta1", x.Name, own.Version)
 	}
-	if own.Group == "" && own.Resource == "secrets" {
-		return fmt.Errorf("collector %q lists secrets, which a kubernetes collector may not: their values would pass through the transforms, and could be shown by their errors and by a debug report; a metric of a Secret's existence or age comes from another resource, or from an exporter made for it", x.Name)
+	if own.Group == "" && own.Resource == "secrets" && !own.MetadataOnly {
+		return fmt.Errorf("collector %q lists secrets whole, which a kubernetes collector may not: their values would pass through the transforms, and could be shown by their errors and by a debug report; set request.metadata_only: true to list their metadata alone, their names, labels and ages", x.Name)
+	}
+	if err := validateKubelet(x, own); err != nil {
+		return err
 	}
 	if own.AllNamespaces && len(own.Namespaces) > 0 {
 		return fmt.Errorf("collector %q sets both request.namespaces and request.all_namespaces; list namespaces, or every namespace, not both", x.Name)
@@ -259,6 +279,36 @@ func validateKubernetesRequest(x *model.Collector) error {
 	// The debug page's playground makes no request, and may name no file.
 	if r.BearerTokenFile == "" && r.TLS.CertFile == "" && !x.RequestNotMade {
 		return fmt.Errorf("collector %q names request.api_server with no credential; set bearer_token_file, or tls.cert_file and tls.key_file", x.Name)
+	}
+	return nil
+}
+
+// kubeletSummary is the one request.kubelet there is: a kubelet's Summary
+// API.
+const kubeletSummary = "stats/summary"
+
+// validateKubelet checks request.kubelet and the keys that go with it.
+func validateKubelet(x *model.Collector, own KubernetesConfig) error {
+	if own.Kubelet == "" {
+		switch {
+		case own.KubeletViaAPIServer:
+			return fmt.Errorf("collector %q sets request.kubelet_via_api_server without request.kubelet; it says how the nodes' kubelets are asked, which only a collector with kubelet: %s asks", x.Name, kubeletSummary)
+		case own.KubeletCAFile != "":
+			return fmt.Errorf("collector %q sets request.kubelet_ca_file without request.kubelet; it is the CA of the nodes' kubelets, which only a collector with kubelet: %s asks", x.Name, kubeletSummary)
+		}
+		return nil
+	}
+	switch {
+	case own.Kubelet != kubeletSummary:
+		return fmt.Errorf("collector %q request.kubelet is %q; the kubelet is asked for %s, its Summary API, alone", x.Name, own.Kubelet, kubeletSummary)
+	case own.Group != "" || own.Resource != "nodes":
+		return fmt.Errorf("collector %q sets request.kubelet with resource %q; the kubelets asked are those of the nodes listed, so list nodes, of the core group", x.Name, own.Resource)
+	case !own.AllNamespaces:
+		return fmt.Errorf("collector %q sets request.kubelet without request.all_namespaces; nodes are of no namespace, and are listed across the cluster: set all_namespaces: true", x.Name)
+	case own.MetadataOnly:
+		return fmt.Errorf("collector %q sets both request.kubelet and request.metadata_only; a kubelet is asked at the address its Node's status names, which its metadata does not hold", x.Name)
+	case own.KubeletViaAPIServer && own.KubeletCAFile != "":
+		return fmt.Errorf("collector %q sets both request.kubelet_via_api_server and request.kubelet_ca_file; through the API server, the kubelets are not reached by the exporter, and their certificates are the API server's to verify", x.Name)
 	}
 	return nil
 }
@@ -399,6 +449,28 @@ type kubernetesList struct {
 	Items []json.RawMessage `json:"items"`
 }
 
+// kubernetesConcurrency is how many of a scrape's requests are sent at
+// once: the listings of its namespaces, and with kubelet, the requests of
+// its nodes' kubelets. A collector of many namespaces takes about as long
+// as its slowest few rather than as all of them added up, and no API
+// server or kubelet is asked more of at once than a handful of clients
+// would ask.
+const kubernetesConcurrency = 4
+
+// kubernetesThrottleRetries is how many times a page the API server's
+// priority and fairness refused with 429 is asked for again, each after
+// the wait its Retry-After asks for, within the scrape's deadline.
+const kubernetesThrottleRetries = 3
+
+// kubernetesThrottleWait is the wait before asking again for a page
+// answered 429 without a Retry-After the exporter can read.
+const kubernetesThrottleWait = time.Second
+
+// lastAppliedAnnotation is kubectl apply's copy of the configuration it
+// applied, which of a Secret holds its values; a listing of metadata alone
+// takes it out of every object.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
 // fetchKubernetes lists a scrape's objects and answers them as JSON.
 func fetchKubernetes(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
 	start := time.Now()
@@ -435,65 +507,22 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 		return nil, fmt.Errorf("the API server's CA or the client certificate: %w", err)
 	}
 	limit := responseLimit(c)
-	maxObjects := kubernetesMaxObjects(c)
-	doc := kubernetesDocument{Items: []json.RawMessage{}}
-	total := int64(0)
-	for _, namespace := range namespaces {
-		listing := kubeapi.Listing{
-			Client: client, Server: conn.server, Path: kubernetesPath(c, namespace), Token: token, What: kubernetesRequest(c).Resource,
-			LabelSelector: kubernetesRequest(c).LabelSelector, FieldSelector: kubernetesRequest(c).FieldSelector, MaxPageBytes: limit,
-			// With otlp.traces.propagate, each page's request carries the
-			// trace context as an HTTP target's does: the API server takes a
-			// traceparent (its APIServerTracing), and its spans are then
-			// children of the request's. No header of the request is the
-			// operator's, so there is none to leave as it is.
-			Sent: func(req *http.Request) {
-				span := propagateTrace(ctx, req.Header, false)
-				traceRequest(ctx, req.Method, req.URL.String(), req.Header, "", false)
-				traceSpanID(ctx, span)
-			},
-			// kubeapi tells a request that got no answer by this
-			// beginning of its own.
-			Answered: func(outcome string) {
-				if strings.HasPrefix(outcome, "error: ") {
-					traceFailedOutcome(ctx, outcome)
-					return
-				}
-				traceOutcome(ctx, outcome)
-			},
+	l := &kubernetesListing{c: c, conn: conn, client: client, token: token, limit: limit, maxObjects: kubernetesMaxObjects(c), items: make([][]json.RawMessage, len(namespaces))}
+	err = kubernetesEach(ctx, len(namespaces), func(ctx context.Context, i int) error {
+		if err := l.list(ctx, i, namespaces[i]); err != nil {
+			return kubernetesFailure(ctx, c, namespaces[i], err)
 		}
-		err := listing.List(ctx, func(raw []byte) (string, error) {
-			var page kubernetesList
-			if err := json.Unmarshal(raw, &page); err != nil {
-				// The API server's address is the operator's, as below.
-				return "", model.WithOperatorDetail(
-					fmt.Errorf("listing %s at %s: the answer is not a list: %w", kubernetesRequest(c).Resource, conn.server+listing.Path, err),
-					fmt.Sprintf("listing %s: the answer is not a list: %s", kubernetesRequest(c).Resource, err))
-			}
-			doc.Kind, doc.APIVersion = strings.TrimSuffix(page.Kind, "List"), page.APIVersion
-			for _, item := range page.Items {
-				if doc.Count++; doc.Count > maxObjects {
-					return "", model.MarkError(fmt.Errorf("the listing of %s holds more than the %d objects request.max_objects allows; narrow it with namespaces, label_selector or field_selector, or raise max_objects", kubernetesRequest(c).Resource, maxObjects), model.ErrLimitExceeded)
-				}
-				item, err := withoutManagedFields(item)
-				if err != nil {
-					return "", fmt.Errorf("listing %s: an object is not a JSON object: %w", kubernetesRequest(c).Resource, err)
-				}
-				if total += int64(len(item)) + 1; total > limit {
-					return "", model.MarkError(fmt.Errorf("the objects of the listing of %s come to more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", kubernetesRequest(c).Resource, limit), model.ErrLimitExceeded)
-				}
-				doc.Items = append(doc.Items, item)
-			}
-			return page.Metadata.Continue, nil
-		})
-		if err != nil {
-			return nil, kubernetesFailure(ctx, c, namespace, err)
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if doc.Kind == "" {
-		doc.APIVersion = kubernetesAPIVersion(c)
+	var body []byte
+	if kubernetesRequest(c).Kubelet != "" {
+		body, err = l.kubeletDocument(ctx)
+	} else {
+		body, err = l.document()
 	}
-	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -511,31 +540,505 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 	}, nil
 }
 
-// withoutManagedFields is an object without its metadata.managedFields,
-// which say which client set which field: often the largest part of an
-// object, and of no use to a metric. The rest is kept as it was sent.
-func withoutManagedFields(item json.RawMessage) (json.RawMessage, error) {
-	if !bytes.Contains(item, []byte(`"managedFields"`)) {
+// kubernetesEach runs do for 0 to n-1, kubernetesConcurrency at a time. The
+// first error ends the others, whose context it cancels, and is the one
+// returned.
+func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i int) error) error {
+	if n == 1 {
+		return do(ctx, 0)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu    sync.Mutex
+		first error
+		wg    sync.WaitGroup
+	)
+	turns := make(chan struct{}, kubernetesConcurrency)
+	started := 0
+	for i := range n {
+		select {
+		case turns <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		started++
+		go func() {
+			defer wg.Done()
+			defer func() { <-turns }()
+			if err := do(ctx, i); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+					cancel()
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if first == nil && started < n {
+		// The scrape's own context ended before every one was begun.
+		return context.Cause(ctx)
+	}
+	return first
+}
+
+// kubernetesListing is what a scrape's listings gather, from each
+// namespace at once: the objects of each, in the order request.namespaces
+// names the namespaces, and, across them, the count and the bytes, which
+// max_objects and the response limit bound.
+type kubernetesListing struct {
+	c                *model.Collector
+	conn             kubernetesConnection
+	client           *http.Client
+	token            string
+	limit            int64
+	maxObjects       int
+	mu               sync.Mutex
+	items            [][]json.RawMessage
+	count            int
+	total            int64
+	kind, apiVersion string
+}
+
+// list lists namespace, the i-th, into l.items[i].
+func (l *kubernetesListing) list(ctx context.Context, i int, namespace string) error {
+	own := kubernetesRequest(l.c)
+	listing := kubeapi.Listing{
+		Client: l.client, Server: l.conn.server, Path: kubernetesPath(l.c, namespace), Token: l.token, What: own.Resource,
+		LabelSelector: own.LabelSelector, FieldSelector: own.FieldSelector, MaxPageBytes: l.limit,
+		Prepare: kubernetesPrepare(ctx), Retry: kubernetesRetry, ResumeExpired: true,
+		// A listing begun again puts away what it had listed.
+		Restart: func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			for _, item := range l.items[i] {
+				l.count--
+				l.total -= int64(len(item)) + 1
+			}
+			l.items[i] = nil
+		},
+	}
+	if own.MetadataOnly {
+		listing.Accept = kubeapi.AcceptMetadataList
+	}
+	return listing.List(ctx, func(raw []byte) (string, error) {
+		var page kubernetesList
+		if err := json.Unmarshal(raw, &page); err != nil {
+			// The API server's address is the operator's, as below.
+			return "", model.WithOperatorDetail(
+				fmt.Errorf("listing %s at %s: the answer is not a list: %w", own.Resource, l.conn.server+listing.Path, err),
+				fmt.Sprintf("listing %s: the answer is not a list: %s", own.Resource, err))
+		}
+		// A listing of metadata alone is never taken as anything else: a
+		// server, or what stands before it, that answers the objects
+		// whole would hand a Secret's values to the transforms.
+		if own.MetadataOnly && page.Kind != "PartialObjectMetadataList" {
+			return "", fmt.Errorf("listing %s: the API server answered a %s, not the PartialObjectMetadataList of their metadata alone asked for", own.Resource, cmp.Or(page.Kind, "list of no kind"))
+		}
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.kind, l.apiVersion = strings.TrimSuffix(page.Kind, "List"), page.APIVersion
+		for _, item := range page.Items {
+			if l.count++; l.count > l.maxObjects {
+				return "", model.MarkError(fmt.Errorf("the listing of %s holds more than the %d objects request.max_objects allows; narrow it with namespaces, label_selector or field_selector, or raise max_objects", own.Resource, l.maxObjects), model.ErrLimitExceeded)
+			}
+			item, err := trimObject(item, own.MetadataOnly)
+			if err != nil {
+				return "", fmt.Errorf("listing %s: an object is not a JSON object: %w", own.Resource, err)
+			}
+			if l.total += int64(len(item)) + 1; l.total > l.limit {
+				return "", model.MarkError(fmt.Errorf("the objects of the listing of %s come to more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", own.Resource, l.limit), model.ErrLimitExceeded)
+			}
+			l.items[i] = append(l.items[i], item)
+		}
+		return page.Metadata.Continue, nil
+	})
+}
+
+// objects are the objects listed, namespace by namespace.
+func (l *kubernetesListing) objects() []json.RawMessage {
+	out := []json.RawMessage{}
+	for _, items := range l.items {
+		out = append(out, items...)
+	}
+	return out
+}
+
+// document is the listing as the transforms read it.
+func (l *kubernetesListing) document() ([]byte, error) {
+	doc := kubernetesDocument{Kind: l.kind, APIVersion: l.apiVersion, Items: l.objects()}
+	doc.Count = len(doc.Items)
+	switch {
+	case kubernetesRequest(l.c).MetadataOnly:
+		// What the API server names a list of metadata, whether or not it
+		// had objects to list.
+		doc.Kind, doc.APIVersion = "PartialObjectMetadata", "meta.k8s.io/v1"
+	case doc.Kind == "":
+		doc.APIVersion = kubernetesAPIVersion(l.c)
+	}
+	return json.Marshal(doc)
+}
+
+// kubernetesPrepare records each request of a scrape in its trace, when it
+// has one, at its own place (tracedAt), since the requests of a scrape are
+// sent at once; sends the trace context with it under
+// otlp.traces.propagate; and, of an exported trace, times its phases for
+// its span (TracedRequest.Phases).
+func kubernetesPrepare(ctx context.Context) func(req *http.Request) (*http.Request, kubeapi.Sent) {
+	return func(req *http.Request) (*http.Request, kubeapi.Sent) {
+		// With otlp.traces.propagate, each request carries the trace
+		// context as an HTTP target's does: the API server takes a
+		// traceparent (its APIServerTracing), and its spans are then
+		// children of the request's. No header of the request is the
+		// operator's, so there is none to leave as it is.
+		span := propagateTrace(ctx, req.Header, false)
+		at := traceRequestAt(ctx, req.Method, req.URL.String(), req.Header, "", false)
+		at.spanID(span)
+		var trip *tripTrace
+		if at.t != nil && spanTraced(ctx) {
+			trip = newTripTrace(ctx, time.Now())
+			trip.at = &at
+			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trip.hooks()))
+		}
+		return req, kubeapi.Sent{
+			// kubeapi tells a request that got no answer by this
+			// beginning of its own.
+			Answered: func(outcome string) {
+				failed := strings.HasPrefix(outcome, "error: ")
+				if failed {
+					trip.recordPhases()
+				}
+				at.outcome(outcome, failed)
+			},
+			Waiting: func(wait time.Duration, why string) {
+				at.wait(fmt.Sprintf("then waited %s, as the answer's Retry-After asked", shownWait(wait)))
+			},
+		}
+	}
+}
+
+// kubernetesRetry asks again for a page the API server's priority and
+// fairness refused with 429 Too Many Requests: after the wait its
+// Retry-After asks for, a second when it has none the exporter can read,
+// at most kubernetesThrottleRetries times, and not when the wait would end
+// after the scrape's deadline.
+func kubernetesRetry(ctx context.Context, answer *kubeapi.StatusError, header http.Header, retried int) (time.Duration, bool) {
+	if answer.Code != http.StatusTooManyRequests || retried >= kubernetesThrottleRetries {
+		return 0, false
+	}
+	wait := kubernetesThrottleWait
+	if value := strings.TrimSpace(header.Get("Retry-After")); value != "" {
+		if asked, ok := parseRetryAfter(value, time.Now()); ok {
+			wait = asked
+		}
+	}
+	if deadline, has := ctx.Deadline(); has && time.Until(deadline) <= wait {
+		return 0, false
+	}
+	return wait, true
+}
+
+// trimObject is an object without its metadata.managedFields, which say
+// which client set which field: often the largest part of an object, and
+// of no use to a metric; and, of a listing of metadata alone, with its
+// kind, apiVersion and metadata alone, whatever else an answer carried,
+// and without kubectl apply's copy of what it applied, which of a Secret
+// holds its values. The rest is kept as it was sent.
+func trimObject(item json.RawMessage, metadataOnly bool) (json.RawMessage, error) {
+	if !metadataOnly && !bytes.Contains(item, []byte(`"managedFields"`)) {
 		return item, nil
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(item, &object); err != nil {
 		return nil, err
 	}
-	// A metadata that is missing or no object has no managed fields to
-	// take out, and the object is left as it was sent.
+	changed := false
+	if metadataOnly {
+		for key := range object {
+			if key != "kind" && key != "apiVersion" && key != "metadata" {
+				delete(object, key)
+				changed = true
+			}
+		}
+	}
+	// A metadata that is missing or no object has nothing to take out, and
+	// the object is left as it was sent.
 	var metadata map[string]json.RawMessage
 	_ = json.Unmarshal(object["metadata"], &metadata)
-	if metadata["managedFields"] == nil {
+	if metadata["managedFields"] != nil {
+		delete(metadata, "managedFields")
+		changed = true
+	}
+	if metadataOnly && metadata["annotations"] != nil {
+		var annotations map[string]json.RawMessage
+		if json.Unmarshal(metadata["annotations"], &annotations) == nil && annotations[lastAppliedAnnotation] != nil {
+			delete(annotations, lastAppliedAnnotation)
+			raw, err := json.Marshal(annotations)
+			if err != nil {
+				return nil, err
+			}
+			metadata["annotations"], changed = raw, true
+		}
+	}
+	if !changed {
 		return item, nil
 	}
-	delete(metadata, "managedFields")
-	raw, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
+	if metadata != nil {
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+		object["metadata"] = raw
 	}
-	object["metadata"] = raw
 	return json.Marshal(object)
+}
+
+// The kubelet of each node of a collector with request.kubelet answers what
+// no object of the API holds: what each pod, container and volume uses of
+// the node's CPU, memory and file systems, ephemeral storage among them, as
+// its Summary API, /stats/summary, has it. The collector lists the nodes,
+// as its keys name them, and asks each node's kubelet, kubernetesConcurrency
+// at a time: at the address of its Node, InternalIP first, and the port
+// the Node says its kubelet serves on, with the token the listing is made
+// with, the kubelet's certificate verified against kubelet_ca_file, the
+// cluster's CA when it is left out; or, with kubelet_via_api_server,
+// through the API server's proxy of the node, for a cluster whose kubelets'
+// certificates no CA the exporter has signs. The first needs get on
+// nodes/stats, the second get on nodes/proxy, which lets its holder do
+// all a kubelet does, so the first is the one to choose where it works.
+
+// kubeletSummaryVersion is the version of the kubelet's Summary API, as the
+// document of a collector with request.kubelet names it.
+const kubeletSummaryVersion = "stats/v1alpha1"
+
+// kubeletDocument is the document of a collector with request.kubelet: each
+// node's summary, as its kubelet answered it, in the order the nodes were
+// listed, and the nodes whose kubelet answered none, and why.
+type kubeletDocument struct {
+	Kind       string            `json:"kind"`
+	APIVersion string            `json:"api_version"`
+	Count      int               `json:"count"`
+	Items      []json.RawMessage `json:"items"`
+	Failed     []kubeletFailure  `json:"failed"`
+}
+
+// kubeletFailure is a node whose kubelet answered no summary. Error says
+// why in the words a probe's caller is shown, which name no address.
+type kubeletFailure struct {
+	Node  string `json:"node"`
+	Error string `json:"error"`
+}
+
+// kubeletNode is what the request of a node's kubelet needs of its Node.
+type kubeletNode struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Status struct {
+		Addresses []struct {
+			Type    string `json:"type"`
+			Address string `json:"address"`
+		} `json:"addresses"`
+		DaemonEndpoints struct {
+			KubeletEndpoint struct {
+				Port int `json:"Port"`
+			} `json:"kubeletEndpoint"`
+		} `json:"daemonEndpoints"`
+	} `json:"status"`
+}
+
+// kubeletAddressTypes are the addresses of a Node a kubelet is asked at, in
+// the order they are tried: the one inside the cluster first, as the API
+// server's own --kubelet-preferred-address-types has it by default.
+var kubeletAddressTypes = []string{"InternalIP", "Hostname", "ExternalIP"}
+
+// kubeletDefaultPort is the kubelet's port when its Node names none.
+const kubeletDefaultPort = 10250
+
+// address is where n's kubelet is asked directly, "" when the Node has no
+// address to ask it at.
+func (n kubeletNode) address() string {
+	for _, kind := range kubeletAddressTypes {
+		for _, a := range n.Status.Addresses {
+			if a.Type == kind && a.Address != "" {
+				port := n.Status.DaemonEndpoints.KubeletEndpoint.Port
+				if port <= 0 || port > 65535 {
+					port = kubeletDefaultPort
+				}
+				return "https://" + net.JoinHostPort(a.Address, strconv.Itoa(port))
+			}
+		}
+	}
+	return ""
+}
+
+// kubeletDocument asks the kubelet of every node listed for its summary.
+// The nodes whose kubelet answered none are in the document's failed, so
+// one node down leaves the others' metrics; when every kubelet fails, the
+// scrape fails as the first did.
+func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error) {
+	own := kubernetesRequest(l.c)
+	objects := l.objects()
+	nodes := make([]kubeletNode, len(objects))
+	for i, raw := range objects {
+		if err := json.Unmarshal(raw, &nodes[i]); err != nil {
+			return nil, fmt.Errorf("listing nodes: a node is not a Node: %w", err)
+		}
+	}
+	client := l.client
+	if !own.KubeletViaAPIServer {
+		var err error
+		if client, err = HTTPClient(TransportSettings{TLS: kubeletTLS(l.c, l.conn)}, false, 0); err != nil {
+			return nil, fmt.Errorf("the kubelets' CA or the client certificate: %w", err)
+		}
+	}
+	// A kubelet that does not answer, a node gone dark, is given up on a
+	// little before the scrape's deadline, so the others' summaries are
+	// answered with it among the failed, rather than the scrape failing
+	// at its deadline for one node.
+	asking, stop := context.WithDeadline(ctx, kubeletDeadline(ctx))
+	defer stop()
+	summaries := make([]json.RawMessage, len(nodes))
+	failures := make([]error, len(nodes))
+	var total int64
+	var mu sync.Mutex
+	err := kubernetesEach(ctx, len(nodes), func(ctx context.Context, i int) error {
+		node := nodes[i]
+		get := kubeapi.Get{Client: client, Token: l.token, What: "kubelet of node " + node.Metadata.Name, MaxBytes: l.limit, Prepare: kubernetesPrepare(asking)}
+		if own.KubeletViaAPIServer {
+			get.Address = l.conn.server + "/api/v1/nodes/" + url.PathEscape(node.Metadata.Name) + "/proxy/" + own.Kubelet
+		} else if address := node.address(); address != "" {
+			get.Address = address + "/" + own.Kubelet
+		} else {
+			failures[i] = errKubeletNoAddress
+			return nil
+		}
+		raw, err := get.Do(asking)
+		if err == nil && !json.Valid(raw) {
+			err = errKubeletNotJSON
+		}
+		if err != nil {
+			failures[i] = err
+			// The scrape's own end, or a sibling's limit, ends them all:
+			// what failed is the scrape, not the node.
+			if ctx.Err() != nil {
+				return err
+			}
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if total += int64(len(raw)) + 1; total > l.limit {
+			return model.MarkError(fmt.Errorf("the summaries of the nodes' kubelets come to more than the response limit, %d bytes; narrow the nodes with label_selector or field_selector, or raise max_response_bytes", l.limit), model.ErrLimitExceeded)
+		}
+		summaries[i] = raw
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, model.ErrLimitExceeded) {
+			return nil, err
+		}
+		// The scrape ended before the kubelets were asked: its caller
+		// left, or its time ran out before the kubelets' deadline.
+		return nil, model.WithOperatorDetail(fmt.Errorf("asking the nodes' kubelets for their %s: %w", own.Kubelet, err),
+			fmt.Sprintf("asking the nodes' kubelets for their %s: %s", own.Kubelet, context.Cause(ctx)))
+	}
+	doc := kubeletDocument{Kind: "Summary", APIVersion: kubeletSummaryVersion, Items: []json.RawMessage{}, Failed: []kubeletFailure{}}
+	for i, node := range nodes {
+		if failures[i] == nil && summaries[i] == nil {
+			// None is left unasked but by the scrape's end, which fails it
+			// above; this is that rule kept.
+			failures[i] = context.DeadlineExceeded
+		}
+		if failures[i] != nil {
+			doc.Failed = append(doc.Failed, kubeletFailure{Node: node.Metadata.Name, Error: kubeletShown(failures[i])})
+			continue
+		}
+		doc.Items = append(doc.Items, summaries[i])
+	}
+	doc.Count = len(doc.Items)
+	if len(nodes) > 0 && len(doc.Items) == 0 {
+		return nil, kubeletFailed(ctx, own, failures[0])
+	}
+	return json.Marshal(doc)
+}
+
+// kubeletDeadline is when a scrape gives up on the kubelets that have not
+// answered: a tenth of its time left before its deadline, at most a
+// second, so the document of those that did is answered in time.
+func kubeletDeadline(ctx context.Context) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Now().Add(kubernetesTimeout)
+	}
+	return deadline.Add(-min(time.Until(deadline)/10, time.Second))
+}
+
+var (
+	errKubeletNoAddress = errors.New("its Node has no InternalIP, Hostname or ExternalIP address to ask its kubelet at")
+	errKubeletNotJSON   = errors.New("its kubelet's answer is not JSON")
+)
+
+// kubeletTLS is how a kubelet is reached directly: the listing's client
+// certificate, if any, and kubelet_ca_file, or the CA the API server is
+// verified against when it is left out.
+func kubeletTLS(c *model.Collector, conn kubernetesConnection) model.TLSConfig {
+	settings := conn.tls
+	if file := kubernetesRequest(c).KubeletCAFile; file != "" {
+		settings.CAFile = file
+	}
+	return settings
+}
+
+// kubeletShown is why a node's kubelet answered no summary, as the document
+// shows it: its status, or that the request failed and, when it did,
+// that the scrape's time ran out; never the address, which is the
+// operator's.
+func kubeletShown(err error) string {
+	var status *kubeapi.StatusError
+	switch {
+	case errors.As(err, &status):
+		return "the kubelet answered " + status.Status
+	case errors.Is(err, kubeapi.ErrTooLarge):
+		return "the kubelet's summary is larger than the response limit"
+	case errors.Is(err, errKubeletNoAddress), errors.Is(err, errKubeletNotJSON):
+		return err.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the request to the kubelet failed: " + context.DeadlineExceeded.Error()
+	}
+	return "the request to the kubelet failed"
+}
+
+// kubeletFailed words the failure of a scrape no kubelet answered: what
+// the first said, which is the operator's, and what to do about it.
+func kubeletFailed(ctx context.Context, own KubernetesConfig, err error) error {
+	shown := kubeletShown(err)
+	hint := ""
+	var status *kubeapi.StatusError
+	if errors.As(err, &status) {
+		switch {
+		case status.Code == http.StatusForbidden && own.KubeletViaAPIServer:
+			hint = "; the exporter's service account may not ask the kubelets through the API server: grant it get on nodes/proxy, with the chart's kubernetesAccess.kubelet: proxy (docs/KUBERNETES.md#kubelet-statistics)"
+		case status.Code == http.StatusForbidden:
+			hint = "; the exporter's service account may not read the kubelets' statistics: grant it get on nodes/stats, with the chart's kubernetesAccess.kubelet: stats (docs/KUBERNETES.md#kubelet-statistics)"
+		case status.Code == http.StatusUnauthorized:
+			hint = "; the kubelets do not take the token: their webhook authentication may be off, which a kubelet of --authentication-token-webhook=false has"
+		}
+	}
+	var certificate *tls.CertificateVerificationError
+	if errors.As(err, &certificate) {
+		hint = "; no CA the exporter has signs the kubelets' certificates: give theirs in request.kubelet_ca_file, or set kubelet_via_api_server (docs/KUBERNETES.md#kubelet-statistics)"
+	}
+	failure := fmt.Errorf("no node's kubelet answered its %s; the first: %w%s", own.Kubelet, err, hint)
+	if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		failure = fmt.Errorf("%w: %w", failure, ctx.Err())
+	}
+	return model.WithOperatorDetail(failure, "no node's kubelet answered its "+own.Kubelet+"; the first: "+shown+hint)
 }
 
 // kubernetesFailure words a failed listing: an API server's refusal with
@@ -591,6 +1094,12 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 		hint = "; the API server does not take the token: the service account's, or bearer_token_file's with api_server, is missing, expired or of another cluster"
 	case http.StatusForbidden:
 		hint = fmt.Sprintf("; the exporter's service account may not list them: grant it list on %s in group %q, with the chart's kubernetesAccess.rules (docs/KUBERNETES.md#permissions)", kubernetesRequest(c).Resource, kubernetesRequest(c).Group)
+	case http.StatusTooManyRequests:
+		hint = fmt.Sprintf("; its priority and fairness had no seat for the listing, which was asked for again %d times, each after the wait its Retry-After asked for, and is not when that wait would end after the scrape's deadline: the API server is busy, or the exporter's FlowSchema gets it too few seats", status.Retried)
+	case http.StatusGone:
+		hint = "; the listing's continue token expired, and so did it again when the listing started over: the objects change faster than they can be listed, so narrow the listing with label_selector or field_selector"
+	case http.StatusNotAcceptable:
+		hint = "; the API server does not answer the metadata alone of the objects, a PartialObjectMetadataList, which every API server since Kubernetes 1.15 answers: a proxy before it may refuse the Accept"
 	case http.StatusNotFound:
 		hint = "; the API server has no such resource: check resource, its plural name, group and version against kubectl api-resources, and that a custom resource's definition is installed; a cluster-scoped resource, such as nodes, is listed with all_namespaces: true"
 	}
@@ -600,15 +1109,23 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 	return model.WithOperatorDetail(errors.New(what+hint), told+hint)
 }
 
-// checkKubernetesFiles reads the files a collector naming api_server
-// reaches it with, as a scrape reads them, for --dry-run: the token file
-// and the tls block's. Those of the exporter's own service account are its
+// checkKubernetesFiles reads the files a collector reaches what it asks
+// with, as a scrape reads them, for --dry-run: kubelet_ca_file, and of a
+// collector naming api_server, the token file and the tls block's. Those of the exporter's own service account are its
 // pod's, which a check run elsewhere does not have, and are not read.
 func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
-	if t != nil || kubernetesRequest(c).APIServer == "" {
+	if t != nil {
 		return nil
 	}
 	var warnings []string
+	if file := kubernetesRequest(c).KubeletCAFile; file != "" {
+		if _, err := tlsConfig(model.TLSConfig{CAFile: file}); err != nil {
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.kubelet_ca_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
+		}
+	}
+	if kubernetesRequest(c).APIServer == "" {
+		return warnings
+	}
 	if c.Request.BearerTokenFile != "" {
 		if _, err := kubeapi.ReadToken(c.Request.BearerTokenFile); err != nil {
 			warnings = append(warnings, fmt.Sprintf("collector %q: request.bearer_token_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
@@ -622,7 +1139,10 @@ func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 
 // kubernetesSchemaRule is what a kubernetes collector's request is held to, as
 // the exporter holds it (validateKubernetesRequest): resource,
-// written with something other than "", and not the core group's secrets;
+// written with something other than "", and not the core group's secrets
+// but with metadata_only; kubelet only of the core group's nodes, with
+// all_namespaces and without metadata_only, and kubelet_via_api_server and
+// kubelet_ca_file only beside it, not both;
 // namespaces or all_namespaces, not both; bearer_token_file only beside
 // api_server, and beside api_server a credential, bearer_token_file or
 // tls.cert_file, and no insecure_skip_verify true. "" is a key left out
@@ -632,7 +1152,18 @@ func kubernetesSchemaRule() map[string]any {
 	rule := SchemaWrittenKey("resource")
 	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}
 	rule["allOf"] = []any{
-		map[string]any{"if": coreGroup, "then": map[string]any{"properties": map[string]any{"resource": map[string]any{"not": map[string]any{"const": "secrets"}}}}},
+		map[string]any{"if": map[string]any{"allOf": []any{coreGroup, map[string]any{"properties": map[string]any{"resource": map[string]any{"const": "secrets"}}}}}, "then": map[string]any{"properties": map[string]any{"metadata_only": map[string]any{"const": true}}, "required": []string{"metadata_only"}}},
+		map[string]any{"if": SchemaWrittenKey("kubelet"), "then": map[string]any{
+			"allOf": []any{coreGroup},
+			"properties": map[string]any{
+				"resource": map[string]any{"const": "nodes"}, "all_namespaces": map[string]any{"const": true}, "metadata_only": map[string]any{"not": map[string]any{"const": true}},
+			},
+			"required": []string{"all_namespaces"},
+			"not":      map[string]any{"allOf": []any{map[string]any{"properties": map[string]any{"kubelet_via_api_server": map[string]any{"const": true}}, "required": []string{"kubelet_via_api_server"}}, SchemaWrittenKey("kubelet_ca_file")}},
+		}, "else": map[string]any{
+			"properties": map[string]any{"kubelet_via_api_server": map[string]any{"not": map[string]any{"const": true}}},
+			"not":        SchemaWrittenKey("kubelet_ca_file"),
+		}},
 		map[string]any{
 			"if":   map[string]any{"properties": map[string]any{"all_namespaces": map[string]any{"const": true}}, "required": []string{"all_namespaces"}},
 			"then": map[string]any{"not": map[string]any{"properties": map[string]any{"namespaces": map[string]any{"minItems": 1}}, "required": []string{"namespaces"}}},
@@ -650,14 +1181,18 @@ func kubernetesSchemaRule() map[string]any {
 // collector's own keys.
 func kubernetesKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"resource":       {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
-		"group":          {"type": "string", "pattern": SchemaOptionalPattern(kubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
-		"version":        {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},
-		"namespaces":     {"items": map[string]any{"type": "string", "pattern": kubernetesNamePattern, "maxLength": 63}, "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account."},
-		"all_namespaces": {"description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false."},
-		"label_selector": {"not": SchemaOnlyBlanks(), "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out."},
-		"field_selector": {"not": SchemaOnlyBlanks(), "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out."},
-		"max_objects":    {"minimum": 0, "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000."},
-		"api_server":     {"type": "string", "pattern": SchemaOptionalPattern(`^https://[^/?#@]+(/[^?#]*)?$`), "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster."},
+		"resource":               {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md."},
+		"group":                  {"type": "string", "pattern": SchemaOptionalPattern(kubernetesGroupPattern), "maxLength": 253, "not": map[string]any{"enum": []string{"core", "v1"}}, "description": "kubernetes: the resource's API group, such as apps or cert-manager.io; left out for the core group, of pods, services and nodes, which has no name."},
+		"version":                {"type": "string", "pattern": SchemaOptionalPattern(kubernetesNamePattern), "maxLength": 63, "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1."},
+		"namespaces":             {"items": map[string]any{"type": "string", "pattern": kubernetesNamePattern, "maxLength": 63}, "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account."},
+		"all_namespaces":         {"description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false."},
+		"label_selector":         {"not": SchemaOnlyBlanks(), "description": "kubernetes: the label selector sent with the listing, such as app.kubernetes.io/part-of=shop,tier!=cache; every object when left out."},
+		"field_selector":         {"not": SchemaOnlyBlanks(), "description": "kubernetes: the field selector sent with the listing, such as status.phase=Running, of the fields the resource can be selected by; every object when left out."},
+		"max_objects":            {"minimum": 0, "description": "kubernetes: the most objects a listing may hold; one more fails the scrape. Defaults to 10000."},
+		"metadata_only":          {"description": "kubernetes: list the objects' metadata alone, their names, namespaces, labels, annotations and times, as a PartialObjectMetadataList, without kubectl's last-applied-configuration annotation: smaller pages, and the one way to list the core group's secrets. Not with kubelet. Defaults to false. See docs/KUBERNETES.md#metadata-alone."},
+		"kubelet":                {"enum": []string{"", kubeletSummary}, "description": "kubernetes: with resource nodes, all_namespaces and the core group, ask each node's kubelet for its Summary API, stats/summary, what each pod, container and volume uses of CPU, memory and file systems, ephemeral storage among them; the document is the summaries, and the nodes whose kubelet answered none. Needs get on nodes/stats (nodes/proxy with kubelet_via_api_server). See docs/KUBERNETES.md#kubelet-statistics."},
+		"kubelet_via_api_server": {"description": "kubernetes, with kubelet: ask the kubelets through the API server's proxy of each node, for a cluster whose kubelets' certificates no CA the exporter has signs; needs get on nodes/proxy, which lets its holder do all a kubelet does. Not with kubelet_ca_file. Defaults to false."},
+		"kubelet_ca_file":        {"type": "string", "description": "kubernetes, with kubelet: the CA the kubelets' serving certificates are verified against when each is asked directly, read at every scrape; the CA the API server is verified against when left out, the cluster's in its own cluster."},
+		"api_server":             {"type": "string", "pattern": SchemaOptionalPattern(`^https://[^/?#@]+(/[^?#]*)?$`), "description": "kubernetes: the URL of an API server other than the one of the cluster the exporter runs in, https, with a path when it is behind one; reached with tls.ca_file and bearer_token_file, or tls.cert_file and tls.key_file, each read at every scrape. Left out, the exporter's own cluster's, with its pod's service account. See docs/KUBERNETES.md#outside-the-cluster."},
 	}
 }

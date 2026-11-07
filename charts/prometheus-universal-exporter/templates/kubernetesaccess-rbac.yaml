@@ -1,6 +1,7 @@
 {{- /* What kubernetes collectors need: the right of the exporter's own
        ServiceAccount to list the resources kubernetesAccess.rules name, and
-       no more, since a collector only lists. A Role and a RoleBinding in
+       no more, since a collector only lists, but for the get of the nodes'
+       kubelets kubernetesAccess.kubelet asks for. A Role and a RoleBinding in
        each namespace of kubernetesAccess.namespaces, the release's when it
        lists none; with clusterWide, a ClusterRole and a ClusterRoleBinding,
        which a collector with all_namespaces, or of a cluster-scoped
@@ -12,6 +13,13 @@
 {{- $rules := list }}
 {{- range $rule := .Values.kubernetesAccess.rules }}
 {{- $rules = append $rules (dict "apiGroups" $rule.apiGroups "resources" $rule.resources "verbs" (list "list")) }}
+{{- end }}
+{{- /* A collector with request.kubelet asks each node's kubelet: get on
+       nodes/stats directly, or on nodes/proxy through the API server, both
+       of nodes, which are of no namespace, so a ClusterRole's alone. */ -}}
+{{- $kubelet := .Values.kubernetesAccess.kubelet | default "" }}
+{{- if $kubelet }}
+{{- $rules = append $rules (dict "apiGroups" (list "") "resources" (list (printf "nodes/%s" $kubelet)) "verbs" (list "get")) }}
 {{- end }}
 {{- if .Values.kubernetesAccess.clusterWide }}
 ---

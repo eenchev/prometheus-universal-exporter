@@ -60,9 +60,10 @@
         "enabled": {"type": "boolean"},
         "clusterWide": {"type": "boolean", "description": "A ClusterRole and a ClusterRoleBinding in place of a Role and a RoleBinding per namespace: for a collector with all_namespaces, or of a cluster-scoped resource such as nodes. Not with namespaces."},
         "namespaces": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63}, "description": "The namespaces the ServiceAccount may list in, a Role and a RoleBinding in each; the release's when empty."},
+        "kubelet": {"enum": ["", "stats", "proxy"], "description": "For a collector with request.kubelet: stats grants get on nodes/stats, for the kubelets asked directly; proxy get on nodes/proxy, for kubelet_via_api_server, which lets the account do all a kubelet does. Needs clusterWide; the rules still name nodes, for their listing."},
         "rules": {
           "type": "array",
-          "description": "What the ServiceAccount may list: each rule's apiGroups, \"\" for the core group, and resources, by their plural names. The verb is list alone. Never \"*\", nor secrets of the core group.",
+          "description": "What the ServiceAccount may list: each rule's apiGroups, \"\" for the core group, and resources, by their plural names. The verb is list alone; kubelet adds get on nodes/stats or nodes/proxy. Never \"*\", nor secrets of the core group.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -76,8 +77,10 @@
           }
         }
       },
-      "if": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]},
-      "then": {"properties": {"namespaces": {"maxItems": 0}}}
+      "allOf": [
+        {"if": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]}, "then": {"properties": {"namespaces": {"maxItems": 0}}}},
+        {"if": {"properties": {"kubelet": {"enum": ["stats", "proxy"]}}, "required": ["kubelet"]}, "then": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]}}
+      ]
     },
 
     "service": {

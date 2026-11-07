@@ -102,6 +102,20 @@ func TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed(t *testing.T
 	if text(path(binding, "roleRef", "kind")) != "ClusterRole" || text(path(binding, "subjects", "0", "name")) != name {
 		t.Error("the ClusterRoleBinding does not bind the ClusterRole to the exporter's ServiceAccount")
 	}
+	// kubelet adds get on the nodes' stats, or their proxy, to the
+	// ClusterRole's rules; without it, the rules alone.
+	for kubelet, want := range map[string]string{"": "", "stats": "nodes/stats", "proxy": "nodes/proxy"} {
+		rules := entries(path(manifest(t, manifests(t, helm, append(slices.Clone(cluster), "--set", "kubernetesAccess.kubelet="+kubelet)...), "ClusterRole/default-"+name), "rules"))
+		if want == "" {
+			if len(rules) != 2 {
+				t.Errorf("without kubelet the ClusterRole allows %v", rules)
+			}
+			continue
+		}
+		if len(rules) != 3 || !slices.Equal(scalars(path(rules[2], "apiGroups")), []string{""}) || !slices.Equal(scalars(path(rules[2], "resources")), []string{want}) || !slices.Equal(scalars(path(rules[2], "verbs")), []string{"get"}) {
+			t.Errorf("kubelet %s: the ClusterRole allows %v, want get on %s after the rules", kubelet, rules, want)
+		}
+	}
 
 	mount := append(slices.Clone(release), "--set-json", `extraVolumes=[{"name":"x","emptyDir":{}}]`, "--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/var/run/secrets/kubernetes.io/serviceaccount"}]`)
 	if out, ok := helmTemplate(t, helm, chartDir, mount...); ok || !strings.Contains(out, "the service account token directory") {
@@ -114,18 +128,21 @@ func TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed(t *testing.T
 
 // What kubernetesAccess may not grant fails rendering, by the schema and,
 // with the schema skipped, by the templates: no rules, a wildcard, the core
-// group's secrets, and namespaces beside clusterWide.
+// group's secrets, namespaces beside clusterWide, and kubelet without
+// clusterWide or other than stats or proxy.
 func TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing(t *testing.T) {
 	helm := requireHelm(t)
 	for what, c := range map[string]struct {
 		args []string
 		want string
 	}{
-		"no rules":            {[]string{"--set", "kubernetesAccess.enabled=true"}, "kubernetesAccess.rules lists nothing"},
-		"a group wildcard":    {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["*"],"resources":["pods"]}]`}, `apiGroups has "*"`},
-		"a resource wildcard": {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["apps"],"resources":["*"]}]`}, `resources has "*"`},
-		"secrets":             {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["apps",""],"resources":["deployments","secrets"]}]`}, "grants secrets of the core group"},
-		"both scopes":         {[]string{"--set", "kubernetesAccess.enabled=true", "--set", "kubernetesAccess.clusterWide=true", "--set-json", `kubernetesAccess.namespaces=["a"]`, "--set-json", kubernetesAccessRules}, "both clusterWide and namespaces"},
+		"no rules":              {[]string{"--set", "kubernetesAccess.enabled=true"}, "kubernetesAccess.rules lists nothing"},
+		"a group wildcard":      {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["*"],"resources":["pods"]}]`}, `apiGroups has "*"`},
+		"a resource wildcard":   {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["apps"],"resources":["*"]}]`}, `resources has "*"`},
+		"secrets":               {[]string{"--set", "kubernetesAccess.enabled=true", "--set-json", `kubernetesAccess.rules=[{"apiGroups":["apps",""],"resources":["deployments","secrets"]}]`}, "grants secrets of the core group"},
+		"both scopes":           {[]string{"--set", "kubernetesAccess.enabled=true", "--set", "kubernetesAccess.clusterWide=true", "--set-json", `kubernetesAccess.namespaces=["a"]`, "--set-json", kubernetesAccessRules}, "both clusterWide and namespaces"},
+		"kubelet in namespaces": {[]string{"--set", "kubernetesAccess.enabled=true", "--set", "kubernetesAccess.kubelet=stats", "--set-json", kubernetesAccessRules}, "kubernetesAccess.kubelet needs kubernetesAccess.clusterWide"},
+		"another kubelet":       {[]string{"--set", "kubernetesAccess.enabled=true", "--set", "kubernetesAccess.clusterWide=true", "--set", "kubernetesAccess.kubelet=exec", "--set-json", kubernetesAccessRules}, `kubernetesAccess.kubelet is "exec"`},
 	} {
 		if out, ok := helmTemplate(t, helm, chartDir, c.args...); ok {
 			t.Errorf("%s: rendered", what)

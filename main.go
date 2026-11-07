@@ -29,6 +29,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
@@ -234,6 +235,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
 		return 0
 	}
+	// Kubernetes requests name the exporter and its version (kubeapi).
+	kubeapi.UserAgent = exporter.UserAgent("prometheus-universal-exporter")
 
 	if healthcheck.endpoint != "" {
 		return runHealthcheck(*listenAddress, healthcheck.endpoint, stderr)

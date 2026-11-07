@@ -169,7 +169,7 @@ func TestTheTraceOfASlowProbeIsExported(t *testing.T) {
 		names = append(names, span.Name)
 	}
 	slices.Sort(names)
-	if want := []string{"GET", "decode", "http", "probe text", "transform", "validation"}; !slices.Equal(names, want) {
+	if want := []string{"GET", "decode", "http", "http.connect", "http.first_byte", "probe text", "transform", "validation"}; !slices.Equal(names, want) {
 		t.Fatalf("the spans are %v, want %v: the slow probe's alone", names, want)
 	}
 	root := byName["probe text"]
@@ -399,7 +399,14 @@ func TestAProbeContinuesItsCallersTrace(t *testing.T) {
 // otlp.traces.max_pending_spans is dropped whole and counted, in the
 // self-metrics and on the status page, and the probe is answered as ever.
 func TestATraceOverThePendingBoundIsDropped(t *testing.T) {
-	slow := tracedTarget(t, 10*time.Millisecond, http.StatusOK)
+	// Each probe makes a connection of its own, so the two traces have the
+	// same spans, the request's phases among them.
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.Header().Set("Connection", "close")
+		_, _ = w.Write([]byte("value=3\n"))
+	}))
+	t.Cleanup(slow.Close)
 	receiver := newLogReceiver(t)
 	server := tracesServer(t, receiver, time.Millisecond, func(c *model.Config) { c.OTLP.Traces.MaxPendingSpans = 8 }, nil)
 	probeURL := "/probe?collector=text&target=" + url.QueryEscape(slow.URL)
@@ -626,4 +633,122 @@ func TestASlowReaderMakesNoProbeSlow(t *testing.T) {
 	if pending := server.otlpTraces.pending(); pending != 0 {
 		t.Errorf("a fast probe whose caller read slowly queued %d spans", pending)
 	}
+}
+
+// spanNanos is a span's start and end.
+func spanNanos(t *testing.T, span otlpSpan) (start, end int64) {
+	t.Helper()
+	start, err1 := strconv.ParseInt(span.StartTimeUnixNano, 10, 64)
+	end, err2 := strconv.ParseInt(span.EndTimeUnixNano, 10, 64)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("span %s has times %q and %q", span.Name, span.StartTimeUnixNano, span.EndTimeUnixNano)
+	}
+	return start, end
+}
+
+// An HTTP request's span has under it the phases $timings measures:
+// http.first_byte, from the request's start to the answer's first byte, and
+// under it http.dns, http.connect and http.tls for the lookup, the
+// connection and the handshake the request made, each within it. A target
+// named by a name has its lookup, one over HTTPS its handshake, and a probe
+// on the connection an earlier one left open has http.first_byte alone. A
+// request whose connection is refused has the phase that went through, the
+// lookup, under its span. A trip of a collector none of whose rules reads
+// $timings is timed all the same while it is traced.
+func TestAnHTTPRequestsSpanHasItsPhases(t *testing.T) {
+	receiver := newLogReceiver(t)
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = w.Write([]byte("value=3\n"))
+	}))
+	t.Cleanup(target.Close)
+	server := tracesServer(t, receiver, time.Millisecond, func(c *model.Config) {
+		c.Collectors[0].Request.TLS.InsecureSkipVerify = true
+		c.OTLP.Traces.Errors = true
+	}, nil)
+	if !server.manager.Get().Collectors[0].TimingsUnread {
+		t.Fatal("the collector's rules read $timings; the test is of one whose do not")
+	}
+	// byName is the spans of the last trace exported, of the probe's span
+	// root, by name.
+	byName := func(root string) map[string]receivedSpan {
+		t.Helper()
+		exportTracesNow(server)
+		spans := receiver.spans(t)
+		trace := ""
+		for _, span := range spans {
+			if span.Name == root {
+				trace = span.TraceID
+			}
+		}
+		found := map[string]receivedSpan{}
+		for _, span := range spans {
+			if span.TraceID == trace {
+				found[span.Name] = span
+			}
+		}
+		return found
+	}
+	named := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+	if answer := probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(named), nil); answer.Code != http.StatusOK {
+		t.Fatalf("the probe is answered %d: %s", answer.Code, answer.Body)
+	}
+	spans := byName("probe text")
+	get, first := spans["GET"], spans["http.first_byte"]
+	if first.ParentSpanID != get.SpanID || first.Kind != otlpSpanKindInternal || first.TraceID != get.TraceID {
+		t.Fatalf("http.first_byte is %+v under %s, want INTERNAL under the request's span %s", first.otlpSpan, first.ParentSpanID, get.SpanID)
+	}
+	getStart, getEnd := spanNanos(t, get.otlpSpan)
+	firstStart, firstEnd := spanNanos(t, first.otlpSpan)
+	if firstStart < getStart || firstEnd > getEnd || firstEnd-firstStart < (20*time.Millisecond).Nanoseconds() {
+		t.Errorf("http.first_byte runs from %d to %d, the request from %d to %d; want it within, the target's 20ms in it", firstStart, firstEnd, getStart, getEnd)
+	}
+	for _, phase := range []string{"http.dns", "http.connect", "http.tls"} {
+		span, ok := spans[phase]
+		if !ok {
+			t.Errorf("no %s span", phase)
+			continue
+		}
+		start, end := spanNanos(t, span.otlpSpan)
+		if span.ParentSpanID != first.SpanID || start < firstStart || end > firstEnd || end < start {
+			t.Errorf("%s runs from %d to %d under %s, want within http.first_byte, %d to %d, under it", phase, start, end, span.ParentSpanID, firstStart, firstEnd)
+		}
+	}
+	if _, dnsEnd := spanNanos(t, spans["http.dns"].otlpSpan); dnsEnd > mustStart(t, spans["http.connect"].otlpSpan) {
+		t.Error("the lookup ends after the connection begins")
+	}
+
+	// The connection the first probe left open.
+	if answer := probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(named), nil); answer.Code != http.StatusOK {
+		t.Fatalf("the second probe is answered %d", answer.Code)
+	}
+	spans = byName("probe text")
+	if _, ok := spans["http.first_byte"]; !ok {
+		t.Error("the request on a kept connection has no http.first_byte")
+	}
+	for _, phase := range []string{"http.dns", "http.connect", "http.tls"} {
+		if _, ok := spans[phase]; ok {
+			t.Errorf("the request on a kept connection has %s", phase)
+		}
+	}
+
+	refused := httptest.NewServer(http.NotFoundHandler())
+	refusedURL := strings.Replace(refused.URL, "127.0.0.1", "localhost", 1)
+	refused.Close()
+	if answer := probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(refusedURL), nil); answer.Code == http.StatusOK {
+		t.Fatal("the probe of a closed port is answered 200")
+	}
+	spans = byName("probe text")
+	if dns, ok := spans["http.dns"]; !ok || dns.ParentSpanID != spans["GET"].SpanID {
+		t.Errorf("the refused request's lookup is %+v, want under its span %s", dns.otlpSpan, spans["GET"].SpanID)
+	}
+	if _, ok := spans["http.first_byte"]; ok {
+		t.Error("the refused request has http.first_byte")
+	}
+}
+
+func mustStart(t *testing.T, span otlpSpan) int64 {
+	t.Helper()
+	start, _ := spanNanos(t, span)
+	return start
 }

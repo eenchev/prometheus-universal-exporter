@@ -220,3 +220,49 @@ func TestTheURLIsWhereTheRedirectsLed(t *testing.T) {
 		t.Error("$url and $redirects")
 	}
 }
+
+// A trip exported as a trace records each request's phases with its span's
+// request (TracedRequest.Phases), each with when it began and ended, in the
+// order they began: a redirect's request has its own, on its own
+// connection, not the first request's; and the phases are timed for the
+// trace although no rule of the collector reads $timings. A trip that is
+// not traced records none.
+func TestATracedTripRecordsEachRequestsPhases(t *testing.T) {
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer secure.Close()
+	redirecting := httptest.NewServer(http.RedirectHandler(strings.Replace(secure.URL, "127.0.0.1", "localhost", 1)+"/there", http.StatusFound))
+	defer redirecting.Close()
+	c := httpCollector(t, func(c *model.Collector) {
+		c.Request.TLS.InsecureSkipVerify = true
+		c.Request.FollowRedirects = true
+	})
+	c.TimingsUnread = true
+	ctx, trace := WithSpanTrace(context.Background())
+	if _, err := FetchCollector(ctx, redirecting.URL, c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	requests := trace.Requests()
+	if len(requests) != 2 || !requests[1].Redirect {
+		t.Fatalf("the requests are %+v", requests)
+	}
+	names := func(r TracedRequest) string {
+		var out []string
+		for _, p := range r.Phases {
+			if p.End.Before(p.Start) || p.Start.Before(r.Start()) {
+				t.Errorf("%s runs from %s to %s, the request from %s", p.Name, p.Start, p.End, r.Start())
+			}
+			out = append(out, p.Name)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := names(requests[0]); got != "connect first_byte" {
+		t.Errorf("the first request's phases are %q, want a connection and the first byte", got)
+	}
+	if got := names(requests[1]); got != "dns connect tls first_byte" {
+		t.Errorf("the redirect's phases are %q, want a lookup, a connection, a handshake and the first byte", got)
+	}
+	untraced, err := FetchCollector(context.Background(), redirecting.URL, c, RequestOverrides{}, nil)
+	if err != nil || untraced.Trip.FirstByte != nil {
+		t.Errorf("an untraced trip of a collector that reads no $timings is timed: %v %+v", err, untraced.Trip)
+	}
+}

@@ -927,6 +927,8 @@ The spans, by OpenTelemetry's conventions where one applies:
 | `shared_trip` | INTERNAL | the probe | the wait for an identical probe's trip, a copy of the trip's spans under it; `cancelled` when the probe's caller left first |
 | `http`, `dns`, `sql`, … | INTERNAL | the probe or scrape | the fetch, named as the debug report names its stage; `stage.outcome`, `stage.note` |
 | `GET`, `POST`, `SEARCH`, … | CLIENT | the fetch | one for each request sent: each attempt under `request.retry`, each redirect followed, each page of `request.pagination` and `request.login`'s login. `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`, `http.request.resend_count` for a retry or a redirect, `retry.attempt`, `pagination.page`, `redirect`, `login`, `error.type`; for dns, `dns.question.type` (the record type), `dns.answer.count` and `dns.response.not_found` when the name was not found; for sql, `db.response.returned_rows`, `sql.columns` and `sql.connection.reused`; for grpc, `rpc.grpc.status_code`, the code's number; for ntp, `ntp.stratum`, `ntp.offset_seconds` and `ntp.delay_seconds`; for ldap, `ldap.result_code` and, of a `SEARCH` page, `ldap.search.entries`; for tlscert, `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`, `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and `tlscert.leaf.days_until_expiry`; for redis, `redis.reply.type` (`integer`, `simple_string`, `bulk_string`, `array`, `nil` or `error`) and `redis.reply.bytes` or `redis.reply.elements`; for sshfile and s3file, `sshfile.files` and `sshfile.bytes`, `s3file.objects` and `s3file.bytes`, of the files read; for tcp, `tcp.greeting.bytes` and `tcp.greeting.matched` when it read a greeting and `tcp.answer.bytes`; for sshexec, `process.exit.code`, `sshexec.stdout.bytes` and `sshexec.stderr.bytes`. A localfile collector's reads are no request and have no span |
+| `http.first_byte` | INTERNAL | an HTTP request's span | of an http or graphite request, from its start, when it asked for a connection, to the answer's first byte: the time `$timings.first_byte` measures (see [Metrics per item](CONFIGURATION.md#metrics-per-item)) |
+| `http.dns`, `http.connect`, `http.tls` | INTERNAL | `http.first_byte` | the name's lookup, the connection and the TLS handshake the request made, as `$timings.dns`, `connect` and `tls` measure them; each only when the request made it, none on a connection it reused; of a request that failed before its first byte, the phases that went through, under its own span |
 | `rate_limit` | INTERNAL | the fetch | the request's wait for its turn under `request.rate_limit` |
 | `files`, `decode`, `transform`, `validation` | INTERNAL | the probe or scrape | the stages after the fetch, as the debug report names them |
 | `python` | INTERNAL | `transform` | the time the collector's Python scripts took, added up, from the transform's start |
@@ -997,7 +999,8 @@ nothing the log does not:
 What it costs. While `traces` is off, a probe records nothing and allocates
 nothing more for it. While it is on, every probe and scrape records its
 stages and requests in memory, without their headers, as it goes — about a
-dozen allocations and a kilobyte of a probe's own — and only one exported
+dozen allocations and a kilobyte of a probe's own — and times each HTTP
+request's phases, as it would for a rule that reads `$timings`, and only one exported
 has its spans
 made and encoded: the decision is made at its end, when its duration is
 known. The spans wait in a queue bounded by their count,

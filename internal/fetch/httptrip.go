@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"net/http"
@@ -250,9 +251,45 @@ type tripTrace struct {
 	// remote is the remote address of the connection the request got,
 	// kept or new (GotConn).
 	remote net.Addr
+	// ctx is the context of the trip's requests, whose request trace, an
+	// exported trip's spans or a debug run's, is given each request's
+	// phases (tracePhases) once they are known: at the answer's first
+	// byte, or when the request failed before it (recordPhases).
+	ctx context.Context
 }
 
-func newTripTrace(start time.Time) *tripTrace { return &tripTrace{start: start} }
+func newTripTrace(ctx context.Context, start time.Time) *tripTrace {
+	return &tripTrace{ctx: ctx, start: start}
+}
+
+// phasesLocked are the phases timed of the request being sent, each with
+// its start and end, in the order they began; under t.mu.
+func (t *tripTrace) phasesLocked() []TracedPhase {
+	var phases []TracedPhase
+	add := func(name string, start time.Time, d *time.Duration) {
+		if d != nil && !start.IsZero() {
+			phases = append(phases, TracedPhase{Name: name, Start: start, End: start.Add(*d)})
+		}
+	}
+	add("dns", t.dnsStart, t.dns)
+	add("connect", t.dialStart, t.connect)
+	add("tls", t.handshakeStart, t.tls)
+	add("first_byte", t.start, t.firstByte)
+	return phases
+}
+
+// recordPhases gives the request being sent its phases timed so far, as
+// one that failed before its first byte has them: a lookup or a
+// connection that went through before what failed.
+func (t *tripTrace) recordPhases() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	phases := t.phasesLocked()
+	t.mu.Unlock()
+	tracePhases(t.ctx, phases)
+}
 
 // hooks are the trace's hooks. A phase is taken only before the request
 // has its connection (GotConn): a dial still going on for an earlier
@@ -328,10 +365,14 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 		},
 		GotFirstResponseByte: func() {
 			t.mu.Lock()
-			defer t.mu.Unlock()
 			if t.firstByte == nil {
 				t.firstByte = since(t.start)
 			}
+			phases := t.phasesLocked()
+			t.mu.Unlock()
+			// The request's own, before a redirect's GetConn starts
+			// another's.
+			tracePhases(t.ctx, phases)
 		},
 	}
 }

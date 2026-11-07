@@ -1,5 +1,7 @@
 package exporter
 
+import "github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
+
 // The debug page (debugpage.go): a collector, the playground, one written in
 // an editor, or one chosen from the configuration in force, the response it
 // is run on — pasted, or at --web.debug=full a target fetched through a
@@ -93,7 +95,7 @@ var debugPageTemplate = pageTemplate("debug", `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug · Prometheus Universal Exporter</title>
 `+pageIcon+"\n"+themeHead+`
-<style>`+pageStyle+`
+<style>`+pageStyle+pagekit.SortableStyle+`
 main { max-width: 1200px; }
 .note { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-top: 16px; }
@@ -214,10 +216,6 @@ summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 table.series { border-collapse: collapse; width: 100%; font-size: 12px; }
 table.series th, table.series td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 table.series th { position: sticky; top: 0; background: var(--code); white-space: nowrap; z-index: 1; }
-table.series th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
-table.series th button::after { content: " \2195"; color: var(--muted); }
-table.series th[aria-sort="ascending"] button::after { content: " \2191"; color: var(--accent); }
-table.series th[aria-sort="descending"] button::after { content: " \2193"; color: var(--accent); }
 table.series td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: break-word; max-width: 32em; }
 table.series td.value { text-align: right; white-space: nowrap; }
 table.series td.type { color: var(--muted); font-family: inherit; }
@@ -443,7 +441,7 @@ p.danger strong { color: var(--bad); }
 </div>
 <ul class="lint-unplaced" id="lint-unplaced" hidden></ul>
 <p class="note" id="series-count">Not run yet.</p>
-<div class="table-box" id="series-box" hidden><table class="series" id="series-table"><thead><tr id="series-columns"></tr></thead><tbody id="series-rows"></tbody></table></div>
+<div class="table-box" id="series-box" hidden><table class="series sortable" id="series-table"><thead><tr id="series-columns"></tr></thead><tbody id="series-rows"></tbody></table></div>
 <p class="note" id="series-cap" hidden></p>
 </div>
 <div id="series-text-part" role="tabpanel" aria-labelledby="view-text" hidden>
@@ -464,7 +462,7 @@ p.danger strong { color: var(--bad); }
 <input id="otlp-filter" type="search" autocomplete="off" spellcheck="false"></div>
 </div>
 <p class="note" id="otlp-count"></p>
-<div class="table-box" id="otlp-box" hidden><table class="series" id="otlp-table"><thead><tr id="otlp-columns"></tr></thead><tbody id="otlp-rows"></tbody></table></div>
+<div class="table-box" id="otlp-box" hidden><table class="series sortable" id="otlp-table"><thead><tr id="otlp-columns"></tr></thead><tbody id="otlp-rows"></tbody></table></div>
 <div id="otlp-left-part" hidden>
 <h3>Left out</h3>
 <ul class="lint-unplaced" id="otlp-left"></ul>
@@ -552,6 +550,9 @@ p.danger strong { color: var(--bad); }
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+// The series tables sort and mark as every sortable table of the pages
+// does (pagekit.SortOrderScript).
+`+pagekit.SortOrderScript+`
 const store = (() => { try { return window.localStorage; } catch (error) { return null; } })();
 // The page opens with the example playground, whatever was written on it
 // before: written is the playground, which the editor shows while no
@@ -1927,7 +1928,7 @@ function compareBy(column, down) {
       const p = numberOf(x), q = numberOf(y);
       order = Number.isNaN(p) || Number.isNaN(q) ? Number.isNaN(p) - Number.isNaN(q) : p < q ? -1 : p > q ? 1 : 0;
     } else {
-      order = x < y ? -1 : x > y ? 1 : 0;
+      order = textOrder(x, y);
     }
     return down ? -order : order;
   };
@@ -2000,9 +2001,8 @@ function drawRows() {
   const needle = $("series-filter").value.trim().toLowerCase(), metric = $("series-metric").value;
   let rows = samples.filter((sample) => (metric === "" || sample.metric === metric) && (needle === "" || sample.haystack.includes(needle)));
   if (sortBy !== null) rows = rows.slice().sort(compareBy(sortBy, sortDown));
-  for (const th of $("series-columns").children) {
-    if (th.dataset.column) th.setAttribute("aria-sort", th.dataset.column === sortBy ? (sortDown ? "descending" : "ascending") : "none");
-  }
+  const heads = [...$("series-columns").children].filter((th) => th.dataset.column);
+  markSorted(heads, heads.find((th) => th.dataset.column === sortBy) || null, sortDown);
   const drawn = rows.slice(0, tableRows);
   $("series-rows").replaceChildren(...drawn.map((sample) => {
     const tr = document.createElement("tr");
@@ -2316,11 +2316,12 @@ function drawOTLPRows() {
     rows = rows.slice().sort((a, b) => {
       const x = otlpCell(a, otlpSort), y = otlpCell(b, otlpSort);
       const p = numberOf(x), q = numberOf(y);
-      const order = x !== "" && y !== "" && !Number.isNaN(p) && !Number.isNaN(q) ? (p < q ? -1 : p > q ? 1 : 0) : (x < y ? -1 : x > y ? 1 : 0);
+      const order = x !== "" && y !== "" && !Number.isNaN(p) && !Number.isNaN(q) ? (p < q ? -1 : p > q ? 1 : 0) : textOrder(x, y);
       return otlpDown ? -order : order;
     });
   }
-  for (const th of $("otlp-columns").children) th.setAttribute("aria-sort", th.dataset.column === otlpSort ? (otlpDown ? "descending" : "ascending") : "none");
+  const heads = [...$("otlp-columns").children];
+  markSorted(heads, heads.find((th) => th.dataset.column === otlpSort) || null, otlpDown);
   $("otlp-rows").replaceChildren(...rows.slice(0, tableRows).map((point) => {
     const tr = document.createElement("tr");
     for (const column of otlpColumns) {

@@ -31162,6 +31162,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAMySQLServerThatDoesNotKnowTheLimitsVariableIsScrapedWithoutIt` (fetch): a server that refuses `max_execution_time` with error 1193 is scraped twice on one connection, the variable set once, the statement run twice; refused with 1227, the scrape fails at `running SET SESSION max_execution_time`.
 - `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: a row of `statement_file` in a collector without `statement`: the absolute path of `testdata/sql/statement.sql` is taken by both, `statement.sql` refused by both, and the key left out or written `""` refused by both, the collector having no statement; the schema requires one of `statement` and `statement_file` written with something other than `""` (`oneOf`), which the schema as it was is taken to have held as it held `statement` required, `""` or not.
 
+## 34.294 An HTTP request's phases in its trace; the debug page's tables sort with the shared code
+
+- `TestATracedTripRecordsEachRequestsPhases` (fetch): a trip exported as a trace, of a collector whose rules read no `$timings`, records with its first request, to an IP address over HTTP, `connect first_byte`, and with the redirect it led to, to `localhost` over HTTPS, `dns connect tls first_byte`, each within its request's time; an untraced trip of the collector is not timed.
+- `TestAnHTTPRequestsSpanHasItsPhases` (exporter): a probe of `localhost` over HTTPS answering after 20ms has under its `GET` span `http.first_byte`, within it and of 20ms or more, and under that `http.dns`, `http.connect` and `http.tls`, each within it, the lookup ending before the connection begins; the next probe, on the kept connection, has `http.first_byte` alone; a probe of a closed port has its `http.dns` under its `GET` span and no `http.first_byte`.
+- `TestTheTraceOfASlowProbeIsExported`, `TestTheOTLPTabShowsTheRunsSpans` and `TestATraceOverThePendingBoundIsDropped` (exporter), changed: the spans have `http.connect` and `http.first_byte`; the pending bound's target closes each connection, so that two probes have the same spans.
+- `TestTheDebugPagesTablesSortWithTheSharedCode` (exporter): the series table is `sortable`, the page has the shared marks' style and the shared `textOrder` and `markSorted`, the series table's text sorted with `textOrder`, and no copy of its own of the marks, a `<` comparison of text or the setting of `aria-sort`. (In headless Chromium, the example's rows sort by room both ways and by value, the heading `aria-sort="ascending"`.)
+- `TestTheDebugPageShowsTheSeriesAsATable` (exporter) and `TestTheProbeJobsTableSortsNaturallyAndOnlyWithItsScript` (allocator), changed: the table's class and the shared `textOrder`.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -31678,7 +31686,16 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   `redirect` and `login`, ERROR for a request that got no answer, or an
   answer its request type takes for a failure, or an HTTP answer of 400 or
   more, and a `rate_limit` span before a request that waited for its
-  turn. Trace and span ids MUST come from `crypto/rand` and be written in
+  turn. Under an http or graphite request's CLIENT span there MUST be an
+  INTERNAL `http.first_byte` span from the request's start, when it asked
+  for a connection, to the answer's first byte, and under it `http.dns`,
+  `http.connect` and `http.tls` for the lookup, the connection and the
+  handshake the request made, each only when it made it and none on a
+  connection it reused, with the times `$timings` measures; a request that
+  failed before its first byte MUST have the phases that went through under
+  its own span. The phases MUST be timed while the trip is traced whether or
+  not a rule reads `$timings`, and each request's MUST be its own, a
+  redirect's not the request's before it. Trace and span ids MUST come from `crypto/rand` and be written in
   lowercase hex; times MUST be decimal nanoseconds.
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its

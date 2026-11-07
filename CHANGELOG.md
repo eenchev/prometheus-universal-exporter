@@ -62,6 +62,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A trace's HTTP request span has its phases under it: `http.first_byte`,
+  and within it `http.dns`, `http.connect` and `http.tls`, the times
+  `$timings` measures ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).
+- The debug page's tables sort text as the status pages' do, the numbers in
+  it by their value and a letter's case no matter.
 - A `sql` collector's `statement_file` names a file holding its statement,
   read when the configuration loads and at each reload, an edit of it
   reloading with `--config.watch`; a file that is no statement file is

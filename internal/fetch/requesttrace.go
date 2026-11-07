@@ -86,8 +86,22 @@ type TracedRequest struct {
 	// SpanID is the span id the request was sent under in its traceparent
 	// (otlp.traces.propagate), which its CLIENT span is made with; zero
 	// when it sent none of the exporter's.
-	SpanID  [8]byte
+	SpanID [8]byte
+	// Phases are the phases of an HTTP request that were timed, as
+	// $timings has them (HTTPTrip): the name's lookup, the connection, the
+	// TLS handshake, each only when the request made it, and the time to
+	// the answer's first byte, from the request's start; nil when none
+	// was, as for a request of another type, or one that got no
+	// connection.
+	Phases  []TracedPhase
 	started time.Time
+}
+
+// TracedPhase is one phase of a request: dns, connect, tls or first_byte,
+// with when it began and ended.
+type TracedPhase struct {
+	Name       string
+	Start, End time.Time
 }
 
 // TraceFact is one fact of TracedRequest.Facts, under Key: an integer, a
@@ -139,6 +153,30 @@ func WithRequestTrace(ctx context.Context) (context.Context, *RequestTrace) {
 func WithSpanTrace(ctx context.Context) (context.Context, *RequestTrace) {
 	t := &RequestTrace{spans: true}
 	return context.WithValue(ctx, requestTraceKey{}, t), t
+}
+
+// spanTraced reports whether ctx is an exported trip's (WithSpanTrace),
+// whose requests' spans show their phases (TracedRequest.Phases).
+func spanTraced(ctx context.Context) bool {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	return ok && t.spans
+}
+
+// tracePhases records phases on the last request recorded, the one being
+// sent, unless it has them already.
+func tracePhases(ctx context.Context, phases []TracedPhase) {
+	if len(phases) == 0 {
+		return
+	}
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 && t.requests[n-1].Phases == nil {
+		t.requests[n-1].Phases = phases
+	}
 }
 
 // debugRun reports whether ctx is a debug run's — a debug probe, a debug

@@ -52,8 +52,8 @@ func TestTheSortMarksStandApartFromTheirNames(t *testing.T) {
 // sortable, so a page without it shows no mark that does nothing.
 func TestTheProbeJobsTableSortsNaturallyAndOnlyWithItsScript(t *testing.T) {
 	page := ask(jobAllocator(t).Handler(""), "/", "").Body.String()
-	requireIn(t, page, `const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});`,
-		"collator.compare(key(x), key(y))",
+	requireIn(t, page, `const textOrder = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;`,
+		"textOrder(key(x), key(y))",
 		`<table class="spread" id="probe-jobs">`+"\n"+`<thead><tr><th data-sort="text">Job</th><th data-sort="text">Collector</th><th class="num" data-sort="num">Targets</th>`,
 		`button.append(...head.childNodes);`, `table.classList.add("sortable");`)
 	if strings.Contains(page, "localeCompare(") {

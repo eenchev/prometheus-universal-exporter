@@ -913,8 +913,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// attempt, which is spared a collector none of whose rules reads
 	// $timings or $remote_ip, the address the trace sees the connection
 	// made to (model.Collector.TimingsUnread). A debug run times them
-	// whatever the rules read, since its report shows them.
-	timed := !c.TimingsUnread || debugRun(ctx)
+	// whatever the rules read, since its report shows them, and so does a
+	// trip exported as a trace, whose requests' spans show them
+	// (TracedRequest.Phases).
+	timed := !c.TimingsUnread || debugRun(ctx) || spanTraced(ctx)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -926,7 +928,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		attemptContext := requestContext
 		var timing *tripTrace
 		if timed {
-			timing = newTripTrace(attemptStart)
+			timing = newTripTrace(requestContext, attemptStart)
 			attemptContext = httptrace.WithClientTrace(requestContext, timing.hooks())
 		}
 		req, err := http.NewRequestWithContext(attemptContext, method, u.String(), reqBody)
@@ -979,6 +981,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		traceRateLimitWait(requestContext, waited, false)
 		resp, err := client.Do(req)
 		if err != nil {
+			timing.recordPhases()
 			// Go's error quotes the whole URL, request.query included, and
 			// of an answer that is no HTTP, its first line, which a
 			// probe's caller is not told (answerquoted.go).

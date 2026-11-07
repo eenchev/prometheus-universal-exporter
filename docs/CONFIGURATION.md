@@ -6046,7 +6046,10 @@ is what the export does, not a description of it:
   gauges because its bucket counts fall or a counter is NaN, `_total` taken
   off, the unit `s` from `_seconds`, a label moved to the resource, an
   attribute added. The table sorts by a column's header and keeps the rows
-  that hold the filter's text.
+  that hold the filter's text. It sorts, as the series table does, as every
+  sortable table of the exporter's and the allocator's pages does: numbers
+  by their value, and text as it reads, the numbers in it by theirs,
+  `node2` before `node10`, a letter's case no matter.
 - **Left out**: points the export would leave out, a name exported as two
   kinds or, under `otel` naming, for two Prometheus names, with the warning
   the export logs of them. Only the run's own points are checked against

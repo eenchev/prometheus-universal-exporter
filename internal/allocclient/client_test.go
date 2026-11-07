@@ -1131,9 +1131,13 @@ func (s *syncBuffer) String() string {
 // allocator address, though the addresses fail in turn with errors that
 // name them.
 func TestARepeatedHeartbeatErrorIsLoggedOncePerAddress(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closed.Close()
-	port := closed.URL[strings.LastIndex(closed.URL, ":")+1:]
+	// A server that holds its port, so no other process's listener can
+	// take it as a closed one's could, and answers every heartbeat at
+	// 127.0.0.1 with a failure; 127.0.0.2, where nothing may listen on the
+	// port while it holds it, refuses the connection.
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", http.StatusServiceUnavailable) }))
+	t.Cleanup(failing.Close)
+	port := failing.URL[strings.LastIndex(failing.URL, ":")+1:]
 	var logs syncBuffer
 	c := newTestClient(t, newFakeAllocator(t), t.TempDir(), func(o *Options) {
 		o.URL = "http://allocator.test:" + port

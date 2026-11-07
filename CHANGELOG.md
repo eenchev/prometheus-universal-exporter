@@ -74,6 +74,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `icmp` collector pings every address of a name with `all_addresses`,
+  each in the document's `addresses` and the top of all of them together
+  ([Every address](docs/ICMP.md#every-address)).
 - A `tlscert` collector's document has `ocsp`, the OCSP response the server
   stapled: its status, `good`, `revoked` or `unknown`, whether the issuer
   signed it for the certificate, its updates, and a revocation's time and

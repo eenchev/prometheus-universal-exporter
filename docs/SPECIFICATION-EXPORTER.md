@@ -2505,6 +2505,17 @@ types at build time). Its keys:
   `rtt_stddev_seconds` (the population deviation) when a reply came and
   left out otherwise, `duplicates`, `payload_bytes` and `duration_seconds`,
   with the `Content-Type` `application/json` and no status.
+- With `all_addresses`, every address of the name of the families
+  `ip_family` takes, `prefer_ip4` and `prefer_ip6` both, that family's
+  first, MUST be pinged, the first 16 in that order, at once, each as an
+  address alone is, its own request in a debug report and its span. The
+  document MUST have `addresses`, each one's `address`, `family`, `sent`,
+  `received`, `loss_ratio`, `rtts_seconds`, the statistics when a reply
+  came and `duplicates`, in that order, and `addresses_found`, how many
+  the name has of those families; its top MUST then have `address` `""`
+  and `family` 0, and the counts, the round trips and their statistics of
+  all of them together. An address whose ping fails MUST fail the scrape,
+  naming it. Without it, the document MUST have neither key.
 
 #### `ntp`
 
@@ -31312,6 +31323,11 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestATLSCertCollectorReadsTheStapledOCSPResponse` (fetch): a server stapling a good response its intermediate signed for its certificate has `ocsp` stapled, `good`, verified, with its this and next updates and a produced time; a revoked one has its revocation's time and `keyCompromise`; one signed with another key reads `good`, not verified, with why; one of another certificate is not verified; bytes that are no response are stapled with no status and why; none stapled is all zero; the span tells `tlscert.ocsp.stapled` and `tlscert.ocsp.status`.
 - `TestATLSCertHandshakesSpanTellsItsFacts` (fetch), changed: `tlscert.ocsp.stapled` false.
+
+## 34.298 An icmp collector pings every address of a name
+
+- `TestAnICMPCollectorPingsEveryAddressOfAName` (fetch, icmp): with `all_addresses`, a name resolving to 127.0.0.1, ::1 and 127.0.0.2 of `ip4` pings the two IPv4 addresses, each in `addresses` with its two replies and a request of its own in the trace, `addresses_found` 2, the top of four echoes and four replies with no address; of both families, three addresses, the second of family 6; without it, 127.0.0.1 alone, with no `addresses`. Skipped where the system opens no ICMP datagram socket.
+- `TestICMPTargetsAndFamilies` (fetch, icmp), changed: `icmpAddresses`, the addresses a host may be pinged at.
 
 ## 42.1 OTLP export
 

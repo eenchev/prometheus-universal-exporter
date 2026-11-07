@@ -205,10 +205,10 @@ func TestICMPTargetsAndFamilies(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	if a, err := icmpAddress(ctx, "::1", "prefer_ip4"); err != nil || a != netip.MustParseAddr("::1") {
+	if a, err := icmpAddresses(ctx, "::1", "prefer_ip4"); err != nil || len(a) != 1 || a[0] != netip.MustParseAddr("::1") {
 		t.Errorf("an IPv6 address preferring IPv4: %v, %v", a, err)
 	}
-	if _, err := icmpAddress(ctx, "::1", "ip4"); err == nil || !strings.Contains(err.Error(), "has no IPv4 address, and request.ip_family is ip4") {
+	if _, err := icmpAddresses(ctx, "::1", "ip4"); err == nil || !strings.Contains(err.Error(), "has no IPv4 address, and request.ip_family is ip4") {
 		t.Errorf("an IPv6 address of ip4: %v", err)
 	}
 }
@@ -242,4 +242,56 @@ func TestICMPKeysAreChecked(t *testing.T) {
 // are listed (optInRequestKeys, optInTargetKeys).
 func TestTheICMPTypesOptInKeysAreListed(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeICMP)
+}
+
+// With all_addresses, every address of the name of the families ip_family
+// takes is pinged, each a request of its own: the document has each in
+// addresses, in the resolver's order, and at its top the echoes of all of
+// them, their round trips and statistics, with no address of its own;
+// without it, the first alone, with no addresses.
+func TestAnICMPCollectorPingsEveryAddressOfAName(t *testing.T) {
+	old := icmpLookup
+	icmpLookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1"), netip.MustParseAddr("127.0.0.2")}, nil
+	}
+	t.Cleanup(func() { icmpLookup = old })
+	all := func(family string) *model.Collector {
+		return icmpCollector(t, func(c *model.Collector) {
+			c.Request.IPFamily = family
+			c.Request.Own = ICMPConfig{Count: 2, Interval: model.Duration(10 * time.Millisecond), ReplyTimeout: model.Duration(time.Second), AllAddresses: true}
+		})
+	}
+	ctx, trace := WithRequestTrace(context.Background())
+	resp, err := FetchCollector(ctx, "pool.example", all("ip4"), RequestOverrides{}, nil)
+	if err != nil && strings.Contains(err.Error(), "permission denied") {
+		t.Skip("the system opens no ICMP datagram socket here")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc icmpDocument
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Address != "" || doc.Family != 0 || doc.AddressesFound != 2 || len(doc.Addresses) != 2 || doc.Addresses[0].Address != "127.0.0.1" || doc.Addresses[1].Address != "127.0.0.2" ||
+		doc.Sent != 4 || doc.Received != 4 || doc.LossRatio != 0 || len(doc.RTTsSeconds) != 4 || doc.RTTMax == nil || doc.Addresses[1].Sent != 2 || doc.Addresses[1].Received != 2 {
+		t.Fatalf("document %+v", doc)
+	}
+	if requests := trace.Requests(); len(requests) != 2 || requests[0].Header.Get("Icmp-Address") != "127.0.0.1" || requests[1].Outcome != "2 of 2 replies" {
+		t.Errorf("traced %+v", requests)
+	}
+	doc, err = pingOrSkip(t, all(""), "pool.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.AddressesFound != 3 || len(doc.Addresses) != 3 || doc.Addresses[1].Family != 6 {
+		t.Errorf("of both families: %+v", doc)
+	}
+	first := icmpCollector(t, func(c *model.Collector) {
+		c.Request.Own = ICMPConfig{Count: 1, Interval: model.Duration(10 * time.Millisecond), ReplyTimeout: model.Duration(time.Second)}
+	})
+	doc, err = pingOrSkip(t, first, "pool.example")
+	if err != nil || doc.Address != "127.0.0.1" || doc.Addresses != nil || doc.AddressesFound != 0 {
+		t.Errorf("without all_addresses: %+v, %v", doc, err)
+	}
 }

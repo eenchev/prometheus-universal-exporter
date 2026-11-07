@@ -2219,6 +2219,10 @@
                   "boolean"
                 ]
               },
+              "all_addresses": {
+                "description": "icmp: ping every address of the target's name, of the families ip_family takes, at most 16, at once, each in the document's addresses and the top of the document of all of them; the first alone when false, the default. See docs/ICMP.md#every-address.",
+                "type": "boolean"
+              },
               "all_namespaces": {
                 "description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false.",
                 "type": "boolean"

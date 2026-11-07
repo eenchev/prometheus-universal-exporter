@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,10 @@ type ICMPConfig struct {
 	Interval     model.Duration `yaml:"interval,omitempty"`
 	ReplyTimeout model.Duration `yaml:"reply_timeout,omitempty"`
 	PayloadBytes *int           `yaml:"payload_bytes,omitempty"`
+	// AllAddresses pings every address of the target's name of the
+	// families ip_family takes, at most icmpMaxAddresses of them, at once,
+	// each in the document's addresses, the top of it of all of them.
+	AllAddresses bool `yaml:"all_addresses,omitempty"`
 }
 
 // icmpRequest is an icmp collector's own request keys, its defaults
@@ -103,7 +108,13 @@ const (
 	icmpTimeout = 30 * time.Second
 	// icmpMethod is the http_method label of a scrape.
 	icmpMethod = "PING"
+	// icmpMaxAddresses is how many addresses of a name all_addresses
+	// pings, the first of them in the resolver's order.
+	icmpMaxAddresses = 16
 )
+
+// icmpLookup looks a name's addresses up. Tests answer of their own.
+var icmpLookup = net.DefaultResolver.LookupNetIP
 
 func init() {
 	registerRequestType(&RequestType{
@@ -229,8 +240,29 @@ type icmpDocument struct {
 	RTTStddev    *float64  `json:"rtt_stddev_seconds,omitempty"`
 	Duplicates   int       `json:"duplicates"`
 	PayloadBytes int       `json:"payload_bytes"`
+	// Addresses are, with all_addresses, each address pinged, in the
+	// resolver's order, of AddressesFound the name has of the families
+	// ip_family takes; Address and Family are then "" and 0, and the rest
+	// of the top of all of them together.
+	Addresses      []icmpAddressResult `json:"addresses,omitempty"`
+	AddressesFound int                 `json:"addresses_found,omitempty"`
 	// DurationSeconds is the whole scrape, the lookup included.
 	DurationSeconds float64 `json:"duration_seconds"`
+}
+
+// icmpAddressResult is the ping of one address of all_addresses.
+type icmpAddressResult struct {
+	Address     string    `json:"address"`
+	Family      int       `json:"family"`
+	Sent        int       `json:"sent"`
+	Received    int       `json:"received"`
+	LossRatio   float64   `json:"loss_ratio"`
+	RTTsSeconds []float64 `json:"rtts_seconds"`
+	RTTMin      *float64  `json:"rtt_min_seconds,omitempty"`
+	RTTAvg      *float64  `json:"rtt_avg_seconds,omitempty"`
+	RTTMax      *float64  `json:"rtt_max_seconds,omitempty"`
+	RTTStddev   *float64  `json:"rtt_stddev_seconds,omitempty"`
+	Duplicates  int       `json:"duplicates"`
 }
 
 // fetchICMP pings a scrape's host and answers what came back as JSON.
@@ -259,42 +291,27 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
-	address, err := icmpAddress(ctx, host, c.Request.IPFamily)
+	candidates, err := icmpAddresses(ctx, host, c.Request.IPFamily)
 	if err != nil {
 		return nil, err
 	}
 	r := icmpRequest(c)
-	traceRequest(ctx, icmpMethod, "icmp://"+host, http.Header{"Icmp-Address": {address.String()}, "Icmp-Count": {strconv.Itoa(r.Count)}}, "", false)
-	// The address is held to the target lists before a socket is opened,
-	// as the connection's is (checkConnection), the socket being connected
-	// to that address alone: a refused one is refused whether or not the
-	// system would open the socket.
-	if err := checkConnection(ctx, net.JoinHostPort(host, "0"), icmpConnectedTo{remote: &net.UDPAddr{IP: address.AsSlice()}}); err != nil {
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return nil, err
-	}
-	conn, err := icmpDial(address)
-	if err != nil {
-		err = fmt.Errorf("opening an ICMP socket to ping %s: %w", address, err)
-		if errors.Is(err, os.ErrPermission) {
-			err = fmt.Errorf("%w; the system lets no process of the exporter's group open one: on Linux, set the sysctl net.ipv4.ping_group_range to take the group, such as \"0 2147483647\"", err)
+	var doc icmpDocument
+	if !r.AllAddresses {
+		at := traceRequestAt(ctx, icmpMethod, "icmp://"+host, http.Header{"Icmp-Address": {candidates[0].String()}, "Icmp-Count": {strconv.Itoa(r.Count)}}, "", false)
+		if doc, err = icmpPingAddress(ctx, host, candidates[0], r, at); err != nil {
+			return nil, err
 		}
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return nil, err
-	}
-	defer func() { _ = conn.Close() }()
-	doc, err := icmpPing(ctx, conn, address, r)
-	if err != nil {
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return nil, err
+	} else {
+		if doc, err = icmpPingAll(ctx, host, candidates, r); err != nil {
+			return nil, err
+		}
 	}
 	doc.Host, doc.DurationSeconds = host, time.Since(start).Seconds()
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
-	traceOutcome(ctx, fmt.Sprintf("%d of %d replies", doc.Received, doc.Sent))
-	traceFacts(ctx, intFact("icmp.sent", doc.Sent), intFact("icmp.received", doc.Received))
 	return &HTTPResponse{
 		StatusCode: http.StatusOK,
 		NoStatus:   true,
@@ -304,6 +321,73 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 		Collector:  c.Name,
 		Duration:   time.Since(start),
 	}, nil
+}
+
+// icmpPingAddress pings address, of host, as r says, its request recorded
+// at at: held to the target lists, a socket opened to it, the echoes sent
+// and the replies read.
+func icmpPingAddress(ctx context.Context, host string, address netip.Addr, r ICMPConfig, at tracedAt) (icmpDocument, error) {
+	// The address is held to the target lists before a socket is opened,
+	// as the connection's is (checkConnection), the socket being connected
+	// to that address alone: a refused one is refused whether or not the
+	// system would open the socket.
+	if err := checkConnection(ctx, net.JoinHostPort(host, "0"), icmpConnectedTo{remote: &net.UDPAddr{IP: address.AsSlice()}}); err != nil {
+		at.outcome("error: "+err.Error(), true)
+		return icmpDocument{}, err
+	}
+	conn, err := icmpDial(address)
+	if err != nil {
+		err = fmt.Errorf("opening an ICMP socket to ping %s: %w", address, err)
+		if errors.Is(err, os.ErrPermission) {
+			err = fmt.Errorf("%w; the system lets no process of the exporter's group open one: on Linux, set the sysctl net.ipv4.ping_group_range to take the group, such as \"0 2147483647\"", err)
+		}
+		at.outcome("error: "+err.Error(), true)
+		return icmpDocument{}, err
+	}
+	defer func() { _ = conn.Close() }()
+	doc, err := icmpPing(ctx, conn, address, r)
+	if err != nil {
+		at.outcome("error: "+err.Error(), true)
+		return icmpDocument{}, err
+	}
+	at.outcome(fmt.Sprintf("%d of %d replies", doc.Received, doc.Sent), false)
+	at.facts(intFact("icmp.sent", doc.Sent), intFact("icmp.received", doc.Received))
+	return doc, nil
+}
+
+// icmpPingAll pings each of addresses, of host, at once, each its own
+// request: the document has each in addresses, and of all of them
+// together the counts, the round trips and their statistics. One that
+// fails fails the scrape, naming it.
+func icmpPingAll(ctx context.Context, host string, addresses []netip.Addr, r ICMPConfig) (icmpDocument, error) {
+	found := len(addresses)
+	addresses = addresses[:min(found, icmpMaxAddresses)]
+	docs := make([]icmpDocument, len(addresses))
+	errs := make([]error, len(addresses))
+	var wg sync.WaitGroup
+	for i, address := range addresses {
+		at := traceRequestAt(ctx, icmpMethod, "icmp://"+host, http.Header{"Icmp-Address": {address.String()}, "Icmp-Count": {strconv.Itoa(r.Count)}}, "", false)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			docs[i], errs[i] = icmpPingAddress(ctx, host, address, r, at)
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return icmpDocument{}, err
+	}
+	all := icmpDocument{PayloadBytes: *r.PayloadBytes, AddressesFound: found, Addresses: make([]icmpAddressResult, len(docs))}
+	var rtts []float64
+	for i, d := range docs {
+		all.Addresses[i] = icmpAddressResult{Address: d.Address, Family: d.Family, Sent: d.Sent, Received: d.Received, LossRatio: d.LossRatio,
+			RTTsSeconds: d.RTTsSeconds, RTTMin: d.RTTMin, RTTAvg: d.RTTAvg, RTTMax: d.RTTMax, RTTStddev: d.RTTStddev, Duplicates: d.Duplicates}
+		all.Sent += d.Sent
+		all.Duplicates += d.Duplicates
+		rtts = append(rtts, d.RTTsSeconds...)
+	}
+	icmpStatistics(&all, rtts)
+	return all, nil
 }
 
 // icmpConnectedTo is the socket a scrape connects, as the target policy
@@ -316,18 +400,19 @@ type icmpConnectedTo struct {
 // RemoteAddr is the address the socket is connected to.
 func (c icmpConnectedTo) RemoteAddr() net.Addr { return c.remote }
 
-// icmpAddress is the address a host is pinged at: the host itself when it
-// is an address, and otherwise the first address of its name of the family
-// ip_family names, ip4 or ip6, the first of it, prefer_ip4 or prefer_ip6,
-// else of the other, or the first of either left out.
-func icmpAddress(ctx context.Context, host, family string) (netip.Addr, error) {
+// icmpAddresses are the addresses a host may be pinged at, the first the
+// one it is pinged at without all_addresses: the host itself when it is an
+// address, and otherwise its name's of the family ip_family names, ip4 or
+// ip6; prefer_ip4 or prefer_ip6, that family's first and then the other's;
+// or both, in the resolver's order, left out.
+func icmpAddresses(ctx context.Context, host, family string) ([]netip.Addr, error) {
 	addrs := []netip.Addr{}
 	if a, err := netip.ParseAddr(host); err == nil {
 		addrs = append(addrs, a.Unmap())
 	} else {
-		found, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		found, err := icmpLookup(ctx, "ip", host)
 		if err != nil {
-			return netip.Addr{}, fmt.Errorf("looking up %s: %w", host, err)
+			return nil, fmt.Errorf("looking up %s: %w", host, err)
 		}
 		for _, a := range found {
 			addrs = append(addrs, a.Unmap())
@@ -356,9 +441,9 @@ func icmpAddress(ctx context.Context, host, family string) (netip.Addr, error) {
 		pick = addrs
 	}
 	if len(pick) == 0 {
-		return netip.Addr{}, fmt.Errorf("%s has no %s address, and request.ip_family is %s", host, map[string]string{"ip4": "IPv4", "ip6": "IPv6"}[family], family)
+		return nil, fmt.Errorf("%s has no %s address, and request.ip_family is %s", host, map[string]string{"ip4": "IPv4", "ip6": "IPv6"}[family], family)
 	}
-	return pick[0], nil
+	return pick, nil
 }
 
 // icmpEcho is an echo request's ICMP message: type 8 for IPv4 and 128 for
@@ -514,7 +599,17 @@ loop:
 		}
 		break
 	}
-	doc.Sent, doc.Received = len(sent), len(rtts)
+	doc.Sent = len(sent)
+	icmpStatistics(&doc, rtts)
+	return doc, nil
+}
+
+// icmpStatistics sets what doc's Sent and the round trips rtts make of it:
+// the replies, the loss, the round trips, from the shortest, and their
+// minimum, average, maximum and population standard deviation, left out
+// when there are none.
+func icmpStatistics(doc *icmpDocument, rtts []float64) {
+	doc.Received = len(rtts)
 	if doc.Sent > 0 {
 		doc.LossRatio = 1 - float64(doc.Received)/float64(doc.Sent)
 	}
@@ -532,8 +627,7 @@ loop:
 		stddev := math.Sqrt(squares / float64(len(rtts)))
 		doc.RTTMin, doc.RTTAvg, doc.RTTMax, doc.RTTStddev = &minimum, &avg, &maximum, &stddev
 	}
-	doc.RTTsSeconds = append(doc.RTTsSeconds, rtts...)
-	return doc, nil
+	doc.RTTsSeconds = append([]float64{}, rtts...)
 }
 
 // icmpLostEcho reports whether err is the network's answer to an echo,
@@ -551,6 +645,7 @@ func icmpKeyRules() map[string]map[string]any {
 		"count":         {"minimum": 0, "maximum": icmpMaxCount, "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md."},
 		"interval":      {"not": SchemaLeastDuration(icmpMinInterval, true), "description": "icmp: how long apart the echoes are sent, at least 10ms; 1s when left out."},
 		"reply_timeout": {"not": SchemaLeastDuration(icmpMinReplyTimeout, true), "description": "icmp: how long the last echo's reply is waited for once it is sent, at least 10ms; 1s when left out. A scrape takes about (count - 1) × interval + reply_timeout, within its deadline."},
+		"all_addresses": {"description": "icmp: ping every address of the target's name, of the families ip_family takes, at most 16, at once, each in the document's addresses and the top of the document of all of them; the first alone when false, the default. See docs/ICMP.md#every-address."},
 		"payload_bytes": {"minimum": icmpToken, "maximum": icmpMaxPayload, "description": "icmp: how many bytes of data each echo carries, from 8 to 1232; 56 when left out, as ping's."},
 	}
 }

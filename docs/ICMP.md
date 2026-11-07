@@ -70,6 +70,7 @@ answers:
 | `reply_timeout` | `1s` | How long the last echo's reply is waited for once it is sent, at least `10ms`. |
 | `payload_bytes` | `56` | How many bytes of data each echo carries, from 8 to 1232, as `ping -s`. The first 8 are a random token the replies are matched by. |
 | `ip_family` | either | `ip4` or `ip6` pings the first address of that family of a name, `prefer_ip4` or `prefer_ip6` that family's first and else the other's; left out, the first address the name resolves to. |
+| `all_addresses` | `false` | Ping every address of the name, of the families `ip_family` takes, at once: see [Every address](#every-address). |
 | `allowed_targets`, `denied_targets` | none | The hosts the collector may and may not ping, as for [any type that reaches a host](REQUESTS.md#restricting-targets): the name before it is looked up, and the address pinged before a socket is opened. |
 
 No other request key applies, and setting one is a startup error. A scrape
@@ -96,6 +97,53 @@ included.
       - name: ping_up
         expression: 'if .received > 0 then 1 else 0 end'
 ```
+
+## Every address
+
+A name with several addresses — a pool behind round-robin DNS, a
+dual-stack host — is pinged at one of them, so a bad one among them, or a
+broken IPv6 path, goes unseen half the time. `all_addresses: true` pings
+every address, at once, each with its own socket:
+
+```yaml
+    request:
+      type: icmp
+      count: 3
+      interval: 200ms
+      all_addresses: true
+    metrics:
+      - name: ping_loss_ratio
+        items: .addresses[]
+        expression: .loss_ratio
+        labels:
+          - name: address
+            expression: .address
+      - name: ping_any_loss_ratio
+        expression: .loss_ratio
+```
+
+```json
+{"host":"pool.example.com","address":"","family":0,"sent":6,"received":3,"loss_ratio":0.5,
+ "rtts_seconds":[0.0011,0.0012,0.0019],"rtt_min_seconds":0.0011,"rtt_avg_seconds":0.0014,"rtt_max_seconds":0.0019,
+ "rtt_stddev_seconds":0.00035,"duplicates":0,"payload_bytes":56,"duration_seconds":2.01,"addresses_found":2,
+ "addresses":[
+  {"address":"192.0.2.1","family":4,"sent":3,"received":3,"loss_ratio":0,"rtts_seconds":[0.0011,0.0012,0.0019],
+   "rtt_min_seconds":0.0011,"rtt_avg_seconds":0.0014,"rtt_max_seconds":0.0019,"rtt_stddev_seconds":0.00035,"duplicates":0},
+  {"address":"192.0.2.2","family":4,"sent":3,"received":0,"loss_ratio":1,"rtts_seconds":[],"duplicates":0}]}
+```
+
+- `addresses` are the addresses pinged, in the order the resolver gave
+  them, of the families `ip_family` takes: `ip4` or `ip6` alone, and with
+  `prefer_ip4` or `prefer_ip6`, or left out, both, the preferred first.
+  Each has the counts, round trips and statistics an address alone has at
+  the top of the document. At most 16 are pinged; `addresses_found` is how
+  many the name has of those families.
+- The top of the document is of all of them together: `sent`, `received`,
+  `loss_ratio`, the round trips and their statistics, with `address` `""`
+  and `family` 0.
+- An address the target lists refuse, or that no socket can be opened
+  for, fails the scrape, naming it. A debug probe shows each address's
+  echoes as a request of its own, as an exported trace does.
 
 ## The target
 
@@ -162,8 +210,9 @@ self-metrics label it `url="icmp://<host>"`.
   which a datagram socket does not hand on.
 - **Linux and macOS.** A build for another system has the type, and every
   scrape fails, saying so.
-- **One address.** A name with several addresses is pinged at one, the
-  first of its family; a collector for each family pings both.
+- **One address, unless asked.** A name with several addresses is pinged at
+  one, the first of its family, but with
+  [`all_addresses`](#every-address).
 
 ## Troubleshooting
 

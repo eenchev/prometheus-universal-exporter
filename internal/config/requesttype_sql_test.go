@@ -140,3 +140,39 @@ func TestAnEmptyTLSBlockAsksASQLCollectorForTLS(t *testing.T) {
 		t.Errorf("tls: {}: %v", err)
 	}
 }
+
+// arg_types is read as a sql collector's own key, and a static target whose
+// params fill an arg with a value not of its type is refused when its file
+// loads, naming the target and the arg.
+func TestASQLCollectorsArgTypesHoldItsStaticTargetsParams(t *testing.T) {
+	typed := strings.Replace(sqlCollector, "      username: metrics\n", "      username: metrics\n      args: [\"{{param_limit:10}}\"]\n      arg_types: [int]\n", 1)
+	cfg, err := Load(testutil.WriteFile(t, "config.yaml", typed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for value, want := range map[string]string{
+		"25":  "",
+		"ten": `target "a" uses collector "db": request.args[0] is "ten", which is no whole number`,
+		"2.5": `target "a" uses collector "db": request.args[0] is "2.5", which is no whole number`,
+		// A parameter left empty is one not given: the default fills it.
+		"":     "",
+		"1e3":  `target "a" uses collector "db": request.args[0] is "1e3", which is no whole number`,
+		"-100": "",
+	} {
+		document := "interval: 1m\ntargets:\n  - name: a\n    collector: db\n    target: db.example\n    params:\n      param_limit: \"" + value + "\"\n"
+		f, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", document))
+		if err == nil {
+			err = ValidateStaticTargets(f)
+		}
+		if err == nil {
+			err = ValidateStaticTargetsAgainst(f, cfg)
+		}
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("param_limit %q: %v, want %q", value, err, want)
+		}
+	}
+	bad := strings.Replace(typed, "arg_types: [int]", "arg_types: [int, text]", 1)
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", bad)); err == nil || !strings.Contains(err.Error(), `collector "db" request.arg_types has 2 types for 1 args`) {
+		t.Errorf("two types for one arg: %v", err)
+	}
+}

@@ -62,6 +62,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `sql` collector's `arg_types` binds each of its `args` as `text`, `int`,
+  `float` or `bool`, for a statement that takes no text there, such as
+  `LIMIT ?` on MySQL before 8.0.22; a value not of its type is refused when the
+  configuration or the static target file loads, or answered `400`
+  ([Typed args](docs/SQL.md#typed-args)).
 - The exporter's and the allocator's pages show an outline on what the
   keyboard focuses, give search boxes and selects a border that can be seen
   (3:1), tell a screen reader each ✓ ✗ strip as its counts and its latest

@@ -48,7 +48,8 @@ collectors:
 | `type` | — | **Required.** `sql`. |
 | `driver` | — | **Required.** `mysql`, `postgres` or `sqlserver`; `oracle`, `clickhouse`, `snowflake` or `vertica` in a build that has them. In any case, blanks around it aside. |
 | `statement` | — | **Required.** The one statement run, with the driver's own placeholders for `args` (see [The statement](#the-statement)). Not blanks alone. |
-| `args` | — | The values bound to the statement's placeholders, in order, as text. May use [placeholders](REQUESTS.md#path-parameters), `{{param_name}}` and `{{param_name:default}}`. |
+| `args` | — | The values bound to the statement's placeholders, in order, as text unless `arg_types` says otherwise. May use [placeholders](REQUESTS.md#path-parameters), `{{param_name}}` and `{{param_name:default}}`. |
+| `arg_types` | all `text` | The type each of `args` is bound as, one for each, in their order: `text`, `int`, `float` or `bool` (see [Typed args](#typed-args)). |
 | `database` | the account's | The database the statement runs on. May use placeholders, filled with letters, digits and `_ - . $` only. Not for `oracle`. Not blanks alone. |
 | `service_name` | — | **Required for `oracle`**, and for no other driver: the service of the database. |
 | `username` | — | **Required.** The account the statement runs as. Not blanks alone. |
@@ -234,6 +235,39 @@ outside any scrape too: for a driver that fails so closing a connection past
 its `max_lifetime` or `idle_timeout`, or rolling back the transaction of a
 scrape whose deadline came. One that fails so while connecting holds no
 place at `max_per_target` after it.
+
+### Typed args
+
+An arg is bound as text, which most databases convert where the statement
+needs a number: PostgreSQL by the type the placeholder takes. Where they do
+not — MySQL's `LIMIT ?`, which MySQL versions before 8.0.22 refuse text
+for, or a comparison of a number with text that compares them as text —
+`arg_types` binds it as its type:
+
+```yaml
+      statement: SELECT id, state FROM jobs WHERE priority >= ? AND paused = ? ORDER BY id LIMIT ?
+      args: ["{{param_priority:0.5}}", "false", "{{param_limit:100}}"]
+      arg_types: [float, bool, int]
+```
+
+| Type | The arg holds | Bound as |
+| --- | --- | --- |
+| `text` | anything | the text, as written |
+| `int` | a whole number in decimal digits, a sign allowed: `-12`, `+7` | a 64-bit integer |
+| `float` | a finite decimal number: `0.25`, `1e-3`, `.5` — no `Inf`, `NaN`, hexadecimal float (`0x1p-2`) or `_` | a 64-bit floating-point number |
+| `bool` | `true` or `false`, in any case | a boolean |
+
+`arg_types` gives a type for every arg, by its place, `text` for one bound
+as text; another count, or a type other than these four in lower case, is
+a startup error. An arg that is not of its type fails as early as it can
+be known: one with no placeholder, or whose placeholders all have
+defaults, when the configuration loads, filled with the defaults; one a
+probe fills, before the server is asked, answered `400`,
+`request.args[2] is "ten", which is no whole number …`; and one a static
+target's `params` fill, when the target file loads. A parameter left empty
+is one not given, which the default fills. A database without a boolean
+type, as Oracle before 23ai, may refuse a `bool`: bind `1` or `0` as an
+`int` there.
 
 ## The rows
 

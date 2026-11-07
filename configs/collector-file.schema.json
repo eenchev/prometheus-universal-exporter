@@ -2078,8 +2078,20 @@
                 "pattern": "^$|^https://[^/?#@]+(/[^?#]*)?$",
                 "type": "string"
               },
+              "arg_types": {
+                "description": "sql: the type each of args is bound as, one for each, in their order: text (as written), int (a whole number of 64 bits), float (a finite number) or bool (true or false, in any case). Left out, every arg is text. A value that is not of its type fails: when the configuration loads for an arg with no placeholder, or whose placeholders all have defaults; and a probe's parameter answered 400, a static target's params refused when its file loads. See docs/SQL.md#the-statement.",
+                "items": {
+                  "enum": [
+                    "text",
+                    "int",
+                    "float",
+                    "bool"
+                  ]
+                },
+                "type": "array"
+              },
               "args": {
-                "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders.",
+                "description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders. Bound as text unless arg_types says otherwise.",
                 "items": {
                   "type": [
                     "string",

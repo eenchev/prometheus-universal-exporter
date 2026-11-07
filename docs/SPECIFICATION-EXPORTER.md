@@ -2014,7 +2014,19 @@ of objects, one a row, of its columns by name. Its keys:
   sent as values, never as SQL: bound to the statement's native placeholders
   at the server by every driver but `clickhouse`, whose driver writes each
   into the statement quoted as a literal of its type, and the documentation
-  MUST say which. A `vertica` statement its driver would not prepare, and
+  MUST say which. `arg_types` MUST give each arg, by its place, the type it
+  is bound as — `text`, the default, as written; `int`, Go's `int64` of a
+  decimal whole number, a sign allowed; `float`, a finite `float64` of a
+  decimal number, no hexadecimal float, underscore, `Inf`, `NaN` or number
+  past the range; `bool`, `true` or `false` in any case — handed to the
+  driver as that Go value. It MUST be refused at load without `args`, with
+  another count of types than of args, or with a type other than those four
+  as written; an arg of a type but `text` with no placeholder, or whose
+  placeholders all have defaults, MUST be refused at load when it, filled
+  with the defaults, is not of its type; and one a probe's parameters fill
+  MUST be checked when they are, a value not of its type answered `400`
+  before the server is asked and refused in a static target's `params` when
+  its file loads. A `vertica` statement its driver would not prepare, and
   so would write the values into, doubling a `'` and leaving a `\` as it
   is, MUST be refused at load: any `COPY`, its first word as the driver
   reads the text (outside quotes, quoted identifiers, `--` and unnested
@@ -31106,6 +31118,13 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestEachSQLDriverRunsTheStatementReadOnlyAsItCan` (fetch), changed: postgres and mysql begin a read-only transaction and sqlserver one that is not, each rolled back; before the statement postgres runs `SET LOCAL statement_timeout = `, mysql `SET SESSION max_execution_time = ` and sqlserver `SET LOCK_TIMEOUT `, each the scrape's five seconds less what passed, over 4000 milliseconds; a second mysql scrape on the kept connection does not ask the server's version again. (sqlserver ran with no transaction, and mysql and sqlserver set no limit.)
 - `TestTheMySQLServerIsToldTheScrapesTimeLeftAsItsKindTakesIt` (fetch): `8.0.36` with 2.5s is `max_execution_time = 2500`, `8.4.0-log` with 500µs `= 1`, `5.7.8` `= 1000`, `5.7.7` and `5.6.51` nothing; `10.11.6-MariaDB-…` with 2.5s is `max_statement_time = 2.500`, `5.5.5-10.6.16-MariaDB` with 61.001s `= 61.001`, `10.1.0-MariaDB` nothing and `10.1.1-MariaDB` `= 1.000`; no time left, `v8` and an empty version are set nothing. Errors 3024 and 1969 are the server's timeout, wrapped too, and 1317, 1045 and an error that is no server's are not.
 - `TestASQLServerLockTimeoutIsTheScrapesDeadline` (fetch): no time left sets nothing, 1.5s is `SET LOCK_TIMEOUT 1500` and a microsecond `1`; error 1222 is the lock timeout, wrapped too, and 18456 and an error that is no server's are not.
+
+## 34.292 Typed sql args
+
+- `TestSQLArgTypesAreCheckedWhenTheConfigurationLoads` (fetch): `arg_types` without `args`, with 1 type for 2 args and 2 for 1, `INT`, ` int` and `integer`, `ten`, `1.5`, ` 1` and `9223372036854775808` as int, `NaN` as float, `maybe` as bool, and `{{param_limit:lots}}` and `{{param_a:1}}{{param_b:x}}` as int, filled with their defaults, are refused naming the collector; no types, `-12`, `0.25`, `TRUE` and `it's` as int, float, bool and text, placeholders with a default and without, and an arg one of whose placeholders has no default, load.
+- `TestSQLArgsAreBoundAsTheirTypes` (fetch): `{{param_limit:100}}`, `1e-3`, `False`, `007` and `42` as int, float, bool, text and text are bound as `int64(100)`, `0.001`, `false`, `"007"` and `"42"`; `10 rows` as int, `Inf` as float and `yes` as bool are refused by the check of the parameters and by the scrape, which runs no statement.
+- `TestSQLTypedArgsReadOnlyTheirTypesValues` (fetch): the least int64, `+7`, `2.5e3`, `-0`, `.5`, `tRuE` and ` any ` as text are read; `0x10`, `1_000` and an empty int, `0x1p-2`, `1_000.5`, `-Inf`, `1e999` and an empty float, and `1`, `t` and an empty bool are not.
+- `TestASQLCollectorsArgTypesHoldItsStaticTargetsParams` (config): `arg_types: [int]` loads from YAML; a static target's `param_limit` of `25`, `-100` and empty (the default filling it) loads, and `ten`, `2.5` and `1e3` are refused naming the target, the collector and the arg; two types for one arg are refused.
 
 ## 42.1 OTLP export
 

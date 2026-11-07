@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -74,10 +75,14 @@ import (
 // default; and how the type keeps connections to a target. The account and
 // its credential files are of the common part, which other types take too.
 type SQLConfig struct {
-	Driver      string                `yaml:"driver,omitempty"`
-	Database    string                `yaml:"database,omitempty"`
-	Statement   string                `yaml:"statement,omitempty"`
-	Args        []string              `yaml:"args,omitempty"`
+	Driver    string   `yaml:"driver,omitempty"`
+	Database  string   `yaml:"database,omitempty"`
+	Statement string   `yaml:"statement,omitempty"`
+	Args      []string `yaml:"args,omitempty"`
+	// ArgTypes are the types args are bound as, one for each, by its
+	// place: text, int, float or bool (sqlArgTypes). Left out, every arg
+	// is bound as text.
+	ArgTypes    []string              `yaml:"arg_types,omitempty"`
 	Options     map[string]string     `yaml:"options,omitempty"`
 	ServiceName string                `yaml:"service_name,omitempty"`
 	MaxRows     int                   `yaml:"max_rows,omitempty"`
@@ -127,6 +132,12 @@ func init() {
 		},
 	})
 	templateEscapers["database"] = escapeSQLDatabase
+	// An arg of a type but text is sent as a value, as one of text is, and
+	// checked against its type once filled.
+	for _, kind := range sqlArgKinds {
+		templateEscapers[kind] = func(_, _, value string) (string, error) { return value, nil }
+		templateRenderedRules[kind] = sqlArgRule(kind)
+	}
 }
 
 // sqlRequester is the sql request type's Requester.
@@ -233,8 +244,16 @@ func validateSQLRequest(x *model.Collector) error {
 	if _, err := (templateField{"request.database", own.Database, "database"}).parse(); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	for i, arg := range own.Args {
-		if _, err := (templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"}).parse(); err != nil {
+	if err := checkSQLArgTypes(own.Args, own.ArgTypes); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	for i := range own.Args {
+		field := sqlArgField(own, i)
+		placeholders, err := field.parse()
+		if err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+		if err := checkSQLArgDefaults(field, placeholders); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
@@ -671,21 +690,155 @@ func sqlDatabase(c *model.Collector, overrides RequestOverrides) (string, error)
 	return templateField{"request.database", sqlRequest(c).Database, "database"}.render(overrides.Params)
 }
 
-// sqlArgs is the values bound to the statement, their placeholders filled.
+// sqlArgs is the values bound to the statement, their placeholders filled,
+// each of the type its arg_types gives it.
 func sqlArgs(c *model.Collector, overrides RequestOverrides) ([]any, error) {
-	args := make([]any, len(sqlRequest(c).Args))
-	for i, arg := range sqlRequest(c).Args {
-		if !HasPathParams(arg) {
-			args[i] = arg
-			continue
+	own := sqlRequest(c)
+	args := make([]any, len(own.Args))
+	for i, arg := range own.Args {
+		field := sqlArgField(own, i)
+		value := arg
+		if HasPathParams(arg) {
+			var err error
+			if value, err = field.render(overrides.Params); err != nil {
+				return nil, err
+			}
 		}
-		value, err := templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"}.render(overrides.Params)
+		typed, err := sqlTypedArg(field.where, sqlArgType(own, i), value)
 		if err != nil {
 			return nil, err
 		}
-		args[i] = value
+		args[i] = typed
 	}
 	return args, nil
+}
+
+// The types an arg is bound as (request.arg_types): text, the default, as
+// written; int, a whole number of 64 bits; float, a floating-point number
+// of 64 bits; bool, true or false in any case. Each is handed to the
+// driver as Go's own type of it, which the driver binds as the database's:
+// MySQL's LIMIT ? takes no text before 8.0.22, and a comparison of a number
+// with text may compare them as text.
+const (
+	sqlArgText  = "text"
+	sqlArgInt   = "int"
+	sqlArgFloat = "float"
+	sqlArgBool  = "bool"
+)
+
+// sqlArgTypes are the types an arg may be bound as.
+var sqlArgTypes = []string{sqlArgText, sqlArgInt, sqlArgFloat, sqlArgBool}
+
+// sqlArgKinds are the kinds of templated field of the args of each type
+// but text, whose kind is arg: a value that a placeholder fills is checked
+// against its type when it is filled (sqlArgRule), so that a probe whose
+// parameter is no number is answered 400 before the server is asked, as a
+// static target's is refused when its file loads.
+var sqlArgKinds = map[string]string{sqlArgInt: "sql_int", sqlArgFloat: "sql_float", sqlArgBool: "sql_bool"}
+
+// sqlArgType is the type the arg at i is bound as.
+func sqlArgType(own SQLConfig, i int) string {
+	if i < len(own.ArgTypes) && own.ArgTypes[i] != "" {
+		return own.ArgTypes[i]
+	}
+	return sqlArgText
+}
+
+// sqlArgField is the arg at i as a templated field, of the kind its type
+// takes.
+func sqlArgField(own SQLConfig, i int) templateField {
+	kind := "arg"
+	if k, ok := sqlArgKinds[sqlArgType(own, i)]; ok {
+		kind = k
+	}
+	return templateField{fmt.Sprintf("request.args[%d]", i), own.Args[i], kind}
+}
+
+// sqlTypedArg is value, the arg at where, as its type takes it.
+func sqlTypedArg(where, typ, value string) (any, error) {
+	switch typ {
+	case sqlArgInt:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%s is %q, which is no whole number from -9223372036854775808 to 9223372036854775807, written in decimal digits with no blanks, as its type in request.arg_types, int, takes", where, value)
+		}
+		return n, nil
+	case sqlArgFloat:
+		f, err := strconv.ParseFloat(value, 64)
+		// A hexadecimal float, 0x1p-2, and one with underscores, which Go
+		// reads, are written no way a database does; Inf and NaN are no
+		// finite number, and a number past float64's range fails to parse.
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || strings.ContainsAny(value, "_xXpP") {
+			return nil, fmt.Errorf("%s is %q, which is no finite decimal number, such as 0.25 or 1e-3, as its type in request.arg_types, float, takes", where, value)
+		}
+		return f, nil
+	case sqlArgBool:
+		switch strings.ToLower(value) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return nil, fmt.Errorf("%s is %q, which is neither true nor false, as its type in request.arg_types, bool, takes", where, value)
+	}
+	return value, nil
+}
+
+// checkSQLArgTypes refuses arg_types that do not give a type for each arg,
+// in order, or that name a type there is not.
+func checkSQLArgTypes(args, types []string) error {
+	if len(types) == 0 {
+		return nil
+	}
+	if len(args) == 0 {
+		return errors.New("sets request.arg_types without request.args; the types are those of the args, by their places")
+	}
+	if len(types) != len(args) {
+		return fmt.Errorf("request.arg_types has %d types for %d args; give a type for each arg, in their order, text for one bound as text", len(types), len(args))
+	}
+	for i, typ := range types {
+		if !slices.Contains(sqlArgTypes, typ) {
+			return fmt.Errorf("request.arg_types[%d] is %q; want one of %s, in lower case", i, typ, strings.Join(sqlArgTypes, ", "))
+		}
+	}
+	return nil
+}
+
+// checkSQLArgDefaults refuses, when the configuration loads, an arg that is
+// not of its type as it is bound when no probe parameter fills it: one
+// with no placeholder, and one whose every placeholder has a default, which
+// a probe that gives none of them binds.
+func checkSQLArgDefaults(field templateField, placeholders []pathPlaceholder) error {
+	if field.kind == "arg" {
+		return nil
+	}
+	for _, p := range placeholders {
+		if !p.HasDefault {
+			return nil
+		}
+	}
+	if len(placeholders) == 0 {
+		return sqlArgRule(field.kind)(field.where, nil, field.text)
+	}
+	// Filling it checks it against its type (templateRenderedRules).
+	field.where += ", as its placeholders' defaults fill it,"
+	_, err := field.renderParsed(placeholders, nil)
+	return err
+}
+
+// sqlArgRule is the rule a filled arg of kind is checked by
+// (templateRenderedRules).
+func sqlArgRule(kind string) func(where string, _ []pathPlaceholder, value string) error {
+	typ := ""
+	for t, k := range sqlArgKinds {
+		if k == kind {
+			typ = t
+		}
+	}
+	return func(where string, _ []pathPlaceholder, value string) error {
+		_, err := sqlTypedArg(where, typ, value)
+		return err
+	}
 }
 
 // sqlMaxRows is the most rows a statement of c may return.
@@ -935,9 +1088,10 @@ func sqlTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 	if HasPathParams(sqlRequest(c).Database) {
 		out = append(out, templateField{"request.database", sqlRequest(c).Database, "database"})
 	}
-	for i, arg := range sqlRequest(c).Args {
+	own := sqlRequest(c)
+	for i, arg := range own.Args {
 		if HasPathParams(arg) {
-			out = append(out, templateField{fmt.Sprintf("request.args[%d]", i), arg, "arg"})
+			out = append(out, sqlArgField(own, i))
 		}
 	}
 	return out
@@ -959,7 +1113,8 @@ func sqlKeyRules() map[string]map[string]any {
 		"driver":                          {"type": "string", "pattern": SchemaCaselessOneOf(BuiltSQLDrivers()...), "description": "sql, required: the database's driver, in any case and with blanks around it or not, as the exporter matches it. mysql, postgres and sqlserver are built in; oracle, clickhouse, snowflake and vertica only in a build with SQL_DRIVERS naming them. See docs/SQL.md."},
 		"database":                        {"not": SchemaOnlyBlanks(), "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only."},
 		"statement":                       {"not": SchemaOnlyBlanks(), "description": "sql, required: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement."},
-		"args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders."},
+		"args":                            {"description": "sql: the values of the statement's placeholders, in order, as text; sent as values, never as SQL (bound, or written in quoted as literals by the clickhouse driver). May contain {{param_name}} placeholders. Bound as text unless arg_types says otherwise."},
+		"arg_types":                       {"items": map[string]any{"enum": sqlArgTypes}, "description": "sql: the type each of args is bound as, one for each, in their order: text (as written), int (a whole number of 64 bits), float (a finite number) or bool (true or false, in any case). Left out, every arg is text. A value that is not of its type fails: when the configuration loads for an arg with no placeholder, or whose placeholders all have defaults; and a probe's parameter answered 400, a static target's params refused when its file loads. See docs/SQL.md#the-statement."},
 		"options":                         {"description": "sql: the driver's settings, from a short list for each: postgres sslmode and application_name; mysql tls; sqlserver encrypt; oracle ssl; clickhouse protocol, compress and secure; snowflake warehouse, role and schema; vertica tlsmode. See docs/SQL.md#drivers."},
 		"service_name":                    {"not": SchemaOnlyBlanks(), "description": "sql, required for the oracle driver and for no other: the service of the database."},
 		"max_rows":                        {"minimum": 0, "description": "sql: the most rows the statement may return; one more fails the scrape. Defaults to 10000."},

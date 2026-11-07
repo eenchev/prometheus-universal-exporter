@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -1055,5 +1056,133 @@ func TestASQLStatementsSpanTellsItsFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 		requireFacts(t, "the statement", factsOf(t, trace.Requests()[0]), map[string]string{"db.response.returned_rows": "2", "sql.columns": "2", "sql.connection.reused": reused})
+	}
+}
+
+// sqlArgsCollector is a postgres collector of args typed as types, not
+// validated.
+func sqlArgsCollector(args, types []string) *model.Collector {
+	return &model.Collector{
+		Name:    "typed",
+		Request: model.RequestConfig{Type: RequestTypeSQL, Username: "metrics", Own: SQLConfig{Driver: SQLDriverPostgres, Statement: "q", Args: args, ArgTypes: types}},
+	}
+}
+
+// arg_types gives each arg the type it is bound as, by its place, and is
+// checked when the configuration loads: a type for each arg, each one of
+// text, int, float and bool as written, and an arg that no probe parameter
+// fills — one without a placeholder, or whose placeholders all have
+// defaults — of its type.
+func TestSQLArgTypesAreCheckedWhenTheConfigurationLoads(t *testing.T) {
+	for _, tc := range []struct {
+		args, types []string
+		want        string
+	}{
+		{nil, []string{"int"}, "sets request.arg_types without request.args"},
+		{[]string{"1", "2"}, []string{"int"}, "request.arg_types has 1 types for 2 args"},
+		{[]string{"1"}, []string{"int", "int"}, "request.arg_types has 2 types for 1 args"},
+		{[]string{"1"}, []string{"INT"}, `request.arg_types[0] is "INT"; want one of text, int, float, bool, in lower case`},
+		{[]string{"1"}, []string{" int"}, `request.arg_types[0] is " int"`},
+		{[]string{"1"}, []string{"integer"}, `request.arg_types[0] is "integer"`},
+		{[]string{"ten"}, []string{"int"}, `request.args[0] is "ten", which is no whole number`},
+		{[]string{"1.5"}, []string{"int"}, `request.args[0] is "1.5", which is no whole number`},
+		{[]string{" 1"}, []string{"int"}, `request.args[0] is " 1", which is no whole number`},
+		{[]string{"9223372036854775808"}, []string{"int"}, "which is no whole number from -9223372036854775808 to 9223372036854775807"},
+		{[]string{"NaN"}, []string{"float"}, `request.args[0] is "NaN", which is no finite decimal number`},
+		{[]string{"x", "maybe"}, []string{"text", "bool"}, `request.args[1] is "maybe", which is neither true nor false`},
+		{[]string{"{{param_limit:lots}}"}, []string{"int"}, `request.args[0], as its placeholders' defaults fill it, is "lots", which is no whole number`},
+		{[]string{"{{param_a:1}}{{param_b:x}}"}, []string{"int"}, `request.args[0], as its placeholders' defaults fill it, is "1x"`},
+	} {
+		err := ValidateRequest(sqlArgsCollector(tc.args, tc.types))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.HasPrefix(err.Error(), `collector "typed" `) {
+			t.Errorf("args %q, arg_types %q: %v, want %q", tc.args, tc.types, err, tc.want)
+		}
+	}
+	for _, ok := range []struct{ args, types []string }{
+		{[]string{"1", "x"}, nil},
+		{[]string{"-12", "0.25", "TRUE", "it's"}, []string{"int", "float", "bool", "text"}},
+		{[]string{"{{param_limit:100}}", "{{param_ratio}}"}, []string{"int", "float"}},
+		// A placeholder with no default leaves the value to the probe.
+		{[]string{"{{param_a:x}}{{param_b}}"}, []string{"int"}},
+	} {
+		if err := ValidateRequest(sqlArgsCollector(ok.args, ok.types)); err != nil {
+			t.Errorf("args %q, arg_types %q: %v", ok.args, ok.types, err)
+		}
+	}
+}
+
+// Each arg is bound as Go's own value of its type, which the driver binds
+// as the database's; a probe parameter that is no value of its arg's type
+// is refused before anything is sent, as the check of a probe's or a
+// static target's parameters refuses it.
+func TestSQLArgsAreBoundAsTheirTypes(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
+	c := f.collector(t, "typed", SQLDriverPostgres, "q", func(r *model.RequestConfig) {
+		sqlOwn(r, func(o *SQLConfig) {
+			o.Args = []string{"{{param_limit:100}}", "{{param_ratio}}", "{{param_on}}", "007", "{{param_name}}"}
+			o.ArgTypes = []string{"int", "float", "bool", "text", "text"}
+		})
+	})
+	params := map[string]string{"param_ratio": "1e-3", "param_on": "False", "param_name": "42"}
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Params: params}, nil); err != nil {
+		t.Fatal(err)
+	}
+	queries := f.db.Queries()
+	if got := queries[len(queries)-1].Args; !reflect.DeepEqual(got, []any{int64(100), 0.001, false, "007", "42"}) {
+		t.Errorf("args %#v", got)
+	}
+	for param, want := range map[string]string{
+		"param_limit": `request.args[0] is "10 rows", which is no whole number`,
+		"param_ratio": `request.args[1] is "Inf", which is no finite decimal number`,
+		"param_on":    `request.args[2] is "yes", which is neither true nor false`,
+	} {
+		bad := maps.Clone(params)
+		bad[param] = map[string]string{"param_limit": "10 rows", "param_ratio": "Inf", "param_on": "yes"}[param]
+		before := len(f.db.Queries())
+		if _, err := CheckRequestParams(c, RequestOverrides{Params: bad}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: the parameters' check says %v, want %q", param, err, want)
+		}
+		if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{Params: bad}, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", param, err, want)
+		}
+		if len(f.db.Queries()) != before {
+			t.Errorf("%s: the statement ran with a value not of its type", param)
+		}
+	}
+}
+
+// A float arg is a finite number written in decimal: Go's hexadecimal
+// floats and underscores, which no database writes a number with, Inf, NaN
+// and a number past float64's range are refused; a bool is true or false
+// in any case.
+func TestSQLTypedArgsReadOnlyTheirTypesValues(t *testing.T) {
+	for _, tc := range []struct {
+		typ, value string
+		want       any
+	}{
+		{"int", "-9223372036854775808", int64(-9223372036854775808)},
+		{"int", "+7", int64(7)},
+		{"float", "2.5e3", 2500.0},
+		{"float", "-0", 0.0},
+		{"float", ".5", 0.5},
+		{"bool", "tRuE", true},
+		{"text", " any ", " any "},
+		{"int", "0x10", nil},
+		{"int", "1_000", nil},
+		{"int", "", nil},
+		{"float", "0x1p-2", nil},
+		{"float", "1_000.5", nil},
+		{"float", "-Inf", nil},
+		{"float", "1e999", nil},
+		{"float", "", nil},
+		{"bool", "1", nil},
+		{"bool", "t", nil},
+		{"bool", "", nil},
+	} {
+		got, err := sqlTypedArg("request.args[0]", tc.typ, tc.value)
+		if tc.want == nil && err == nil || tc.want != nil && (err != nil || got != tc.want) {
+			t.Errorf("%s %q: %#v, %v; want %#v", tc.typ, tc.value, got, err, tc.want)
+		}
 	}
 }

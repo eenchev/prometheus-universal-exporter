@@ -672,6 +672,10 @@ target:
   last good result served marked stale under `cache.stale_if_error`),
   `skipped by backoff` (`failure_backoff` kept the scrape from the target), or
   `not yet scraped`; and whether the response cache answered it;
+- a strip of its last 10 scrapes, oldest first, as the recent probes have:
+  ✓ `success`, ✗ `failed`, ~ `stale result served` and … `skipped by
+  backoff`, each with its time and result as its tooltip, so a target that
+  fails now and then reads apart from one that failed once;
 - the consecutive failed scrapes, and while `failure_backoff` keeps scrapes
   from the target, until when, or that its next try is in progress, with the
   failures the backoff counts. A scrape skipped by backoff tried nothing: it
@@ -716,7 +720,9 @@ curl 'http://exporter:8080/static-targets/status?format=json'
    "cached": false, "stale": false, "consecutive_failures": 3,
    "last_error": "fetch http://legacy-eu:8080: received HTTP status 503",
    "last_error_at": "2026-10-24T08:58:41Z", "last_error_recovered": false,
-   "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3},
+   "backoff": "backing off until 2026-10-24T09:02:00Z", "backoff_until": "2026-10-24T09:02:00Z", "backoff_trial": false, "backoff_failures": 3,
+   "recent": [{"at": "2026-10-24T08:58:41Z", "duration_seconds": 0.012, "result": "failed"},
+              {"at": "2026-10-24T08:59:41Z", "duration_seconds": 0.0001, "result": "skipped by backoff"}]},
   {"name": "billing_eu", "...": "..."}
  ]}
 ```
@@ -727,6 +733,8 @@ off. `consecutive_failures` counts the target's failed scrapes of every kind
 but those skipped by backoff, `backoff_failures` the failed trips
 `failure_backoff` counts (see
 [Backing off from failing targets](CONFIGURATION.md#backing-off-from-failing-targets)).
+`recent` is the strip's scrapes, oldest first, each with when it began, how
+long it took and its result; it is `[]` for a target not yet scraped.
 `last_error_recovered`, given with `last_error` alone, is `true` when the last
 scrape succeeded after the one `last_error` is of, and `false` otherwise.
 

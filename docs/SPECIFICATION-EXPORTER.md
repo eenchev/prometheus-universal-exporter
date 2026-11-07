@@ -31020,6 +31020,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheStatusPageTellsStaticAndProbeTargetsApart` (allocator): one written static target, three a `discovered_targets` entry's source finds, two probe targets a job lists and two its source `sites` finds, over r1 and r2: the spread's JSON counts 1 written and 3 discovered static targets by `file_sd_0` and 2 listed and 2 discovered probe targets by `sites`, and has a static row of the written target with no source and one of the entry `node` with its three targets over both members and its source; the page defines both kinds with their swatches, says `4 static targets: 1 written in the static target file and 3 discovered by file_sd_0. 4 probe targets: 2 listed in the probe jobs and 2 discovered by sites.`, groups the members table's columns under Static targets (Owned, Draining) and Probe targets (Routed), names the legend's segments by kind, has the static targets table with its two rows, the entry's anchored, before the probe jobs table, and a Feeds column linking the job and the entry; a member's view and a job's view mark their target headings with the kind's swatch.
 - `TestTheStatusPageHasAProbeJobsTable`, `TestTheTargetsTableShowsWeightsAndCapacities`, `TestTheJobViewListsItsTargets` and `TestTheSourcesTableWrapsLongNamesAndKeepsShortCellsOnOneLine` (allocator), changed: the members table's heading of two rows, the probe jobs heading with its swatch, a job view's *Probe targets*, and the sources table's Feeds cell.
 
+## 34.283 A static target's last scrapes on the status page
+
+- `TestATargetsRowShowsItsLastScrapes` (exporter): the strip of `ok` is one success, of `backing_off` a failure then a skip by backoff, of `stale` a success then a stale result served, each scrape with its time, and of `never` empty, `"recent":[]` in the JSON; the page's table has a Recent column after Result, the backed off target's strip ✗ then …, each mark titled with its time and result; after 13 scrapes `ok`'s strip has the last 10.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33322,6 +33326,11 @@ then one of the OTLP export. Of the static targets:
   `--web.static-targets-path`.
   A target whose collector or address a reload changed MUST be shown as not
   yet scraped until its own scrape.
+- Each row MUST show a strip of the target's last 10 scrapes, oldest first,
+  marked ✓ for `success`, ✗ for `failed`, ~ for `stale result served` and …
+  for `skipped by backoff`, each with its start and result as its tooltip;
+  the JSON MUST give them as `recent`, each with `at`, `duration_seconds`
+  and `result`, `[]` for a target not yet scraped.
 - Each row MUST show the consecutive failed scrapes, the error of the last
   failed scrape, kept through later successes, with when that scrape began,
   and, while `failure_backoff` keeps scrapes from the target, until when, or

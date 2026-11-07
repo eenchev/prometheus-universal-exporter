@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -90,6 +91,30 @@ type staticTargetStatus struct {
 	errorText string
 	failedAt  time.Time
 	failures  int
+	// recent are the last recentProbesPerKey scrapes, oldest first, for
+	// the row's strip: a target that fails now and then reads apart from
+	// one that failed once. Each keeps its start, length and result alone.
+	recent []staticRecentScrape
+}
+
+// staticRecentScrape is one scrape of a target's strip.
+type staticRecentScrape struct {
+	started  time.Time
+	duration time.Duration
+	result   string
+}
+
+// staticResult is the result a scrape that ended with status shows.
+func staticResult(status staticScrapeStatus) string {
+	switch {
+	case status.ok:
+		return statusSuccess
+	case status.skipped:
+		return statusBackoff
+	case status.stale:
+		return statusStale
+	}
+	return statusFailed
 }
 
 // noteStaticStatusLocked records status as the last scrape of the target
@@ -122,6 +147,10 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 	}
 	status.err = nil
 	st.last = status
+	if len(st.recent) == recentProbesPerKey {
+		st.recent = append(st.recent[:0:0], st.recent[1:]...)
+	}
+	st.recent = append(st.recent, staticRecentScrape{started: status.started, duration: status.duration, result: staticResult(status)})
 }
 
 // shownStatusError is err as the status page shows it. The page is read by
@@ -151,6 +180,30 @@ type callerShownError struct {
 func (e *callerShownError) Error() string { return e.text }
 
 func (e *callerShownError) Unwrap() error { return e.err }
+
+// staticStatusScrape is one scrape of a row's strip, in the JSON and as a
+// mark of the strip: ✓ success, ✗ failed, ~ stale result served, …
+// skipped by backoff, as the recent probes' strip marks them.
+type staticStatusScrape struct {
+	At       string  `json:"at"`
+	Duration float64 `json:"duration_seconds"`
+	Result   string  `json:"result"`
+	Mark     string  `json:"-"`
+	Good     bool    `json:"-"`
+}
+
+// staticMark is the strip's mark of a scrape with result.
+func staticMark(result string) string {
+	switch result {
+	case statusSuccess:
+		return "✓"
+	case statusStale:
+		return "~"
+	case statusBackoff:
+		return "…"
+	}
+	return "✗"
+}
 
 // The results a row shows.
 const (
@@ -188,6 +241,8 @@ type staticStatusRow struct {
 	// so that a failure in the night can still be read in the morning, but
 	// the target is past it.
 	LastErrorRecovered *bool `json:"last_error_recovered,omitempty"`
+	// Recent are its last scrapes, oldest first, as the strip shows them.
+	Recent []staticStatusScrape `json:"recent"`
 	// LabelText, Age and DurationText are the row's values as the page
 	// writes them.
 	LabelText    string `json:"-"`
@@ -268,6 +323,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 	for i := range targets {
 		if st := s.staticStatus[targets[i].Name]; st != nil && st.last.collector == targets[i].Collector && st.last.target == targets[i].Target {
 			kept := *st
+			kept.recent = slices.Clone(st.recent)
 			statuses[i] = &kept
 		}
 	}
@@ -288,6 +344,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			Interval:      time.Duration(target.Interval).String(),
 			ExportViaOTLP: target.ExportViaOTLP,
 			Result:        statusNotScraped,
+			Recent:        []staticStatusScrape{},
 		}
 		if c := collectors[target.Collector]; c != nil {
 			row.Target = fetch.DisplayTarget(c, target.Target)
@@ -321,17 +378,11 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			// A scrape that succeeded began after every one that failed
 			// before it, so the error kept is older than it.
 			row.LastErrorRecovered = errorRecovered(st.errorText, last.ok)
-			switch {
-			case last.ok:
-				row.Result = statusSuccess
-			case last.skipped:
-				row.Result = statusBackoff
-			case last.stale:
-				row.Result = statusStale
-			default:
-				row.Result = statusFailed
-			}
+			row.Result = staticResult(last)
 			row.Failing = !last.ok
+			for _, r := range st.recent {
+				row.Recent = append(row.Recent, staticStatusScrape{At: r.started.UTC().Format(time.RFC3339), Duration: r.duration.Seconds(), Result: r.result, Mark: staticMark(r.result), Good: r.result == statusSuccess})
+			}
 			if b := s.backoffs.state(target.Collector, last.backoffKey); b.backingOff {
 				row.BackoffFailure = b.failures
 				row.BackoffTrial = b.trial
@@ -673,10 +724,10 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 
 <h2>Static targets</h2>
 {{- if .Total}}
-<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>; a scraped target's name links to its own.</p>
+<p>{{.Total}} static target{{if ne .Total 1}}s{{end}}, {{.Failing}} failing{{if .NotScraped}}, {{.NotScraped}} not yet scraped{{end}}. Their series are served at <code>{{.StaticTargetsPath}}</code>; a scraped target's name links to its own. The last {{.PerKey}} scrapes of each are kept, oldest first in the strip (✓ success, ✗ failed, ~ stale result served, … skipped by backoff).</p>
 <div class="scroll">
 <table>
-<thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Failures</th><th>Last error</th></tr></thead>
+<thead><tr><th>Target</th><th>Interval</th><th>Last scrape</th><th>Result</th><th>Recent</th><th>Failures</th><th>Last error</th></tr></thead>
 <tbody>
 {{- range .Rows}}
 <tr>
@@ -684,6 +735,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <td>{{duration .Interval}}</td>
 <td>{{if .LastScrape}}{{.LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
+<td class="strip">{{range .Recent}}<span class="{{if .Good}}good{{else}}bad{{end}}" title="{{.At}} {{.Result}}">{{.Mark}}</span>{{end}}</td>
 <td>{{.Failures}}{{if .Backoff}}<br><span class="bad">{{.Backoff}}</span>{{end}}</td>
 <td class="err">{{if .LastError}}{{template "lasterror" (lastError .LastError .LastErrorAt .LastErrorAge .LastErrorRecovered)}}{{end}}</td>
 </tr>

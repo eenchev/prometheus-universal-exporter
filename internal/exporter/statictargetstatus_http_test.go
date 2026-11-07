@@ -434,7 +434,7 @@ func TestARemovedTargetIsForgottenWithoutAReadOfTheEndpoint(t *testing.T) {
 func TestATargetsNameLinksItsSeries(t *testing.T) {
 	server := statusTargets(t)
 	page := getPage(t, server, "/static-targets/status")
-	requireContains(t, page, `<a href="../static-targets?targets=ok" title="the series the endpoint serves of ok"><strong>ok</strong></a>`, "a scraped target's name links to its own")
+	requireContains(t, page, `<a href="../static-targets?targets=ok" title="the series the endpoint serves of ok"><strong>ok</strong></a>`)
 	if strings.Contains(page, "targets=never") || !strings.Contains(page, "<strong>never</strong>") {
 		t.Errorf("the target not yet scraped is linked")
 	}
@@ -451,4 +451,50 @@ func TestATargetsNameLinksItsSeries(t *testing.T) {
 	requireContains(t, getPage(t, server, "/static-targets/status"), `<a class="muted" href="../static-targets?debug=ok" title="scrape ok once now, and report each stage">debug</a>`)
 	server.SetStaticTargetsPath("/static/targets")
 	requireContains(t, getPage(t, server, "/static/targets/status"), `href="../targets?targets=ok"`)
+}
+
+// Each row has a strip of the target's last scrapes, oldest first, marked
+// as the recent probes' are, so that a target failing now and then reads
+// apart from one that failed once. The strip keeps the last ten.
+func TestATargetsRowShowsItsLastScrapes(t *testing.T) {
+	server := statusTargets(t)
+	results := func(row staticStatusRow) string {
+		var got []string
+		for _, r := range row.Recent {
+			if r.At == "" {
+				t.Errorf("a scrape of %s has no time", row.Name)
+			}
+			got = append(got, r.Result)
+		}
+		return strings.Join(got, " ")
+	}
+	for name, want := range map[string]string{
+		"ok":          statusSuccess,
+		"backing_off": statusFailed + " " + statusBackoff,
+		"stale":       statusSuccess + " " + statusStale,
+		"never":       "",
+	} {
+		if got := results(statusRow(t, server, name)); got != want {
+			t.Errorf("the strip of %s is %q, want %q", name, got, want)
+		}
+	}
+	r := getPath(server, http.MethodGet, "/static-targets/status?format=json")
+	requireContains(t, r.Body.String(), `"name":"never"`)
+	if !strings.Contains(r.Body.String(), `"recent":[]`) {
+		t.Errorf("the target never scraped has no empty recent list in the JSON")
+	}
+	page := getPage(t, server, "/static-targets/status")
+	requireContains(t, page, `<th>Result</th><th>Recent</th><th>Failures</th>`)
+	requireContains(t, page, `">✗</span><span class="bad" title="`)
+	requireContains(t, page, ` backoff">…</span></td>`)
+	for _, target := range server.manager.StaticTargets() {
+		if target.Name == "ok" {
+			for range 12 {
+				server.scrapeTarget(t.Context(), server.manager.Get(), target)
+			}
+		}
+	}
+	if got := len(statusRow(t, server, "ok").Recent); got != recentProbesPerKey {
+		t.Errorf("after 13 scrapes the strip has %d, want the last %d", got, recentProbesPerKey)
+	}
 }

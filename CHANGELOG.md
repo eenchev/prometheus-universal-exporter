@@ -53,6 +53,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Each static target's row on the status page has a strip of its last 10
+  scrapes, ✓ ✗ ~ …, as the recent probes have, and the JSON has them as
+  `recent` ([Status page](docs/STATIC-TARGETS.md#status-page)).
 - The allocator's status page tells static targets from probe targets: it
   says what each kind is and how many of each the files write and the
   sources found, groups the members table's columns under the two kinds in

@@ -2985,6 +2985,7 @@ types at build time): only a build asked for it carries it. Its keys:
 | `send_hex` | none | `send` as pairs of hexadecimal digits, blanks between them or none; no placeholder. At most 64 KiB of bytes. |
 | `answer_bytes` | none | How many bytes the answer is; reading stops once that many came. |
 | `udp` | `false` | `true`: one UDP datagram is sent and the first back is the answer. |
+| `steps` | none | A conversation, in place of `send`, `send_hex`, `terminator` and `answer_bytes`, each refused beside it, as is `udp`: up to 16 entries of `send`, required, not `""`, held as `send` is, and `until`, a regular expression held as `greeting` is, required of each but the last. |
 | `unix_socket` | none | The absolute path of a Unix stream socket the exchange is made over; of the common part, as `http`'s. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
@@ -3166,6 +3167,18 @@ types at build time): only a build asked for it carries it. Its keys:
   list what a scrape would fail on as warnings of the `config` check.
 - A static target MAY set `timeout` and its own `tls` block (§ 42.14); a
   probe MAY set `timeout` and `param_<name>`.
+- With `steps`, after the greeting and the request for TLS when set, each
+  step's `send`, its placeholders filled as `send`'s, MUST be written in
+  order, and its answer read until what came of it matches its `until`, or,
+  the last without `until`, until the server closes the connection: one
+  that closes it before the answer matches, or the deadline first, MUST
+  fail the scrape, quoting what came and naming the step. The steps'
+  answers together, with the greeting a document holds, MUST be held to the
+  response limit. The answer MUST be their answers one after another, and
+  the document of `document` MUST hold `steps`, each step's `send`,
+  `answer` and `seconds`. The method MUST be `SEND`; a debug report MUST
+  show each step's send, quoted, in `Tcp-Steps`, and the outcome the steps
+  taken and the bytes read.
 
 #### `sshexec`
 
@@ -31375,6 +31388,13 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestAnLDAPRangedAttributeIsFollowed` (fetch, ldap): a stand-in answering in ranges of 10 a group of 25 members, `member;range=0-9`, is asked with searches of the group alone for `member;range=10-*` and `member;range=20-*`, and the entry has the 25 under `member`, in order; a group of 3 is as the server sent it; each search of a range is traced, `success, 10 values` and `success, 5 values`.
 - `TestLDAPRangesAreRead` (fetch, ldap): the range option is read among other options and in any case, `*` its last; a name with none, a range that ends before it starts and one that is no number are no range.
+
+## 34.301 A tcp collector speaks a conversation of steps
+
+- `TestATCPConversationOfSteps` (fetch, tcp): after a `220` greeting, a step whose send a probe's parameter fills reads a three-line `250` reply, in two writes, until `(?m)^250 `, and a last step without until reads `221 bye` until the server closes; the document's answer is the two answers, its steps each one's send, answer and seconds, the trace `SEND`, `Tcp-Steps` both sends and `2 steps, 62 bytes read`.
+- `TestATCPStepThatIsNotAnsweredFailsTheScrape` (fetch, tcp): an answer that does not come to match its until fails at the deadline quoting it; a last step without until on a server that keeps the connection open fails saying so; a server that closes the connection before the answer matches fails naming the step.
+- `TestTCPStepsAreCheckedAtLoad` (fetch, tcp): `steps` beside `send`, `send_hex`, `terminator`, `answer_bytes` or `udp`, 17 steps, a step without send, a step but the last without until, an until that is no regular expression or has a placeholder, and a send whose default a line refuses, are refused.
+- `TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty` (repository, tcp), changed: a row of `steps[].send`, `"HELO x\r\n"` taken by both, left out or `""` refused by both.
 
 ## 42.1 OTLP export
 

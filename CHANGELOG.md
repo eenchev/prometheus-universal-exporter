@@ -74,6 +74,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `tcp` collector speaks a conversation with `steps`, each a `send` and
+  the `until` its answer matches, as SMTP's `EHLO` then `QUIT`
+  ([A conversation](docs/TCP.md#a-conversation)).
 - An `ldap` collector follows an attribute answered in ranges, as Active
   Directory answers a large group's `member;range=0-1499`, and holds every
   value under `member`.

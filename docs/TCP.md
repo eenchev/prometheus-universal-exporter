@@ -117,6 +117,7 @@ sum; a server that has had no get yet has no ratio.
 | `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on the plaintext connection, after the greeting, as that protocol asks for it, and write `send` over TLS. See [STARTTLS](#starttls). |
 | `send` | nothing | The text written once the connection is made, such as `"stats\r\n"`. Write it in double quotes, in which YAML reads `\r\n` as a carriage return and a line feed; in single quotes or none, `\r\n` is four characters. May hold `{{param_name}}` placeholders. At most 64 KiB. Left out, nothing is written, and the answer is what the server says first. See [What a scrape sends](#what-a-scrape-sends). |
 | `send_hex` | nothing | The bytes written, as pairs of hexadecimal digits, with blanks between them or none: `"00 01 00 00 00 06 01 03 00 00 00 02"`. In place of `send`, for a protocol whose requests are binary; no placeholder. At most 64 KiB. See [Binary protocols](#binary-protocols). |
+| `steps` | none | A conversation of several exchanges, each a `send` and the `until` its answer matches, in place of `send` and of where the answer ends. See [A conversation](#a-conversation). |
 | `terminator` | none | What the answer ends with, such as `"END\r\n"`: reading stops once it has come. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See [Reading the answer](#reading-the-answer). |
 | `answer_bytes` | none | How many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length. Not with `terminator`. See [Binary protocols](#binary-protocols). |
 | `udp` | `false` | `true` sends `send` or `send_hex` as one UDP datagram and takes the first datagram back as the answer. See [Over UDP](#over-udp). |
@@ -244,6 +245,48 @@ envelope unless [`document`](#the-exchange-as-a-document) asks for one,
 with no status (`$status` is `null`, Python's `response.status_code`
 `None`) and no headers of the server's: the only headers it carries are
 the exporter's [timings](#timings-as-headers).
+
+## A conversation
+
+Some services say what a metric needs only after more than one exchange:
+SMTP lists its extensions in its answer to `EHLO`, and a polite client
+says `QUIT` after it; POP3 answers `CAPA` and IMAP `CAPABILITY` after their
+greetings. `steps` is such a conversation, each step a `send` and the
+`until`, a regular expression, its answer matches once it has all come:
+
+```yaml
+    request:
+      type: tcp
+      greeting: '^220 '
+      steps:
+        - send: "EHLO {{param_client:exporter.example}}\r\n"
+          until: '(?m)^250 '
+        - send: "QUIT\r\n"
+    transform:
+      type: regex
+    metrics:
+      - name: smtp_size_limit_bytes
+        expression: '(?m)^250[ -]SIZE (\d+)\r$'
+```
+
+- The steps are spoken after the greeting and `starttls`, when the
+  collector has them, each `send` written in order: a step's answer is
+  read until what came of it matches its `until`, across as many reads as
+  it takes, and the next step is written after it. The last step may leave
+  `until` out: its answer is read until the server closes the connection,
+  as `QUIT`'s is.
+- The answer the rules read is the steps' answers, one after another; with
+  [`document`](#the-exchange-as-a-document), `steps` also holds each step's
+  `send`, `answer` and `seconds`.
+- A step's `send` is held as `send` is, `{{param_name}}` placeholders
+  included; `until` as `greeting` is, a pattern with no placeholder. Every
+  step but the last needs `until`.
+- An answer that does not come to match its `until` fails the scrape at
+  the deadline, quoting what came; a server that closes the connection
+  before it does fails it at once. The answers are held to the response
+  limit together.
+- `steps` is in place of `send`, `send_hex`, `terminator` and
+  `answer_bytes`, and not over UDP; at most 16 steps.
 
 ## Over UDP
 
@@ -1010,9 +1053,10 @@ when it only reads.
 
 ## Limitations
 
-- **One line, one answer.** A scrape reads a greeting when asked, begins
-  TLS with `starttls`, writes `send` once and reads one answer; a dialogue,
-  a login, or an answer read after a second command is not spoken.
+- **A conversation, not a session.** A scrape reads a greeting when asked,
+  begins TLS with `starttls`, and writes `send` once and reads one answer,
+  or speaks up to 16 [`steps`](#a-conversation), each answered before the
+  next; a login whose answer decides what is sent next is not spoken.
   `starttls` speaks SMTP's, IMAP's, POP3's and FTP's request for TLS alone:
   LMTP's, XMPP's, LDAP's (the [`ldap`](LDAP.md#tls) type's `start_tls`),
   PostgreSQL's and MySQL's are not. Write every command into `send` where the server takes them

@@ -4246,6 +4246,37 @@
                 "maxItems": 16,
                 "type": "array"
               },
+              "steps": {
+                "description": "tcp: a conversation, in place of send, send_hex, terminator and answer_bytes: each step's send written, after the greeting and starttls when set, and its answer read until it matches the step's until, a regular expression, the last step's read until the server closes the connection when it has none. The answer is the steps' answers one after another; with document, steps holds each one's send, answer and seconds. At most 16 steps; not with udp. See docs/TCP.md#a-conversation.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "send": {
+                      "description": "The text written, as send is, such as \"EHLO exporter.example\\r\\n\": not empty, at most 64 KiB, with {{param_name}} placeholders as send takes them.",
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "until": {
+                      "description": "A regular expression (Go's, RE2) the step's answer, as read so far, matches when it has all come, such as '(?m)^250 ' for an SMTP reply's last line: reading stops then. Required of every step but the last, whose answer, without it, ends when the server closes the connection. No placeholder; at most 64 KiB.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "send"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",
                 "items": {

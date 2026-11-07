@@ -108,8 +108,10 @@ func (m grpcMethod) checkMessage(message string) error {
 }
 
 // findMethod looks rpc, package.Service/Method, up among files; source says
-// where they came from, for the errors.
-func findMethod(files *protoregistry.Files, rpc, source string) (grpcMethod, error) {
+// where they came from, for the errors. A server streaming method is found
+// only when streamed, the collector's stream_messages set, and a unary one
+// only when it is not.
+func findMethod(files *protoregistry.Files, rpc, source string, streamed bool) (grpcMethod, error) {
 	serviceName, methodName, _ := strings.Cut(rpc, "/")
 	d, err := files.FindDescriptorByName(protoreflect.FullName(serviceName))
 	if err != nil {
@@ -129,11 +131,13 @@ func findMethod(files *protoregistry.Files, rpc, source string) (grpcMethod, err
 	}
 	switch {
 	case method.IsStreamingClient() && method.IsStreamingServer():
-		return grpcMethod{}, fmt.Errorf("%s is a bidirectional streaming method; only unary methods can be called", rpc)
+		return grpcMethod{}, fmt.Errorf("%s is a bidirectional streaming method; only unary and server streaming methods can be called", rpc)
 	case method.IsStreamingClient():
-		return grpcMethod{}, fmt.Errorf("%s is a client streaming method; only unary methods can be called", rpc)
-	case method.IsStreamingServer():
-		return grpcMethod{}, fmt.Errorf("%s is a server streaming method; only unary methods can be called", rpc)
+		return grpcMethod{}, fmt.Errorf("%s is a client streaming method; only unary and server streaming methods can be called", rpc)
+	case method.IsStreamingServer() && !streamed:
+		return grpcMethod{}, fmt.Errorf("%s is a server streaming method; set request.stream_messages to read the first messages of its stream", rpc)
+	case !method.IsStreamingServer() && streamed:
+		return grpcMethod{}, fmt.Errorf("%s is a unary method; request.stream_messages is for a server streaming method, so take it out", rpc)
 	}
 	return grpcMethod{desc: method, types: dynamicpb.NewTypes(files)}, nil
 }
@@ -142,21 +146,22 @@ func findMethod(files *protoregistry.Files, rpc, source string) (grpcMethod, err
 // without asking the server: protoset, proto, or the built-in health
 // service's when descriptors is left out.
 func staticMethod(c *model.Collector) (grpcMethod, error) {
+	streamed := grpcRequest(c).StreamMessages > 0
 	switch grpcRequest(c).Descriptors {
 	case "":
-		return findMethod(protoregistry.GlobalFiles, grpcRequest(c).RPC, "the built-in health service")
+		return findMethod(protoregistry.GlobalFiles, grpcRequest(c).RPC, "the built-in health service", streamed)
 	case descriptorsProtoset:
 		files, err := descriptorFiles.protoset(grpcRequest(c).ProtosetFile)
 		if err != nil {
 			return grpcMethod{}, err
 		}
-		return findMethod(files, grpcRequest(c).RPC, "protoset_file "+grpcRequest(c).ProtosetFile)
+		return findMethod(files, grpcRequest(c).RPC, "protoset_file "+grpcRequest(c).ProtosetFile, streamed)
 	case descriptorsProto:
 		files, err := descriptorFiles.proto(grpcRequest(c).ProtoFiles, grpcRequest(c).ProtoImportPaths)
 		if err != nil {
 			return grpcMethod{}, err
 		}
-		return findMethod(files, grpcRequest(c).RPC, "proto_files")
+		return findMethod(files, grpcRequest(c).RPC, "proto_files", streamed)
 	}
 	return grpcMethod{}, fmt.Errorf("descriptors %q are not read from files", grpcRequest(c).Descriptors)
 }

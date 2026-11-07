@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -132,7 +133,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		if err != nil {
 			return grpcMethod{}, reflectionError(ctx, err)
 		}
-		return findMethod(files, grpcRequest(c).RPC, "the server's reflection answer")
+		return findMethod(files, grpcRequest(c).RPC, "the server's reflection answer", grpcRequest(c).StreamMessages > 0)
 	}
 	encode := func() (grpcMethod, *dynamicpb.Message, error) {
 		m, err := method()
@@ -220,7 +221,6 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			}
 			resolved = true
 		}
-		out := dynamicpb.NewMessage(m.desc.Output())
 		var header, trailer metadata.MD
 		var span [8]byte
 		if !operatorTrace {
@@ -232,26 +232,40 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// one whose JSON is surely over the limit is refused unread
 		// (answerCodec).
 		codec := &answerCodec{limit: limit, resolver: answerResolver(m.types)}
-		err := conn.Invoke(callCtx, m.path(), in, out,
-			grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))),
-			grpc.ForceCodecV2(codec),
-			grpc.Header(&header), grpc.Trailer(&trailer))
+		options := []grpc.CallOption{grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))), grpc.ForceCodecV2(codec), grpc.Header(&header), grpc.Trailer(&trailer)}
+		var body []byte
+		var messages int
+		if m.desc.IsStreamingServer() {
+			body, messages, err = grpcReadStream(callCtx, conn, m, in, codec, grpcRequest(c).StreamMessages, options)
+		} else {
+			out := dynamicpb.NewMessage(m.desc.Output())
+			err = conn.Invoke(callCtx, m.path(), in, out, options...)
+			if err == nil && codec.over == nil {
+				if body, err = renderAnswer(out, m.types); err != nil {
+					return nil, &CallAnswerError{Err: err}
+				}
+			}
+		}
 		if codec.over != nil {
 			// The call was answered OK; the answer is over the limit.
 			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
 			traceFacts(ctx, intFact("rpc.grpc.status_code", int(codes.OK)))
 			return nil, &CallAnswerError{Err: codec.over}
 		}
-		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
+		var answerErr *CallAnswerError
+		if errors.As(err, &answerErr) {
+			return nil, err
+		}
+		outcome := "grpc " + grpcCodeName(status.Code(err))
+		if m.desc.IsStreamingServer() && err == nil {
+			outcome += fmt.Sprintf(", %d messages", messages)
+		}
+		traceOutcome(ctx, outcome)
 		// The code as OpenTelemetry's conventions have it, a number; its
 		// name is the stage's, and the message, the server's text, is
 		// none of the span's.
 		traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
 		if err == nil {
-			body, err := renderAnswer(out, m.types)
-			if err != nil {
-				return nil, &CallAnswerError{Err: err}
-			}
 			// The limit bounds the message as it arrived, and the JSON it
 			// became, which writing every zero value can make much larger:
 			// the count before decoding is short of the JSON by what it
@@ -307,6 +321,75 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return nil, failure
 	}
+}
+
+// grpcStreamAnswer is a server streaming call's answer: each message read,
+// in order, as a unary call's answer is rendered, and whether the server
+// ended the stream, rather than its having been cut at stream_messages.
+type grpcStreamAnswer struct {
+	Messages []json.RawMessage `json:"messages"`
+	Ended    bool              `json:"ended"`
+}
+
+// grpcReadStream calls a server streaming method with in and reads its
+// stream until the server ends it or most messages have come, when it is
+// cancelled: the messages are held to the response limit together, codec's
+// limit what is left of it before each one. A status the server ends the
+// stream with, other than OK, is the call's error, as a unary call's is.
+func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in *dynamicpb.Message, codec *answerCodec, most int, options []grpc.CallOption) ([]byte, int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: string(m.desc.Name()), ServerStreams: true}, m.path(), options...)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := stream.SendMsg(in); err != nil && !errors.Is(err, io.EOF) {
+		return nil, 0, err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return nil, 0, err
+	}
+	limit := codec.limit
+	// {"messages":[],"ended":false}, and a comma between messages.
+	used := int64(len(`{"messages":[],"ended":false}`))
+	var answer grpcStreamAnswer
+	for len(answer.Messages) < most {
+		codec.limit = limit - used
+		out := dynamicpb.NewMessage(m.desc.Output())
+		err := stream.RecvMsg(out)
+		if errors.Is(err, io.EOF) {
+			answer.Ended = true
+			break
+		}
+		if codec.over != nil {
+			// The message was refused unread: what is left of the limit
+			// is the stream's, not the message's alone.
+			codec.over = grpcStreamOver(limit, len(answer.Messages)+1)
+			return nil, 0, codec.over
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err := renderAnswer(out, m.types)
+		if err != nil {
+			return nil, 0, &CallAnswerError{Err: err}
+		}
+		if used += int64(len(body)) + 1; used > limit {
+			return nil, 0, &CallAnswerError{Err: grpcStreamOver(limit, len(answer.Messages)+1)}
+		}
+		answer.Messages = append(answer.Messages, body)
+	}
+	if answer.Messages == nil {
+		answer.Messages = []json.RawMessage{}
+	}
+	body, err := json.Marshal(answer)
+	return body, len(answer.Messages), err
+}
+
+// grpcStreamOver is the refusal of a stream whose messages, read as far
+// as the nth, are more than the response limit as JSON together.
+func grpcStreamOver(limit int64, n int) error {
+	return model.MarkError(model.Errorf("the stream's messages are more than %d bytes as JSON together, over the response limit, at message %d; raise request.max_response_bytes or limits.max_response_bytes, or lower request.stream_messages", model.Size(limit), n), model.ErrLimitExceeded)
 }
 
 // grpcTraceScheme is how a debug probe shows a call's scheme, as the url

@@ -2687,7 +2687,7 @@ request:
 There are nine types in a default build: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
-`grpc` calls a unary gRPC method — see [gRPC](GRPC.md) — `sshfile`
+`grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
 `sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the

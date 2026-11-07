@@ -4374,6 +4374,12 @@
                 "maxItems": 16,
                 "type": "array"
               },
+              "stream_messages": {
+                "description": "grpc: a server streaming method is called, and its stream read until the server ends it or this many messages have come, at most 1000; the answer is {\"messages\": [...], \"ended\": true or false}. Left out, or 0, only unary methods are called. See docs/GRPC.md#server-streaming.",
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",
                 "items": {

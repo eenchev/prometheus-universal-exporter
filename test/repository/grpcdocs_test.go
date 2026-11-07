@@ -100,3 +100,33 @@ func TestGRPCDocumentationExamples(t *testing.T) {
 		t.Fatalf("retry %+v", c.Request.Retry)
 	}
 }
+
+// The server streaming example of docs/GRPC.md reads a Watch's stream: the
+// updates it sent and the last one's total.
+func TestGRPCServerStreamingDocumentationExample(t *testing.T) {
+	blocks := docBlocks(t, "docs/GRPC.md", "yaml")
+	upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Watch: func(_ context.Context, _ string, send func(string) error) error {
+		for _, total := range []string{"3", "5"} {
+			if err := send(`{"total": "` + total + `", "state": "STATE_OK"}`); err != nil {
+				return err
+			}
+		}
+		return nil
+	}})
+	yaml := docBlock(t, blocks, "collectors:\n  - name: queue_watch\n")
+	cfg, err := config.Load(testutil.WriteIn(t, t.TempDir(), "config.yaml", yaml))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, yaml)
+	}
+	server := exporter.NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+url.QueryEscape(upstream.Addr)+"&collector=queue_watch&param_queue=orders", nil))
+	for _, want := range []string{"queue_watch_updates 2", "queue_watch_last_total 5"} {
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), want) {
+			t.Errorf("%d, want %q in\n%s", recorder.Code, want, recorder.Body)
+		}
+	}
+	if calls := upstream.Calls(); len(calls) != 1 || calls[0].Request != `{"queue":"orders"}` {
+		t.Errorf("calls %+v", calls)
+	}
+}

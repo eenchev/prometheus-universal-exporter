@@ -1465,8 +1465,9 @@ lines: it only pulls. Its keys:
 
 #### `grpc`
 
-A `grpc` collector calls one unary gRPC method on the probe's `target`, the
-server, and hands the answer to the transforms as JSON (§ 9a). The call MUST
+A `grpc` collector calls one unary gRPC method, or one server streaming
+method with `stream_messages`, on the probe's `target`, the server, and hands
+the answer to the transforms as JSON (§ 9a). The call MUST
 be described in configuration alone, with message types built at run time
 from descriptors, so no service needs generated code or a new build. Its
 keys:
@@ -1482,6 +1483,7 @@ keys:
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
 | `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent`, `statuses` and `retry_after` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `stream_messages` | none | From 1 to 1000; set, the method MUST be server streaming, and unset it MUST be unary, either refused naming the key otherwise. The stream MUST be read until the server ends it or that many messages have come, when the call MUST end it; the answer MUST be `{"messages": [...], "ended": ...}`, each message rendered as a unary answer, `ended` true when the server ended the stream. A status other than `OK` ending it MUST be the call's status, as a unary call's; the messages MUST be held to the response limit together as JSON, a limit exceeded past it naming the message. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -1505,7 +1507,8 @@ keys:
   JSON.
 - With `protoset` or `proto`, the service and method MUST be looked up at load
   and by `--dry-run`: a missing service or method, naming the methods the
-  service has, and a client, server or bidirectional streaming method, naming
+  service has, and a client or bidirectional streaming method, a server
+  streaming method without `stream_messages` and a unary one with it, naming
   its kind, MUST be refused; a message whose placeholders all have defaults,
   and a static target's message, MUST be checked against the input type,
   unknown fields refused. A descriptor set MUST be read with its imports, an
@@ -31424,6 +31427,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADryRunReadsTheRedisSentinelsPasswordFile` (fetch, redis): a missing `sentinel.password_file` is a `--dry-run` warning naming the key.
 - `TestRedisSentinelDocumentationExample` (repository, redis): docs/REDIS.md's Sentinel example answers the known replicas and the primary not down.
 - `TestSchemaAndExporterAgreeOnRedisKeysWrittenEmpty` (repository, redis), changed: rows of `sentinel.master` and `sentinel.password_file` beside `sentinel.username`.
+
+## 34.303 A grpc collector reads a server stream, bounded
+
+- `TestAGRPCCollectorReadsAServerStream` (fetch, grpc): a Watch that sends two messages and ends is answered `{"messages":[...],"ended":true}` with both, the server called once with the message; one that holds the stream open after three is cut at `stream_messages: 2`, answered with two and `ended:false`, at once.
+- `TestAGRPCServerStreamsFailures` (fetch, grpc): a stream ended with `RESOURCE_EXHAUSTED` after a message fails with that status; one held open short of `stream_messages` fails `DEADLINE_EXCEEDED` at the deadline; fifty messages past a 600-byte limit together fail as a limit exceeded naming the stream's messages.
+- `TestGRPCStreamMessagesIsChecked` (fetch, grpc): with a descriptor set, Watch without `stream_messages`, GetStats with it, Push and Sync with it, and 1001 and -1 are refused; Watch with 1000 is taken; the built-in health service's Watch with 1 answers `{"messages":[{"status":"SERVING"}],"ended":false}`.
+- `TestAReflectedServerStreamingMethodNeedsStreamMessages` (fetch, grpc): a reflected Watch without `stream_messages` fails at the call saying to set it.
+- `TestGRPCServerStreamingDocumentationExample` (repository, grpc): docs/GRPC.md's Watch example answers its two updates and the last total, the server called once with the probe's queue.
 
 ## 42.1 OTLP export
 

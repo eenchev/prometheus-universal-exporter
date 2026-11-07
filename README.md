@@ -151,7 +151,7 @@ which `--help` prints too.
 - [Uptime probes](docs/REQUESTS.md#uptime-probes) — whether HTTP and HTTPS sites are up, their status, the phases of the request, the redirects and the certificate's expiry, as blackbox_exporter's `http` prober reports them, from one collector, [`configs/config.uptime.example.yaml`](configs/config.uptime.example.yaml).
 - [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
 - [Graphite](docs/GRAPHITE.md) — the `graphite` request type: Graphite series from a render API, or carbon lines from a file, as Prometheus metrics.
-- [gRPC](docs/GRPC.md) — the `grpc` request type: a unary gRPC method called with a JSON message, its answer mapped as JSON, with message types from server reflection, a descriptor set or `.proto` files.
+- [gRPC](docs/GRPC.md) — the `grpc` request type: a unary or server streaming gRPC method called with a JSON message, its answer mapped as JSON, with message types from server reflection, a descriptor set or `.proto` files.
 - [Files over SSH](docs/SSHFILE.md) — the `sshfile` request type: metrics and status files read from another host over SFTP, one file or a whole directory, on a kept connection with the host's key always verified.
 - [Commands over SSH](docs/SSHEXEC.md) — the `sshexec` request type, in a build that asks for it: one fixed command run on another host over SSH, such as `df` or a script of its own, its output handed to any transform as a body, each word quoted for the host's shell.
 - [Objects in S3](docs/S3FILE.md) — the `s3file` request type, in a build that asks for it: objects of Amazon S3, MinIO, Ceph, R2 or GCS read as files, one object or every matching one under a prefix.

@@ -87,7 +87,15 @@ type GRPCConfig struct {
 	ProtoFiles       []string          `yaml:"proto_files"`
 	ProtoImportPaths []string          `yaml:"proto_import_paths"`
 	AcceptCodes      []string          `yaml:"accept_codes"`
+	// StreamMessages is how many messages of a server streaming method's
+	// stream are read, at most; 0 calls unary methods alone.
+	StreamMessages int `yaml:"stream_messages"`
 }
+
+// grpcMaxStreamMessages is the most stream_messages may be: each message
+// is rendered and held until the stream is read, under the response limit
+// together.
+const grpcMaxStreamMessages = 1000
 
 // grpcRequest is a grpc collector's own request keys: the zero GRPCConfig
 // of a collector built in code whose request has not been validated, which
@@ -262,6 +270,9 @@ func validateGRPCRequest(x *model.Collector) error {
 		if err := f.check(); err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
 		}
+	}
+	if own.StreamMessages < 0 || own.StreamMessages > grpcMaxStreamMessages {
+		return fmt.Errorf("collector %q request.stream_messages is %d; write how many messages of a server streaming method's stream are read, from 1 to %d, or leave it out to call a unary method", x.Name, own.StreamMessages, grpcMaxStreamMessages)
 	}
 	message, typed, err := messageForCheck(own.Message)
 	if err != nil {
@@ -654,6 +665,7 @@ func grpcKeyRules() map[string]map[string]any {
 		"protoset_file":      {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
 		"proto_files":        {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
 		"proto_import_paths": {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
+		"stream_messages":    {"minimum": 0, "maximum": grpcMaxStreamMessages, "description": "grpc: a server streaming method is called, and its stream read until the server ends it or this many messages have come, at most 1000; the answer is {\"messages\": [...], \"ended\": true or false}. Left out, or 0, only unary methods are called. See docs/GRPC.md#server-streaming."},
 		"accept_codes":       {"items": map[string]any{"type": "string", "pattern": SchemaCaselessOneOf(model.GRPCCodeNames[1:]...)}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 	}
 }

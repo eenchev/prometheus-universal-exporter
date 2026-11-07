@@ -74,6 +74,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `grpc` collector calls a server streaming method with
+  `stream_messages`, reading its stream until the server ends it or that many
+  messages have come, the health service's `Watch` among them
+  ([Server streaming](docs/GRPC.md#server-streaming)).
 - A `redis` collector reads the primary a Sentinel names with `sentinel`:
   its target is the Sentinel, asked which server is the primary of
   `sentinel.master` now, and the document's `sentinel` holds what the

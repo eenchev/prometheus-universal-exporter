@@ -1,7 +1,7 @@
 # gRPC
 
-The `grpc` request type calls one unary gRPC method on the target and hands
-the answer to the transforms as JSON. jq, yq or a Python script then map it to
+The `grpc` request type calls one unary, or server streaming, gRPC method on
+the target and hands the answer to the transforms as JSON. jq, yq or a Python script then map it to
 Prometheus metrics, with the same rules, limits, caching and error policies as
 any other collector.
 
@@ -190,9 +190,11 @@ the probe that asked it gives up, until it is answered or its own 30-second
 timeout ends, so that a slow server's answer still serves the probes that
 follow; the bounds hold it meanwhile.
 
-Only unary methods are called. A streaming method is refused when the
-configuration loads with `protoset` and `proto`, and at the first call with
-`reflection`, saying which kind it is.
+Unary methods are called, and server streaming ones with
+[`stream_messages`](#server-streaming). A client or bidirectional streaming
+method, a server streaming one without `stream_messages` and a unary one with
+it are refused when the configuration loads with `protoset` and `proto`, and
+at the first call with `reflection`, saying which kind it is.
 
 ### A descriptor set
 
@@ -321,7 +323,9 @@ about one service. A service the server's health service does not know is
 answered `NOT_FOUND`, which fails the probe at the `grpc` stage like any other
 status, `http_exporter_scrape_grpc_status_code` reading `5`: check the name
 against the server's registrations, or set `error_handling.on_fetch_error: log`
-for a health check that should carry on without the series. `Watch` streams and is refused. With `descriptors` set, the health service's
+for a health check that should carry on without the series. `Watch` streams,
+and is called with `stream_messages: 1`: it sends the status at once, which
+the call reads and then ends the stream. With `descriptors` set, the health service's
 types come from that source like any other service's.
 
 ## The answer
@@ -379,6 +383,50 @@ collectors:
         for shard in data["shards"]:
             metric(name="queue_depth", value=int(shard["depth"]), labels={"shard": shard["id"]})
 ```
+
+## Server streaming
+
+With `stream_messages`, the method is a server streaming one: it is called
+with the message, and its stream read until the server ends it or that many
+messages have come, when the call ends the stream itself. The answer holds
+each message, rendered as a unary answer is, in `messages`, and `ended`,
+`true` when the server ended the stream, `false` when it was cut at
+`stream_messages`:
+
+```yaml
+collectors:
+  - name: queue_watch
+    request:
+      type: grpc
+      rpc: acme.queue.v1.QueueService/Watch
+      descriptors: reflection
+      message: '{"queue": {{param_queue|json}}}'
+      stream_messages: 10
+    transform:
+      type: jq
+    metrics:
+      - name: queue_watch_updates
+        expression: .messages | length
+      - name: queue_watch_last_total
+        expression: .messages[-1].total
+```
+
+```json
+{"messages": [{"shards": [], "total": "1", "state": "STATE_OK", "...": "..."},
+              {"shards": [], "total": "2", "state": "STATE_OK", "...": "..."}],
+ "ended": true}
+```
+
+`stream_messages` is from 1 to 1000. A stream the server ends with a status
+other than `OK` fails the call with it, retried and accepted as a unary
+call's status is, whatever messages came before it. A stream that stays open
+with fewer messages than `stream_messages` is read until the probe's
+deadline, which then fails it, `DEADLINE_EXCEEDED`: set `stream_messages` to
+what the method sends at once, such as `1` for the health service's `Watch`,
+which sends the status and then only its changes. The messages are held to
+the response limit together, as JSON; past it the call fails as a limit
+exceeded, saying at which message. A debug probe's trace shows the call's
+outcome as `grpc OK, 2 messages`.
 
 ## Placeholders
 

@@ -220,6 +220,10 @@ type Options struct {
 	// test that has to do something while the question is in flight and
 	// cannot say how long that takes on a busy machine.
 	ReflectionHold <-chan struct{}
+	// Watch answers the queue service's server streaming Watch: it is given
+	// the request as JSON and sends each message, written in JSON, with
+	// send, the stream ending with what it returns; nil ends it at once.
+	Watch func(ctx context.Context, request string, send func(message string) error) error
 	// Addr is the host:port to listen on; empty takes a free port, one no
 	// server or listener of this package had before (Listen). A test
 	// restarting a server on the address a stopped one had sets it.
@@ -365,7 +369,7 @@ func Start(t testing.TB, opts Options) *Server {
 	}))
 	s.grpc = grpc.NewServer(serverOpts...)
 	healthpb.RegisterHealthServer(s.grpc, s.Health)
-	s.grpc.RegisterService(queueService(t, files, s, opts.Answer), struct{}{})
+	s.grpc.RegisterService(queueService(t, files, s, opts.Answer, opts.Watch), struct{}{})
 	reflectionOpts := reflection.ServerOptions{Services: s.grpc, DescriptorResolver: files}
 	switch opts.Reflection {
 	case "v1":
@@ -381,9 +385,10 @@ func Start(t testing.TB, opts Options) *Server {
 	return s
 }
 
-// queueService answers the queue service's unary methods with answer, and
-// its streaming ones not at all.
-func queueService(t testing.TB, files *protoregistry.Files, s *Server, answer Answer) *grpc.ServiceDesc {
+// queueService answers the queue service's unary methods with answer, its
+// server streaming Watch with watch, and its other streaming ones not at
+// all.
+func queueService(t testing.TB, files *protoregistry.Files, s *Server, answer Answer, watch func(context.Context, string, func(string) error) error) *grpc.ServiceDesc {
 	t.Helper()
 	d, err := files.FindDescriptorByName(Service)
 	if err != nil {
@@ -395,9 +400,38 @@ func queueService(t testing.TB, files *protoregistry.Files, s *Server, answer An
 	for i := 0; i < service.Methods().Len(); i++ {
 		method := service.Methods().Get(i)
 		if method.IsStreamingClient() || method.IsStreamingServer() {
+			handler := func(any, grpc.ServerStream) error { return io.EOF }
+			if watch != nil && method.IsStreamingServer() && !method.IsStreamingClient() {
+				handler = func(_ any, stream grpc.ServerStream) error {
+					in := dynamicpb.NewMessage(method.Input())
+					if err := stream.RecvMsg(in); err != nil {
+						return err
+					}
+					request, err := protojson.MarshalOptions{UseProtoNames: true, Resolver: types}.Marshal(in)
+					if err != nil {
+						return err
+					}
+					var compact bytes.Buffer
+					if err := json.Compact(&compact, request); err != nil {
+						return err
+					}
+					call := Call{Method: string(method.Name()), Request: compact.String()}
+					call.Metadata, _ = metadata.FromIncomingContext(stream.Context())
+					s.mu.Lock()
+					s.calls = append(s.calls, call)
+					s.mu.Unlock()
+					return watch(stream.Context(), call.Request, func(text string) error {
+						out := dynamicpb.NewMessage(method.Output())
+						if err := (protojson.UnmarshalOptions{Resolver: withBuiltIn{types}}).Unmarshal([]byte(text), out); err != nil {
+							return err
+						}
+						return stream.SendMsg(out)
+					})
+				}
+			}
 			desc.Streams = append(desc.Streams, grpc.StreamDesc{
 				StreamName:    string(method.Name()),
-				Handler:       func(any, grpc.ServerStream) error { return io.EOF },
+				Handler:       handler,
 				ServerStreams: method.IsStreamingServer(),
 				ClientStreams: method.IsStreamingClient(),
 			})

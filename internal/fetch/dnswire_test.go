@@ -287,3 +287,18 @@ func TestADNSCollectorAsksOverTLS(t *testing.T) {
 		}
 	}
 }
+
+// A dry run reads the files of DNS over TLS's tls block, as a scrape would,
+// and says what a scrape would find wrong with them.
+func TestADryRunReadsTheFilesOfDNSOverTLS(t *testing.T) {
+	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
+	addr, caFile := s.ServeTLS(t)
+	c := dnsCollector(t, addr, "A", dnsKeys(func(r *DNSConfig) { r.Transport = "tls" }), func(c *model.Collector) { c.Request.TLS.CAFile = caFile })
+	if warnings := FileWarnings(c, nil); len(warnings) != 0 {
+		t.Errorf("warnings %v", warnings)
+	}
+	missing := dnsCollector(t, addr, "A", dnsKeys(func(r *DNSConfig) { r.Transport = "tls" }), func(c *model.Collector) { c.Request.TLS.CAFile = caFile + ".missing" })
+	if warnings := FileWarnings(missing, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "request.tls") {
+		t.Errorf("warnings %v", warnings)
+	}
+}

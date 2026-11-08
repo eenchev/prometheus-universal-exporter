@@ -301,8 +301,11 @@ place of the one sent: Microsoft's identity platform does at every login,
 and Okta and Auth0 do with rotation turned on, and may then refuse the old
 one. The new one is sent at the next login, and the next one after that,
 until the file holds another than it held when it was replaced, which is
-the operator putting a new token in place. The file is never written, a
-Secret being mounted read-only, so a restart, or a second replica, sends
+the operator putting a new token in place. It is kept for the endpoint
+that answered it: a `url` that is a path is another endpoint at each target
+and each virtual host, each sent the file's until it answers one of its
+own. The file is never written, a Secret being mounted read-only, so a
+restart, a second replica, or a reload that changes the `login` block sends
 the file's again: with an endpoint that refuses a refresh token once it is
 used, put a new one in the file when the exporter restarts, or run one
 replica of the collector. Google does not rotate them.
@@ -471,7 +474,8 @@ password as the files the JSON login above reads. Any other Secret, an
 OAuth client's secret say, is mounted with `extraVolumes` and
 `extraVolumeMounts` (see the
 [chart README](../charts/prometheus-universal-exporter/README.md)), and its
-files named in `field_files`, `client_id_file` or `client_secret_file`.
+files named in `field_files`, `client_id_file`, `client_secret_file` or
+`refresh_token_file`.
 
 ## Probing from the browser
 

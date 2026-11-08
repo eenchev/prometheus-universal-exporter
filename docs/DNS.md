@@ -242,7 +242,10 @@ verified against the system's roots and `tls.ca_file`, for `tls.server_name`
 or else the server's host, with the [`tls` block](REQUESTS.md#tls) of any
 other type; a client certificate is `cert_file` and `key_file`. `tls` needs
 `server`: the system's resolvers are asked over UDP and TCP, and a `tls`
-block without `transport: tls` is refused.
+block without `transport: tls` is refused. Its files are read at each
+scrape, so one put in place later is used then, and
+[`--dry-run`](CONFIGURATION.md#dry-run) reads them, warning of one a scrape
+would fail on.
 
 ```yaml
   - name: dot_resolver

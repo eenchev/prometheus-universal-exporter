@@ -2751,18 +2751,25 @@ request:
   path: /api/status
 ```
 
-There are nine types in a default build: `http` asks a URL, `localfile` reads a file from the
+There are ten types in a default build: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 `grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-`sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
+`sql` runs statements on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
 certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
-`ntp` asks an NTP server for the time — see [NTP](NTP.md) — `icmp` pings
-a host — see [Ping over ICMP](ICMP.md) — `snmp` reads an SNMP agent's
-objects and tables — see [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes
-objects — see [Kubernetes objects](KUBERNETES.md).
+`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
+`kubernetes` lists Kubernetes objects — see [Kubernetes
+objects](KUBERNETES.md). Seven more are opt-in, in a build that asks for
+them: `sshexec` runs a command on another host — see [Commands over
+SSH](SSHEXEC.md) — `s3file` reads objects of S3 — see [Objects in
+S3](S3FILE.md) — `redis` reads a Redis or Valkey server — see [Redis and
+Valkey](REDIS.md) — `tcp` speaks a protocol over TCP or UDP, or checks that
+a port takes a connection — see [Text protocols over TCP](TCP.md) — `ldap`
+searches an LDAP directory — see [LDAP directories](LDAP.md) — `icmp` pings
+a host — see [Ping over ICMP](ICMP.md) — and `snmp` reads an SNMP agent's
+objects and tables — see [SNMP agents](SNMP.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -2785,6 +2792,7 @@ and so does an unknown type.
 | A gRPC service's answer, or its health | `grpc` | [gRPC](GRPC.md) |
 | Series from Graphite | `graphite` | [Graphite](GRAPHITE.md) |
 | A line protocol such as memcached's `stats`, or an SMTP dialogue | `tcp`, opt-in | [Text protocols over TCP](TCP.md) |
+| Whether a port, or each of a host's ports, takes a connection | `tcp`, opt-in | [Checking that a port is open](TCP.md#checking-that-a-port-is-open) |
 | Entries of an LDAP directory, or its monitor counters | `ldap`, opt-in | [LDAP directories](LDAP.md) |
 | A name's records, their TTLs, a zone's serial or its signatures' expiry | `dns` | [DNS](DNS.md) |
 | A TLS certificate's expiry and chain, of any TLS or STARTTLS server | `tlscert` | [TLS certificates](TLSCERT.md) |

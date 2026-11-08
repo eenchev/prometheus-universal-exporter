@@ -812,7 +812,7 @@ Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
 `graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target),
-[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`icmp`](ICMP.md#the-target), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target), [`ldap`](LDAP.md#the-target) and [`snmp`](SNMP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
+[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`icmp`](ICMP.md#the-target), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target), [`ldap`](LDAP.md#the-target), [`sshexec`](SSHEXEC.md#the-target) and [`snmp`](SNMP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
 collector may resolve, matched by name alone, and which buckets an
 [`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
 glob, since its target is a bucket:

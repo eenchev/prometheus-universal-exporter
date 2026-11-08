@@ -80,7 +80,7 @@ collector is looked at):
 | [`kubernetes`](KUBERNETES.md#static-targets) | none at all | `timeout` |
 | [`s3file`](S3FILE.md#static-targets), opt-in | the bucket, required | `path` and `timeout` |
 | [`redis`](REDIS.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
-| [`tcp`](TCP.md#static-targets), opt-in | the service, `host:port`, required | `timeout`, and its own `tls` |
+| [`tcp`](TCP.md#static-targets), opt-in | the service, `host:port`, or a host alone with `ports` or `unix_socket`, required | `timeout`, and its own `tls` |
 | [`ldap`](LDAP.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `bind_dn` and `password_file`, and `tls` |
 | [`sshexec`](SSHEXEC.md#static-targets), opt-in | the host, required | `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file`; nothing of the command |
 | [`icmp`](ICMP.md#static-targets), opt-in | the host, required | `timeout` |

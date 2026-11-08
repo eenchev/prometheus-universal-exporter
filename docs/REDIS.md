@@ -12,7 +12,9 @@ exporter for it is one more thing to run:
 - the backlog of a job queue kept in a list, a sorted set or a stream, with
   `LLEN`, `ZCOUNT` or `XINFO GROUPS`;
 - the replicas of a primary and how far behind each is, from
-  `INFO replication`.
+  `INFO replication`;
+- the primary a Sentinel names now, whichever server that is, and what the
+  Sentinel knows of it ([Sentinel](#sentinel)).
 
 The type is opt-in: the default build and the published image leave it out,
 so a build carries it only when asked

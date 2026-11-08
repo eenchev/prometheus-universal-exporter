@@ -2308,7 +2308,7 @@ flags are known. Its keys:
 | `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, `RRSIG`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
 | `transport` | `udp` | `udp`, `tcp` or `tls`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone; `tls` MUST ask over TLS (RFC 7858), port 853 when `server` names none, verifying the certificate with the `tls` block for `tls.server_name` or else the server's host, and MUST be refused without `server`. |
-| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it; a defaults block's `tls` MUST apply to a collector with `transport: tls` alone. |
+| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it; a defaults block's `tls` MUST apply to a collector with `transport: tls` alone. Its files MUST be read at each scrape, and `--dry-run` MUST read them, warning of one a scrape would fail on. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
 
 - The record type, server and transport MUST be the collector's alone: no
@@ -31779,6 +31779,11 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestAWrongSNMPv3PrivPasswordIsADecryptionErrorEachTime` (fetch, snmp): forty scrapes with a wrong privacy password, of DES and of AES, each fail naming `usmStatsDecryptionErrors`; the test agent reports anything a wrong key decrypts that is no scoped PDU of its engine as a decryption error, as one that cannot decode it does, where it had sent no answer when the garbage read as the start of a value.
 
+## 34.319 The release audit of 2026-11-08
+
+- `TestARotatedRefreshTokenIsSentToTheEndpointThatAnsweredIt` (fetch): an oauth2 login of `grant_type: refresh_token` and a relative `url`, to two targets whose token endpoints each rotate the refresh token, sends each endpoint the file's refresh token, not the one the other answered.
+- `TestADryRunReadsTheFilesOfDNSOverTLS` (fetch, dns): `--dry-run`'s reading of a `dns` collector's files warns of a `tls.ca_file` of `transport: tls` that is missing, naming `request.tls`, and of none that is in place.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32760,8 +32765,10 @@ MUST be supported:
   `client_secret_file` MAY be left out, for a public client, whose id MUST
   then be sent as a form parameter, and `auth_style: header` MUST be refused
   without it. A refresh token the answer gives MUST be sent at the next login
-  in place of the file's while the file's content is unchanged, kept in
-  memory only and never written to the file. `refresh_token_file` MUST be
+  to the same endpoint, at the same virtual host, in place of the file's
+  while the file's content is unchanged, kept in memory only and never
+  written to the file; the login of a relative `url` at another target MUST
+  send the file's until its own endpoint answers one. `refresh_token_file` MUST be
   refused without `grant_type: refresh_token`, and a `grant_type` other than
   `client_credentials`, the default, and `refresh_token` MUST be refused.
 

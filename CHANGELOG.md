@@ -86,6 +86,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- docs/KUBERNETES.md has an example of each node's conditions, disk
+  pressure among them, and its allocatable against its capacity
+  ([Examples](docs/KUBERNETES.md#examples)).
+- docs/GRPC.md shows the health service's `List`, every service's status in
+  one call, built in as `Check` is
+  ([Health checks](docs/GRPC.md#health-checks)).
 - An `ldap` collector binds as its TLS client certificate with
   `sasl_external: true` (SASL EXTERNAL), with no password file
   ([A client certificate](docs/LDAP.md#a-client-certificate)).

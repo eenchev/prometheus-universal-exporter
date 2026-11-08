@@ -588,6 +588,65 @@ in it:
             expression: .phase
 ```
 
+Each node's conditions — `Ready`, `DiskPressure`, `MemoryPressure`,
+`PIDPressure` — and what it can give pods (`allocatable`) against what it
+has (`capacity`), CPU, memory, ephemeral storage and pods, the quantities
+read with `parse_quantity`:
+
+```yaml
+  - name: node_status
+    request:
+      type: kubernetes
+      resource: nodes
+      all_namespaces: true   # nodes are of no namespace
+    transform:
+      type: jq
+    metrics:
+      - name: kube_node_condition
+        description: 1 when the node's condition is True
+        items: '.items[] | .metadata.name as $node | .status.conditions[]? | {node: $node, condition: .type, status}'
+        expression: 'if .status == "True" then 1 else 0 end'
+        labels:
+          - name: node
+            expression: .node
+          - name: condition
+            expression: .condition
+      - name: kube_node_allocatable
+        description: What the node can give pods, in cores, bytes or pods
+        items: '.items[] | .metadata.name as $node | .status.allocatable // {} | to_entries[] | {node: $node, resource: .key, value}'
+        expression: '.value | parse_quantity'
+        labels:
+          - name: node
+            expression: .node
+          - name: resource
+            expression: .resource
+      - name: kube_node_capacity
+        description: What the node has, in cores, bytes or pods
+        items: '.items[] | .metadata.name as $node | .status.capacity // {} | to_entries[] | {node: $node, resource: .key, value}'
+        expression: '.value | parse_quantity'
+        labels:
+          - name: node
+            expression: .node
+          - name: resource
+            expression: .resource
+```
+
+Nodes are of no namespace, so their listing needs `clusterWide`:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  rules:
+    - apiGroups: [""]
+      resources: [nodes]
+```
+
+A node under disk pressure evicts pods: alert on
+`kube_node_condition{condition="DiskPressure"} == 1`, and on
+`kube_node_allocatable{resource="ephemeral-storage"}` falling, which the
+kubelet's eviction thresholds and image garbage take from capacity.
+
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `kubernetes` collector lists on the

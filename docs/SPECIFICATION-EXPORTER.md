@@ -1480,7 +1480,7 @@ keys:
 | `rpc` | none | **Required.** `package.Service/Method`; a leading `/` MUST be dropped. MUST match `^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$` and hold no placeholder. |
 | `message` | `{}` | The request message in the protobuf JSON mapping. MAY hold placeholders (§ 42.10a) with the filters `json`, `number` and `raw`; `form` and `xml` MUST be refused. |
 | `metadata` | none | Keys MUST be `[0-9a-z_.-]+`; `-bin` keys, `grpc-` and `:` keys, `content-type`, `te`, `host`, `connection` and `user-agent` MUST be refused, and `authorization` when a credential key is set. Values MAY hold placeholders, filled with the header rule; a literal value with a control character MUST be refused. |
-| `descriptors` | none | `reflection`, `protoset` or `proto`, in lower case and without blanks around it; any other spelling MUST be refused naming the three. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in. |
+| `descriptors` | none | `reflection`, `protoset` or `proto`, in lower case and without blanks around it; any other spelling MUST be refused naming the three. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in: `Check`, `List`, every service's status in one call, and `Watch`, with `stream_messages`. |
 | `protoset_file` | none | Required with, and only with, `protoset`. |
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
@@ -31526,6 +31526,15 @@ The chart values and monitors that expose this endpoint are specified in
 ## 34.310 An ldap collector binds as its client certificate
 
 - `TestAnLDAPCollectorBindsAsItsClientCertificate` (fetch, ldap): over ldaps:// and after StartTLS the bind is SASL EXTERNAL, with no DN or password, over TLS, the server seeing the client certificate `exporter`; a bind the server refuses fails the scrape naming `BIND SASL EXTERNAL`; `sasl_external` without a certificate, and beside `bind_dn`, are refused.
+
+## 34.311 A grpc collector lists every service's health
+
+- `TestAGRPCCollectorListsEveryServicesHealth` (fetch, grpc): `grpc.health.v1.Health/List`, with no descriptors, answers a SERVING and a NOT_SERVING service and the server as a whole under `""`.
+- `TestGRPCHealthListDocumentationExample` (repository, grpc): docs/GRPC.md's List example gives a series per service, 1 and 0, and none for the server as a whole.
+
+## 34.312 docs/KUBERNETES.md's node status example
+
+- `TestKubernetesDocumentationExamples` (repository, kubernetes), changed: the node status example gives each node's conditions, 1 for True and 0 otherwise, and its allocatable and capacity read with `parse_quantity`, `3800m` as 3.8, `90Gi` and `16Gi` in bytes and `110` pods.
 
 ## 42.1 OTLP export
 

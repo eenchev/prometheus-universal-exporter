@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // The examples in docs/GRPC.md load, and run against the queue service the
@@ -128,5 +129,31 @@ func TestGRPCServerStreamingDocumentationExample(t *testing.T) {
 	}
 	if calls := upstream.Calls(); len(calls) != 1 || calls[0].Request != `{"queue":"orders"}` {
 		t.Errorf("calls %+v", calls)
+	}
+}
+
+// The health List example of docs/GRPC.md gives a series per service the
+// server's health service knows, the server as a whole left out.
+func TestGRPCHealthListDocumentationExample(t *testing.T) {
+	blocks := docBlocks(t, "docs/GRPC.md", "yaml")
+	upstream := grpctest.Start(t, grpctest.Options{})
+	upstream.Health.SetServingStatus("acme.queue.v1.QueueService", healthpb.HealthCheckResponse_SERVING)
+	upstream.Health.SetServingStatus("acme.billing.v1.Billing", healthpb.HealthCheckResponse_NOT_SERVING)
+	yaml := docBlock(t, blocks, "collectors:\n  - name: grpc_health_all\n")
+	cfg, err := config.Load(testutil.WriteIn(t, t.TempDir(), "config.yaml", yaml))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, yaml)
+	}
+	server := exporter.NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?target="+url.QueryEscape(upstream.Addr)+"&collector=grpc_health_all", nil))
+	body := recorder.Body.String()
+	for _, want := range []string{`grpc_service_serving{service="acme.queue.v1.QueueService"} 1`, `grpc_service_serving{service="acme.billing.v1.Billing"} 0`} {
+		if recorder.Code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("%d, want %q in\n%s", recorder.Code, want, body)
+		}
+	}
+	if strings.Contains(body, `service=""`) {
+		t.Errorf("the server as a whole is a series:\n%s", body)
 	}
 }

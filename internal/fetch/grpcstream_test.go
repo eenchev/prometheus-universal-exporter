@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"google.golang.org/grpc/codes"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 )
 
@@ -182,5 +183,23 @@ func TestAGRPCConnectionMadeBeforeTheCallIsNotItsPhase(t *testing.T) {
 	}
 	if got := phases.take(before); got != nil {
 		t.Errorf("taken twice: %+v", got)
+	}
+}
+
+// The built-in health service's List, which needs no descriptors, answers
+// every service the server knows, and the server as a whole under "".
+func TestAGRPCCollectorListsEveryServicesHealth(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{})
+	server.Health.SetServingStatus("acme.queue.v1.QueueService", healthpb.HealthCheckResponse_SERVING)
+	server.Health.SetServingStatus("acme.billing.v1.Billing", healthpb.HealthCheckResponse_NOT_SERVING)
+	c := model.Collector{Name: "health", Request: model.RequestConfig{Type: RequestTypeGRPC, Own: GRPCConfig{RPC: "grpc.health.v1.Health/List"}}, Transform: model.TransformConfig{Type: "jq"}}
+	resp, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, c), RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"acme.queue.v1.QueueService":{"status":"SERVING"}`, `"acme.billing.v1.Billing":{"status":"NOT_SERVING"}`, `"":{"status":"SERVING"}`} {
+		if !strings.Contains(string(resp.Body), want) {
+			t.Errorf("the answer has no %s:\n%s", want, resp.Body)
+		}
 	}
 }

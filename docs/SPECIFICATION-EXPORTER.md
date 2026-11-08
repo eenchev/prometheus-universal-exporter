@@ -1083,7 +1083,10 @@ from `start` by the number of items the page before held, or by `size`. A
 parameter of the target's query or of a next URL that is `param` in any case
 MUST be dropped where `param` is set, and `param` MUST be sent last. `next`
 giving `null`, `false` or `""` MUST end the pages, more than one value or
-another kind MUST fail the trip, and so MUST items that are neither an array
+another kind MUST fail the trip, the expression's values read no further
+than the second and its run ended by the trip's deadline, and a login's
+`token` and `expires_in` expressions likewise by the second value and the
+login's deadline, so that an expression without end holds no trip, and so MUST items that are neither an array
 nor missing or `null`, which are no items.
 
 The pages MUST end at the first that names no next page — no `rel="next"`,
@@ -31483,6 +31486,21 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAConnectionOfAnUntracedTripIsNotTimed` and `TestHeldPhasesAreTheNextRequestsAndAddedOnesTheLasts` (fetch): no timing without a trace; phases held go to the next request, its start moved to theirs, and phases added go to the last.
 - `TestAConnectionsPhasesAreSpansUnderItsRequest` (exporter): `connection.*` phases are spans of their names under the request's span; an http request's are `http.*` under `http.first_byte`.
 
+## 34.306 Static target slots are shared between collectors; jq expressions of pages and logins end
+
+- `TestAStaticCollectorAloneHoldsEverySlot` (exporter): one collector takes all four slots of four, and no fifth.
+- `TestASlowStaticCollectorLeavesASlotForTheOthers` (exporter): with eight slots and two collectors one takes seven and not the eighth, which the other takes at once; with three collectors one takes six.
+- `TestAFreedStaticSlotGoesToACollectorUnderItsShare` (exporter): a slot freed goes to the waiting collector holding fewer, not the one that waited longer; the other's turn comes at the next release.
+- `TestAStaticSlotWaitEndsWithItsScrapeAndAReloadGrants` (exporter): a cancelled wait takes no slot; a larger concurrency grants the waiter.
+- `TestHungTargetsOfOneCollectorLeaveASlotForAnother` (exporter, http): six hung targets of one collector hold three of four slots and another collector's target, due after them, is scraped while they hang.
+- `TestAPaginationExpressionThatNeverEndsEndsWithTheTrip` (fetch, http): a `next` of `def f: f; f` and of `last(range(1e15))` ends at the trip's deadline; one of `.n, repeat("y")` fails saying it gave more than one value.
+- `TestALoginExpressionThatNeverEndsEndsWithTheLogin` (fetch, http): a login `token` of `def f: f; f` ends at the login's deadline; one giving values without end fails saying it gave more than one value.
+- `TestPaginationValidation` (fetch, http), changed: items of two places are refused as naming more than one place.
+
+## 34.307 The chart's kubernetesAccess.extraRules
+
+- `TestChartAddsTheOperatorsExtraKubernetesRules` (repository): an extra rule of `get` and `watch` on the `configmaps` named `cluster-info` is the third rule of the ClusterRole, and of the Role in a listed namespace; extra rules alone render a Role and its RoleBinding; a `*` verb or resource, the core group's secrets and a rule without verbs fail rendering by the schema and by the templates, and with `allowBroadExtraRules` the first three render.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33688,7 +33706,13 @@ MUST scrape at most the document's `concurrency` targets at once, 8 when it is
 unset or 0, and MUST refuse a negative one; a target due while all are busy
 MUST wait for a slot within its interval and be skipped, logged, if none
 frees. A reload that changes `concurrency` MUST apply to the scrapes that
-start after it. A
+start after it and to those waiting. The slots MUST be shared between the
+collectors the document names: a collector MUST be able to take a slot
+while it holds fewer than its share, `concurrency` divided by the number of
+collectors, at least one; beyond its share it MUST take one only while one
+stays free for every other collector holding none; a slot freed MUST go to
+the waiting target whose collector holds the fewest, the first to wait of
+those. A
 panic during a static target scrape MUST NOT end the process: it MUST be
 logged with its stack and end that scrape as failed, with
 `http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.

@@ -16,6 +16,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- The static target file's `concurrency` slots are shared between its
+  collectors: a collector whose targets hang can no longer hold every slot
+  and leave the others' targets skipped. Beyond its share, `concurrency`
+  divided by the collectors, a collector leaves a slot free for each other
+  collector holding none
+  ([Static targets](docs/STATIC-TARGETS.md)).
 - A `dns` collector asks its question with a client of its own rather than
   Go's resolver. A `SERVFAIL`, `REFUSED` or other response code is now the
   document's `rcode` rather than a failed scrape, so a rule that relied on
@@ -80,6 +86,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Chart: `kubernetesAccess.extraRules` adds RBAC rules of your own, with
+  their verbs, to the exporter's Role or ClusterRole; `*` and the core
+  group's secrets need `allowBroadExtraRules`
+  ([Kubernetes collectors](charts/prometheus-universal-exporter/README.md#kubernetes-collectors)).
 - Exported traces time the connections of `tcp`, `tlscert`, `ldap`,
   `redis`, `sshexec`, `sshfile` and `grpc` requests, as an http request's
   are: `connection.dns`, `connection.connect` and `connection.tls`, or
@@ -369,6 +379,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- A pagination `next`, `items` or login `token` / `expires_in` jq
+  expression that never ended, or gave values without end, held its trip,
+  its slots and a CPU for ever; it now ends at the trip's (or login's)
+  deadline, and is refused at its second value.
 - An exporter in allocator mode whose lookup of the allocator's addresses
   failed sent no heartbeat until one succeeded, and fell out of the member
   list after the member TTL though every instance was up. It now heartbeats the

@@ -420,7 +420,25 @@ At most `concurrency` targets are scraped at once,
 slot within its interval, and is skipped, with a warning, if none frees. Each
 also waits for a slot of its collector's `max_concurrent_probes`, which it
 shares with the probes. A reload that changes `concurrency` applies to the
-scrapes that start after it.
+scrapes that start after it, and to those waiting.
+
+The slots are shared between the collectors the file names, so that one
+whose targets are slow, or hang until their deadline, cannot hold them all
+and leave every other collector's targets skipped turn after turn:
+
+- each collector may hold its share, `concurrency` divided by the number of
+  collectors the file names, one at least, whenever its targets are due;
+- beyond its share it takes a slot only while that leaves one free for every
+  other collector that holds none, so a collector whose target comes due
+  finds a slot at once, however the others' targets behave;
+- a slot freed goes to the waiting target whose collector holds the fewest.
+
+A file of one collector uses every slot, as do collectors busy within their
+shares. With 100 `http` targets and 100 `sql` targets, eight slots and the
+database hanging, the `sql` targets hold seven slots at most and the `http`
+targets keep being scraped. Set `concurrency` to at least the number of
+collectors the file names, or each holds one slot at most while the others
+are busy.
 
 Retries come from the collector's `request.retry`, and each key a target's own
 `request.retry` sets replaces the collector's, as the `retry_attempts` and

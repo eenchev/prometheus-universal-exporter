@@ -493,7 +493,7 @@ func TestPaginationValidation(t *testing.T) {
 		"unknown type":     {model.PaginationConfig{Type: "pages", Items: "."}, nil, `collector "paged" request.pagination.type is "pages"; want one of link, next_url, cursor, page, offset`},
 		"no items":         {model.PaginationConfig{Type: "link", Items: " "}, nil, `collector "paged" request.pagination.items is required`},
 		"items no path":    {model.PaginationConfig{Type: "link", Items: ".items | length"}, nil, `collector "paged" request.pagination.items ".items | length" is not a path to the array of a page's items`},
-		"items two":        {model.PaginationConfig{Type: "link", Items: ".a, .b"}, nil, `request.pagination.items ".a, .b" names 2 places; it must name one`},
+		"items two":        {model.PaginationConfig{Type: "link", Items: ".a, .b"}, nil, `request.pagination.items ".a, .b" names more than one place; it must name one`},
 		"items bad":        {model.PaginationConfig{Type: "link", Items: ".items["}, nil, `request.pagination.items ".items[" does not compile`},
 		"next missing":     {model.PaginationConfig{Type: "next_url", Items: "."}, nil, `collector "paged" request.pagination.next is required with type next_url: the jq expression of the next page's URL`},
 		"cursor no next":   {model.PaginationConfig{Type: "cursor", Param: "c", Items: "."}, nil, `request.pagination.next is required with type cursor: the jq expression of the next page's cursor`},
@@ -624,5 +624,30 @@ func TestPaginationFollowsTheHostOverridesVirtualHost(t *testing.T) {
 				t.Fatalf("pages %v", pageURLs(response))
 			}
 		})
+	}
+}
+
+// A next expression that never ends is ended by the trip's deadline, and
+// one that gives values without end is refused at its second: neither
+// holds the trip, its slot and a CPU for ever.
+func TestAPaginationExpressionThatNeverEndsEndsWithTheTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"items":[1],"n":"x"}`)
+	}))
+	t.Cleanup(server.Close)
+	for next, want := range map[string]string{
+		`def f: f; f`:       "deadline exceeded",
+		`.n, repeat("y")`:   "gave more than one value",
+		`last(range(1e15))`: "deadline exceeded",
+	} {
+		c := pagedCollector(t, model.PaginationConfig{Type: "cursor", Param: "c", Next: next, Items: ".items"})
+		start := time.Now()
+		_, err := FetchCollector(context.Background(), server.URL, c, RequestOverrides{Timeout: 300 * time.Millisecond}, nil)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %s", next, err, want)
+		}
+		if took := time.Since(start); took > 3*time.Second {
+			t.Errorf("%s: took %s", next, took)
+		}
 	}
 }

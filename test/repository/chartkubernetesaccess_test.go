@@ -157,3 +157,56 @@ func TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing(t *testing.T) {
 		t.Error("secrets of another group, a custom resource's, are refused")
 	}
 }
+
+// kubernetesAccess.extraRules are added as written, with their verbs and
+// resourceNames, to the Role or ClusterRole after the chart's own; they
+// alone are enough to enable the access. "*" and the core group's secrets
+// are refused, by the schema and by the templates alike, unless
+// allowBroadExtraRules grants them as written.
+func TestChartAddsTheOperatorsExtraKubernetesRules(t *testing.T) {
+	helm := requireHelm(t)
+	extra := `kubernetesAccess.extraRules=[{"apiGroups":[""],"resources":["configmaps"],"verbs":["get","watch"],"resourceNames":["cluster-info"]}]`
+	for _, scope := range [][]string{{"--set", "kubernetesAccess.clusterWide=true"}, {"--set-json", `kubernetesAccess.namespaces=["shop"]`}} {
+		args := append([]string{"--set", "kubernetesAccess.enabled=true", "--set-json", kubernetesAccessRules, "--set-json", extra}, scope...)
+		found := false
+		for _, doc := range renderedDocuments(t, helm, args...) {
+			kind := text(path(doc, "kind"))
+			if (kind != "Role" && kind != "ClusterRole") || strings.HasSuffix(text(path(doc, "metadata", "name")), "-allocator") {
+				continue
+			}
+			rules := entries(path(doc, "rules"))
+			last := rules[len(rules)-1]
+			if len(rules) != 3 || !slices.Equal(scalars(path(last, "verbs")), []string{"get", "watch"}) || !slices.Equal(scalars(path(last, "resourceNames")), []string{"cluster-info"}) ||
+				!slices.Equal(scalars(path(last, "resources")), []string{"configmaps"}) {
+				t.Errorf("%v: the %s allows %v", scope, kind, rules)
+			}
+			found = true
+		}
+		if !found {
+			t.Errorf("%v: no Role or ClusterRole rendered", scope)
+		}
+	}
+	if got := exporterRBAC(t, helm, "--set", "kubernetesAccess.enabled=true", "--set-json", extra); len(got) != 2 {
+		t.Errorf("extraRules alone rendered %v, want a Role and its RoleBinding", got)
+	}
+	for what, c := range map[string]struct{ rule, want string }{
+		"a verb wildcard":     {`{"apiGroups":["apps"],"resources":["deployments"],"verbs":["*"]}`, `extraRules[0].verbs has "*"`},
+		"a resource wildcard": {`{"apiGroups":["apps"],"resources":["*"],"verbs":["get"]}`, `extraRules[0].resources has "*"`},
+		"secrets":             {`{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}`, "extraRules[0] grants secrets of the core group"},
+		"no verbs":            {`{"apiGroups":["apps"],"resources":["deployments"]}`, "extraRules[0] needs apiGroups"},
+	} {
+		args := []string{"--set", "kubernetesAccess.enabled=true", "--set-json", "kubernetesAccess.extraRules=[" + c.rule + "]"}
+		if _, ok := helmTemplate(t, helm, chartDir, args...); ok {
+			t.Errorf("%s: rendered", what)
+		}
+		if out, ok := helmTemplate(t, helm, chartDir, append([]string{"--skip-schema-validation"}, args...)...); ok || !strings.Contains(out, c.want) {
+			t.Errorf("%s, the schema skipped: rendered %v\n%s", what, ok, out)
+		}
+		if what == "no verbs" {
+			continue
+		}
+		if _, ok := helmTemplate(t, helm, chartDir, append(args, "--set", "kubernetesAccess.allowBroadExtraRules=true")...); !ok {
+			t.Errorf("%s with allowBroadExtraRules: refused", what)
+		}
+	}
+}

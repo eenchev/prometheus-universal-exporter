@@ -43,6 +43,19 @@ serviceAccount:
 # and a rule of nodes, adds get on nodes/stats (stats) or, for
 # kubelet_via_api_server, on nodes/proxy (proxy), which lets the account do
 # all a kubelet does.
+# extraRules are RBAC rules of your own, with their verbs, and resourceNames
+# if you like, added as written to the same Role or ClusterRole, for what the
+# account needs beyond its collectors' listings. They are held to the same
+# care as rules: no "*" in apiGroups, resources or verbs, and no secrets of
+# the core group, unless allowBroadExtraRules is true, which grants them as
+# written.
+#
+#   kubernetesAccess:
+#     extraRules:
+#       - apiGroups: [""]
+#         resources: [configmaps]
+#         verbs: [get]
+#         resourceNames: [cluster-info]
 #
 #   kubernetesAccess:
 #     enabled: true
@@ -57,6 +70,8 @@ kubernetesAccess:
   namespaces: []
   rules: []
   kubelet: ""
+  extraRules: []
+  allowBroadExtraRules: false
 service:
   enabled: true
   # ClusterIP, NodePort or LoadBalancer. Not ExternalName, a DNS alias with no

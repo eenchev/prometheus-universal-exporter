@@ -61,6 +61,22 @@
         "clusterWide": {"type": "boolean", "description": "A ClusterRole and a ClusterRoleBinding in place of a Role and a RoleBinding per namespace: for a collector with all_namespaces, or of a cluster-scoped resource such as nodes. Not with namespaces."},
         "namespaces": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63}, "description": "The namespaces the ServiceAccount may list in, a Role and a RoleBinding in each; the release's when empty."},
         "kubelet": {"enum": ["", "stats", "proxy"], "description": "For a collector with request.kubelet: stats grants get on nodes/stats, for the kubelets asked directly; proxy get on nodes/proxy, for kubelet_via_api_server, which lets the account do all a kubelet does. Needs clusterWide; the rules still name nodes, for their listing."},
+        "extraRules": {
+          "type": "array",
+          "description": "RBAC rules of your own, with their verbs and, if you like, resourceNames, added as written to the Role or ClusterRole, for what the account needs beyond its collectors' listings. No \"*\" in apiGroups, resources or verbs, nor secrets of the core group, unless allowBroadExtraRules.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["apiGroups", "resources", "verbs"],
+            "properties": {
+              "apiGroups": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "resources": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+              "verbs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+              "resourceNames": {"type": "array", "items": {"type": "string", "minLength": 1}}
+            }
+          }
+        },
+        "allowBroadExtraRules": {"type": "boolean", "description": "Grants extraRules as written, \"*\" and the core group's secrets among them, which the chart otherwise refuses."},
         "rules": {
           "type": "array",
           "description": "What the ServiceAccount may list: each rule's apiGroups, \"\" for the core group, and resources, by their plural names. The verb is list alone; kubelet adds get on nodes/stats or nodes/proxy. Never \"*\", nor secrets of the core group.",
@@ -79,7 +95,16 @@
       },
       "allOf": [
         {"if": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]}, "then": {"properties": {"namespaces": {"maxItems": 0}}}},
-        {"if": {"properties": {"kubelet": {"enum": ["stats", "proxy"]}}, "required": ["kubelet"]}, "then": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]}}
+        {"if": {"properties": {"kubelet": {"enum": ["stats", "proxy"]}}, "required": ["kubelet"]}, "then": {"properties": {"clusterWide": {"const": true}}, "required": ["clusterWide"]}},
+        {"if": {"not": {"properties": {"allowBroadExtraRules": {"const": true}}, "required": ["allowBroadExtraRules"]}}, "then": {"properties": {"extraRules": {"items": {
+          "properties": {
+            "apiGroups": {"items": {"not": {"const": "*"}}},
+            "resources": {"items": {"not": {"const": "*"}}},
+            "verbs": {"items": {"not": {"const": "*"}}}
+          },
+          "if": {"properties": {"apiGroups": {"contains": {"const": ""}}}},
+          "then": {"properties": {"resources": {"not": {"contains": {"const": "secrets"}}}}}
+        }}}}}
       ]
     },
 

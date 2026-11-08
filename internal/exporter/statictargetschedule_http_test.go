@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -194,5 +195,67 @@ func TestTheScrapeLoopKeepsToTheFilesConcurrency(t *testing.T) {
 	<-done
 	if got := most.Load(); got != 2 {
 		t.Fatalf("at most %d scrapes ran at once, want the file's concurrency, 2", got)
+	}
+}
+
+// A collector whose targets hang cannot take every slot of the file's
+// concurrency: the scrapes of another collector, due after the hung ones
+// came for theirs, still find one, and are scraped while the hung ones
+// hold the rest.
+func TestHungTargetsOfOneCollectorLeaveASlotForAnother(t *testing.T) {
+	release := make(chan struct{})
+	letGo := sync.OnceFunc(func() { close(release) })
+	var hung, fastScraped atomic.Int64
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hung.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fastScraped.Add(1)
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	t.Cleanup(func() {
+		letGo()
+		slow.Close()
+		fast.Close()
+	})
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("slow", "text"), testutil.Collector("fast", "text")}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Hour), Concurrency: 4}
+	for _, name := range soonScraped(t, time.Hour, 6) {
+		file.Targets = append(file.Targets, model.StaticTarget{Name: name, Collector: "slow", Target: slow.URL, Interval: model.Duration(time.Hour)})
+	}
+	// The fast collector's target is due a little after the hung ones.
+	later := ""
+	for i := 0; later == ""; i++ {
+		if name := fmt.Sprintf("web_%d", i); scheduleOffset(name, min(time.Hour, firstScrapeWindow)) > 300*time.Millisecond && scheduleOffset(name, min(time.Hour, firstScrapeWindow)) < 2*time.Second {
+			later = name
+		}
+	}
+	file.Targets = append(file.Targets, model.StaticTarget{Name: later, Collector: "fast", Target: fast.URL, Interval: model.Duration(time.Hour)})
+	manager := config.NewManager(cfg, "", testutil.QuietLogger(t))
+	manager.SetTargets("", file)
+	server := NewServer(manager, "python3", testutil.QuietLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.StaticScrapeLoop(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		letGo()
+		<-done
+	})
+	testutil.WaitFor(t, "the hung targets to hold the slots they may", func() bool { return hung.Load() >= 3 })
+	testutil.WaitFor(t, "the other collector's target to be scraped while they hang", func() bool { return fastScraped.Load() >= 1 })
+	if got := hung.Load(); got != 3 {
+		t.Errorf("%d hung scrapes hold slots of four, want three, one left for the other collector", got)
 	}
 }

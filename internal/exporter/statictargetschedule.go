@@ -396,15 +396,25 @@ func (s *Server) turnSkipped(generation uint64, d dueTarget) {
 		"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 }
 
+// staticCollectors is the number of collectors targets name.
+func staticCollectors(targets []model.StaticTarget) int {
+	names := map[string]bool{}
+	for _, t := range targets {
+		names[t.Collector] = true
+	}
+	return len(names)
+}
+
 // StaticScrapeLoop scrapes every static target on its interval until ctx
 // ends, and then waits for the scrapes in flight, which run until they end or
 // AbortStaticScrapes cancels them. The results are published for the static
 // targets endpoint, and queued for the OTLP export loop for a target with
-// export_via_otlp. At most the file's concurrency are scraped at once; a
-// reload that changes it applies to the scrapes that start after it.
+// export_via_otlp. At most the file's concurrency are scraped at once, the
+// slots shared between the collectors (staticslots.go); a reload that
+// changes it applies to the scrapes that start after it.
 func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
-	var slots chan struct{}
+	slots := newStaticSlots()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	// ended wakes the loop when a scrape the schedule waits for ends, so
@@ -420,19 +430,16 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 		// (statsSince).
 		followed := s.followedInForce()
 		cfg, file, generation := followed.config, followed.targets, followed.generation
-		if limit := file.ScrapeConcurrency(); slots == nil || cap(slots) != limit {
-			slots = make(chan struct{}, limit)
-		}
+		targets := staticTargetsOf(file)
+		slots.shape(file.ScrapeConcurrency(), staticCollectors(targets))
 		now := time.Now()
-		due, skipped, next := schedule.planFollowed(cfg, staticTargetsOf(file), followed, now)
+		due, skipped, next := schedule.planFollowed(cfg, targets, followed, now)
 		for _, d := range skipped {
 			s.turnSkipped(generation, d)
 		}
 		for _, d := range due {
 			d.state.running.Store(true)
 			wg.Add(1)
-			// Each scrape frees the slot of the limit it took one under.
-			slots := slots
 			go func() {
 				defer wg.Done()
 				defer func() {
@@ -448,22 +455,24 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 				if hook := slotWaitHook.Load(); hook != nil {
 					(*hook)(d.target.Name)
 				}
-				// Waiting for a slot counts against the scrape's interval.
-				select {
-				case slots <- struct{}{}:
-				case <-ctx.Done():
+				// Waiting for a slot counts against the scrape's interval;
+				// the loop's stop ends the wait too.
+				waitCtx, stopWait := context.WithCancel(scrapeCtx)
+				unhook := context.AfterFunc(ctx, stopWait)
+				err := slots.acquire(waitCtx, d.target.Collector)
+				unhook()
+				stopWait()
+				if err != nil {
 					// The loop is stopping: a scrape not yet begun is not
 					// begun, and is no one's failure.
-					return
-				case <-scrapeCtx.Done():
-					if shuttingDown(scrapeCtx) {
+					if ctx.Err() != nil || shuttingDown(scrapeCtx) {
 						return
 					}
 					s.failures.failedFor(scrapeCtx, s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return
 				}
-				defer func() { <-slots }()
+				defer slots.release(d.target.Collector)
 				// A slot free as the loop stops leaves the select above two
 				// ways to go, and it takes either: the scrape that got the
 				// slot is not begun any more than the one that saw the stop.

@@ -3,8 +3,10 @@
 package fetch
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"net"
 	"net/netip"
 	"strings"
 	"testing"
@@ -160,4 +162,38 @@ func dnsTestRecord(owner string, rtype uint16, data []byte) []byte {
 	r = append(r, 0, 1, 0, 0, 0, 60)
 	r = binary.BigEndian.AppendUint16(r, uint16(len(data))) //nolint:gosec // a test's short data
 	return append(r, data...)
+}
+
+// Of the system's servers, the next is asked after one that fails or
+// answers SERVFAIL; an answer, even SERVFAIL, is kept over a later
+// server's failure, and a good answer of a later server over both.
+func TestTheNextDNSServerIsAskedAndAnAnswerIsKeptOverAFailure(t *testing.T) {
+	failing := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
+	failing.SetRcode(2)
+	good := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
+	closed := closedTCPPort(t)
+	ctx := context.Background()
+	reply, server, err := askDNSServers(ctx, []string{failing.Addr, closed}, true, "www.example.test", 1)
+	if err != nil || reply.rcode != "SERVFAIL" || server != failing.Addr {
+		t.Errorf("SERVFAIL then a failure: %+v from %s, %v", reply, server, err)
+	}
+	reply, server, err = askDNSServers(ctx, []string{closed, failing.Addr, good.Addr}, true, "www.example.test", 1)
+	if err != nil || reply.rcode != "NOERROR" || len(reply.answers) != 1 || server != good.Addr {
+		t.Errorf("a failure, SERVFAIL, then an answer: %+v from %s, %v", reply, server, err)
+	}
+	if _, server, err = askDNSServers(ctx, []string{closed}, true, "www.example.test", 1); err == nil || server != closed {
+		t.Errorf("a failure alone: %s, %v", server, err)
+	}
+}
+
+// closedTCPPort is an address of 127.0.0.1 nothing listens on, over TCP.
+func closedTCPPort(t *testing.T) string {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
 }

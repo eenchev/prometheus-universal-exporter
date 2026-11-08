@@ -150,3 +150,37 @@ func TestAReflectedServerStreamingMethodNeedsStreamMessages(t *testing.T) {
 		t.Errorf("Watch without stream_messages: %v", err)
 	}
 }
+
+// A stream's messages are written in the answer as they were rendered, as
+// a unary answer is: a <, > or & in a string is itself, not escaped again.
+func TestAGRPCStreamsMessagesAreWrittenAsRendered(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Watch: func(_ context.Context, _ string, send func(string) error) error {
+		return send(`{"shards": [{"id": "a<b&c>d"}]}`)
+	}})
+	resp, err := FetchCollector(context.Background(), server.Addr, watchCollector(t, 1), RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(resp.Body), `"id":"a<b&c>d"`) {
+		t.Errorf("answer %s", resp.Body)
+	}
+}
+
+// A connection's phases are a call's only when they began after the call
+// did: grpc-go reconnects on its own, between calls.
+func TestAGRPCConnectionMadeBeforeTheCallIsNotItsPhase(t *testing.T) {
+	var phases grpcPhases
+	before := time.Now()
+	phases.add("connection.connect", before)
+	if got := phases.take(before.Add(time.Millisecond)); got != nil {
+		t.Errorf("a connection made before the call: %+v", got)
+	}
+	phases.add("connection.connect", time.Now())
+	phases.add("connection.tls", time.Now())
+	if got := phases.take(before); len(got) != 2 {
+		t.Errorf("a connection made during the call: %+v", got)
+	}
+	if got := phases.take(before); got != nil {
+		t.Errorf("taken twice: %+v", got)
+	}
+}

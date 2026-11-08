@@ -249,8 +249,9 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				}
 			}
 		}
-		// A connection grpc-go made for the call: its dial and handshake.
-		traceAddPhases(ctx, entry.phases.take())
+		// A connection grpc-go made for the call: its dial and handshake,
+		// not one it made before the call began, reconnecting on its own.
+		traceAddPhases(ctx, entry.phases.take(start))
 		if codec.over != nil {
 			// The call was answered OK; the answer is over the limit.
 			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
@@ -391,11 +392,19 @@ func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in
 		}
 		answer.Messages = append(answer.Messages, body)
 	}
-	if answer.Messages == nil {
-		answer.Messages = []json.RawMessage{}
+	// Written by hand, as the messages were rendered: json.Marshal would
+	// escape their <, > and & again, and make the answer larger than the
+	// bytes the limit counted.
+	var b bytes.Buffer
+	b.WriteString(`{"messages":[`)
+	for i, message := range answer.Messages {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.Write(message)
 	}
-	body, err := json.Marshal(answer)
-	return body, len(answer.Messages), header, trailer, err
+	b.WriteString(`],"ended":` + strconv.FormatBool(answer.Ended) + `}`)
+	return b.Bytes(), len(answer.Messages), header, trailer, nil
 }
 
 // grpcStreamOver is the refusal of a stream whose messages, read as far

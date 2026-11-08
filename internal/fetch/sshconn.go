@@ -128,9 +128,12 @@ type sshConn struct {
 	maker     string
 	makerGone bool
 	// phases are the lookup, connection and SSH handshake of the making,
-	// set before ready is closed: the phases of the first request of each
-	// scrape that waited for it (sshPhases).
+	// set before ready is closed, and trace the request trace of the
+	// scrape that began it, whose first request on it they are the phases
+	// of (traceSSH): a scrape that came to wait for it later did not wait
+	// all of them.
 	phases []TracedPhase
+	trace  *RequestTrace
 	// calls is how many reads hold the connection now. retired says the
 	// cache has forgotten it, so it is closed when the last of them ends;
 	// givenUp that its making was cancelled (giveUpLocked); closed that it
@@ -292,6 +295,7 @@ func (c *sshConnCache) get(ctx context.Context, key sshConnKey, collector string
 // and sshConnectTimeout, whoever still waits.
 func (c *sshConnCache) startLocked(ctx context.Context, key sshConnKey, stamp, collector string) *sshConn {
 	entry := &sshConn{key: key, stamp: stamp, ready: make(chan struct{}), ended: make(chan struct{}), users: map[string]bool{}, maker: collector, lastUsed: time.Now()}
+	entry.trace, _ = ctx.Value(requestTraceKey{}).(*RequestTrace)
 	c.entries[key] = entry
 	c.making[entry] = true
 	if key.owner != "" {
@@ -751,7 +755,7 @@ func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, 
 		header[name] = values
 	}
 	traceRequest(ctx, method, shown, header, "", false)
-	if entry != nil && !reused {
+	if trace, _ := ctx.Value(requestTraceKey{}).(*RequestTrace); entry != nil && !reused && trace != nil && trace == entry.trace {
 		// The connection made for the scrape: its lookup, connection and
 		// handshake, and the span from the connection's start.
 		traceAddPhases(ctx, entry.phases)

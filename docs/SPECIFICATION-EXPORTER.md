@@ -2356,8 +2356,9 @@ flags are known. Its keys:
   `server`, or without it to the `nameserver` lines of `/etc/resolv.conf`
   in order, port 53, `127.0.0.1` and `::1` when there are none, the next
   asked when one fails, does not answer within 5 seconds, or answers
-  `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`, the last one's answer the
-  document when each does. `/etc/hosts` and the file's other lines MUST NOT
+  `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`; the last such answer MUST
+  be the document when no server answers better, kept over a later
+  server's failure, and the scrape MUST fail only when none answers. `/etc/hosts` and the file's other lines MUST NOT
   be read.
 - The records MUST be those of the record type whose owner is the name, or
   but for `CNAME` a name the answer's CNAME records lead to from it, in any
@@ -31450,6 +31451,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAGRPCCollectorReadsAServerStream` (fetch, grpc): a Watch that sends two messages and ends is answered `{"messages":[...],"ended":true}` with both, the server called once with the message; one that holds the stream open after three is cut at `stream_messages: 2`, answered with two and `ended:false`, at once.
 - `TestAGRPCServerStreamsFailures` (fetch, grpc): a stream ended with `RESOURCE_EXHAUSTED` after a message fails with that status; one held open short of `stream_messages` fails `DEADLINE_EXCEEDED` at the deadline; fifty messages past a 600-byte limit together fail as a limit exceeded naming the stream's messages.
 - `TestGRPCStreamMessagesIsChecked` (fetch, grpc): with a descriptor set, Watch without `stream_messages`, GetStats with it, Push and Sync with it, and 1001 and -1 are refused; Watch with 1000 is taken; the built-in health service's Watch with 1 answers `{"messages":[{"status":"SERVING"}],"ended":false}`.
+- `TestAGRPCStreamsMessagesAreWrittenAsRendered` (fetch, grpc): a string with `<`, `&` and `>` is written in the stream's answer as it is, not escaped again.
 - `TestAReflectedServerStreamingMethodNeedsStreamMessages` (fetch, grpc): a reflected Watch without `stream_messages` fails at the call saying to set it.
 - `TestGRPCServerStreamingDocumentationExample` (repository, grpc): docs/GRPC.md's Watch example answers its two updates and the last total, the server called once with the probe's queue.
 
@@ -31460,6 +31462,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADNSAnswerFollowsTheCNAMEChain` (fetch, dns): an A question of an alias of an alias answers the end's address; an A record of a name the chain does not reach is left out.
 - `TestADNSQuestionAsksForADWithEDNSAndFallsBackWithout` (fetch, dns): the question has RD and AD and an OPT record of 1232 bytes; a server answering FORMERR to EDNS is asked twice and answers.
 - `TestADNSPTRQuestionIsOfTheReverseName` (fetch, dns): the reverse names of an IPv4 and an IPv6 address.
+- `TestTheNextDNSServerIsAskedAndAnAnswerIsKeptOverAFailure` (fetch, dns): a SERVFAIL then a server that cannot be reached answer the SERVFAIL; a failure, a SERVFAIL and then a good answer answer the good one; a failure alone fails, naming its server.
 - `TestAMalformedDNSAnswerFails` (fetch, dns): another id, name or type, an A record of 3 bytes, an MX of one, a record cut short and a TXT string past its record fail saying the message cannot be read.
 - `TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails` (fetch, dns), changed: NXDOMAIN and NOERROR without records are `not_found` with their `rcode`; SERVFAIL and REFUSED are documents with their `rcode`, `not_found` false.
 - `TestADNSCNAMELookupAsksForTheCNAMERecordAlone` (fetch, dns), changed: SERVFAIL is the document's `rcode`.
@@ -31475,6 +31478,8 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAnLDAPConnectionsPhasesAreItsFirstOperations` (fetch, ldap): with StartTLS, STARTTLS has `connection.connect` and then `connection.tls`; BIND and SEARCH none.
 - `TestAnSSHExecConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshexec) and `TestAnSSHFileConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshfile): the first scrape's request has `connection.connect` and `connection.handshake`, the next scrape's, on the kept connection, none.
 - `TestAGRPCCallsConnectionPhasesAreTheCallThatMadeIt` (fetch, grpc): without and with target lists, the first call over TLS has `connection.connect` and `connection.tls`, the next none.
+- `TestAGRPCConnectionMadeBeforeTheCallIsNotItsPhase` (fetch, grpc): phases of a connection begun before the call are not the call's; those begun during it are, once.
+- `TestAnSSHConnectionsPhasesAreOnlyItsMakersScrapes` (fetch, sshexec): of two scrapes waiting for one connection, the one whose trace began making it has its phases, the other none.
 - `TestAConnectionOfAnUntracedTripIsNotTimed` and `TestHeldPhasesAreTheNextRequestsAndAddedOnesTheLasts` (fetch): no timing without a trace; phases held go to the next request, its start moved to theirs, and phases added go to the last.
 - `TestAConnectionsPhasesAreSpansUnderItsRequest` (exporter): `connection.*` phases are spans of their names under the request's span; an http request's are `http.*` under `http.first_byte`.
 
@@ -32013,9 +32018,10 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   whose connection is made for it; of the first command, operation or
   call sent on an ldap or redis connection, a redis Sentinel's and its
   primary's each their own, and `connection.tls` of ldap's StartTLS that
-  of the STARTTLS operation; of each request of an sshexec or sshfile
-  scrape that waited for its connection to be made, and none on one kept;
-  of the grpc call during which grpc-go made its connection, without
+  of the STARTTLS operation; of the first request of the sshexec or
+  sshfile scrape that began making its connection, none of another scrape
+  that came to wait for it, and none on one kept; of the grpc call during
+  which grpc-go made its connection, not one it made before the call, without
   `connection.dns`, the name's lookup being grpc-go's resolver's, and none
   on a connection kept or behind a proxy for `connection.connect`. A
   request's span MUST begin no later than the phases under it. Trace and span ids MUST come from `crypto/rand` and be written in

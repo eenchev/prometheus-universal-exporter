@@ -81,7 +81,10 @@ var dnsRetried = []string{"SERVFAIL", "REFUSED", "NOTIMP", "FORMERR"}
 
 // lookupDNS asks for the records of recordType of name, absolute and in
 // lower case, or for PTR of the reverse name of the address name is, and
-// answers the reply of the first server that gives one, or of the last.
+// answers the reply of the first server that gives one: one whose code is
+// not among dnsRetried, or else the last of those whose code is, the next
+// asked after each, or else, when no server answered at all, the last
+// failure.
 func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string) (dnsReply, string, error) {
 	r := dnsRequest(c)
 	servers := []string{}
@@ -99,8 +102,15 @@ func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string)
 	if recordType == "PTR" {
 		asked = dnsReverseName(netip.MustParseAddr(name))
 	}
+	return askDNSServers(ctx, servers, r.Transport == dnsTCP, asked, dnsTypeNumbers[recordType])
+}
+
+// askDNSServers asks servers in order, each but the last for at most
+// dnsServerTimeout, as lookupDNS says.
+func askDNSServers(ctx context.Context, servers []string, tcp bool, asked string, qtype uint16) (dnsReply, string, error) {
 	var last dnsReply
-	var lastServer string
+	var lastServer, failedServer string
+	var answered bool
 	var lastErr error
 	for i, server := range servers {
 		askCtx := ctx
@@ -108,17 +118,26 @@ func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string)
 		if i < len(servers)-1 {
 			askCtx, cancel = context.WithTimeout(ctx, dnsServerTimeout)
 		}
-		reply, err := askDNS(askCtx, server, r.Transport == dnsTCP, asked, dnsTypeNumbers[recordType])
+		reply, err := askDNS(askCtx, server, tcp, asked, qtype)
 		cancel()
 		if ctx.Err() != nil {
 			return dnsReply{}, server, ctx.Err()
 		}
-		if err == nil && !slices.Contains(dnsRetried, reply.rcode) {
+		switch {
+		case err == nil && !slices.Contains(dnsRetried, reply.rcode):
 			return reply, server, nil
+		case err == nil:
+			// An answer, if not a good one, is kept over a later
+			// server's failure.
+			last, lastServer, answered = reply, server, true
+		default:
+			failedServer, lastErr = server, err
 		}
-		last, lastServer, lastErr = reply, server, err
 	}
-	return last, lastServer, lastErr
+	if answered {
+		return last, lastServer, nil
+	}
+	return dnsReply{}, failedServer, lastErr
 }
 
 // dnsReverseName is the name PTR records of addr are asked for under:

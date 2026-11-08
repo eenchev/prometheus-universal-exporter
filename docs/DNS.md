@@ -170,8 +170,10 @@ address's `in-addr.arpa` or `ip6.arpa` name.
 It goes to `server`, or without one to the `nameserver` lines of
 `/etc/resolv.conf` in their order, on port 53, `127.0.0.1` and `::1` when
 the file names none; the next is asked when one fails, does not answer
-within 5 seconds, or answers `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`,
-and the last one's answer is the document when every one does. The file's
+within 5 seconds, or answers `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`;
+the last of those answers is the document when no server answers better,
+kept over a later server's failure, and the scrape fails only when no server
+answers at all. The file's
 `search`, `options` (`timeout`, `attempts`, `rotate`, `ndots`) and
 `/etc/hosts` are not read: a name in `/etc/hosts` is asked of the server
 like any other.

@@ -109,12 +109,17 @@ func (p *grpcPhases) add(name string, start time.Time) {
 	p.pending = append(p.pending, TracedPhase{Name: name, Start: start, End: time.Now()})
 }
 
-// take returns the phases held and holds none.
-func (p *grpcPhases) take() []TracedPhase {
+// take returns the phases held that began at since or after, and holds
+// none: those of a connection grpc-go made before the call began, as it
+// reconnects on its own, are none of the call's.
+func (p *grpcPhases) take(since time.Time) []TracedPhase {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	phases := p.pending
 	p.pending = nil
+	if len(phases) > 0 && phases[0].Start.Before(since) {
+		return nil
+	}
 	return phases
 }
 

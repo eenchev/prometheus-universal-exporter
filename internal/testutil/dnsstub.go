@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ const (
 	DNSTypeAAAA   = 28
 	DNSTypeSRV    = 33
 	DNSTypeSOA    = 6
+	DNSTypeRRSIG  = 46
 	DNSTypeDNSKEY = 48
 	DNSTypeCAA    = 257
 )
@@ -64,8 +66,10 @@ type DNSStub struct {
 	// answers a question with an OPT record FORMERR, as a server that
 	// knows no EDNS(0) does.
 	authoritative, authentic, noEDNS bool
-	// asked is every question, as "name type network".
-	asked []string
+	// asked is every question, as "name type network", and dnssec whether
+	// each set the DO bit of an OPT record.
+	asked  []string
+	dnssec []bool
 }
 
 // wireName is name as the wire writes it, in labels.
@@ -142,6 +146,20 @@ func DNSSOA(owner, primary, mailbox string, serial, refresh, retry, expire, mini
 	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeSOA, Data: data}
 }
 
+// DNSRRSIG is an RRSIG record of owner, of the records of covered, signed
+// by signer's key keyTag, valid from inception to expiration, in seconds
+// since 1970 as the wire's serial numbers write them.
+func DNSRRSIG(owner string, covered uint16, algorithm, labels byte, originalTTL, expiration, inception uint32, keyTag uint16, signer string) DNSRecord {
+	data := append(u16(covered), algorithm, labels)
+	data = binary.BigEndian.AppendUint32(data, originalTTL)
+	data = binary.BigEndian.AppendUint32(data, expiration)
+	data = binary.BigEndian.AppendUint32(data, inception)
+	data = append(data, u16(keyTag)...)
+	data = append(data, wireName(signer)...)
+	data = append(data, 0xde, 0xad, 0xbe, 0xef)
+	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeRRSIG, Data: data}
+}
+
 // DNSCAA is a CAA record of owner.
 func DNSCAA(owner string, flags byte, tag, value string) DNSRecord {
 	return DNSRecord{Owner: strings.ToLower(owner) + ".", Type: DNSTypeCAA, Data: append(append([]byte{flags, len8(len(tag))}, tag...), value...)}
@@ -186,33 +204,52 @@ func NewDNSStub(t testing.TB, records ...DNSRecord) *DNSStub {
 			}
 		}
 	}()
-	go func() {
-		for {
-			conn, err := tcp.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-				for {
-					var size [2]byte
-					if _, err := io.ReadFull(conn, size[:]); err != nil {
-						return
-					}
-					query := make([]byte, binary.BigEndian.Uint16(size[:]))
-					if _, err := io.ReadFull(conn, query); err != nil {
-						return
-					}
-					answer := s.answer(query, "tcp")
-					if answer == nil {
-						return
-					}
-					_, _ = conn.Write(append(u16(len16(len(answer))), answer...))
-				}
-			}()
-		}
-	}()
+	go s.serveStream(tcp, "tcp")
 	return s
+}
+
+// ServeTLS answers DNS over TLS (RFC 7858) as well, on a port of its own,
+// with a certificate for 127.0.0.1 whose file it returns, until t ends.
+func (s *DNSStub) ServeTLS(t testing.TB) (addr, caFile string) {
+	t.Helper()
+	config, caFile := stubTLS(t)
+	var lc net.ListenConfig
+	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go s.serveStream(tls.NewListener(listener, config), "tls")
+	return listener.Addr().String(), caFile
+}
+
+// serveStream answers the questions of each connection listener accepts,
+// each after its length, as TCP carries them.
+func (s *DNSStub) serveStream(listener net.Listener, network string) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer func() { _ = conn.Close() }()
+			for {
+				var size [2]byte
+				if _, err := io.ReadFull(conn, size[:]); err != nil {
+					return
+				}
+				query := make([]byte, binary.BigEndian.Uint16(size[:]))
+				if _, err := io.ReadFull(conn, query); err != nil {
+					return
+				}
+				answer := s.answer(query, network)
+				if answer == nil {
+					return
+				}
+				_, _ = conn.Write(append(u16(len16(len(answer))), answer...))
+			}
+		}()
+	}
 }
 
 // SetRcode answers every question from now on with rcode and no record, or
@@ -285,6 +322,10 @@ func (s *DNSStub) answer(query []byte, network string) []byte {
 	qtype := binary.BigEndian.Uint16(query[i+1 : i+3])
 	s.mu.Lock()
 	s.asked = append(s.asked, name+" "+dnsTypeName(qtype)+" "+network)
+	// An OPT record after the question: the root name, type 41, class,
+	// then the TTL's flags, whose top bit is DO.
+	opt := query[questionEnd:]
+	s.dnssec = append(s.dnssec, binary.BigEndian.Uint16(query[10:12]) > 0 && len(opt) >= 11 && opt[0] == 0 && binary.BigEndian.Uint16(opt[1:]) == 41 && opt[7]&0x80 != 0)
 	records, rcode, silent, truncated := s.records, s.rcode, s.silent, s.truncate && network == "udp"
 	authoritative, authentic := s.authoritative, s.authentic
 	if s.noEDNS && binary.BigEndian.Uint16(query[10:12]) > 0 {
@@ -377,7 +418,14 @@ func decodeWireName(b []byte) []byte {
 }
 
 func dnsTypeName(t uint16) string {
-	return map[uint16]string{DNSTypeA: "A", DNSTypeNS: "NS", DNSTypeCNAME: "CNAME", DNSTypePTR: "PTR", DNSTypeMX: "MX", DNSTypeTXT: "TXT", DNSTypeAAAA: "AAAA", DNSTypeSRV: "SRV", DNSTypeSOA: "SOA", DNSTypeDNSKEY: "DNSKEY", DNSTypeCAA: "CAA"}[t]
+	return map[uint16]string{DNSTypeA: "A", DNSTypeNS: "NS", DNSTypeCNAME: "CNAME", DNSTypePTR: "PTR", DNSTypeMX: "MX", DNSTypeTXT: "TXT", DNSTypeAAAA: "AAAA", DNSTypeSRV: "SRV", DNSTypeSOA: "SOA", DNSTypeRRSIG: "RRSIG", DNSTypeDNSKEY: "DNSKEY", DNSTypeCAA: "CAA"}[t]
+}
+
+// DNSSEC is, for each question asked, whether it set the DO bit.
+func (s *DNSStub) DNSSEC() []bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]bool(nil), s.dnssec...)
 }
 
 // Questions is what the server was asked, each as "name type network", the

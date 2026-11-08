@@ -745,7 +745,22 @@ kubernetesAccess:
     - apiGroups: [""]
       resources: [nodes]
 ```
- With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name` ([Service account](#service-account)). While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
+ The account may need more than its collectors' `list`: `extraRules` adds RBAC rules of your own, each with its `apiGroups`, `resources`, `verbs` and, if you like, `resourceNames`, as written, after the chart's in the same Role or ClusterRole, so they apply in the same namespaces, or cluster-wide with `clusterWide`. They are held to the same care as `rules`: a `*` in any of the three lists, or the core group's `secrets`, fails rendering, unless `allowBroadExtraRules: true` grants them as written, a choice made knowing what it allows:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  rules:
+    - apiGroups: [""]
+      resources: [pods]
+  extraRules:
+    - apiGroups: [""]
+      resources: [configmaps]
+      verbs: [get]
+      resourceNames: [cluster-info]
+```
+
+With `serviceAccount.create: false` the bindings name the account the pods run as, `serviceAccount.name` ([Service account](#service-account)). While it is enabled, no `extraVolumeMounts` entry may be at or below the token's directory, `/var/run/secrets/kubernetes.io/serviceaccount`. With `networkPolicy.egress` rules, add one for the API server, the address and port of the `kubernetes` Service's endpoints, 443 or 6443 on most clusters. The request's keys are in [Kubernetes objects](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/KUBERNETES.md).
 
 ## Common configuration
 
@@ -1910,7 +1925,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`; `name` is required, and `annotations` refused, with `create: false`. See [Service account](#service-account). |
-| `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`, and `kubelet` (`stats` or `proxy`, `get` on `nodes/stats` or `nodes/proxy`, with `clusterWide`); see [Kubernetes collectors](#kubernetes-collectors). |
+| `kubernetesAccess` | object | disabled | The exporter's own access to the Kubernetes API, for `kubernetes` collectors: `enabled`, `rules` (`apiGroups` and `resources` the ServiceAccount may `list`), `namespaces` (the release's when empty) or `clusterWide`, `kubelet` (`stats` or `proxy`, `get` on `nodes/stats` or `nodes/proxy`, with `clusterWide`), `extraRules` (rules of your own, with their verbs) and `allowBroadExtraRules`; see [Kubernetes collectors](#kubernetes-collectors). |
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`, the last two with `webAuth` or `exposure.allowWithoutWebAuth`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. Needs `webAuth` or `exposure.allowWithoutWebAuth`; see [Exposing the exporter](#exposing-the-exporter). |

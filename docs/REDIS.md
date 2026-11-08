@@ -498,7 +498,8 @@ commands.
   document with U+FFFD in place of those bytes. Read such a key's size or
   kind instead, with `STRLEN`, `TYPE` or `OBJECT ENCODING`.
 - **One connection per scrape.** No connection is kept between scrapes, so
-  each scrape costs a TCP handshake, and a TLS one with TLS.
+  each costs a TCP handshake, a TLS one with TLS: see [One connection
+  per scrape](REQUESTS.md#one-connection-per-scrape) for why.
 - **No `CONFIG GET`, `CLIENT LIST` or `LATENCY`.** What they show beyond
   `INFO` holds secrets or other clients' addresses.
 

@@ -15,6 +15,36 @@ lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
 
+## Contents
+
+- [The request URL](#the-request-url)
+  - [The Host header](#the-host-header)
+  - [Compression and the response size](#compression-and-the-response-size)
+- [Path parameters](#path-parameters)
+  - [In the body, headers and query](#in-the-body-headers-and-query)
+  - [In label values](#in-label-values)
+- [Redirects and HTTP/2](#redirects-and-http2)
+  - [What a followed redirect carries](#what-a-followed-redirect-carries)
+- [Restricting targets](#restricting-targets)
+- [Connections](#connections)
+  - [Address families](#address-families)
+  - [Proxies](#proxies)
+  - [A collector's own proxy](#a-collectors-own-proxy)
+  - [Over a Unix socket](#over-a-unix-socket)
+  - [FastCGI](#fastcgi)
+- [Retries](#retries)
+  - [Waiting as Retry-After asks](#waiting-as-retry-after-asks)
+- [Accepting other statuses](#accepting-other-statuses)
+- [Timings, TLS and the final URL](#timings-tls-and-the-final-url)
+- [Uptime probes](#uptime-probes)
+  - [WebSocket endpoints](#websocket-endpoints)
+  - [Compared with blackbox_exporter](#compared-with-blackbox_exporter)
+- [One connection per scrape](#one-connection-per-scrape)
+- [Pagination](#pagination)
+- [Rate limiting](#rate-limiting)
+  - [Rate limits per host](#rate-limits-per-host)
+- [TLS](#tls)
+
 ## The request URL
 
 The URL requested is the probe's `target` with the collector's `request.path`
@@ -1926,6 +1956,20 @@ What this collector does not do:
 - No body check: blackbox_exporter's `fail_if_body_matches_regexp` is a
   `GET` with a decoder and a rule that reads the body, in a collector of its
   own.
+
+## One connection per scrape
+
+`ldap`, `redis` and `tcp` collectors make a connection for each scrape and
+close it when the scrape is over, rather than keeping one between scrapes as
+`http`, `grpc`, `sql`, `sshfile` and `sshexec` do. A scrape of them sends a
+few requests, seconds apart at most, and a connection kept between scrapes,
+a minute or more apart, would need its own keepalive, idle timeout and
+limit, as the kept connections of the others have, and a way to tell a
+connection the server closed while idle from one that failed, for no gain a
+scrape would see: each scrape costs a TCP handshake, a TLS one over TLS,
+and for `ldap` a bind, some milliseconds against the scrape's own interval.
+Exported traces show it as the `connection.*` spans of the scrape's first
+request ([Traces of slow requests](OTLP.md#traces-of-slow-requests)).
 
 ## Pagination
 

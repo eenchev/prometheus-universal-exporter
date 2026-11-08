@@ -2402,6 +2402,16 @@
                   "boolean"
                 ]
               },
+              "checksums": {
+                "description": "s3file: when_present, the default, checks the checksum the store keeps of an object (CRC32, CRC32C, CRC64NVME, SHA-1 or SHA-256) as it is read, when it has one of the whole object; required fails a read of an object without one; off checks none. See docs/S3FILE.md#checksums.",
+                "enum": [
+                  "when_present",
+                  "required",
+                  "off",
+                  ""
+                ],
+                "type": "string"
+              },
               "command": {
                 "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md.",
                 "items": {
@@ -3900,8 +3910,8 @@
                 "type": "object"
               },
               "record_type": {
-                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md.",
-                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, RRSIG, the name's DNSSEC signatures and when they expire, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy]|[Rr][Rr][Ss][Ii][Gg])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                 "type": "string"
               },
               "redirect_trusted_hosts": {
@@ -4026,6 +4036,10 @@
                 "maximum": 8,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "sasl_external": {
+                "description": "ldap: bind with SASL EXTERNAL, as the identity of the TLS client certificate request.tls.cert_file and key_file present, in place of a simple bind; not with bind_dn or password_file. A client certificate makes the connection TLS. See docs/LDAP.md#a-client-certificate.",
+                "type": "boolean"
               },
               "searches": {
                 "description": "ldap, required: the searches whose results the document holds under .searches.\u003cname\u003e, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches.",
@@ -4419,10 +4433,11 @@
                 "type": "object"
               },
               "transport": {
-                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone.",
+                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, tcp, which asks over TCP alone, or tls, DNS over TLS (RFC 7858), of request.server alone, port 853 when it names none, verified with request.tls. See docs/DNS.md#dns-over-tls.",
                 "enum": [
                   "udp",
                   "tcp",
+                  "tls",
                   ""
                 ],
                 "type": "string"

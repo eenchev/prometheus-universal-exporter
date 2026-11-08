@@ -145,6 +145,8 @@ which `--help` prints too.
 
 ## Documentation
 
+Not sure which request type reads what you want? [Which request type?](docs/CONFIGURATION.md#which-request-type) has a table of what each one is for.
+
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.
 - [Endpoints](docs/ENDPOINTS.md) and [command-line flags](docs/FLAGS.md) — what each endpoint takes and answers, and every flag of the exporter.
 - [Target requests](docs/REQUESTS.md) — the request URL and the `Host` header, redirects, HTTP/2, retries, accepted statuses, a request's timings, TLS connection and final URL, pagination, restricting targets, TLS, proxies, per-scrape overrides.
@@ -159,7 +161,7 @@ which `--help` prints too.
 - [Redis and Valkey](docs/REDIS.md) — the `redis` request type, in a build that asks for it: a server's INFO and the replies of read-only commands, such as a queue's length, as a JSON document, over plaintext or TLS.
 - [Text protocols over TCP](docs/TCP.md) — the `tcp` request type, in a build that asks for it: a line such as memcached's `stats` sent over a TCP or TLS connection, and the answer read until a terminator or the close, handed to any transform as a body.
 - [LDAP directories](docs/LDAP.md) — the `ldap` request type, in a build that asks for it: searches of an LDAP directory, such as OpenLDAP's cn=Monitor counters or the disabled accounts of Active Directory, their entries or their count, as a JSON document, over plaintext, StartTLS or LDAPS.
-- [DNS](docs/DNS.md) — the `dns` request type: the A, AAAA, CNAME, MX, NS, TXT, SRV or PTR records of a name, from the system's resolver or a named server, as a JSON document.
+- [DNS](docs/DNS.md) — the `dns` request type: the A, AAAA, CNAME, MX, NS, TXT, SRV, PTR, SOA, CAA, DNSKEY or RRSIG records of a name, with their TTLs and the answer's response code, from the system's resolvers or a named server, over UDP, TCP or TLS, as a JSON document.
 - [TLS certificates](docs/TLSCERT.md) — the `tlscert` request type: the certificates a server presents in a TLS handshake, from the start or after STARTTLS on a mail or FTP server, their names, issuers and expiry, and whether the chain verifies.
 - [NTP](docs/NTP.md) — the `ntp` request type: one SNTP request to an NTP server, the clock's offset from it and the round trip's delay, and the server's stratum, leap indicator and reference, as a JSON document.
 - [Ping over ICMP](docs/ICMP.md) — the `icmp` request type, in a build that asks for it: echo requests to a host, as ping sends them, on an unprivileged socket, and how many replies came and how long each took, as a JSON document.

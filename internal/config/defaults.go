@@ -162,7 +162,7 @@ func defaultApplies(x *model.Collector, key string) bool {
 		return true
 	}
 	top, _, _ := strings.Cut(rest, ".")
-	if model.RequestKeyRefused(x.Request.Type, top) {
+	if model.RequestKeyRefused(x.Request.Type, top) || !fetch.DefaultKeyApplies(x, top) {
 		return false
 	}
 	return top != "retry" || !model.RequestKeyRefused(x.Request.Type, rest)

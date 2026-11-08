@@ -82,7 +82,7 @@ const maxLoginEntries = 1000
 // than the deadline of the request that began it: a probe with a short
 // timeout, or a debug probe, would otherwise cut it short for every request
 // waiting on it, each of which still returns at its own deadline.
-const loginTimeout = 30 * time.Second
+var loginTimeout = 30 * time.Second
 
 // loginNow is the clock a token's lifetime is read by; a test sets it.
 var loginNow = time.Now
@@ -764,7 +764,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 		}
 		// What the expression gave is the token, or text near it: an
 		// error says what kind of value it was, never the value.
-		value, kind, err := jqOne(l.Token, page, resp)
+		value, kind, err := jqOne(ctx, l.Token, page, resp)
 		if err != nil {
 			return loginToken{}, fmt.Errorf("login.token %q %w", l.Token, err)
 		}
@@ -779,7 +779,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 		if err != nil {
 			return loginToken{}, err
 		}
-		value, kind, err := jqOne(l.ExpiresIn, page, resp)
+		value, kind, err := jqOne(ctx, l.ExpiresIn, page, resp)
 		if err != nil {
 			return loginToken{}, fmt.Errorf("login.expires_in %q %w", l.ExpiresIn, err)
 		}
@@ -867,14 +867,17 @@ func loginExcerpt(body []byte) string {
 // $headers as a rule has them, and returns its one value and the kind of
 // it. An error says what went wrong without the value gojq's own words
 // would quote, which may be the token.
-func jqOne(expression string, page any, resp *http.Response) (value any, kind string, err error) {
+func jqOne(ctx context.Context, expression string, page any, resp *http.Response) (value any, kind string, err error) {
 	code, err := expr.CompileJQ(expression)
 	if err != nil {
 		return nil, "", err
 	}
-	iterator := code.Run(page, expr.JQBindings{Status: resp.StatusCode, Headers: jqHeaders(resp.Header)}.Values(page)...)
+	// Within the login's deadline, and no further than a second value,
+	// which is enough to refuse it: an expression that never ends, or gives
+	// values without end, holds no scrape for ever.
+	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: resp.StatusCode, Headers: jqHeaders(resp.Header)}.Values(page)...)
 	count := 0
-	for {
+	for count < 2 {
 		v, ok := iterator.Next()
 		if !ok {
 			break
@@ -888,7 +891,10 @@ func jqOne(expression string, page any, resp *http.Response) (value any, kind st
 		count++
 	}
 	if count != 1 {
-		return nil, "", fmt.Errorf("gave %d values; it must give one", count)
+		if count == 0 {
+			return nil, "", errors.New("gave no value; it must give one")
+		}
+		return nil, "", errors.New("gave more than one value; it must give one")
 	}
 	return value, jsonKind(value), nil
 }

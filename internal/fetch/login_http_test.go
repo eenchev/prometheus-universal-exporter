@@ -982,3 +982,28 @@ func TestALoginsPolicyRefusalKeepsWhatItsCallerIsAnswered(t *testing.T) {
 		t.Errorf("the caller is answered %q", shown)
 	}
 }
+
+// A login's token expression that never ends is ended by the login's
+// deadline, and one that gives values without end is refused at its
+// second.
+func TestALoginExpressionThatNeverEndsEndsWithTheLogin(t *testing.T) {
+	saved := loginTimeout
+	loginTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { loginTimeout = saved })
+	for token, want := range map[string]string{
+		`def f: f; f`:              "failed on the login's answer",
+		`.access_token, repeat(1)`: "gave more than one value",
+	} {
+		freshLogins(t)
+		server := newLoginServer(t, tokenAnswer(0), bearer("tok1"))
+		c := loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: token, FieldFiles: secretFiles(t, map[string]string{"password": "p"})})
+		start := time.Now()
+		_, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{Timeout: 300 * time.Millisecond}, nil)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %s", token, err, want)
+		}
+		if took := time.Since(start); took > 3*time.Second {
+			t.Errorf("%s: took %s", token, took)
+		}
+	}
+}

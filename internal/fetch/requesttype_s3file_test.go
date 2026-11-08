@@ -4,9 +4,11 @@ package fetch
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,6 +57,10 @@ type fakeObject struct {
 	body     string
 	modified time.Time
 	etag     string
+	// crc32 is the CRC32 checksum the store keeps of the object, base64,
+	// as x-amz-checksum-crc32 sends it, and composite says it is of parts.
+	crc32     string
+	composite bool
 }
 
 func newFakeS3(t *testing.T) *fakeS3 {
@@ -145,6 +151,12 @@ func (f *fakeS3) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(o.body)))
 	w.Header().Set("Last-Modified", o.modified.Format(http.TimeFormat))
 	w.Header().Set("ETag", o.etag)
+	if o.crc32 != "" && r.Header.Get("x-amz-checksum-mode") == "ENABLED" {
+		w.Header().Set("x-amz-checksum-crc32", o.crc32)
+		if o.composite {
+			w.Header().Set("x-amz-checksum-type", "COMPOSITE")
+		}
+	}
 	if r.Method == http.MethodGet {
 		_, _ = w.Write([]byte(o.body))
 	}
@@ -789,5 +801,59 @@ func TestAnS3FileReadsSpanTellsItsFacts(t *testing.T) {
 		}
 		requests := trace.Requests()
 		requireFacts(t, tc.c.Name, factsOf(t, requests[len(requests)-1]), tc.want)
+	}
+}
+
+// crc32Of is the CRC32 checksum of body as S3 sends it, base64.
+func crc32Of(body string) string {
+	sum := crc32.ChecksumIEEE([]byte(body))
+	return base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+}
+
+// An object's checksum is checked as it is read, by default: an object the
+// store's checksum matches is read, and one it does not fails the read; an
+// object without a checksum is read. checksums off reads the mismatched one;
+// checksums required fails an object without a checksum, or with one of its
+// parts alone, and reads one with a checksum of it whole.
+func TestS3FileChecksAnObjectsChecksum(t *testing.T) {
+	f := newFakeS3(t)
+	modified := time.Date(2026, 10, 1, 12, 30, 0, 0, time.UTC)
+	put := func(key, body, sum string, composite bool) {
+		f.put("metrics", "exports/app/"+key, body, modified)
+		f.mu.Lock()
+		f.buckets["metrics"]["exports/app/"+key].crc32 = sum
+		f.buckets["metrics"]["exports/app/"+key].composite = composite
+		f.mu.Unlock()
+	}
+	put("good.prom", "up 1\n", crc32Of("up 1\n"), false)
+	put("bad.prom", "up 1\n", crc32Of("up 0\n"), false)
+	put("none.prom", "up 1\n", "", false)
+	put("parts.prom", "up 1\n", crc32Of("up 1\n")+"-2", true)
+	read := func(path, checksums string) error {
+		c := f.collector(t, "objects", path, func(r *model.RequestConfig) { s3Own(r, func(o *S3FileConfig) { o.Checksums = checksums }) })
+		_, err := FetchCollector(context.Background(), "s3://metrics", c, RequestOverrides{}, nil)
+		return err
+	}
+	for _, tc := range []struct {
+		path, checksums string
+		fails           string
+	}{
+		{"good.prom", "", ""},
+		{"bad.prom", "", "checksum did not match"},
+		{"none.prom", "", ""},
+		{"bad.prom", "when_present", "checksum did not match"},
+		{"bad.prom", "off", ""},
+		{"none.prom", "required", "sent no checksum of the whole object"},
+		{"parts.prom", "required", "sent no checksum of the whole object"},
+		{"good.prom", "required", ""},
+	} {
+		err := read(tc.path, tc.checksums)
+		if (tc.fails == "") != (err == nil) || err != nil && !strings.Contains(err.Error(), tc.fails) {
+			t.Errorf("%s with checksums %q: %v, want %q", tc.path, tc.checksums, err, tc.fails)
+		}
+	}
+	c := &model.Collector{Name: "objects", Request: model.RequestConfig{Type: RequestTypeS3File, Root: "/r", Path: "a", Own: S3FileConfig{Checksums: "md5"}}}
+	if err := ValidateRequest(c); err == nil || !strings.Contains(err.Error(), "request.checksums") {
+		t.Errorf("checksums md5: %v", err)
 	}
 }

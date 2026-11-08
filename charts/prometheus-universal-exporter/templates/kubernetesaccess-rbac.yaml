@@ -21,6 +21,15 @@
 {{- if $kubelet }}
 {{- $rules = append $rules (dict "apiGroups" (list "") "resources" (list (printf "nodes/%s" $kubelet)) "verbs" (list "get")) }}
 {{- end }}
+{{- /* The operator's own rules, as written, with their verbs, for what the
+       exporter's account needs beyond its collectors' listings. */ -}}
+{{- range $rule := .Values.kubernetesAccess.extraRules | default list }}
+{{- $extra := dict "apiGroups" $rule.apiGroups "resources" $rule.resources "verbs" $rule.verbs }}
+{{- if $rule.resourceNames }}
+{{- $_ := set $extra "resourceNames" $rule.resourceNames }}
+{{- end }}
+{{- $rules = append $rules $extra }}
+{{- end }}
 {{- if .Values.kubernetesAccess.clusterWide }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

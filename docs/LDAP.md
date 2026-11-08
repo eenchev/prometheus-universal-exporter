@@ -113,6 +113,7 @@ by name, or with `+`.
 | `bind_dn` | none: an anonymous bind | The DN of the account the scrape binds as with a simple bind, such as `cn=exporter,ou=services,dc=example,dc=org`. Only with `password_file`. See [Binding](#binding). |
 | `password_file` | none | The file of the account's password, read at every scrape, its surrounding whitespace taken off. Only with `bind_dn`. |
 | `start_tls` | `false` | Begin TLS with the StartTLS operation on a plaintext connection: see [TLS](#tls). |
+| `sasl_external` | `false` | Bind as the TLS client certificate, with SASL `EXTERNAL`, in place of a simple bind: see [A client certificate](#a-client-certificate). |
 | `searches` | — | **Required.** The searches whose results the document holds: see [Searches](#searches). |
 | `tls` | none | Verify the server, and present a client certificate: see [TLS](#tls). |
 | `max_response_bytes` | `10MiB` | The most bytes of the server's messages to one scrape, every page of every search together: see [Limits](#limits). |
@@ -138,11 +139,44 @@ the searches after it would run as nobody, finding less than they should,
 with nothing to say why. A password the server refuses fails the scrape
 with `invalidCredentials` and the server's words, never the password.
 
-There is no SASL bind: no Kerberos, no `EXTERNAL` with a client
-certificate. A client certificate in `tls` is presented in the TLS
-handshake, which a server may require, but the bind is still the simple
-one; send it over TLS ([TLS](#tls)), since a simple bind's password is
-otherwise sent as it is.
+A client certificate in `tls` is presented in the TLS handshake, which a
+server may require, but the bind is still the simple one unless
+`sasl_external` asks for the certificate's own; send a simple bind over TLS
+([TLS](#tls)), since its password is otherwise sent as it is.
+
+### A client certificate
+
+With `sasl_external: true` the scrape binds with SASL `EXTERNAL` (RFC 4513
+§ 5.2.3): the identity is the one TLS established, the client certificate
+`tls.cert_file` and `tls.key_file` present, so there is no password file to
+keep, rotate or leak, and the account is whatever the server maps the
+certificate's subject to — OpenLDAP's `authz-regexp`, 389 Directory
+Server's certificate mapping, Active Directory's certificate mapping.
+Nothing but the mechanism's name is sent: no DN, no password, no
+authorization identity.
+
+```yaml
+request:
+  type: ldap
+  start_tls: true                 # or an ldaps:// target
+  sasl_external: true
+  tls:
+    ca_file: /etc/exporter/ldap-ca.pem
+    cert_file: /etc/exporter/ldap-client.pem
+    key_file: /etc/exporter/ldap-client-key.pem
+  searches:
+    - name: people
+      base: ou=people,dc=example,dc=org
+```
+
+`sasl_external` needs the client certificate, and is refused beside
+`bind_dn` or `password_file`; so is a static target's own `bind_dn` or
+`password_file`, and a static target's own `tls` block, which replaces the
+collector's whole, names its own certificate. The certificate makes the connection TLS: an
+`ldaps://` target or `start_tls`, as for any `tls` block. A server that saw
+no certificate, or maps it to no account, answers the bind
+`inappropriateAuthentication` or `invalidCredentials`, which fails the
+scrape as `BIND SASL EXTERNAL: …`.
 
 ## The target
 
@@ -505,8 +539,8 @@ start, and `http_method="SEARCH"`.
 
 ## Limitations
 
-- **Simple bind only.** No SASL: no Kerberos (GSSAPI), no NTLM, no
-  `EXTERNAL` bind with a client certificate.
+- **Simple bind, or SASL EXTERNAL alone.** No other SASL mechanism: no
+  Kerberos (GSSAPI), no NTLM, no DIGEST-MD5.
 - **No referrals followed.** A search whose base another server holds, which
   the server answers with `referral`, fails the scrape; continuation
   references are counted, not followed. Make the target the server that
@@ -514,7 +548,8 @@ start, and `http_method="SEARCH"`.
 - **Text values only.** A value that is not UTF-8 fails the scrape: leave
   binary attributes out of `attributes`.
 - **One connection per scrape.** No connection is kept between scrapes, so
-  each costs a TCP handshake, a TLS one with TLS, and a bind.
+  each costs a TCP handshake, a TLS one with TLS, and a bind: see [One connection
+  per scrape](REQUESTS.md#one-connection-per-scrape) for why.
 
 ## Troubleshooting
 

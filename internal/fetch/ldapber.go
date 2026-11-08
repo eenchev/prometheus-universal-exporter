@@ -68,6 +68,7 @@ const (
 	ldapExtendedRequest  = 0x77 // [APPLICATION 23]
 	ldapExtendedResponse = 0x78 // [APPLICATION 24]
 	ldapSimpleAuth       = 0x80 // [0] primitive, in a BindRequest
+	ldapSASLAuth         = 0xa3 // [3] constructed, SaslCredentials, in a BindRequest
 	ldapExtendedName     = 0x80 // [0] primitive, in an ExtendedRequest
 	ldapControls         = 0xa0 // [0] constructed, after a message's operation
 	ldapReferral         = 0xa3 // [3] constructed, in an LDAPResult

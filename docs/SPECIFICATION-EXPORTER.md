@@ -1083,7 +1083,10 @@ from `start` by the number of items the page before held, or by `size`. A
 parameter of the target's query or of a next URL that is `param` in any case
 MUST be dropped where `param` is set, and `param` MUST be sent last. `next`
 giving `null`, `false` or `""` MUST end the pages, more than one value or
-another kind MUST fail the trip, and so MUST items that are neither an array
+another kind MUST fail the trip, the expression's values read no further
+than the second and its run ended by the trip's deadline, and a login's
+`token` and `expires_in` expressions likewise by the second value and the
+login's deadline, so that an expression without end holds no trip, and so MUST items that are neither an array
 nor missing or `null`, which are no items.
 
 The pages MUST end at the first that names no next page — no `rel="next"`,
@@ -1477,7 +1480,7 @@ keys:
 | `rpc` | none | **Required.** `package.Service/Method`; a leading `/` MUST be dropped. MUST match `^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$` and hold no placeholder. |
 | `message` | `{}` | The request message in the protobuf JSON mapping. MAY hold placeholders (§ 42.10a) with the filters `json`, `number` and `raw`; `form` and `xml` MUST be refused. |
 | `metadata` | none | Keys MUST be `[0-9a-z_.-]+`; `-bin` keys, `grpc-` and `:` keys, `content-type`, `te`, `host`, `connection` and `user-agent` MUST be refused, and `authorization` when a credential key is set. Values MAY hold placeholders, filled with the header rule; a literal value with a control character MUST be refused. |
-| `descriptors` | none | `reflection`, `protoset` or `proto`, in lower case and without blanks around it; any other spelling MUST be refused naming the three. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in. |
+| `descriptors` | none | `reflection`, `protoset` or `proto`, in lower case and without blanks around it; any other spelling MUST be refused naming the three. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in: `Check`, `List`, every service's status in one call, and `Watch`, with `stream_messages`. |
 | `protoset_file` | none | Required with, and only with, `protoset`. |
 | `proto_files` | none | Required with, and only with, `proto`. |
 | `proto_import_paths` | each file's directory | Only with `proto`. |
@@ -2302,9 +2305,10 @@ flags are known. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, `RRSIG`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
-| `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
+| `transport` | `udp` | `udp`, `tcp` or `tls`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone; `tls` MUST ask over TLS (RFC 7858), port 853 when `server` names none, verifying the certificate with the `tls` block for `tls.server_name` or else the server's host, and MUST be refused without `server`. |
+| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it; a defaults block's `tls` MUST apply to a collector with `transport: tls` alone. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
 
 - The record type, server and transport MUST be the collector's alone: no
@@ -2334,7 +2338,12 @@ flags are known. Its keys:
   and `weight` (SRV); `name` (PTR); `host`, `mailbox`, `serial`,
   `refresh`, `retry`, `expire` and `minimum` (SOA); `flags`, `tag` and
   `value` (CAA); `flags`, `protocol`, `algorithm` and `key_tag`, computed
-  as RFC 4034 appendix B does (DNSKEY). Names MUST be given without their
+  as RFC 4034 appendix B does (DNSKEY); `type_covered`, by name or
+  `TYPE<n>`, `algorithm`, `labels`, `original_ttl`, `key_tag`, `signer`,
+  `inception`, `expiration` and `seconds_until_expiration`, the times placed
+  nearest to now as RFC 1982's serial numbers are (RRSIG). An `RRSIG`
+  question MUST set the DO bit of its OPT record, and MUST NOT be asked
+  again without the record on `FORMERR`; no other question MUST set it. Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
@@ -2644,6 +2653,7 @@ carries it. Its keys:
 | `path_style` | `false` | The bucket in the URL's path rather than its host. |
 | `access_key_id_file`, `secret_access_key_file` | none | Both or neither. |
 | `session_token_file` | none | Only with the two above. |
+| `checksums` | `when_present` | `when_present`, `required` or `off`; any other MUST be refused at load. Unless `off`, the GetObject MUST ask for the object's checksum and a checksum of the whole object the store sends MUST be checked as the body is read, a mismatch failing the read; with `required`, an object sent without one, or with a composite one, MUST fail before its body is read; with `off` none MUST be checked. The SDK's own environment and shared config MUST NOT change it, and the SDK MUST NOT log by itself of an object sent without one. |
 | `allowed_targets`, `denied_targets` | none | Bucket names and globs of them; an address or a network MUST be refused at load. |
 
 - The credential files MUST be read at every request, not at load, as every
@@ -3334,6 +3344,7 @@ asked for it carries it. Its keys:
 | --- | --- | --- |
 | `bind_dn` | none | The DN of a simple bind. A DN as RFC 4514 writes one, not blanks alone, no placeholder; only with `password_file`. Without it the bind is anonymous. |
 | `password_file` | none | The file of the bind's password. Not blanks alone; only with `bind_dn`. |
+| `sasl_external` | `false` | A SASL `EXTERNAL` bind in place of the simple one: only with `tls.cert_file` and `key_file`, and MUST be refused beside `bind_dn` or `password_file`; a static target of such a collector MUST be refused its own `bind_dn` or `password_file`, and a `tls` block of its own without `cert_file`. |
 | `start_tls` | `false` | Begin TLS with the StartTLS extended operation on a plaintext connection. |
 | `searches` | — | Required, one or more: entries of `name`, `base`, `scope`, `filter`, `attributes`, `count_only` and `max_entries`. |
 | `tls` | none | As `http`'s. |
@@ -3371,7 +3382,10 @@ asked for it carries it. Its keys:
   presence filter `(cn=*)`, as `(cn={{param_x:}}*)` fills in to, and never
   as a SubstringFilter of no substring.
 - A scrape MUST make one connection, begin TLS on it when `start_tls` is
-  set, send a simple bind, as `bind_dn` or anonymous, and then each search
+  set, send a simple bind, as `bind_dn` or anonymous, or with
+  `sasl_external` a bind of SASL credentials of the mechanism `EXTERNAL`
+  alone, no DN, password or authorization identity, shown as `BIND SASL
+  EXTERNAL`, and then each search
   in order, each answered before the next is sent, and end with an unbind.
   A search MUST ask for its `attributes`, or for `1.1` when it has none, and
   MUST carry the Simple Paged Results control (RFC 2696), not critical,
@@ -31483,6 +31497,51 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAConnectionOfAnUntracedTripIsNotTimed` and `TestHeldPhasesAreTheNextRequestsAndAddedOnesTheLasts` (fetch): no timing without a trace; phases held go to the next request, its start moved to theirs, and phases added go to the last.
 - `TestAConnectionsPhasesAreSpansUnderItsRequest` (exporter): `connection.*` phases are spans of their names under the request's span; an http request's are `http.*` under `http.first_byte`.
 
+## 34.306 Static target slots are shared between collectors; jq expressions of pages and logins end
+
+- `TestAStaticCollectorAloneHoldsEverySlot` (exporter): one collector takes all four slots of four, and no fifth.
+- `TestASlowStaticCollectorLeavesASlotForTheOthers` (exporter): with eight slots and two collectors one takes seven and not the eighth, which the other takes at once; with three collectors one takes six; with a hundred, one takes four and the others one each.
+- `TestAFreedStaticSlotGoesToACollectorUnderItsShare` (exporter): a slot freed goes to the waiting collector holding fewer, not the one that waited longer; the other's turn comes at the next release.
+- `TestAStaticSlotWaitEndsWithItsScrapeAndAReloadGrants` (exporter): a cancelled wait takes no slot; a larger concurrency grants the waiter.
+- `TestHungTargetsOfOneCollectorLeaveASlotForAnother` (exporter, http): six hung targets of one collector hold three of four slots and another collector's target, due after them, is scraped while they hang.
+- `TestAPaginationExpressionThatNeverEndsEndsWithTheTrip` (fetch, http): a `next` of `def f: f; f` and of `last(range(1e15))` ends at the trip's deadline; one of `.n, repeat("y")` fails saying it gave more than one value.
+- `TestALoginExpressionThatNeverEndsEndsWithTheLogin` (fetch, http): a login `token` of `def f: f; f` ends at the login's deadline; one giving values without end fails saying it gave more than one value.
+- `TestPaginationValidation` (fetch, http), changed: items of two places are refused as naming more than one place.
+
+## 34.307 The chart's kubernetesAccess.extraRules
+
+- `TestChartAddsTheOperatorsExtraKubernetesRules` (repository): an extra rule of `get` and `watch` on the `configmaps` named `cluster-info` is the third rule of the ClusterRole, and of the Role in a listed namespace; extra rules alone render a Role and its RoleBinding; a `*` verb or resource, the core group's secrets and a rule without verbs fail rendering by the schema and by the templates, and with `allowBroadExtraRules` the first three render.
+
+## 34.308 A dns collector asks for RRSIG signatures and over TLS
+
+- `TestADNSCollectorAnswersTheSignaturesOfAName` (fetch, dns): the signatures of an A and an SOA record answer their type covered, algorithm, labels, original TTL, key tag, signer, inception and expiration, the SOA's a day left; the question sets DO, an A question does not; a server refusing EDNS answers FORMERR, asked once.
+- `TestADNSSignaturesTimesWrapAsSerialNumbers` (fetch, dns): 100 seconds before 2^32, an expiration of 50 is 2^32+50 and has 150 seconds left.
+- `TestADNSCollectorAsksOverTLS` (fetch, dns): a question over TLS to a stand-in verified with its CA answers, the server asked over `tls`; without the CA the handshake fails; a server without a port is port 853, one with a port keeps it; `tls` without a server, and a tls block without `transport: tls`, are refused.
+- `TestADefaultTLSBlockAppliesToADNSCollectorOverTLSAlone` (config, http): a defaults block's tls is given to a dns collector over TLS, and not to one over UDP, which is not refused for it.
+
+## 34.309 An s3file collector's checksums are optional
+
+- `TestS3FileChecksAnObjectsChecksum` (fetch, s3file): by default and with `when_present` an object whose CRC32 matches is read, one whose does not fails saying the checksum did not match, and one without is read; `off` reads the mismatched one; `required` fails an object without a checksum, and one with a composite one, and reads one with a whole one; `md5` is refused.
+- `TestSchemaAndExporterAgreeOnS3FileKeysWrittenEmpty` (repository, s3file), changed: a row of `checksums`.
+
+## 34.310 An ldap collector binds as its client certificate
+
+- `TestAnLDAPCollectorBindsAsItsClientCertificate` (fetch, ldap): over ldaps:// and after StartTLS the bind is SASL EXTERNAL, with no DN or password, over TLS, the server seeing the client certificate `exporter`; a bind the server refuses fails the scrape naming `BIND SASL EXTERNAL`; `sasl_external` without a certificate, and beside `bind_dn`, are refused.
+- `TestAStaticTargetOfASASLExternalCollectorKeepsToTheCertificate` (fetch, ldap): a static target's own `bind_dn` and `password_file`, and its own tls block without a certificate, are refused; one with its own certificate is taken.
+
+## 34.311 A grpc collector lists every service's health
+
+- `TestAGRPCCollectorListsEveryServicesHealth` (fetch, grpc): `grpc.health.v1.Health/List`, with no descriptors, answers a SERVING and a NOT_SERVING service and the server as a whole under `""`.
+- `TestGRPCHealthListDocumentationExample` (repository, grpc): docs/GRPC.md's List example gives a series per service, 1 and 0, and none for the server as a whole.
+
+## 34.312 docs/KUBERNETES.md's node status example
+
+- `TestKubernetesDocumentationExamples` (repository, kubernetes), changed: the node status example gives each node's conditions, 1 for True and 0 otherwise, and its allocatable and capacity read with `parse_quantity`, `3800m` as 3.8, `90Gi` and `16Gi` in bytes and `110` pods.
+
+## 34.313 The grants beside docs/KUBERNETES.md's examples render
+
+- `TestTheKubernetesPagesGrantsRender` (repository): each `kubernetesAccess` block of docs/KUBERNETES.md, six at least, renders a Role or a ClusterRole with the chart as written.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33688,7 +33747,13 @@ MUST scrape at most the document's `concurrency` targets at once, 8 when it is
 unset or 0, and MUST refuse a negative one; a target due while all are busy
 MUST wait for a slot within its interval and be skipped, logged, if none
 frees. A reload that changes `concurrency` MUST apply to the scrapes that
-start after it. A
+start after it and to those waiting. The slots MUST be shared between the
+collectors the document names: a collector MUST be able to take a slot
+while it holds fewer than its share, `concurrency` divided by the number of
+collectors, at least one; beyond its share it MUST take one only while one
+stays free for every other collector holding none, half the slots at most; a slot freed MUST go to
+the waiting target whose collector holds the fewest, the first to wait of
+those. A
 panic during a static target scrape MUST NOT end the process: it MUST be
 logged with its stack and end that scrape as failed, with
 `http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.

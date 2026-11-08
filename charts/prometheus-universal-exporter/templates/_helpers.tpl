@@ -1058,8 +1058,23 @@ true
        empty, and with clusterWide. */ -}}
 {{- define "prometheus-universal-exporter.validateKubernetesAccess" -}}
 {{- $access := .Values.kubernetesAccess -}}
-{{- if not $access.rules -}}
+{{- if and (not $access.rules) (not $access.extraRules) -}}
 {{- fail "kubernetesAccess.enabled is true and kubernetesAccess.rules lists nothing; name the apiGroups and resources the kubernetes collectors list" -}}
+{{- end -}}
+{{- range $i, $rule := $access.extraRules | default list -}}
+{{- if or (not $rule.apiGroups) (not $rule.resources) (not $rule.verbs) -}}
+{{- fail (printf "kubernetesAccess.extraRules[%d] needs apiGroups, \"\" for the core group, resources and verbs" $i) -}}
+{{- end -}}
+{{- if not $access.allowBroadExtraRules -}}
+{{- range $field := list "apiGroups" "resources" "verbs" -}}
+{{- if has "*" (index $rule $field) -}}
+{{- fail (printf "kubernetesAccess.extraRules[%d].%s has \"*\", which grants more than any rule can name; name each one, or set kubernetesAccess.allowBroadExtraRules to grant it as written" $i $field) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (has "" $rule.apiGroups) (has "secrets" $rule.resources) -}}
+{{- fail (printf "kubernetesAccess.extraRules[%d] grants secrets of the core group, which lets the account read their values; set kubernetesAccess.allowBroadExtraRules to grant it as written" $i) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if and $access.clusterWide $access.namespaces -}}
 {{- fail "kubernetesAccess sets both clusterWide and namespaces; clusterWide grants every namespace's objects, so list namespaces or set clusterWide, not both" -}}

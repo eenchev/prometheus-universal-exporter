@@ -68,6 +68,9 @@ type LDAPConfig struct {
 	BindDN   string       `yaml:"bind_dn,omitempty"`
 	StartTLS bool         `yaml:"start_tls,omitempty"`
 	Searches []LDAPSearch `yaml:"searches,omitempty"`
+	// SASLExternal binds with SASL EXTERNAL: as the identity of the TLS
+	// client certificate, with no DN or password sent.
+	SASLExternal bool `yaml:"sasl_external,omitempty"`
 }
 
 // LDAPSearch is one entry of an ldap collector's request.searches: the name
@@ -257,6 +260,14 @@ func validateLDAPRequest(x *model.Collector) error {
 		}
 		if own.BindDN == "" {
 			return fmt.Errorf("collector %q sets request.password_file without request.bind_dn; a password is sent with the DN of its account, so name it in bind_dn", x.Name)
+		}
+	}
+	if own.SASLExternal {
+		switch {
+		case own.BindDN != "" || r.PasswordFile != "":
+			return fmt.Errorf("collector %q sets request.sasl_external beside request.bind_dn or request.password_file; a SASL EXTERNAL bind is as the TLS client certificate's identity, and sends neither", x.Name)
+		case t.CertFile == "" && !x.RequestNotMade:
+			return fmt.Errorf("collector %q sets request.sasl_external without request.tls.cert_file and key_file; a SASL EXTERNAL bind is as the client certificate presented over TLS, so name it", x.Name)
 		}
 	}
 	if len(own.Searches) == 0 {
@@ -469,6 +480,17 @@ func checkLDAPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 			return fmt.Errorf("sets request.password_file without request.bind_dn, and collector %q binds anonymously; a password is sent with the DN of its account, so name it in bind_dn beside it", c.Name)
 		}
 	}
+	if ldapRequest(c).SASLExternal {
+		// The collector binds as its client certificate: a target's own
+		// account would not be used, and a tls block of its own, which
+		// replaces the collector's whole, must present a certificate.
+		switch {
+		case r.BindDN != "" || r.PasswordFile != "":
+			return fmt.Errorf("sets request.bind_dn or request.password_file of its own, but collector %q binds with request.sasl_external, as its client certificate; give the target a tls block with its own cert_file and key_file instead", c.Name)
+		case r.TLS != nil && r.TLS.CertFile == "":
+			return fmt.Errorf("sets request.tls of its own without cert_file and key_file, which replaces collector %q's, whose request.sasl_external binds as the client certificate; name the target's certificate in it", c.Name)
+		}
+	}
 	if err := checkTargetTLS(t); err != nil {
 		return err
 	}
@@ -650,7 +672,11 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 			return nil, err
 		}
 	}
-	if err := ldapBind(ctx, session, label, ldapRequest(c).BindDN, password); err != nil {
+	if ldapRequest(c).SASLExternal {
+		if err := ldapExternalBind(ctx, session, label); err != nil {
+			return nil, err
+		}
+	} else if err := ldapBind(ctx, session, label, ldapRequest(c).BindDN, password); err != nil {
 		return nil, err
 	}
 	doc := ldapDocument{Searches: map[string]*ldapSearchResult{}}
@@ -750,6 +776,29 @@ func ldapBind(ctx context.Context, session *ldapConn, label, dn, password string
 			bind = bind.ForCaller(shown)
 		}
 		err = ldapFailure(ctx, model.Errorf("%s: %w", bind, err))
+		traceFailedOutcome(ctx, "error: "+err.Error())
+		return err
+	}
+	traceOutcome(ctx, "success")
+	return nil
+}
+
+// ldapExternalBind binds with SASL EXTERNAL (RFC 4422 appendix A): the
+// identity is the one TLS established, the client certificate's, and no
+// authorization identity is asked for.
+func ldapExternalBind(ctx context.Context, session *ldapConn, label string) error {
+	const shown = "BIND SASL EXTERNAL"
+	traceRequest(ctx, "BIND", label, http.Header{"Ldap-Operation": {shown}}, "", false)
+	op := berElement(ldapBindRequest, berInt(berInteger, 3), berString(berOctetString, ""), berElement(ldapSASLAuth, berString(berOctetString, "EXTERNAL")))
+	result, err := ldapOperation(session, op, ldapBindResponse)
+	if err == nil {
+		traceFacts(ctx, intFact("ldap.result_code", int(result.code)))
+		if result.code != 0 {
+			err = result.err()
+		}
+	}
+	if err != nil {
+		err = ldapFailure(ctx, fmt.Errorf("%s: %w", shown, err))
 		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
 	}
@@ -1105,6 +1154,7 @@ func ldapTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 func ldapKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
 		"bind_dn":                 {"not": SchemaOnlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding."},
+		"sasl_external":           {"description": "ldap: bind with SASL EXTERNAL, as the identity of the TLS client certificate request.tls.cert_file and key_file present, in place of a simple bind; not with bind_dn or password_file. A client certificate makes the connection TLS. See docs/LDAP.md#a-client-certificate."},
 		"start_tls":               {"description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls."},
 		"searches":                {"minItems": 1, "description": "ldap, required: the searches whose results the document holds under .searches.<name>, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches."},
 		"searches[]":              {"required": []string{"name"}},

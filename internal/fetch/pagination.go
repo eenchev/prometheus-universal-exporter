@@ -81,7 +81,12 @@ func validatePagination(c *model.Collector) error {
 	if strings.TrimSpace(p.Items) == "" {
 		return fmt.Errorf("collector %q request.pagination.items is required: the jq path of the array each page holds its items in, such as .items, or . for a page that is an array", c.Name)
 	}
-	if _, err := itemsPath(p.Items, nil); err != nil {
+	// Checked against null at load, within a bound: an expression that
+	// never ends would otherwise hold the load for ever.
+	loadCtx, cancel := context.WithTimeout(context.Background(), jqLoadCheckTimeout)
+	_, err := itemsPath(loadCtx, p.Items, nil)
+	cancel()
+	if err != nil {
 		return fmt.Errorf("collector %q request.pagination.items %w", c.Name, err)
 	}
 	usesNext := p.Type == model.PaginationNextURL || p.Type == model.PaginationCursor
@@ -154,22 +159,28 @@ func nextPageBy(typ string) string {
 	}[typ]
 }
 
+// jqLoadCheckTimeout bounds the check of an expression against null when
+// the configuration loads.
+const jqLoadCheckTimeout = 5 * time.Second
+
 // itemsPath is the path, in jq's terms, of the items array that the
 // expression items names in the document page: the keys and indexes that
 // lead to it. Checked against null at load, it tells an expression that is a
 // path, such as .items or .data[0].results, from one that is not, such as
 // .items | length, which names no place to put the merged items in.
-func itemsPath(items string, page any) ([]any, error) {
+func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 	// The expression goes on a line of its own, so a comment at its end
 	// does not swallow the closing parenthesis.
 	code, err := expr.CompileJQ("path(" + items + "\n)")
 	if err != nil {
 		return nil, fmt.Errorf("%q does not compile: %w", items, err)
 	}
-	iterator := code.Run(page, expr.JQBindings{}.Values(page)...)
+	iterator := code.RunWithContext(ctx, page, expr.JQBindings{}.Values(page)...)
 	var found []any
 	count := 0
-	for {
+	// A second value is enough to refuse it: an expression that gives
+	// values without end is not read to its end.
+	for count < 2 {
 		value, ok := iterator.Next()
 		if !ok {
 			break
@@ -181,7 +192,11 @@ func itemsPath(items string, page any) ([]any, error) {
 		found, _ = value.([]any)
 	}
 	if count != 1 {
-		return nil, fmt.Errorf("%q names %d places; it must name one, the array of a page's items, such as .items, .data.results, or . for a page that is an array", items, count)
+		places := "no place"
+		if count > 1 {
+			places = "more than one place"
+		}
+		return nil, fmt.Errorf("%q names %s; it must name one, the array of a page's items, such as .items, .data.results, or . for a page that is an array", items, places)
 	}
 	for _, step := range found {
 		switch step.(type) {
@@ -325,7 +340,7 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 			}
 			return nil, fmt.Errorf("page %d of request.pagination, %s, is not JSON: %w", n, RedactURL(pageURL, MaskCredentialQueryValues), err)
 		}
-		pagePath, err := itemsPath(p.Items, page)
+		pagePath, err := itemsPath(ctx, p.Items, page)
 		if err != nil {
 			return nil, fmt.Errorf("page %d of request.pagination: request.pagination.items %w", n, err)
 		}
@@ -341,7 +356,7 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 			document, path = page, pagePath
 		}
 		items = append(items, pageItems...)
-		next, err := nextPage(c, response, page, pageURL, len(pageItems), &offset)
+		next, err := nextPage(ctx, c, response, page, pageURL, len(pageItems), &offset)
 		if err != nil {
 			return nil, fmt.Errorf("page %d of request.pagination: %w", n, err)
 		}
@@ -420,7 +435,7 @@ func onVirtualHost(c *model.Collector, overrides RequestOverrides, forwarded htt
 // nextPage is the URL of the page after page, the answer to a request for
 // pageURL that held count items, or nil when there is none. offset is the
 // offset of an offset pagination, moved on here.
-func nextPage(c *model.Collector, response *HTTPResponse, page any, pageURL *url.URL, count int, offset *int) (*url.URL, error) {
+func nextPage(ctx context.Context, c *model.Collector, response *HTTPResponse, page any, pageURL *url.URL, count int, offset *int) (*url.URL, error) {
 	p := httpRequest(c).Pagination
 	switch p.Type {
 	case model.PaginationLink:
@@ -430,13 +445,13 @@ func nextPage(c *model.Collector, response *HTTPResponse, page any, pageURL *url
 		}
 		return resolvePageURL(pageURL, link, `the Link header's rel="next"`)
 	case model.PaginationNextURL:
-		value, err := nextValue(p.Next, response, page)
+		value, err := nextValue(ctx, p.Next, response, page)
 		if err != nil || value == "" {
 			return nil, err
 		}
 		return resolvePageURL(pageURL, value, "request.pagination.next")
 	case model.PaginationCursor:
-		value, err := nextValue(p.Next, response, page)
+		value, err := nextValue(ctx, p.Next, response, page)
 		if err != nil || value == "" {
 			return nil, err
 		}
@@ -461,15 +476,15 @@ func nextPage(c *model.Collector, response *HTTPResponse, page any, pageURL *url
 // nextValue is what the expression next gives for page: its text, or ""
 // for null, false and "", which end the pagination. A number is its text, as
 // a cursor written as one is meant.
-func nextValue(next string, response *HTTPResponse, page any) (string, error) {
+func nextValue(ctx context.Context, next string, response *HTTPResponse, page any) (string, error) {
 	code, err := expr.CompileJQ(next)
 	if err != nil {
 		return "", err
 	}
-	iterator := code.Run(page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
+	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
 	var first any
 	count := 0
-	for {
+	for count < 2 {
 		value, ok := iterator.Next()
 		if !ok {
 			break
@@ -483,7 +498,7 @@ func nextValue(next string, response *HTTPResponse, page any) (string, error) {
 		count++
 	}
 	if count > 1 {
-		return "", fmt.Errorf("request.pagination.next %q gave %d values; it must give one", next, count)
+		return "", fmt.Errorf("request.pagination.next %q gave more than one value; it must give one", next)
 	}
 	switch v := first.(type) {
 	case nil:

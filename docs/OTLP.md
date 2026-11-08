@@ -916,6 +916,36 @@ page, a debug probe or a debug scrape, is never exported, as nothing of a
 run is; the debug page shows the spans the export would make of it
 ([below](#seeing-a-runs-spans)).
 
+How they nest, for an `http` probe on a new HTTPS connection and a `redis`
+static target scrape over TLS:
+
+```text
+probe api                         SERVER    the probe
+├─ cache                          INTERNAL  hit or miss
+├─ http                           INTERNAL  the fetch
+│  ├─ rate_limit                  INTERNAL  its wait for its turn
+│  └─ GET                         CLIENT    the request, each retry and redirect its own
+│     └─ http.first_byte          INTERNAL  to the answer's first byte
+│        ├─ http.dns              INTERNAL
+│        ├─ http.connect          INTERNAL
+│        └─ http.tls              INTERNAL
+├─ decode                         INTERNAL
+├─ transform                      INTERNAL
+│  └─ python                      INTERNAL
+└─ validation                     INTERNAL
+
+scrape cache-01                    INTERNAL  the scrape
+├─ slot                           INTERNAL  its wait for a slot
+├─ redis                          INTERNAL  the fetch
+│  ├─ AUTH                        CLIENT    the first command on the connection
+│  │  ├─ connection.connect       INTERNAL
+│  │  └─ connection.tls           INTERNAL
+│  └─ INFO                        CLIENT
+├─ decode                         INTERNAL
+├─ transform                      INTERNAL
+└─ validation                     INTERNAL
+```
+
 The spans, by OpenTelemetry's conventions where one applies:
 
 | Span | Kind | Parent | Attributes |

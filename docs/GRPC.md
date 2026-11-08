@@ -328,6 +328,34 @@ and is called with `stream_messages: 1`: it sends the status at once, which
 the call reads and then ends the stream. With `descriptors` set, the health service's
 types come from that source like any other service's.
 
+`List` asks for every service the server's health service knows in one
+call, `{"statuses": {"<service>": {"status": "SERVING"}, …}}`, the server as
+a whole under `""`, so one collector gives a series per service without a
+probe each:
+
+```yaml
+collectors:
+  - name: grpc_health_all
+    request:
+      type: grpc
+      rpc: grpc.health.v1.Health/List
+    transform:
+      type: jq
+    metrics:
+      - name: grpc_service_serving
+        description: 1 when the service answers SERVING
+        items: '.statuses | to_entries[] | select(.key != "")'
+        expression: 'if .value.status == "SERVING" then 1 else 0 end'
+        labels:
+          - name: service
+            expression: .key
+```
+
+`List` is newer than `Check`, served by recent releases of grpc-go and the
+other libraries; a server that does not serve it answers `UNIMPLEMENTED`, which fails the probe; ask such a
+server with `Check`, a probe per service. A server with more services than
+it lists at once, 100 for grpc-go, answers `RESOURCE_EXHAUSTED`.
+
 ## The answer
 
 A call answered `OK` becomes an ordinary fetch result: the answer rendered as

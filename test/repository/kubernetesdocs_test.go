@@ -19,7 +19,8 @@ import (
 // server, each collector pointed at it with api_server and its CA and token
 // files, where the page's collectors reach their own cluster's: the main
 // collector's and the Deployments' replicas, the Certificates' readiness and
-// expiry, the Pods of every phase; the page's other collector, outside the
+// expiry, the Pods of every phase, the nodes' conditions, allocatable and
+// capacity; the page's other collector, outside the
 // cluster, loads; and so does the static target against them.
 func TestKubernetesDocumentationExamples(t *testing.T) {
 	blocks := pageBlocks(t, "docs/KUBERNETES.md", "yaml")
@@ -38,10 +39,18 @@ func TestKubernetesDocumentationExamples(t *testing.T) {
 		{"metadata": map[string]any{"name": "b"}, "status": map[string]any{"phase": "Running"}},
 		{"metadata": map[string]any{"name": "c"}, "status": map[string]any{"phase": "Failed"}},
 	}})
+	api.Serve("/api/v1/nodes", kubetest.List{Kind: "NodeList", APIVersion: "v1", Items: []map[string]any{
+		{"metadata": map[string]any{"name": "n1"}, "status": map[string]any{
+			"conditions":  []map[string]any{{"type": "Ready", "status": "True"}, {"type": "DiskPressure", "status": "False"}},
+			"capacity":    map[string]any{"cpu": "4", "memory": "16Gi", "ephemeral-storage": "100Gi", "pods": "110"},
+			"allocatable": map[string]any{"cpu": "3800m", "memory": "15Gi", "ephemeral-storage": "90Gi", "pods": "110"},
+		}},
+		{"metadata": map[string]any{"name": "n2"}, "status": map[string]any{"conditions": []map[string]any{{"type": "DiskPressure", "status": "True"}}}},
+	}})
 	// Each collector reaches the stand-in as one outside the cluster
 	// reaches its API server.
 	reach := "      type: kubernetes\n      api_server: " + api.URL + "\n      tls:\n        ca_file: " + filepath.Join(api.Dir, "ca.crt") + "\n      bearer_token_file: " + filepath.Join(api.Dir, "token") + "\n"
-	conf := pageBlock(t, blocks, "collectors:\n") + pageBlock(t, blocks, "  - name: deployment_replicas\n") + pageBlock(t, blocks, "  - name: certificates\n") + pageBlock(t, blocks, "  - name: pod_phases\n")
+	conf := pageBlock(t, blocks, "collectors:\n") + pageBlock(t, blocks, "  - name: deployment_replicas\n") + pageBlock(t, blocks, "  - name: certificates\n") + pageBlock(t, blocks, "  - name: pod_phases\n") + pageBlock(t, blocks, "  - name: node_status\n")
 	conf = strings.ReplaceAll(conf, "      type: kubernetes\n", reach)
 	dir := t.TempDir()
 	path := testutil.WriteIn(t, dir, "config.yaml", conf)
@@ -58,6 +67,11 @@ func TestKubernetesDocumentationExamples(t *testing.T) {
 			`certmanager_certificate_expiration_timestamp_seconds{certificate="web",namespace="shop"} 1.798859045e+09`,
 		},
 		"pod_phases": {`kube_pods{phase="Running"} 2`, `kube_pods{phase="Failed"} 1`, `kube_pods{phase="Pending"} 0`, `kube_pods{phase="Unknown"} 0`},
+		"node_status": {
+			`kube_node_condition{condition="Ready",node="n1"} 1`, `kube_node_condition{condition="DiskPressure",node="n1"} 0`, `kube_node_condition{condition="DiskPressure",node="n2"} 1`,
+			`kube_node_allocatable{node="n1",resource="cpu"} 3.8`, `kube_node_allocatable{node="n1",resource="ephemeral-storage"} 9.663676416e+10`, `kube_node_capacity{node="n1",resource="memory"} 1.7179869184e+10`,
+			`kube_node_capacity{node="n1",resource="pods"} 110`,
+		},
 	} {
 		recorder := httptest.NewRecorder()
 		exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector="+collector, nil))
@@ -92,4 +106,26 @@ func probed(exp *exporter.Server, collector string) string {
 	r := httptest.NewRecorder()
 	exp.Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/probe?collector="+collector, nil))
 	return r.Body.String()
+}
+
+// Every kubernetesAccess snippet of docs/KUBERNETES.md renders with the
+// chart as written, and grants something: the grant beside each example
+// is one the chart takes.
+func TestTheKubernetesPagesGrantsRender(t *testing.T) {
+	helm := requireHelm(t)
+	found := 0
+	for _, block := range pageBlocks(t, "docs/KUBERNETES.md", "yaml") {
+		if !strings.HasPrefix(block, "kubernetesAccess:\n") {
+			continue
+		}
+		found++
+		values := testutil.WriteIn(t, t.TempDir(), "values.yaml", block)
+		out, ok := helmTemplate(t, helm, chartDir, "-f", values)
+		if !ok || !strings.Contains(out, "kind: ClusterRole") && !strings.Contains(out, "kind: Role") {
+			t.Errorf("the grant\n%s\ndoes not render a Role:\n%s", block, out)
+		}
+	}
+	if found < 6 {
+		t.Errorf("found %d grants in docs/KUBERNETES.md, want one beside each example that needs it", found)
+	}
 }

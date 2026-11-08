@@ -107,6 +107,7 @@ func TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates(t *testing.
 		{"podDisruptionBudget.minAvailable", "poddisruptionbudget.yaml", `include "prometheus-universal-exporter.budgetCount" (list "podDisruptionBudget.minAvailable" $pdb.minAvailable)`, 0},
 		{"podDisruptionBudget.maxUnavailable", "poddisruptionbudget.yaml", `include "prometheus-universal-exporter.budgetCount" (list "podDisruptionBudget.maxUnavailable" $pdb.maxUnavailable)`, 0},
 		{"allocator.replicas", "allocator-deployment.yaml", whole + `(list "allocator.replicas" $allocator.replicas 1 2147483647)`, 1},
+		{"allocator.terminationGracePeriodSeconds", "_helpers.tpl", whole + `(list "allocator.terminationGracePeriodSeconds" $explicit 0 2147483647)`, 0},
 		{"server.probeMaxConcurrent", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.probeMaxConcurrent" .Values.server.probeMaxConcurrent)`, 0},
 		{"server.pythonMaxWorkers", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)`, 0},
 		{"server.pythonMaxIdleWorkers", "deployment.yaml", `include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxIdleWorkers" .Values.server.pythonMaxIdleWorkers "0 to keep no worker idle")`, 0},

@@ -665,7 +665,9 @@ flag, a count, a number of seconds and a port alike. The templates MUST
 decide what a whole number is by its value, not by how a template prints it.
 
 The whole numbers the templates print themselves each have a range:
-`replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`,
+`replicaCount`, `terminationGracePeriodSeconds`,
+`allocator.terminationGracePeriodSeconds`, a preStop hook's `sleep.seconds`,
+`server.probeMaxConcurrent`,
 `server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers`, and a `podDisruptionBudget.minAvailable` or
 `maxUnavailable` given as a number, from 0 to 2147483647;
 `autoscaling.minReplicas`, `maxReplicas`,
@@ -900,7 +902,9 @@ source the allocator's pods MUST have `terminationGracePeriodSeconds` the
 larger of 30 and the shutdown delay, the check interval and the check
 timeout rounded up to whole seconds, plus 15, the 10 seconds the allocator
 takes to stop its server and 5 for its exit, so Kubernetes does not kill a
-peer still telling its peers it stops; without one it MUST NOT be rendered.
+peer still telling its peers it stops; without one it MUST NOT be rendered
+while that need, of no check, is 30 seconds or less. A preStop sleep and
+`allocator.terminationGracePeriodSeconds` change it as § 42.6a says.
 The peers' timings MUST NOT change `minReadySeconds`. The chart
 README MUST say how to reach an allocator pod's status page with `kubectl
 port-forward`, give the token as a browser asks for it, and find the leader's
@@ -2026,7 +2030,18 @@ are skipped and the text checks of the templates still run:
      allocator pods' `terminationGracePeriodSeconds` is 30 by default, 36
      for a `20s` interval and a `500ms` timeout and 135 for `1m` and
      `59.5s`, and is not rendered without a discovery source
-     (`TestChartSetsThePeersTimings`); each set without a discovery source,
+     (`TestChartSetsThePeersTimings`); a preStop sleep is rendered as the
+     exporter's and the allocator's `lifecycle.preStop` and raises the grace
+     period, the exporter's to 40 for 10 seconds and the allocator's to 35
+     for 20 without discovery and 38 with it, 30 for 5 with it, an `exec`
+     or `httpGet` hook raising neither, and
+     `allocator.terminationGracePeriodSeconds` renders 60 without discovery
+     and 120 with it (`TestChartRendersPreStopHooksAndTheAllocatorsGracePeriod`);
+     a grace period below its need, the sleep counted, fails naming both,
+     and a `tcpSocket`, two handlers, none, an empty command, an `httpGet`
+     of no port, and a sleep that is negative, fractional or of no seconds
+     fail at either key, by the schema and with it skipped
+     (`TestChartRefusesAGracePeriodShorterThanItsPreStop`); each set without a discovery source,
      or outside the allocator's bounds, fails rendering, with the values
      schema and with it skipped
      (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
@@ -2296,6 +2311,28 @@ offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
 none while that need is 30 seconds or less, Kubernetes' default, and the need
 itself when it is more. Set, it MUST be rendered, and rendering MUST fail when
 it is less than the need, naming both.
+
+The chart MUST offer `preStop` and `allocator.preStop`, null by default, each
+rendered as its container's `lifecycle.preStop` as written: a mapping of
+exactly one of `exec`, with a `command` of one item or more, `httpGet`, with
+its `port`, and `sleep`, with its `seconds`, a whole number from 0 to
+2147483647. Any other handler, `tcpSocket` among them, which Kubernetes does
+not run as a hook, no handler and two handlers MUST fail rendering, by the
+values schema and, with it skipped, by the templates, naming the key.
+Kubernetes runs the hook within the grace period before the container is
+told to stop, so a `sleep`'s seconds MUST be added to the need above, and to
+the allocator's below; an `exec` or `httpGet` hook's time MUST NOT be
+guessed.
+
+The chart MUST offer `allocator.terminationGracePeriodSeconds`, null by
+default. An allocator instance needs its preStop's sleep, its shutdown
+delay, with a discovery source a check interval and a check timeout rounded
+up to whole seconds (§ 42.1, the allocator's peers), and 15 seconds, the 10
+it takes to stop its server and 5 for its exit. Null, it MUST render, with a
+discovery source, the larger of 30 and that need, and without one the need
+only when it is more than 30. Set, it MUST be rendered, a whole number from
+0 to 2147483647, and rendering MUST fail when it is less than the need,
+naming both.
 
 ## 42.7 Helm monitor arrays and opt-in monitor authentication
 

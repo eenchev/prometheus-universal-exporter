@@ -683,10 +683,21 @@ podDisruptionBudget:
   unhealthyPodEvictionPolicy: ""
 # How long Kubernetes lets a stopping pod run before killing it. Empty leaves
 # Kubernetes' default, 30 seconds, unless the shutdown needs more: the chart
-# then renders server.shutdownDelay plus server.shutdownTimeout plus 10
-# seconds, the 10 for the exporter's last OTLP export and exit. Set explicitly, it must be at
-# least that, or rendering fails.
+# then renders preStop's sleep plus server.shutdownDelay plus
+# server.shutdownTimeout plus 10 seconds, the 10 for the exporter's last OTLP
+# export and exit. Set explicitly, it must be at least that, or rendering
+# fails.
 terminationGracePeriodSeconds: null
+# The exporter container's preStop hook, as Kubernetes writes a lifecycle
+# handler: exactly one of exec ({command: [...]}), httpGet ({path, port}) and
+# sleep ({seconds: 5}). Kubernetes runs it before telling the exporter to
+# stop, within terminationGracePeriodSeconds, so a sleep's seconds are added
+# to the grace period the chart renders and holds a set one to; an exec or
+# httpGet hook takes what time it takes, which the chart cannot know: raise
+# terminationGracePeriodSeconds to cover it. server.shutdownDelay already
+# keeps a stopping pod serving while it leaves the Service, so a sleep is
+# not needed for that. Null renders none.
+preStop: null
 # The Deployment's strategy. rollingUpdate is rendered with RollingUpdate
 # only: with type Recreate it is left out, as Kubernetes refuses it there, so
 # `strategy.type: Recreate` alone is enough. maxSurge and maxUnavailable both
@@ -1079,6 +1090,17 @@ allocator:
   # checksum/config stays the chart's.
   podLabels: {}
   podAnnotations: {}
+  # How long Kubernetes lets a stopping allocator pod run before killing it.
+  # Null renders, with discovery, the larger of Kubernetes' 30 and what a
+  # stopping instance needs: preStop's sleep, a peer check interval and
+  # timeout, rounded up, and 15 seconds for its shutdown and exit; without
+  # discovery, that sum only when it is more than 30. Set explicitly, it
+  # must be at least that, or rendering fails.
+  terminationGracePeriodSeconds: null
+  # The allocator container's preStop hook, as preStop is for the
+  # exporter's: one of exec, httpGet and sleep, a sleep's seconds counted in
+  # terminationGracePeriodSeconds. Null renders none.
+  preStop: null
   # Scheduling of the allocator's pods, independent of the exporter's.
   priorityClassName: ""
   nodeSelector: {}

@@ -6760,9 +6760,10 @@ prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 ```
 
 In Kubernetes the pod must also be allowed to run that long: its
-`terminationGracePeriodSeconds`, 30 by default, has to cover the delay, the
-timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
-`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
+`terminationGracePeriodSeconds`, 30 by default, has to cover a preStop
+hook's sleep, the delay, the timeout and the last OTLP export. The Helm
+chart's `server.shutdownDelay` and `server.shutdownTimeout` set the flags,
+its `preStop` the hook, and they raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
 included, ends the process at once — the second Ctrl-C of an impatient
 operator, or a supervisor that signals twice — without waiting for the probes
 or the export. It logs one line first,

@@ -252,6 +252,11 @@ spec:
             {{- with .Values.readinessProbe }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- /* Checked with the grace period it counts in. */}}
+          {{- with .Values.preStop }}
+          lifecycle:
+            preStop: {{- toYaml . | nindent 14 }}
+          {{- end }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             {{- if $allocator }}

@@ -825,12 +825,42 @@ helm install exporter charts/prometheus-universal-exporter \
 
 `server.shutdownDelay`, `5s` by default, is how long a stopping pod keeps answering probes before that, with `/ready` answering `503`, rendered as `--web.shutdown-delay`. Kubernetes takes a few seconds to take a terminating pod out of its Service, and probes sent to it in that gap would otherwise be refused, so Prometheus would record failed scrapes during every rollout. Raise it on a large cluster where endpoint updates are slow; `0s` turns it off, and empty leaves the flag out for an image older than it.
 
-Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown delay, its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting — 30 seconds with the defaults, which Kubernetes' default already covers. Left unset, `terminationGracePeriodSeconds` is rendered as that sum whenever it is more than 30; set, it must be at least that, or rendering fails:
+Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its [`preStop`](#shutting-down) hook's sleep, when it has one, its shutdown delay, its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting — 30 seconds with the defaults, which Kubernetes' default already covers. Left unset, `terminationGracePeriodSeconds` is rendered as that sum whenever it is more than 30; set, it must be at least that, or rendering fails:
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
   --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 75
 ```
+
+`preStop` is the exporter container's preStop hook, and `allocator.preStop`
+the allocator's, written as Kubernetes writes a lifecycle handler: exactly
+one of `exec`, a command, `httpGet`, a path and a port, and `sleep`, its
+`seconds`. Kubernetes runs it before telling the container to stop, within
+the same grace period, so a `sleep`'s seconds are added to the grace period
+the chart renders, and to the least a set one must be. An `exec` or
+`httpGet` hook takes the time it takes, which the chart cannot know: raise
+`terminationGracePeriodSeconds` to cover it. `tcpSocket`, which Kubernetes
+does not run as a hook, and more than one handler fail rendering. The
+exporter needs no hook to leave its Service before it stops, which
+`server.shutdownDelay` does; a hook is for what else must happen first,
+such as a sidecar's drain or a mesh that waits for one:
+
+```yaml
+preStop:
+  sleep:
+    seconds: 10        # with the defaults, renders terminationGracePeriodSeconds: 40
+allocator:
+  terminationGracePeriodSeconds: 60
+  preStop:
+    sleep:
+      seconds: 15      # at least 15 + 15 = 30 without discovery, 33 with it
+```
+
+The allocator's pods stop in `allocator.terminationGracePeriodSeconds`: left
+null, with a discovery source, the larger of 30 and its preStop's sleep, a
+peer check interval and timeout, rounded up, and 15 seconds for its server's
+10-second shutdown and its exit; without one, that sum only when it is more
+than Kubernetes' 30. Set, it must be at least that sum, or rendering fails.
 
 Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds. With [`otlp.logs`](#otlp-export) the last export of the exporter's own log follows the metrics' within the same `otlp.timeout`, taking at least a second, which the 10 seconds cover at the default.
 
@@ -1717,7 +1747,9 @@ sources answer: at its next check when the leader shuts down, and after
 answering. A stopping pod keeps serving for a check interval and a check
 timeout first, so its peers see it go, and the pods'
 `terminationGracePeriodSeconds` is that, rounded up, plus 15 seconds, or
-30 when that is less, as with the default timings. `allocator.replicas` is 2 by default, as
+30 when that is less, as with the default timings; `allocator.terminationGracePeriodSeconds`
+sets it, at least that, and `allocator.preStop`'s sleep adds to both (see
+[Shutting down](#shutting-down)). `allocator.replicas` is 2 by default, as
 without discovery, and any number is safe; the Deployment rolls out with
 the default strategy, a pod at a time, under the disruption budget of
 `maxUnavailable: 1`, and the allocator's NetworkPolicy also admits the
@@ -1819,6 +1851,8 @@ allocator refuses.
 | `allocator.networkPolicy.prometheus` | Prometheus Operator pods | NetworkPolicy peers that fetch the probe targets: by default pods labelled `app.kubernetes.io/name: prometheus` in any namespace. Set your Prometheus's labels and namespace; a Prometheus Agent is `app.kubernetes.io/name: prometheus-agent`. |
 | `allocator.pdb.enabled` | `true` | A PodDisruptionBudget of `maxUnavailable: 1` for the allocator. |
 | `allocator.podLabels` / `podAnnotations` | `{}` | Labels and annotations of the allocator's pods only; a label the chart sets fails rendering, and `checksum/config` stays the chart's. |
+| `allocator.terminationGracePeriodSeconds` | `null` | The allocator pods' grace period, at least `allocator.preStop`'s sleep, a peer check interval and timeout with discovery, and 15 seconds; see [Shutting down](#shutting-down). |
+| `allocator.preStop` | `null` | The allocator container's preStop hook, a Kubernetes lifecycle handler: an exec, an HTTP GET or a sleep; see [Shutting down](#shutting-down). |
 | `allocator.priorityClassName` | `""` | The allocator pods' PriorityClass. |
 | `allocator.nodeSelector` / `tolerations` / `affinity` | empty | Scheduling of the allocator's pods, independent of the exporter's. |
 | `allocator.topologySpreadConstraints` | `kubernetes.io/hostname`, `ScheduleAnyway` | The allocator pods' topology spread constraints; one without a `labelSelector` spreads the allocator's pods. `[]` renders none. |
@@ -1915,7 +1949,7 @@ Helm passes a dependency the parent's `global` values, and the `enabled` its con
 
 Every value has a default, and `values.yaml` documents each one in place. `values.schema.json` is checked by Helm on install, upgrade and `helm template`, so a misspelled key or a wrong type fails there rather than on a pod that starts and behaves unexpectedly.
 
-A whole number is rendered as the whole number it is, however it is written: `replicaCount: 2000000`, `2e6` and `2000000.0` in a values file all render `replicas: 2000000`, never `2e+06`. The whole numbers the chart renders itself take a range, and a fraction or a number outside it fails rendering, refused by the schema and, with the schema skipped, by the templates: 0 to 2147483647 for `replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers` and a `podDisruptionBudget` count, 1 to 2147483647 for the replicas and utilization targets of `autoscaling`, and 1 to 65535 for `service.port`. A `podDisruptionBudget` count given as a string is rendered bare, so it is held to what Kubernetes takes on a budget and fails rendering otherwise, naming the key: a whole number from 0 to 2147483647 or a percentage from `0%` to `100%`, written with no zero before another digit, since `"010"` would render as YAML's octal number, eight. The probes' timings and the `strategy.rollingUpdate` counts are passed through as written, and the values schema bounds them as Kubernetes does, so `periodSeconds: 1e30` fails at `helm template` rather than when Kubernetes refuses the Deployment: each timing is a whole number up to 2147483647, from 0 for `initialDelaySeconds` and from 1 for the others, and a liveness probe's `successThreshold` is 1, the one value Kubernetes takes there; `maxSurge` and `maxUnavailable` are a whole number from 0 to 2147483647 or a percentage written with no zero before another digit, up to `100%` for `maxUnavailable`, and never a string of digits alone, which would reach Kubernetes as a string it refuses. Whole numbers inside the other Kubernetes shapes the chart passes through — a security context's `runAsUser` or `fsGroup`, such as OpenShift's `1000680000`, `resources`, tolerations, relabelings — are written out in digits too, and are Kubernetes' to bound.
+A whole number is rendered as the whole number it is, however it is written: `replicaCount: 2000000`, `2e6` and `2000000.0` in a values file all render `replicas: 2000000`, never `2e+06`. The whole numbers the chart renders itself take a range, and a fraction or a number outside it fails rendering, refused by the schema and, with the schema skipped, by the templates: 0 to 2147483647 for `replicaCount`, `terminationGracePeriodSeconds`, `allocator.terminationGracePeriodSeconds`, a `preStop` hook's `sleep.seconds`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers`, `server.pythonMaxIdleWorkers` and a `podDisruptionBudget` count, 1 to 2147483647 for the replicas and utilization targets of `autoscaling`, and 1 to 65535 for `service.port`. A `podDisruptionBudget` count given as a string is rendered bare, so it is held to what Kubernetes takes on a budget and fails rendering otherwise, naming the key: a whole number from 0 to 2147483647 or a percentage from `0%` to `100%`, written with no zero before another digit, since `"010"` would render as YAML's octal number, eight. The probes' timings and the `strategy.rollingUpdate` counts are passed through as written, and the values schema bounds them as Kubernetes does, so `periodSeconds: 1e30` fails at `helm template` rather than when Kubernetes refuses the Deployment: each timing is a whole number up to 2147483647, from 0 for `initialDelaySeconds` and from 1 for the others, and a liveness probe's `successThreshold` is 1, the one value Kubernetes takes there; `maxSurge` and `maxUnavailable` are a whole number from 0 to 2147483647 or a percentage written with no zero before another digit, up to `100%` for `maxUnavailable`, and never a string of digits alone, which would reach Kubernetes as a string it refuses. Whole numbers inside the other Kubernetes shapes the chart passes through — a security context's `runAsUser` or `fsGroup`, such as OpenShift's `1000680000`, `resources`, tolerations, relabelings — are written out in digits too, and are Kubernetes' to bound.
 
 | Value | Type | Default | What it sets |
 | --- | --- | --- | --- |
@@ -1932,6 +1966,7 @@ A whole number is rendered as the whole number it is, however it is written: `re
 | `exposure.allowWithoutWebAuth` | boolean | `false` | Lets `ingress.enabled`, and `service.type` `NodePort` or `LoadBalancer`, render without `webAuth`, for callers authenticated where the chart cannot see it; see [Exposing the exporter](#exposing-the-exporter). |
 | `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `pythonMaxIdleWorkers`, `pythonIdleTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `debug`, `gzipLevel`, `statusRefresh`, `allocatorCapacity`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
+| `preStop` | object | unset | The exporter container's preStop hook, a Kubernetes lifecycle handler: an exec, an HTTP GET or a sleep; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |

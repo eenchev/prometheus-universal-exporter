@@ -86,6 +86,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The chart's `preStop` and `allocator.preStop` set the exporter's and the
+  allocator's container `lifecycle.preStop` hook, one of `exec`, `httpGet`
+  and `sleep`; a sleep's seconds are added to the grace period the chart
+  renders and requires. `allocator.terminationGracePeriodSeconds` sets the
+  allocator pods' grace period, which must cover its peers' shutdown delay
+  and its exit ([Shutting down](charts/prometheus-universal-exporter/README.md#shutting-down)).
 - An opt-in `snmp` request type reads SNMP agents, as snmp_exporter does:
   `get` reads objects one by one and `walk` walks tables whole, each by a
   name of the collector's and its numeric identifier, the columns of a

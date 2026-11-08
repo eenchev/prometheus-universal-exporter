@@ -31757,6 +31757,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary` (repository), changed: a build of snmp alone links no package a build of no request type lacks but the standard library's.
 - `TestNoKeyEntryOrMappingValueOfTheSchemasTakesNoValue` and `TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes` (repository), changed: a key of a mapping of mappings, as `walk`'s columns, is told of by the nearest key of a name, `walk`.
 
+## 34.316 preStop hooks, and the allocator's grace period from values
+
+- `TestChartRendersPreStopHooksAndTheAllocatorsGracePeriod` (chart, test/repository): `preStop` and `allocator.preStop` render as their containers' `lifecycle.preStop`; a sleep of 10 raises the exporter's grace period to 40, and one beside a set 90 keeps 90; an exec hook renders and raises nothing; the allocator's sleep of 20 renders 35 without discovery and 38 with it, one of 5 with it 30; `allocator.terminationGracePeriodSeconds` renders 60 without discovery and 120 with it; an `httpGet` hook renders.
+- `TestChartRefusesAGracePeriodShorterThanItsPreStop` (chart, test/repository): a set grace period below what the sleep, the shutdown and the exit need fails naming both, the exporter's and the allocator's, with and without discovery; a `tcpSocket`, two handlers, none, an empty command, an `httpGet` of no port, and a sleep negative, fractional or of no seconds fail at `preStop` and at `allocator.preStop`, by the schema and with it skipped.
+- `TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates` (chart, test/repository), changed: `allocator.terminationGracePeriodSeconds` is held to 0 to 2147483647 by the schema and the templates, and an `httpGet` hook's port to 1 to 65535 by the schema.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,

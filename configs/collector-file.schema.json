@@ -1850,6 +1850,77 @@
                 "if": {
                   "properties": {
                     "type": {
+                      "const": "ldap"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "bind_dn": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "bind_dn"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "password_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "password_file"
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "password_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "password_file"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "bind_dn": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "bind_dn"
+                        ]
+                      }
+                    }
+                  ],
+                  "required": [
+                    "searches"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
                       "const": "localfile"
                     }
                   },
@@ -1867,6 +1938,301 @@
                   },
                   "required": [
                     "root"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "redis"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "if": {
+                    "properties": {
+                      "username": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "username"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "password_file": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "password_file"
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "s3file"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "access_key_id_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "access_key_id_file"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "secret_access_key_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "secret_access_key_file"
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "secret_access_key_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "secret_access_key_file"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "access_key_id_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "access_key_id_file"
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "session_token_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "session_token_file"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "access_key_id_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "access_key_id_file"
+                        ]
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "root": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "root"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "snmp"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "allOf": [
+                    {
+                      "else": {
+                        "properties": {
+                          "community_file": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "community_file"
+                        ]
+                      },
+                      "if": {
+                        "properties": {
+                          "snmp_version": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "snmp_version"
+                        ]
+                      },
+                      "then": {
+                        "allOf": [
+                          {
+                            "properties": {
+                              "username": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "username"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "security_level": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "security_level"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "security_level": {
+                            "enum": [
+                              "authNoPriv",
+                              "authPriv"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "security_level"
+                        ]
+                      },
+                      "then": {
+                        "allOf": [
+                          {
+                            "properties": {
+                              "auth_protocol": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "auth_protocol"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "auth_password_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "auth_password_file"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "security_level": {
+                            "enum": [
+                              "authPriv"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "security_level"
+                        ]
+                      },
+                      "then": {
+                        "allOf": [
+                          {
+                            "properties": {
+                              "priv_protocol": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "priv_protocol"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "priv_password_file": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "priv_password_file"
+                            ]
+                          }
+                        ]
+                      }
+                    }
                   ]
                 }
               },
@@ -1974,6 +2340,87 @@
                     "driver",
                     "username"
                   ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "sshexec"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "private_key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "private_key_file"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "password_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "password_file"
+                      ]
+                    }
+                  ],
+                  "if": {
+                    "properties": {
+                      "passphrase_file": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "passphrase_file"
+                    ]
+                  },
+                  "properties": {
+                    "known_hosts_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    },
+                    "username": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "username",
+                    "known_hosts_file"
+                  ],
+                  "then": {
+                    "properties": {
+                      "private_key_file": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "private_key_file"
+                    ]
+                  }
                 }
               },
               {
@@ -2404,7 +2851,7 @@
                 ]
               },
               "bind_dn": {
-                "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding.",
+                "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. See docs/LDAP.md#binding.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -2434,7 +2881,7 @@
                 "type": "string"
               },
               "command": {
-                "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md.",
+                "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. See docs/SSHEXEC.md.",
                 "items": {
                   "type": [
                     "string",
@@ -2589,7 +3036,7 @@
                 ]
               },
               "count": {
-                "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md.",
+                "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. See docs/ICMP.md.",
                 "maximum": 100,
                 "minimum": 0,
                 "type": "integer"
@@ -2607,7 +3054,7 @@
                 ]
               },
               "db": {
-                "description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md.",
+                "description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. See docs/REDIS.md.",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -4163,7 +4610,7 @@
                 "type": "array"
               },
               "region": {
-                "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md.",
+                "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. See docs/S3FILE.md.",
                 "pattern": "^$|^[A-Za-z0-9_-]+$",
                 "type": "string"
               },
@@ -4390,7 +4837,7 @@
                 "type": "string"
               },
               "send": {
-                "description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md.",
+                "description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. See docs/TCP.md.",
                 "type": [
                   "string",
                   "number",
@@ -4509,7 +4956,7 @@
                 ]
               },
               "snmp_version": {
-                "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. snmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SNMP.md.",
+                "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. See docs/SNMP.md.",
                 "maximum": 3,
                 "minimum": 0,
                 "type": "integer"
@@ -4728,11 +5175,18 @@
                   "graphite",
                   "grpc",
                   "http",
+                  "icmp",
                   "kubernetes",
+                  "ldap",
                   "localfile",
                   "ntp",
+                  "redis",
+                  "s3file",
+                  "snmp",
                   "sql",
+                  "sshexec",
                   "sshfile",
+                  "tcp",
                   "tlscert"
                 ],
                 "type": "string"

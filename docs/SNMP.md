@@ -14,25 +14,7 @@ directory; a MIB, or `snmptranslate -On`, gives the number of a name once,
 when the collector is written ([Finding an object's
 number](#finding-an-objects-number)).
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with snmp](#building-with-snmp)). It needs nothing outside Go's
-standard library.
-
-## Building with snmp
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=snmp              # bin/prometheus-universal-exporter
-docker build --build-arg OPT_IN_REQUEST_TYPES=snmp -t exporter:snmp .
-go build -tags "$(sh tools/request-type-tags.sh '' '' snmp)" .
-```
-
-The tag is `request_type_snmp`. A configuration with an `snmp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+It needs nothing outside Go's standard library.
 
 ## A collector
 

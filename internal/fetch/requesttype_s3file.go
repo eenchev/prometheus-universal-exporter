@@ -1,4 +1,4 @@
-//go:build request_type_s3file
+//go:build !select_request_types || request_type_s3file
 
 package fetch
 
@@ -53,9 +53,9 @@ import (
 //   - allowed_targets and denied_targets name buckets, by name or glob,
 //     since a target is a bucket: the store reached is the configuration's.
 //
-// The type is opt-in: a default build leaves it out, with the AWS SDK it
-// alone of the types imports. This file and s3source.go are built under its
-// tag alone, so only a build that asks for it links the SDK's S3 client.
+// The type is in the default build, with the AWS SDK it alone of the types
+// imports; a build of select_request_types without request_type_s3file
+// links none of the SDK's S3 client.
 
 // S3FileConfig is an s3file collector's own request keys: the region
 // requests are signed for, the URL of an S3-compatible store in place of
@@ -553,7 +553,7 @@ func s3FileSchemaRule() map[string]any {
 // collector's own keys.
 func s3FileKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"region":                 {"pattern": SchemaOptionalPattern(`^[A-Za-z0-9_-]+$`), "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. s3file is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/S3FILE.md."},
+		"region":                 {"pattern": SchemaOptionalPattern(`^[A-Za-z0-9_-]+$`), "description": "s3file: the region requests are signed for, as the store names it, such as eu-west-1, auto for R2. Defaults to the AWS SDK's (AWS_REGION, the shared config), else us-east-1. See docs/S3FILE.md."},
 		"endpoint":               {"pattern": SchemaOptionalPattern(`^https?://[^/?#@]+/?$`), "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores."},
 		"path_style":             {"description": "s3file: name the bucket in the URL's path, endpoint/bucket/key, rather than its host, bucket.endpoint/key, as MinIO and most stores reached by address need. Defaults to false."},
 		"access_key_id_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},

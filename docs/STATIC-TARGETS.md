@@ -78,13 +78,13 @@ collector is looked at):
 | [`tlscert`](TLSCERT.md#static-targets) | the server | `timeout` |
 | [`ntp`](NTP.md#static-targets) | the server | `timeout` |
 | [`kubernetes`](KUBERNETES.md#static-targets) | none at all | `timeout` |
-| [`s3file`](S3FILE.md#static-targets), opt-in | the bucket, required | `path` and `timeout` |
-| [`redis`](REDIS.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
-| [`tcp`](TCP.md#static-targets), opt-in | the service, `host:port`, or a host alone with `ports` or `unix_socket`, required | `timeout`, and its own `tls` |
-| [`ldap`](LDAP.md#static-targets), opt-in | the server, required | `timeout`, and its own account and TLS settings: `bind_dn` and `password_file`, and `tls` |
-| [`sshexec`](SSHEXEC.md#static-targets), opt-in | the host, required | `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file`; nothing of the command |
-| [`icmp`](ICMP.md#static-targets), opt-in | the host, required | `timeout` |
-| [`snmp`](SNMP.md#static-targets), opt-in | the agent, required | `timeout`, `request_timeout` and `retries`, and its own account: `community_file`, or of v3 `username`, `auth_password_file` and `priv_password_file` |
+| [`s3file`](S3FILE.md#static-targets) | the bucket, required | `path` and `timeout` |
+| [`redis`](REDIS.md#static-targets) | the server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
+| [`tcp`](TCP.md#static-targets) | the service, `host:port`, or a host alone with `ports` or `unix_socket`, required | `timeout`, and its own `tls` |
+| [`ldap`](LDAP.md#static-targets) | the server, required | `timeout`, and its own account and TLS settings: `bind_dn` and `password_file`, and `tls` |
+| [`sshexec`](SSHEXEC.md#static-targets) | the host, required | `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file`; nothing of the command |
+| [`icmp`](ICMP.md#static-targets) | the host, required | `timeout` |
+| [`snmp`](SNMP.md#static-targets) | the agent, required | `timeout`, `request_timeout` and `retries`, and its own account: `community_file`, or of v3 `username`, `auth_password_file` and `priv_password_file` |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

@@ -13,25 +13,8 @@ of its own ([With a ping](TCP.md#with-a-ping)).
 The echoes go on an unprivileged ICMP socket, so the exporter needs neither
 root nor `CAP_NET_RAW` ([Permissions](#permissions)).
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with icmp](#building-with-icmp)). It needs nothing outside Go's
-standard library, and runs on Linux and macOS.
-
-## Building with icmp
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=icmp              # bin/prometheus-universal-exporter
-docker build --build-arg OPT_IN_REQUEST_TYPES=icmp -t exporter:icmp .
-go build -tags "$(sh tools/request-type-tags.sh '' '' icmp)" .
-```
-
-The tag is `request_type_icmp`. A configuration with an `icmp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+It needs nothing outside Go's standard library, and runs on Linux and
+macOS.
 
 ## A collector
 
@@ -221,7 +204,6 @@ self-metrics label it `url="icmp://<host>"`.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "icmp", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=icmp` ([Building with icmp](#building-with-icmp)); the published image does not carry it. |
 | `socket: permission denied; ... net.ipv4.ping_group_range` | Set the sysctl for the exporter's group ([Permissions](#permissions)). |
 | `socket: address family not supported by protocol` | The host has no IPv6; set `ip_family: ip4`. |
 | `has no IPv6 address, and request.ip_family is ip6` | The name has no address of that family; set `ip_family` to the other, or `prefer_ip6`. |

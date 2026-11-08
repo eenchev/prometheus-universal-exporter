@@ -144,7 +144,7 @@ since its collector's counters do ([Created timestamps](#created-timestamps)).
 
 <!-- request-types: default -->
 ```text
-http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,http,kubernetes,localfile,ntp,sql,sshfile,tlscert",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,http,icmp,kubernetes,ldap,localfile,ntp,redis,s3file,snmp,sql,sshexec,sshfile,tcp,tlscert",revision="4c1f2e9…",sql_drivers="mysql,postgres,sqlserver",version="v1.4.0"} 1
 ```
 <!-- /request-types -->
 

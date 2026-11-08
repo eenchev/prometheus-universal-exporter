@@ -1,4 +1,8 @@
-//go:build request_type_icmp || request_type_ldap || request_type_redis || request_type_s3file || request_type_snmp || request_type_sshexec || request_type_tcp
+//go:build ignore
+
+// The constraint names every opt-in type of the tree, so the file is built
+// with any of them; with none, it is ignore, built by no build (make
+// new-request-type OPT_IN=1 writes the new type's tag in its place).
 
 package fetch
 

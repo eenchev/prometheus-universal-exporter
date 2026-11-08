@@ -214,7 +214,7 @@ func TestDecoderListsNameEveryDecoder(t *testing.T) {
 // chartSourceNames is, per request type, the words the chart README's
 // opening and Chart.yaml's description, which Artifact Hub shows, use for
 // it. The description is of the image the chart deploys, a default build,
-// so it leaves the opt-in types out.
+// so it leaves an opt-in type out, of which there are none now.
 var chartSourceNames = map[string]struct{ readme, description string }{
 	"http":       {"an HTTP API", "HTTP"},
 	"grpc":       {"a gRPC service", "gRPC"},
@@ -225,14 +225,14 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"dns":        {"a DNS name", "DNS names"},
 	"tlscert":    {"the TLS certificate", "TLS certificates"},
 	"kubernetes": {"Kubernetes objects", "Kubernetes objects"},
-	"s3file":     {"objects in S3", ""},
-	"redis":      {"a Redis or Valkey server", ""},
-	"tcp":        {"a service that answers a line sent over TCP", ""},
-	"ldap":       {"an LDAP directory", ""},
-	"sshexec":    {"a command run on another host over SSH", ""},
+	"s3file":     {"objects in S3", "objects in S3"},
+	"redis":      {"a Redis or Valkey server", "Redis servers"},
+	"tcp":        {"a service that answers a line sent over TCP", "TCP services"},
+	"ldap":       {"an LDAP directory", "LDAP directories"},
+	"sshexec":    {"a command run on another host over SSH", "commands over SSH"},
 	"ntp":        {"the clock of an NTP server", "NTP servers"},
-	"icmp":       {"the echo replies of a host pinged over ICMP", ""},
-	"snmp":       {"an SNMP agent", ""},
+	"icmp":       {"the echo replies of a host pinged over ICMP", "pings"},
+	"snmp":       {"an SNMP agent", "SNMP agents"},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

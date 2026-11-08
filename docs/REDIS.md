@@ -16,39 +16,7 @@ exporter for it is one more thing to run:
 - the primary a Sentinel names now, whichever server that is, and what the
   Sentinel knows of it ([Sentinel](#sentinel)).
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with redis](#building-with-redis)). It needs nothing outside Go's
-standard library.
-
-## Building with redis
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=redis            # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=s3file,redis     # two opt-in types
-docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' redis)" .
-```
-
-The tag is `request_type_redis`, which is all `go build -tags
-request_type_redis .` needs by hand: every type of the default build, and
-`redis`; `-tags request_type_s3file,request_type_redis` adds those two
-opt-in types. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
-request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
-`REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=redis` builds the two, and
-`REQUEST_TYPES` may name `redis` itself, `REQUEST_TYPES=redis` building it
-alone.
-
-A configuration with a `redis` collector is refused by a build without the
-type, at startup, on a reload and by `--dry-run`, saying how to build one
-that has it:
-
-```text
-collector "redis" uses request.type "redis", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. redis is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=redis (make build, or the Dockerfile's build argument), which adds the tag request_type_redis
-```
+It needs nothing outside Go's standard library.
 
 ## A collector
 
@@ -509,7 +477,6 @@ commands.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "redis", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=redis` (see [Building with redis](#building-with-redis)); the published image does not carry it. |
 | `INFO: the server answered: NOAUTH Authentication required.` | The server wants a password: set `password_file`. |
 | `AUTH ***: the server answered: WRONGPASS ...` | The password, or the user: an ACL user needs `username`. |
 | `AUTH ***: the server answered: ERR AUTH <password> called without any password configured ...` | The server wants none: take `password_file` out. |

@@ -24,34 +24,9 @@ settings. Each scrape runs the command in a session of its own on that
 connection. The host needs nothing but an SSH server and an account that
 may run the command; read [Security](#security) before you give it one.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with sshexec](#building-with-sshexec)). It needs Go's SSH client,
-`golang.org/x/crypto/ssh`, and not the SFTP client `sshfile` links: a build
-of `sshexec` alone, or of `sshfile` alone, carries only what it needs.
-
-## Building with sshexec
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=sshexec              # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=sshexec,tcp          # more than one opt-in type
-docker build --build-arg OPT_IN_REQUEST_TYPES=sshexec -t exporter:sshexec .
-go build -tags "$(sh tools/request-type-tags.sh '' '' sshexec)" .
-```
-
-The tag is `request_type_sshexec`, which is all `go build -tags
-request_type_sshexec .` needs by hand: every type of the default build, and
-`sshexec`. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
-request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
-`REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=sshexec` builds the two, and
-`REQUEST_TYPES=sshexec` builds it alone.
-
-A configuration with an `sshexec` collector is refused by a build without
-the type, at startup, on a reload and by `--dry-run`, saying how to build
-one that has it.
+It needs Go's SSH client, `golang.org/x/crypto/ssh`, and not the SFTP
+client `sshfile` links: a build of `sshexec` alone, or of `sshfile` alone,
+carries only what it needs.
 
 ## A collector
 
@@ -391,8 +366,12 @@ need:
   on the status page, not in what `/probe` answers ([Exit status](#exit-status)): a command that complains
   of a file quotes it, and the caller of a probe may be anyone the probe
   endpoint answers.
-- **Opt-in.** The type is in no build that does not ask for it, so an
-  exporter built without it cannot be configured to run commands anywhere.
+- **Only what the configuration says.** The type is in the default build
+  and the published image, so whoever writes the configuration decides
+  whether the exporter runs commands anywhere: no probe parameter names the
+  program, a host's account or a key. A build that must never run one
+  leaves the type out with `REQUEST_TYPES`
+  ([Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)).
 
 The host's key is always verified against `known_hosts_file`, so the
 account's credentials are given to no host that only claims to be the one
@@ -520,7 +499,6 @@ a scrape is labelled `url="ssh://host:port"` and `http_method="EXEC"`.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "sshexec", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=sshexec` (see [Building with sshexec](#building-with-sshexec)); the published image does not carry it. |
 | `the command on ... exited with 127; its stderr began: sh: 1: ...: not found` | The program is not on the account's `PATH`: write its absolute path. |
 | `the command on ... exited with 126` | The program is not executable by the account, or a forced command's wrapper refused the line: compare the debug probe's `Ssh-Command` with the wrapper's list. |
 | `the command on ... exited with 1, and wrote nothing to stderr` | A command whose 1 is an answer, as `grep`'s is: list it in `success_exit_codes`. |

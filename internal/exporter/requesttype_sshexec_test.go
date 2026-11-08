@@ -1,4 +1,4 @@
-//go:build request_type_sshexec
+//go:build !select_request_types || request_type_sshexec
 
 package exporter
 

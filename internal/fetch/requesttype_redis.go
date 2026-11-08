@@ -1,4 +1,4 @@
-//go:build request_type_redis
+//go:build !select_request_types || request_type_redis
 
 package fetch
 
@@ -61,8 +61,8 @@ import (
 // every credential file is, and never shown: a debug report shows AUTH as
 // AUTH user ***.
 //
-// The type is opt-in, built under its tag alone, and imports nothing
-// outside the standard library: the client is the RESP2 of redisresp.go.
+// The type imports nothing outside the standard library: the client is the
+// RESP2 of redisresp.go.
 
 // RedisConfig is a redis collector's own request keys: the logical
 // database selected, 0 when left out, the sections of INFO read, and the
@@ -981,7 +981,7 @@ func redisTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 // collector's own keys.
 func redisKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"db":                     {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
+		"db":                     {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. See docs/REDIS.md."},
 		"info_sections":          {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
 		"info_sections[]":        {"pattern": redisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
 		"commands":               {"description": "redis: read-only commands whose replies the document holds under .commands.<name>, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands."},

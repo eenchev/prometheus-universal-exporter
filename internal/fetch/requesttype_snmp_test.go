@@ -1,4 +1,4 @@
-//go:build request_type_snmp
+//go:build !select_request_types || request_type_snmp
 
 package fetch
 
@@ -556,12 +556,6 @@ func TestAStaticTargetOfAnSNMPCollectorKeepsToItsAccount(t *testing.T) {
 	if warnings := FileWarnings(v2, &model.StaticTarget{Name: "sw", Request: model.TargetRequestConfig{CommunityFile: "/nonexistent/x"}}); len(warnings) != 1 || !strings.Contains(warnings[0], `target "sw"`) {
 		t.Errorf("warnings %v", warnings)
 	}
-}
-
-// The keys the opt-in snmp type takes that no type of a default build does
-// are listed (optInRequestKeys, optInTargetKeys).
-func TestTheSNMPTypesOptInKeysAreListed(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeSNMP)
 }
 
 // A v3 answer is held to the security level of its request: one signed

@@ -1,4 +1,4 @@
-//go:build request_type_icmp
+//go:build !select_request_types || request_type_icmp
 
 package fetch
 
@@ -63,8 +63,8 @@ import (
 // fails the scrape is not being able to ask: a name that does not resolve,
 // an address the target policy refuses, a socket the system does not open.
 //
-// The type is opt-in, built under its tag alone, on Linux and macOS, and
-// imports nothing outside the standard library.
+// The type pings on Linux and macOS, and imports nothing outside the
+// standard library.
 
 // ICMPConfig is an icmp collector's own request keys: how many echoes a
 // scrape sends, 3 when left out, how long apart, 1s, how long the last
@@ -642,7 +642,7 @@ func icmpLostEcho(err error) bool {
 // keys beyond their Go types.
 func icmpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"count":         {"minimum": 0, "maximum": icmpMaxCount, "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md."},
+		"count":         {"minimum": 0, "maximum": icmpMaxCount, "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. See docs/ICMP.md."},
 		"interval":      {"not": SchemaLeastDuration(icmpMinInterval, true), "description": "icmp: how long apart the echoes are sent, at least 10ms; 1s when left out."},
 		"reply_timeout": {"not": SchemaLeastDuration(icmpMinReplyTimeout, true), "description": "icmp: how long the last echo's reply is waited for once it is sent, at least 10ms; 1s when left out. A scrape takes about (count - 1) × interval + reply_timeout, within its deadline."},
 		"all_addresses": {"description": "icmp: ping every address of the target's name, of the families ip_family takes, at most 16, at once, each in the document's addresses and the top of the document of all of them; the first alone when false, the default. See docs/ICMP.md#every-address."},

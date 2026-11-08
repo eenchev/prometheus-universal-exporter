@@ -144,8 +144,9 @@ func TestMakeRunWithoutAnExampleListsThem(t *testing.T) {
 
 // An example of an opt-in request type runs without the user knowing the
 // type: the types its collectors name are added to OPT_IN_REQUEST_TYPES,
-// beside any the command line gives, for every example; examples/tcp is
-// built with tcp, and an unknown example fails before anything is built.
+// beside any the command line gives, for every example, none now, the tree
+// having no opt-in type; examples/tcp is built with those the command line
+// gives, and an unknown example fails before anything is built.
 func TestMakeRunAddsTheOptInTypesAnExampleNeeds(t *testing.T) {
 	optIn := optInRequestTypes(t)
 	tree := shippedExamples(t)
@@ -171,12 +172,12 @@ func TestMakeRunAddsTheOptInTypesAnExampleNeeds(t *testing.T) {
 			t.Errorf("%s: the opt-in types added are %v, want %v", name, got, want)
 		}
 	}
-	if out, err := runExample(t, "opt-in-types", "tcp", "redis,tcp"); err != nil || strings.TrimSpace(out) != "redis,tcp" {
-		t.Errorf("tcp with OPT_IN_REQUEST_TYPES=redis,tcp gives %q (%v), want redis,tcp", out, err)
+	if out, err := runExample(t, "opt-in-types", "tcp", "zzopt,zzother"); err != nil || strings.TrimSpace(out) != "zzopt,zzother" {
+		t.Errorf("tcp with OPT_IN_REQUEST_TYPES=zzopt,zzother gives %q (%v), want zzopt,zzother", out, err)
 	}
-	out, err := runMake(t, t.TempDir(), "-n", "run", "EXAMPLE=tcp")
-	if err != nil || !strings.Contains(out, "sh tools/request-type-tags.sh '' '' 'tcp'") {
-		t.Errorf("make -n run EXAMPLE=tcp does not build with tcp (%v):\n%s", err, out)
+	out, err := runMake(t, t.TempDir(), "-n", "run", "EXAMPLE=tcp", "OPT_IN_REQUEST_TYPES=zzopt")
+	if err != nil || !strings.Contains(out, "sh tools/run-example.sh opt-in-types 'tcp' 'zzopt'") {
+		t.Errorf("make -n run EXAMPLE=tcp OPT_IN_REQUEST_TYPES=zzopt does not pass zzopt on (%v):\n%s", err, out)
 	}
 	out, err = runMake(t, t.TempDir(), "-n", "run", "EXAMPLE=no-such-example")
 	if err == nil || strings.Contains(out, "go build") {
@@ -498,12 +499,13 @@ func TestAnExampleDirectoryMayHaveCollectorFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{
 		"examples/team/config.yaml":           "# curl 'http://localhost:9115/probe?collector=extra&target=http://127.0.0.1:8080'\ncollector_files: ['collectors-*.yaml']\ncollectors:\n" + exampleCollector("main", "http"),
-		"examples/team/collectors-extra.yaml": "collectors:\n" + exampleCollector("extra", "tcp"),
+		"examples/team/collectors-extra.yaml": "collectors:\n" + exampleCollector("extra", "zzopt"),
 		"examples/team/static-targets.yaml":   "interval: 1m\ntargets:\n  - name: one\n    collector: main\n    target: http://127.0.0.1:8080\n",
 		"examples/config.solo.json-test.yaml": "collectors:\n" + exampleCollector("solo", "http"),
 		"bin/prometheus-universal-exporter":   "#!/bin/sh\nfor a in \"$@\"; do echo \"arg: $a\"; done\n",
-		// opt-in-types reads the opt-in types from the tree.
-		"internal/fetch/requesttype_tcp.go": read(t, "internal/fetch/requesttype_tcp.go"),
+		// opt-in-types reads the opt-in types from the tree: one of this
+		// tree's own, the real tree having none.
+		"internal/fetch/requesttype_zzopt.go": "//go:build request_type_zzopt\n\npackage fetch\n",
 	})
 	if err := os.Chmod(filepath.Join(dir, "bin", "prometheus-universal-exporter"), 0o755); err != nil {
 		t.Fatal(err)
@@ -521,8 +523,8 @@ func TestAnExampleDirectoryMayHaveCollectorFiles(t *testing.T) {
 	if out, err := runExampleIn(t, dir, "files", "team"); err != nil || out != "examples/team/config.yaml\nexamples/team/static-targets.yaml\n" {
 		t.Errorf("files team gives (%v):\n%s", err, out)
 	}
-	if out, err := runExampleIn(t, dir, "opt-in-types", "team"); err != nil || strings.TrimSpace(out) != "tcp" {
-		t.Errorf("opt-in-types team gives %q (%v), want tcp from the collector file", out, err)
+	if out, err := runExampleIn(t, dir, "opt-in-types", "team"); err != nil || strings.TrimSpace(out) != "zzopt" {
+		t.Errorf("opt-in-types team gives %q (%v), want zzopt from the collector file", out, err)
 	}
 	out, err = runExampleIn(t, dir, "run", "team", "127.0.0.1", "9115")
 	if err != nil || !strings.Contains(out, "arg: --config.file=examples/team/config.yaml\n") || !strings.Contains(out, "arg: --static-targets-file=examples/team/static-targets.yaml\n") ||

@@ -101,14 +101,11 @@ The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `LXML_VERSION`,
 defaults. Override them with `docker build --build-arg NAME=value`.
 
 `REQUEST_TYPES` is a build argument too, but not a pinned version: empty by
-default, which builds every request type but the opt-in ones, or a
-comma-separated list such as `http` to build only those. See
+default, which builds every request type, or a comma-separated list such as
+`http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
-`OPT_IN_REQUEST_TYPES` adds the opt-in types, which the published image
-leaves out: `s3file` ([Objects in S3](S3FILE.md#building-with-s3file)),
-`redis` ([Redis and Valkey](REDIS.md#building-with-redis)), `tcp`
-([Text protocols over TCP](TCP.md#building-with-tcp)) and `ldap`
-([LDAP directories](LDAP.md#building-with-ldap)).
+`OPT_IN_REQUEST_TYPES` adds opt-in types, which the published image leaves
+out; there are none now.
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
@@ -180,8 +177,8 @@ compiler behind `descriptors: proto`. Only the type's build-tagged files
 import them, so a build without the type does not link them, and a test
 (`TestOnlyTheTypesThatNeedThemLinkTheirModules`) keeps it so. Measured with
 `-trimpath -ldflags="-s -w"` as the image builds, they add about 6 MB: 23.7 MB
-for every type but `sql` against 17.9 MB for
-`REQUEST_TYPES=http,localfile,graphite,sshfile`.
+for `REQUEST_TYPES=http,localfile,graphite,grpc,sshfile,dns,tlscert,ntp,kubernetes`
+against 17.9 MB for `REQUEST_TYPES=http,localfile,graphite,sshfile`.
 Dependabot's Go group and `govulncheck` cover them with no change.
 
 The [`dns`](DNS.md) and [`tlscert`](TLSCERT.md) request types have no
@@ -197,8 +194,7 @@ would add some tens of megabytes to the binary for what a few `GET`s with a
 continue token do. The same test finds none of the other types' modules in a
 build of it.
 
-Nor has the opt-in [`redis`](REDIS.md) request type, which a build carries
-only when `OPT_IN_REQUEST_TYPES` names it: it speaks RESP2, the protocol of
+Nor has the [`redis`](REDIS.md) request type: it speaks RESP2, the protocol of
 Redis and Valkey, over `net` and `crypto/tls` with a client of its own of
 some two hundred lines (`internal/fetch/redisresp.go`), and no Redis client
 library (`github.com/redis/go-redis`, `github.com/gomodule/redigo`), whose
@@ -208,7 +204,7 @@ same test finds none of the other types' modules in a build of it, and the
 stand-in server of its tests (`internal/redistest`) is standard library
 alone too.
 
-Nor has the opt-in [`tcp`](TCP.md) request type: it writes a line and reads
+Nor has the [`tcp`](TCP.md) request type: it writes a line and reads
 the answer with `net` and `crypto/tls`, the protocol being whatever the
 service's text is, which the decoders and transforms read as they read a
 body. A test finds that a build of it alone links no package that a build
@@ -216,8 +212,7 @@ of no request type does not, but the standard library's, and the stand-in
 server of its tests (`internal/testutil`'s `TCPStub`) is standard library
 alone too.
 
-Nor has the opt-in [`ldap`](LDAP.md) request type, which a build carries
-only when `OPT_IN_REQUEST_TYPES` names it: it speaks LDAPv3 over `net` and
+Nor has the [`ldap`](LDAP.md) request type: it speaks LDAPv3 over `net` and
 `crypto/tls` with a client of its own, the BER of the few operations a
 scrape sends and reads (`internal/fetch/ldapber.go`) and a parser of
 RFC 4515 filters (`internal/fetch/ldapfilter.go`), and no LDAP client
@@ -274,16 +269,16 @@ A build without the type links no driver, the default build links the three
 built-in ones and none of the four others, and a build with an opt-in driver
 links its modules and no other's: a test
 (`TestOnlyTheBuildsWithASQLDriverLinkIt`) keeps it so. Measured as the image
-builds, the three built-in drivers add about 6 MB, 29.8 MB for the default
-build against 23.7 MB for one without `sql`, and the four opt-in ones about
-46 MB more: a build with all seven drivers is 76.0 MB, most of it
-Snowflake's. CI vets, builds and
+builds, the three built-in drivers add about 6 MB, 29.8 MB for a build of
+`http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`,
+`ntp` and `kubernetes` against 23.7 MB for the same without `sql`,
+and the four opt-in ones about 46 MB more: that build with all seven
+drivers is 76.0 MB, most of it Snowflake's. CI vets, builds and
 tests a build with all four opt-in drivers, which no other build compiles
 (see [Development](DEVELOPMENT.md#the-sql-request-type)). The stand-in
 database of the tests (`internal/sqltest`) uses `database/sql/driver` alone.
 
-The [`s3file`](S3FILE.md) request type, which a build carries only when
-`OPT_IN_REQUEST_TYPES` names it, has four direct dependencies of its own,
+The [`s3file`](S3FILE.md) request type has four direct dependencies of its own,
 all of the AWS SDK for Go v2: `github.com/aws/aws-sdk-go-v2`, the SDK's
 core, for its configuration and credential types (`aws`);
 `github.com/aws/aws-sdk-go-v2/config`, which finds the region and the
@@ -303,8 +298,8 @@ the S3 client in a build with the type and no AWS module in one without
 it; the `snowflake` driver links the AWS SDK too, its S3 client among it,
 which is that driver's build to carry
 (`TestOnlyTheBuildsWithASQLDriverLinkIt`). Measured as the image builds,
-they add about 6.7 MB: 37.0 MB for the default build with `s3file`
-against 30.3 MB without it. CI vets, builds, lints and tests a build with
-it beside the default build's types, and each build of one type, `s3file`
+they add about 6.7 MB: 37.0 MB for a build of those ten types and
+`s3file` against 30.3 MB without it. CI vets, builds, lints and tests the
+default build, `s3file` among its types, and each build of one type, `s3file`
 among them. The stand-in store of the tests is an `httptest` server answering
 the calls a read makes, in the tests themselves, with no SDK code.

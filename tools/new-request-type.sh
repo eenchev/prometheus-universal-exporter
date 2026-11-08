@@ -128,7 +128,6 @@ need internal/fetch/requesttype_none.go '^//go:build select_request_types'
 need Makefile 'for type in [a-z0-9 ]*; do'
 need Makefile "^	tags=\"\$\$(sh tools/request-type-tags.sh '' '' [a-z0-9,]*)\""
 need .github/workflows/ci.yml '^  request-types:$'
-need .github/workflows/ci.yml '^          args: --build-tags request_type_'
 need README.md '^- \[.*\](docs/[A-Z0-9]*\.md) — the `[a-z0-9]*` request type'
 need docs/CONFIGURATION.md '^- \[[A-Z0-9]*\.md\]([A-Z0-9]*\.md) — the .*`[a-z0-9]*` request type'
 need docs/SPECIFICATION-EXPORTER.md ', with `localfile` and `grpc` above'
@@ -143,7 +142,6 @@ need test/repository/docfacts_test.go '^func TestEveryRequestTypePageNamesTheKey
 
 # The opt-in types as the Makefile builds them, before this one joins.
 oldOptIn=$(sed -n "s/^	tags=\"\$\$(sh tools\/request-type-tags.sh '' '' \([a-z0-9,]*\)).*/\1/p" Makefile | sed -n 1p)
-oldOptInTags=$(sh tools/request-type-tags.sh '' '' "$(printf '%s' "$oldOptIn" | tr ',' '\n' | sort | paste -s -d , -)")
 
 # rewrite FILE COMMAND... replaces FILE by what COMMAND writes reading it,
 # keeping the file's mode.
@@ -530,10 +528,8 @@ defaultTypes=$(for t in $types; do
 done)
 typeWords=$(printf '%s' "$types" | tr '\n' ' ')
 defaultCommas=$(printf '%s' "$defaultTypes" | paste -s -d , -)
-optInCommas=$(printf '%s' "$optInTypes" | paste -s -d , -)
 newOptIn="$oldOptIn"
-[ -z "$optin" ] || newOptIn="${oldOptIn},${name}"
-newOptInTags=$(sh tools/request-type-tags.sh '' '' "$optInCommas")
+[ -z "$optin" ] || newOptIn="${oldOptIn:+${oldOptIn},}${name}"
 
 # internal/fetch/requesttype.go: the constant, knownRequestTypes and, of an
 # opt-in type, optInRequestTypes; gofmt aligns the constants.
@@ -541,7 +537,8 @@ rewrite internal/fetch/requesttype.go awk -v name="$name" -v Title="$Title" -v o
 	prev ~ /^\/\/ The request types in the source tree\.$/ && $0 == "const (" { inConst = 1 }
 	inConst && $0 == ")" { printf "\tRequestType%s = \"%s\"\n", Title, name; inConst = 0 }
 	/^var knownRequestTypes = \[\]string\{.*\}$/ { sub(/\}$/, ", RequestType" Title "}") }
-	optin != "" && /^var optInRequestTypes = \[\]string\{.*\}$/ { sub(/\}$/, ", RequestType" Title "}") }
+	optin != "" && /^var optInRequestTypes = \[\]string\{\}$/ { sub(/\{\}$/, "{RequestType" Title "}") }
+	optin != "" && /^var optInRequestTypes = \[\]string\{.+\}$/ { sub(/\}$/, ", RequestType" Title "}") }
 	{ print; prev = $0 }
 '
 gofmt -w internal/fetch/requesttype.go
@@ -582,10 +579,9 @@ rewrite Makefile awk -v words="${typeWords% }" -v old="'' '' ${oldOptIn})" -v ne
 	{ sub(/for type in [a-z0-9 ]+; do/, "for type in " words "; do"); print replace($0, old, new) }
 '
 
-# ci.yml: the request-types matrix, the builds of every opt-in type, and the
-# lint of their build.
-rewrite .github/workflows/ci.yml awk -v name="$name" -v old="'' '' ${oldOptIn})" -v new="'' '' ${newOptIn})" \
-	-v oldTags="          args: --build-tags ${oldOptInTags}" -v newTags="          args: --build-tags ${newOptInTags}" '
+# ci.yml: the request-types matrix, and the builds and the lint of every
+# opt-in type.
+rewrite .github/workflows/ci.yml awk -v name="$name" -v old="'' '' ${oldOptIn})" -v new="'' '' ${newOptIn})" '
 	function replace(s, from, to,    i, out) {
 		out = ""
 		while ((i = index(s, from)) > 0) { out = out substr(s, 1, i - 1) to; s = substr(s, i + length(from)) }
@@ -600,7 +596,6 @@ rewrite .github/workflows/ci.yml awk -v name="$name" -v old="'' '' ${oldOptIn})"
 		next
 	}
 	inList { if (!done) print "          - " name; done = 1; inList = 0; inJob = 0 }
-	$0 == oldTags { print newTags; next }
 	{ print replace($0, old, new) }
 '
 
@@ -683,8 +678,9 @@ grep -E -q -e "$relatedGroup" docs/CONFIGURATION.md || relatedGroup='^- \[[A-Z0-
 add_after_last docs/CONFIGURATION.md "$relatedGroup" "$relatedLine"
 
 # Spec § 35's list of the request types' pages: a type of the default build
-# before ", and the opt-in" in the lines before the end of the list, an
-# opt-in type last; when the list is written otherwise, at its end with a
+# before ", and the opt-in" in the lines before the end of the list, or last
+# when the list has no opt-in type, and an opt-in type last, the first after
+# ", and the opt-in"; when the list is written otherwise, at its end with a
 # TODO.
 rewrite docs/SPECIFICATION-EXPORTER.md awk -v name="$name" -v NAME="$NAME" -v optin="$optin" '
 	{ lines[NR] = $0 }
@@ -693,12 +689,16 @@ rewrite docs/SPECIFICATION-EXPORTER.md awk -v name="$name" -v NAME="$NAME" -v op
 		item = "`" name "` in `docs/" NAME ".md`"
 		for (n = 1; n <= NR; n++) if (index(lines[n], end) > 0) break
 		placed = 0
-		if (n <= NR && optin == "") {
-			for (k = n; k >= 1 && k > n - 8; k--) if ((i = index(lines[k], ", and the opt-in `")) > 0) {
-				lines[k] = substr(lines[k], 1, i - 1) ", " item substr(lines[k], i)
-				placed = 1
-				break
-			}
+		group = 0
+		for (k = n; n <= NR && k >= 1 && k > n - 8; k--) if (index(lines[k], ", and the opt-in `") > 0) group = k
+		if (group && optin == "") {
+			i = index(lines[group], ", and the opt-in `")
+			lines[group] = substr(lines[group], 1, i - 1) ", " item substr(lines[group], i)
+			placed = 1
+		} else if (n <= NR && optin != "" && !group) {
+			i = index(lines[n], end)
+			lines[n] = substr(lines[n], 1, i - 1) ", and the opt-in " item substr(lines[n], i)
+			placed = 1
 		} else if (n <= NR) {
 			i = index(lines[n], end)
 			head = substr(lines[n], 1, i - 1)

@@ -16,6 +16,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- The default build and the published image carry every request type:
+  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` are no longer opt-in, and
+  the new `icmp` and `snmp` are in them too, so their collectors run on the
+  image as it is, and a build that names one in `OPT_IN_REQUEST_TYPES` now
+  fails, saying the type is in every build: leave the variable empty. The
+  binary is some 7 MB larger, the AWS SDK's S3 client most of it; a build
+  that must not carry a type leaves it out with `REQUEST_TYPES`
+  ([Choosing request types at build time](docs/CONFIGURATION.md#choosing-request-types-at-build-time)).
+- Chart: `Chart.yaml`'s description names every source the image reads, and
+  the README no longer tells you to build an image of your own for the
+  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors.
 - The static target file's `concurrency` slots are shared between its
   collectors: a collector whose targets hang can no longer hold every slot
   and leave the others' targets skipped. Beyond its share, `concurrency`
@@ -98,7 +109,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   renders and requires. `allocator.terminationGracePeriodSeconds` sets the
   allocator pods' grace period, which must cover its peers' shutdown delay
   and its exit ([Shutting down](charts/prometheus-universal-exporter/README.md#shutting-down)).
-- An opt-in `snmp` request type reads SNMP agents, as snmp_exporter does:
+- An `snmp` request type reads SNMP agents, as snmp_exporter does:
   `get` reads objects one by one and `walk` walks tables whole, each by a
   name of the collector's and its numeric identifier, the columns of a
   table merged into rows by their index, with no MIB read. It speaks v1,
@@ -256,7 +267,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   series, `/static-targets?targets=<name>`, and with `--web.debug=full` a
   *debug* link beside it scrapes it once now and reports each stage
   ([Status page](docs/STATIC-TARGETS.md#status-page)).
-- The opt-in `tcp` type speaks UDP (`udp: true`: one datagram sent, the
+- The `tcp` type speaks UDP (`udp: true`: one datagram sent, the
   first back is the answer) and over a Unix socket (`unix_socket`, as an
   `http` collector's), and binary protocols: `send_hex` writes the request's
   bytes, and `answer_bytes` ends an answer of a known length, as Modbus
@@ -265,7 +276,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   a `unix_socket`, so PHP-FPM's status and ping pages, which PHP-FPM serves
   over FastCGI alone, are read as any HTTP answer
   ([FastCGI](docs/REQUESTS.md#fastcgi)).
-- The opt-in `icmp` request type pings a host on an unprivileged ICMP
+- An `icmp` request type pings a host on an unprivileged ICMP
   socket, as `ping` does, and answers how many echoes came back, the loss
   and the round trips as a JSON document; a host that answers nothing is a
   loss of 1, not a failed scrape ([Ping over ICMP](docs/ICMP.md)).

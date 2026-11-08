@@ -12,37 +12,9 @@ writes the metrics, or a status, leaves them in a bucket:
 - the JSON report a backup tool or a data pipeline writes after each run;
 - an export a SaaS product drops into a bucket you own.
 
-The type is opt-in: the default build and the published image leave it out,
-with the AWS SDK it alone needs, so a build carries it only when asked
-([Building with s3file](#building-with-s3file)).
-
-## Building with s3file
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=s3file           # bin/prometheus-universal-exporter
-docker build --build-arg OPT_IN_REQUEST_TYPES=s3file -t exporter:s3file .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file)" .
-```
-
-The tag is `request_type_s3file`, which is all `go build -tags
-request_type_s3file .` needs by hand: every type of the default build, and
-`s3file`. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
-request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
-`REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=s3file` builds the two, and
-`REQUEST_TYPES` may name `s3file` itself, `REQUEST_TYPES=s3file` building it
-alone. A name that is no opt-in type, or a type of every build, fails the
-build. The AWS SDK adds about 6.7 MB to the binary.
-
-A configuration with an `s3file` collector is refused by a build without the
-type, at startup, on a reload and by `--dry-run`, saying how to build one
-that has it:
-
-```text
-collector "backups" uses request.type "s3file", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. s3file is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=s3file (make build, or the Dockerfile's build argument), which adds the tag request_type_s3file
-```
+It needs the AWS SDK's S3 client, which no other type links: a build
+without `s3file` ([Choosing request types at build
+time](CONFIGURATION.md#choosing-request-types-at-build-time)) leaves it out.
 
 ## A collector
 
@@ -378,7 +350,6 @@ placeholders, or the prefix's ending in `/`, and `http_method="READ"`.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "s3file", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=s3file` (see [Building with s3file](#building-with-s3file)); the published image does not carry it. |
 | `file ... does not exist (in s3://...)` | The key: `root`'s prefix and `path` joined, without the leading `/`. A store that answers `403` for a missing object to credentials without `s3:ListBucket` says `access denied` instead. |
 | `the bucket does not exist` | The target's bucket, or the `endpoint` and `region` it is in. |
 | `access denied (403): the credentials need s3:GetObject ...` | The policy of the credentials, or of the bucket; for a prefix, `s3:ListBucket` too. |

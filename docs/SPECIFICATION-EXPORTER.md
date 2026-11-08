@@ -2308,7 +2308,7 @@ flags are known. Its keys:
 | `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, `RRSIG`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
 | `transport` | `udp` | `udp`, `tcp` or `tls`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone; `tls` MUST ask over TLS (RFC 7858), port 853 when `server` names none, verifying the certificate with the `tls` block for `tls.server_name` or else the server's host, and MUST be refused without `server`. |
-| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it. |
+| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it; a defaults block's `tls` MUST apply to a collector with `transport: tls` alone. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
 
 - The record type, server and transport MUST be the collector's alone: no
@@ -3344,7 +3344,7 @@ asked for it carries it. Its keys:
 | --- | --- | --- |
 | `bind_dn` | none | The DN of a simple bind. A DN as RFC 4514 writes one, not blanks alone, no placeholder; only with `password_file`. Without it the bind is anonymous. |
 | `password_file` | none | The file of the bind's password. Not blanks alone; only with `bind_dn`. |
-| `sasl_external` | `false` | A SASL `EXTERNAL` bind in place of the simple one: only with `tls.cert_file` and `key_file`, and MUST be refused beside `bind_dn` or `password_file`. |
+| `sasl_external` | `false` | A SASL `EXTERNAL` bind in place of the simple one: only with `tls.cert_file` and `key_file`, and MUST be refused beside `bind_dn` or `password_file`; a static target of such a collector MUST be refused its own `bind_dn` or `password_file`, and a `tls` block of its own without `cert_file`. |
 | `start_tls` | `false` | Begin TLS with the StartTLS extended operation on a plaintext connection. |
 | `searches` | — | Required, one or more: entries of `name`, `base`, `scope`, `filter`, `attributes`, `count_only` and `max_entries`. |
 | `tls` | none | As `http`'s. |
@@ -31500,7 +31500,7 @@ The chart values and monitors that expose this endpoint are specified in
 ## 34.306 Static target slots are shared between collectors; jq expressions of pages and logins end
 
 - `TestAStaticCollectorAloneHoldsEverySlot` (exporter): one collector takes all four slots of four, and no fifth.
-- `TestASlowStaticCollectorLeavesASlotForTheOthers` (exporter): with eight slots and two collectors one takes seven and not the eighth, which the other takes at once; with three collectors one takes six.
+- `TestASlowStaticCollectorLeavesASlotForTheOthers` (exporter): with eight slots and two collectors one takes seven and not the eighth, which the other takes at once; with three collectors one takes six; with a hundred, one takes four and the others one each.
 - `TestAFreedStaticSlotGoesToACollectorUnderItsShare` (exporter): a slot freed goes to the waiting collector holding fewer, not the one that waited longer; the other's turn comes at the next release.
 - `TestAStaticSlotWaitEndsWithItsScrapeAndAReloadGrants` (exporter): a cancelled wait takes no slot; a larger concurrency grants the waiter.
 - `TestHungTargetsOfOneCollectorLeaveASlotForAnother` (exporter, http): six hung targets of one collector hold three of four slots and another collector's target, due after them, is scraped while they hang.
@@ -31517,6 +31517,7 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADNSCollectorAnswersTheSignaturesOfAName` (fetch, dns): the signatures of an A and an SOA record answer their type covered, algorithm, labels, original TTL, key tag, signer, inception and expiration, the SOA's a day left; the question sets DO, an A question does not; a server refusing EDNS answers FORMERR, asked once.
 - `TestADNSSignaturesTimesWrapAsSerialNumbers` (fetch, dns): 100 seconds before 2^32, an expiration of 50 is 2^32+50 and has 150 seconds left.
 - `TestADNSCollectorAsksOverTLS` (fetch, dns): a question over TLS to a stand-in verified with its CA answers, the server asked over `tls`; without the CA the handshake fails; a server without a port is port 853, one with a port keeps it; `tls` without a server, and a tls block without `transport: tls`, are refused.
+- `TestADefaultTLSBlockAppliesToADNSCollectorOverTLSAlone` (config, http): a defaults block's tls is given to a dns collector over TLS, and not to one over UDP, which is not refused for it.
 
 ## 34.309 An s3file collector's checksums are optional
 
@@ -31526,6 +31527,7 @@ The chart values and monitors that expose this endpoint are specified in
 ## 34.310 An ldap collector binds as its client certificate
 
 - `TestAnLDAPCollectorBindsAsItsClientCertificate` (fetch, ldap): over ldaps:// and after StartTLS the bind is SASL EXTERNAL, with no DN or password, over TLS, the server seeing the client certificate `exporter`; a bind the server refuses fails the scrape naming `BIND SASL EXTERNAL`; `sasl_external` without a certificate, and beside `bind_dn`, are refused.
+- `TestAStaticTargetOfASASLExternalCollectorKeepsToTheCertificate` (fetch, ldap): a static target's own `bind_dn` and `password_file`, and its own tls block without a certificate, are refused; one with its own certificate is taken.
 
 ## 34.311 A grpc collector lists every service's health
 
@@ -33749,7 +33751,7 @@ start after it and to those waiting. The slots MUST be shared between the
 collectors the document names: a collector MUST be able to take a slot
 while it holds fewer than its share, `concurrency` divided by the number of
 collectors, at least one; beyond its share it MUST take one only while one
-stays free for every other collector holding none; a slot freed MUST go to
+stays free for every other collector holding none, half the slots at most; a slot freed MUST go to
 the waiting target whose collector holds the fewest, the first to wait of
 those. A
 panic during a static target scrape MUST NOT end the process: it MUST be

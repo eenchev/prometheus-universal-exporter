@@ -201,6 +201,11 @@ type RequestType struct {
 	// of files read at a request, which the configuration's loading does not
 	// read. Unset, nothing is read.
 	CheckFiles func(c *model.Collector, t *model.StaticTarget) []string
+	// DefaultApplies says whether a request key of a defaults block the
+	// type takes, by its top name, applies to c as its own keys leave it:
+	// dns takes tls for transport tls alone. Unset, every key it takes
+	// applies.
+	DefaultApplies func(c *model.Collector, key string) bool
 	// URLPath says the type's path is a URL path, joined onto the target,
 	// which can hold no query or fragment; localfile's is a file's.
 	URLPath bool
@@ -419,6 +424,16 @@ func CollectorPools(requestType, collector string) PoolStats {
 		return rt.ConnectionPools(collector)
 	}
 	return PoolStats{}
+}
+
+// DefaultKeyApplies says whether a request key of a defaults block, by its
+// top name, applies to c, whose request type takes it
+// (RequestType.DefaultApplies).
+func DefaultKeyApplies(c *model.Collector, key string) bool {
+	if rt := requestTypeOf(c); rt != nil && rt.DefaultApplies != nil {
+		return rt.DefaultApplies(c, key)
+	}
+	return true
 }
 
 // FileWarnings reads the files the request of c names, or of the static

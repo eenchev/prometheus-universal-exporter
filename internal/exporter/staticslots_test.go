@@ -56,6 +56,19 @@ func TestASlowStaticCollectorLeavesASlotForTheOthers(t *testing.T) {
 	}
 	takeAll(t, s3, "http", 1)
 	takeAll(t, s3, "dns", 1)
+	// Of a hundred collectors and eight slots, one of them busy alone
+	// takes half the slots, not one: the other half stays for the others.
+	many := newStaticSlots()
+	many.shape(8, 100)
+	takeAll(t, many, "sql", 4)
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel3()
+	if err := many.acquire(ctx3, "sql"); err == nil {
+		t.Error("one collector of a hundred took a fifth slot of eight")
+	}
+	for _, other := range []string{"a", "b", "c", "d"} {
+		takeAll(t, many, other, 1)
+	}
 }
 
 // A slot freed goes to the waiting scrape whose collector holds the fewest,

@@ -480,6 +480,17 @@ func checkLDAPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 			return fmt.Errorf("sets request.password_file without request.bind_dn, and collector %q binds anonymously; a password is sent with the DN of its account, so name it in bind_dn beside it", c.Name)
 		}
 	}
+	if ldapRequest(c).SASLExternal {
+		// The collector binds as its client certificate: a target's own
+		// account would not be used, and a tls block of its own, which
+		// replaces the collector's whole, must present a certificate.
+		switch {
+		case r.BindDN != "" || r.PasswordFile != "":
+			return fmt.Errorf("sets request.bind_dn or request.password_file of its own, but collector %q binds with request.sasl_external, as its client certificate; give the target a tls block with its own cert_file and key_file instead", c.Name)
+		case r.TLS != nil && r.TLS.CertFile == "":
+			return fmt.Errorf("sets request.tls of its own without cert_file and key_file, which replaces collector %q's, whose request.sasl_external binds as the client certificate; name the target's certificate in it", c.Name)
+		}
+	}
 	if err := checkTargetTLS(t); err != nil {
 		return err
 	}

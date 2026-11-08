@@ -411,7 +411,7 @@ func staticCollectors(targets []model.StaticTarget) int {
 // targets endpoint, and queued for the OTLP export loop for a target with
 // export_via_otlp. At most the file's concurrency are scraped at once, the
 // slots shared between the collectors (staticslots.go); a reload that
-// changes it applies to the scrapes that start after it.
+// changes it applies to the scrapes waiting and those that start after it.
 func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
 	slots := newStaticSlots()

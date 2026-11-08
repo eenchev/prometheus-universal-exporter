@@ -170,7 +170,9 @@ request:
 ```
 
 `sasl_external` needs the client certificate, and is refused beside
-`bind_dn` or `password_file`. The certificate makes the connection TLS: an
+`bind_dn` or `password_file`; so is a static target's own `bind_dn` or
+`password_file`, and a static target's own `tls` block, which replaces the
+collector's whole, names its own certificate. The certificate makes the connection TLS: an
 `ldaps://` target or `start_tls`, as for any `tls` block. A server that saw
 no certificate, or maps it to no account, answers the bind
 `inappropriateAuthentication` or `invalidCredentials`, which fails the

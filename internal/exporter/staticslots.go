@@ -18,15 +18,17 @@ import (
 //   - each collector may hold its share, concurrency divided by the number
 //     of collectors the file names, at least one, whenever it asks;
 //   - beyond its share it takes a slot only while that leaves one free for
-//     every other collector holding none, so that a collector that comes
-//     for a slot finds one at once, however the others' targets behave;
+//     every other collector holding none, half the slots at most, so that a
+//     collector that comes for a slot finds one at once, however the
+//     others' targets behave;
 //   - a slot freed goes to the scrape waiting whose collector holds the
 //     fewest, the first to wait of those, so a collector with many slots
 //     does not take it from one with few.
 //
 // A file of a single collector, and one whose collectors are all busy
 // within their shares, uses every slot, as before. A file of more
-// collectors than slots gives each one slot at least.
+// collectors than slots gives each one slot at least, and lets one take
+// half of them while the others are idle.
 
 // staticSlots are the static target file's slots.
 type staticSlots struct {
@@ -70,14 +72,15 @@ func (s *staticSlots) mayTakeLocked(collector string) bool {
 		return true
 	}
 	// Beyond its share: one slot stays free for each other collector the
-	// file names that holds none.
+	// file names that holds none, half the slots at most, so that a file
+	// of more collectors than slots still lets one collector run several.
 	holding := 0
 	for name, n := range s.held {
 		if name != collector && n > 0 {
 			holding++
 		}
 	}
-	idle := max(0, s.collectors-1-holding)
+	idle := min(max(0, s.collectors-1-holding), s.limit/2)
 	return free-1 >= idle
 }
 

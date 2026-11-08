@@ -77,3 +77,29 @@ func TestAnLDAPCollectorBindsAsItsClientCertificate(t *testing.T) {
 		}
 	}
 }
+
+// A static target of a collector binding with sasl_external is refused
+// its own bind_dn and password_file, which would not be used, and a tls
+// block of its own without a certificate, which replaces the collector's.
+func TestAStaticTargetOfASASLExternalCollectorKeepsToTheCertificate(t *testing.T) {
+	certFile, keyFile := ldaptest.WriteClientCertificate(t, "exporter")
+	c := ldapCollector(t, func(c *model.Collector) {
+		c.Request.TLS = model.TLSConfig{CertFile: certFile, KeyFile: keyFile}
+		editLDAP(c, func(r *LDAPConfig) { r.SASLExternal = true })
+	})
+	for name, tc := range map[string]struct {
+		request model.TargetRequestConfig
+		want    string
+	}{
+		"its own account":            {model.TargetRequestConfig{BindDN: "cn=x,dc=example,dc=org", PasswordFile: "/p"}, "binds with request.sasl_external"},
+		"a tls block without a cert": {model.TargetRequestConfig{TLS: &model.TLSConfig{CAFile: "/ca"}}, "without cert_file and key_file"},
+	} {
+		err := checkLDAPTargetRequest(c, &model.StaticTarget{Name: "t", Collector: c.Name, Target: "ldaps://ldap.example.org", Request: tc.request})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := checkLDAPTargetRequest(c, &model.StaticTarget{Name: "t", Collector: c.Name, Target: "ldaps://ldap.example.org", Request: model.TargetRequestConfig{TLS: &model.TLSConfig{CertFile: certFile, KeyFile: keyFile}}}); err != nil {
+		t.Errorf("a target's own certificate: %v", err)
+	}
+}

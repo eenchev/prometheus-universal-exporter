@@ -20,7 +20,7 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   collectors: a collector whose targets hang can no longer hold every slot
   and leave the others' targets skipped. Beyond its share, `concurrency`
   divided by the collectors, a collector leaves a slot free for each other
-  collector holding none
+  collector holding none, half the slots at most
   ([Static targets](docs/STATIC-TARGETS.md)).
 - A `dns` collector asks its question with a client of its own rather than
   Go's resolver. A `SERVFAIL`, `REFUSED` or other response code is now the

@@ -562,3 +562,16 @@ func TestACollectorTurnsOffTheBackoffOfItsDefaults(t *testing.T) {
 		})
 	}
 }
+
+// A defaults block's tls applies to a dns collector asking over TLS alone:
+// one asking over UDP is not given it, and is not refused for it.
+func TestADefaultTLSBlockAppliesToADNSCollectorOverTLSAlone(t *testing.T) {
+	dot := "  - name: dot\n    request: {type: dns, transport: tls, server: dns.example.com}\n    transform: {type: jq}\n    metrics:\n      - name: dot_value\n        expression: .answers | length\n"
+	c, err := Load(testutil.WriteFile(t, "config.yaml", "defaults:\n  request:\n    tls: {ca_file: /etc/ca.pem}\ncollectors:\n"+dot+defaultsCollector("names", "dns")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collectorNamed(t, c, "dot").Request.TLS.CAFile != "/etc/ca.pem" || collectorNamed(t, c, "names").Request.TLS.Set {
+		t.Errorf("dot %+v, names %+v", collectorNamed(t, c, "dot").Request.TLS, collectorNamed(t, c, "names").Request.TLS)
+	}
+}

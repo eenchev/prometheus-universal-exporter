@@ -107,3 +107,25 @@ func probed(exp *exporter.Server, collector string) string {
 	exp.Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/probe?collector="+collector, nil))
 	return r.Body.String()
 }
+
+// Every kubernetesAccess snippet of docs/KUBERNETES.md renders with the
+// chart as written, and grants something: the grant beside each example
+// is one the chart takes.
+func TestTheKubernetesPagesGrantsRender(t *testing.T) {
+	helm := requireHelm(t)
+	found := 0
+	for _, block := range pageBlocks(t, "docs/KUBERNETES.md", "yaml") {
+		if !strings.HasPrefix(block, "kubernetesAccess:\n") {
+			continue
+		}
+		found++
+		values := testutil.WriteIn(t, t.TempDir(), "values.yaml", block)
+		out, ok := helmTemplate(t, helm, chartDir, "-f", values)
+		if !ok || !strings.Contains(out, "kind: ClusterRole") && !strings.Contains(out, "kind: Role") {
+			t.Errorf("the grant\n%s\ndoes not render a Role:\n%s", block, out)
+		}
+	}
+	if found < 6 {
+		t.Errorf("found %d grants in docs/KUBERNETES.md, want one beside each example that needs it", found)
+	}
+}

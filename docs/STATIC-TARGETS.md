@@ -429,16 +429,18 @@ and leave every other collector's targets skipped turn after turn:
 - each collector may hold its share, `concurrency` divided by the number of
   collectors the file names, one at least, whenever its targets are due;
 - beyond its share it takes a slot only while that leaves one free for every
-  other collector that holds none, so a collector whose target comes due
-  finds a slot at once, however the others' targets behave;
+  other collector that holds none, half the slots at most, so a collector
+  whose target comes due finds a slot at once, however the others' targets
+  behave;
 - a slot freed goes to the waiting target whose collector holds the fewest.
 
 A file of one collector uses every slot, as do collectors busy within their
 shares. With 100 `http` targets and 100 `sql` targets, eight slots and the
 database hanging, the `sql` targets hold seven slots at most and the `http`
-targets keep being scraped. Set `concurrency` to at least the number of
-collectors the file names, or each holds one slot at most while the others
-are busy.
+targets keep being scraped. With more collectors than slots, each holds
+one at least and one busy alone takes half of them; set `concurrency` to
+at least the number of collectors the file names for each to have a
+share of its own.
 
 Retries come from the collector's `request.retry`, and each key a target's own
 `request.retry` sets replaces the collector's, as the `retry_attempts` and

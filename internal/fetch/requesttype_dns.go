@@ -86,6 +86,11 @@ func init() {
 			return unusedParamsIn(c, unused, "its label values")
 		},
 		Stage: "dns",
+		// A defaults block's tls is a dns collector's for DNS over TLS
+		// alone: a file of http and dns collectors shares one.
+		DefaultApplies: func(c *model.Collector, key string) bool {
+			return key != "tls" || dnsRequest(c).Transport == dnsTLS
+		},
 	})
 }
 

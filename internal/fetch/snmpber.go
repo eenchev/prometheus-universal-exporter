@@ -224,18 +224,20 @@ func snmpOIDValue(content []byte) (snmpOID, error) {
 	if len(content) == 0 {
 		return nil, errors.New("an object identifier of no byte")
 	}
-	var arcs []uint64
+	var arcs []uint32
 	var arc uint64
 	for i, b := range content {
 		if arc == 0 && b == 0x80 {
 			return nil, errors.New("an object identifier with an arc of a leading 0x80")
 		}
 		arc = arc<<7 | uint64(b&0x7f)
-		if arc > 0xffffffff+80 {
+		// The first two arcs together are at most 4294967295 too, as
+		// they are written again when a walk asks for what comes after.
+		if arc > 0xffffffff {
 			return nil, errors.New("an object identifier with an arc above 4294967295")
 		}
 		if b&0x80 == 0 {
-			arcs = append(arcs, arc)
+			arcs = append(arcs, uint32(arc))
 			arc = 0
 		} else if i == len(content)-1 {
 			return nil, errors.New("an object identifier whose last arc does not end")
@@ -245,19 +247,13 @@ func snmpOIDValue(content []byte) (snmpOID, error) {
 	oid := make(snmpOID, 0, len(arcs)+1)
 	switch {
 	case first < 40:
-		oid = append(oid, 0, uint32(first))
+		oid = append(oid, 0, first)
 	case first < 80:
-		oid = append(oid, 1, uint32(first-40))
+		oid = append(oid, 1, first-40)
 	default:
-		oid = append(oid, 2, uint32(first-80)) //nolint:gosec // G115: bounded above
+		oid = append(oid, 2, first-80)
 	}
-	for _, a := range arcs[1:] {
-		if a > 0xffffffff {
-			return nil, errors.New("an object identifier with an arc above 4294967295")
-		}
-		oid = append(oid, uint32(a))
-	}
-	return oid, nil
+	return append(oid, arcs[1:]...), nil
 }
 
 // snmpOID is an object identifier, its arcs in order.

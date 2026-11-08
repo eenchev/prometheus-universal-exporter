@@ -2577,7 +2577,9 @@ named by the collector and numbered by their identifiers. Its keys:
   table and of a column MUST be letters, digits and `_`, not beginning with
   a digit; a column MUST NOT be named `index`; an identifier MUST be
   numbers by dots, a leading dot taken, of 2 to 128 arcs, the first 0, 1 or
-  2, the second below 40 under 0 and 1, each at most 4294967295; an object
+  2, the second below 40 under 0 and 1, each at most 4294967295, and an
+  identifier an agent sends whose arcs, the first two together among them,
+  are past it MUST fail the scrape; an object
   of `get` named twice and a name of `hex` of no object MUST be refused at
   load.
 - A key of one version's account MUST be refused with another's: v3's keys
@@ -2595,8 +2597,11 @@ named by the collector and numbered by their identifiers. Its keys:
 - The requests MUST go over one UDP socket of the scrape. A request
   unanswered within `request_timeout`, or the scrape's deadline when sooner,
   MUST be sent again, `retries` times, and a scrape with none answered MUST
-  fail saying how many were sent and how long each waited; a datagram that
-  is not the answer, by its request-id, of v3 its msgID, MUST be ignored. A
+  fail saying how many were sent and how long each waited, or, when the
+  scrape's deadline came, with the deadline's error, sending nothing more; a
+  datagram that is not the answer, by its request-id, of v3 its msgID, MUST
+  be ignored, and an answer to any sending of the request, an earlier one's
+  coming late included, MUST be taken. A
   read the system refuses, as an ICMP port unreachable makes it, MUST fail
   the scrape saying no agent listens.
 - `get` MUST be asked with GetRequest, at most 32 objects a request in the
@@ -2641,7 +2646,8 @@ named by the collector and numbered by their identifiers. Its keys:
   the protocol over the message, its authentication parameters zeros,
   truncated to 12 bytes for MD5 and SHA, 16, 24, 32 and 48 for SHA224 to
   SHA512 (RFC 7860), and an answer MUST be signed alike and be checked,
-  one signed wrong failing the scrape and one unsigned failing it too. With
+  one signed wrong failing the scrape and one unsigned failing it too, as
+  one in the clear to a request of `authPriv` MUST. With
   `authPriv` the scoped PDU MUST be encrypted: DES-CBC under the first 8
   bytes of the privacy key, its IV the next 8 XOR a salt of the boots and a
   counter, padded to whole blocks (RFC 3414 § 8); AES-CFB-128 under its
@@ -31734,6 +31740,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestSNMPv3KeysAreRFC3414s` (fetch, snmp): `maplesyrup` gives RFC 3414 § A.3's keys of MD5 and SHA, made and localized; an MD5 key extended for AES-256 by either way is 32 bytes, its first 16 the localized key, the two ways different.
 - `TestAnSNMPv3CollectorReadsAtEachSecurityLevel` (fetch, snmp): against a stand-in agent written apart from the exporter's encoding, a user of noAuthNoPriv, of authNoPriv with each of the six authentication protocols, and of authPriv with MD5, SHA and SHA512 and each of the six privacy protocols reads an object and a table after discovery, the document naming the engine.
 - `TestAnSNMPv3RequestTheAgentRefusesSaysWhy` (fetch, snmp): a Report of the time window has the request sent again and answered, the trace's `DISCOVER` naming the engine and the user; an unknown user, a wrong authentication or privacy password and another level fail naming the Report's counter; a short and an empty password file fail naming why.
+- `TestAnSNMPv3AnswerIsHeldToTheRequestsSecurityLevel` (fetch, snmp): an answer signed but in the clear, to a request of authPriv, fails saying it was not encrypted.
+- `TestAnSNMPAnswerToAnEarlierSendingIsTaken` (fetch, snmp): a v3 discovery answered after it was sent again, to the first sending's msgID, is taken, 3 requests in all.
+- `TestAnSNMPScrapeEndsAtItsDeadline` (fetch, snmp): a deadline that comes before the context says it is done fails the scrape with the deadline's error after 1 request.
+- `TestAnSNMPIdentifierOfAnArcTooLargeIsRefused` (fetch, snmp): an identifier whose first two arcs together, or another arc, are past 4294967295, and one whose last arc does not end, are refused; 4294967295 itself is read.
 - `TestAnSNMPCollectorsKeysAreChecked` (fetch, snmp): each refusal of a key of the account, of an object and of a limit, a key of another type and a tls block; the defaults; and the forms of a target.
 - `TestAStaticTargetOfAnSNMPCollectorKeepsToItsAccount` (fetch, snmp): a target's own account goes with its collector's version and level, its `request_timeout` and `retries` with the collector's bounds; `--dry-run` warns of a missing community file of the collector and of a target.
 - `TestAnSNMPCollectorProbe`, `TestADebugProbeOfAnSNMPCollector` and `TestAnSNMPCollectorsDocumentInPython` (exporter, snmp): a probe gives the uptime and each interface's state and octets; the verbose self-metrics label it `WALK` and `snmp://`; the debug report shows the `GET` and the `WALK` and the document; a target with a scheme is 400, a refused one 403, a silent agent 502 in the snmp stage; a python script reads the rows.

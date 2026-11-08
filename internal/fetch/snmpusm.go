@@ -32,7 +32,7 @@ type snmpAuth struct {
 }
 
 // snmpAuths are the authentication protocols by their names in the
-// configuration, as net-snmp's snmpget -a writes them.
+// configuration, as snmp_exporter names them.
 var snmpAuths = map[string]snmpAuth{
 	"MD5":    {"MD5", md5.New, 12},
 	"SHA":    {"SHA", sha1.New, 12},

@@ -43,6 +43,7 @@ type SNMPAgent struct {
 	got     int
 	dropped int
 	skewed  bool
+	late    time.Time
 	pdus    []string
 	wg      sync.WaitGroup
 }
@@ -70,6 +71,13 @@ type SNMPAgentConfig struct {
 	// V1 makes the agent an SNMPv1 one, which answers no GetBulk and
 	// reports a missing object with noSuchName.
 	V1 bool
+	// Unencrypted answers an encrypted v3 request signed but in the
+	// clear, as an agent of a lower security level than asked would.
+	Unencrypted bool
+	// Late answers the first datagram after this long, and drops every
+	// datagram that comes while that answer waits, as a slow agent whose
+	// first answer comes after the request was sent again.
+	Late time.Duration
 }
 
 // SNMPAgentUser is an SNMPv3 user: its authentication protocol (MD5,
@@ -176,9 +184,29 @@ func (a *SNMPAgent) serve() {
 		if drop {
 			continue
 		}
-		if reply := a.answer(append([]byte{}, buf[:n]...)); reply != nil {
-			_, _ = a.conn.WriteToUDP(reply, from)
+		a.mu.Lock()
+		first, pending := a.got == 1 && a.config.Late > 0, time.Now().Before(a.late)
+		if first {
+			a.late = time.Now().Add(a.config.Late)
 		}
+		a.mu.Unlock()
+		if pending {
+			continue
+		}
+		reply := a.answer(append([]byte{}, buf[:n]...))
+		if reply == nil {
+			continue
+		}
+		if first {
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				time.Sleep(a.config.Late)
+				_, _ = a.conn.WriteToUDP(reply, from)
+			}()
+			continue
+		}
+		_, _ = a.conn.WriteToUDP(reply, from)
 	}
 }
 
@@ -683,6 +711,9 @@ func (a *SNMPAgent) answerV3(msg []byte, parts []agentNode) []byte {
 	pdu, ok := a.respond(scoped, inner[2])
 	if !ok {
 		return nil
+	}
+	if a.config.Unencrypted {
+		flags &^= 2
 	}
 	return send(flags&3, user, pdu)
 }

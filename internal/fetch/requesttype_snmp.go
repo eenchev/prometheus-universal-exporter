@@ -4,6 +4,7 @@ package fetch
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -183,14 +184,14 @@ func (snmpRequester) Validate(c *model.Collector) error {
 	if err := validateSNMPObjects(c.Name, r); err != nil {
 		return err
 	}
+	if r.MaxRepetitions != 0 && r.Version == 1 {
+		return fmt.Errorf("collector %q sets request.max_repetitions with snmp_version 1; SNMPv1 has no GetBulk, and walks with GetNext, one value a request", c.Name)
+	}
 	switch {
 	case r.MaxRepetitions == 0:
 		r.MaxRepetitions = snmpDefaultMaxRepetitions
 	case r.MaxRepetitions < 0 || r.MaxRepetitions > snmpMaxMaxRepetitions:
 		return fmt.Errorf("collector %q request.max_repetitions is %d; it is how many values a GetBulk asks for, from 1 to %d", c.Name, r.MaxRepetitions, snmpMaxMaxRepetitions)
-	}
-	if r.MaxRepetitions != snmpDefaultMaxRepetitions && r.Version == 1 {
-		return fmt.Errorf("collector %q sets request.max_repetitions with snmp_version 1; SNMPv1 has no GetBulk, and walks with GetNext, one value a request", c.Name)
 	}
 	switch {
 	case r.RequestTimeout == 0:
@@ -761,11 +762,15 @@ func (s *snmpSession) exchange(ctx context.Context, tag byte, a, b int, oids []s
 	requestID := snmpRequestID()
 	pdu := snmpPDUBytes(tag, requestID, a, b, oids)
 	buf := make([]byte, snmpMaxMessage)
+	// The msgIDs of v3 the request was sent with, each sending its own: an
+	// answer to an earlier one that comes late is the answer still.
+	var msgIDs []int64
 	for attempt := 0; attempt <= s.retries; attempt++ {
 		message, msgID, err := s.encode(pdu)
 		if err != nil {
 			return snmpPDU{}, err
 		}
+		msgIDs = append(msgIDs, msgID)
 		s.requests++
 		if _, err := s.conn.Write(message); err != nil {
 			return snmpPDU{}, snmpFailure(ctx, fmt.Errorf("sending a request to %s: %w", s.address.hostPort, err))
@@ -782,13 +787,19 @@ func (s *snmpSession) exchange(ctx context.Context, tag byte, a, b int, oids []s
 					return snmpPDU{}, snmpFailure(ctx, fmt.Errorf("waiting for the answer of %s, %d requests sent: %w", s.address.hostPort, attempt+1, err))
 				}
 				if errors.Is(err, os.ErrDeadlineExceeded) {
+					// The scrape's deadline, which the socket's can reach
+					// before the context's timer says so, ends the
+					// requests as the deadline's.
+					if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+						return snmpPDU{}, fmt.Errorf("waiting for the answer of %s, %d requests sent: %w", s.address.hostPort, attempt+1, context.DeadlineExceeded)
+					}
 					break
 				}
 				// An ICMP port unreachable, which a connected socket
 				// reads as a refusal: nothing listens on the port.
 				return snmpPDU{}, fmt.Errorf("reading the answer of %s: %w; no agent listens on the port", s.address.hostPort, err)
 			}
-			got, err := s.decode(buf[:n], msgID, requestID)
+			got, err := s.decode(buf[:n], msgIDs, requestID)
 			if errors.Is(err, errSNMPIgnore) {
 				continue
 			}
@@ -920,7 +931,7 @@ func (s *snmpSession) discover(ctx context.Context) error {
 // of v3 its signature checked and its scoped PDU decrypted, and the
 // engine's ID, boots and time taken from discovery's Report and from a
 // Report of the time window.
-func (s *snmpSession) decode(msg []byte, msgID, requestID int64) (snmpPDU, error) {
+func (s *snmpSession) decode(msg []byte, msgIDs []int64, requestID int64) (snmpPDU, error) {
 	start, end, err := snmpExpect(msg, 0, len(msg), snmpSequence, "the message")
 	if err != nil {
 		return snmpPDU{}, errSNMPIgnore
@@ -952,7 +963,7 @@ func (s *snmpSession) decode(msg []byte, msgID, requestID int64) (snmpPDU, error
 	if version != 3 {
 		return snmpPDU{}, errSNMPIgnore
 	}
-	return s.decodeV3(msg, pos, end, msgID, requestID)
+	return s.decodeV3(msg, pos, end, msgIDs, requestID)
 }
 
 // malformed is the failure of an answer that is not SNMP as it should be.
@@ -961,7 +972,7 @@ func (s *snmpSession) malformed(err error) error {
 }
 
 // decodeV3 reads the rest of a v3 message, from pos.
-func (s *snmpSession) decodeV3(msg []byte, pos, end int, msgID, requestID int64) (snmpPDU, error) {
+func (s *snmpSession) decodeV3(msg []byte, pos, end int, msgIDs []int64, requestID int64) (snmpPDU, error) {
 	gStart, gEnd, err := snmpExpect(msg, pos, end, snmpSequence, "the global data")
 	if err != nil {
 		return snmpPDU{}, s.malformed(err)
@@ -970,7 +981,7 @@ func (s *snmpSession) decodeV3(msg []byte, pos, end int, msgID, requestID int64)
 	if err != nil {
 		return snmpPDU{}, s.malformed(err)
 	}
-	if gotID != msgID {
+	if !slices.Contains(msgIDs, gotID) {
 		return snmpPDU{}, errSNMPIgnore
 	}
 	_, at, err = snmpIntAt(msg, at, gEnd, "the msgMaxSize")
@@ -1017,7 +1028,7 @@ func (s *snmpSession) decodeV3(msg []byte, pos, end int, msgID, requestID int64)
 		}
 		zeroed := append([]byte{}, msg...)
 		clear(zeroed[fields[4][0]:fields[4][1]])
-		if want := snmpSign(*s.auth, s.authKey, zeroed); string(msg[fields[4][0]:fields[4][1]]) != string(want) {
+		if want := snmpSign(*s.auth, s.authKey, zeroed); !hmac.Equal(msg[fields[4][0]:fields[4][1]], want) {
 			return snmpPDU{}, fmt.Errorf("the answer of %s is signed wrong; the agent's key for the user is not the one request.auth_password_file makes, or the answer was changed on the way", s.address.hostPort)
 		}
 	}
@@ -1084,6 +1095,9 @@ func (s *snmpSession) decodeV3(msg []byte, pos, end int, msgID, requestID int64)
 	}
 	if s.auth != nil && flags&0x01 == 0 {
 		return snmpPDU{}, fmt.Errorf("the agent at %s answered without signing its answer, which security_level %s asks of it", s.address.hostPort, s.r.SecurityLevel)
+	}
+	if s.priv != nil && flags&0x02 == 0 {
+		return snmpPDU{}, fmt.Errorf("the agent at %s answered without encrypting its answer, which security_level %s asks of it", s.address.hostPort, s.r.SecurityLevel)
 	}
 	return pdu, nil
 }

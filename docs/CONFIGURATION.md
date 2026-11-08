@@ -3086,14 +3086,17 @@ go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshe
 ```
 
 Its tag alone, `request_type_s3file`, `request_type_redis`,
-`request_type_tcp`, `request_type_ldap` or `request_type_sshexec`, adds a type to a default build, and the tags together
+`request_type_tcp`, `request_type_ldap`, `request_type_sshexec`,
+`request_type_icmp` or `request_type_snmp`, adds a type to a default build, and the tags together
 each of them. A collector of an opt-in type is refused by a build without it
 with a message that says the type is opt-in and how to build with it
 ([Building with s3file](S3FILE.md#building-with-s3file), [Building with
 redis](REDIS.md#building-with-redis), [Building with
 tcp](TCP.md#building-with-tcp), [Building with
 ldap](LDAP.md#building-with-ldap), [Building with
-sshexec](SSHEXEC.md#building-with-sshexec)).
+sshexec](SSHEXEC.md#building-with-sshexec), [Building with
+icmp](ICMP.md#building-with-icmp), [Building with
+snmp](SNMP.md#building-with-snmp)).
 
 ### When a metric cannot be extracted
 

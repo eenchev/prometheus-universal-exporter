@@ -281,8 +281,9 @@ collectors:
 | `priv_password_file` | With `authPriv`, **required**: the file of the privacy password, at least 8 characters. |
 | `context_name` | The context the objects are read in; the default context when left out. |
 
-The names are those of net-snmp's `snmpget -a` and `-x`, and of the agent's
-configuration. A key the level does not use is refused at load, as is a v3
+The names are snmp_exporter's: net-snmp's `snmpget -a` writes the SHA-2
+ones with a dash, `SHA-256`, and `-x` the AES ones `AES-192` and `AES-256`.
+A key the level does not use is refused at load, as is a v3
 key with v1 or v2c and `community_file` with v3.
 
 Each scrape first asks the agent its engine ID, boots and time, which an
@@ -294,10 +295,10 @@ Report brings. The document's `engine_id` is the engine discovery found.
 
 **AES-192 and AES-256 come two ways.** RFC 3826 standardises AES-128 alone,
 and agents extend the key of the longer ones in one of two incompatible
-ways. `AES192` and `AES256` extend it as `draft-blumenthal-aes-usm-04` does,
-as net-snmp's `-x AES192` and `-x AES256` do; `AES192C` and `AES256C` as
+ways. `AES192` and `AES256` extend it as `draft-blumenthal-aes-usm-04` does;
+`AES192C` and `AES256C` as
 `draft-reeder-snmpv3-usm-3desede` does, as Cisco's agents and many others
-do, net-snmp's `-x AES192C` and `-x AES256C`. With an authentication
+do. snmp_exporter names them alike. With an authentication
 protocol whose hash is long enough, `SHA256` and above for `AES256`, no
 extension is needed and the two are one. A wrong choice reads as a
 decryption error of the agent's (`usmStatsDecryptionErrors`).

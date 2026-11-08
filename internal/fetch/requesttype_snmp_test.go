@@ -461,7 +461,7 @@ func TestAnSNMPCollectorsKeysAreChecked(t *testing.T) {
 			r.Walk = map[string]map[string]string{"t": {"index": "1.3.6.1"}}
 		}, "names a column index"},
 		"a hex of nothing":         {func(_ *model.Collector, r *SNMPConfig) { r.Hex = []string{"ifPhysAddress"} }, `request.hex names "ifPhysAddress", which is no object`},
-		"max_repetitions of v1":    {func(_ *model.Collector, r *SNMPConfig) { r.Version, r.MaxRepetitions = 1, 10 }, "sets request.max_repetitions with snmp_version 1"},
+		"max_repetitions of v1":    {func(_ *model.Collector, r *SNMPConfig) { r.Version, r.MaxRepetitions = 1, 25 }, "sets request.max_repetitions with snmp_version 1"},
 		"max_repetitions 256":      {func(_ *model.Collector, r *SNMPConfig) { r.MaxRepetitions = 256 }, "request.max_repetitions is 256"},
 		"a request_timeout of 1ms": {func(_ *model.Collector, r *SNMPConfig) { r.RequestTimeout = model.Duration(time.Millisecond) }, "request.request_timeout is 1ms"},
 		"retries -1":               {func(_ *model.Collector, r *SNMPConfig) { r.Retries = &negative }, "request.retries is -1"},
@@ -541,4 +541,69 @@ func TestAStaticTargetOfAnSNMPCollectorKeepsToItsAccount(t *testing.T) {
 // are listed (optInRequestKeys, optInTargetKeys).
 func TestTheSNMPTypesOptInKeysAreListed(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeSNMP)
+}
+
+// A v3 answer is held to the security level of its request: one signed
+// but not encrypted, to a request of authPriv, fails the scrape.
+func TestAnSNMPv3AnswerIsHeldToTheRequestsSecurityLevel(t *testing.T) {
+	agent := testutil.NewSNMPAgent(t, testutil.SNMPAgentConfig{EngineID: []byte{0x80, 0, 0x1f, 0x88, 4, 'u'}, Values: switchValues, Unencrypted: true, Users: map[string]testutil.SNMPAgentUser{
+		"exporter": {Auth: "SHA", AuthPassword: "authpassword", Priv: "AES", PrivPassword: "privpassword"},
+	}})
+	if _, err := snmpScrape(t, snmpV3Collector(t, snmpAuthPriv, "SHA", "AES"), agent.Addr, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "answered without encrypting its answer, which security_level authPriv asks of it") {
+		t.Errorf("an answer in the clear: %v", err)
+	}
+}
+
+// An answer to a request sent before it was sent again is its answer
+// still, of v3 as of v2c, though each sending of v3 has a msgID of its
+// own.
+func TestAnSNMPAnswerToAnEarlierSendingIsTaken(t *testing.T) {
+	agent := testutil.NewSNMPAgent(t, testutil.SNMPAgentConfig{EngineID: []byte{0x80, 0, 0x1f, 0x88, 4, 'l'}, Values: switchValues, Late: 150 * time.Millisecond, Users: map[string]testutil.SNMPAgentUser{"exporter": {}}})
+	c := snmpV3Collector(t, snmpNoAuthNoPriv, "", "")
+	r := snmpRequest(c)
+	r.RequestTimeout = model.Duration(100 * time.Millisecond)
+	c.Request.Own = r
+	doc, err := snmpScrape(t, c, agent.Addr, RequestOverrides{})
+	if err != nil || doc.Get["sysName"].Value != "sw1" || doc.Requests != 3 {
+		t.Errorf("%+v, %v", doc, err)
+	}
+}
+
+// deadlineOnly is a context whose deadline has come before it says it is
+// done, as a socket's deadline can come before the context's timer fires.
+type deadlineOnly struct {
+	context.Context
+	deadline time.Time
+}
+
+func (d deadlineOnly) Deadline() (time.Time, bool) { return d.deadline, true }
+
+// A scrape whose deadline comes while it waits fails with the deadline's
+// error, though the context does not say so yet, rather than sending its
+// requests again into a deadline that is past.
+func TestAnSNMPScrapeEndsAtItsDeadline(t *testing.T) {
+	agent := testutil.NewSNMPAgent(t, testutil.SNMPAgentConfig{Community: "other", Values: switchValues})
+	c := snmpCollector(t)
+	ctx := deadlineOnly{context.Background(), time.Now().Add(100 * time.Millisecond)}
+	_, err := FetchCollector(ctx, agent.Addr, c, RequestOverrides{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || agent.Requests() != 1 {
+		t.Errorf("%v, %d requests", err, agent.Requests())
+	}
+}
+
+// An identifier an agent sends with arcs past 4294967295, the first two
+// together among them, is refused, as it could not be written again.
+func TestAnSNMPIdentifierOfAnArcTooLargeIsRefused(t *testing.T) {
+	for name, content := range map[string][]byte{
+		"a first two past":      {0x90, 0x80, 0x80, 0x80, 0x32},
+		"an arc past":           {0x2b, 0x90, 0x80, 0x80, 0x80, 0x00},
+		"one that does not end": {0x2b, 0x86},
+	} {
+		if oid, err := snmpOIDValue(content); err == nil {
+			t.Errorf("%s: %s", name, oid)
+		}
+	}
+	if oid, err := snmpOIDValue([]byte{0x2b, 0x06, 0x01, 0x8f, 0xff, 0xff, 0xff, 0x7f}); err != nil || oid.String() != "1.3.6.1.4294967295" {
+		t.Errorf("the largest arc: %s, %v", oid, err)
+	}
 }

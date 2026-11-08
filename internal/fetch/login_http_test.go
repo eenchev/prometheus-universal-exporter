@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -593,6 +595,18 @@ func TestALoginBlockIsCheckedWhenItLoads(t *testing.T) {
 		{oauth(func(l *model.LoginConfig) { l.Scopes = []string{"a b"} }), nil, "is no scope"},
 		{oauth(func(l *model.LoginConfig) { l.AuthStyle = "auto" }), nil, `auth_style is "auto"`},
 		{oauth(func(l *model.LoginConfig) { l.Token = ".x" }), nil, "sets token, which a login of type oauth2 does not take"},
+		{oauth(func(l *model.LoginConfig) { l.GrantType = "password" }), nil, `grant_type is "password"; it is client_credentials, the default, or refresh_token`},
+		{oauth(func(l *model.LoginConfig) { l.GrantType = "refresh_token" }), nil, "needs refresh_token_file with grant_type: refresh_token"},
+		{oauth(func(l *model.LoginConfig) { l.RefreshTokenFile = "/run/refresh" }), nil, "sets refresh_token_file with the client credentials grant"},
+		{oauth(func(l *model.LoginConfig) { l.GrantType, l.RefreshTokenFile = "client_credentials", "/run/refresh" }), nil, "sets refresh_token_file with the client credentials grant"},
+		{oauth(func(l *model.LoginConfig) {
+			l.GrantType, l.RefreshTokenFile, l.ClientSecretFile, l.AuthStyle = "refresh_token", "/run/refresh", "", "header"
+		}), nil, "sets auth_style: header without client_secret_file"},
+		{oauth(func(l *model.LoginConfig) {
+			l.GrantType, l.RefreshTokenFile, l.EndpointParams = "refresh_token", "/run/refresh", map[string]string{"refresh_token": "x"}
+		}), nil, "endpoint_params sets refresh_token, which the grant sets itself"},
+		{json(func(l *model.LoginConfig) { l.GrantType = "refresh_token" }), nil, "sets grant_type, which a login of type json does not take"},
+		{json(func(l *model.LoginConfig) { l.RefreshTokenFile = "/run/refresh" }), nil, "sets refresh_token_file, which a login of type json does not take"},
 	} {
 		c := testutil.Collector("api", "text")
 		login := tc.login
@@ -1005,5 +1019,89 @@ func TestALoginExpressionThatNeverEndsEndsWithTheLogin(t *testing.T) {
 		if took := time.Since(start); took > 3*time.Second {
 			t.Errorf("%s: took %s", token, took)
 		}
+	}
+}
+
+// An oauth2 login of grant_type refresh_token asks the token endpoint with
+// the refresh token grant: the refresh token of its file, the client's id
+// and secret, the scopes; a refresh token the endpoint answers in place of
+// the one sent is sent at the next login, until the file holds another,
+// which is sent then. A public client, with no secret, sends its id as a
+// form parameter, and no Basic credential.
+func TestOAuth2LoginUsesTheRefreshTokenGrant(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public=%v", public), func(t *testing.T) {
+			advance := freshLogins(t)
+			var mu sync.Mutex
+			var sent, problems []string
+			var n atomic.Int64
+			idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				count := n.Add(1)
+				mu.Lock()
+				defer mu.Unlock()
+				if err := r.ParseForm(); err != nil {
+					problems = append(problems, err.Error())
+				}
+				user, pass, basic := r.BasicAuth()
+				switch {
+				case public && (basic || r.PostForm.Get("client_id") != "desktop-app" || r.PostForm.Has("client_secret")):
+					problems = append(problems, fmt.Sprintf("public client: basic %v, form %v", basic, r.PostForm))
+				case !public && (user != "desktop-app" || pass != "app-secret"):
+					problems = append(problems, fmt.Sprintf("confidential client: %q %q", user, pass))
+				}
+				if r.PostForm.Get("grant_type") != "refresh_token" || r.PostForm.Get("scope") != "https://www.googleapis.com/auth/gmail.readonly" {
+					problems = append(problems, fmt.Sprintf("form %v", r.PostForm))
+				}
+				sent = append(sent, r.PostForm.Get("refresh_token"))
+				w.Header().Set("Content-Type", "application/json")
+				rotated := ""
+				if count == 1 {
+					rotated = `, "refresh_token": "rt-rotated"`
+				}
+				_, _ = fmt.Fprintf(w, `{"access_token": "at%d", "token_type": "Bearer", "expires_in": 300%s}`, count, rotated)
+			}))
+			defer idp.Close()
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer at") {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				_, _ = io.WriteString(w, "value=1")
+			}))
+			defer target.Close()
+			files := secretFiles(t, map[string]string{"secret": "app-secret", "refresh": "rt-file"})
+			login := model.LoginConfig{Type: "oauth2", URL: idp.URL + "/token", ClientID: "desktop-app", ClientSecretFile: files["secret"],
+				GrantType: "refresh_token", RefreshTokenFile: files["refresh"], Scopes: []string{"https://www.googleapis.com/auth/gmail.readonly"}}
+			if public {
+				login.ClientSecretFile = ""
+			}
+			c := loginCollector(t, login)
+			fetch := func() {
+				t.Helper()
+				if response, err := FetchCollector(context.Background(), target.URL, c, RequestOverrides{}, nil); err != nil || response.StatusCode != http.StatusOK {
+					t.Fatalf("fetch: %v, %+v", err, response)
+				}
+			}
+			fetch()
+			advance(271 * time.Second)
+			fetch()
+			if err := os.WriteFile(files["refresh"], []byte("rt-new\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			advance(271 * time.Second)
+			fetch()
+			mu.Lock()
+			defer mu.Unlock()
+			if want := []string{"rt-file", "rt-rotated", "rt-new"}; !slices.Equal(sent, want) {
+				t.Errorf("sent the refresh tokens %v, want %v", sent, want)
+			}
+			for _, p := range problems {
+				t.Error(p)
+			}
+		})
+	}
+	missing := loginCollector(t, model.LoginConfig{Type: "oauth2", URL: "https://idp.example/token", ClientID: "x", GrantType: "refresh_token", RefreshTokenFile: "/nonexistent/refresh"})
+	if warnings := FileWarnings(missing, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "request.login.refresh_token_file") {
+		t.Errorf("warnings %v", warnings)
 	}
 }

@@ -3059,6 +3059,30 @@
                               },
                               {
                                 "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
                                   "scopes": {
                                     "not": {
                                       "const": ""
@@ -3141,18 +3165,6 @@
                           ]
                         },
                         {
-                          "properties": {
-                            "client_secret_file": {
-                              "not": {
-                                "const": ""
-                              }
-                            }
-                          },
-                          "required": [
-                            "client_secret_file"
-                          ]
-                        },
-                        {
                           "not": {
                             "anyOf": [
                               {
@@ -3226,6 +3238,100 @@
                                 "required": [
                                   "expires_in"
                                 ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "else": {
+                            "allOf": [
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "not": {
+                                  "anyOf": [
+                                    {
+                                      "properties": {
+                                        "refresh_token_file": {
+                                          "not": {
+                                            "const": ""
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "refresh_token_file"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "if": {
+                            "properties": {
+                              "grant_type": {
+                                "const": "refresh_token"
+                              }
+                            },
+                            "required": [
+                              "grant_type"
+                            ]
+                          },
+                          "then": {
+                            "allOf": [
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "if": {
+                                  "not": {
+                                    "anyOf": [
+                                      {
+                                        "properties": {
+                                          "client_secret_file": {
+                                            "not": {
+                                              "const": ""
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "client_secret_file"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "then": {
+                                  "not": {
+                                    "properties": {
+                                      "auth_style": {
+                                        "const": "header"
+                                      }
+                                    },
+                                    "required": [
+                                      "auth_style"
+                                    ]
+                                  }
+                                }
                               }
                             ]
                           }
@@ -3305,7 +3411,7 @@
                     ]
                   },
                   "client_secret_file": {
-                    "description": "oauth2: required. The file holding the client's secret, read at every login.",
+                    "description": "oauth2: the file holding the client's secret, read at every login. Required with the client credentials grant; with refresh_token, left out for a public client, which sends its id as a form parameter.",
                     "type": [
                       "string",
                       "number",
@@ -3320,7 +3426,7 @@
                         "boolean"
                       ]
                     },
-                    "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id or client_secret, which the grant sets.",
+                    "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id, client_secret or refresh_token, which the grant sets.",
                     "propertyNames": {
                       "minLength": 1,
                       "not": {
@@ -3328,7 +3434,8 @@
                           "grant_type",
                           "scope",
                           "client_id",
-                          "client_secret"
+                          "client_secret",
+                          "refresh_token"
                         ]
                       }
                     },
@@ -3364,6 +3471,15 @@
                     "description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant.",
                     "type": "object"
                   },
+                  "grant_type": {
+                    "description": "oauth2: client_credentials, the default, for a service's own access, or refresh_token, to act on a user's account with the refresh token of refresh_token_file, which the user's consent gave once, such as Gmail's API's. See docs/AUTHENTICATION.md#a-users-refresh-token.",
+                    "enum": [
+                      "client_credentials",
+                      "refresh_token",
+                      ""
+                    ],
+                    "type": "string"
+                  },
                   "header": {
                     "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie.",
                     "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
@@ -3371,6 +3487,14 @@
                   },
                   "prefix": {
                     "description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "refresh_token_file": {
+                    "description": "oauth2, with grant_type: refresh_token: required. The file holding the refresh token, read at every login; one the endpoint answers in its place is used until the file changes.",
                     "type": [
                       "string",
                       "number",
@@ -3506,7 +3630,7 @@
                     ]
                   },
                   "type": {
-                    "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4).",
+                    "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4), or the refresh token grant (section 6) with grant_type: refresh_token.",
                     "enum": [
                       "json",
                       "oauth2"

@@ -8,7 +8,8 @@ same request with a URL built for the Graphite render API
 `grpc` collector makes a gRPC call instead, with rules of its own, described in
 [gRPC](GRPC.md); its credentials, TLS keys and probe placeholders work as
 they do here. A token the target hands out at a login of its own, or an
-OAuth 2.0 client credentials token, is fetched with `request.login`,
+OAuth 2.0 token of the client credentials grant, or of a user's refresh
+token, is fetched with `request.login`,
 described with the other target credentials in
 [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). Each setting
 lives on a collector's `request` block, and most can be overridden for a single

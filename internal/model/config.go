@@ -405,8 +405,10 @@ type HostRateLimit struct {
 // Fields and FieldFiles to URL and reads the token from the answer's body
 // (Token, a jq expression), a header of it (TokenHeader) or a cookie it sets
 // (TokenCookie); type oauth2 asks the token endpoint URL for a token with
-// the client credentials grant (RFC 6749 § 4.4). A secret is read from a
-// file at each login, never written in the configuration.
+// the client credentials grant (RFC 6749 § 4.4), or, with GrantType
+// refresh_token, with the refresh token of RefreshTokenFile (§ 6). A
+// secret is read from a file at each login, never written in the
+// configuration.
 type LoginConfig struct {
 	Type string `yaml:"type" json:"type"`
 	// URL is where the login is sent: absolute, or relative to the target.
@@ -424,9 +426,15 @@ type LoginConfig struct {
 	ExpiresIn   string `yaml:"expires_in" json:"expires_in,omitempty"`
 	// ClientID, ClientIDFile, ClientSecretFile, Scopes, EndpointParams
 	// and AuthStyle are an oauth2 login's.
-	ClientID         string            `yaml:"client_id" json:"client_id,omitempty"`
-	ClientIDFile     string            `yaml:"client_id_file" json:"client_id_file,omitempty"`
-	ClientSecretFile string            `yaml:"client_secret_file" json:"client_secret_file,omitempty"`
+	ClientID         string `yaml:"client_id" json:"client_id,omitempty"`
+	ClientIDFile     string `yaml:"client_id_file" json:"client_id_file,omitempty"`
+	ClientSecretFile string `yaml:"client_secret_file" json:"client_secret_file,omitempty"`
+	// GrantType is an oauth2 login's grant: client_credentials when
+	// empty, or refresh_token, which sends the refresh token held in
+	// RefreshTokenFile, a user's consent given once, for an API that acts
+	// on a user's account, such as Gmail's.
+	GrantType        string            `yaml:"grant_type" json:"grant_type,omitempty"`
+	RefreshTokenFile string            `yaml:"refresh_token_file" json:"refresh_token_file,omitempty"`
 	Scopes           []string          `yaml:"scopes" json:"scopes,omitempty"`
 	EndpointParams   map[string]string `yaml:"endpoint_params" json:"endpoint_params,omitempty"`
 	AuthStyle        string            `yaml:"auth_style" json:"auth_style,omitempty"`
@@ -446,6 +454,8 @@ type LoginConfig struct {
 var (
 	LoginTypes      = []string{"json", "oauth2"}
 	LoginAuthStyles = []string{"header", "params"}
+	// LoginGrantTypes are request.login.grant_type's of an oauth2 login.
+	LoginGrantTypes = []string{"client_credentials", "refresh_token"}
 )
 
 // SQLConnections is a sql collector's request.connections, and a static

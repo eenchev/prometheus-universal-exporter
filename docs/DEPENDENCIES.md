@@ -229,7 +229,8 @@ other types' modules in a build of it, and the stand-in server of its tests
 
 The `http` and `graphite` types' [login](AUTHENTICATION.md#logging-in-to-a-target)
 has one: `golang.org/x/oauth2`, whose `clientcredentials` package asks a token
-endpoint for a token with the OAuth 2.0 client credentials grant
+endpoint for a token with the OAuth 2.0 client credentials grant, and, its
+`grant_type` set to `refresh_token`, with the refresh token grant
 (`internal/fetch/login.go`), and which `go.mod` already required as the
 `snowflake` driver's dependency. Only the file of the login imports it, built
 with either type, so a build of neither, such as `REQUEST_TYPES=grpc`, does

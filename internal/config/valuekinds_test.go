@@ -217,7 +217,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		"decoder.type", "derived[].by[]", "derived[].difference[]", "derived[].name", "derived[].ratio[]", "derived[].sum[]", "derived[].type", "error_handling.on_decode_error", "error_handling.on_fetch_error", "error_handling.on_transform_error",
 		"lint.ignore[]", "metrics[].error_mode", "metrics[].labels[].name", "metrics[].name", "metrics[].time_zone", "metrics[].type", "metric_name_validation_scheme", "metrics_prefix", "name", "name_escaping",
 		"request.accept_codes[]", "request.api_server", "request.auth_protocol", "request.checksums", "request.commands[].name", "request.connections.keepalive.check", "request.descriptors", "request.driver", "request.endpoint", "request.forward_headers[]", "request.get.*", "request.group", "request.info_sections[]", "request.ip_family", "request.kubelet", "request.kubelet_ca_file",
-		"request.login.auth_style", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type", "request.login.url",
+		"request.login.auth_style", "request.login.grant_type", "request.login.header", "request.login.scopes[]", "request.login.token_cookie", "request.login.token_header", "request.login.type", "request.login.url",
 		"request.method", "request.namespaces[]", "request.pagination.type", "request.priv_protocol", "request.proxy_url", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.security_level", "request.starttls", "request.statement_file", "request.statements[].name", "request.transport", "request.type", "request.unix_socket", "request.version", "request.walk.*.*",
 		"response.binary.byte_order", "response.binary.fields[].byte_order", "response.binary.fields[].type", "response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
@@ -235,7 +235,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		"a collector file":  {reflect.TypeOf(collectorFile{}), ofCollectors},
 		"one collector":     {reflect.TypeOf(model.Collector{}), slices.Clone(collector)},
 		"the static target file": {reflect.TypeOf(model.StaticTargetFile{}), []string{"targets[].name", "targets[].request.accept_codes[]", "targets[].request.connections.keepalive.check", "targets[].request.ip_family",
-			"targets[].request.login.auth_style", "targets[].request.login.header", "targets[].request.login.scopes[]", "targets[].request.login.token_cookie", "targets[].request.login.token_header", "targets[].request.login.type", "targets[].request.login.url",
+			"targets[].request.login.auth_style", "targets[].request.login.grant_type", "targets[].request.login.header", "targets[].request.login.scopes[]", "targets[].request.login.token_cookie", "targets[].request.login.token_header", "targets[].request.login.type", "targets[].request.login.url",
 			"targets[].request.method", "targets[].request.retry.codes[]"}},
 	} {
 		got := model.SortedKeys(textOnlyKeys(tc.file))

@@ -1268,14 +1268,24 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 		"allOf": []any{
 			writtenKey("type"),
 			writtenKey("url"),
-			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "scopes", "endpoint_params", "auth_style")}}},
-			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), writtenKey("client_secret_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in")}}},
+			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style")}}},
+			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in"),
+				// The refresh token grant sends the refresh token of its
+				// file, and a public client of it has no secret, sending
+				// its id as a parameter; the client credentials grant,
+				// grant_type left out, sends the secret and no refresh
+				// token.
+				map[string]any{
+					"if":   map[string]any{"properties": map[string]any{"grant_type": map[string]any{"const": "refresh_token"}}, "required": []string{"grant_type"}},
+					"then": map[string]any{"allOf": []any{writtenKey("refresh_token_file"), map[string]any{"if": none("client_secret_file"), "then": map[string]any{"not": map[string]any{"properties": map[string]any{"auth_style": map[string]any{"const": "header"}}, "required": []string{"auth_style"}}}}}},
+					"else": map[string]any{"allOf": []any{writtenKey("client_secret_file"), none("refresh_token_file")}},
+				}}}},
 			// prefix written "" is a prefix of nothing, not one left out.
 			map[string]any{"if": writtenKey("token_cookie"), "then": map[string]any{"allOf": []any{none("header"), map[string]any{"not": map[string]any{"required": []string{"prefix"}}}}}},
 		},
 	}
 	for key, rule := range map[string]map[string]any{
-		"type":               {"enum": model.LoginTypes, "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4)."},
+		"type":               {"enum": model.LoginTypes, "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4), or the refresh token grant (section 6) with grant_type: refresh_token."},
 		"url":                {"pattern": `^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))`, "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect."},
 		"fields":             {"description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant."},
 		"field_files":        {"description": "json: members of the JSON object posted, each read from its file at every login, such as {username: /var/run/secrets/login/username, password: /var/run/secrets/login/password}. Required: at least one. A field is in fields or here, not both."},
@@ -1285,10 +1295,12 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 		"expires_in":         {"description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. Left out, or null, ttl applies."},
 		"client_id":          {"description": "oauth2: the client's id. Exactly one of client_id and client_id_file."},
 		"client_id_file":     {"description": "oauth2: the file holding the client's id, read at every login."},
-		"client_secret_file": {"description": "oauth2: required. The file holding the client's secret, read at every login."},
+		"client_secret_file": {"description": "oauth2: the file holding the client's secret, read at every login. Required with the client credentials grant; with refresh_token, left out for a public client, which sends its id as a form parameter."},
+		"grant_type":         {"enum": optionalEnum(model.LoginGrantTypes), "description": "oauth2: client_credentials, the default, for a service's own access, or refresh_token, to act on a user's account with the refresh token of refresh_token_file, which the user's consent gave once, such as Gmail's API's. See docs/AUTHENTICATION.md#a-users-refresh-token."},
+		"refresh_token_file": {"description": "oauth2, with grant_type: refresh_token: required. The file holding the refresh token, read at every login; one the endpoint answers in its place is used until the file changes."},
 		"scopes":             {"description": "oauth2: the scopes asked for, sent as the scope parameter."},
 		"scopes[]":           {"type": "string", "pattern": `^[^\s"\\]+$`},
-		"endpoint_params":    {"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{"grant_type", "scope", "client_id", "client_secret"}}}, "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id or client_secret, which the grant sets."},
+		"endpoint_params":    {"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{"grant_type", "scope", "client_id", "client_secret", "refresh_token"}}}, "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id, client_secret or refresh_token, which the grant sets."},
 		"auth_style":         {"enum": optionalEnum(model.LoginAuthStyles), "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form."},
 		"ttl":                {"description": "How long a token is used when the answer does not say: no expires_in, an oauth2 answer without expires_in, a cookie without Max-Age or Expires, a token_header. Left out, such a token is used until the target answers 401."},
 		"header":             {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie."},

@@ -418,6 +418,27 @@ func TestAnSNMPv3RequestTheAgentRefusesSaysWhy(t *testing.T) {
 	}
 }
 
+// A wrong privacy password is a decryption error whatever the salt: what
+// the agent decrypts with the wrong key is garbage that, now and then, reads
+// as the start of a value, and is no scoped PDU all the same.
+func TestAWrongSNMPv3PrivPasswordIsADecryptionErrorEachTime(t *testing.T) {
+	engine := []byte{0x80, 0x00, 0x1f, 0x88, 0x04, 'p', 'u', 'e'}
+	for _, priv := range []string{"DES", "AES"} {
+		agent := testutil.NewSNMPAgent(t, testutil.SNMPAgentConfig{EngineID: engine, Values: switchValues, Users: map[string]testutil.SNMPAgentUser{
+			"exporter": {Auth: "SHA", AuthPassword: "authpassword", Priv: priv, PrivPassword: "privpassword"},
+		}})
+		for i := range 40 {
+			bad := snmpV3Collector(t, snmpAuthPriv, "SHA", priv)
+			r := snmpRequest(bad)
+			r.PrivPasswordFile = testutil.WriteFile(t, "wrong", "wrongpassword")
+			bad.Request.Own = r
+			if _, err := snmpScrape(t, bad, agent.Addr, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "usmStatsDecryptionErrors") {
+				t.Fatalf("%s, scrape %d: %v", priv, i, err)
+			}
+		}
+	}
+}
+
 // The keys of an account are those of its version and level, each it
 // needs required; the objects are named and numbered; the limits are
 // held to.

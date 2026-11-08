@@ -31775,6 +31775,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `login.grant_type` is held to text alone.
 - `TestAuthenticationPageExamplesLoad` (repository), changed: the Gmail example of docs/AUTHENTICATION.md loads.
 
+## 34.318 A wrong privacy password is a decryption error each time
+
+- `TestAWrongSNMPv3PrivPasswordIsADecryptionErrorEachTime` (fetch, snmp): forty scrapes with a wrong privacy password, of DES and of AES, each fail naming `usmStatsDecryptionErrors`; the test agent reports anything a wrong key decrypts that is no scoped PDU of its engine as a decryption error, as one that cannot decode it does, where it had sent no answer when the garbage read as the start of a value.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,

@@ -693,21 +693,21 @@ func (a *SNMPAgent) answerV3(msg []byte, parts []agentNode) []byte {
 			scoped = agentCFB(key, iv, sealed, false)
 		}
 		// The scoped PDU is the first value of what was decrypted: DES's
-		// padding comes after it.
+		// padding comes after it. What a wrong key decrypts is garbage
+		// that may yet read as the start of a value, so anything that is
+		// no scoped PDU of this engine is a decryption error, as an agent
+		// that cannot decode it reports.
 		end := agentFirstEnd(scoped)
-		if end < 0 {
+		if end < 0 || !agentScoped(scoped[:end], a.config.EngineID) {
 			return report(0, SNMPAgentUser{}, nil, "1.3.6.1.6.3.15.1.1.6.0")
 		}
 		scoped = scoped[:end]
 	}
-	nodes, err := agentParse(scoped, 0, len(scoped))
-	if err != nil || len(nodes) != 1 {
+	if !agentScoped(scoped, a.config.EngineID) {
 		return nil
 	}
+	nodes, _ := agentParse(scoped, 0, len(scoped))
 	inner := agentChildren(scoped, nodes[0])
-	if len(inner) != 3 || !bytes.Equal(inner[0].content, a.config.EngineID) {
-		return nil
-	}
 	pdu, ok := a.respond(scoped, inner[2])
 	if !ok {
 		return nil
@@ -716,6 +716,20 @@ func (a *SNMPAgent) answerV3(msg []byte, parts []agentNode) []byte {
 		flags &^= 2
 	}
 	return send(flags&3, user, pdu)
+}
+
+// agentScoped tells whether scoped is one scoped PDU of engine: a
+// sequence of the engine's id, a context name and a PDU.
+func agentScoped(scoped, engine []byte) bool {
+	if len(scoped) == 0 || scoped[0] != 0x30 {
+		return false
+	}
+	nodes, err := agentParse(scoped, 0, len(scoped))
+	if err != nil || len(nodes) != 1 {
+		return false
+	}
+	inner := agentChildren(scoped, nodes[0])
+	return len(inner) == 3 && bytes.Equal(inner[0].content, engine)
 }
 
 // agentFirstEnd is where the first value of buf ends, -1 when it does not

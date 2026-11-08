@@ -26,7 +26,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   ([Choosing request types at build time](docs/CONFIGURATION.md#choosing-request-types-at-build-time)).
 - Chart: `Chart.yaml`'s description names every source the image reads, and
   the README no longer tells you to build an image of your own for the
-  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors.
+  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors; its ICMP and
+  SNMP collectors section shows the `podSecurityContext.sysctls` an `icmp`
+  collector may need
+  ([ICMP and SNMP collectors](charts/prometheus-universal-exporter/README.md#icmp-and-snmp-collectors)).
 - The static target file's `concurrency` slots are shared between its
   collectors: a collector whose targets hang can no longer hold every slot
   and leave the others' targets skipped. Beyond its share, `concurrency`

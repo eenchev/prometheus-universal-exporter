@@ -55,7 +55,7 @@ targets:
 know. A target's `target` is checked when the file loads as its collector's
 type reads it: an `http` or `graphite` target is an absolute URL, and one
 whose port is 0 or past 65535, which no connection can use, is refused
-naming the port, as a `grpc`, `sshfile`, `sql`, `tlscert`, `ntp` or `snmp` target's is. Each target names a collector from the exporter configuration and takes
+naming the port, as a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp` or `snmp` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
 `new_connection`, `ip_family` and the `retry` settings — overriding the collector's own request for that target only.
@@ -285,13 +285,13 @@ block, in place of the collector's. This is what each type takes:
 | --- | --- | --- |
 | `http`, `graphite` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`, `login`, each replacing the collector's as above | yes, or `insecure_skip_verify` alone |
 | `grpc` | `basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file` | yes |
-| `sshfile` | `username`, and `private_key_file`, `passphrase_file` and `password_file`, any of the three replacing all three of the collector's | no; the host is verified with the collector's `known_hosts_file` |
+| `sshfile`, `sshexec` | `username`, and `private_key_file`, `passphrase_file` and `password_file`, any of the three replacing all three of the collector's | no; the host is verified with the collector's `known_hosts_file` |
 | `sql` | `username`, and `password_file` or, for `snowflake`, `private_key_file`, either replacing the collector's credential file | yes |
 | `redis` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file` | yes |
 | `ldap` | `password_file`, replacing the collector's, and `bind_dn`, which needs the target's own `password_file` | yes |
 | `tcp` | none: a tcp service is asked no password | yes |
 | `snmp` | `community_file` of v1 and v2c; `username`, `auth_password_file` and `priv_password_file` of v3, each replacing the collector's as its security level uses it | no; SNMP has no TLS |
-| `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `kubernetes` | none | no |
+| `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes` | none | no |
 
 A target's `tls` replaces the collector's whole block, a key it leaves out
 not being taken from the collector's, so a target with a client certificate

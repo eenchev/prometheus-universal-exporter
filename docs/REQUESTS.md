@@ -1055,9 +1055,11 @@ read once, when the exporter first connects; an `http` or `graphite`
 collector may name a proxy of its own instead ([below](#a-collectors-own-proxy)).
 In Kubernetes, set the variables through the chart's `env`,
 with credentials from a Secret. `localfile` collectors read files and are not
-affected, and neither are `sshfile`, `sql`, `redis`, `tcp`, `ldap` and `sshexec` collectors, which
-connect to their hosts directly; `s3file` collectors go through the proxy, by the AWS
-SDK's own client, which reads the same variables.
+affected, and neither are `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`
+and `tlscert` collectors, which connect to their hosts directly, nor `dns`,
+`ntp`, `icmp` and `snmp` collectors, whose datagrams no HTTP proxy carries;
+`grpc` and `kubernetes` collectors go through the proxy, and `s3file`
+collectors too, by the AWS SDK's own client, which reads the same variables.
 
 A proxy that refuses to tunnel to an `https` target fails the request with
 `the proxy refused the tunnel to api.example:443: 403 Forbidden`. A probe's

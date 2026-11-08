@@ -509,3 +509,26 @@ func TestChartReadmeSSHExecExampleRenders(t *testing.T) {
 		}
 	}
 }
+
+// The chart README's ICMP and SNMP collectors section renders as it is
+// shown: its example sets the ping sysctl on the pod beside the chart's own
+// security context, which it keeps.
+func TestChartReadmeICMPExampleRenders(t *testing.T) {
+	helm := requireHelm(t)
+	_, section, found := strings.Cut(readChartFile(t, "README.md"), "## ICMP and SNMP collectors\n")
+	if !found {
+		t.Fatal("the chart README has no ICMP and SNMP collectors section")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	blocks := yamlBlocksOf(section)
+	if len(blocks) != 1 || !strings.Contains(blocks[0], "net.ipv4.ping_group_range") {
+		t.Fatalf("the section shows %d examples, want one of the ping sysctl", len(blocks))
+	}
+	pod := podSpecOf(t, renderedObjects(t, helm, "-f", valuesFile(t, blocks[0])))
+	raw, _ := json.Marshal(pod["securityContext"])
+	for _, want := range []string{`"name":"net.ipv4.ping_group_range"`, `"value":"0 2147483647"`, `"runAsGroup":65532`, `"runAsNonRoot":true`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the pod's security context has no %s: %s", want, raw)
+		}
+	}
+}

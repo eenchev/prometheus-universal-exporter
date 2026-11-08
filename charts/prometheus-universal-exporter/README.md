@@ -700,6 +700,19 @@ extraVolumeMounts:
 
 and name `password_file: /var/run/prometheus-universal-exporter/ldap/password` beside `bind_dn` in the collector. Probe it with the server as the target, `/probe?collector=directory&target=ldap.example.org`, or `ldaps://` for TLS from the start; the CA and a client certificate are mounted as [TLS files](#tls-files) shows. With `networkPolicy.egress` rules, add one for the servers' port, 389, or 636 for LDAPS. The request's keys are in [LDAP directories](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/LDAP.md).
 
+## ICMP and SNMP collectors
+
+An `icmp` collector pings a host on an unprivileged ICMP socket, which Linux opens only for a process whose group is in the sysctl `net.ipv4.ping_group_range`. The exporter runs as group `65532`; containerd and Docker set the sysctl so that every group may, and where the runtime does not, the pod sets it for itself, the sysctl being of the pod's network namespace and safe to Kubernetes ([Permissions](../../docs/ICMP.md#permissions)):
+
+```yaml
+podSecurityContext:
+  sysctls:
+    - name: net.ipv4.ping_group_range
+      value: "0 2147483647"
+```
+
+The values' `podSecurityContext` is merged with the chart's, so the pod keeps running as that user and group. An `snmp` collector needs nothing of the chart's beyond its community or v3 password files, mounted from a Secret through `extraVolumes` and `extraVolumeMounts` as an [LDAP collector's](#ldap-collectors) password is; see [SNMP agents](../../docs/SNMP.md).
+
 ## Kubernetes collectors
 
 A `kubernetes` collector lists objects from the API server of the cluster the exporter runs in, with the exporter's own ServiceAccount. Out of the box the pods mount no token and the account may list nothing; `kubernetesAccess` grants what the collectors list, and only `list` of it, but for the `get` of the kubelets' statistics `kubernetesAccess.kubelet` adds (below):

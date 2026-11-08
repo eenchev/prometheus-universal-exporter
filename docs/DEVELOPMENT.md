@@ -530,14 +530,14 @@ true of it by hand. Most have no test that fails when the type is left out
   default build.
 - `docs/CONFIGURATION.md`: the sentence after the `request.type` table of
   what each type does ("`dns` resolves a name — see [DNS](DNS.md) — …");
-  under Choosing request types at build time, the types an http-only build
-  leaves out and those that need nothing outside the standard library.
+  under Choosing request types at build time, the libraries each type
+  links, or that it needs nothing outside the standard library.
 - `docs/REQUESTS.md`: the types `allowed_targets` and `denied_targets`
   bound, and those that refuse the cloud metadata service.
 - `docs/SELF-METRICS.md`: the types `http_exporter_targets_refused_total`
   counts, when the type takes the target lists.
 - `docs/STATIC-TARGETS.md`: the types whose target's port is checked at
-  load ("as a `grpc`, `sshfile`, `sql`, `tlscert` or `ntp` target's is"),
+  load ("as a `grpc`, `sshfile`, `sql`, … target's is"),
   and the row of the credentials table the type belongs in.
 - `docs/DEVELOPMENT.md`: the code layout's row of `internal/fetch`, and the
   types with a table of schema rows under the schema tests.
@@ -1196,7 +1196,7 @@ table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap` and `sshexec`: the document, the
+and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`: the document, the
 place of the key, a value both take and one both refuse, and whether both
 take the file without the key and with the key written `""`. An optional key
 takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so

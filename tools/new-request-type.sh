@@ -383,7 +383,7 @@ EOF
 # The rows of the keys the schemas hold to a rule, compiled in the default
 # build, which checks that every such key has one, and their check, in a
 # build with the type: one file for a type of the default build, two for an
-# opt-in one, as tcp's.
+# opt-in one.
 if [ -n "$optin" ]; then
 	rows="test/repository/schemakeys_${name}rows_test.go"
 	rowsConstraint="//go:build !select_request_types || request_type_${name}"

@@ -74,33 +74,6 @@ other decoder, and a transform that does not read JSON (`regex`, `csv`,
 `css`, `prometheus`), is refused when the configuration loads. Use `jq`,
 `yq` or `python`.
 
-### Coming from 2.0
-
-Exporter 2.0 asked Go's resolver; later releases ask the question
-themselves ([The question](#the-question)), and two things behave
-differently:
-
-- **`SERVFAIL`, `REFUSED` and the other failures are data.** 2.0 failed the
-  scrape on them, so the target went down and `on_fetch_error` applied; now
-  the scrape succeeds with `rcode` saying what the server answered. A
-  collector that relied on the failure keeps an alertable series with a
-  rule of its own:
-
-  ```yaml
-      - name: dns_answered
-        description: 1 when the server answered NOERROR or NXDOMAIN
-        expression: 'if .rcode == "NOERROR" or .rcode == "NXDOMAIN" then 1 else 0 end'
-  ```
-
-  and an alert on `dns_answered == 0` in place of one on the target's
-  scrape failing.
-- **`/etc/hosts` is not read.** A name 2.0 answered from the exporter's
-  `/etc/hosts`, or a Kubernetes pod's `hostAliases`, is asked of the server
-  like any other, and is `not_found` unless the server has it.
-
-Nothing else needs changing: the document gains `rcode`, the flags and each
-record's `ttl`, which rules written for 2.0 do not read.
-
 ## The target
 
 The target is the name to resolve, such as `example.com` or

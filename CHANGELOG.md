@@ -39,7 +39,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   ([Secrets](docs/KUBERNETES.md#secrets)).
 - The debug page's series and OTLP tables sort text as the status pages'
   do, the numbers in it by their value and a letter's case no matter.
-
 - A `sql` collector with `driver: sqlserver` runs its statement in a
   transaction that is rolled back after it, with `SET LOCK_TIMEOUT` set to
   the scrape's time left; one with `driver: mysql` sets
@@ -312,7 +311,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `--allocation.balance-factor`, from 1 to 10 with at most three decimals;
   empty keeps the allocator's 1.25
   ([chart README](charts/prometheus-universal-exporter/README.md)).
-
 - `request.ip_family` on an `http` or `graphite` collector chooses the
   address family its requests connect over, as blackbox_exporter's
   `preferred_ip_protocol` and `ip_protocol_fallback` do: `ip4` or `ip6`
@@ -431,6 +429,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- `--dry-run` read the `tls` files of an `http` or `graphite` static
+  target's own block, but not those of the collector's block, nor of a
+  login's own `tls`. It now reads them too, and warns of one a request or a
+  login would fail on ([Dry run](docs/CONFIGURATION.md#dry-run)).
 - A pagination `next`, `items` or login `token` / `expires_in` jq
   expression that never ended, or gave values without end, held its trip,
   its slots and a CPU for ever; it now ends at the trip's (or login's)

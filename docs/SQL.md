@@ -1,7 +1,8 @@
 # Databases over SQL
 
-The `sql` request type runs one statement on a database and turns the rows it
-returns into metrics. Use it for what a database knows that no exporter of its
+The `sql` request type runs a statement on a database, or several in order
+([Several statements](#several-statements)), and turns the rows they return
+into metrics. Use it for what a database knows that no exporter of its
 own shows:
 
 - the jobs of a queue table by state, the age of the oldest unprocessed row;

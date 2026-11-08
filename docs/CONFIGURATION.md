@@ -2751,18 +2751,25 @@ request:
   path: /api/status
 ```
 
-There are nine types in a default build: `http` asks a URL, `localfile` reads a file from the
+There are ten types in a default build: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 `grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-`sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
+`sql` runs statements on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
 certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
-`ntp` asks an NTP server for the time — see [NTP](NTP.md) — `icmp` pings
-a host — see [Ping over ICMP](ICMP.md) — `snmp` reads an SNMP agent's
-objects and tables — see [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes
-objects — see [Kubernetes objects](KUBERNETES.md).
+`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
+`kubernetes` lists Kubernetes objects — see [Kubernetes
+objects](KUBERNETES.md). Seven more are opt-in, in a build that asks for
+them: `sshexec` runs a command on another host — see [Commands over
+SSH](SSHEXEC.md) — `s3file` reads objects of S3 — see [Objects in
+S3](S3FILE.md) — `redis` reads a Redis or Valkey server — see [Redis and
+Valkey](REDIS.md) — `tcp` speaks a protocol over TCP or UDP, or checks that
+a port takes a connection — see [Text protocols over TCP](TCP.md) — `ldap`
+searches an LDAP directory — see [LDAP directories](LDAP.md) — `icmp` pings
+a host — see [Ping over ICMP](ICMP.md) — and `snmp` reads an SNMP agent's
+objects and tables — see [SNMP agents](SNMP.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -2785,6 +2792,7 @@ and so does an unknown type.
 | A gRPC service's answer, or its health | `grpc` | [gRPC](GRPC.md) |
 | Series from Graphite | `graphite` | [Graphite](GRAPHITE.md) |
 | A line protocol such as memcached's `stats`, or an SMTP dialogue | `tcp`, opt-in | [Text protocols over TCP](TCP.md) |
+| Whether a port, or each of a host's ports, takes a connection | `tcp`, opt-in | [Checking that a port is open](TCP.md#checking-that-a-port-is-open) |
 | Entries of an LDAP directory, or its monitor counters | `ldap`, opt-in | [LDAP directories](LDAP.md) |
 | A name's records, their TTLs, a zone's serial or its signatures' expiry | `dns` | [DNS](DNS.md) |
 | A TLS certificate's expiry and chain, of any TLS or STARTTLS server | `tlscert` | [TLS certificates](TLSCERT.md) |
@@ -2993,8 +3001,12 @@ since the collector lists what its configuration names. `redis` accepts
 `host:port` or a `redis://` or `rediss://` URL of it, and so does `ldap`,
 its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
 accepts `timeout` and `param_<name>`, and requires a `target`, the service,
-`host:port` with its port. `sshexec` accepts `timeout` and
+`host:port` with its port, or the host alone for a collector of
+[`ports`](TCP.md#several-ports-of-a-host). `sshexec` accepts `timeout` and
 `param_<name>`, and requires a `target`, the host, as `sshfile` does.
+`icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
+host, without a port, and so does `snmp`, its agent, `host` or
+`host:port`, port 161 when left out.
 `icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
 host pinged, with no port.
 
@@ -6915,15 +6927,21 @@ password and `known_hosts` files — are read too, as a connection would read
 them, which startup does not do: what a scrape would fail on now is listed
 under `details.warnings` of the `config` entry, or of the `static_targets`
 entry for a target's own files, and logged, without failing the check, since
-a file may be put in place after the exporter starts. So are the password,
-private key and TLS files of a [`sql`](SQL.md#a-collector) collector, and a
-static target's own credential and TLS files, the password and TLS files of
-a [`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
-collector and the TLS files of a [`tcp`](TCP.md#static-targets) or
-[`grpc`](GRPC.md#tls) one, and a static target's own, and the secret files of an `http` or
-`graphite` collector's [`login`](AUTHENTICATION.md#logging-in-to-a-target),
-and of a static target's own, with the TLS files of an `http` or `graphite`
-static target's own `tls` block.
+a file may be put in place after the exporter starts. So are the files of
+every type that reads one at a scrape, a collector's and those a static
+target sets of its own: the password, private key and TLS files of a
+[`sql`](SQL.md#a-collector) collector; the password and TLS files of a
+[`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
+collector; the TLS files of a [`tcp`](TCP.md#static-targets),
+[`grpc`](GRPC.md#tls), [`tlscert`](TLSCERT.md) or, with `transport: tls`,
+[`dns`](DNS.md#dns-over-tls) one; the token and TLS files of a
+[`kubernetes`](KUBERNETES.md) collector; the credential files of an
+[`s3file`](S3FILE.md) one; the community and password files of an
+[`snmp`](SNMP.md#versions-and-accounts) one; the key, password and
+`known_hosts` files of an [`sshexec`](SSHEXEC.md) one, as `sshfile`'s; and
+of an `http` or `graphite` collector, its `tls` files, the secret files of
+its [`login`](AUTHENTICATION.md#logging-in-to-a-target) and the files of the
+login's own `tls` block.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

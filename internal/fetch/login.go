@@ -624,7 +624,7 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	var token loginToken
 	switch l.Type {
 	case "oauth2":
-		token, err = oauth2Login(ctx, &traced, l, u, start)
+		token, err = oauth2Login(ctx, &traced, l, u, host, start)
 	default:
 		token, err = jsonLogin(ctx, &traced, l, u, start)
 	}
@@ -965,7 +965,7 @@ func loginSeconds(value any) (time.Duration, bool) {
 // the form, its grant_type refresh_token and the refresh token beside it,
 // which clientcredentials sends as it does its own (it lets grant_type be
 // another's). A public client, with no secret, sends its id as a parameter.
-func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, start time.Time) (loginToken, error) {
+func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, host string, start time.Time) (loginToken, error) {
 	id := l.ClientID
 	if l.ClientIDFile != "" {
 		value, err := ReadCredentialFile(l.ClientIDFile)
@@ -999,7 +999,7 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 	var refresh oauth2Refresh
 	if l.GrantType == "refresh_token" {
 		var err error
-		if refresh, err = oauth2RefreshToken(l); err != nil {
+		if refresh, err = oauth2RefreshToken(l, u, host); err != nil {
 			return loginToken{}, err
 		}
 		params.Set("grant_type", "refresh_token")
@@ -1056,8 +1056,8 @@ type oauth2Refresh struct {
 }
 
 // oauth2Rotated are the refresh tokens token endpoints answered in place
-// of the ones sent, by the login block they were answered to: an
-// endpoint that rotates its refresh tokens, as Microsoft's identity
+// of the ones sent, by the login block and the endpoint they were answered
+// to: an endpoint that rotates its refresh tokens, as Microsoft's identity
 // platform and Okta's and Auth0's with rotation on do, takes the new one
 // from then on, and may refuse the old. The new one is sent until the
 // file changes, which is the operator putting another in place; the file
@@ -1073,10 +1073,13 @@ type oauth2Rotation struct {
 	file, current string
 }
 
-// oauth2RefreshToken reads the refresh token a login of l sends: the
-// file's, unless the endpoint answered one in its place since, and the file
-// still holds what it did then.
-func oauth2RefreshToken(l *model.LoginConfig) (oauth2Refresh, error) {
+// oauth2RefreshToken reads the refresh token a login of l to the endpoint
+// u, at the virtual host host when it is not "", sends: the file's, unless
+// that endpoint answered one in its place since, and the file still holds
+// what it did then. A relative login.url is another endpoint at each
+// target, and at each virtual host of one, whose refresh tokens are its
+// own.
+func oauth2RefreshToken(l *model.LoginConfig, u *url.URL, host string) (oauth2Refresh, error) {
 	file, err := ReadCredentialFile(l.RefreshTokenFile)
 	if err != nil {
 		return oauth2Refresh{}, fmt.Errorf("reading login.refresh_token_file: %w", err)
@@ -1084,7 +1087,7 @@ func oauth2RefreshToken(l *model.LoginConfig) (oauth2Refresh, error) {
 	if file == "" {
 		return oauth2Refresh{}, fmt.Errorf("login.refresh_token_file %s is empty", l.RefreshTokenFile)
 	}
-	r := oauth2Refresh{key: loginFingerprint(l), file: file, sent: file}
+	r := oauth2Refresh{key: loginFingerprint(l) + "\x00" + u.String() + "\x00" + host, file: file, sent: file}
 	oauth2Rotated.Lock()
 	defer oauth2Rotated.Unlock()
 	if rotation, ok := oauth2Rotated.byLogin[r.key]; ok && rotation.file == file {

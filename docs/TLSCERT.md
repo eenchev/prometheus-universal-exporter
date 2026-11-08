@@ -13,7 +13,9 @@ verifies. Use it to know before a certificate expires:
   [STARTTLS](#starttls), on SMTP's 25 or 587, IMAP's 143, POP3's 110 or
   FTP's 21;
 - a certificate nobody trusts, such as an internal one, whose expiry matters
-  as much.
+  as much;
+- whether the OCSP response the server staples says the certificate is
+  good, and when it was last updated ([The document](#the-document)).
 
 Nothing is sent over TLS: the handshake is the scrape, and the connection
 is closed when it is over.

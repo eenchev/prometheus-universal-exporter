@@ -85,13 +85,27 @@ func init() {
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},
-		Stage: "dns",
+		Stage:      "dns",
+		CheckFiles: checkDNSFiles,
 		// A defaults block's tls is a dns collector's for DNS over TLS
 		// alone: a file of http and dns collectors shares one.
 		DefaultApplies: func(c *model.Collector, key string) bool {
 			return key != "tls" || dnsRequest(c).Transport == dnsTLS
 		},
 	})
+}
+
+// checkDNSFiles reads the files of a dns collector's tls block, as DNS
+// over TLS reads them at each scrape (RequestType.CheckFiles): none
+// without transport tls, nor of a static target, which sets no tls.
+func checkDNSFiles(c *model.Collector, t *model.StaticTarget) []string {
+	if t != nil || dnsRequest(c).Transport != dnsTLS {
+		return nil
+	}
+	if _, err := tlsConfig(c.Request.TLS); err != nil {
+		return []string{fmt.Sprintf("collector %q: request.tls: %v; a scrape would fail on it now (the files are read at each scrape, so one put in place later is used then)", c.Name, err)}
+	}
+	return nil
 }
 
 // dnsRequester is the dns request type's Requester.

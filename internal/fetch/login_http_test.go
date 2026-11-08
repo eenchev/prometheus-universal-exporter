@@ -1028,6 +1028,44 @@ func TestALoginExpressionThatNeverEndsEndsWithTheLogin(t *testing.T) {
 // the one sent is sent at the next login, until the file holds another,
 // which is sent then. A public client, with no secret, sends its id as a
 // form parameter, and no Basic credential.
+// A refresh token one token endpoint rotated is sent to that endpoint
+// alone: a relative login.url is another endpoint at each target, whose
+// tokens are its own.
+func TestARotatedRefreshTokenIsSentToTheEndpointThatAnsweredIt(t *testing.T) {
+	freshLogins(t)
+	sent := map[string][]string{}
+	var mu sync.Mutex
+	host := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/token" {
+				_ = r.ParseForm()
+				mu.Lock()
+				sent[name] = append(sent[name], r.PostForm.Get("refresh_token"))
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"access_token": "at", "token_type": "Bearer", "expires_in": 300, "refresh_token": "rt-%s"}`, name)
+				return
+			}
+			_, _ = io.WriteString(w, "value=1")
+		}))
+	}
+	a, b := host("a"), host("b")
+	defer a.Close()
+	defer b.Close()
+	files := secretFiles(t, map[string]string{"refresh": "rt-file"})
+	c := loginCollector(t, model.LoginConfig{Type: "oauth2", URL: "/token", ClientID: "app", GrantType: "refresh_token", RefreshTokenFile: files["refresh"]})
+	for _, target := range []string{a.URL, b.URL} {
+		if _, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(sent["a"], []string{"rt-file"}) || !slices.Equal(sent["b"], []string{"rt-file"}) {
+		t.Errorf("sent %v, want the file's refresh token to each endpoint", sent)
+	}
+}
+
 func TestOAuth2LoginUsesTheRefreshTokenGrant(t *testing.T) {
 	for _, public := range []bool{false, true} {
 		t.Run(fmt.Sprintf("public=%v", public), func(t *testing.T) {

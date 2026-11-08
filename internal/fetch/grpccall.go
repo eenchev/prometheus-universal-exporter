@@ -403,7 +403,9 @@ func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in
 		}
 		b.Write(message)
 	}
-	b.WriteString(`],"ended":` + strconv.FormatBool(answer.Ended) + `}`)
+	b.WriteString(`],"ended":`)
+	b.WriteString(strconv.FormatBool(answer.Ended))
+	b.WriteByte('}')
 	return b.Bytes(), len(answer.Messages), header, trailer, nil
 }
 

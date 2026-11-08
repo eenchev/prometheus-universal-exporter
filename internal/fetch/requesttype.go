@@ -296,7 +296,7 @@ type RequestType struct {
 	// exporter makes on some collectors alone, what that document is when
 	// a collector's answer is one, as a refusal of another decoder or
 	// transform names it, and "" when it is not: a tcp collector with
-	// request.document. Such a collector is held to json and to the
+	// request.document or request.connect_only. Such a collector is held to json and to the
 	// transforms that read it, as one of a JSONAnswer type is.
 	JSONDocument func(c *model.Collector) string
 	// Decoder is the decoder a collector of the type uses when its

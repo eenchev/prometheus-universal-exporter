@@ -2485,6 +2485,27 @@
                 },
                 "type": "array"
               },
+              "connect_only": {
+                "description": "tcp: true makes the scrape a check that the port takes a connection: it dials the target, makes the TLS handshake when a tls block is set, and closes, writing and reading nothing. The answer is a JSON document: open, true or false, and when false the reason (refused, timeout, unreachable, reset, tls or error) and error; when the connection was made, address, the address reached, connect_seconds, and with tls tls_seconds and tls_version; and duration_seconds. A port that is not open is an answer, not a failed scrape. Not with send, send_hex, steps, greeting, terminator, answer_bytes, starttls, udp or unix_socket. See docs/TCP.md#checking-that-a-port-is-open.",
+                "type": "boolean"
+              },
+              "connect_timeout": {
+                "description": "tcp: with connect_only, how long the connection and its TLS handshake may take before the port counts as not open, reason timeout: at least 10ms, 5s when left out, and at most nine tenths of the time the scrape has left. Only with connect_only.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
               "connections": {
                 "additionalProperties": false,
                 "description": "sql: how the collector keeps connections to a target, a server or Snowflake account, in a pool for each of its databases and accounts, the limits counting across them. A static target may set each key but max_targets for itself. See docs/SQL.md#connections.",
@@ -3831,6 +3852,18 @@
                 "maximum": 1232,
                 "minimum": 8,
                 "type": "integer"
+              },
+              "ports": {
+                "description": "tcp: with connect_only, the ports of the target's host dialed at once, such as [22, 443, 5432], the target then being the host alone. The document has each port in ports, keyed by its number, as the document of one port is, open, whether every port was, and open_ports, how many were. At most 64, each once. See docs/TCP.md#several-ports-of-a-host.",
+                "items": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
               },
               "private_key_file": {
                 "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",

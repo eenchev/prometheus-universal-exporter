@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_kubernetes || request_type_icmp || request_type_ntp
+//go:build !select_request_types || request_type_kubernetes || request_type_icmp || request_type_ntp || request_type_tcp
 
 package fetch
 
@@ -10,7 +10,7 @@ import (
 
 // How a request recorded at its own place in the trace (tracedAt) ended,
 // for the types whose requests may be sent at once: kubernetes, icmp's
-// all_addresses and ntp's servers.
+// all_addresses, ntp's servers and tcp's ports.
 
 // outcome records how the request ended, as traceOutcome does, and that it
 // failed, as traceFailedOutcome does, unless its end is recorded already.

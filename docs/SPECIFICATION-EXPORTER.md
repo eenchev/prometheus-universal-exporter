@@ -3036,6 +3036,9 @@ types at build time): only a build asked for it carries it. Its keys:
 | `udp` | `false` | `true`: one UDP datagram is sent and the first back is the answer. |
 | `steps` | none | A conversation, in place of `send`, `send_hex`, `terminator` and `answer_bytes`, each refused beside it, as is `udp`: up to 16 entries of `send`, required, not `""`, held as `send` is, and `until`, a regular expression held as `greeting` is, required of each but the last. |
 | `unix_socket` | none | The absolute path of a Unix stream socket the exchange is made over; of the common part, as `http`'s. |
+| `connect_only` | `false` | `true`: the scrape connects, makes the TLS handshake with `tls`, and closes, writing and reading nothing; the answer is a JSON document of whether the port was open. |
+| `connect_timeout` | `5s` | With `connect_only`, how long the connection and its handshake may take; at least `10ms`. |
+| `ports` | none | With `connect_only`, up to 64 distinct ports from 1 to 65535 of the target's host, dialed at once. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
 - `send_hex` MUST be refused at load beside `send`, with a placeholder, with
@@ -3228,6 +3231,51 @@ types at build time): only a build asked for it carries it. Its keys:
   `answer` and `seconds`. The method MUST be `SEND`; a debug report MUST
   show each step's send, quoted, in `Tcp-Steps`, and the outcome the steps
   taken and the bytes read.
+- `connect_only: true` MUST be refused at load beside `send`, `send_hex`,
+  `steps`, `greeting`, `terminator`, `answer_bytes`, `starttls`, `udp` and
+  `unix_socket`, each named; `connect_timeout` and `ports` MUST be refused
+  without it, `connect_timeout` under `10ms`, and `ports` of more than 64,
+  of a port outside 1 to 65535, naming its index, and of a port twice. Its
+  decoder MUST be `json` and its transform `jq`, `yq` or `python`, as with
+  `document`, which MAY be written beside it.
+- A scrape of `connect_only` MUST dial the target, holding the connection
+  to the target lists as every connection is, make the TLS handshake when a
+  `tls` block is set, and close the connection, writing nothing to it and
+  reading nothing of it but the handshake's. Its body MUST be a JSON object
+  with `open`, true when the connection was made and, with `tls`, the
+  handshake too; `reason` and `error` when it is false, `reason` one of
+  `refused`, `timeout`, `unreachable`, `reset`, `tls` and `error`; when the
+  connection was made, `address`, the remote address it reached, and
+  `connect_seconds`, even when the handshake failed; with `tls` and a
+  handshake made, `tls_seconds` and `tls_version` as Go names it (`TLS
+  1.3`); and `duration_seconds`; a key that does not apply MUST be left
+  out. Its `Content-Type` MUST be `application/json`.
+- A port refused, not answering by the connection's deadline, unreachable,
+  reset, or whose handshake fails, MUST be answered `"open": false`, not
+  fail the scrape. A target the target lists refuse MUST fail the scrape,
+  never connected to, and so MUST a name that does not resolve, other than
+  by a lookup's timeout, and a scrape cut short before the connection's
+  deadline.
+- The connection and its handshake MUST end at `connect_timeout` from when
+  the scrape begins to connect, `5s` when it is left out, or, when sooner, at nine tenths
+  of the time the scrape has left to its deadline, so that the document is
+  answered within it.
+- With `ports`, the target MUST be a host alone, a name, an IPv4 address,
+  or an IPv6 address in brackets or not; one with a port MUST be refused
+  with `400`. Each port MUST be dialed at once, as a scrape of one port is,
+  and the body MUST hold `ports`, an object of each port's document keyed by
+  its number in decimal, `open`, whether every port was open, and
+  `open_ports`, how many were, with `duration_seconds`. A failure of any
+  port that fails a scrape MUST fail it.
+- The `http_method` of `connect_only` MUST be `CONNECT`. A debug report
+  MUST show the scrape, and with `ports` each port as a request of its own
+  whose `url` is `tcp://host:port` or `tls://host:port`, with its
+  connection's phases, a `Tcp-Connect-Timeout` header of the time the
+  connection was given, and as its outcome `open, connected to <address>`,
+  with `, began <version>` after a handshake, or `not open, <reason>:
+  <error>`; a span MUST tell `tcp.open` and, when not open,
+  `tcp.closed.reason`. The scrape's `url` label with `ports` MUST be
+  `tcp://host` or `tls://host`, an IPv6 address in brackets.
 
 #### `sshexec`
 
@@ -31541,6 +31589,18 @@ The chart values and monitors that expose this endpoint are specified in
 ## 34.313 The grants beside docs/KUBERNETES.md's examples render
 
 - `TestTheKubernetesPagesGrantsRender` (repository): each `kubernetesAccess` block of docs/KUBERNETES.md, six at least, renders a Role or a ClusterRole with the chart as written.
+
+## 34.314 A tcp collector checks that ports take a connection
+
+- `TestATCPConnectOnlyScrapeAnswersWhetherThePortTakesAConnection` (fetch, tcp): an open port answers `open`, the address reached and `connect_seconds`, as `application/json`, the server reading 0 bytes before the close; a refusing port answers `open: false`, `reason` `refused`, with no address; the method and the trace say `CONNECT`, the outcome `open, connected to` and `not open, refused`, neither failed.
+- `TestATCPConnectOnlyScrapeMakesTheTLSHandshake` (fetch, tcp): with the stand-in's CA the handshake answers `tls_seconds` and `tls_version`, the label `tls://`; an unknown authority answers `reason` `tls` with the address and `connect_seconds`; a server that never answers the handshake answers `reason` `timeout` within a `connect_timeout` of 100ms.
+- `TestATCPConnectOnlyScrapeFailsWhenItCannotAsk` (fetch, tcp): a denied target, of one port and of `ports`, fails as refused and is never connected to; a name that does not resolve fails naming it.
+- `TestATCPConnectOnlyScrapeDialsEachOfItsPorts` (fetch, tcp): two open ports and a refusing one answer each in `ports`, `open` false and `open_ports` 2, each its own `CONNECT` request of the trace; every port open answers `open`; the label is `tcp://127.0.0.1` and `tcp://[2001:db8::1]`; a host, `[v6]` and a bare IPv6 address are targets, one with a port or a path is refused.
+- `TestATCPConnectOnlyCollectorsKeysAreChecked` (fetch, tcp): `connect_only` beside each of the keys of what is sent or read, `starttls`, `udp` and `unix_socket` is refused naming it; `connect_timeout` and `ports` without it, a `connect_timeout` of 1ms, ports 0 and 65536, a port twice and 65 ports are refused; 64 ports, a 10ms timeout and `document` are taken.
+- `TestATCPConnectOnlyScrapeEndsItsConnectionsBeforeItsDeadline` (fetch, tcp): the connections end 5s from now by default, at `connect_timeout` within a longer deadline, and at nine tenths of a 1s deadline.
+- `TestTCPConnectOnlyDocumentationExamples` (repository, tcp): docs/TCP.md's port check gives `port_open` 1 of an open port and 0 of a refusing one, answered 200; its check of a host's ports gives `port_open` by port and `ports_open`; in a build with icmp the ping beside them and the static targets of both load.
+- `TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty` (repository, tcp), changed: rows of `connect_timeout`.
+- `TestATCPConnectOnlyCollectorIsDecodedAsJSON` (config, tcp): `connect_only`, `connect_timeout` and `ports` load from a file, the decoder `json`; a `regex` transform is refused naming the document.
 
 ## 42.1 OTLP export
 

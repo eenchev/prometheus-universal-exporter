@@ -86,6 +86,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `tcp` collector checks that a port takes a connection with
+  `connect_only: true`: it dials, makes the TLS handshake with a `tls`
+  block, and closes, sending and reading nothing, and answers a JSON
+  document of `open`, the address reached and how long the connection and
+  the handshake took. A port that refuses, does not answer within
+  `connect_timeout` or fails the handshake is `"open": false` with the
+  reason, not a failed scrape, so the series is 0 or 1
+  ([Checking that a port is open](docs/TCP.md#checking-that-a-port-is-open)).
+- With `ports: [22, 443, 5432]` such a collector dials each port of the
+  target's host at once, so one target covers a host; docs/TCP.md shows it
+  beside an `icmp` ping of the same host
+  ([Several ports of a host](docs/TCP.md#several-ports-of-a-host)).
 - docs/KUBERNETES.md has an example of each node's conditions, disk
   pressure among them, and its allocatable against its capacity
   ([Examples](docs/KUBERNETES.md#examples)).

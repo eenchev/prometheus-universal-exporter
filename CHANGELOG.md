@@ -86,6 +86,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `oauth2` login takes `grant_type: refresh_token` with a
+  `refresh_token_file`: the exporter trades a user's refresh token for an
+  access token, so the Gmail API and other Google and Microsoft APIs that
+  act for a user can be scraped. `client_secret_file` is optional with it,
+  for a public client, and a refresh token the endpoint rotates is used
+  until the file changes
+  ([A user's refresh token](docs/AUTHENTICATION.md#a-users-refresh-token)).
 - The chart's `preStop` and `allocator.preStop` set the exporter's and the
   allocator's container `lifecycle.preStop` hook, one of `exec`, `httpGet`
   and `sleep`; a sleep's seconds are added to the grace period the chart

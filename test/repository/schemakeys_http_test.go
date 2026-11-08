@@ -369,6 +369,7 @@ func httpSchemaKeys() []schemaKey {
 			{key: prefix + ".login.header", document: json, at: mark, setting: in("header: %s\n"), valid: "X-Auth-Token", invalid: `"X Token"`, absent: true, empty: true, emptyWas: refused},
 			{key: prefix + ".login.ttl", document: json, at: mark, setting: in("ttl: %s\n"), valid: "15m", invalid: "soon", absent: true, duration: true},
 			{key: prefix + ".login.auth_style", document: oauth2, at: mark, setting: in("auth_style: %s\n"), valid: "params", invalid: "auto", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.grant_type", document: oauth2, at: mark, setting: in("grant_type: %s\n"), valid: "client_credentials", invalid: "password", absent: true, empty: true, emptyWas: refused},
 			{key: prefix + ".login.scopes[]", document: oauth2, at: mark, setting: in("scopes: [%s]\n"), valid: "metrics", invalid: `"a b"`, absent: true},
 			{key: prefix + ".login.endpoint_params{}", document: oauth2, at: mark, setting: in("endpoint_params: {%s: x}\n"), valid: "audience", invalid: "grant_type", absent: true},
 		}

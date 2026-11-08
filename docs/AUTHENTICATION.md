@@ -237,9 +237,88 @@ collectors:
 every server must take; `auth_style: params` sends them as parameters of
 the form instead, for a server that wants them there. `scopes` are sent as
 the `scope` parameter, and `endpoint_params` as further parameters, but not
-`grant_type`, `scope`, `client_id` or `client_secret`, which the grant sets.
-The answer's `access_token` is sent as `Authorization: Bearer <token>`, or
-as `header` and `prefix` say, and its `expires_in` is the token's lifetime.
+`grant_type`, `scope`, `client_id`, `client_secret` or `refresh_token`,
+which the grant sets. The answer's `access_token` is sent as
+`Authorization: Bearer <token>`, or as `header` and `prefix` say, and its
+`expires_in` is the token's lifetime.
+
+### A user's refresh token
+
+`grant_type: refresh_token` makes an `oauth2` login ask for a token with the
+refresh token grant (RFC 6749 § 6), for an API that acts on a user's own
+account rather than a service's: a user consents once, in a browser, and the
+refresh token that consent gives is put in a file, from which every login
+gets a fresh access token. Gmail's API, a Google Workspace or a personal
+Google account alike, and Microsoft Graph's mail are reached so:
+
+```yaml
+collectors:
+  - name: gmail
+    request:
+      type: http
+      # The label's counts; INBOX unless the probe names another.
+      path: /gmail/v1/users/me/labels/{{param_label:INBOX}}
+      login:
+        type: oauth2
+        url: https://oauth2.googleapis.com/token
+        grant_type: refresh_token
+        client_id_file: /var/run/secrets/gmail/client-id
+        client_secret_file: /var/run/secrets/gmail/client-secret
+        refresh_token_file: /var/run/secrets/gmail/refresh-token
+        scopes: [https://www.googleapis.com/auth/gmail.readonly]
+    transform:
+      type: jq
+    metrics:
+      - name: gmail_messages
+        description: Messages in the label
+        expression: .messagesTotal
+        labels:
+          - name: label
+            expression: .name
+      - name: gmail_messages_unread
+        expression: .messagesUnread
+        labels:
+          - name: label
+            expression: .name
+```
+
+```text
+/probe?collector=gmail&target=https://gmail.googleapis.com&param_label=INBOX
+```
+
+`refresh_token_file` is required with `grant_type: refresh_token`, and is
+refused without it, `client_credentials` being the grant left out. The
+request sends `grant_type=refresh_token`, the refresh token, and `scopes` as
+`scope`, which a server that takes none ignores; `endpoint_params` may not
+set `refresh_token` either. `client_secret_file` is the client's secret, as
+for the other grant; left out, the client is a public one, such as a
+desktop or mobile app registered without a secret, and sends its id as a
+parameter of the form, so `auth_style: header`, a Basic credential of no
+secret, is refused beside it.
+
+An endpoint may answer a new refresh token beside the access token, in
+place of the one sent: Microsoft's identity platform does at every login,
+and Okta and Auth0 do with rotation turned on, and may then refuse the old
+one. The new one is sent at the next login, and the next one after that,
+until the file holds another than it held when it was replaced, which is
+the operator putting a new token in place. The file is never written, a
+Secret being mounted read-only, so a restart, or a second replica, sends
+the file's again: with an endpoint that refuses a refresh token once it is
+used, put a new one in the file when the exporter restarts, or run one
+replica of the collector. Google does not rotate them.
+
+To get the refresh token for Gmail, create an OAuth client in a Google
+Cloud project with the Gmail API enabled, and consent once, asking for
+offline access to the scope: with Google's OAuth 2.0 Playground, set to use
+the client's own id and secret, the client is a *Web application* with
+`https://developers.google.com/oauthplayground` among its redirect URIs;
+with a tool of your own that runs the consent in a browser and listens on
+localhost for its answer, a *Desktop app*. The Playground, or the tool,
+shows the refresh token the consent gave. A project whose consent screen is in *Testing*
+gets refresh tokens that expire after seven days; publish it, or keep it
+internal to a Workspace, for one that lasts. Mail itself is never read:
+`gmail.readonly` reads a label's counts, and nothing in the collector asks
+for a message.
 
 ### Where a login goes
 

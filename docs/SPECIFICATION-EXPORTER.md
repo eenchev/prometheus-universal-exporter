@@ -360,7 +360,7 @@ Support:
 - Optional file-backed basic authentication credentials
 - Bearer token authentication
 - A login before the request, whose token is sent on it: a JSON login or the
-  OAuth 2.0 client credentials grant (§ 42.6a)
+  OAuth 2.0 client credentials or refresh token grant (§ 42.6a)
 - TLS CA configuration
 - Configurable target certificate verification, including an explicit
   `insecure_skip_verify` opt-out
@@ -27120,7 +27120,10 @@ Pagination of an `http` collector's answer (§ 5.1, `http`, Pagination):
   a negative `ttl`; a login in `Authorization` beside `bearer_token_file`, or
   beside a `request.headers` entry of its header; for oauth2, both or neither
   of `client_id` and `client_id_file`, no `client_secret_file`, an endpoint
-  parameter the grant sets, a scope with a blank, an unknown `auth_style`. A
+  parameter the grant sets, a scope with a blank, an unknown `auth_style`,
+  an unknown `grant_type`, `refresh_token_file` without `grant_type:
+  refresh_token` or that grant without it, `auth_style: header` with that
+  grant and no `client_secret_file`. A
   login in `X-Auth-Token` beside `basic_auth_file` is taken; a static
   target's login beside its own bearer token is refused.
 - Following a configuration keeps the tokens of a login in force, drops
@@ -31763,6 +31766,19 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestChartRefusesAGracePeriodShorterThanItsPreStop` (chart, test/repository): a set grace period below what the sleep, the shutdown and the exit need fails naming both, the exporter's and the allocator's, with and without discovery; a `tcpSocket`, two handlers, none, an empty command, an `httpGet` of no port, and a sleep negative, fractional or of no seconds fail at `preStop` and at `allocator.preStop`, by the schema and with it skipped.
 - `TestTheChartsWholeNumbersHaveOneRangeInTheSchemaAndTheTemplates` (chart, test/repository), changed: `allocator.terminationGracePeriodSeconds` is held to 0 to 2147483647 by the schema and the templates, and an `httpGet` hook's port to 1 to 65535 by the schema.
 
+## 34.317 A user's refresh token for an oauth2 login
+
+- `TestOAuth2LoginUsesTheRefreshTokenGrant` (fetch): `grant_type: refresh_token` sends `grant_type=refresh_token`, the file's refresh token and the scope; a public client sends its id as a form parameter and no secret, a confidential one its id and secret as a Basic credential; a rotated refresh token the endpoint answers is sent at the next login, and the file's again once it changes; a missing `refresh_token_file` is a dry run's warning.
+- `TestALoginBlockIsCheckedWhenItLoads` (fetch), changed: a `grant_type` of `password`, `refresh_token` without `refresh_token_file`, `refresh_token_file` with the client credentials grant, set or left out, `auth_style: header` with the refresh grant and no secret, an `endpoint_params` of `refresh_token`, and a json login's `grant_type` or `refresh_token_file` are refused, naming the key.
+- `TestSchemaAndExporterAgreeOnALogin` (repository), changed: the schema and the exporter agree on `grant_type` and `refresh_token_file`, a public client with and without `auth_style: params`, and one with `auth_style: header`.
+- `TestSchemaAndExporterAgreeOnKeysWrittenEmpty` (repository), changed: `login.grant_type` written empty is the default grant.
+- `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `login.grant_type` is held to text alone.
+- `TestAuthenticationPageExamplesLoad` (repository), changed: the Gmail example of docs/AUTHENTICATION.md loads.
+
+## 34.318 A wrong privacy password is a decryption error each time
+
+- `TestAWrongSNMPv3PrivPasswordIsADecryptionErrorEachTime` (fetch, snmp): forty scrapes with a wrong privacy password, of DES and of AES, each fail naming `usmStatsDecryptionErrors`; the test agent reports anything a wrong key decrypts that is no scoped PDU of its engine as a decryption error, as one that cannot decode it does, where it had sent no answer when the garbage read as the start of a value.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32736,8 +32752,18 @@ MUST be supported:
   secret MUST be sent as a Basic credential, or as form parameters with
   `auth_style: params`; `scopes` as the `scope` parameter, and
   `endpoint_params` as further parameters, which MUST NOT name `grant_type`,
-  `scope`, `client_id` or `client_secret`. The answer's `expires_in` is the
-  token's lifetime.
+  `scope`, `client_id`, `client_secret` or `refresh_token`. The answer's
+  `expires_in` is the token's lifetime.
+- With `grant_type: refresh_token`, `type: oauth2` MUST ask for a token with
+  the refresh token grant (RFC 6749 § 6) instead, sending the content of
+  `refresh_token_file` as `refresh_token`; `refresh_token_file` is required,
+  `client_secret_file` MAY be left out, for a public client, whose id MUST
+  then be sent as a form parameter, and `auth_style: header` MUST be refused
+  without it. A refresh token the answer gives MUST be sent at the next login
+  in place of the file's while the file's content is unchanged, kept in
+  memory only and never written to the file. `refresh_token_file` MUST be
+  refused without `grant_type: refresh_token`, and a `grant_type` other than
+  `client_credentials`, the default, and `refresh_token` MUST be refused.
 
 A key of the other kind MUST be refused, and so MUST a login without `type`
 or `url`, at load, naming the collector or the target and the key. A secret

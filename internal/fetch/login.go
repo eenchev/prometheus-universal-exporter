@@ -39,7 +39,10 @@ import (
 //     (token), from a header of it (token_header), or from a cookie it sets
 //     (token_cookie), which is then sent back as that cookie.
 //   - oauth2 asks a token endpoint for a token with the client credentials
-//     grant (RFC 6749 § 4.4), with golang.org/x/oauth2's clientcredentials.
+//     grant (RFC 6749 § 4.4), with golang.org/x/oauth2's clientcredentials,
+//     or with the refresh token grant (§ 6), the refresh token read from
+//     refresh_token_file, for an API that acts on a user's account, which a
+//     user consented to once, such as Gmail's or Microsoft Graph's mail.
 //
 // Where a login goes is the configuration's alone, never a probe's: login.url
 // is absolute, fixed for the collector, or a path from the root resolved
@@ -103,12 +106,12 @@ func loginOf(c *model.Collector, overrides RequestOverrides) *model.LoginConfig 
 // The keys of each kind of login, for the message refusing another kind's.
 var (
 	jsonLoginKeys   = []string{"fields", "field_files", "token", "token_header", "token_cookie", "expires_in"}
-	oauth2LoginKeys = []string{"client_id", "client_id_file", "client_secret_file", "scopes", "endpoint_params", "auth_style"}
+	oauth2LoginKeys = []string{"client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style"}
 )
 
-// oauth2OwnParams are the parameters of a token request the client
-// credentials grant sets itself, which endpoint_params may not set.
-var oauth2OwnParams = []string{"grant_type", "scope", "client_id", "client_secret"}
+// oauth2OwnParams are the parameters of a token request the grant sets
+// itself, which endpoint_params may not set.
+var oauth2OwnParams = []string{"grant_type", "scope", "client_id", "client_secret", "refresh_token"}
 
 // validateLogin checks a login block when the configuration, or the static
 // target file, loads. It writes nothing into l, which may be a static
@@ -119,7 +122,7 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, 
 	order = loginKeyOrder(order)
 	if !slices.Contains(model.LoginTypes, l.Type) {
 		if l.Type == "" {
-			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, or type: oauth2, for the OAuth 2.0 client credentials grant", where)
+			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, or type: oauth2, for the OAuth 2.0 client credentials or refresh token grant", where)
 		}
 		return fmt.Errorf("%s.type is %q; it is json or oauth2", where, l.Type)
 	}
@@ -277,15 +280,36 @@ func checkJSONLogin(l *model.LoginConfig, where string, order []string) error {
 }
 
 // checkOAuth2Login holds an oauth2 login's rules: the client's id, in the
-// configuration or a file, and its secret, in a file; scopes without blanks,
-// which separate them in the request; no endpoint parameter the grant sets
-// itself; and an auth_style the library has.
+// configuration or a file, and its secret, in a file, which a public client
+// of the refresh token grant has none of; the grant, client_credentials or
+// refresh_token, the latter's refresh token in a file and the former with
+// none; scopes without blanks, which separate them in the request; no
+// endpoint parameter the grant sets itself; and an auth_style the library
+// has.
 func checkOAuth2Login(l *model.LoginConfig, where string) error {
 	if (l.ClientID == "") == (l.ClientIDFile == "") {
 		return fmt.Errorf("%s needs exactly one of client_id and client_id_file", where)
 	}
-	if strings.TrimSpace(l.ClientSecretFile) == "" {
-		return fmt.Errorf("%s needs client_secret_file, the file holding the client's secret", where)
+	switch l.GrantType {
+	case "", "client_credentials":
+		if l.RefreshTokenFile != "" {
+			return fmt.Errorf("%s sets refresh_token_file with the client credentials grant, which sends none; set grant_type: refresh_token beside it", where)
+		}
+		if strings.TrimSpace(l.ClientSecretFile) == "" {
+			return fmt.Errorf("%s needs client_secret_file, the file holding the client's secret", where)
+		}
+	case "refresh_token":
+		if strings.TrimSpace(l.RefreshTokenFile) == "" {
+			return fmt.Errorf("%s needs refresh_token_file with grant_type: refresh_token, the file holding the refresh token the user's consent gave", where)
+		}
+		if l.ClientSecretFile != "" && strings.TrimSpace(l.ClientSecretFile) == "" {
+			return fmt.Errorf("%s.client_secret_file is blanks alone; name the file of the client's secret, or leave it out for a public client", where)
+		}
+		if l.ClientSecretFile == "" && l.AuthStyle == "header" {
+			return fmt.Errorf("%s sets auth_style: header without client_secret_file; a public client, which has no secret, sends its id as a parameter of the form, so leave auth_style out", where)
+		}
+	default:
+		return fmt.Errorf("%s.grant_type is %q; it is client_credentials, the default, or refresh_token", where, l.GrantType)
 	}
 	for i, scope := range l.Scopes {
 		if scope == "" || strings.ContainsAny(scope, " \t\r\n\"\\") {
@@ -297,7 +321,7 @@ func checkOAuth2Login(l *model.LoginConfig, where string) error {
 			return fmt.Errorf("%s.endpoint_params has a parameter without a name", where)
 		}
 		if slices.Contains(oauth2OwnParams, name) {
-			return fmt.Errorf("%s.endpoint_params sets %s, which the client credentials grant sets itself (scope from scopes, the client's from client_id and client_secret_file)", where, name)
+			return fmt.Errorf("%s.endpoint_params sets %s, which the grant sets itself (scope from scopes, the client's from client_id and client_secret_file, the refresh token from refresh_token_file)", where, name)
 		}
 	}
 	if l.AuthStyle != "" && !slices.Contains(model.LoginAuthStyles, l.AuthStyle) {
@@ -937,7 +961,10 @@ func loginSeconds(value any) (time.Duration, bool) {
 }
 
 // oauth2Login asks the token endpoint u for a token with the client
-// credentials grant.
+// credentials grant, or with the refresh token grant: the same request of
+// the form, its grant_type refresh_token and the refresh token beside it,
+// which clientcredentials sends as it does its own (it lets grant_type be
+// another's). A public client, with no secret, sends its id as a parameter.
 func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, start time.Time) (loginToken, error) {
 	id := l.ClientID
 	if l.ClientIDFile != "" {
@@ -950,20 +977,33 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 		}
 		id = value
 	}
-	secret, err := ReadCredentialFile(l.ClientSecretFile)
-	if err != nil {
-		return loginToken{}, fmt.Errorf("reading login.client_secret_file: %w", err)
-	}
-	if secret == "" {
-		return loginToken{}, fmt.Errorf("login.client_secret_file %s is empty", l.ClientSecretFile)
+	var secret string
+	if l.ClientSecretFile != "" {
+		value, err := ReadCredentialFile(l.ClientSecretFile)
+		if err != nil {
+			return loginToken{}, fmt.Errorf("reading login.client_secret_file: %w", err)
+		}
+		if value == "" {
+			return loginToken{}, fmt.Errorf("login.client_secret_file %s is empty", l.ClientSecretFile)
+		}
+		secret = value
 	}
 	style := oauth2.AuthStyleInHeader
-	if l.AuthStyle == "params" {
+	if l.AuthStyle == "params" || secret == "" {
 		style = oauth2.AuthStyleInParams
 	}
 	params := url.Values{}
 	for name, value := range l.EndpointParams {
 		params.Set(name, value)
+	}
+	var refresh oauth2Refresh
+	if l.GrantType == "refresh_token" {
+		var err error
+		if refresh, err = oauth2RefreshToken(l); err != nil {
+			return loginToken{}, err
+		}
+		params.Set("grant_type", "refresh_token")
+		params.Set("refresh_token", refresh.sent)
 	}
 	config := clientcredentials.Config{ClientID: id, ClientSecret: secret, TokenURL: u.String(), Scopes: l.Scopes, EndpointParams: params, AuthStyle: style}
 	token, err := config.Token(context.WithValue(ctx, oauth2.HTTPClient, client))
@@ -995,6 +1035,9 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 		// is the operator's.
 		return loginToken{}, model.WithOperatorDetail(said, "the token endpoint's answer could not be read as a token"+loginAnswerLogged)
 	}
+	if l.GrantType == "refresh_token" {
+		refresh.answered(token.RefreshToken)
+	}
 	out := loginToken{value: token.AccessToken}
 	if !token.Expiry.IsZero() {
 		// The library reads expires_in against its own clock; the
@@ -1003,6 +1046,65 @@ func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig,
 		out.expires = start.Add(time.Until(token.Expiry))
 	}
 	return out, nil
+}
+
+// oauth2Refresh is the refresh token a login sends: the file's, or the
+// one the endpoint answered a login of the same file with in its place,
+// and where the login's key is kept.
+type oauth2Refresh struct {
+	key, file, sent string
+}
+
+// oauth2Rotated are the refresh tokens token endpoints answered in place
+// of the ones sent, by the login block they were answered to: an
+// endpoint that rotates its refresh tokens, as Microsoft's identity
+// platform and Okta's and Auth0's with rotation on do, takes the new one
+// from then on, and may refuse the old. The new one is sent until the
+// file changes, which is the operator putting another in place; the file
+// itself is never written, a Secret mounted read-only being where it
+// lives. At most maxLoginEntries are kept, as tokens are.
+var oauth2Rotated = struct {
+	sync.Mutex
+	byLogin map[string]oauth2Rotation
+}{byLogin: map[string]oauth2Rotation{}}
+
+// oauth2Rotation is a refresh token answered in place of the file's.
+type oauth2Rotation struct {
+	file, current string
+}
+
+// oauth2RefreshToken reads the refresh token a login of l sends: the
+// file's, unless the endpoint answered one in its place since, and the file
+// still holds what it did then.
+func oauth2RefreshToken(l *model.LoginConfig) (oauth2Refresh, error) {
+	file, err := ReadCredentialFile(l.RefreshTokenFile)
+	if err != nil {
+		return oauth2Refresh{}, fmt.Errorf("reading login.refresh_token_file: %w", err)
+	}
+	if file == "" {
+		return oauth2Refresh{}, fmt.Errorf("login.refresh_token_file %s is empty", l.RefreshTokenFile)
+	}
+	r := oauth2Refresh{key: loginFingerprint(l), file: file, sent: file}
+	oauth2Rotated.Lock()
+	defer oauth2Rotated.Unlock()
+	if rotation, ok := oauth2Rotated.byLogin[r.key]; ok && rotation.file == file {
+		r.sent = rotation.current
+	}
+	return r, nil
+}
+
+// answered keeps the refresh token the endpoint answered, when it is
+// another than the one sent, for the next login.
+func (r oauth2Refresh) answered(token string) {
+	if token == "" || token == r.sent {
+		return
+	}
+	oauth2Rotated.Lock()
+	defer oauth2Rotated.Unlock()
+	if _, known := oauth2Rotated.byLogin[r.key]; !known && len(oauth2Rotated.byLogin) >= maxLoginEntries {
+		clear(oauth2Rotated.byLogin)
+	}
+	oauth2Rotated.byLogin[r.key] = oauth2Rotation{file: r.file, current: token}
 }
 
 // oauth2EmptyAnswer is the library's error for an answer without a token,
@@ -1212,6 +1314,9 @@ func (c *loginCache) reset() {
 	defer c.mu.Unlock()
 	c.entries = map[string]*loginEntry{}
 	c.made, c.failed = map[string]uint64{}, map[string]uint64{}
+	oauth2Rotated.Lock()
+	clear(oauth2Rotated.byLogin)
+	oauth2Rotated.Unlock()
 }
 
 // counts reports how many logins a collector made and how many failed.
@@ -1227,7 +1332,7 @@ func loginFiles(l *model.LoginConfig, who string) []string {
 	if l == nil {
 		return nil
 	}
-	files := map[string]string{"client_id_file": l.ClientIDFile, "client_secret_file": l.ClientSecretFile}
+	files := map[string]string{"client_id_file": l.ClientIDFile, "client_secret_file": l.ClientSecretFile, "refresh_token_file": l.RefreshTokenFile}
 	for name, path := range l.FieldFiles {
 		files["field_files."+name] = path
 	}

@@ -4067,6 +4067,10 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "sasl_external": {
+                "description": "ldap: bind with SASL EXTERNAL, as the identity of the TLS client certificate request.tls.cert_file and key_file present, in place of a simple bind; not with bind_dn or password_file. A client certificate makes the connection TLS. See docs/LDAP.md#a-client-certificate.",
+                "type": "boolean"
+              },
               "searches": {
                 "description": "ldap, required: the searches whose results the document holds under .searches.\u003cname\u003e, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches.",
                 "items": {

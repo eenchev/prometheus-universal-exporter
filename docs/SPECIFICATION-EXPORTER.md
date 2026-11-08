@@ -3344,6 +3344,7 @@ asked for it carries it. Its keys:
 | --- | --- | --- |
 | `bind_dn` | none | The DN of a simple bind. A DN as RFC 4514 writes one, not blanks alone, no placeholder; only with `password_file`. Without it the bind is anonymous. |
 | `password_file` | none | The file of the bind's password. Not blanks alone; only with `bind_dn`. |
+| `sasl_external` | `false` | A SASL `EXTERNAL` bind in place of the simple one: only with `tls.cert_file` and `key_file`, and MUST be refused beside `bind_dn` or `password_file`. |
 | `start_tls` | `false` | Begin TLS with the StartTLS extended operation on a plaintext connection. |
 | `searches` | — | Required, one or more: entries of `name`, `base`, `scope`, `filter`, `attributes`, `count_only` and `max_entries`. |
 | `tls` | none | As `http`'s. |
@@ -3381,7 +3382,10 @@ asked for it carries it. Its keys:
   presence filter `(cn=*)`, as `(cn={{param_x:}}*)` fills in to, and never
   as a SubstringFilter of no substring.
 - A scrape MUST make one connection, begin TLS on it when `start_tls` is
-  set, send a simple bind, as `bind_dn` or anonymous, and then each search
+  set, send a simple bind, as `bind_dn` or anonymous, or with
+  `sasl_external` a bind of SASL credentials of the mechanism `EXTERNAL`
+  alone, no DN, password or authorization identity, shown as `BIND SASL
+  EXTERNAL`, and then each search
   in order, each answered before the next is sent, and end with an unbind.
   A search MUST ask for its `attributes`, or for `1.1` when it has none, and
   MUST carry the Simple Paged Results control (RFC 2696), not critical,
@@ -31518,6 +31522,10 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestS3FileChecksAnObjectsChecksum` (fetch, s3file): by default and with `when_present` an object whose CRC32 matches is read, one whose does not fails saying the checksum did not match, and one without is read; `off` reads the mismatched one; `required` fails an object without a checksum, and one with a composite one, and reads one with a whole one; `md5` is refused.
 - `TestSchemaAndExporterAgreeOnS3FileKeysWrittenEmpty` (repository, s3file), changed: a row of `checksums`.
+
+## 34.310 An ldap collector binds as its client certificate
+
+- `TestAnLDAPCollectorBindsAsItsClientCertificate` (fetch, ldap): over ldaps:// and after StartTLS the bind is SASL EXTERNAL, with no DN or password, over TLS, the server seeing the client certificate `exporter`; a bind the server refuses fails the scrape naming `BIND SASL EXTERNAL`; `sasl_external` without a certificate, and beside `bind_dn`, are refused.
 
 ## 42.1 OTLP export
 

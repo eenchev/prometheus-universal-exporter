@@ -86,6 +86,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `ldap` collector binds as its TLS client certificate with
+  `sasl_external: true` (SASL EXTERNAL), with no password file
+  ([A client certificate](docs/LDAP.md#a-client-certificate)).
 - An `s3file` collector's `checksums` sets how an object's checksum is
   checked: `when_present`, the default, `required` or `off`
   ([Checksums](docs/S3FILE.md#checksums)).

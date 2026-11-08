@@ -82,8 +82,12 @@ type Request struct {
 	Op string
 	// ID is the request's message ID.
 	ID int
-	// DN and Password are a bind's.
+	// DN and Password are a simple bind's, and Mechanism a SASL bind's.
 	DN, Password string
+	Mechanism    string
+	// ClientCN is the common name of the client certificate the
+	// connection's TLS presented, "" for none.
+	ClientCN string
 	// Base, Scope, Filter and Attributes are a search's, Scope as base, one
 	// or sub, Filter as RFC 4515 writes it.
 	Base       string
@@ -121,7 +125,7 @@ func NewTLS(t testing.TB) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return start(t, tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}), certificate, caFile)
+	return start(t, tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12, ClientAuth: tls.RequestClientCert}), certificate, caFile)
 }
 
 func listen() (net.Listener, error) {
@@ -253,24 +257,40 @@ func (s *Server) serve() {
 
 // session is what a connection has done so far.
 type session struct {
-	conn    net.Conn
-	r       *bufio.Reader
-	tls     bool
-	bound   bool
-	boundDN string
+	conn     net.Conn
+	r        *bufio.Reader
+	tls      bool
+	bound    bool
+	boundDN  string
+	clientCN string
+}
+
+// peerCN is the common name of the client certificate conn's handshake
+// was presented, "" for none.
+func peerCN(conn *tls.Conn) string {
+	if err := conn.HandshakeContext(context.Background()); err != nil {
+		return ""
+	}
+	if peers := conn.ConnectionState().PeerCertificates; len(peers) > 0 {
+		return peers[0].Subject.CommonName
+	}
+	return ""
 }
 
 func (s *Server) handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	_, isTLS := conn.(*tls.Conn)
+	tlsConn, isTLS := conn.(*tls.Conn)
 	sess := &session{conn: conn, r: bufio.NewReader(conn), tls: isTLS}
+	if isTLS {
+		sess.clientCN = peerCN(tlsConn)
+	}
 	for {
 		id, op, content, controls, err := readMessage(sess.r)
 		if err != nil {
 			return
 		}
 		req := decodeRequest(id, op, content, controls)
-		req.TLS = sess.tls
+		req.TLS, req.ClientCN = sess.tls, sess.clientCN
 		s.mu.Lock()
 		s.requests = append(s.requests, req)
 		answer := s.answer
@@ -291,11 +311,12 @@ func (s *Server) handle(conn net.Conn) {
 
 // The result codes the server answers with.
 const (
-	success                  = 0
-	protocolError            = 2
-	noSuchObject             = 32
-	invalidCredentials       = 49
-	insufficientAccessRights = 50
+	success                     = 0
+	protocolError               = 2
+	noSuchObject                = 32
+	inappropriateAuthentication = 48
+	invalidCredentials          = 49
+	insufficientAccessRights    = 50
 )
 
 // reply answers a request; false ends the connection.
@@ -312,6 +333,11 @@ func (s *Server) reply(sess *session, req Request) bool {
 		password, ok := s.accounts[strings.ToLower(req.DN)]
 		s.mu.Unlock()
 		switch {
+		case req.Mechanism == "EXTERNAL" && sess.clientCN != "":
+			sess.bound, sess.boundDN = true, "cn="+sess.clientCN
+			return write(Message(req.ID, ResultOp(0x61, success, "")))
+		case req.Mechanism != "":
+			return write(Message(req.ID, ResultOp(0x61, inappropriateAuthentication, "SASL "+req.Mechanism+": no client certificate")))
 		case req.DN == "" && req.Password == "":
 			sess.bound, sess.boundDN = true, ""
 			return write(Message(req.ID, ResultOp(0x61, success, "")))
@@ -330,11 +356,11 @@ func (s *Server) reply(sess *session, req Request) bool {
 		if !write(Message(req.ID, ResultOp(0x78, success, ""))) {
 			return false
 		}
-		tlsConn := tls.Server(sess.conn, &tls.Config{Certificates: []tls.Certificate{s.certificate}, MinVersion: tls.VersionTLS12})
+		tlsConn := tls.Server(sess.conn, &tls.Config{Certificates: []tls.Certificate{s.certificate}, MinVersion: tls.VersionTLS12, ClientAuth: tls.RequestClientCert})
 		if err := tlsConn.HandshakeContext(context.Background()); err != nil {
 			return false
 		}
-		sess.conn, sess.r, sess.tls = tlsConn, bufio.NewReader(tlsConn), true
+		sess.conn, sess.r, sess.tls, sess.clientCN = tlsConn, bufio.NewReader(tlsConn), true, peerCN(tlsConn)
 		return true
 	case "SEARCH":
 		return s.search(sess, req, write)
@@ -630,8 +656,14 @@ func decodeRequest(id int, op byte, content, controls []byte) Request {
 		req.Op = "BIND"
 		_, _, rest, _ := next(content)
 		_, dn, rest, _ := next(rest)
-		_, password, _, _ := next(rest)
-		req.DN, req.Password = string(dn), string(password)
+		authTag, auth, _, _ := next(rest)
+		req.DN = string(dn)
+		if authTag == 0xa3 {
+			_, mechanism, _, _ := next(auth)
+			req.Mechanism = string(mechanism)
+		} else {
+			req.Password = string(auth)
+		}
 	case 0x77:
 		_, name, _, _ := next(content)
 		if string(name) == "1.3.6.1.4.1.1466.20037" {
@@ -957,4 +989,40 @@ func selfSigned(t testing.TB) (tls.Certificate, string) {
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, caFile
+}
+
+// WriteClientCertificate writes a self-signed client certificate of the
+// common name cn and its key, as PEM files in a directory of the test's,
+// for a client to present; the server asks for one and takes any.
+func WriteClientCertificate(t testing.TB, cn string) (certFile, keyFile string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "client.pem"), filepath.Join(dir, "client-key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
 }

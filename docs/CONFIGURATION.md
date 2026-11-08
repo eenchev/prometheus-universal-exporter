@@ -2760,7 +2760,8 @@ reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) �
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
 certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
 `ntp` asks an NTP server for the time — see [NTP](NTP.md) — `icmp` pings
-a host — see [Ping over ICMP](ICMP.md) — and `kubernetes` lists Kubernetes
+a host — see [Ping over ICMP](ICMP.md) — `snmp` reads an SNMP agent's
+objects and tables — see [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes
 objects — see [Kubernetes objects](KUBERNETES.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
@@ -2789,6 +2790,7 @@ and so does an unknown type.
 | A TLS certificate's expiry and chain, of any TLS or STARTTLS server | `tlscert` | [TLS certificates](TLSCERT.md) |
 | A clock's offset from an NTP server | `ntp` | [NTP](NTP.md) |
 | Whether a host answers ping, and its round trip | `icmp`, opt-in | [Ping over ICMP](ICMP.md) |
+| A switch's, router's or UPS's counters over SNMP, as snmp_exporter reads them | `snmp`, opt-in | [SNMP agents](SNMP.md) |
 | Kubernetes objects, or each pod's ephemeral storage | `kubernetes` | [Kubernetes objects](KUBERNETES.md) |
 
 An opt-in type is in a build that asks for it, `OPT_IN_REQUEST_TYPES`
@@ -2940,6 +2942,17 @@ long apart, `reply_timeout` how long the last one's reply is waited for and
 `payload_bytes` the data each carries; `ip_family`, `allowed_targets` and
 `denied_targets` apply too. The decoder is `json`; its table is in [Ping
 over ICMP](ICMP.md#a-collector).
+
+For `snmp`, in a build that [asks for it](SNMP.md#building-with-snmp), at
+least one of `get`, the objects read one by one, and `walk`, the tables read
+whole, is required, each object by a name of the collector's and its
+numeric identifier; `snmp_version` is 1, 2 for v2c, the default, or 3, v1
+and v2c requiring `community_file` and v3 `username` and `security_level`,
+with `auth_protocol`, `auth_password_file`, `priv_protocol` and
+`priv_password_file` as its level asks; `request_timeout`, `retries`,
+`max_repetitions`, `walk_limit`, `hex`, `context_name`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+decoder is `json`; its table is in [SNMP agents](SNMP.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -2984,6 +2997,9 @@ accepts `timeout` and `param_<name>`, and requires a `target`, the service,
 `param_<name>`, and requires a `target`, the host, as `sshfile` does.
 `icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
 host pinged, with no port.
+
+`snmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
+agent, `host:port`, port 161 when left out.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3044,7 +3060,7 @@ database drivers, about 6 MB for the three built in by default; `dns`,
 `ntp` and `kubernetes` need nothing outside the standard library, and
 `tlscert` only `golang.org/x/crypto/ocsp`, of a module the default build
 links already; the opt-in `s3file`
-links the AWS SDK, below, the opt-in `redis`, `tcp`, `ldap` and `icmp` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links the AWS SDK, below, the opt-in `redis`, `tcp`, `ldap`, `icmp` and `snmp` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
@@ -3052,9 +3068,10 @@ drivers](SQL.md#building-with-more-drivers)).
 
 An opt-in type is one no build carries unless asked, the default build and
 the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB, `redis`, `tcp` and `ldap`, which need nothing outside the
+6.7 MB, `redis`, `tcp`, `ldap`, `icmp` and `snmp`, which need nothing outside the
 standard library and are left out of the builds of deployments with no Redis
-or text-protocol service to read, or directory to search, and `sshexec`,
+or text-protocol service to read, directory to search, host to ping or SNMP
+agent to read, and `sshexec`,
 which runs commands on the hosts it reaches, and is in no build that does
 not ask to run them.
 `OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
@@ -3065,7 +3082,7 @@ any type:
 make build OPT_IN_REQUEST_TYPES=s3file
 make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap
 docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" .
+go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" .
 ```
 
 Its tag alone, `request_type_s3file`, `request_type_redis`,
@@ -6041,6 +6058,7 @@ as each type says it, so a build without a type has nothing of it:
 | `dns` | Name to resolve: `example.com`, the server being `request.server` or the system's resolver; Address to resolve for `PTR` |
 | `ntp` | NTP server: `host or host:123` |
 | `icmp` | Host: `host` |
+| `snmp` | Agent: `host or host:161` |
 | `tlscert` | Server: `host or host:443`, or the `starttls` protocol's port |
 | `sshfile`, `sshexec` | SSH host: `host or host:22` |
 | `localfile` | File, or Directory when `request.path` names the file or `files` reads a directory: under its root, optional |
@@ -7098,6 +7116,7 @@ nothing there.
 - [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
 - [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.
 - [ICMP.md](ICMP.md) — the opt-in `icmp` request type.
+- [SNMP.md](SNMP.md) — the opt-in `snmp` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

@@ -186,6 +186,15 @@ type RequestOverrides struct {
 	PassphraseFile string
 	PasswordFile   string
 	TLS            *model.TLSConfig
+	// CommunityFile, AuthPasswordFile and PrivPasswordFile are a static
+	// target's, replacing an snmp collector's community and v3 passwords,
+	// and RequestTimeout and Retries its request.request_timeout and retries;
+	// no probe parameter sets them.
+	CommunityFile    string
+	AuthPasswordFile string
+	PrivPasswordFile string
+	RequestTimeout   *time.Duration
+	Retries          *int
 	// SQLConnections is a static target's request.connections, whose keys
 	// replace a sql collector's; no probe parameter sets it.
 	SQLConnections *model.SQLConnections

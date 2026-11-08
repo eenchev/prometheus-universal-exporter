@@ -455,12 +455,13 @@ One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
 `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes` and the opt-in
-`s3file`, `redis`, `tcp`, `ldap`, `sshexec` and `icmp` — and under every transform: `transform.labels` are applied
+`s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
 value](CONFIGURATION.md#long-label-values). A `python` script is not given
 the parameters; what it labels its series with is its own.
+
 <!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or
@@ -810,7 +811,7 @@ Whoever can reach `/probe` chooses the `target`, and a target that redirects
 chooses where a followed redirect goes. `allowed_targets` and
 `denied_targets` bound where a collector's requests may go, for `http`,
 `graphite`, `grpc`, [`sshfile`](SSHFILE.md), [`sql`](SQL.md#the-target),
-[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`icmp`](ICMP.md#the-target), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target) and [`ldap`](LDAP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
+[`tlscert`](TLSCERT.md), [`ntp`](NTP.md), [`icmp`](ICMP.md#the-target), [`redis`](REDIS.md#the-target), [`tcp`](TCP.md#the-target), [`ldap`](LDAP.md#the-target) and [`snmp`](SNMP.md#the-target) collectors, which names a [`dns`](DNS.md#target-lists)
 collector may resolve, matched by name alone, and which buckets an
 [`s3file`](S3FILE.md#which-object-is-read) collector may read, by name or
 glob, since its target is a bucket:
@@ -829,7 +830,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `icmp`, `redis`, `tcp`, `ldap` and `sshexec` collector, and a
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `icmp`, `redis`, `tcp`, `ldap`, `sshexec` and `snmp` collector, and a
 `dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
 refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,

@@ -41,8 +41,13 @@ func (p valuePlace) node(t *testing.T, schema map[string]any) map[string]any {
 // mapping and the key.
 func (p valuePlace) named() string {
 	last, key := p[len(p)-1], ""
-	if len(p) > 1 {
-		key = p[len(p)-2]
+	// A mapping's key is told of by the nearest key of a name: of a
+	// mapping of mappings, such as an snmp collector's walk, the mapping
+	// that holds them.
+	for i := len(p) - 2; i >= 0; i-- {
+		if key = p[i]; key != "{}" {
+			break
+		}
 	}
 	switch last {
 	case "[]":

@@ -276,6 +276,14 @@
                 },
                 "type": "array"
               },
+              "auth_password_file": {
+                "description": "snmp, of snmp_version 3 with authNoPriv or authPriv: replaces the collector's auth_password_file for this target, the password of the target's own username or, without one, of the collector's. No {{param_...}} placeholder.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "basic_auth": {
                 "additionalProperties": false,
                 "properties": {
@@ -393,6 +401,14 @@
                 ]
               },
               "body": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "community_file": {
+                "description": "snmp, of snmp_version 1 or 2: replaces the collector's community_file for this target. No {{param_...}} placeholder.",
                 "type": [
                   "string",
                   "number",
@@ -1208,6 +1224,14 @@
                   "boolean"
                 ]
               },
+              "priv_password_file": {
+                "description": "snmp, of snmp_version 3 with authPriv: replaces the collector's priv_password_file for this target. No {{param_...}} placeholder.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "private_key_file": {
                 "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does.",
                 "not": {
@@ -1247,6 +1271,28 @@
                   "requests_per_second"
                 ],
                 "type": "object"
+              },
+              "request_timeout": {
+                "description": "snmp: replaces the collector's request_timeout for this target: how long each request waits for its answer before it is sent again, at least 10ms; 0 keeps the collector's. The scrape as a whole ends at timeout.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "retries": {
+                "description": "snmp: replaces the collector's retries for this target: how many times a request unanswered is sent again, from 0 to 5.",
+                "minimum": 0,
+                "type": "integer"
               },
               "retry": {
                 "additionalProperties": false,
@@ -1438,7 +1484,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
+                "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. snmp: replaces an SNMPv3 collector's user for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
                 "not": {
                   "anyOf": [
                     {

@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_dns || request_type_kubernetes || request_type_ldap || request_type_redis || request_type_tcp || request_type_tlscert
+//go:build !select_request_types || request_type_dns || request_type_kubernetes || request_type_ldap || request_type_redis || request_type_snmp || request_type_tcp || request_type_tlscert
 
 package repository
 

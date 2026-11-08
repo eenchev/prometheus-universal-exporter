@@ -86,8 +86,13 @@ func (p valuePlace) written(value string) string {
 // mapping and the key, and how the value that is none was written.
 func (p valuePlace) said(value string) string {
 	last, key := p[len(p)-1], ""
-	if len(p) > 1 {
-		key = p[len(p)-2]
+	// The key a mapping's key is told of by is the nearest one of a name:
+	// of a mapping of mappings, such as an snmp collector's walk, the
+	// mapping that holds them.
+	for i := len(p) - 2; i >= 0; i-- {
+		if key = p[i]; key != "{}" {
+			break
+		}
 	}
 	how := "is written" + value
 	switch {

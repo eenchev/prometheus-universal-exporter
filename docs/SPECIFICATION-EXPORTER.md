@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket (`tcp`), searches of LDAP directories (`ldap`), and the echo replies of hosts pinged over ICMP (`icmp`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket (`tcp`), searches of LDAP directories (`ldap`), the echo replies of hosts pinged over ICMP (`icmp`), and the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
@@ -708,8 +708,8 @@ number and which the exporter MUST refuse.
 
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
-`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec` and
-`icmp` are implemented;
+`tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
+`icmp` and `snmp` are implemented;
 FTP is anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -840,11 +840,11 @@ and the source MUST list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap` and `icmp` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp` and `snmp` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
-  and of `tcp`'s (`internal/testutil`) included — and the test MUST find none of the other
+  and of `tcp`'s and `snmp`'s (`internal/testutil`) included — and the test MUST find none of the other
   types' modules in a build of any of them, and in a build of `tcp` alone no
   package a build of no request type lacks but the standard library's. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
@@ -2546,6 +2546,127 @@ types at build time). Its keys:
   and `family` 0, and the counts, the round trips and their statistics of
   all of them together. An address whose ping fails MUST fail the scrape,
   naming it. Without it, the document MUST have neither key.
+
+#### `snmp`
+
+An `snmp` collector reads an SNMP agent's objects one by one and walks its
+tables, and hands the transforms a JSON document of what it answered. It is
+an opt-in type (§ 5.1, Selecting request types at build time), and MUST
+import nothing outside the standard library, MIBs included: its objects are
+named by the collector and numbered by their identifiers. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `snmp_version` | `2` | 1, 2 for v2c, or 3. |
+| `community_file` | none | With 1 and 2, required: the file of the community. |
+| `username` | none | With 3, required: the user, of the common part. |
+| `security_level` | none | With 3, required: `noAuthNoPriv`, `authNoPriv` or `authPriv`. |
+| `auth_protocol`, `auth_password_file` | none | With `authNoPriv` and `authPriv`, required: `MD5`, `SHA`, `SHA224`, `SHA256`, `SHA384` or `SHA512`, and the file of the password. |
+| `priv_protocol`, `priv_password_file` | none | With `authPriv`, required: `DES`, `AES`, `AES192`, `AES256`, `AES192C` or `AES256C`, and the file of the password. |
+| `context_name` | `""` | With 3, the context. |
+| `get` | none | Objects by name and identifier, at most 256. |
+| `walk` | none | Tables by name, each columns by name and identifier, at most 32 tables of 64 columns. |
+| `hex` | none | Names of `get` and `table.column` of `walk` written as hexadecimal. |
+| `max_repetitions` | `25` | With 2 and 3, the values a GetBulk asks for, 1 to 255. |
+| `request_timeout` | `1s` | How long a request waits for its answer, at least `10ms`. |
+| `retries` | `1` | How many times one unanswered is sent again, 0 to 5. |
+| `walk_limit` | `10000` | The most values of a column, 1 to 1000000. |
+| `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
+
+- `get` or `walk` MUST name at least one object. A name of `get`, of a
+  table and of a column MUST be letters, digits and `_`, not beginning with
+  a digit; a column MUST NOT be named `index`; an identifier MUST be
+  numbers by dots, a leading dot taken, of 2 to 128 arcs, the first 0, 1 or
+  2, the second below 40 under 0 and 1, each at most 4294967295; an object
+  of `get` named twice and a name of `hex` of no object MUST be refused at
+  load.
+- A key of one version's account MUST be refused with another's: v3's keys
+  with 1 and 2, `community_file` with 3, a protocol or password file a
+  security level does not use, and `max_repetitions` with 1. A password MUST
+  be at least 8 characters and a community not empty, read from its file at
+  each scrape, blanks around it taken off; one that is not MUST fail the
+  scrape naming the key, and `--dry-run` MUST warn of it.
+- The target MUST be `host`, `host:port` or `[v6]:port`, port 161 when it
+  names none, a bare IPv6 address too; a scheme, a path, a query or a user
+  MUST be refused before anything is sent. Its `url` label MUST be
+  `snmp://host:port`, its `http_method` `WALK` with `walk` and `GET`
+  without. The target lists MUST hold the name before the socket is opened
+  and the address when it is connected, as an `ntp` request's.
+- The requests MUST go over one UDP socket of the scrape. A request
+  unanswered within `request_timeout`, or the scrape's deadline when sooner,
+  MUST be sent again, `retries` times, and a scrape with none answered MUST
+  fail saying how many were sent and how long each waited; a datagram that
+  is not the answer, by its request-id, of v3 its msgID, MUST be ignored. A
+  read the system refuses, as an ICMP port unreachable makes it, MUST fail
+  the scrape saying no agent listens.
+- `get` MUST be asked with GetRequest, at most 32 objects a request in the
+  order of their names; an object the agent answers `noSuchObject` or
+  `noSuchInstance` MUST be left out of the document; v1's `noSuchName` MUST
+  take the object its error-index names out of the request and ask the rest
+  again; `tooBig` MUST halve the request; any other error-status MUST fail
+  the scrape naming the object and the status, and an answer of another
+  number of values, or another identifier in an object's place, MUST fail
+  it.
+- Each column of `walk` MUST be walked from its identifier: with v1 by
+  GetNext, one value a request, until `noSuchName`; with 2 and 3 by GetBulk
+  of `max_repetitions`, halved on `tooBig` down to 1, until `endOfMibView`
+  or a value outside the column. A value not past the one before it MUST
+  fail the scrape, and a column past `walk_limit` values MUST fail it as a
+  limit exceeded. The columns of a table MUST be merged into rows by the
+  index, the identifier after the column's, each row having `index`, the
+  index dotted, and the values of the columns the agent has of it, the rows
+  in the order of their index as identifiers.
+- A value MUST be written: an INTEGER, Counter32, Gauge32, TimeTicks
+  (hundredths), Unsigned32 and Counter64 as a number of every digit; an
+  OCTET STRING as text when it is UTF-8 of no control character but a tab
+  and line ends and not named in `hex`, and otherwise as its bytes in two
+  hexadecimal digits each by colons; an OBJECT IDENTIFIER and an IpAddress
+  dotted; an Opaque of a finite float or double (`0x9f78`, `0x9f79`) as the
+  number and any other as hexadecimal; a NULL as null. A value of another
+  tag MUST fail the scrape.
+- The body MUST be a JSON object with `get`, each object's `type` and
+  `value`, `walk`, each table's rows, `version` (`1`, `2c` or `3`),
+  `address`, the address the requests went to, of v3 `engine_id` in
+  hexadecimal, `requests`, the requests sent, again ones counted, and
+  `duration_seconds`, with the `Content-Type` `application/json` and no
+  status, held to the response limit as a limit exceeded.
+- With 3, a scrape MUST first discover the engine (RFC 3414 § 4): an
+  unauthenticated, reportable request naming no engine, no time and no
+  user, whose Report brings the engine's ID, boots and time; an answer with
+  no engine ID MUST fail the scrape. The passwords MUST be made keys and
+  localized to the engine as RFC 3414 § A.2 does, with the authentication
+  protocol's hash; each request MUST then name the engine, its boots and
+  its time as discovery read it plus the seconds since, and the context.
+- With `authNoPriv` and `authPriv` each request MUST be signed with HMAC of
+  the protocol over the message, its authentication parameters zeros,
+  truncated to 12 bytes for MD5 and SHA, 16, 24, 32 and 48 for SHA224 to
+  SHA512 (RFC 7860), and an answer MUST be signed alike and be checked,
+  one signed wrong failing the scrape and one unsigned failing it too. With
+  `authPriv` the scoped PDU MUST be encrypted: DES-CBC under the first 8
+  bytes of the privacy key, its IV the next 8 XOR a salt of the boots and a
+  counter, padded to whole blocks (RFC 3414 § 8); AES-CFB-128 under its
+  first 16, 24 or 32, its IV the boots, the time and a salt of 8 bytes
+  (RFC 3826); a key too short for AES192 and AES256 extended by the hash of
+  itself, `draft-blumenthal-aes-usm-04`, and for AES192C and AES256C by the
+  key localized from it, `draft-reeder-snmpv3-usm-3desede`. An answer MUST
+  be decrypted with its own boots, time and salt.
+- A Report MUST fail the scrape naming its counter — an unsupported
+  security level, an unknown user, a wrong digest, a decryption error, an
+  unknown engine or context — but one of `usmStatsNotInTimeWindows` after
+  discovery, which MUST take the engine's boots and time from the Report
+  and send the request again, once, not counted as a retry.
+- A debug report MUST show, of v3, `DISCOVER` with `Snmp-User` and as its
+  outcome the engine in hexadecimal, its boots and time; the `get` as one
+  `GET` with `Snmp-Objects`, each name and identifier, and as its outcome
+  how many objects the agent had of how many, in how many requests; and
+  each table as a `WALK` with `Snmp-Table` and `Snmp-Columns`, its outcome
+  the rows and columns and the requests.
+- A static target MAY set `timeout`, `request_timeout` and `retries`, held
+  as the collector's are, and its own account as its collector's version
+  and level use it: `community_file` of 1 and 2, `username`,
+  `auth_password_file` and `priv_password_file` of 3, none holding a
+  placeholder; each MUST be part of the target's cache key. A probe MAY set
+  `timeout` and `param_<name>`, which the label values take.
 
 #### `ntp`
 
@@ -10366,7 +10487,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap` or `sshexec` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec` or `snmp` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -30951,7 +31072,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md` and `icmp` in `docs/ICMP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -31055,7 +31176,7 @@ Do NOT implement these unless required to support the core design:
 - Runtime package installation
 - General-purpose data science environment
 - Database access from Python (databases are the `sql` request type, § 5.1)
-- SNMP
+- Reading MIBs: an `snmp` collector names its objects by number (§ 5.1, `snmp`)
 - Kafka
 - Protobuf-encoded HTTP responses (gRPC calls are a request type, § 5.1)
 - GraphQL client logic
@@ -31601,6 +31722,30 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTCPConnectOnlyDocumentationExamples` (repository, tcp): docs/TCP.md's port check gives `port_open` 1 of an open port and 0 of a refusing one, answered 200; its check of a host's ports gives `port_open` by port and `ports_open`; in a build with icmp the ping beside them and the static targets of both load.
 - `TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty` (repository, tcp), changed: rows of `connect_timeout`.
 - `TestATCPConnectOnlyCollectorIsDecodedAsJSON` (config, tcp): `connect_only`, `connect_timeout` and `ports` load from a file, the decoder `json`; a `regex` transform is refused naming the document.
+
+## 34.315 The opt-in snmp request type
+
+- `TestAnSNMPCollectorReadsObjectsAndWalksTables` (fetch, snmp): a v2c collector's objects are their types and values, an object the agent lacks left out; a table's columns are merged into rows by index, in numeric order, a row lacking a column the agent lacks; a Counter64 keeps every digit; a MAC address, and a column of `hex` that reads as text, are hexadecimal by colons; TimeTicks, an OID, an IpAddress index and an Opaque float are written as the rule says; the agent sees a Get and GetBulks of 25; the trace has a `GET` and a `WALK` of each table with their outcomes and `Snmp-Objects`; the method is `WALK`, or `GET` without `walk`; the label is `snmp://host:port`.
+- `TestAnSNMPv1CollectorWalksWithGetNext` (fetch, snmp): v1 asks a Get again without the object its noSuchName names, and walks with GetNext to the end of a column and to the end of the agent's objects.
+- `TestAnSNMPWalkAsksForFewerValuesWhenTheAnswerIsTooBig` (fetch, snmp): an agent answering tooBig above 5 is asked for 25, 12, 6 and 3.
+- `TestAnSNMPWalkIsHeldToItsLimits` (fetch, snmp): a column past `walk_limit` and a document past `max_response_bytes` fail as limits exceeded.
+- `TestAnSNMPRequestUnansweredIsSentAgain` (fetch, snmp): a dropped request is sent again and answered, 2 requests; an agent of another community is not answered after 2 requests of 50ms each, within a second; a target's own `retries` and `request_timeout` send 1 of 30ms; a target's own community is answered; a port no agent listens on fails.
+- `TestAnSNMPCollectorKeepsToItsTargetLists` (fetch, snmp): the metadata service and a denied agent are refused, the agent sent nothing.
+- `TestSNMPv3KeysAreRFC3414s` (fetch, snmp): `maplesyrup` gives RFC 3414 § A.3's keys of MD5 and SHA, made and localized; an MD5 key extended for AES-256 by either way is 32 bytes, its first 16 the localized key, the two ways different.
+- `TestAnSNMPv3CollectorReadsAtEachSecurityLevel` (fetch, snmp): against a stand-in agent written apart from the exporter's encoding, a user of noAuthNoPriv, of authNoPriv with each of the six authentication protocols, and of authPriv with MD5, SHA and SHA512 and each of the six privacy protocols reads an object and a table after discovery, the document naming the engine.
+- `TestAnSNMPv3RequestTheAgentRefusesSaysWhy` (fetch, snmp): a Report of the time window has the request sent again and answered, the trace's `DISCOVER` naming the engine and the user; an unknown user, a wrong authentication or privacy password and another level fail naming the Report's counter; a short and an empty password file fail naming why.
+- `TestAnSNMPCollectorsKeysAreChecked` (fetch, snmp): each refusal of a key of the account, of an object and of a limit, a key of another type and a tls block; the defaults; and the forms of a target.
+- `TestAStaticTargetOfAnSNMPCollectorKeepsToItsAccount` (fetch, snmp): a target's own account goes with its collector's version and level, its `request_timeout` and `retries` with the collector's bounds; `--dry-run` warns of a missing community file of the collector and of a target.
+- `TestAnSNMPCollectorProbe`, `TestADebugProbeOfAnSNMPCollector` and `TestAnSNMPCollectorsDocumentInPython` (exporter, snmp): a probe gives the uptime and each interface's state and octets; the verbose self-metrics label it `WALK` and `snmp://`; the debug report shows the `GET` and the `WALK` and the document; a target with a scheme is 400, a refused one 403, a silent agent 502 in the snmp stage; a python script reads the rows.
+- `TestSNMPStaticTargetsReadWithTheirOwnAccounts` (exporter, snmp): static targets of one caching collector read with their own community, their own v3 user and password, and their own `request_timeout` and `retries`, a target of the collector's wrong community not answered from the cache, and an impatient target sending 2 requests.
+- `TestAnSNMPPlaygroundMakesNoRequest` (exporter, snmp): a playground of a v3 collector reads a pasted document and sends nothing to the agent's port, and one naming a community or password file is refused, naming the key.
+- `TestAStaticTargetOfAnSNMPCollectorIsChecked` (exporter, snmp): a key of another type, another version's account, a `request_timeout` of 1ms and a port past 65535 are refused at load.
+- `TestSNMPDocumentationExamples` (repository, snmp): the collectors of docs/SNMP.md load and give their series against a stand-in agent, v2c and v3, and the static targets load against them.
+- `TestSchemaAndExporterAgreeOnSNMPKeysWrittenEmpty` (repository, snmp): rows of `security_level`, `auth_protocol`, `priv_protocol` and `request_timeout`.
+- `TestANewRequestTypeIsWiredByTheScaffold` (repository), changed: the opt-in `zzdemo` lands after `snmp`, the last opt-in type of the tree.
+- `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `security_level`, `auth_protocol`, `priv_protocol`, and the identifiers of `get` and of `walk`'s columns, are held to text alone.
+- `TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary` (repository), changed: a build of snmp alone links no package a build of no request type lacks but the standard library's.
+- `TestNoKeyEntryOrMappingValueOfTheSchemasTakesNoValue` and `TestSchemaAndExporterAgreeOnTheKindOfValueEveryPlaceTakes` (repository), changed: a key of a mapping of mappings, as `walk`'s columns, is told of by the nearest key of a name, `walk`.
 
 ## 42.1 OTLP export
 

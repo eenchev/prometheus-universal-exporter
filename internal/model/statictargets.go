@@ -104,6 +104,16 @@ type TargetRequestConfig struct {
 	PrivateKeyFile string `yaml:"private_key_file"`
 	PassphraseFile string `yaml:"passphrase_file"`
 	PasswordFile   string `yaml:"password_file"`
+	// CommunityFile, AuthPasswordFile and PrivPasswordFile replace an snmp
+	// collector's: the community of v1 and v2c, and the passwords of a v3
+	// user, whose name is Username. RequestTimeout and Retries replace its
+	// own: how long each request waits for its answer, and how many
+	// times one unanswered is sent again.
+	CommunityFile    string    `yaml:"community_file"`
+	AuthPasswordFile string    `yaml:"auth_password_file"`
+	PrivPasswordFile string    `yaml:"priv_password_file"`
+	RequestTimeout   *Duration `yaml:"request_timeout"`
+	Retries          *int      `yaml:"retries"`
 	// TLS replaces, as a whole block, a redis, ldap, tcp, sql, grpc, http
 	// or graphite collector's request.tls for this target; nil keeps the
 	// collector's. Written, even as tls: {}, it asks for TLS

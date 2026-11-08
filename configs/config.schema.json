@@ -2316,6 +2316,27 @@
                 },
                 "type": "array"
               },
+              "auth_password_file": {
+                "description": "snmp: with security_level authNoPriv or authPriv, the file of the user's authentication password, at least 8 characters, read at each scrape.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "auth_protocol": {
+                "description": "snmp: with security_level authNoPriv or authPriv, how requests are signed: HMAC of MD5, SHA (SHA-1), SHA224, SHA256, SHA384 or SHA512 (RFC 3414, RFC 7860), as the user is configured on the agent.",
+                "enum": [
+                  "MD5",
+                  "SHA",
+                  "SHA224",
+                  "SHA256",
+                  "SHA384",
+                  "SHA512",
+                  ""
+                ],
+                "type": "string"
+              },
               "basic_auth": {
                 "additionalProperties": false,
                 "properties": {
@@ -2485,6 +2506,14 @@
                 },
                 "type": "array"
               },
+              "community_file": {
+                "description": "snmp: with snmp_version 1 or 2, the file of the community the agent answers to, read at each scrape, blanks around it taken off; required with them, refused with 3. See docs/SNMP.md#versions-and-accounts.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "connect_only": {
                 "description": "tcp: true makes the scrape a check that the port takes a connection: it dials the target, makes the TLS handshake when a tls block is set, and closes, writing and reading nothing. The answer is a JSON document: open, true or false, and when false the reason (refused, timeout, unreachable, reset, tls or error) and error; when the connection was made, address, the address reached, connect_seconds, and with tls tls_seconds and tls_version; and duration_seconds. A port that is not open is an answer, not a failed scrape. Not with send, send_hex, steps, greeting, terminator, answer_bytes, starttls, udp or unix_socket. See docs/TCP.md#checking-that-a-port-is-open.",
                 "type": "boolean"
@@ -2580,6 +2609,14 @@
                   }
                 },
                 "type": "object"
+              },
+              "context_name": {
+                "description": "snmp: with snmp_version 3, the context the objects are read in; the default context when left out.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               },
               "count": {
                 "description": "icmp: how many echo requests a scrape sends, from 1 to 100; 3 when left out. icmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/ICMP.md.",
@@ -2726,6 +2763,14 @@
                   "boolean"
                 ]
               },
+              "get": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "snmp: the objects read one by one, each by a name of the collector's, letters, digits and _, and its numeric identifier, such as sysUpTime: 1.3.6.1.2.1.1.3.0. The document has each the agent has under get, its type and value. At most 256. See docs/SNMP.md#a-collector.",
+                "maxProperties": 256,
+                "type": "object"
+              },
               "greeting": {
                 "description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first.",
                 "type": [
@@ -2762,6 +2807,17 @@
                   "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
                 },
                 "type": "object"
+              },
+              "hex": {
+                "description": "snmp: names of get, and table.column of walk, whose values are written as hexadecimal bytes by colons even when they read as text, such as a MAC address of printable bytes.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
               },
               "idle_timeout": {
                 "description": "sshfile and sshexec: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
@@ -3490,6 +3546,12 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "max_repetitions": {
+                "description": "snmp: with snmp_version 2 or 3, how many values a GetBulk of a walk asks for, from 1 to 255; 25 when left out. An agent that answers tooBig is asked for half as many.",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_response_bytes": {
                 "anyOf": [
                   {
@@ -3865,6 +3927,27 @@
                 "type": "array",
                 "uniqueItems": true
               },
+              "priv_password_file": {
+                "description": "snmp: with security_level authPriv, the file of the user's privacy password, at least 8 characters, read at each scrape.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "priv_protocol": {
+                "description": "snmp: with security_level authPriv, how requests are encrypted: DES, AES (AES-128, RFC 3826), AES192 and AES256, their keys extended as draft-blumenthal-aes-usm-04 does, or AES192C and AES256C, as Cisco's agents and draft-reeder-snmpv3-usm-3desede do. See docs/SNMP.md#snmpv3.",
+                "enum": [
+                  "DES",
+                  "AES",
+                  "AES192",
+                  "AES256",
+                  "AES192C",
+                  "AES256C",
+                  ""
+                ],
+                "type": "string"
+              },
               "private_key_file": {
                 "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication.",
                 "not": {
@@ -4007,11 +4090,34 @@
                   "integer"
                 ]
               },
+              "request_timeout": {
+                "description": "snmp: how long a request waits for its answer before it is sent again, at least 10ms; 1s when left out. A static target may set its own. Every request ends at the scrape's deadline too.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
               "resource": {
                 "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md.",
                 "maxLength": 63,
                 "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
                 "type": "string"
+              },
+              "retries": {
+                "description": "snmp: how many times a request unanswered within request_timeout is sent again, from 0 to 5; 1 when left out. A static target may set its own.",
+                "maximum": 5,
+                "minimum": 0,
+                "type": "integer"
               },
               "retry": {
                 "additionalProperties": false,
@@ -4179,6 +4285,16 @@
                   "boolean"
                 ]
               },
+              "security_level": {
+                "description": "snmp: with snmp_version 3, required: noAuthNoPriv, authNoPriv, which signs each request with auth_protocol, or authPriv, which encrypts it with priv_protocol too. See docs/SNMP.md#snmpv3.",
+                "enum": [
+                  "noAuthNoPriv",
+                  "authNoPriv",
+                  "authPriv",
+                  ""
+                ],
+                "type": "string"
+              },
               "send": {
                 "description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md.",
                 "type": [
@@ -4297,6 +4413,12 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "snmp_version": {
+                "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. snmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SNMP.md.",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
               },
               "start_tls": {
                 "description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls.",
@@ -4539,7 +4661,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -4555,6 +4677,25 @@
                 "maxLength": 63,
                 "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
                 "type": "string"
+              },
+              "walk": {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "maxProperties": 64,
+                  "minProperties": 1,
+                  "type": "object"
+                },
+                "description": "snmp: the tables read whole, each by a name, its columns by name and the numeric identifier of the column, such as interfaces: {ifDescr: 1.3.6.1.2.1.2.2.1.2}. The document has each table under walk, its rows by their index, each the index and the values of its columns. At most 32 tables of 64 columns. See docs/SNMP.md#walking-tables.",
+                "maxProperties": 32,
+                "type": "object"
+              },
+              "walk_limit": {
+                "description": "snmp: the most values a column of a walk may have, past which the scrape fails as a limit exceeded; 10000 when left out.",
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [

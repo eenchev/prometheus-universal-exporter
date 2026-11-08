@@ -429,6 +429,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- `--dry-run` read the `tls` files of an `http` or `graphite` static
+  target's own block, but not those of the collector's block, nor of a
+  login's own `tls`. It now reads them too, and warns of one a request or a
+  login would fail on ([Dry run](docs/CONFIGURATION.md#dry-run)).
 - A pagination `next`, `items` or login `token` / `expires_in` jq
   expression that never ended, or gave values without end, held its trip,
   its slots and a CPU for ever; it now ends at the trip's (or login's)

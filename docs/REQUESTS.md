@@ -2321,7 +2321,9 @@ refused.
 
 A client certificate needs both `cert_file` and `key_file`; one without the
 other stops the exporter at startup. The files themselves are read at the first
-request, and again when they change, so a Secret mounted later is picked up.
+request, and again when they change, so a Secret mounted later is picked up;
+[`--dry-run`](CONFIGURATION.md#dry-run) reads them, warning of one a request
+would fail on, as it does a `login`'s own `tls` block's.
 
 A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
 code, but for `insecure_skip_verify`: it reports a chain that does not

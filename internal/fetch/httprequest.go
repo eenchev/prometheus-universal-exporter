@@ -63,13 +63,23 @@ func checkHTTPTargetTLS(t *model.StaticTarget) error {
 }
 
 // checkHTTPFiles reads, for --dry-run, the files of the login, the
-// collector's or a static target's (checkLoginFiles), and those of a static
-// target's own tls block, as its first request would.
+// collector's or a static target's (checkLoginFiles), with those of the
+// login's own tls block, and those of the collector's tls block, or of a
+// static target's own, as the first request would.
 func checkHTTPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	warnings := checkLoginFiles(c, t)
-	if t != nil && t.Request.TLS != nil {
-		if _, err := tlsConfig(*t.Request.TLS); err != nil {
-			warnings = append(warnings, fmt.Sprintf("target %q: request.tls: %v; a scrape would fail on it now (the files are read at the first request and again when they change, so one put in place later is used then)", t.Name, err))
+	who, login, settings := fmt.Sprintf("collector %q", c.Name), c.Request.Login, &c.Request.TLS
+	if t != nil {
+		who, login, settings = fmt.Sprintf("target %q", t.Name), t.Request.Login, t.Request.TLS
+	}
+	if login != nil && login.TLS != nil {
+		if _, err := tlsConfig(*login.TLS); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: request.login.tls: %v; a login would fail on it now (the files are read at the first login, and again when they change, so one put in place later is used then)", who, err))
+		}
+	}
+	if settings != nil && *settings != (model.TLSConfig{}) {
+		if _, err := tlsConfig(*settings); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: request.tls: %v; a scrape would fail on it now (the files are read at the first request and again when they change, so one put in place later is used then)", who, err))
 		}
 	}
 	return warnings

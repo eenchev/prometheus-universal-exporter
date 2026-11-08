@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -226,4 +228,38 @@ func TestAnHTTPStaticTargetsTLSIsChecked(t *testing.T) {
 // request would, under the target's name.
 func TestAnHTTPStaticTargetsFilesAreReadByTheDryRun(t *testing.T) {
 	checkTargetFilesAreRead(t, httpCollector(t, nil), false)
+}
+
+// --dry-run reads an http collector's own tls files, and its login's, as
+// its first request and its first login would, under the collector's name.
+func TestAnHTTPCollectorsTLSFilesAreReadByTheDryRun(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "ca.pem")
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	login := func(tls *model.TLSConfig) *model.LoginConfig {
+		return &model.LoginConfig{Type: "oauth2", URL: "https://idp.example/token", ClientID: "x", ClientSecretFile: secret, TLS: tls}
+	}
+	for name, tc := range map[string]struct {
+		edit func(*model.Collector)
+		want string
+	}{
+		"a CA that is not there": {func(c *model.Collector) { c.Request.TLS = model.TLSConfig{CAFile: missing} }, `collector "web": request.tls: open ` + missing},
+		"a login's CA that is not there": {func(c *model.Collector) {
+			c.Request.Login = login(&model.TLSConfig{CAFile: missing})
+		}, `collector "web": request.login.tls: open ` + missing},
+		"a server name alone": {func(c *model.Collector) { c.Request.TLS = model.TLSConfig{ServerName: "api.example"} }, ""},
+		"a login without tls": {func(c *model.Collector) { c.Request.Login = login(nil) }, ""},
+		"no tls block at all": {nil, ""},
+	} {
+		warnings := FileWarnings(httpCollector(t, tc.edit), nil)
+		switch {
+		case tc.want == "" && len(warnings) != 0:
+			t.Errorf("%s: warnings %v", name, warnings)
+		case tc.want != "" && (len(warnings) != 1 || !strings.HasPrefix(warnings[0], tc.want)):
+			t.Errorf("%s: warnings %v, want one beginning %q", name, warnings, tc.want)
+		}
+	}
 }

@@ -31783,6 +31783,8 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestARotatedRefreshTokenIsSentToTheEndpointThatAnsweredIt` (fetch): an oauth2 login of `grant_type: refresh_token` and a relative `url`, to two targets whose token endpoints each rotate the refresh token, sends each endpoint the file's refresh token, not the one the other answered.
 - `TestADryRunReadsTheFilesOfDNSOverTLS` (fetch, dns): `--dry-run`'s reading of a `dns` collector's files warns of a `tls.ca_file` of `transport: tls` that is missing, naming `request.tls`, and of none that is in place.
+- `TestAnHTTPCollectorsTLSFilesAreReadByTheDryRun` (fetch): `--dry-run`'s reading of an `http` collector's files warns, under the collector's name, of a `request.tls.ca_file` and of a `request.login.tls.ca_file` that are missing, and of nothing for a tls block of a server name alone, a login without a tls block, or no tls block.
+- `TestEveryRequestSpanAttributeIsInTheOTLPDocs` (repository): every span attribute a request type records of what its request found is named in docs/OTLP.md.
 
 ## 42.1 OTLP export
 
@@ -32775,7 +32777,10 @@ MUST be supported:
 A key of the other kind MUST be refused, and so MUST a login without `type`
 or `url`, at load, naming the collector or the target and the key. A secret
 MUST NOT be read from the configuration: it MUST be read from its file at
-each login, so a rotated file is used by the next one.
+each login, so a rotated file is used by the next one. `--dry-run` MUST read
+the login's secret files and the files of its own `tls` block, and those of
+the collector's `tls` block or a static target's own, warning of one a
+login or a request would fail on.
 
 The token MUST be sent in `header`, `Authorization` when left out, after
 `prefix`, `"Bearer "` in `Authorization` and nothing in another header when

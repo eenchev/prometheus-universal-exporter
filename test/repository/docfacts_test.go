@@ -298,3 +298,31 @@ func TestDependenciesNamesEveryDirectDependencyOfTheExporter(t *testing.T) {
 		}
 	}
 }
+
+// Every attribute a request's span carries of what the request found, a
+// fact of a request type (TraceFact), is named in docs/OTLP.md's table of
+// spans, so that a type that gains one says so where a reader of traces
+// looks.
+func TestEveryRequestSpanAttributeIsInTheOTLPDocs(t *testing.T) {
+	files, err := filepath.Glob("internal/fetch/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact := regexp.MustCompile(`\b(?:int|bool|name|double)Fact\("([a-z_.]+)"`)
+	docs := read(t, "docs/OTLP.md")
+	found := 0
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		for _, m := range fact.FindAllStringSubmatch(read(t, file), -1) {
+			found++
+			if !strings.Contains(docs, "`"+m[1]+"`") {
+				t.Errorf("%s: the span attribute %s is not in docs/OTLP.md", file, m[1])
+			}
+		}
+	}
+	if found < 20 {
+		t.Fatalf("%d span attributes found under internal/fetch; the facts have moved", found)
+	}
+}

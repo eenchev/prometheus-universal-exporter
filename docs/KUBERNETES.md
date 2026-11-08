@@ -304,6 +304,17 @@ one way to list Secrets ([Secrets](#secrets)).
             expression: .metadata.name
 ```
 
+The chart's values that grant it, `list` on ConfigMaps in every namespace:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  rules:
+    - apiGroups: [""]
+      resources: [configmaps]
+```
+
 - The document's `kind` is `PartialObjectMetadata` and its `api_version`
   `meta.k8s.io/v1`, as the API server names the objects, whether there are
   any or not; each object has `metadata` alone.
@@ -343,10 +354,24 @@ age:
             expression: .metadata.name
 ```
 
-The chart's `kubernetesAccess` still refuses to grant `secrets`: `list` on
-them lets the account's token read their values, whatever the exporter asks
-for, so that grant is yours to make, with a Role of your own, knowing what it
-allows. A custom resource named `secrets` in another group is listed as any
+The chart's `kubernetesAccess.rules` still refuse to grant `secrets`: `list`
+on them lets the account's token read their values, whatever the exporter
+asks for, so that grant is yours to make, knowing what it allows: with a
+Role of your own, or with `extraRules` and `allowBroadExtraRules`, which
+grants it as written, here in `shop` alone:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  namespaces: [shop]
+  allowBroadExtraRules: true   # secrets of the core group, granted knowingly
+  extraRules:
+    - apiGroups: [""]
+      resources: [secrets]
+      verbs: [list]
+```
+
+A custom resource named `secrets` in another group is listed as any
 other.
 
 ## Kubelet statistics
@@ -386,6 +411,20 @@ one's kubelet for its summary:
       - name: kube_kubelet_summaries_failed
         description: The nodes whose kubelet answered no summary
         expression: .failed | length
+```
+
+The chart's values that grant it: `list` on nodes and `get` on their
+kubelets' `nodes/stats`, cluster-wide, as nodes are of no namespace
+([Permissions](#permissions) has the kubelets' port for a NetworkPolicy):
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  kubelet: stats       # proxy with kubelet_via_api_server
+  rules:
+    - apiGroups: [""]
+      resources: [nodes]
 ```
 
 and what each container requests, from the Pods, its quantity read by
@@ -537,6 +576,17 @@ Each Deployment's replicas, wanted and available, and whether all are:
             expression: .metadata.name
 ```
 
+Its grant, in `shop` alone:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  namespaces: [shop]
+  rules:
+    - apiGroups: [apps]
+      resources: [deployments]
+```
+
 A condition of a custom resource as a gauge: whether each cert-manager
 Certificate is Ready, and when it expires.
 
@@ -568,6 +618,17 @@ Certificate is Ready, and when it expires.
             expression: .metadata.name
 ```
 
+Its grant, in every namespace for `all_namespaces`:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  rules:
+    - apiGroups: [cert-manager.io]
+      resources: [certificates]
+```
+
 How many Pods are in each phase, every phase a series even when no Pod is
 in it:
 
@@ -587,6 +648,22 @@ in it:
           - name: phase
             expression: .phase
 ```
+
+Its grant, `list` on Pods cluster-wide, which the ephemeral storage
+requests above share:
+
+```yaml
+kubernetesAccess:
+  enabled: true
+  clusterWide: true
+  rules:
+    - apiGroups: [""]
+      resources: [pods]
+```
+
+One release grants every collector it serves: its `rules` list each
+resource once, `clusterWide` when any collector lists every namespace or
+nodes, and `kubelet` when one asks the kubelets.
 
 Each node's conditions — `Ready`, `DiskPressure`, `MemoryPressure`,
 `PIDPressure` — and what it can give pods (`allocatable`) against what it

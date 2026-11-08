@@ -31536,6 +31536,10 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestKubernetesDocumentationExamples` (repository, kubernetes), changed: the node status example gives each node's conditions, 1 for True and 0 otherwise, and its allocatable and capacity read with `parse_quantity`, `3800m` as 3.8, `90Gi` and `16Gi` in bytes and `110` pods.
 
+## 34.313 The grants beside docs/KUBERNETES.md's examples render
+
+- `TestTheKubernetesPagesGrantsRender` (repository): each `kubernetesAccess` block of docs/KUBERNETES.md, six at least, renders a Role or a ClusterRole with the chart as written.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,

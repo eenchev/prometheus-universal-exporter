@@ -546,7 +546,8 @@ start, and `http_method="SEARCH"`.
 - **Text values only.** A value that is not UTF-8 fails the scrape: leave
   binary attributes out of `attributes`.
 - **One connection per scrape.** No connection is kept between scrapes, so
-  each costs a TCP handshake, a TLS one with TLS, and a bind.
+  each costs a TCP handshake, a TLS one with TLS, and a bind: see [One connection
+  per scrape](REQUESTS.md#one-connection-per-scrape) for why.
 
 ## Troubleshooting
 

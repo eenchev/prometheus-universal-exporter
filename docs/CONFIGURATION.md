@@ -30,6 +30,73 @@ to no collector, and bound the requests of all of them together.
 `configs/config.example.yaml` is a complete working document to
 start from. This page is the reference for what it may contain.
 
+## Contents
+
+- [Collectors](#collectors)
+  - [No decoder](#no-decoder)
+  - [NDJSON, logfmt, TOML and INI](#ndjson-logfmt-toml-and-ini)
+  - [Binary answers](#binary-answers)
+  - [Character encodings](#character-encodings)
+  - [Reading CSV: what to expect](#reading-csv-what-to-expect)
+  - [XML namespaces](#xml-namespaces)
+  - [Collector-wide labels](#collector-wide-labels)
+  - [Prefixing a collector's metrics](#prefixing-a-collectors-metrics)
+  - [UTF-8 names](#utf-8-names)
+  - [Metrics per item](#metrics-per-item)
+  - [Long label values](#long-label-values)
+  - [Long label names](#long-label-names)
+  - [Turning a status into metrics](#turning-a-status-into-metrics)
+  - [Mapping text to values and scaling them](#mapping-text-to-values-and-scaling-them)
+  - [Reading a date or a time as the value](#reading-a-date-or-a-time-as-the-value)
+  - [Value-parsing helpers](#value-parsing-helpers)
+  - [Histograms from a list of values](#histograms-from-a-list-of-values)
+  - [Derived series](#derived-series)
+  - [Conditional metrics and labels](#conditional-metrics-and-labels)
+  - [Request types](#request-types)
+  - [When a metric cannot be extracted](#when-a-metric-cannot-be-extracted)
+  - [When a stage of the probe fails](#when-a-stage-of-the-probe-fails)
+  - [What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)
+  - [Reporting failed probes as metrics](#reporting-failed-probes-as-metrics)
+  - [Checked when the configuration loads](#checked-when-the-configuration-loads)
+  - [Two rules that are the same rule](#two-rules-that-are-the-same-rule)
+  - [A name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it)
+  - [Editor support](#editor-support)
+- [Reusing settings with YAML anchors](#reusing-settings-with-yaml-anchors)
+- [Collector files](#collector-files)
+- [Defaults for the collectors of a file](#defaults-for-the-collectors-of-a-file)
+- [Environment variables](#environment-variables)
+- [OpenMetrics](#openmetrics)
+- [Response caching](#response-caching)
+  - [Serving the last good result when the target fails](#serving-the-last-good-result-when-the-target-fails)
+  - [Revalidating expired responses](#revalidating-expired-responses)
+- [Identical probes share one request](#identical-probes-share-one-request)
+- [Limiting concurrent probes](#limiting-concurrent-probes)
+- [Backing off from failing targets](#backing-off-from-failing-targets)
+- [Memory](#memory)
+- [Probe deadlines](#probe-deadlines)
+- [Watching the configuration](#watching-the-configuration)
+  - [Descriptor files](#descriptor-files)
+  - [Rejected reloads](#rejected-reloads)
+- [Reloading on demand](#reloading-on-demand)
+  - [What a reload changed](#what-a-reload-changed)
+- [Metric lint](#metric-lint)
+  - [counter-total](#counter-total)
+  - [unit-suffix](#unit-suffix)
+  - [unbounded-label](#unbounded-label)
+  - [name-clash](#name-clash)
+  - [Silencing a rule](#silencing-a-rule)
+- [Debugging collectors](#debugging-collectors)
+  - [The debug page](#the-debug-page)
+  - [Dangerous debug mode](#dangerous-debug-mode)
+  - [Debug probes](#debug-probes)
+- [Readiness](#readiness)
+  - [Health checks](#health-checks)
+- [Shutting down](#shutting-down)
+- [Sizes](#sizes)
+- [Dry run](#dry-run)
+- [Configuration from the target allocator](#configuration-from-the-target-allocator)
+- [Related pages](#related-pages)
+
 ## Collectors
 
 Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
@@ -2701,6 +2768,31 @@ probes](REQUESTS.md#uptime-probes).
 A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
+
+#### Which request type?
+
+| You want | Type | Where it is |
+| --- | --- | --- |
+| A value from a JSON, XML, CSV, YAML or HTML API or page | `http` | [Target requests](REQUESTS.md) |
+| Whether a site is up, its status, timings and certificate | `http` | [Uptime probes](REQUESTS.md#uptime-probes) |
+| A metrics or status file on the exporter's own disk | `localfile` | [Local files](LOCALFILE.md) |
+| A file on another host | `sshfile` | [Files over SSH](SSHFILE.md) |
+| The output of a command on another host, such as `df` | `sshexec`, opt-in | [Commands over SSH](SSHEXEC.md) |
+| An object in S3, MinIO, Ceph, R2 or GCS | `s3file`, opt-in | [Objects in S3](S3FILE.md) |
+| A value in a database, such as a queue's backlog | `sql` | [Databases over SQL](SQL.md) |
+| A Redis or Valkey server's INFO, or a queue's length | `redis`, opt-in | [Redis and Valkey](REDIS.md) |
+| A gRPC service's answer, or its health | `grpc` | [gRPC](GRPC.md) |
+| Series from Graphite | `graphite` | [Graphite](GRAPHITE.md) |
+| A line protocol such as memcached's `stats`, or an SMTP dialogue | `tcp`, opt-in | [Text protocols over TCP](TCP.md) |
+| Entries of an LDAP directory, or its monitor counters | `ldap`, opt-in | [LDAP directories](LDAP.md) |
+| A name's records, their TTLs, a zone's serial or its signatures' expiry | `dns` | [DNS](DNS.md) |
+| A TLS certificate's expiry and chain, of any TLS or STARTTLS server | `tlscert` | [TLS certificates](TLSCERT.md) |
+| A clock's offset from an NTP server | `ntp` | [NTP](NTP.md) |
+| Whether a host answers ping, and its round trip | `icmp`, opt-in | [Ping over ICMP](ICMP.md) |
+| Kubernetes objects, or each pod's ephemeral storage | `kubernetes` | [Kubernetes objects](KUBERNETES.md) |
+
+An opt-in type is in a build that asks for it, `OPT_IN_REQUEST_TYPES`
+([Building](DEVELOPMENT.md)); the default build and image carry the others.
 
 <!-- request-types: all "For `%s`" -->
 Each type accepts its own keys. For `http`, `type` is the only required one —

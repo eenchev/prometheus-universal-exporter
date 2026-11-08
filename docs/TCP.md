@@ -1068,7 +1068,8 @@ when it only reads.
   is the first of them, which `^SSH-2\.0-` does not match. Such a server
   needs a pattern for what it writes first.
 - **One connection per scrape.** No connection is kept between scrapes, so
-  each scrape costs a TCP handshake, and a TLS one with TLS.
+  each costs a TCP handshake, a TLS one with TLS: see [One connection
+  per scrape](REQUESTS.md#one-connection-per-scrape) for why.
 - **One datagram each way over UDP.** A UDP exchange sends one datagram and
   takes one back: an answer split over several datagrams is read as its
   first, and a datagram lost on the way fails the scrape at its deadline,

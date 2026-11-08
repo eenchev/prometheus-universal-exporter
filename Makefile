@@ -27,9 +27,9 @@ GOVULNCHECK_VERSION := v1.8.0
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 # OPT_IN_REQUEST_TYPES adds the opt-in request types, comma-separated, which
-# no build carries unless asked: `make build OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap,icmp`.
-# See docs/S3FILE.md, docs/REDIS.md, docs/TCP.md, docs/LDAP.md, docs/SSHEXEC.md
-# and docs/ICMP.md.
+# no build carries unless asked: `make build OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap,icmp,snmp`.
+# See docs/S3FILE.md, docs/REDIS.md, docs/TCP.md, docs/LDAP.md, docs/SSHEXEC.md,
+# docs/ICMP.md and docs/SNMP.md.
 OPT_IN_REQUEST_TYPES ?=
 # SQL_DRIVERS adds the sql request type's opt-in database drivers,
 # comma-separated, for example `make build SQL_DRIVERS=oracle,snowflake`: any
@@ -79,7 +79,7 @@ run:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -111,13 +111,13 @@ test-sql-drivers:
 # OPT_IN_REQUEST_TYPES is. A test keeps the list naming every opt-in type in
 # the tree.
 build-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
 
 # golangci-lint over the build with every opt-in request type, as ci.yml's
 # third lint step runs it: no other lint run compiles them beside the
 # default build's types.
 lint-opt-in-types: lint-version
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" && golangci-lint run --build-tags "$$tags"
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && golangci-lint run --build-tags "$$tags"
 
 # golangci-lint over each request type's build on its own, as ci.yml's
 # request-types matrix runs it, a job for each type: a helper a one-type
@@ -125,7 +125,7 @@ lint-opt-in-types: lint-version
 # tests call, is reported by no lint of a build with every type. A test
 # keeps the loop naming every type in the tree.
 lint-request-types: lint-version
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "golangci-lint run --build-tags $$tags"; \
 		golangci-lint run --build-tags "$$tags"; \
@@ -137,7 +137,7 @@ lint-request-types: lint-version
 # which a build of one type's tests reach only through make. Once and
 # without -race.
 test-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
 
 # Opt-in: the sql request type against real databases, which the
 # PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
@@ -170,7 +170,7 @@ test-scaffold:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \
@@ -196,7 +196,7 @@ new-request-type:
 # of the types it leaves out from, is made first, from a build with every
 # request type.
 schemas:
-	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp)" && go test -count=1 -tags "$$tags" -run '^TestTheRequestKeyCatalogueIsCurrent$$' ./internal/config/ -args -update-request-keys
+	tags="$$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && go test -count=1 -tags "$$tags" -run '^TestTheRequestKeyCatalogueIsCurrent$$' ./internal/config/ -args -update-request-keys
 	go run . --config.schema > configs/config.schema.json
 	go run . --config.collector-file-schema > configs/collector-file.schema.json
 	go run . --static-targets-file-schema > configs/static-targets.schema.json

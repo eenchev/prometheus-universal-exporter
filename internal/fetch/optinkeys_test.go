@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_icmp || request_type_ldap || request_type_redis || request_type_s3file || request_type_sshexec || request_type_tcp
+//go:build !select_request_types || request_type_icmp || request_type_ldap || request_type_redis || request_type_s3file || request_type_snmp || request_type_sshexec || request_type_tcp
 
 package fetch
 
@@ -18,4 +18,5 @@ var optInRequestKeys = map[string][]string{}
 // are of a collector's.
 var optInTargetKeys = map[string][]string{
 	RequestTypeLDAP: {"bind_dn"},
+	RequestTypeSNMP: {"community_file", "auth_password_file", "priv_password_file", "request_timeout", "retries"},
 }

@@ -5,7 +5,10 @@ requests and hands the transform a JSON document of how many replies came
 back and how long each took. Use it where a host's reachability is what you
 want to know and no port of it is the thing to check — a router, a switch,
 a host behind a firewall that answers pings, the gateway of a site — and
-alert on the loss and the round trips.
+alert on the loss and the round trips. Whether a port takes a connection
+is a [`tcp`](TCP.md#checking-that-a-port-is-open) collector's
+`connect_only`, which goes beside a ping of the same host as a collector
+of its own ([With a ping](TCP.md#with-a-ping)).
 
 The echoes go on an unprivileged ICMP socket, so the exporter needs neither
 root nor `CAP_NET_RAW` ([Permissions](#permissions)).

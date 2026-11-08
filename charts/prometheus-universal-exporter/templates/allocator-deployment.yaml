@@ -59,10 +59,10 @@ spec:
         {{- $_ := set $podAnnotations "checksum/config" $checksum }}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
-      {{- if include "prometheus-universal-exporter.allocatorDiscovers" . }}
-      {{- /* A peer that is stopped keeps serving its shutdown delay first;
-             see the helper. */}}
-      terminationGracePeriodSeconds: {{ include "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" . }}
+      {{- /* A peer that is stopped keeps serving its shutdown delay first,
+             after its preStop hook; see the helper. */}}
+      {{- with include "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" . }}
+      terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       serviceAccountName: {{ include "prometheus-universal-exporter.allocatorServiceAccountName" . }}
       {{- if include "prometheus-universal-exporter.allocatorUsesKubernetes" . }}
@@ -190,6 +190,10 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- with $allocator.preStop }}
+          lifecycle:
+            preStop: {{- toYaml . | nindent 14 }}
+          {{- end }}
           resources: {{- toYaml ($allocator.resources | default dict) | nindent 12 }}
           volumeMounts:
             - name: config

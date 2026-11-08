@@ -696,12 +696,15 @@ true
        seconds unless told otherwise, which would cut them short. */ -}}
 {{- $delay := include "prometheus-universal-exporter.shutdownDelay" . | default "0s" -}}
 {{- $shutdown := include "prometheus-universal-exporter.shutdownTimeout" . | default "15s" -}}
-{{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $delay | atoi) (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
+{{- /* A preStop hook runs before the exporter is told to stop, within
+       the same grace period: its sleep counts first. */ -}}
+{{- $sleep := include "prometheus-universal-exporter.preStopSeconds" (list "preStop" .Values.preStop) | int64 -}}
+{{- $needed := add $sleep (include "prometheus-universal-exporter.durationSeconds" $delay | atoi) (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
 {{- $explicit := .Values.terminationGracePeriodSeconds -}}
 {{- if not (kindIs "invalid" $explicit) -}}
 {{- $seconds := include "prometheus-universal-exporter.wholeNumber" (list "terminationGracePeriodSeconds" $explicit 0 2147483647) | int64 -}}
 {{- if lt $seconds (int64 $needed) -}}
-{{- fail (printf "terminationGracePeriodSeconds %d is shorter than the %d seconds a stopping pod needs: server.shutdownDelay (%s), server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownDelay or server.shutdownTimeout" $seconds $needed $delay $shutdown) -}}
+{{- fail (printf "terminationGracePeriodSeconds %d is shorter than the %d seconds a stopping pod needs: preStop's sleep (%ds), server.shutdownDelay (%s), server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower one of them" $seconds $needed $sleep $delay $shutdown) -}}
 {{- end -}}
 {{- $seconds -}}
 {{- else if gt (int $needed) 30 -}}
@@ -1437,10 +1440,80 @@ true
        pod checks its peers and fetches the leader's snapshot from its
        start, and its rounds, at most 1m apart, run well within it. */ -}}
 {{- define "prometheus-universal-exporter.allocatorTerminationGracePeriodSeconds" -}}
-{{- $interval := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckInterval | default "2s" -}}
-{{- $timeout := include "prometheus-universal-exporter.allocatorDuration" .Values.allocator.peerCheckTimeout | default "1s" -}}
-{{- $delay := ceil (divf (addf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) (include "prometheus-universal-exporter.goDurationMilliseconds" $timeout)) 1000) | int64 -}}
-{{- max 30 (add $delay 15) -}}
+{{- /* A stopping instance needs its preStop hook's sleep, which Kubernetes
+       runs before telling it to stop, its shutdown delay, a check interval
+       and a check timeout when it has peers to tell, and 15 seconds for its
+       10s server shutdown and its exit. Rendered when set, which must be at
+       least that; unset, with peers as the larger of that and Kubernetes'
+       30, and without them only when that is more than 30. */ -}}
+{{- $allocator := .Values.allocator -}}
+{{- $sleep := include "prometheus-universal-exporter.preStopSeconds" (list "allocator.preStop" $allocator.preStop) | int64 -}}
+{{- $delay := int64 0 -}}
+{{- $peers := include "prometheus-universal-exporter.allocatorDiscovers" . -}}
+{{- if $peers -}}
+{{- $interval := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckInterval | default "2s" -}}
+{{- $timeout := include "prometheus-universal-exporter.allocatorDuration" $allocator.peerCheckTimeout | default "1s" -}}
+{{- $delay = ceil (divf (addf (include "prometheus-universal-exporter.goDurationMilliseconds" $interval) (include "prometheus-universal-exporter.goDurationMilliseconds" $timeout)) 1000) | int64 -}}
+{{- end -}}
+{{- $needed := add $sleep $delay 15 -}}
+{{- $explicit := $allocator.terminationGracePeriodSeconds -}}
+{{- if not (kindIs "invalid" $explicit) -}}
+{{- $seconds := include "prometheus-universal-exporter.wholeNumber" (list "allocator.terminationGracePeriodSeconds" $explicit 0 2147483647) | int64 -}}
+{{- if lt $seconds (int64 $needed) -}}
+{{- fail (printf "allocator.terminationGracePeriodSeconds %d is shorter than the %d seconds a stopping instance needs: allocator.preStop's sleep (%ds), a peer check interval and timeout (%ds) with discovery, and 15 seconds for its shutdown and exit; raise it or lower one of them" $seconds $needed $sleep $delay) -}}
+{{- end -}}
+{{- $seconds -}}
+{{- else if $peers -}}
+{{- max 30 $needed -}}
+{{- else if gt (int64 $needed) 30 -}}
+{{- $needed -}}
+{{- end -}}
+{{- end }}
+{{- /* The seconds a preStop hook sleeps, from (list name hook), which it
+       checks first: null for none; otherwise a mapping of exactly one of
+       exec, a command of one word or more, httpGet, with its port, and
+       sleep, with its seconds from 0 to 2147483647, which Kubernetes run
+       before the container is told to stop. 0 but for sleep, whose time
+       the chart cannot know of the others. The values schema refuses the
+       same; this stands where it is skipped. */ -}}
+{{- define "prometheus-universal-exporter.preStopSeconds" -}}
+{{- $name := index . 0 -}}
+{{- $hook := index . 1 -}}
+{{- if kindIs "invalid" $hook -}}
+0
+{{- else -}}
+{{- if not (kindIs "map" $hook) -}}
+{{- fail (printf "%s must be a mapping of one of exec, httpGet and sleep, as a container's lifecycle.preStop is" $name) -}}
+{{- end -}}
+{{- $handlers := list -}}
+{{- range $key, $_ := $hook -}}
+{{- if not (has $key (list "exec" "httpGet" "sleep")) -}}
+{{- fail (printf "%s has %s; it is one of exec, httpGet and sleep (tcpSocket is no preStop handler Kubernetes runs)" $name $key) -}}
+{{- end -}}
+{{- $handlers = append $handlers $key -}}
+{{- end -}}
+{{- if ne (len $handlers) 1 -}}
+{{- fail (printf "%s must set exactly one of exec, httpGet and sleep, not %d" $name (len $handlers)) -}}
+{{- end -}}
+{{- if hasKey $hook "exec" -}}
+{{- $command := (index $hook "exec" | default dict).command -}}
+{{- if or (not (kindIs "slice" $command)) (eq (len $command) 0) -}}
+{{- fail (printf "%s.exec.command must be the command and its arguments, a list of one word or more" $name) -}}
+{{- end -}}
+0
+{{- else if hasKey $hook "httpGet" -}}
+{{- if kindIs "invalid" (index $hook "httpGet" | default dict).port -}}
+{{- fail (printf "%s.httpGet needs its port, a number or the container port's name, http" $name) -}}
+{{- end -}}
+0
+{{- else -}}
+{{- $seconds := (index $hook "sleep" | default dict).seconds -}}
+{{- if kindIs "invalid" $seconds -}}
+{{- fail (printf "%s.sleep needs its seconds" $name) -}}
+{{- end -}}
+{{- include "prometheus-universal-exporter.wholeNumber" (list (printf "%s.sleep.seconds" $name) $seconds 0 2147483647) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 {{- /* Whether the chart renders the probe jobs' ScrapeConfigs. */ -}}
 {{- define "prometheus-universal-exporter.scrapeConfigs" -}}

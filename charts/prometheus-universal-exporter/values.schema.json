@@ -268,8 +268,9 @@
       "type": ["integer", "null"],
       "minimum": 0,
       "maximum": 2147483647,
-      "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless the shutdown needs more; set, it must be at least server.shutdownDelay plus server.shutdownTimeout plus 10 seconds."
+      "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless the shutdown needs more; set, it must be at least preStop's sleep plus server.shutdownDelay plus server.shutdownTimeout plus 10 seconds."
     },
+    "preStop": {"$ref": "#/$defs/preStop", "description": "The exporter container's lifecycle.preStop: one of exec, httpGet and sleep. A sleep's seconds count in terminationGracePeriodSeconds. Null renders none."},
 
     "env": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
     "envFrom": {"type": "array", "items": {"type": "object"}},
@@ -855,6 +856,8 @@
         },
         "podLabels": {"$ref": "#/$defs/stringMap"},
         "podAnnotations": {"$ref": "#/$defs/stringMap"},
+        "terminationGracePeriodSeconds": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647, "description": "The allocator pods' terminationGracePeriodSeconds. Null renders, with discovery, the larger of 30 and preStop's sleep plus a peer check interval and timeout plus 15 seconds, and without it that sum only when it is more than 30; set, it must be at least that sum."},
+        "preStop": {"$ref": "#/$defs/preStop", "description": "The allocator container's lifecycle.preStop, as preStop is the exporter's."},
         "priorityClassName": {"type": "string"},
         "nodeSelector": {"$ref": "#/$defs/stringMap"},
         "tolerations": {"type": "array", "items": {"type": "object"}},
@@ -911,6 +914,18 @@
 
   "$defs": {
     "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "preStop": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "description": "A Kubernetes lifecycle handler: exactly one of exec, httpGet and sleep. tcpSocket is none Kubernetes runs.",
+      "properties": {
+        "exec": {"type": "object", "required": ["command"], "properties": {"command": {"type": "array", "minItems": 1, "items": {"type": "string"}}}},
+        "httpGet": {"type": "object", "required": ["port"], "properties": {"path": {"type": "string"}, "port": {"type": ["integer", "string"], "minimum": 1, "maximum": 65535}, "host": {"type": "string"}, "scheme": {"enum": ["HTTP", "HTTPS"]}, "httpHeaders": {"type": "array", "items": {"type": "object", "required": ["name", "value"]}}}},
+        "sleep": {"type": "object", "additionalProperties": false, "required": ["seconds"], "properties": {"seconds": {"type": "integer", "minimum": 0, "maximum": 2147483647}}}
+      }
+    },
     "allocatorDiscoverySource": {
       "type": "object",
       "additionalProperties": false,

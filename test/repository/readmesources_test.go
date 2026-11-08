@@ -31,6 +31,7 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"sshexec":    {"a command run on another host", "the output of a command run on another host"},
 	"ntp":        {"NTP server", "the clock of an NTP server"},
 	"icmp":       {"host answering a ping", "the echo replies of a host pinged over ICMP"},
+	"snmp":       {"SNMP agent", "SNMP agents"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

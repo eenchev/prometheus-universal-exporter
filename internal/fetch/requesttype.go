@@ -27,7 +27,8 @@ import (
 // server, redis reads INFO and read-only commands from a Redis or Valkey
 // server, tcp sends a line to a text-protocol service over TCP and reads
 // its answer, ldap searches an LDAP directory, sshexec runs a command on
-// another host over SSH, icmp pings a host. The type is required rather than defaulted so that no configuration means
+// another host over SSH, icmp pings a host, snmp reads an SNMP agent's
+// objects and tables. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common
@@ -66,6 +67,7 @@ const (
 	RequestTypeSSHExec    = "sshexec"
 	RequestTypeNTP        = "ntp"
 	RequestTypeICMP       = "icmp"
+	RequestTypeSNMP       = "snmp"
 )
 
 // UnixSocketPattern is what request.unix_socket may be, an http or tcp
@@ -78,7 +80,7 @@ const UnixSocketPattern = `^$|^/`
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers: s3file links
@@ -90,12 +92,13 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestT
 // runs commands on the hosts it reaches, which no build should do unless
 // asked; icmp, which needs nothing outside the standard library either,
 // opens ICMP sockets, which a deployment that pings nothing has no use
-// for. A build
+// for, and snmp, which needs nothing outside it either, is kept out of
+// every deployment with no SNMP agent to read. A build
 // carries one only when
 // asked, with its request_type_<name> tag, and its file is built
 // under that tag alone. A test keeps the list in step with the files'
 // constraints.
-var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeICMP}
+var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeICMP, RequestTypeSNMP}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose
@@ -296,7 +299,7 @@ type RequestType struct {
 	// exporter makes on some collectors alone, what that document is when
 	// a collector's answer is one, as a refusal of another decoder or
 	// transform names it, and "" when it is not: a tcp collector with
-	// request.document. Such a collector is held to json and to the
+	// request.document or request.connect_only. Such a collector is held to json and to the
 	// transforms that read it, as one of a JSONAnswer type is.
 	JSONDocument func(c *model.Collector) string
 	// Decoder is the decoder a collector of the type uses when its

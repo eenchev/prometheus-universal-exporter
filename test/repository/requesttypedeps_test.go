@@ -212,15 +212,16 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	}
 }
 
-// The opt-in tcp request type and the ntp type link nothing outside the
-// standard library: every package a build of either alone links beyond
-// those of a build of no type at all is the standard library's or the
-// module's own, tcp's client being net and crypto/tls and ntp's net and
-// crypto/rand, as is the stand-in server of tcp's tests in
+// The opt-in tcp and snmp request types and the ntp type link nothing
+// outside the standard library: every package a build of one alone links
+// beyond those of a build of no type at all is the standard library's or
+// the module's own, tcp's client being net and crypto/tls, ntp's net and
+// crypto/rand, and snmp's net and the hashes and ciphers of SNMPv3, as are
+// the stand-in server of tcp's tests and agent of snmp's in
 // internal/testutil, which tests alone import.
 func TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary(t *testing.T) {
 	none := linkedPackagesTagged(t, "select_request_types")
-	for _, types := range []string{"tcp", "ntp"} {
+	for _, types := range []string{"tcp", "ntp", "snmp"} {
 		for _, pkg := range linkedPackages(t, types) {
 			first, _, _ := strings.Cut(pkg, "/")
 			if !slices.Contains(none, pkg) && strings.Contains(first, ".") && !strings.HasPrefix(pkg, "github.com/eenchev/prometheus-universal-exporter/") {

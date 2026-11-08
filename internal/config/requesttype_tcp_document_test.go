@@ -47,3 +47,24 @@ func TestATCPDocumentIsDecodedAsJSON(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A tcp collector of request.connect_only is answered with a JSON document
+// too, held to json and to jq, yq and python as one of request.document
+// is; its keys are read from the configuration file.
+func TestATCPConnectOnlyCollectorIsDecodedAsJSON(t *testing.T) {
+	collector := func(transform string) string {
+		return "collectors:\n  - name: ports\n    request:\n      type: tcp\n      connect_only: true\n      connect_timeout: 2s\n      ports: [22, 443]\n" +
+			"    transform:\n      type: " + transform + "\n    metrics:\n      - name: up\n        expression: 'if .open then 1 else 0 end'\n"
+	}
+	cfg, err := Load(testutil.WriteFile(t, "config.yaml", collector("jq")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Collectors[0].Decoder.Type; got != "json" {
+		t.Errorf("decoder %q", got)
+	}
+	want := `collector "ports" transforms with regex, which cannot read the JSON document request.connect_only makes of whether a port took a connection; use jq, yq or python`
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", collector("regex"))); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("regex: %v, want %q", err, want)
+	}
+}

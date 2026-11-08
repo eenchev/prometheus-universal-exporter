@@ -86,6 +86,34 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- The chart's `preStop` and `allocator.preStop` set the exporter's and the
+  allocator's container `lifecycle.preStop` hook, one of `exec`, `httpGet`
+  and `sleep`; a sleep's seconds are added to the grace period the chart
+  renders and requires. `allocator.terminationGracePeriodSeconds` sets the
+  allocator pods' grace period, which must cover its peers' shutdown delay
+  and its exit ([Shutting down](charts/prometheus-universal-exporter/README.md#shutting-down)).
+- An opt-in `snmp` request type reads SNMP agents, as snmp_exporter does:
+  `get` reads objects one by one and `walk` walks tables whole, each by a
+  name of the collector's and its numeric identifier, the columns of a
+  table merged into rows by their index, with no MIB read. It speaks v1,
+  v2c and v3, v3 with every security level, HMAC of MD5, SHA and SHA-2,
+  and DES, AES-128 and both ways of AES-192 and AES-256, and needs nothing
+  outside the standard library. `request_timeout` and `retries` set how
+  long each request waits and how many times it is sent again, and a
+  static target may set its own, beside its own community or v3 user
+  ([SNMP agents](docs/SNMP.md)).
+- A `tcp` collector checks that a port takes a connection with
+  `connect_only: true`: it dials, makes the TLS handshake with a `tls`
+  block, and closes, sending and reading nothing, and answers a JSON
+  document of `open`, the address reached and how long the connection and
+  the handshake took. A port that refuses, does not answer within
+  `connect_timeout` or fails the handshake is `"open": false` with the
+  reason, not a failed scrape, so the series is 0 or 1
+  ([Checking that a port is open](docs/TCP.md#checking-that-a-port-is-open)).
+- With `ports: [22, 443, 5432]` such a collector dials each port of the
+  target's host at once, so one target covers a host; docs/TCP.md shows it
+  beside an `icmp` ping of the same host
+  ([Several ports of a host](docs/TCP.md#several-ports-of-a-host)).
 - docs/KUBERNETES.md has an example of each node's conditions, disk
   pressure among them, and its allocatable against its capacity
   ([Examples](docs/KUBERNETES.md#examples)).

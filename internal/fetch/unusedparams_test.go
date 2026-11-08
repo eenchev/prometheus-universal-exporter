@@ -31,6 +31,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeSSHExec:    `probe parameters param_tenat are not used by collector "places": no placeholder in the arguments of its request.command or its label values names them`,
 	RequestTypeNTP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeICMP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeSNMP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

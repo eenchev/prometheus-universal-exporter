@@ -1,4 +1,4 @@
-//go:build request_type_redis || request_type_ldap
+//go:build request_type_redis || request_type_ldap || request_type_snmp
 
 package exporter
 

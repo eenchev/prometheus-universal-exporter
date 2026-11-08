@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -111,6 +112,15 @@ type TCPConfig struct {
 	// ends: each step's text written and its answer read until it matches
 	// the step's until (tcpsteps.go).
 	Steps []TCPStep `yaml:"steps,omitempty"`
+	// ConnectOnly makes the scrape a check that the port takes a
+	// connection: it dials, makes the TLS handshake with a tls block, and
+	// closes, writing and reading nothing, its answer a JSON document of
+	// whether it connected (tcpconnect.go). ConnectTimeout bounds the
+	// connection and the handshake, and Ports are the ports of the target's
+	// host dialed at once, in place of the target's port.
+	ConnectOnly    bool           `yaml:"connect_only,omitempty"`
+	ConnectTimeout model.Duration `yaml:"connect_timeout,omitempty"`
+	Ports          []int          `yaml:"ports,omitempty"`
 }
 
 // tcpRequest is a tcp collector's own request keys: the zero TCPConfig of
@@ -149,6 +159,9 @@ func init() {
 		Stage:              "tcp",
 		CheckFiles:         checkTCPFiles,
 		JSONDocument: func(c *model.Collector) string {
+			if tcpRequest(c).ConnectOnly {
+				return "the JSON document request.connect_only makes of whether a port took a connection"
+			}
 			if tcpRequest(c).Document {
 				return "the JSON document request.document makes of what a tcp server says"
 			}
@@ -174,7 +187,7 @@ func (tcpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 
 // CheckTarget checks a tcp collector's target.
 func (tcpRequester) CheckTarget(c *model.Collector, target string, _ bool) error {
-	_, err := parseTCPTarget(target, c.Request.UnixSocket == "")
+	_, err := parseTCPTargetOf(c, target)
 	return err
 }
 
@@ -226,6 +239,9 @@ func validateTCPRequest(x *model.Collector) error {
 	}
 	if HasPathParams(r.Terminator) {
 		return fmt.Errorf("collector %q request.terminator %q has a placeholder; the end of the answer is matched as it is written", x.Name, r.Terminator)
+	}
+	if err := validateTCPConnect(x, r); err != nil {
+		return err
 	}
 	if err := validateTCPBinary(x.Name, r); err != nil {
 		return err
@@ -450,13 +466,23 @@ func tcpURL(a tcpAddress, c *model.Collector) string {
 	case tcpRequest(c).UDP:
 		return "udp://" + a.hostPort
 	case tcpSecure(c):
-		return "tls://" + a.hostPort
+		return "tls://" + a.dialed()
 	}
-	return "tcp://" + a.hostPort
+	return "tcp://" + a.dialed()
+}
+
+// dialed is the address as a url label shows it: host:port, or, for the
+// host alone of a collector of request.ports, the host, an IPv6 address in
+// brackets.
+func (a tcpAddress) dialed() string {
+	if a.hostPort == a.host && strings.Contains(a.host, ":") {
+		return "[" + a.host + "]"
+	}
+	return a.hostPort
 }
 
 func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
-	a, err := parseTCPTarget(target, c.Request.UnixSocket == "")
+	a, err := parseTCPTargetOf(c, target)
 	if err != nil {
 		return "", err
 	}
@@ -464,6 +490,9 @@ func tcpLabel(target string, c *model.Collector, overrides RequestOverrides) (st
 }
 
 func tcpMethod(c *model.Collector, _ RequestOverrides) string {
+	if tcpRequest(c).ConnectOnly {
+		return tcpMethodConnect
+	}
 	if r := tcpRequest(c); r.Send == "" && r.SendHex == "" && len(r.Steps) == 0 {
 		return tcpMethodRead
 	}
@@ -472,9 +501,12 @@ func tcpMethod(c *model.Collector, _ RequestOverrides) string {
 
 // tcpDisplay renders a target for logs and labels: as written, since it
 // holds no credentials, when it is one at all. A target without a port is
-// one of a collector of request.unix_socket, which the display does not
-// know of.
+// one of a collector of request.unix_socket or request.ports, which the
+// display does not know of, and so is an IPv6 address alone.
 func tcpDisplay(target string) string {
+	if _, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(target), "[]")); err == nil {
+		return strings.TrimSpace(target)
+	}
 	if _, err := parseTCPTarget(target, false); err != nil {
 		return "<invalid target>"
 	}
@@ -487,7 +519,7 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	start := time.Now()
 	// A static target's own tls block, in place of the collector's.
 	c = withTargetAccount(c, overrides)
-	address, err := parseTCPTarget(target, c.Request.UnixSocket == "")
+	address, err := parseTCPTargetOf(c, target)
 	if err != nil {
 		return nil, err
 	}
@@ -532,6 +564,9 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 			return nil, err
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
+	}
+	if tcpRequest(c).ConnectOnly {
+		return fetchTCPConnect(ctx, start, target, address, cfg, c)
 	}
 	label := tcpURL(address, c)
 	traced := http.Header{"Tcp-Send": {tcpShown(send)}}
@@ -1093,16 +1128,19 @@ func refuseEmptySend(where string, placeholders []pathPlaceholder, rendered stri
 // own keys.
 func tcpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"document":      {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, starttls, the protocol, with starttls, connect_seconds, tls_seconds, greeting_seconds, starttls_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
-		"greeting":      {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
-		"send":          {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
-		"send_hex":      {"description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols."},
-		"answer_bytes":  {"minimum": 0, "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols."},
-		"udp":           {"description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp."},
-		"steps":         {"maxItems": tcpMaxSteps, "description": "tcp: a conversation, in place of send, send_hex, terminator and answer_bytes: each step's send written, after the greeting and starttls when set, and its answer read until it matches the step's until, a regular expression, the last step's read until the server closes the connection when it has none. The answer is the steps' answers one after another; with document, steps holds each one's send, answer and seconds. At most 16 steps; not with udp. See docs/TCP.md#a-conversation."},
-		"steps[]":       {"required": []string{"send"}},
-		"steps[].send":  {"minLength": 1, "description": "The text written, as send is, such as \"EHLO exporter.example\\r\\n\": not empty, at most 64 KiB, with {{param_name}} placeholders as send takes them."},
-		"steps[].until": {"description": "A regular expression (Go's, RE2) the step's answer, as read so far, matches when it has all come, such as '(?m)^250 ' for an SMTP reply's last line: reading stops then. Required of every step but the last, whose answer, without it, ends when the server closes the connection. No placeholder; at most 64 KiB."},
-		"terminator":    {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
+		"connect_only":    {"description": "tcp: true makes the scrape a check that the port takes a connection: it dials the target, makes the TLS handshake when a tls block is set, and closes, writing and reading nothing. The answer is a JSON document: open, true or false, and when false the reason (refused, timeout, unreachable, reset, tls or error) and error; when the connection was made, address, the address reached, connect_seconds, and with tls tls_seconds and tls_version; and duration_seconds. A port that is not open is an answer, not a failed scrape. Not with send, send_hex, steps, greeting, terminator, answer_bytes, starttls, udp or unix_socket. See docs/TCP.md#checking-that-a-port-is-open."},
+		"connect_timeout": {"not": SchemaLeastDuration(tcpMinConnectTimeout, true), "description": "tcp: with connect_only, how long the connection and its TLS handshake may take before the port counts as not open, reason timeout: at least 10ms, 5s when left out, and at most nine tenths of the time the scrape has left. Only with connect_only."},
+		"ports":           {"minItems": 1, "maxItems": tcpMaxPorts, "uniqueItems": true, "items": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "description": "tcp: with connect_only, the ports of the target's host dialed at once, such as [22, 443, 5432], the target then being the host alone. The document has each port in ports, keyed by its number, as the document of one port is, open, whether every port was, and open_ports, how many were. At most 64, each once. See docs/TCP.md#several-ports-of-a-host."},
+		"document":        {"description": "tcp: true hands the transforms a JSON document of the exchange in place of the raw answer: greeting and answer as text, starttls, the protocol, with starttls, connect_seconds, tls_seconds, greeting_seconds, starttls_seconds and answer_seconds for the steps taken, and duration_seconds, a step not taken left out. The decoder is then json, and the transform jq, yq or python. A greeting or an answer that is not UTF-8 fails the scrape, and a document past max_response_bytes fails it as a limit exceeded. See docs/TCP.md#the-exchange-as-a-document."},
+		"greeting":        {"description": "tcp: a regular expression (Go's, RE2) the server's greeting must match, such as \"^220[ -]\" for SMTP or '^SSH-2\\.0-' for SSH: the greeting, its first line, or, after a line beginning with three digits and a '-', every line up to the one beginning with those digits and no '-', is read before send is written, and a greeting that does not match fails the scrape. Without send or send_hex the greeting is the answer, and neither terminator nor answer_bytes may be set. No placeholder; at most 64 KiB. See docs/TCP.md#services-that-speak-first."},
+		"send":            {"description": "tcp: the text written once the connection is made, such as \"stats\\r\\n\" for memcached, written in double quotes so that \\r\\n is a carriage return and a line feed; nothing when left out, the answer then being what the server says first. May contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, so a probe adds no command or argument; a send they leave empty is refused. At most 64 KiB. tcp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/TCP.md."},
+		"send_hex":        {"description": "tcp: the bytes written, as pairs of hexadecimal digits with blanks between them or none, such as \"00 01 00 00 00 06 01 03 00 00 00 02\", for a protocol whose requests are binary, as Modbus TCP's are; in place of send, and with no placeholder. At most 64 KiB. Read a binary answer with decoder.type binary. See docs/TCP.md#binary-protocols."},
+		"answer_bytes":    {"minimum": 0, "description": "tcp: how many bytes the answer is: reading stops once that many have come, for a server that keeps the connection open after an answer of a known length, such as Modbus TCP's to a read, 9 bytes and two for each register read. Not with terminator, nor with udp. A connection closed sooner fails the scrape. See docs/TCP.md#binary-protocols."},
+		"udp":             {"description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp."},
+		"steps":           {"maxItems": tcpMaxSteps, "description": "tcp: a conversation, in place of send, send_hex, terminator and answer_bytes: each step's send written, after the greeting and starttls when set, and its answer read until it matches the step's until, a regular expression, the last step's read until the server closes the connection when it has none. The answer is the steps' answers one after another; with document, steps holds each one's send, answer and seconds. At most 16 steps; not with udp. See docs/TCP.md#a-conversation."},
+		"steps[]":         {"required": []string{"send"}},
+		"steps[].send":    {"minLength": 1, "description": "The text written, as send is, such as \"EHLO exporter.example\\r\\n\": not empty, at most 64 KiB, with {{param_name}} placeholders as send takes them."},
+		"steps[].until":   {"description": "A regular expression (Go's, RE2) the step's answer, as read so far, matches when it has all come, such as '(?m)^250 ' for an SMTP reply's last line: reading stops then. Required of every step but the last, whose answer, without it, ends when the server closes the connection. No placeholder; at most 64 KiB."},
+		"terminator":      {"description": "tcp: what the answer ends with, such as \"END\\r\\n\": reading stops once it has come, and it stays in the body. Left out, reading stops when the server closes the connection. At most 64 KiB, and no placeholder. See docs/TCP.md#reading-the-answer."},
 	}
 }

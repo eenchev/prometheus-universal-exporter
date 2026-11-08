@@ -21,7 +21,9 @@ thing to run:
   ([Over UDP](#over-udp)), or on a Unix socket, as HAProxy's runtime API
   often is ([Over a Unix socket](#over-a-unix-socket));
 - a binary protocol, such as Modbus TCP, written in hexadecimal and read by
-  a layout of its fields ([Binary protocols](#binary-protocols)).
+  a layout of its fields ([Binary protocols](#binary-protocols));
+- whether a port, or each of a host's ports, takes a connection, sending
+  nothing ([Checking that a port is open](#checking-that-a-port-is-open)).
 
 Whatever reads a body reads the answer: `regex` for lines of text, `csv`,
 `prometheus` for a service that writes exposition, `jq` for one that answers
@@ -112,6 +114,9 @@ sum; a server that has had no get yet has no ratio.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `tcp`. |
+| `connect_only` | `false` | `true` connects, makes the TLS handshake with `tls`, and closes, writing and reading nothing: the answer is a JSON document of whether the port was open. Not with `send`, `send_hex`, `steps`, `greeting`, `terminator`, `answer_bytes`, `starttls`, `udp` or `unix_socket`. See [Checking that a port is open](#checking-that-a-port-is-open). |
+| `connect_timeout` | `5s` | With `connect_only`, how long the connection and its handshake may take before the port counts as not open, at least `10ms`, and at most nine tenths of the time the scrape has left. |
+| `ports` | none | With `connect_only`, the ports of the target's host dialed at once, such as `[22, 443, 5432]`, the target then being the host alone. At most 64. See [Several ports of a host](#several-ports-of-a-host). |
 | `document` | `false` | `true` hands the transforms a JSON document of the exchange, the greeting, the answer and each step's seconds, in place of the server's text; the decoder is then `json`. See [The exchange as a document](#the-exchange-as-a-document). |
 | `greeting` | none | A regular expression the server's greeting must match, such as `'^220[ -]'`: the greeting is read before `send` is written, and one that does not match fails the scrape. Without `send` or `send_hex` the greeting is the answer, and `terminator` and `answer_bytes` are refused. No placeholder; at most 64 KiB. See [Services that speak first](#services-that-speak-first). |
 | `starttls` | none | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on the plaintext connection, after the greeting, as that protocol asks for it, and write `send` over TLS. See [STARTTLS](#starttls). |
@@ -137,7 +142,9 @@ reads as, JSON when it is JSON: the answer has no `Content-Type` to go by.
 The probe's `target` is the service: `host:port` or `[v6]:port`. The port
 is required, since no port is every such service's; a collector of
 [`unix_socket`](#over-a-unix-socket) takes a host without one, since its
-target only names the service. A scheme, a path, a
+target only names the service, and one of [`ports`](#several-ports-of-a-host)
+takes the host alone, `[v6]` or an IPv6 address bare, since the ports are
+the list's. A scheme, a path, a
 query or a user in the target is refused with `400`, before anything is
 sent. `allowed_targets` and `denied_targets` are matched against the host
 before the connection is made and against the address it is made to, and
@@ -396,6 +403,172 @@ limit fails the scrape before anything is read. A Modbus exception, the
 function with its high bit set (`0x83`) and one byte of its code, is 9 bytes,
 fewer than `answer_bytes`, so the server's refusal of a read fails the
 scrape at its deadline as an answer that did not come whole.
+
+## Checking that a port is open
+
+`connect_only: true` makes the scrape a check that a port takes a
+connection, as a port check of a monitoring system is: it dials the
+target, makes the TLS handshake when the collector has a `tls` block, and
+closes, writing and reading nothing, so it suits any service, whatever it
+speaks. The answer is a JSON document of what it found:
+
+```yaml
+collectors:
+  - name: port
+    request:
+      type: tcp
+      connect_only: true
+    transform:
+      type: jq
+    metrics:
+      - name: port_open
+        description: 1 when the port took a connection
+        expression: 'if .open then 1 else 0 end'
+      - name: port_connect_seconds
+        expression: .connect_seconds
+```
+
+```text
+/probe?collector=port&target=db.example:5432
+```
+
+```json
+{"open":true,"address":"192.0.2.10:5432","connect_seconds":0.0011,"duration_seconds":0.0013}
+{"open":false,"reason":"refused","error":"dial tcp 192.0.2.10:5432: connect: connection refused","duration_seconds":0.0004}
+```
+
+- `open` is whether the connection was made and, with `tls`, the handshake
+  too.
+- `reason` and `error` say why a port is not open: `refused`, the host
+  answered that nothing listens there; `timeout`, no answer within
+  `connect_timeout`, as a port a firewall drops is, or a lookup of the
+  name that took as long; `unreachable`, the
+  network or the host has no route; `reset`, the connection was reset as
+  it was made; `tls`, the connection was made but the handshake failed, as
+  it does for a certificate that does not verify; and `error`, any other.
+  Both are left out of an open port's document.
+- `address` is the address the connection reached, the name's lookup
+  having chosen it, and `connect_seconds` how long making it took, the
+  lookup included, when the connection was made, even if the handshake
+  then failed. `tls_seconds` and `tls_version`, such as `TLS 1.3`, are the
+  handshake's, with `tls`.
+- `duration_seconds` is the whole scrape.
+
+**A port that is not open is an answer, not a failed scrape.** The scrape
+answers `"open": false`, which a rule makes a 0, so the series is 0 or 1 at
+every scrape and an alert is on `port_open == 0` rather than on a series
+gone missing, as [DNS](DNS.md) answers a `SERVFAIL`. What fails the scrape
+is being unable to ask: a target the [target lists](#the-target) refuse,
+which is never connected to, a name that does not resolve, and a probe cut
+short.
+
+`connect_timeout`, `5s` when left out and at least `10ms`, is how long the
+connection and its handshake may take before the port counts as not open,
+`reason` `timeout`. Within the probe's deadline it is at most nine tenths
+of the time the scrape has left, so the document is answered before the
+deadline ends the scrape: a probe of `timeout=2s` waits at most `1.8s`.
+
+`connect_only` goes with no key of what is sent or read — `send`,
+`send_hex`, `steps`, `greeting`, `terminator`, `answer_bytes`, `starttls` —
+nor with `udp`, which has no connection to make, nor with `unix_socket`;
+each is refused at load. `document` may be written and changes nothing:
+the decoder is `json`, and the transform `jq`, `yq` or `python`. A debug
+probe shows the scrape as `CONNECT`, its outcome `open, connected to
+192.0.2.10:5432` or `not open, refused: ...`.
+
+### Several ports of a host
+
+`ports` lists the ports of the target's host to dial, at once, each its
+own connection, so one target covers a whole host rather than one target
+for each port. The target is then the host alone, `db.example`,
+`192.0.2.10` or `[2001:db8::1]`; one with a port is refused, the ports
+being the list's. At most 64, each once:
+
+```yaml
+collectors:
+  - name: host_ports
+    request:
+      type: tcp
+      connect_only: true
+      ports: [22, 443, 5432]
+    transform:
+      type: jq
+    metrics:
+      - name: port_open
+        description: 1 when the port took a connection
+        items: '.ports | to_entries[]'
+        expression: 'if .value.open then 1 else 0 end'
+        labels:
+          - name: port
+            expression: .key
+      - name: ports_open
+        description: How many of the ports took a connection
+        expression: .open_ports
+```
+
+```json
+{"open":false,"open_ports":2,"duration_seconds":0.0021,"ports":{
+  "22":{"open":true,"address":"192.0.2.10:22","connect_seconds":0.0010},
+  "443":{"open":true,"address":"192.0.2.10:443","connect_seconds":0.0012},
+  "5432":{"open":false,"reason":"refused","error":"dial tcp 192.0.2.10:5432: connect: connection refused"}}}
+```
+
+`ports` has each port's document, keyed by its number, as the document of
+one port has its fields; `open` is whether every port was, and
+`open_ports` how many were. Each port's connection is held to the target
+lists, and a `tls` block makes the handshake on every one. A debug probe,
+and a trace, have each port as its own `CONNECT` request,
+`tcp://db.example:22` and so on, made at once; the scrape's label is the
+host, `tcp://db.example`.
+
+### With a ping
+
+[`icmp`](ICMP.md) pings a host; a port check and a ping of the same host
+are two collectors, the ping telling a host that is down from one whose
+service is, and a [static target](STATIC-TARGETS.md) of each covers a host:
+
+```yaml
+collectors:
+  - name: ping
+    request:
+      type: icmp
+      count: 3
+    transform:
+      type: jq
+    metrics:
+      - name: ping_up
+        expression: 'if .received > 0 then 1 else 0 end'
+      - name: ping_rtt_avg_seconds
+        expression: .rtt_avg_seconds
+  - name: host_ports
+    request:
+      type: tcp
+      connect_only: true
+      ports: [22, 443, 5432]
+    transform:
+      type: jq
+    metrics:
+      - name: port_open
+        items: '.ports | to_entries[]'
+        expression: 'if .value.open then 1 else 0 end'
+        labels:
+          - name: port
+            expression: .key
+```
+
+```yaml
+interval: 1m
+targets:
+  - name: db_ping
+    collector: ping
+    target: db.example
+  - name: db_ports
+    collector: host_ports
+    target: db.example
+```
+
+Both are opt-in types, so the build names them:
+`OPT_IN_REQUEST_TYPES=icmp,tcp`.
 
 ## Services that speak first
 
@@ -957,9 +1130,11 @@ and `1` for any other:
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `tcp` collector names the service,
-`host:port`, as its `target`, which it requires, and may set under its
-`request` `timeout` and `tls`. What is sent, the terminator and `starttls`
-are the collector's, and `params` fills its placeholders:
+`host:port`, as its `target`, which it requires, or the host alone for a
+collector of [`ports`](#several-ports-of-a-host), and may set under its
+`request` `timeout` and `tls`. What is sent, the terminator, `starttls`,
+`connect_only` and `ports` are the collector's, and `params` fills its
+placeholders:
 
 ```yaml
 interval: 30s
@@ -1013,6 +1188,11 @@ The connection, the TLS handshake, the greeting, the request for TLS with
 probe's deadline, its `timeout` or the scrape's, 30 seconds without one:
 a server that stops answering, or keeps the connection open without the
 terminator, fails the scrape when it comes, with the deadline's error.
+With [`connect_only`](#checking-that-a-port-is-open) the connection and
+the handshake end at `connect_timeout` instead, within the deadline, and a
+port that has not answered by then is `"open": false`, not a failure; its
+document is a few hundred bytes for each port, which `max_response_bytes`
+does not limit.
 
 ## Errors and self-metrics
 
@@ -1049,7 +1229,9 @@ With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)
 a scrape is labelled `url="tcp://host:port"`, `tls://` over TLS, `udp://`
 over UDP and `unix://` with the socket's path over a Unix socket, and
 `http_method="SEND"` when the collector writes `send` or `send_hex`, `http_method="READ"`
-when it only reads.
+when it only reads, and `http_method="CONNECT"` with
+[`connect_only`](#checking-that-a-port-is-open), whose port that is not
+open is an answer, not a failure.
 
 ## Limitations
 

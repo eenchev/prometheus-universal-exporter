@@ -112,6 +112,15 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		out.AcceptCodes = append([]string{}, t.Request.AcceptCodes...)
 	}
 	out.Username, out.BindDN, out.PrivateKeyFile, out.PassphraseFile, out.PasswordFile = t.Request.Username, t.Request.BindDN, t.Request.PrivateKeyFile, t.Request.PassphraseFile, t.Request.PasswordFile
+	out.CommunityFile, out.AuthPasswordFile, out.PrivPasswordFile = t.Request.CommunityFile, t.Request.AuthPasswordFile, t.Request.PrivPasswordFile
+	if t.Request.RequestTimeout != nil {
+		timeout := time.Duration(*t.Request.RequestTimeout)
+		out.RequestTimeout = &timeout
+	}
+	if t.Request.Retries != nil {
+		retries := *t.Request.Retries
+		out.Retries = &retries
+	}
 	if t.Request.TLS != nil {
 		settings := *t.Request.TLS
 		out.TLS = &settings

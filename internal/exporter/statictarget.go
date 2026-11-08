@@ -405,7 +405,8 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 // and retry codes, the retried statuses, an sshfile, sql, redis or ldap
 // collector's account and credential files, a redis, ldap, tcp, sql, grpc,
 // http or graphite collector's tls block, an http or graphite collector's
-// login. Each section names itself and how many values follow, so a value
+// login, an snmp collector's community or v3 passwords and its
+// request_timeout and retries. Each section names itself and how many values follow, so a value
 // that looks like the next section's name cannot move the boundary between
 // two sections, and two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
@@ -433,6 +434,23 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	}
 	if r := &t.Request; r.Username != "" || r.BindDN != "" || r.PrivateKeyFile != "" || r.PassphraseFile != "" || r.PasswordFile != "" {
 		own = append(own, "account", "5", r.Username, r.BindDN, r.PrivateKeyFile, r.PassphraseFile, r.PasswordFile)
+	}
+	// An snmp target's own community or v3 passwords are the account it
+	// reads as; its request_timeout and retries only how long it waits, but
+	// a target that gives up sooner may answer what one that waits does
+	// not.
+	if r := &t.Request; r.CommunityFile != "" || r.AuthPasswordFile != "" || r.PrivPasswordFile != "" {
+		own = append(own, "snmp_account", "3", r.CommunityFile, r.AuthPasswordFile, r.PrivPasswordFile)
+	}
+	if r := &t.Request; r.RequestTimeout != nil || r.Retries != nil {
+		timeout, retries := "", ""
+		if r.RequestTimeout != nil {
+			timeout = time.Duration(*r.RequestTimeout).String()
+		}
+		if r.Retries != nil {
+			retries = strconv.Itoa(*r.Retries)
+		}
+		own = append(own, "snmp_waits", "2", timeout, retries)
 	}
 	// A target's own tls block, every key of it, tls: {} as much as one
 	// with files: the certificate a scrape presents is part of the account

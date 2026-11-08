@@ -120,7 +120,7 @@ The chart is published to GitHub Container Registry as an OCI artifact. It is pu
 ```sh
 helm install exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
-  --version 2.0.0 \
+  --version 2.1.0 \
   --set-file 'config.data.config\.yaml=configs/config.example.yaml'
 ```
 

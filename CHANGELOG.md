@@ -16,6 +16,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Nothing; you can upgrade without changes.
+
+## chart 2.1.0
+
+### What changed for you
+
+- Deploys exporter 2.1.0: read its `### What changed for you` before
+  upgrading. The image now carries every request type, and some label
+  values a target's URL gave are now `<redacted>`, which makes new series.
 - Chart: `Chart.yaml`'s description names every source the image reads, and
   the README no longer tells you to build an image of your own for the
   `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors; its ICMP and

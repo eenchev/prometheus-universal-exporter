@@ -26,7 +26,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); and, in a build that asks for them, objects in S3 (`s3file`), the INFO and read-only commands of Redis and Valkey servers (`redis`), the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket (`tcp`), searches of LDAP directories (`ldap`), the echo replies of hosts pinged over ICMP (`icmp`), and the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); and the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
@@ -31787,6 +31787,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestANewRequestTypeIsWiredByTheScaffold` (repository), changed: in a tree with no opt-in type, the opt-in `zzdemo` gets `optInRequestTypes`, the opt-in builds' lists and constraints of its own, and lands last in the documentation's lists, the default `ozdefault` before it, after `snmp`.
 - `make gopls-check`, changed: the `icmp` type's refusal on a system other than Linux and macOS is `icmpDial`'s default, which `icmpsocket_unix.go` replaces when the package starts, rather than a file left out of a Linux build, so that gopls checks the tree in the host's build alone and not in Windows' too.
 - The seven types' schema rows are in their `schemakeys_<name>_test.go`, checked against the committed schemas as every default type's are; their tests of `optInRequestKeys` (`TestTheOptInRequestKeysAreTheTypesOwn` and its six likes) are gone, the types having no opt-in keys to list.
+
+## 34.321 The final review before the release
+
+- `TestChartReadmeICMPExampleRenders` (chart, test/repository): the chart README's ICMP and SNMP collectors section shows one example, of the ping sysctl, which renders on the exporter's pod as `securityContext.sysctls` beside the chart's own `runAsGroup` and `runAsNonRoot`.
 
 ## 42.1 OTLP export
 

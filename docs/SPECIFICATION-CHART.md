@@ -1249,6 +1249,10 @@ The Helm chart README MUST document:
   and the allocator's account with `allocator.serviceAccount.name`
 - Mounting the TLS files of `tcp`, `redis` and `ldap` collectors from a Secret
   through `extraVolumes` and `extraVolumeMounts`, with an example
+- What an `icmp` collector needs of the pod: the sysctl
+  `net.ipv4.ping_group_range` taking the exporter's group, set through
+  `podSecurityContext.sysctls`, with an example that renders beside the
+  chart's own security context
 - Installation and upgrade from the published OCI repository, including the
   recommendation to pin a version
 - Use as a dependency of another chart, with the `condition` that switches it

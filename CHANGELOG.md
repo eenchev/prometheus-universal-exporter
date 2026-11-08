@@ -16,6 +16,43 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Chart: `Chart.yaml`'s description names every source the image reads, and
+  the README no longer tells you to build an image of your own for the
+  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors; its ICMP and
+  SNMP collectors section shows the `podSecurityContext.sysctls` an `icmp`
+  collector may need
+  ([ICMP and SNMP collectors](charts/prometheus-universal-exporter/README.md#icmp-and-snmp-collectors)).
+
+### New
+
+- The chart's `preStop` and `allocator.preStop` set the exporter's and the
+  allocator's container `lifecycle.preStop` hook, one of `exec`, `httpGet`
+  and `sleep`; a sleep's seconds are added to the grace period the chart
+  renders and requires. `allocator.terminationGracePeriodSeconds` sets the
+  allocator pods' grace period, which must cover its peers' shutdown delay
+  and its exit ([Shutting down](charts/prometheus-universal-exporter/README.md#shutting-down)).
+- Chart: `kubernetesAccess.extraRules` adds RBAC rules of your own, with
+  their verbs, to the exporter's Role or ClusterRole; `*` and the core
+  group's secrets need `allowBroadExtraRules`
+  ([Kubernetes collectors](charts/prometheus-universal-exporter/README.md#kubernetes-collectors)).
+- The chart's `allocator.balanceFactor` sets the allocator's
+  `--allocation.balance-factor`, from 1 to 10 with at most three decimals;
+  empty keeps the allocator's 1.25
+  ([chart README](charts/prometheus-universal-exporter/README.md)).
+- The chart runs `allocator.replicas` allocator pods, 2 by default, with a
+  discovery source too, as peers of the allocator's headless Service, rolled
+  out one at a time, where it ran one pod and refused more.
+- The chart's `allocator.heartbeatInterval` sets the allocator's
+  `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
+  is `max(allocator.settle, 2m)` plus it, so a new allocator pod counts as
+  available only once its first member list has formed and reached the
+  exporter pods, also during a rollout that shortens the interval, whose
+  old value the chart cannot know.
+
+## exporter 2.1.0
+
+### What changed for you
+
 - The default build and the published image carry every request type:
   `s3file`, `redis`, `tcp`, `ldap` and `sshexec` are no longer opt-in, and
   the new `icmp` and `snmp` are in them too, so their collectors run on the
@@ -24,12 +61,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   binary is some 7 MB larger, the AWS SDK's S3 client most of it; a build
   that must not carry a type leaves it out with `REQUEST_TYPES`
   ([Choosing request types at build time](docs/CONFIGURATION.md#choosing-request-types-at-build-time)).
-- Chart: `Chart.yaml`'s description names every source the image reads, and
-  the README no longer tells you to build an image of your own for the
-  `s3file`, `redis`, `tcp`, `ldap` and `sshexec` collectors; its ICMP and
-  SNMP collectors section shows the `podSecurityContext.sysctls` an `icmp`
-  collector may need
-  ([ICMP and SNMP collectors](charts/prometheus-universal-exporter/README.md#icmp-and-snmp-collectors)).
 - The static target file's `concurrency` slots are shared between its
   collectors: a collector whose targets hang can no longer hold every slot
   and leave the others' targets skipped. Beyond its share, `concurrency`
@@ -106,12 +137,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   for a public client, and a refresh token the endpoint rotates is used
   until the file changes
   ([A user's refresh token](docs/AUTHENTICATION.md#a-users-refresh-token)).
-- The chart's `preStop` and `allocator.preStop` set the exporter's and the
-  allocator's container `lifecycle.preStop` hook, one of `exec`, `httpGet`
-  and `sleep`; a sleep's seconds are added to the grace period the chart
-  renders and requires. `allocator.terminationGracePeriodSeconds` sets the
-  allocator pods' grace period, which must cover its peers' shutdown delay
-  and its exit ([Shutting down](charts/prometheus-universal-exporter/README.md#shutting-down)).
 - An `snmp` request type reads SNMP agents, as snmp_exporter does:
   `get` reads objects one by one and `walk` walks tables whole, each by a
   name of the collector's and its numeric identifier, the columns of a
@@ -151,10 +176,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   TLS with `transport: tls` (RFC 7858)
   ([DNSSEC signatures](docs/DNS.md#dnssec-signatures),
   [DNS over TLS](docs/DNS.md#dns-over-tls)).
-- Chart: `kubernetesAccess.extraRules` adds RBAC rules of your own, with
-  their verbs, to the exporter's Role or ClusterRole; `*` and the core
-  group's secrets need `allowBroadExtraRules`
-  ([Kubernetes collectors](charts/prometheus-universal-exporter/README.md#kubernetes-collectors)).
 - Exported traces time the connections of `tcp`, `tlscert`, `ldap`,
   `redis`, `sshexec`, `sshfile` and `grpc` requests, as an http request's
   are: `connection.dns`, `connection.connect` and `connection.tls`, or
@@ -321,10 +342,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   warning; the probe jobs table, a member's view and a job's view give each
   job's and each target's weight, and the discovery sources table how many
   weights fell back ([Status page](docs/ALLOCATOR.md#status-page)).
-- The chart's `allocator.balanceFactor` sets the allocator's
-  `--allocation.balance-factor`, from 1 to 10 with at most three decimals;
-  empty keeps the allocator's 1.25
-  ([chart README](charts/prometheus-universal-exporter/README.md)).
 - `request.ip_family` on an `http` or `graphite` collector chooses the
   address family its requests connect over, as blackbox_exporter's
   `preferred_ip_protocol` and `ip_protocol_fallback` do: `ip4` or `ip6`
@@ -411,9 +428,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   instance has one instance's series of the allocation; the chart's
   `allocator.leaderOnly` sets it with a discovery source
   ([Leader-only metrics](docs/ALLOCATOR.md#leader-only-metrics)).
-- The chart runs `allocator.replicas` allocator pods, 2 by default, with a
-  discovery source too, as peers of the allocator's headless Service, rolled
-  out one at a time, where it ran one pod and refused more.
 - `pue-allocator --heartbeat.interval`, 10s by default, from 1s to 2m: how
   often the replicas heartbeat, which the allocator says in every heartbeat
   answer (`heartbeat_interval_seconds`) and the exporter heartbeats at from
@@ -434,12 +448,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   and when the first it hears started after it. The
   status page shows both and marks a member whose heartbeat is overdue
   ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
-- The chart's `allocator.heartbeatInterval` sets the allocator's
-  `--heartbeat.interval`, and the allocator Deployment's `minReadySeconds`
-  is `max(allocator.settle, 2m)` plus it, so a new allocator pod counts as
-  available only once its first member list has formed and reached the
-  exporter pods, also during a rollout that shortens the interval, whose
-  old value the chart cannot know.
 
 ### Fixed
 

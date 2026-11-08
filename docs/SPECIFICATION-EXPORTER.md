@@ -2305,9 +2305,10 @@ flags are known. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, `RRSIG`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
-| `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
+| `transport` | `udp` | `udp`, `tcp` or `tls`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone; `tls` MUST ask over TLS (RFC 7858), port 853 when `server` names none, verifying the certificate with the `tls` block for `tls.server_name` or else the server's host, and MUST be refused without `server`. |
+| `tls` | none | As `http`'s; with `transport: tls` alone, and refused without it. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
 
 - The record type, server and transport MUST be the collector's alone: no
@@ -2337,7 +2338,12 @@ flags are known. Its keys:
   and `weight` (SRV); `name` (PTR); `host`, `mailbox`, `serial`,
   `refresh`, `retry`, `expire` and `minimum` (SOA); `flags`, `tag` and
   `value` (CAA); `flags`, `protocol`, `algorithm` and `key_tag`, computed
-  as RFC 4034 appendix B does (DNSKEY). Names MUST be given without their
+  as RFC 4034 appendix B does (DNSKEY); `type_covered`, by name or
+  `TYPE<n>`, `algorithm`, `labels`, `original_ttl`, `key_tag`, `signer`,
+  `inception`, `expiration` and `seconds_until_expiration`, the times placed
+  nearest to now as RFC 1982's serial numbers are (RRSIG). An `RRSIG`
+  question MUST set the DO bit of its OPT record, and MUST NOT be asked
+  again without the record on `FORMERR`; no other question MUST set it. Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
@@ -31500,6 +31506,12 @@ The chart values and monitors that expose this endpoint are specified in
 ## 34.307 The chart's kubernetesAccess.extraRules
 
 - `TestChartAddsTheOperatorsExtraKubernetesRules` (repository): an extra rule of `get` and `watch` on the `configmaps` named `cluster-info` is the third rule of the ClusterRole, and of the Role in a listed namespace; extra rules alone render a Role and its RoleBinding; a `*` verb or resource, the core group's secrets and a rule without verbs fail rendering by the schema and by the templates, and with `allowBroadExtraRules` the first three render.
+
+## 34.308 A dns collector asks for RRSIG signatures and over TLS
+
+- `TestADNSCollectorAnswersTheSignaturesOfAName` (fetch, dns): the signatures of an A and an SOA record answer their type covered, algorithm, labels, original TTL, key tag, signer, inception and expiration, the SOA's a day left; the question sets DO, an A question does not; a server refusing EDNS answers FORMERR, asked once.
+- `TestADNSSignaturesTimesWrapAsSerialNumbers` (fetch, dns): 100 seconds before 2^32, an expiration of 50 is 2^32+50 and has 150 seconds left.
+- `TestADNSCollectorAsksOverTLS` (fetch, dns): a question over TLS to a stand-in verified with its CA answers, the server asked over `tls`; without the CA the handshake fails; a server without a port is port 853, one with a port keeps it; `tls` without a server, and a tls block without `transport: tls`, are refused.
 
 ## 42.1 OTLP export
 

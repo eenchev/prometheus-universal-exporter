@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -89,8 +90,7 @@ func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string)
 	r := dnsRequest(c)
 	servers := []string{}
 	if r.Server != "" {
-		server, _ := ParseDNSServer(r.Server)
-		servers = append(servers, server)
+		servers = append(servers, dnsServerOf(r))
 	} else {
 		conf, err := os.ReadFile(dnsResolvConf)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -102,12 +102,16 @@ func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string)
 	if recordType == "PTR" {
 		asked = dnsReverseName(netip.MustParseAddr(name))
 	}
-	return askDNSServers(ctx, servers, r.Transport == dnsTCP, asked, dnsTypeNumbers[recordType])
+	via, err := dnsViaOf(c)
+	if err != nil {
+		return dnsReply{}, "", err
+	}
+	return askDNSServers(ctx, servers, via, asked, dnsTypeNumbers[recordType])
 }
 
 // askDNSServers asks servers in order, each but the last for at most
 // dnsServerTimeout, as lookupDNS says.
-func askDNSServers(ctx context.Context, servers []string, tcp bool, asked string, qtype uint16) (dnsReply, string, error) {
+func askDNSServers(ctx context.Context, servers []string, via dnsVia, asked string, qtype uint16) (dnsReply, string, error) {
 	var last dnsReply
 	var lastServer, failedServer string
 	var answered bool
@@ -118,7 +122,7 @@ func askDNSServers(ctx context.Context, servers []string, tcp bool, asked string
 		if i < len(servers)-1 {
 			askCtx, cancel = context.WithTimeout(ctx, dnsServerTimeout)
 		}
-		reply, err := askDNS(askCtx, server, tcp, asked, qtype)
+		reply, err := askDNS(askCtx, server, via, asked, qtype)
 		cancel()
 		if ctx.Err() != nil {
 			return dnsReply{}, server, ctx.Err()
@@ -162,8 +166,9 @@ func dnsReverseName(addr netip.Addr) string {
 }
 
 // dnsQuery is the question of name of type qtype with id: recursion
-// desired, AD set, and an OPT record when edns.
-func dnsQuery(id uint16, name string, qtype uint16, edns bool) []byte {
+// desired, AD set, and an OPT record when edns, with the DO bit when
+// dnssec, which asks for the records' signatures (RFC 3225).
+func dnsQuery(id uint16, name string, qtype uint16, edns, dnssec bool) []byte {
 	query := binary.BigEndian.AppendUint16(make([]byte, 0, 512), id)
 	additional := byte(0)
 	if edns {
@@ -175,35 +180,68 @@ func dnsQuery(id uint16, name string, qtype uint16, edns bool) []byte {
 	query = append(query, 0, 1) // IN
 	if edns {
 		// The root name, OPT, 1232 bytes over UDP, no extended code,
-		// version 0, no flags, no options.
-		query = append(query, 0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0)
+		// version 0, DO or no flag, no options.
+		do := byte(0)
+		if dnssec {
+			do = 0x80
+		}
+		query = append(query, 0, 0, 41, 0x04, 0xd0, 0, 0, do, 0, 0, 0)
 	}
 	return query
 }
 
 // askDNS sends the question of name of type qtype to server and reads the
 // answer.
-func askDNS(ctx context.Context, server string, tcp bool, name string, qtype uint16) (dnsReply, error) {
-	reply, err := exchangeDNS(ctx, server, tcp, name, qtype, true)
-	if err == nil && reply.rcode == "FORMERR" {
-		// A server that knows no EDNS(0) refuses the OPT record.
-		return exchangeDNS(ctx, server, tcp, name, qtype, false)
+func askDNS(ctx context.Context, server string, via dnsVia, name string, qtype uint16) (dnsReply, error) {
+	reply, err := exchangeDNS(ctx, server, via, name, qtype, true)
+	if err == nil && reply.rcode == "FORMERR" && qtype != dnsTypeNumbers["RRSIG"] {
+		// A server that knows no EDNS(0) refuses the OPT record. An RRSIG
+		// question needs it, for its DO bit: without it a server answers
+		// no signature.
+		return exchangeDNS(ctx, server, via, name, qtype, false)
 	}
 	return reply, err
 }
 
+// dnsVia is how questions go: over UDP, with TCP for a truncated answer;
+// over TCP alone; or over TLS, with tls's configuration (RFC 7858).
+type dnsVia struct {
+	tcp bool
+	tls *tls.Config
+}
+
+// dnsViaOf is how c's questions go, with the TLS configuration of its tls
+// block for transport tls.
+func dnsViaOf(c *model.Collector) (dnsVia, error) {
+	switch dnsRequest(c).Transport {
+	case dnsTCP:
+		return dnsVia{tcp: true}, nil
+	case dnsTLS:
+		cfg, err := tlsConfig(c.Request.TLS)
+		if err != nil {
+			return dnsVia{}, fmt.Errorf("request.tls: %w", err)
+		}
+		return dnsVia{tls: cfg}, nil
+	}
+	return dnsVia{}, nil
+}
+
 // exchangeDNS sends one question and reads its answer, over UDP and then
 // TCP for a truncated one, or over TCP alone.
-func exchangeDNS(ctx context.Context, server string, tcp bool, name string, qtype uint16, edns bool) (dnsReply, error) {
+func exchangeDNS(ctx context.Context, server string, via dnsVia, name string, qtype uint16, edns bool) (dnsReply, error) {
 	// The id is random, as a resolver's is, so that an answer forged
 	// without seeing the question is unlikely to match it.
 	var random [2]byte
 	_, _ = rand.Read(random[:])
 	id := binary.BigEndian.Uint16(random[:])
-	query := dnsQuery(id, name, qtype, edns)
+	query := dnsQuery(id, name, qtype, edns, qtype == dnsTypeNumbers["RRSIG"])
 	var answer []byte
 	var err error
-	if !tcp {
+	tcp := via.tcp
+	switch {
+	case via.tls != nil:
+		answer, err = exchangeDNSTLS(ctx, server, query, via.tls)
+	case !tcp:
 		answer, err = exchangeDNSUDP(ctx, server, query)
 		// An answer too long for UDP comes truncated (TC), and is asked
 		// again over TCP, as every resolver does.
@@ -211,7 +249,7 @@ func exchangeDNS(ctx context.Context, server string, tcp bool, name string, qtyp
 			tcp = true
 		}
 	}
-	if tcp {
+	if tcp && via.tls == nil {
 		answer, err = exchangeDNSTCP(ctx, server, query)
 	}
 	if err != nil {
@@ -281,12 +319,37 @@ func exchangeDNSUDP(ctx context.Context, server string, query []byte) ([]byte, e
 // exchangeDNSTCP sends query over TCP, after its length, and reads the
 // answer the same way.
 func exchangeDNSTCP(ctx context.Context, server string, query []byte) ([]byte, error) {
+	return exchangeDNSStream(ctx, server, query, nil)
+}
+
+// exchangeDNSTLS sends query over TLS, as over TCP once the handshake is
+// made (RFC 7858), verifying the server's certificate for cfg's server
+// name, or else the server's host.
+func exchangeDNSTLS(ctx context.Context, server string, query []byte, cfg *tls.Config) ([]byte, error) {
+	return exchangeDNSStream(ctx, server, query, cfg)
+}
+
+// exchangeDNSStream sends query over a stream connection, TCP or, with
+// cfg, TLS, after its length, and reads the answer the same way.
+func exchangeDNSStream(ctx context.Context, server string, query []byte, cfg *tls.Config) ([]byte, error) {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", server)
+	raw, err := dialer.DialContext(ctx, "tcp", server)
 	if err != nil {
 		return nil, err
 	}
+	conn := raw
 	defer func() { _ = conn.Close() }()
+	if cfg != nil {
+		own := cfg.Clone()
+		if own.ServerName == "" {
+			own.ServerName, _, _ = net.SplitHostPort(server)
+		}
+		tlsConn := tls.Client(raw, own)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return nil, fmt.Errorf("TLS handshake: %w", err)
+		}
+		conn = tlsConn
+	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -313,7 +376,18 @@ func exchangeDNSTCP(ctx context.Context, server string, query []byte) ([]byte, e
 var dnsRCodes = map[byte]string{0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN", 4: "NOTIMP", 5: "REFUSED", 6: "YXDOMAIN", 7: "YXRRSET", 8: "NXRRSET", 9: "NOTAUTH", 10: "NOTZONE"}
 
 // dnsTypeNumbers are the record types' numbers on the wire.
-var dnsTypeNumbers = map[string]uint16{"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "AAAA": 28, "SRV": 33, "DNSKEY": 48, "CAA": 257}
+var dnsTypeNumbers = map[string]uint16{"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "AAAA": 28, "SRV": 33, "DS": 43, "RRSIG": 46, "NSEC": 47, "DNSKEY": 48, "NSEC3": 50, "CAA": 257}
+
+// dnsTypeName is the name of a record type an RRSIG covers: one of
+// dnsTypeNumbers, or TYPE<n> as RFC 3597 writes an unknown one.
+func dnsTypeName(t uint16) string {
+	for name, n := range dnsTypeNumbers {
+		if n == t {
+			return name
+		}
+	}
+	return fmt.Sprintf("TYPE%d", t)
+}
 
 // dnsCNAMEChain is the most CNAME records followed from the name asked.
 const dnsCNAMEChain = 16
@@ -490,6 +564,22 @@ func readDNSRecord(msg []byte, r dnsRecord) (dnsAnswer, error) {
 		flags := uint16(data[0])
 		tag, value := string(data[2:2+int(data[1])]), string(data[2+int(data[1]):])
 		answer.Flags, answer.Tag, answer.Value = &flags, tag, &value
+	case 46:
+		// RFC 4034 § 3.1: the type covered, algorithm, labels, original
+		// TTL, expiration, inception, key tag, then the signer's name,
+		// uncompressed, and the signature, which is not read.
+		if len(data) < 19 {
+			return answer, short
+		}
+		algorithm, labels := data[2], data[3]
+		covered := dnsTypeName(binary.BigEndian.Uint16(data))
+		answer.TypeCovered, answer.Algorithm, answer.Labels = covered, &algorithm, &labels
+		answer.OriginalTTL, answer.KeyTag = u32(4), u16(16)
+		expiration, inception := binary.BigEndian.Uint32(data[8:]), binary.BigEndian.Uint32(data[12:])
+		answer.expiration, answer.inception = expiration, inception
+		if answer.Signer, _, err = name(18); err != nil {
+			return answer, err
+		}
 	case 48:
 		if len(data) < 4 {
 			return answer, short

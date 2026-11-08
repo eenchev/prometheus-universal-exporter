@@ -10,7 +10,9 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -88,11 +90,11 @@ func TestADNSAnswerFollowsTheCNAMEChain(t *testing.T) {
 // The question goes with AD set and an OPT record offering 1232 bytes; a
 // server that answers FORMERR to it is asked again without it.
 func TestADNSQuestionAsksForADWithEDNSAndFallsBackWithout(t *testing.T) {
-	query := dnsQuery(1, "example.test", 1, true)
+	query := dnsQuery(1, "example.test", 1, true, false)
 	if query[2] != 0x01 || query[3] != 0x20 || binary.BigEndian.Uint16(query[10:]) != 1 || !strings.HasSuffix(string(query), string([]byte{0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0})) {
 		t.Errorf("query % x", query)
 	}
-	if plain := dnsQuery(1, "example.test", 1, false); binary.BigEndian.Uint16(plain[10:]) != 0 || len(plain) != len(query)-11 {
+	if plain := dnsQuery(1, "example.test", 1, false, false); binary.BigEndian.Uint16(plain[10:]) != 0 || len(plain) != len(query)-11 {
 		t.Errorf("query without EDNS % x", plain)
 	}
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
@@ -173,15 +175,15 @@ func TestTheNextDNSServerIsAskedAndAnAnswerIsKeptOverAFailure(t *testing.T) {
 	good := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
 	closed := closedTCPPort(t)
 	ctx := context.Background()
-	reply, server, err := askDNSServers(ctx, []string{failing.Addr, closed}, true, "www.example.test", 1)
+	reply, server, err := askDNSServers(ctx, []string{failing.Addr, closed}, dnsVia{tcp: true}, "www.example.test", 1)
 	if err != nil || reply.rcode != "SERVFAIL" || server != failing.Addr {
 		t.Errorf("SERVFAIL then a failure: %+v from %s, %v", reply, server, err)
 	}
-	reply, server, err = askDNSServers(ctx, []string{closed, failing.Addr, good.Addr}, true, "www.example.test", 1)
+	reply, server, err = askDNSServers(ctx, []string{closed, failing.Addr, good.Addr}, dnsVia{tcp: true}, "www.example.test", 1)
 	if err != nil || reply.rcode != "NOERROR" || len(reply.answers) != 1 || server != good.Addr {
 		t.Errorf("a failure, SERVFAIL, then an answer: %+v from %s, %v", reply, server, err)
 	}
-	if _, server, err = askDNSServers(ctx, []string{closed}, true, "www.example.test", 1); err == nil || server != closed {
+	if _, server, err = askDNSServers(ctx, []string{closed}, dnsVia{tcp: true}, "www.example.test", 1); err == nil || server != closed {
 		t.Errorf("a failure alone: %s, %v", server, err)
 	}
 }
@@ -196,4 +198,92 @@ func closedTCPPort(t *testing.T) string {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr
+}
+
+// An RRSIG question sets the DO bit and is answered with each signature of
+// the name: the type it covers, its algorithm, labels, original TTL, key
+// tag and signer, and its inception and expiration as times, with the
+// seconds it has left. A server that refuses the OPT record is not asked
+// again without it, which would get no signature: its FORMERR is the
+// document's.
+func TestADNSCollectorAnswersTheSignaturesOfAName(t *testing.T) {
+	now := uint32(time.Now().Unix()) //nolint:gosec // until 2106
+	s := newStubDNS(t,
+		recA("example.test", "192.0.2.1"),
+		testutil.DNSRRSIG("example.test", testutil.DNSTypeA, 13, 2, 3600, now+10*86400, now-86400, 2371, "example.test"),
+		testutil.DNSRRSIG("example.test", testutil.DNSTypeSOA, 13, 2, 3600, now+86400, now-86400, 2371, "example.test"),
+	)
+	doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "RRSIG"), "example.test")
+	if err != nil || doc.Count != 2 {
+		t.Fatalf("%+v, %v", doc, err)
+	}
+	a, soa := doc.Answers[0], doc.Answers[1]
+	if a.TypeCovered != "A" || soa.TypeCovered != "SOA" || *a.Algorithm != 13 || *a.Labels != 2 || *a.OriginalTTL != 3600 || *a.KeyTag != 2371 || a.Signer != "example.test" ||
+		*a.Expiration != int64(now)+10*86400 || *a.Inception != int64(now)-86400 {
+		t.Errorf("signatures %+v %+v", a, soa)
+	}
+	if left := *soa.SecondsUntilExpiration; left < 86400-5 || left > 86400 {
+		t.Errorf("the SOA's signature has %d seconds left, want a day", left)
+	}
+	if do := s.DNSSEC(); len(do) == 0 || !do[len(do)-1] {
+		t.Errorf("the RRSIG question set no DO bit: %v", do)
+	}
+	if _, err := resolveDoc(t, dnsCollector(t, s.Addr, "A"), "example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if do := s.DNSSEC(); do[len(do)-1] {
+		t.Error("an A question set the DO bit")
+	}
+	s.SetNoEDNS(true)
+	before := len(s.Questions())
+	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "RRSIG"), "example.test"); err != nil || doc.Rcode != "FORMERR" || len(s.Questions())-before != 1 {
+		t.Errorf("a server without EDNS: %+v, %v, asked %d times", doc, err, len(s.Questions())-before)
+	}
+}
+
+// A signature's times are serial numbers of 32 bits, each placed nearest
+// to now: past 2106 the wire's small numbers are the next era's.
+func TestADNSSignaturesTimesWrapAsSerialNumbers(t *testing.T) {
+	now := time.Unix(1<<32-100, 0)
+	answers := []dnsAnswer{{TypeCovered: "A", expiration: 50, inception: 1<<32 - 1000}}
+	dnsSignatureTimes(answers, now)
+	if *answers[0].Expiration != 1<<32+50 || *answers[0].Inception != 1<<32-1000 || *answers[0].SecondsUntilExpiration != 150 {
+		t.Errorf("times %d %d %d", *answers[0].Expiration, *answers[0].Inception, *answers[0].SecondsUntilExpiration)
+	}
+}
+
+// transport tls asks the server over TLS, port 853 when it names none,
+// verifying its certificate with the tls block; tls needs a server, and a
+// tls block needs transport tls.
+func TestADNSCollectorAsksOverTLS(t *testing.T) {
+	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
+	addr, caFile := s.ServeTLS(t)
+	c := dnsCollector(t, addr, "A", dnsKeys(func(r *DNSConfig) { r.Transport = "tls" }), func(c *model.Collector) { c.Request.TLS.CAFile = caFile })
+	doc, err := resolveDoc(t, c, "www.example.test")
+	if err != nil || doc.Count != 1 || doc.Transport != "tls" {
+		t.Fatalf("%+v, %v", doc, err)
+	}
+	if asked := s.Questions(); asked[len(asked)-1] != "www.example.test. A tls" {
+		t.Errorf("asked %q", asked)
+	}
+	untrusted := dnsCollector(t, addr, "A", dnsKeys(func(r *DNSConfig) { r.Transport = "tls" }))
+	if _, err := resolveDoc(t, untrusted, "www.example.test"); err == nil || !strings.Contains(err.Error(), "TLS handshake") {
+		t.Errorf("an unknown authority: %v", err)
+	}
+	if got := dnsServerOf(DNSConfig{Server: "dns.example.test", Transport: "tls"}); got != "dns.example.test:853" {
+		t.Errorf("a server without a port over TLS: %s", got)
+	}
+	if got := dnsServerOf(DNSConfig{Server: "dns.example.test:5353", Transport: "tls"}); got != "dns.example.test:5353" {
+		t.Errorf("a server with a port over TLS: %s", got)
+	}
+	for name, edit := range map[string]func(*model.Collector){
+		"tls without a server":    dnsKeys(func(r *DNSConfig) { r.Transport, r.Server = "tls", "" }),
+		"a tls block without tls": func(c *model.Collector) { c.Request.TLS.CAFile = caFile },
+	} {
+		c := &model.Collector{Name: "resolve", Request: model.RequestConfig{Type: RequestTypeDNS, Own: DNSConfig{Server: "10.0.0.53"}}}
+		edit(c)
+		if err := ValidateRequest(c); err == nil {
+			t.Errorf("%s: taken", name)
+		}
+	}
 }

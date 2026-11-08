@@ -55,12 +55,13 @@ collectors:
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `dns`. |
-| `record_type` | `A` | The record type asked for: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA` or `DNSKEY`, in any case and with blanks around it or not. |
+| `record_type` | `A` | The record type asked for: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY` or `RRSIG`, in any case and with blanks around it or not. |
 | `server` | the system's resolver | The server every question is sent to: `host` or `host:port`, port 53 when it is left out, an IPv6 address in brackets with a port. Left out, the servers of `/etc/resolv.conf`. |
-| `transport` | `udp` | `udp`, which asks again over TCP when an answer is too long for UDP, as every resolver does, or `tcp`, which asks over TCP alone. |
+| `transport` | `udp` | `udp`, which asks again over TCP when an answer is too long for UDP, as every resolver does, `tcp`, which asks over TCP alone, or `tls`, DNS over TLS, of `server` alone: see [DNS over TLS](#dns-over-tls). |
+| `tls` | — | With `transport: tls` alone: the [`tls` block](REQUESTS.md#tls) the server's certificate is verified with, for `tls.server_name` or else the server's host. |
 | `allowed_targets`, `denied_targets` | — | The names the collector may and may not resolve: see [Target lists](#target-lists). |
 
-No other request key applies, and setting one — `path`, `headers`, `tls` —
+No other request key applies, and setting one — `path`, `headers` —
 is a startup error. The record type, the server and the transport are the
 collector's: no probe parameter changes them, so a probe cannot send the
 exporter's questions to a server the configuration does not name. A probe
@@ -131,6 +132,7 @@ a name inside a Kubernetes cluster is written out in full,
   | `SOA` | `host`, the zone's primary server, `mailbox`, its contact as a name, `serial`, `refresh`, `retry`, `expire`, `minimum` |
   | `CAA` | `flags`, `tag` (`issue`, `issuewild`, `iodef`), `value` |
   | `DNSKEY` | `flags` (257 a key-signing key, 256 a zone-signing key), `protocol`, `algorithm`, `key_tag`, as DS records and signatures name the key |
+  | `RRSIG` | `type_covered`, the type of the records it signs, `algorithm`, `labels`, `original_ttl`, `key_tag` and `signer`, the key that signed it, `inception` and `expiration`, seconds since 1970, and `seconds_until_expiration`: see [DNSSEC signatures](#dnssec-signatures) |
 
   Names are given without their trailing dot. The records are in an order of
   their own — by preference or priority first where the type has one, then
@@ -191,6 +193,72 @@ parse fail the scrape, in the `dns` stage, saying what was asked of which
 server: `resolving A www.example.com on 10.0.0.53:53: cannot unmarshal DNS
 message`. A lookup cut short by the scrape's deadline says so and counts as
 a timeout.
+
+## DNSSEC signatures
+
+A zone signed with DNSSEC stops resolving, for every validating resolver,
+the moment its signatures expire: a signer that stopped re-signing is an
+outage with a date on it. `record_type: RRSIG` asks for the name's
+signatures, with the DO bit set (RFC 3225) so that the server gives them,
+and answers each one: the type of the records it covers, the key that made
+it (`key_tag`, as a `DNSKEY` answer names the keys, and `signer`), and when
+it was made and expires. The wire writes those times as 32-bit serial
+numbers; the exporter places each at the time nearest to now (RFC 4034
+§ 3.1.5), so they stay right past 2106.
+
+```yaml
+  - name: zone_signatures
+    request:
+      type: dns
+      record_type: RRSIG
+      server: ns1.example.com
+    transform:
+      type: jq
+    metrics:
+      - name: dns_signature_seconds_until_expiry
+        description: How long each signature of the name has left
+        items: .answers[]
+        expression: .seconds_until_expiration
+        labels:
+          - name: type
+            expression: .type_covered
+          - name: key_tag
+            expression: .key_tag | tostring
+```
+
+Ask the zone's own servers, or a resolver that passes signatures on: a
+resolver that does not, and an old server that refuses the DO bit's OPT
+record with `FORMERR`, answer no signature. An RRSIG question is not asked
+again without the OPT record, which would get none; its `FORMERR` is the
+document's `rcode`. Nothing is validated: the signatures are reported as
+the server gave them.
+
+## DNS over TLS
+
+`transport: tls` asks `server` over TLS, as RFC 7858 has it: the question
+and its answer as over TCP, within a TLS connection, made for each scrape.
+The server's port is 853 when `server` names none. Its certificate is
+verified against the system's roots and `tls.ca_file`, for `tls.server_name`
+or else the server's host, with the [`tls` block](REQUESTS.md#tls) of any
+other type; a client certificate is `cert_file` and `key_file`. `tls` needs
+`server`: the system's resolvers are asked over UDP and TCP, and a `tls`
+block without `transport: tls` is refused.
+
+```yaml
+  - name: dot_resolver
+    request:
+      type: dns
+      record_type: A
+      transport: tls
+      server: dns.example.com
+      tls:
+        ca_file: /etc/exporter/dns-ca.pem
+    transform:
+      type: jq
+    metrics:
+      - name: dns_dot_lookup_seconds
+        expression: .duration_seconds
+```
 
 ## Target lists
 

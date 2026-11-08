@@ -86,6 +86,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- A `dns` collector asks for a name's DNSSEC signatures, `record_type:
+  RRSIG`, each with its expiry and the seconds it has left, and asks over
+  TLS with `transport: tls` (RFC 7858)
+  ([DNSSEC signatures](docs/DNS.md#dnssec-signatures),
+  [DNS over TLS](docs/DNS.md#dns-over-tls)).
 - Chart: `kubernetesAccess.extraRules` adds RBAC rules of your own, with
   their verbs, to the exporter's Role or ClusterRole; `*` and the core
   group's secrets need `allowBroadExtraRules`

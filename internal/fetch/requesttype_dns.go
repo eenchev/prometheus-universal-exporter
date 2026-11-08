@@ -53,7 +53,7 @@ type DNSConfig struct {
 }
 
 // dnsRecordTypes are the values of a dns collector's request.record_type.
-var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR", "SOA", "CAA", "DNSKEY"}
+var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR", "SOA", "CAA", "DNSKEY", "RRSIG"}
 
 // dnsRequest is a dns collector's own request keys: the zero DNSConfig of
 // a collector built in code whose request has not been validated, which
@@ -66,7 +66,7 @@ func dnsRequest(c *model.Collector) DNSConfig {
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeDNS,
-		Fields:       []string{"allowed_targets", "denied_targets"},
+		Fields:       []string{"allowed_targets", "denied_targets", "tls"},
 		Config:       DNSConfig{},
 		KeyRules:     dnsKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
@@ -128,6 +128,7 @@ const dnsMethod = "QUERY"
 const (
 	dnsUDP = "udp"
 	dnsTCP = "tcp"
+	dnsTLS = "tls"
 )
 
 // dnsLookupTimeout bounds a lookup with no deadline of its own, as
@@ -156,8 +157,17 @@ func validateDNSRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q request.server %w", x.Name, err)
 		}
 	}
-	if r.Transport != "" && r.Transport != dnsUDP && r.Transport != dnsTCP {
-		return fmt.Errorf("collector %q request.transport is %q; want udp, the default, which falls back to TCP for an answer too long for UDP as every resolver does, or tcp", x.Name, r.Transport)
+	if r.Transport != "" && r.Transport != dnsUDP && r.Transport != dnsTCP && r.Transport != dnsTLS {
+		return fmt.Errorf("collector %q request.transport is %q; want udp, the default, which falls back to TCP for an answer too long for UDP as every resolver does, tcp, or tls, DNS over TLS", x.Name, r.Transport)
+	}
+	switch {
+	case r.Transport == dnsTLS && r.Server == "":
+		return fmt.Errorf("collector %q sets request.transport tls without request.server; DNS over TLS is asked of a server the collector names, port 853 when it names none, not of the system's resolvers", x.Name)
+	case r.Transport != dnsTLS && x.Request.TLS != (model.TLSConfig{}):
+		return fmt.Errorf("collector %q sets request.tls without request.transport tls; the tls block is DNS over TLS's", x.Name)
+	}
+	if t := x.Request.TLS; (t.CertFile == "") != (t.KeyFile == "") {
+		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", x.Name)
 	}
 	return nil
 }
@@ -218,9 +228,43 @@ func dnsURI(c *model.Collector, name string) string {
 	if dnsRequest(c).Server == "" {
 		return "dns:" + name + query
 	}
-	server, _ := ParseDNSServer(dnsRequest(c).Server)
+	server := dnsServerOf(dnsRequest(c))
 	return "dns://" + server + "/" + name + query
 }
+
+// dnsSignatureTimes places each RRSIG's inception and expiration in time,
+// from now: the wire writes them as 32-bit serial numbers of seconds since
+// 1970, compared as RFC 1982 does, each the time of that number nearest to
+// now (RFC 4034 § 3.1.5); and how long each has left.
+func dnsSignatureTimes(answers []dnsAnswer, now time.Time) {
+	at := func(serial uint32) *int64 {
+		t := now.Unix() + int64(int32(serial-uint32(now.Unix()))) //nolint:gosec // G115: serial arithmetic wraps on purpose
+		return &t
+	}
+	for i := range answers {
+		a := &answers[i]
+		if a.TypeCovered == "" {
+			continue
+		}
+		a.Inception, a.Expiration = at(a.inception), at(a.expiration)
+		left := *a.Expiration - now.Unix()
+		a.SecondsUntilExpiration = &left
+	}
+}
+
+// dnsServerOf is r's server as host:port: port 853, DNS over TLS's, for
+// transport tls when the server names no port, port 53 otherwise.
+func dnsServerOf(r DNSConfig) string {
+	server, _ := ParseDNSServer(r.Server)
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(r.Server)); err != nil && r.Transport == dnsTLS {
+		host, _, _ := net.SplitHostPort(server)
+		server = net.JoinHostPort(host, dnsTLSPort)
+	}
+	return server
+}
+
+// dnsTLSPort is DNS over TLS's port (RFC 7858).
+const dnsTLSPort = "853"
 
 // dnsDocument is the answer of a lookup as the transforms read it.
 type dnsDocument struct {
@@ -269,7 +313,21 @@ type dnsAnswer struct {
 	Protocol  *uint8  `json:"protocol,omitempty"`
 	Algorithm *uint8  `json:"algorithm,omitempty"`
 	KeyTag    *uint16 `json:"key_tag,omitempty"`
-	TTL       uint32  `json:"ttl"`
+	// RRSIG's: the type of the records it signs, the labels of its owner,
+	// the TTL the records were signed with, when it was made and when it
+	// expires, in seconds since 1970, how long it has left, and the zone
+	// whose key signed it. expiration and inception are the wire's serial
+	// numbers, placed in time when the document is made (dnsSignatureTimes).
+	TypeCovered            string  `json:"type_covered,omitempty"`
+	Labels                 *uint8  `json:"labels,omitempty"`
+	OriginalTTL            *uint32 `json:"original_ttl,omitempty"`
+	Inception              *int64  `json:"inception,omitempty"`
+	Expiration             *int64  `json:"expiration,omitempty"`
+	SecondsUntilExpiration *int64  `json:"seconds_until_expiration,omitempty"`
+	Signer                 string  `json:"signer,omitempty"`
+	TTL                    uint32  `json:"ttl"`
+
+	expiration, inception uint32
 }
 
 // fetchDNS resolves a scrape's name and answers its records as JSON.
@@ -296,7 +354,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	doc := dnsDocument{Name: name, RecordType: dnsRecordType(c), Transport: cmp.Or(r.Transport, dnsUDP), Answers: []dnsAnswer{}}
 	shownServer := "the system's resolver"
 	if r.Server != "" {
-		doc.Server, _ = ParseDNSServer(r.Server)
+		doc.Server = dnsServerOf(r)
 		shownServer = doc.Server
 	}
 	// The record type goes in a header of its own: a debug report masks the
@@ -318,6 +376,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	}
 	doc.Rcode, doc.Authoritative, doc.RecursionAvailable, doc.AuthenticatedData = reply.rcode, reply.authoritative, reply.recursionAvailable, reply.authentic
 	doc.Answers = reply.answers
+	dnsSignatureTimes(doc.Answers, time.Now())
 	sortDNSAnswers(doc.Answers)
 	doc.Count = len(doc.Answers)
 	doc.NotFound = doc.Rcode == "NXDOMAIN" || doc.Rcode == "NOERROR" && doc.Count == 0
@@ -399,7 +458,7 @@ func sortDNSAnswers(answers []dnsAnswer) {
 			cmp.Compare(value(a.Preference), value(b.Preference)),
 			cmp.Compare(value(a.Priority), value(b.Priority)),
 			cmp.Compare(value(b.Weight), value(a.Weight)),
-			strings.Compare(a.Address+a.Target+a.Host+a.Name+text(a.Text)+a.Tag+text(a.Value), b.Address+b.Target+b.Host+b.Name+text(b.Text)+b.Tag+text(b.Value)),
+			strings.Compare(a.Address+a.Target+a.Host+a.Name+text(a.Text)+a.Tag+text(a.Value)+a.TypeCovered+a.Signer, b.Address+b.Target+b.Host+b.Name+text(b.Text)+b.Tag+text(b.Value)+b.TypeCovered+b.Signer),
 			cmp.Compare(value(a.Port), value(b.Port)),
 			cmp.Compare(value(a.KeyTag), value(b.KeyTag)),
 		)
@@ -433,8 +492,8 @@ func checkDNSPolicy(p *targetPolicy, name string) error {
 // own keys.
 func dnsKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md."},
+		"record_type": {"type": "string", "pattern": SchemaOptionalPattern(SchemaCaselessOneOf(dnsRecordTypes...)), "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, RRSIG, the name's DNSSEC signatures and when they expire, or PTR, whose target is an IP address. See docs/DNS.md."},
 		"server":      {"not": SchemaOnlyBlanks(), "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out."},
-		"transport":   {"enum": SchemaOptionalEnum([]string{"udp", "tcp"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone."},
+		"transport":   {"enum": SchemaOptionalEnum([]string{"udp", "tcp", "tls"}), "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, tcp, which asks over TCP alone, or tls, DNS over TLS (RFC 7858), of request.server alone, port 853 when it names none, verified with request.tls. See docs/DNS.md#dns-over-tls."},
 	}
 }

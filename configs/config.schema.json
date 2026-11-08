@@ -3930,8 +3930,8 @@
                 "type": "object"
               },
               "record_type": {
-                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md.",
-                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, RRSIG, the name's DNSSEC signatures and when they expire, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy]|[Rr][Rr][Ss][Ii][Gg])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                 "type": "string"
               },
               "redirect_trusted_hosts": {
@@ -4449,10 +4449,11 @@
                 "type": "object"
               },
               "transport": {
-                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, or tcp, which asks over TCP alone.",
+                "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, tcp, which asks over TCP alone, or tls, DNS over TLS (RFC 7858), of request.server alone, port 853 when it names none, verified with request.tls. See docs/DNS.md#dns-over-tls.",
                 "enum": [
                   "udp",
                   "tcp",
+                  "tls",
                   ""
                 ],
                 "type": "string"

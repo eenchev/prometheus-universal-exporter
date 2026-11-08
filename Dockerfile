@@ -21,11 +21,12 @@ COPY . .
 ARG TARGETOS
 ARG TARGETARCH
 # REQUEST_TYPES selects the request types built in, as a comma-separated list
-# such as "http". Empty, the default, builds every type but the opt-in ones.
+# such as "http". Empty, the default, builds every type but the opt-in ones,
+# of which there are none now: the published image carries every type.
 ARG REQUEST_TYPES
-# OPT_IN_REQUEST_TYPES adds the opt-in request types, which the published
-# image leaves out, as a comma-separated list such as "s3file" or
-# "s3file,redis,tcp,ldap".
+# OPT_IN_REQUEST_TYPES adds opt-in request types, which the published image
+# leaves out, as a comma-separated list; every type of the tree is in the
+# default build now, so there are none to add.
 ARG OPT_IN_REQUEST_TYPES
 # SQL_DRIVERS adds the sql request type's opt-in database drivers, as a
 # comma-separated list such as "oracle,snowflake". Empty, the default, the

@@ -1,9 +1,7 @@
 # Three services that report their statistics as text over TCP, read with
-# the opt-in tcp request type (docs/TCP.md): memcached, ZooKeeper and
-# HAProxy's runtime API. The published image does not carry the type, so
-# build the exporter with it; make run builds bin/prometheus-universal-exporter
-# with tcp, as `make build OPT_IN_REQUEST_TYPES=tcp` does, and runs it with
-# this file and the static target file beside it:
+# the tcp request type (docs/TCP.md): memcached, ZooKeeper and HAProxy's
+# runtime API. make run builds bin/prometheus-universal-exporter and runs it
+# with this file and the static target file beside it:
 #
 #   make run EXAMPLE=tcp
 #

@@ -1,4 +1,4 @@
-//go:build request_type_sshexec
+//go:build !select_request_types || request_type_sshexec
 
 package fetch
 
@@ -597,10 +597,4 @@ func TestSSHExecConfigurationRules(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-}
-
-// The keys the opt-in sshexec type takes that no type of a default build does
-// are listed (optInRequestKeys, optInTargetKeys).
-func TestTheSSHExecTypesOptInKeysAreListed(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeSSHExec)
 }

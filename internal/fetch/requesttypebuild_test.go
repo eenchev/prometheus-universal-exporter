@@ -15,7 +15,7 @@ import (
 )
 
 // Request types are chosen at build time. A default build carries every type
-// but the opt-in ones; -tags select_request_types,request_type_<name>,...
+// but the opt-in ones, of which there are none now; -tags select_request_types,request_type_<name>,...
 // carries only the named ones. Each type lives in requesttype_<name>.go
 // behind `//go:build !select_request_types || request_type_<name>`, an
 // opt-in type behind `//go:build request_type_<name>` alone, and
@@ -194,6 +194,38 @@ func TestAMissingRequestTypeIsToldATypeThisBuildHas(t *testing.T) {
 	for _, name := range knownRequestTypes {
 		if RequestTypes[name] == nil && strings.Contains(err.Error(), "type: "+name) {
 			t.Errorf("the message shows %s, which this build does not include: %v", name, err)
+		}
+	}
+}
+
+// A collector of a type left out of the build is told the build does not
+// include it and how to build one that does: an opt-in type, which the
+// default build and the image leave out, by OPT_IN_REQUEST_TYPES and its
+// tag, and any other type by the default build, which includes every
+// type, and its tag. The tree has no opt-in type now, so one is named for
+// the test alone.
+func TestATypeLeftOutOfTheBuildIsToldHowToBuildWithIt(t *testing.T) {
+	saved := optInRequestTypes
+	t.Cleanup(func() { optInRequestTypes = saved })
+	optInRequestTypes = []string{"zzoptin"}
+	err := ValidateRequest(&model.Collector{Name: "c", Request: model.RequestConfig{Type: "zzoptin"}})
+	for _, want := range []string{`collector "c" uses request.type "zzoptin", which this build of the exporter does not include`, "zzoptin is an opt-in type, which the default build and the published image leave out", "OPT_IN_REQUEST_TYPES=zzoptin", "request_type_zzoptin"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("an opt-in type: %v, want %q", err, want)
+		}
+	}
+	for _, name := range knownRequestTypes {
+		if RequestTypes[name] != nil {
+			continue
+		}
+		err := ValidateRequest(&model.Collector{Name: "c", Request: model.RequestConfig{Type: name}})
+		for _, want := range []string{"which this build of the exporter does not include", "the default build includes every type", "request_type_" + name} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %v, want %q", name, err, want)
+			}
+		}
+		if err != nil && strings.Contains(err.Error(), "opt-in") {
+			t.Errorf("%s, of the default build, is told it is opt-in: %v", name, err)
 		}
 	}
 }

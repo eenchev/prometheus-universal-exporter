@@ -83,22 +83,13 @@ const UnixSocketPattern = `^$|^/`
 var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
-// leaves out, as it leaves out the sql type's opt-in drivers: s3file links
-// the AWS SDK, which few deployments want in the binary, and redis, which
-// needs nothing outside the standard library, is kept out of the binary of
-// every deployment that has no Redis to read, as tcp, which needs nothing
-// outside it either, is of every deployment with no text-protocol service
-// to read, and ldap is of every one with no directory to search; sshexec
-// runs commands on the hosts it reaches, which no build should do unless
-// asked; icmp, which needs nothing outside the standard library either,
-// opens ICMP sockets, which a deployment that pings nothing has no use
-// for, and snmp, which needs nothing outside it either, is kept out of
-// every deployment with no SNMP agent to read. A build
-// carries one only when
-// asked, with its request_type_<name> tag, and its file is built
-// under that tag alone. A test keeps the list in step with the files'
-// constraints.
-var optInRequestTypes = []string{RequestTypeS3File, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeICMP, RequestTypeSNMP}
+// leaves out, as it leaves out the sql type's opt-in drivers: none now, every
+// type being in the default build and the published image. A type that
+// links what few deployments want in the binary may be one: a build carries
+// it only when asked, with its request_type_<name> tag, its file built
+// under that tag alone (make new-request-type OPT_IN=1). A test keeps the
+// list in step with the files' constraints.
+var optInRequestTypes = []string{}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose
@@ -540,12 +531,12 @@ func ReadFiles(c *model.Collector) (paths []string, read string) {
 //	//go:build !select_request_types || request_type_<name>
 //
 // A default build carries every type but the opt-in ones (optInRequestTypes),
-// whose files are built under their own tag alone:
+// none now, whose files would be built under their own tag alone:
 //
 //	//go:build request_type_<name>
 //
-// so -tags request_type_s3file is a default build with s3file added, and
-// -tags request_type_s3file,request_type_redis one with both. Building
+// so that -tags request_type_<name> is a default build with that type
+// added. Building
 // with -tags select_request_types,request_type_http carries only the listed
 // ones; the others, and everything only they import, are left out of the
 // binary.

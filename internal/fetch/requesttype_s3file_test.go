@@ -1,4 +1,4 @@
-//go:build request_type_s3file
+//go:build !select_request_types || request_type_s3file
 
 package fetch
 
@@ -714,12 +714,6 @@ func TestS3FileClientsFollowTheConfiguration(t *testing.T) {
 	if count() != 0 {
 		t.Fatalf("%d clients kept after the reload, want none", count())
 	}
-}
-
-// optInRequestKeys lists the keys s3file accepts that no type of a default
-// build does (checkOptInRequestKeys).
-func TestTheOptInRequestKeysAreTheTypesOwn(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeS3File)
 }
 
 // What the store said is the operator's: S3's AccessDenied names the

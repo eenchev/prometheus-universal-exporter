@@ -1,4 +1,4 @@
-//go:build request_type_snmp
+//go:build !select_request_types || request_type_snmp
 
 package fetch
 
@@ -61,8 +61,7 @@ import (
 //
 // MIBs are not read: the names are the collector's, the numbers the
 // agent's, so the type needs neither net-snmp nor a MIB directory, and
-// imports nothing outside the standard library. It is opt-in, built under
-// its tag alone.
+// imports nothing outside the standard library.
 
 // SNMPConfig is an snmp collector's own request keys. The v3 user's name is
 // request.username, of the common part.
@@ -1423,7 +1422,7 @@ func snmpSchemaRule() map[string]any {
 // collector's own keys.
 func snmpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"snmp_version":       {"minimum": 0, "maximum": 3, "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. snmp is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SNMP.md."},
+		"snmp_version":       {"minimum": 0, "maximum": 3, "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. See docs/SNMP.md."},
 		"community_file":     {"description": "snmp: with snmp_version 1 or 2, the file of the community the agent answers to, read at each scrape, blanks around it taken off; required with them, refused with 3. See docs/SNMP.md#versions-and-accounts."},
 		"security_level":     {"enum": SchemaOptionalEnum([]string{snmpNoAuthNoPriv, snmpAuthNoPriv, snmpAuthPriv}), "description": "snmp: with snmp_version 3, required: noAuthNoPriv, authNoPriv, which signs each request with auth_protocol, or authPriv, which encrypts it with priv_protocol too. See docs/SNMP.md#snmpv3."},
 		"auth_protocol":      {"enum": SchemaOptionalEnum([]string{"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"}), "description": "snmp: with security_level authNoPriv or authPriv, how requests are signed: HMAC of MD5, SHA (SHA-1), SHA224, SHA256, SHA384 or SHA512 (RFC 3414, RFC 7860), as the user is configured on the agent."},

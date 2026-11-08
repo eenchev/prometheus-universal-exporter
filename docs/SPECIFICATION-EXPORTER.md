@@ -771,13 +771,11 @@ added without deciding which types it belongs to.
 Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
-type but the opt-in ones. An opt-in type is one few deployments want in the
-binary: `s3file`, for the AWS SDK it links, `redis`, `tcp` and `ldap`, which
-link nothing outside the standard library but reach servers most
-deployments of the exporter do not have, `sshexec`, which runs commands
-on the hosts it reaches, and `icmp`, which links nothing outside the
-standard library but opens ICMP sockets few deployments ping with. No build MAY carry one unless asked for it by its tag,
-and the source MUST list the opt-in types.
+type but the opt-in ones. An opt-in type is one few deployments would want
+in the binary, for the libraries it links; there are none now, every type
+of the tree being in the default build and the published image. No build
+MAY carry an opt-in type unless asked for it by its tag, and the source MUST
+list the opt-in types.
 
 - Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
@@ -849,8 +847,8 @@ and the source MUST list the opt-in types.
   package a build of no request type lacks but the standard library's. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
-  configuration in a default build with it, and none of them in the default
-  build or a build of any other one type; the `snowflake` driver links the
+  configuration in the default build, and none of them in a build of any
+  other one type, nor in a build of every type but `s3file`; the `snowflake` driver links the
   AWS SDK too, which only its own build may.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
@@ -964,7 +962,8 @@ and the source MUST list the opt-in types.
   opt-in type beside the default build's types, as `make
   build-opt-in-types`, `make lint-opt-in-types` and `make
   test-opt-in-types`, which `make ci` includes, do, and a test MUST keep
-  their lists naming every opt-in type of the tree; each single-type
+  their lists naming every opt-in type of the tree, and, while the tree has
+  none, saying so and stopping; each single-type
   selection, an opt-in type's included, is vetted, built, linted (§ 34.33)
   and tested as below.
 - Every single-type selection MUST pass its tests, and CI MUST run them:
@@ -2490,8 +2489,7 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
 #### `icmp`
 
 An `icmp` collector pings a host, as ping does, and hands the transforms a
-JSON document of the replies. It is an opt-in type (§ 5.1, Selecting request
-types at build time). Its keys:
+JSON document of the replies. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -2550,9 +2548,8 @@ types at build time). Its keys:
 #### `snmp`
 
 An `snmp` collector reads an SNMP agent's objects one by one and walks its
-tables, and hands the transforms a JSON document of what it answered. It is
-an opt-in type (§ 5.1, Selecting request types at build time), and MUST
-import nothing outside the standard library, MIBs included: its objects are
+tables, and hands the transforms a JSON document of what it answered. It
+MUST import nothing outside the standard library, MIBs included: its objects are
 named by the collector and numbered by their identifiers. Its keys:
 
 | Key | Default | Rule |
@@ -2767,9 +2764,7 @@ An `s3file` collector reads an object, or every matching object under a
 prefix, from a bucket of Amazon S3 or of a store that speaks the S3 API, the
 probe's `target` naming the bucket, and MUST present what it read exactly as
 `localfile` presents a file: the same path rules, the same reading of one
-file and of a directory (§ 5.1a), the same response. It is an opt-in type
-(§ 5.1, Selecting request types at build time): only a build asked for it
-carries it. Its keys:
+file and of a directory (§ 5.1a), the same response. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -3010,9 +3005,7 @@ keys:
 
 A `redis` collector reads a Redis or Valkey server, which speak the same
 protocol: its INFO, and the replies of read-only commands its configuration
-lists, handed to the transforms as one JSON document. It is an opt-in type
-(§ 5.1, Selecting request types at build time): only a build asked for it
-carries it. Its keys:
+lists, handed to the transforms as one JSON document. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -3147,8 +3140,7 @@ A `tcp` collector reads a service that answers a line of text sent over a
 TCP connection, such as memcached's `stats`, a ZooKeeper four-letter word or
 HAProxy's runtime API: it writes the line and hands the answer, as the
 server wrote it, to the decoder and the transform as an `http` collector's
-body is handed to them. It is an opt-in type (§ 5.1, Selecting request
-types at build time): only a build asked for it carries it. Its keys:
+body is handed to them. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -3409,8 +3401,7 @@ types at build time): only a build asked for it carries it. Its keys:
 An `sshexec` collector runs one command the configuration fixes on the
 probe's `target`, a remote host, over SSH, and hands what the command wrote
 to stdout, as it wrote it, to the decoder and the transform as an `http`
-collector's body is handed to them. It is an opt-in type (§ 5.1, Selecting
-request types at build time): only a build asked for it carries it. Its
+collector's body is handed to them. Its
 connection MUST be `sshfile`'s, kept apart from `sshfile`'s connections.
 Its keys:
 
@@ -3511,9 +3502,7 @@ Its keys:
 #### `ldap`
 
 An `ldap` collector searches an LDAP directory, any server of LDAPv3, and
-hands the transforms what its searches find as one JSON document. It is an
-opt-in type (§ 5.1, Selecting request types at build time): only a build
-asked for it carries it. Its keys:
+hands the transforms what its searches find as one JSON document. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
@@ -9780,7 +9769,7 @@ checked:
   key the schemas hold to allowed values MUST be told those values in place
   of the advice to quote, which would not make the value one of them: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. A
+  of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`. A
   rule's and a label's `name` are among them under every `name_escaping`. A
   key that takes a boolean MUST take `true` and `false`, in the three cases
   YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
@@ -12376,17 +12365,16 @@ example of its own, and the tests MUST fail on one the configuration's
 `collector_files` does not name, and on a directory of YAML without a
 `config.yaml`. An
 example's static target file MUST be valid against the configuration in its
-directory, as startup checks the two. An example of an opt-in request type
-(`examples/tcp`) MUST be loaded, and checked against the schema the build
+directory, as startup checks the two. An example of a request type a build
+leaves out MUST be skipped, for that reason alone, in that build, and one of
+an opt-in type MUST be loaded, and checked against the schema the build
 generates, in a build with its type, as CI's build with every opt-in type
-runs the repository's tests, and MUST be skipped, for that reason alone, in
-a build without it; every other example is checked against the committed
-schemas. An example SHOULD also be run in the
+runs the repository's tests; every other example is checked against the
+committed schemas. An example SHOULD also be run in the
 default suite against a local stand-in answering in the service's documented
 shape, asserting every series and the request the collector sent, as the
 Filebeat, Open-Meteo, ECB, METAR, mempool.space, Prometheus demo, Frankfurter,
-USGS and scrapethissite.com examples are, and the tcp example in a build
-with its type.
+USGS, scrapethissite.com and tcp examples are.
 
 ## 34.32 Regression tests
 
@@ -12820,14 +12808,14 @@ status captured:
 - Build-time selection: every `internal/fetch/requesttype_<name>.go` carries its selection
   constraint and the list of known types matches the files; the guard's
   constraint names every type; evaluated with the Go toolchain's constraint
-  rules, a default build compiles every type but the opt-in ones and not
+  rules, a default build compiles every type and not
   the guard,
   `select_request_types,request_type_http` compiles http and not the guard,
   `select_request_types,request_type_graphite` compiles graphite alone, and
   `select_request_types,request_type_grpc` compiles grpc alone, and
   `select_request_types` alone compiles only the guard; each of CI's loops
   over single-type builds names every type in the tree; a default build
-  registers every known type but the opt-in ones; a known type missing from the build is rejected
+  registers every known type; a known type missing from the build is rejected
   as left out of the build, naming the tag, while an unknown name is not;
   registering a type twice panics; the `--dry-run` report lists the built
   types; `tools/request-type-tags.sh` maps lists to tags, de-duplicates, and
@@ -31079,7 +31067,7 @@ The repository MUST include documentation covering:
     collector's keys, the target, and static targets: `graphite` in
     `docs/GRAPHITE.md`, `sshfile` in `docs/SSHFILE.md`, `sql` in
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
-    `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, and the opt-in `s3file` in
+    `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
     `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
@@ -31785,6 +31773,20 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADryRunReadsTheFilesOfDNSOverTLS` (fetch, dns): `--dry-run`'s reading of a `dns` collector's files warns of a `tls.ca_file` of `transport: tls` that is missing, naming `request.tls`, and of none that is in place.
 - `TestAnHTTPCollectorsTLSFilesAreReadByTheDryRun` (fetch): `--dry-run`'s reading of an `http` collector's files warns, under the collector's name, of a `request.tls.ca_file` and of a `request.login.tls.ca_file` that are missing, and of nothing for a tls block of a server name alone, a login without a tls block, or no tls block.
 - `TestEveryRequestSpanAttributeIsInTheOTLPDocs` (repository): every span attribute a request type records of what its request found is named in docs/OTLP.md.
+
+## 34.320 Every request type in the default build
+
+- `TestATypeLeftOutOfTheBuildIsToldHowToBuildWithIt` (fetch): a collector of an opt-in type the build left out, one named for the test, is told the type is opt-in, which the default build and the published image leave out, with `OPT_IN_REQUEST_TYPES` and its tag; one of every other type the build left out is told the default build includes every type, with its tag, and never that it is opt-in.
+- `TestEveryRequestTypeFileHasItsSelectionConstraint`, `TestRequestTypeTestFilesCarryTheirTypesConstraint` and `TestADefaultBuildRegistersEveryRequestType` (fetch), changed: the `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` files carry the default build's constraint, and the default build registers every type of the tree.
+- `TestABuildWithoutTCPRefusesATCPCollector`, `TestABuildWithoutLDAPRefusesAnLDAPCollector`, `TestABuildWithoutRedisRefusesARedisCollector` and `TestABuildWithoutS3FileRefusesAnS3FileCollector` (config), changed: they run in a build of `select_request_types` without the type, which is told the default build includes it, and its tag.
+- `TestRequestTypeTagsScript` (repository), changed: the opt-in list is put through a tree of the test's own with two opt-in types; in the tree, each of the seven types named in `OPT_IN_REQUEST_TYPES` is refused as a type of every build.
+- `TestCIBuildsEveryOptInRequestType` (repository), changed: ci.yml's build, test and lint, and the Makefile's, of every opt-in type name the tree's, none, and each stops at once, saying so, when the list is empty.
+- `TestOnlyTheTypesThatNeedThemLinkTheirModules` (repository), changed: the default build links the AWS SDK's S3 client and configuration, and a build of every type but `s3file` none of the SDK; `TestOnlyTheBuildsWithASQLDriverLinkIt`, changed: the default build's AWS SDK is its `s3file` type's, not a driver's.
+- `TestTheChartDescribesEverySource` (repository), changed: `Chart.yaml`'s description names the seven types.
+- `TestMakeRunAddsTheOptInTypesAnExampleNeeds` and `TestAnExampleDirectoryMayHaveCollectorFiles` (repository), changed: no example needs an opt-in type, and a collector file's opt-in type, of the test's own tree, is added.
+- `TestANewRequestTypeIsWiredByTheScaffold` (repository), changed: in a tree with no opt-in type, the opt-in `zzdemo` gets `optInRequestTypes`, the opt-in builds' lists and constraints of its own, and lands last in the documentation's lists, the default `ozdefault` before it, after `snmp`.
+- `make gopls-check`, changed: the `icmp` type's refusal on a system other than Linux and macOS is `icmpDial`'s default, which `icmpsocket_unix.go` replaces when the package starts, rather than a file left out of a Linux build, so that gopls checks the tree in the host's build alone and not in Windows' too.
+- The seven types' schema rows are in their `schemakeys_<name>_test.go`, checked against the committed schemas as every default type's are; their tests of `optInRequestKeys` (`TestTheOptInRequestKeysAreTheTypesOwn` and its six likes) are gone, the types having no opt-in keys to list.
 
 ## 42.1 OTLP export
 

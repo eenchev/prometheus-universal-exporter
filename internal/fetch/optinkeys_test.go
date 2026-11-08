@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_icmp || request_type_ldap || request_type_redis || request_type_s3file || request_type_snmp || request_type_sshexec || request_type_tcp
+//go:build !select_request_types
 
 package fetch
 
@@ -7,7 +7,9 @@ package fetch
 // default build does. A default build, which leaves the opt-in types out,
 // cannot see them claimed (TestEveryRequestKeyBelongsToAType), and a build
 // with the type keeps the list in step with what the type accepts
-// (checkOptInRequestKeys). There are none: a key only opt-in types take
+// (checkOptInRequestKeys). The file's constraint names the default build
+// and every opt-in type. A type's list is empty all the same: a key only
+// opt-in types take
 // would have to be taken by two of them to be the common part's, and the
 // keys of one type alone are its own (RequestType.Config), which every
 // build knows from the catalogue.
@@ -15,8 +17,6 @@ var optInRequestKeys = map[string][]string{}
 
 // optInTargetKeys are, by opt-in type, the keys of a static target's request
 // that type accepts and no type of a default build does, as optInRequestKeys
-// are of a collector's.
-var optInTargetKeys = map[string][]string{
-	RequestTypeLDAP: {"bind_dn"},
-	RequestTypeSNMP: {"community_file", "auth_password_file", "priv_password_file", "request_timeout", "retries"},
-}
+// are of a collector's, an opt-in type's target keys that are the common
+// part's.
+var optInTargetKeys = map[string][]string{}

@@ -29,7 +29,7 @@ var (
 // The database drivers are linked only by the builds that carry them: a
 // build without the sql type links none, a build with it links the three
 // default drivers and none of the opt-in ones, the default build included,
-// and a build with an opt-in driver, as SQL_DRIVERS names it, links that
+// whose AWS SDK is its s3file type's, and a build with an opt-in driver, as SQL_DRIVERS names it, links that
 // driver's modules and no other's. sqlOptInModules names every opt-in
 // driver of the tree, a sqldriver_<name>.go built only with its
 // sql_driver_<name> tag.
@@ -51,7 +51,13 @@ func TestOnlyTheBuildsWithASQLDriverLinkIt(t *testing.T) {
 				t.Errorf("REQUEST_TYPES=%q links no %s", types, module)
 			}
 		}
-		if found := linksAny(packages, optIn); len(found) > 0 {
+		// The default build's s3file type links the AWS SDK, which
+		// snowflake's driver brings too: there it is s3file's to carry.
+		drivers := optIn
+		if types == "" {
+			drivers = slices.DeleteFunc(slices.Clone(optIn), func(module string) bool { return slices.Contains(s3fileModules, module) })
+		}
+		if found := linksAny(packages, drivers); len(found) > 0 {
 			t.Errorf("REQUEST_TYPES=%q without SQL_DRIVERS links %s", types, strings.Join(found, ", "))
 		}
 	}

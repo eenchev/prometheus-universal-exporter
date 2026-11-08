@@ -1,4 +1,4 @@
-//go:build request_type_tcp
+//go:build !select_request_types || request_type_tcp
 
 package fetch
 
@@ -429,12 +429,6 @@ func TestATCPScrapeIsTraced(t *testing.T) {
 	if warnings := FileWarnings(missing, nil); len(warnings) != 1 || !strings.Contains(warnings[0], "request.tls") {
 		t.Errorf("warnings %v", warnings)
 	}
-}
-
-// optInRequestKeys lists the keys tcp accepts that no type of a default
-// build does: send and terminator (checkOptInRequestKeys).
-func TestTheOptInRequestKeysAreTCPsOwn(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeTCP)
 }
 
 // A send whose placeholders leave it empty, {{param_cmd:}} with no

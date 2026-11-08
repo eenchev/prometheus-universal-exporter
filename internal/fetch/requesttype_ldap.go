@@ -1,4 +1,4 @@
-//go:build request_type_ldap
+//go:build !select_request_types || request_type_ldap
 
 package fetch
 
@@ -56,8 +56,7 @@ import (
 // The password is read from password_file at every scrape, as every
 // credential file is, and never shown: a debug report shows BIND dn ***.
 //
-// The type is opt-in, built under its tag alone, and imports nothing
-// outside the standard library: the client is the BER of ldapber.go, and
+// The type imports nothing outside the standard library: the client is the BER of ldapber.go, and
 // the filters are parsed by ldapfilter.go.
 
 // LDAPConfig is an ldap collector's own request keys: the DN a simple
@@ -1153,7 +1152,7 @@ func ldapTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 // collector's own keys.
 func ldapKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"bind_dn":                 {"not": SchemaOnlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. ldap is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/LDAP.md#binding."},
+		"bind_dn":                 {"not": SchemaOnlyBlanks(), "description": "ldap: the DN a simple bind is made as, such as cn=exporter,ou=services,dc=example,dc=org, with password_file, which it requires; left out, the bind is anonymous. See docs/LDAP.md#binding."},
 		"sasl_external":           {"description": "ldap: bind with SASL EXTERNAL, as the identity of the TLS client certificate request.tls.cert_file and key_file present, in place of a simple bind; not with bind_dn or password_file. A client certificate makes the connection TLS. See docs/LDAP.md#a-client-certificate."},
 		"start_tls":               {"description": "ldap: begin TLS with the StartTLS operation on a plaintext connection, port 389 when the target names none, verifying the server as request.tls says. Not with an ldaps:// target. See docs/LDAP.md#tls."},
 		"searches":                {"minItems": 1, "description": "ldap, required: the searches whose results the document holds under .searches.<name>, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches."},

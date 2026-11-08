@@ -1,4 +1,4 @@
-//go:build request_type_redis
+//go:build !select_request_types || request_type_redis
 
 package fetch
 
@@ -543,12 +543,6 @@ func TestARedisConnectionRefusedFailsTheScrape(t *testing.T) {
 	if _, err := redisScrape(t, redisCollector(t), addr, nil); err == nil || !strings.Contains(err.Error(), "connecting to "+addr) {
 		t.Errorf("err %v", err)
 	}
-}
-
-// optInRequestKeys lists the keys redis accepts that no type of a default
-// build does: db, info_sections and commands (checkOptInRequestKeys).
-func TestTheOptInRequestKeysAreRedissOwn(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeRedis)
 }
 
 // A reply holding bytes that are not UTF-8 fails the scrape naming the

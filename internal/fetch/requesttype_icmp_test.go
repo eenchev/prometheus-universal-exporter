@@ -1,4 +1,4 @@
-//go:build request_type_icmp
+//go:build !select_request_types || request_type_icmp
 
 package fetch
 
@@ -236,12 +236,6 @@ func TestICMPKeysAreChecked(t *testing.T) {
 	if err := ValidateRequest(x); err == nil || !strings.Contains(err.Error(), `ip_family "ip5"`) {
 		t.Errorf("ip_family ip5: %v", err)
 	}
-}
-
-// The keys the opt-in icmp type takes that no type of a default build does
-// are listed (optInRequestKeys, optInTargetKeys).
-func TestTheICMPTypesOptInKeysAreListed(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeICMP)
 }
 
 // With all_addresses, every address of the name of the families ip_family

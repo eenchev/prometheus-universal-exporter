@@ -1,4 +1,4 @@
-//go:build request_type_tcp
+//go:build !select_request_types || request_type_tcp
 
 package repository
 
@@ -63,7 +63,11 @@ var tcpExampleStatuses = []struct {
 var tcpExampleServerRows = func() string {
 	var b strings.Builder
 	for _, s := range tcpExampleStatuses {
-		b.WriteString("app," + s.name + ",1,2,0,3,,40,300,500,,0,,4,0,0,0," + s.status + ",1,1,0,3,1,30,30,,1,3,2,,40,,2,0,,2,L4CON,,0,,,,,,\n")
+		b.WriteString("app,")
+		b.WriteString(s.name)
+		b.WriteString(",1,2,0,3,,40,300,500,,0,,4,0,0,0,")
+		b.WriteString(s.status)
+		b.WriteString(",1,1,0,3,1,30,30,,1,3,2,,40,,2,0,,2,L4CON,,0,,,,,,\n")
 	}
 	return b.String()
 }()

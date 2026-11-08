@@ -455,7 +455,7 @@ collectors:
 One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
-`localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes` and the opt-in
+`localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`,
 `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
@@ -1947,10 +1947,9 @@ helpers](CONFIGURATION.md#value-parsing-helpers)).
 What this collector does not do:
 
 - No ICMP: an `http` collector does not ping. A host's reachability is a
-  connection to one of its ports, or the [`icmp`](ICMP.md) type's echoes, in
-  a build that asks for it.
+  connection to one of its ports, or the [`icmp`](ICMP.md) type's echoes.
 - No raw TCP: a port that speaks something other than HTTP is the
-  [`tcp`](TCP.md) type's, in a build that asks for it, and a name's records
+  [`tcp`](TCP.md) type's, and a name's records
   the [`dns`](DNS.md) type's.
 - One certificate: the chain's intermediates and roots, a chain that does
   not verify and the reason, and a TLS port that speaks no HTTP are the

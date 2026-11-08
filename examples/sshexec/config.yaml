@@ -1,10 +1,8 @@
-# Commands run on a host over SSH, read with the opt-in sshexec request type
+# Commands run on a host over SSH, read with the sshexec request type
 # (docs/SSHEXEC.md): the space of the root file system from df, the load
 # from uptime, a systemd unit's state, and a count a script of the host's
-# own writes as exposition. The published image does not carry the type, so
-# build the exporter with it; make run builds bin/prometheus-universal-exporter
-# with sshexec, as `make build OPT_IN_REQUEST_TYPES=sshexec` does, and runs
-# it with this file and the static target file beside it:
+# own writes as exposition. make run builds bin/prometheus-universal-exporter
+# and runs it with this file and the static target file beside it:
 #
 #   make run EXAMPLE=sshexec
 #

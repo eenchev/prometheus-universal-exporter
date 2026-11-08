@@ -1,4 +1,4 @@
-//go:build request_type_sshexec
+//go:build !select_request_types || request_type_sshexec
 
 package fetch
 
@@ -71,8 +71,8 @@ import (
 //
 // No environment is sent: OpenSSH accepts only the variables its AcceptEnv
 // names, which by default are none, so a request would fail or, worse, be
-// ignored on some hosts and not others. The type is opt-in, built under its
-// tag alone, and links x/crypto's SSH client but not the SFTP client.
+// ignored on some hosts and not others. The type links x/crypto's SSH client
+// but not the SFTP client.
 
 // SSHExecConfig is an sshexec collector's own request keys: the command,
 // its program first, and the exit statuses that are a success, 0 alone
@@ -756,7 +756,7 @@ func sshExecSchemaRule() map[string]any {
 // collector's own keys.
 func sshExecKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"command":            {"minItems": 1, "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md."},
+		"command":            {"minItems": 1, "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. See docs/SSHEXEC.md."},
 		"success_exit_codes": {"minItems": 1, "items": map[string]any{"type": "integer", "minimum": 0, "maximum": 255}, "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0]."},
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -180,32 +181,45 @@ func TestRequestTypeTagsScript(t *testing.T) {
 	// A third list adds the opt-in request types, which no build carries
 	// unless asked: to the default build's types, or to those REQUEST_TYPES
 	// lists, which may name one too. A type of every build, and one that
-	// does not exist, are refused.
+	// does not exist, are refused. The tree has no opt-in type now, so the
+	// script runs in a tree of its own with two, zzopt and zzother, beside
+	// http and sql of every build and the snowflake and oracle drivers.
+	fixture := t.TempDir()
+	for name, content := range map[string]string{
+		"tools/request-type-tags.sh":            read(t, "tools/request-type-tags.sh"),
+		"internal/fetch/requesttype_http.go":    "//go:build !select_request_types || request_type_http\n",
+		"internal/fetch/requesttype_sql.go":     "//go:build !select_request_types || request_type_sql\n",
+		"internal/fetch/requesttype_zzopt.go":   "//go:build request_type_zzopt\n",
+		"internal/fetch/requesttype_zzother.go": "//go:build request_type_zzother\n",
+		"internal/fetch/sqldriver_oracle.go":    "//go:build (!select_request_types || request_type_sql) && sql_driver_oracle\n",
+		"internal/fetch/sqldriver_snowflake.go": "//go:build (!select_request_types || request_type_sql) && sql_driver_snowflake\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(fixture, name)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	withOptIn := func(types, drivers, optIn string) (string, string, error) {
 		cmd := exec.Command("sh", "tools/request-type-tags.sh", types, drivers, optIn)
+		cmd.Dir = fixture
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()
 		return strings.TrimSpace(stdout.String()), stderr.String(), err
 	}
 	for lists, want := range map[[3]string]string{
-		{"", "", "s3file"}:                 "request_type_s3file",
-		{"", "", "s3file,s3file"}:          "request_type_s3file",
-		{"http", "", "s3file"}:             "select_request_types,request_type_http,request_type_s3file",
-		{"s3file", "", ""}:                 "select_request_types,request_type_s3file",
-		{"s3file", "", "s3file"}:           "select_request_types,request_type_s3file",
-		{"", "snowflake", "s3file"}:        "sql_driver_snowflake,minicore_disabled,request_type_s3file",
-		{"sql,s3file", "oracle", "s3file"}: "select_request_types,request_type_sql,request_type_s3file,sql_driver_oracle",
-		{"", "", "redis"}:                  "request_type_redis",
-		{"", "", "s3file,redis"}:           "request_type_s3file,request_type_redis",
-		{"redis", "", ""}:                  "select_request_types,request_type_redis",
-		{"http", "", "redis,s3file"}:       "select_request_types,request_type_http,request_type_redis,request_type_s3file",
-		{"", "", "tcp"}:                    "request_type_tcp",
-		{"", "", "s3file,redis,tcp"}:       "request_type_s3file,request_type_redis,request_type_tcp",
-		{"tcp", "", ""}:                    "select_request_types,request_type_tcp",
-		{"", "", "ldap"}:                   "request_type_ldap",
-		{"", "", "s3file,redis,tcp,ldap"}:  "request_type_s3file,request_type_redis,request_type_tcp,request_type_ldap",
-		{"ldap", "", ""}:                   "select_request_types,request_type_ldap",
+		{"", "", ""}:                     "",
+		{"", "", "zzopt"}:                "request_type_zzopt",
+		{"", "", "zzopt,zzopt"}:          "request_type_zzopt",
+		{"http", "", "zzopt"}:            "select_request_types,request_type_http,request_type_zzopt",
+		{"zzopt", "", ""}:                "select_request_types,request_type_zzopt",
+		{"zzopt", "", "zzopt"}:           "select_request_types,request_type_zzopt",
+		{"", "snowflake", "zzopt"}:       "sql_driver_snowflake,minicore_disabled,request_type_zzopt",
+		{"sql,zzopt", "oracle", "zzopt"}: "select_request_types,request_type_sql,request_type_zzopt,sql_driver_oracle",
+		{"", "", "zzopt,zzother"}:        "request_type_zzopt,request_type_zzother",
+		{"http", "", "zzother,zzopt"}:    "select_request_types,request_type_http,request_type_zzother,request_type_zzopt",
 	} {
 		got, stderr, err := withOptIn(lists[0], lists[1], lists[2])
 		if err != nil || got != want {
@@ -214,12 +228,21 @@ func TestRequestTypeTagsScript(t *testing.T) {
 	}
 	for optIn, want := range map[string]string{
 		"http":  `the request type "http" is in every build and needs no OPT_IN_REQUEST_TYPES entry`,
-		"s3":    `no opt-in request type "s3"`,
+		"zz":    `no opt-in request type "zz"`,
 		"none":  `no opt-in request type "none"`,
-		"s3fil": `no opt-in request type "s3fil"`,
+		"zzopx": `no opt-in request type "zzopx"`,
 	} {
 		if got, stderr, err := withOptIn("", "", optIn); err == nil || !strings.Contains(stderr, want) {
 			t.Errorf("%q: got %q err=%v stderr=%q, want %q", optIn, got, err, stderr, want)
+		}
+	}
+	// In the tree, every type is of every build, so none is an opt-in one.
+	for _, typ := range []string{"s3file", "redis", "tcp", "ldap", "sshexec", "icmp", "snmp"} {
+		cmd := exec.Command("sh", "tools/request-type-tags.sh", "", "", typ)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil || !strings.Contains(stderr.String(), `the request type "`+typ+`" is in every build`) {
+			t.Errorf("OPT_IN_REQUEST_TYPES=%s: err=%v stderr=%q, want it refused as a type of every build", typ, err, stderr.String())
 		}
 	}
 }

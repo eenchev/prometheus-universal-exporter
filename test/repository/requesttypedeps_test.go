@@ -93,7 +93,8 @@ var s3fileModules = []string{
 }
 
 // optInRequestTypes are the opt-in request types of the tree: each
-// internal/fetch/requesttype_<name>.go built under its own tag alone.
+// internal/fetch/requesttype_<name>.go built under its own tag alone. There
+// are none now, every type being in the default build.
 func optInRequestTypes(t *testing.T) []string {
 	t.Helper()
 	files, err := filepath.Glob("internal/fetch/requesttype_*.go")
@@ -108,8 +109,8 @@ func optInRequestTypes(t *testing.T) []string {
 		}
 	}
 	slices.Sort(names)
-	if len(names) == 0 {
-		t.Fatal("found no opt-in request type under internal/fetch; the files have moved")
+	if files := len(files); files < 10 {
+		t.Fatalf("found %d request type files under internal/fetch; the files have moved", files)
 	}
 	return names
 }
@@ -122,13 +123,12 @@ func optInRequestTypes(t *testing.T) []string {
 // s3file; a build of graphite, http and localfile together links none
 // of them, nor does one of dns, tlscert, ntp and kubernetes, or of redis,
 // tcp, ldap or icmp alone, which need nothing outside the standard library
-// but, for tlscert, golang.org/x/crypto/ocsp; and the default
-// build, of every type but the opt-in s3file, redis, tcp and ldap, links gRPC's
-// and SSH's and no AWS SDK, which only a build asking for s3file
-// (OPT_IN_REQUEST_TYPES) links, and a build asking for redis, tcp or ldap alone
-// does not. go list is asked of the main package, the exporter as it ships;
-// the packages only tests import, such as internal/grpctest and
-// internal/sshtest, are not among its dependencies.
+// but, for tlscert, golang.org/x/crypto/ocsp; and the default build, of
+// every type, links gRPC's, SSH's and the AWS SDK's S3 client and
+// configuration, which a build of every type but s3file does not. go list
+// is asked of the main package, the exporter as it ships; the packages only
+// tests import, such as internal/grpctest and internal/sshtest, are not
+// among its dependencies.
 func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
 	for _, types := range append(treeRequestTypes(t), "graphite,http,localfile", "dns,icmp,kubernetes,ldap,ntp,redis,tcp,tlscert") {
 		packages := linkedPackages(t, types)
@@ -146,63 +146,71 @@ func TestOnlyTheTypesThatNeedThemLinkTheirModules(t *testing.T) {
 		}
 	}
 	all := linkedPackages(t, "")
-	for _, module := range []string{"google.golang.org/grpc", "github.com/bufbuild/protocompile", "golang.org/x/crypto/ssh", "github.com/pkg/sftp"} {
+	for _, module := range []string{"google.golang.org/grpc", "github.com/bufbuild/protocompile", "golang.org/x/crypto/ssh", "github.com/pkg/sftp", "github.com/aws/aws-sdk-go-v2/service/s3", "github.com/aws/aws-sdk-go-v2/config"} {
 		if len(linksAny(all, []string{module})) == 0 {
 			t.Errorf("the default build does not link %s", module)
 		}
 	}
-	if found := linksAny(all, s3fileModules); len(found) > 0 {
-		t.Errorf("the default build links %s, which only a build with the opt-in s3file type may", strings.Join(found, ", "))
-	}
-	for _, optIn := range []string{"redis", "tcp", "ldap"} {
-		if found := linksAny(linkedPackagesOf(t, "", "", optIn), s3fileModules); len(found) > 0 {
-			t.Errorf("OPT_IN_REQUEST_TYPES=%s links %s, which only a build with the opt-in s3file type may", optIn, strings.Join(found, ", "))
+	var others []string
+	for _, typ := range treeRequestTypes(t) {
+		if typ != "s3file" {
+			others = append(others, typ)
 		}
 	}
-	for _, build := range []struct{ types, optIn string }{{"", "s3file"}, {"http", "s3file"}, {"", "s3file,redis,tcp,ldap"}} {
-		packages := linkedPackagesOf(t, build.types, "", build.optIn)
-		for _, module := range []string{"github.com/aws/aws-sdk-go-v2/service/s3", "github.com/aws/aws-sdk-go-v2/config"} {
-			if len(linksAny(packages, []string{module})) == 0 {
-				t.Errorf("REQUEST_TYPES=%q OPT_IN_REQUEST_TYPES=%s links no %s", build.types, build.optIn, module)
-			}
-		}
+	if found := linksAny(linkedPackages(t, strings.Join(others, ",")), s3fileModules); len(found) > 0 {
+		t.Errorf("a build of every type but s3file links %s, which only a build with the s3file type may", strings.Join(found, ", "))
 	}
 }
 
 // optInTypeBuild is the build of every opt-in request type as ci.yml and
-// the Makefile write it.
-var optInTypeBuild = regexp.MustCompile(`tools/request-type-tags\.sh '' '' ([a-z0-9,]+)\)`)
+// the Makefile write it, its list empty while the tree has none.
+var optInTypeBuild = regexp.MustCompile(`tools/request-type-tags\.sh '' '' ([a-z0-9,]*)\)`)
+
+// optInTypesNone is what a build, test or lint of every opt-in request type
+// does first, so that while the tree has none it says so and stops rather
+// than repeat the default build's.
+const optInTypesNone = `{ [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; }`
 
 // CI and `make ci` vet, build, test and lint a build with every opt-in
 // request type beside the default build's types, which no other build
 // compiles together: each of their lists names every opt-in type of the
-// tree, and ci.yml's lint step, which writes its tags out, lints the tags
-// tools/request-type-tags.sh makes of them.
+// tree, none now, and each stops at once when the list is empty.
 func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	want := optInRequestTypes(t)
-	for _, file := range []string{".github/workflows/ci.yml", "Makefile"} {
-		text := read(t, file)
+	for _, c := range []struct {
+		file   string
+		at     int
+		dollar string
+	}{{".github/workflows/ci.yml", 3, "$"}, {"Makefile", 4, "$$"}} {
+		text := read(t, c.file)
 		matches := optInTypeBuild.FindAllStringSubmatch(text, -1)
-		if len(matches) < 2 {
-			t.Errorf("%s builds and tests the opt-in request types %d times, want a build and a test", file, len(matches))
+		if len(matches) < c.at {
+			t.Errorf("%s builds, lints and tests the opt-in request types %d times, want %d", c.file, len(matches), c.at)
 		}
 		for _, match := range matches {
-			listed := strings.Split(match[1], ",")
+			var listed []string
+			if match[1] != "" {
+				listed = strings.Split(match[1], ",")
+			}
 			slices.Sort(listed)
 			if !slices.Equal(listed, want) {
-				t.Errorf("%s builds the opt-in request types %v, but the tree's are %v", file, listed, want)
+				t.Errorf("%s builds the opt-in request types %v, but the tree's are %v", c.file, listed, want)
+			}
+		}
+		for _, run := range []string{`go vet -tags "` + c.dollar + `tags"`, `go test -count=1 -tags "` + c.dollar + `tags" ./test/repository/ ./internal/fetch/`, `golangci-lint run --build-tags "` + c.dollar + `tags"`} {
+			guarded := false
+			for _, line := range strings.Split(text, "\n") {
+				if optInTypeBuild.MatchString(line) && strings.Contains(line, run) && strings.Contains(line, strings.ReplaceAll(optInTypesNone, "$", c.dollar)) {
+					guarded = true
+				}
+			}
+			if !guarded {
+				t.Errorf("%s has no line of the opt-in request types' build running %s after %s", c.file, run, strings.ReplaceAll(optInTypesNone, "$", c.dollar))
 			}
 		}
 	}
-	tags, err := exec.Command("sh", "tools/request-type-tags.sh", "", "", strings.Join(want, ",")).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(read(t, ".github/workflows/ci.yml"), "args: --build-tags "+strings.TrimSpace(string(tags))+"\n") {
-		t.Errorf("ci.yml has no golangci-lint step with --build-tags %s, the opt-in request types' tags", strings.TrimSpace(string(tags)))
-	}
 	makefile := read(t, "Makefile")
-	if !regexp.MustCompile(`(?m)^lint-opt-in-types:.*\n\ttags="\$\$\(sh tools/request-type-tags\.sh '' '' [a-z0-9,]+\)" && golangci-lint run --build-tags "\$\$tags"$`).MatchString(makefile) {
+	if !regexp.MustCompile(`(?m)^lint-opt-in-types:.*\n\ttags="\$\$\(sh tools/request-type-tags\.sh '' '' [a-z0-9,]*\)" && .*golangci-lint run --build-tags "\$\$tags"$`).MatchString(makefile) {
 		t.Error("the Makefile has no lint-opt-in-types target linting the build with every opt-in request type")
 	}
 	for _, target := range []string{"build-opt-in-types", "test-opt-in-types", "lint-opt-in-types"} {
@@ -212,7 +220,7 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	}
 }
 
-// The opt-in tcp and snmp request types and the ntp type link nothing
+// The tcp, snmp and ntp request types link nothing
 // outside the standard library: every package a build of one alone links
 // beyond those of a build of no type at all is the standard library's or
 // the module's own, tcp's client being net and crypto/tls, ntp's net and

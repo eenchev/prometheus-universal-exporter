@@ -10,14 +10,14 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
 make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
-make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type but the opt-in ones; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=s3file,redis,tcp,ldap,sshexec,icmp,snmp adds s3file, redis, tcp, ldap, sshexec, icmp and snmp
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES adds opt-in types, none now
 make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
                 #   configuration and static targets on 127.0.0.1:8080; PORT=, HOST= and ARGS= change
-                #   that, the opt-in types the example needs are added, and EXAMPLE= alone lists the examples
+                #   that, any opt-in types the example needs are added, and EXAMPLE= alone lists the examples
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make lint-request-types  # golangci-lint for each request type built on its own
-make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
+make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type; none now, so they say so
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
 make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>]  # a new request type's files and wiring; not part of make ci
@@ -37,8 +37,8 @@ directory, such as `open-meteo`, whose configuration is its `config.yaml`
 beside an optional static target file and any collector files its
 `collector_files` names, or `examples/config.<name>.<format>-test.yaml`,
 named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
-files and the opt-in request types an example needs (a `type: tcp` line, for
-`examples/tcp`) from the tree. Before it runs the binary it prints the
+files and the opt-in request types an example needs, none now (a `type:
+<name>` line of an opt-in type's), from the tree. Before it runs the binary it prints the
 landing page's URL, the status page's, which every example has (its recent
 probes fill as soon as anything probes), and the first probe URL that the
 comment opening the configuration gives as `curl '…/probe?…'`, when the
@@ -87,7 +87,7 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, the rendezvous hash (`Score`) the allocator's weighted placement ranks the members by, and the bounds of a replica's capacity. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes` and the opt-in `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, each in its own build-tagged `requesttype_<name>.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, each in its own build-tagged `requesttype_<name>.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket.go` and `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
@@ -384,7 +384,7 @@ two to the same lines and the same entries, a full log among them.
 ```sh
 make new-request-type NAME=memcache                          # a type of every build
 make new-request-type NAME=memcache OPT_IN=1                 # an opt-in type
-make new-request-type NAME=sshexec OPT_IN=1 GO_NAME=SSHExec  # its Go name given
+make new-request-type NAME=mqtt OPT_IN=1 GO_NAME=MQTT        # its Go name given
 make new-request-type NAME=uuid GO_NAME=UUID ARTICLE=a        # its article given
 ```
 
@@ -996,32 +996,35 @@ job.
 
 ### Opt-in request types
 
-A type the default build leaves out, `s3file`, `redis`, `tcp` or `ldap`, lives in its
+Every request type of the tree is in the default build. A type may instead
+be opt-in, for one whose libraries few deployments want in the binary:
+`make new-request-type NAME=<name> OPT_IN=1` makes one, which lives in its
 `internal/fetch/requesttype_<name>.go` under its own tag alone,
 
 ```go
-//go:build request_type_s3file
+//go:build request_type_<name>
 ```
 
-as do the files only it needs (`s3source.go`, `redisresp.go`, `ldapber.go`,
-`ldapfilter.go`) and its tests, so a build carries it only when its tag is
-given: `sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec`, from the third argument, `OPT_IN_REQUEST_TYPES`, adds it to the
-default build's types, and `REQUEST_TYPES` may name it like any type. Shared
-code it uses names its tag beside the others' (`filereads.go`,
-`localfile_directory.go`). Each type built on its own includes it, in the
-loops of `make build-request-types` and `make test-request-types` and CI's
-matrix over the request types;
-the build with every opt-in type beside the default build's is vetted,
-built, tested (`internal/fetch` and `test/repository`) and linted by `make
+as do the files only it needs and its tests, so a build carries it only when
+its tag is given: `sh tools/request-type-tags.sh '' '' <name>`, from the
+third argument, `OPT_IN_REQUEST_TYPES`, adds it to the default build's
+types, and `REQUEST_TYPES` may name it like any type. It is listed in
+`optInRequestTypes` (`internal/fetch`), and a configuration naming it is
+refused by a build without it, saying how to build one with it. Each type
+built on its own includes it, in the loops of `make build-request-types` and
+`make test-request-types` and CI's matrix over the request types; the build
+with every opt-in type beside the default build's is vetted, built, tested
+(`internal/fetch` and `test/repository`) and linted by `make
 build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,
 as CI does, and a test keeps their lists naming every opt-in type of the
-tree. The default build's tests know an opt-in type's request keys without
-the type (`optInRequestKeys`, `internal/fetch`), and its schema rows
-(`s3fileSchemaKeys`, `redisSchemaKeys`, `tcpSchemaKeys`, `ldapSchemaKeys`) are compiled in the default build, which checks that
-every constrained key of the schemas has a row, and compared with the
-exporter's verdicts against the schema the binary generates, in a build
-with the type (`built: true`), since the committed schemas, the default
-build's, have no such type.
+tree. With none, as now, the lists are empty, and the targets and CI's steps
+say so and stop. The default build's tests know an opt-in type's request
+keys without the type (`optInRequestKeys`, `internal/fetch`), and its schema
+rows are compiled in the default build, which checks that every constrained
+key of the schemas has a row, and compared with the exporter's verdicts
+against the schema the binary generates, in a build with the type (`built:
+true`), since the committed schemas, the default build's, have no such
+type.
 
 ### The sql request type
 
@@ -1161,7 +1164,7 @@ make schemas
 ```
 
 The committed files are the schemas of a build with every request type but
-the opt-in ones — no `s3file`, `redis`, `tcp` or `ldap` in the `request.type` enum — and the sql type's
+the opt-in ones, of which there are none now, and the sql type's
 default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and

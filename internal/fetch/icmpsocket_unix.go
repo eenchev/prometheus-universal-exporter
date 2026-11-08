@@ -1,4 +1,4 @@
-//go:build request_type_icmp && (linux || darwin)
+//go:build (!select_request_types || request_type_icmp) && (linux || darwin)
 
 package fetch
 
@@ -9,12 +9,18 @@ import (
 	"syscall"
 )
 
-// icmpDial opens an unprivileged ICMP datagram socket connected to
+// On Linux and macOS a scrape pings on icmpSocket; elsewhere icmpDial keeps
+// the refusal of icmpsocket.go. The choice is made when the package starts,
+// not by a file left out of the build elsewhere, so that every file of the
+// type is in the build of the host the tree is worked on.
+func init() { icmpDial = icmpSocket }
+
+// icmpSocket opens an unprivileged ICMP datagram socket connected to
 // address: SOCK_DGRAM of IPPROTO_ICMP or IPPROTO_ICMPV6, which needs no
 // raw socket, as Go's net package opens no ICMP socket of its own. The
 // connected socket is a net.Conn whose remote address the target policy
 // checks, and reads only that address's replies.
-func icmpDial(address netip.Addr) (net.Conn, error) {
+func icmpSocket(address netip.Addr) (net.Conn, error) {
 	// As4 panics on an IPv6 address, so each family's address is made
 	// only for it.
 	var family, proto int

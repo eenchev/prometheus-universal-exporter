@@ -15,38 +15,7 @@ more thing to run:
 - the members of a group, such as the administrators, so that one more is
   seen.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with ldap](#building-with-ldap)). It needs nothing outside Go's
-standard library.
-
-## Building with ldap
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=ldap                # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap   # every opt-in type
-docker build --build-arg OPT_IN_REQUEST_TYPES=ldap -t exporter:ldap .
-go build -tags "$(sh tools/request-type-tags.sh '' '' ldap)" .
-```
-
-The tag is `request_type_ldap`, which is all `go build -tags
-request_type_ldap .` needs by hand: every type of the default build, and
-`ldap`. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
-request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
-`REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=ldap` builds the two, and
-`REQUEST_TYPES` may name `ldap` itself, `REQUEST_TYPES=ldap` building it
-alone.
-
-A configuration with an `ldap` collector is refused by a build without the
-type, at startup, on a reload and by `--dry-run`, saying how to build one
-that has it:
-
-```text
-collector "openldap" uses request.type "ldap", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. ldap is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=ldap (make build, or the Dockerfile's build argument), which adds the tag request_type_ldap
-```
+It needs nothing outside Go's standard library.
 
 ## A collector
 
@@ -555,7 +524,6 @@ start, and `http_method="SEARCH"`.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "ldap", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=ldap` (see [Building with ldap](#building-with-ldap)); the published image does not carry it. |
 | `BIND ... ***: the server answered invalidCredentials (49): ...` | The password, or the DN: Active Directory's `data 52e` says the password is wrong, `data 533` that the account is disabled. |
 | `SEARCH ...: the server answered insufficientAccessRights (50): ...` | The account may not search there: Active Directory refuses an anonymous search; set `bind_dn`. |
 | `SEARCH ...: the server answered noSuchObject (32)` | The base is not an entry of the server's: check it, and that the server holds it. |

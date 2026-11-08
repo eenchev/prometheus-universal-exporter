@@ -1,4 +1,4 @@
-//go:build request_type_ldap
+//go:build !select_request_types || request_type_ldap
 
 package fetch
 
@@ -859,12 +859,6 @@ func TestAnLDAPServerThatNeverAnswersFailsAtTheDeadline(t *testing.T) {
 	if _, err := ldapScrape(t, ldapCollector(t), addr, nil); err == nil || !strings.Contains(err.Error(), "connecting to "+addr) {
 		t.Errorf("err %v", err)
 	}
-}
-
-// optInRequestKeys lists the keys ldap accepts that no type of a default
-// build does: bind_dn, start_tls and searches (checkOptInRequestKeys).
-func TestTheOptInRequestKeysAreLDAPsOwn(t *testing.T) {
-	checkOptInRequestKeys(t, RequestTypeLDAP)
 }
 
 // Each operation's span tells its LDAP result code, a SEARCH page's how

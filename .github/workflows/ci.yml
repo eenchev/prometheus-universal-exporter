@@ -906,13 +906,13 @@ jobs:
           args: --build-tags sql_driver_oracle,sql_driver_clickhouse,sql_driver_snowflake,minicore_disabled,sql_driver_vertica
         if: steps.changes.outputs.go == 'true'
       # Nor are the opt-in request types beside the default build's: lint
-      # the build with all of them, as make lint-opt-in-types does. The tags
-      # are what tools/request-type-tags.sh prints for them; a test keeps the
-      # two in step.
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          args: --build-tags request_type_icmp,request_type_ldap,request_type_redis,request_type_s3file,request_type_snmp,request_type_sshexec,request_type_tcp
+      # the build with all of them, as make lint-opt-in-types does, with the
+      # golangci-lint the steps above installed. With none in the tree, as
+      # now, there is nothing to add to the default build, and the step says
+      # so. A test keeps the list naming every opt-in type.
+      - name: Lint with every opt-in request type
+        run: |
+          tags="$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$tags"
         if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.
@@ -1152,11 +1152,12 @@ jobs:
       # no build above, as a build with OPT_IN_REQUEST_TYPES has them: vet,
       # build and test that build too, the repository's checks among the
       # tests, whose rows of an opt-in type's schema keys and examples of
-      # its documentation run in a build with it.
+      # its documentation run in a build with it. With none in the tree, as
+      # now, the step says so and stops.
       - name: Build and test with every opt-in request type
         run: |
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
-          tags="$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
+          tags="$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
         if: steps.changes.outputs.go == 'true'
   # The image the release publishes, built from the Dockerfile and pushed
   # nowhere, so a change that breaks its build fails here rather than in the

@@ -1895,9 +1895,8 @@ target it probed (`instance`), which already tells two pages apart.
 `statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
 
 [`examples/tcp/`](../examples/tcp/config.yaml) reads three services that
-report their statistics as text over TCP, with the opt-in
-[`tcp`](TCP.md) request type, so in a build with it
-(`make build OPT_IN_REQUEST_TYPES=tcp`): memcached's `stats`, read up to its
+report their statistics as text over TCP, with the
+[`tcp`](TCP.md) request type: memcached's `stats`, read up to its
 `END` line, ZooKeeper's `mntr` and HAProxy's `show stat`, the first two with
 regular expressions and HAProxy's CSV by its columns. Its
 [`static-targets.yaml`](../examples/tcp/static-targets.yaml) scrapes a
@@ -2751,25 +2750,25 @@ request:
   path: /api/status
 ```
 
-There are ten types in a default build: `http` asks a URL, `localfile` reads a file from the
+There are seventeen types, every one in the default build and the published
+image: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
 `grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-`sql` runs statements on a database — see [Databases over SQL](SQL.md) —
-`dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
-certificates of a TLS handshake — see [TLS certificates](TLSCERT.md) —
-`ntp` asks an NTP server for the time — see [NTP](NTP.md) — and
-`kubernetes` lists Kubernetes objects — see [Kubernetes
-objects](KUBERNETES.md). Seven more are opt-in, in a build that asks for
-them: `sshexec` runs a command on another host — see [Commands over
+`sshexec` runs a command on another host — see [Commands over
 SSH](SSHEXEC.md) — `s3file` reads objects of S3 — see [Objects in
-S3](S3FILE.md) — `redis` reads a Redis or Valkey server — see [Redis and
+S3](S3FILE.md) — `sql` runs statements on a database — see [Databases over
+SQL](SQL.md) — `redis` reads a Redis or Valkey server — see [Redis and
 Valkey](REDIS.md) — `tcp` speaks a protocol over TCP or UDP, or checks that
 a port takes a connection — see [Text protocols over TCP](TCP.md) — `ldap`
-searches an LDAP directory — see [LDAP directories](LDAP.md) — `icmp` pings
-a host — see [Ping over ICMP](ICMP.md) — and `snmp` reads an SNMP agent's
-objects and tables — see [SNMP agents](SNMP.md).
+searches an LDAP directory — see [LDAP directories](LDAP.md) — `dns`
+resolves a name — see [DNS](DNS.md) — `tlscert` reads the certificates of a
+TLS handshake — see [TLS certificates](TLSCERT.md) — `ntp` asks an NTP
+server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
+over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
+[SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
+[Kubernetes objects](KUBERNETES.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -2785,24 +2784,21 @@ and so does an unknown type.
 | Whether a site is up, its status, timings and certificate | `http` | [Uptime probes](REQUESTS.md#uptime-probes) |
 | A metrics or status file on the exporter's own disk | `localfile` | [Local files](LOCALFILE.md) |
 | A file on another host | `sshfile` | [Files over SSH](SSHFILE.md) |
-| The output of a command on another host, such as `df` | `sshexec`, opt-in | [Commands over SSH](SSHEXEC.md) |
-| An object in S3, MinIO, Ceph, R2 or GCS | `s3file`, opt-in | [Objects in S3](S3FILE.md) |
+| The output of a command on another host, such as `df` | `sshexec` | [Commands over SSH](SSHEXEC.md) |
+| An object in S3, MinIO, Ceph, R2 or GCS | `s3file` | [Objects in S3](S3FILE.md) |
 | A value in a database, such as a queue's backlog | `sql` | [Databases over SQL](SQL.md) |
-| A Redis or Valkey server's INFO, or a queue's length | `redis`, opt-in | [Redis and Valkey](REDIS.md) |
+| A Redis or Valkey server's INFO, or a queue's length | `redis` | [Redis and Valkey](REDIS.md) |
 | A gRPC service's answer, or its health | `grpc` | [gRPC](GRPC.md) |
 | Series from Graphite | `graphite` | [Graphite](GRAPHITE.md) |
-| A line protocol such as memcached's `stats`, or an SMTP dialogue | `tcp`, opt-in | [Text protocols over TCP](TCP.md) |
-| Whether a port, or each of a host's ports, takes a connection | `tcp`, opt-in | [Checking that a port is open](TCP.md#checking-that-a-port-is-open) |
-| Entries of an LDAP directory, or its monitor counters | `ldap`, opt-in | [LDAP directories](LDAP.md) |
+| A line protocol such as memcached's `stats`, or an SMTP dialogue | `tcp` | [Text protocols over TCP](TCP.md) |
+| Whether a port, or each of a host's ports, takes a connection | `tcp` | [Checking that a port is open](TCP.md#checking-that-a-port-is-open) |
+| Entries of an LDAP directory, or its monitor counters | `ldap` | [LDAP directories](LDAP.md) |
 | A name's records, their TTLs, a zone's serial or its signatures' expiry | `dns` | [DNS](DNS.md) |
 | A TLS certificate's expiry and chain, of any TLS or STARTTLS server | `tlscert` | [TLS certificates](TLSCERT.md) |
 | A clock's offset from an NTP server | `ntp` | [NTP](NTP.md) |
-| Whether a host answers ping, and its round trip | `icmp`, opt-in | [Ping over ICMP](ICMP.md) |
-| A switch's, router's or UPS's counters over SNMP, as snmp_exporter reads them | `snmp`, opt-in | [SNMP agents](SNMP.md) |
+| Whether a host answers ping, and its round trip | `icmp` | [Ping over ICMP](ICMP.md) |
+| A switch's, router's or UPS's counters over SNMP, as snmp_exporter reads them | `snmp` | [SNMP agents](SNMP.md) |
 | Kubernetes objects, or each pod's ephemeral storage | `kubernetes` | [Kubernetes objects](KUBERNETES.md) |
-
-An opt-in type is in a build that asks for it, `OPT_IN_REQUEST_TYPES`
-([Building](DEVELOPMENT.md)); the default build and image carry the others.
 
 <!-- request-types: all "For `%s`" -->
 Each type accepts its own keys. For `http`, `type` is the only required one —
@@ -2901,21 +2897,21 @@ statistics, and `api_server` with `tls` and
 and `allowed_targets` and `denied_targets` do not, there being no target.
 The decoder is `json`; its table is in [Kubernetes objects](KUBERNETES.md#a-collector).
 
-For `s3file`, in a build that [asks for it](S3FILE.md#building-with-s3file),
+For `s3file`,
 `root` is required; `path`, or `files`, `max_files` and `max_total_bytes`,
 `max_age` and `max_response_bytes` are `localfile`'s, and `region`,
 `endpoint`, `path_style`, `access_key_id_file`, `secret_access_key_file`,
 `session_token_file`, `allowed_targets` and `denied_targets` apply too; its
 table is in [Objects in S3](S3FILE.md#a-collector).
 
-For `redis`, in a build that [asks for it](REDIS.md#building-with-redis), no
+For `redis`, no
 key is required: `info_sections` names the sections of INFO read, the
 default ones when left out, and `commands` the read-only commands whose
 replies are read besides; `username` and `password_file`, `db`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
 
-For `tcp`, in a build that [asks for it](TCP.md#building-with-tcp), no key
+For `tcp`, no key
 is required: `send` is the text written once the connection is made, and
 `terminator` what the answer ends with, the answer ending when the server
 closes the connection without one; `greeting` is the pattern a server that
@@ -2928,14 +2924,14 @@ over a Unix socket; `tls`, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The answer is a body, read by any decoder,
 `binary` among them; its table is in [Text protocols over TCP](TCP.md#a-collector).
 
-For `ldap`, in a build that [asks for it](LDAP.md#building-with-ldap),
+For `ldap`,
 `searches` is required, each search with its `name`, `base`, `scope`,
 `filter`, `attributes`, `count_only` and `max_entries`; `bind_dn` and
 `password_file`, `start_tls`, `tls`, `max_response_bytes`,
 `allowed_targets` and `denied_targets` apply too. The decoder is `json`;
 its table is in [LDAP directories](LDAP.md#a-collector).
 
-For `sshexec`, in a build that [asks for it](SSHEXEC.md#building-with-sshexec),
+For `sshexec`,
 `command` is required, the program and its arguments as a list, with
 `username` and `known_hosts_file` and a private key or a password, as for
 `sshfile`; `success_exit_codes` names the exit statuses that are a success,
@@ -2944,14 +2940,14 @@ idle and limit keys, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The command's output is a body, read by any
 decoder; its table is in [Commands over SSH](SSHEXEC.md#a-collector).
 
-For `icmp`, in a build that [asks for it](ICMP.md#building-with-icmp), no
+For `icmp`, no
 key is required: `count` is how many echoes a scrape sends, `interval` how
 long apart, `reply_timeout` how long the last one's reply is waited for and
 `payload_bytes` the data each carries; `ip_family`, `allowed_targets` and
 `denied_targets` apply too. The decoder is `json`; its table is in [Ping
 over ICMP](ICMP.md#a-collector).
 
-For `snmp`, in a build that [asks for it](SNMP.md#building-with-snmp), at
+For `snmp`, at
 least one of `get`, the objects read one by one, and `walk`, the tables read
 whole, is required, each object by a name of the collector's and its
 numeric identifier; `snmp_version` is 1, 2 for v2c, the default, or 3, v1
@@ -3032,8 +3028,8 @@ may be 64 KiB; the exporter answers a longer one `431`.
 
 #### Choosing request types at build time
 
-Every build of the exporter carries every request type but the opt-in ones,
-and so does the published image. A build can instead carry only the types it
+Every build of the exporter carries every request type, and so does the
+published image. A build can instead carry only the types it
 needs, which keeps the other types' code, and the libraries only they use, out
 of the binary:
 
@@ -3047,7 +3043,7 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `go build .` writes it to the current directory.
 
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
-means every type but the opt-in ones. A name that is not a request type fails the build, and so does
+means every type. A name that is not a request type fails the build, and so does
 a selection that names none. The script turns the list into Go build tags —
 `select_request_types` plus `request_type_<name>` per type — which is all
 `go build -tags select_request_types,request_type_http` needs by hand.
@@ -3063,52 +3059,32 @@ only a left-out type accepts is one no request type knows, ignored rather
 than answered `400`. Each type built on its own is a build the test suite is
 run against, by CI and by `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
-An http-only build leaves `localfile`, `graphite`, `grpc`, `sshfile`,
-`sql`, `dns`, `tlscert`, `ntp` and `kubernetes` out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
+An http-only build leaves every other type out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
 HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
 `ntp` and `kubernetes` need nothing outside the standard library, and
 `tlscert` only `golang.org/x/crypto/ocsp`, of a module the default build
-links already; the opt-in `s3file`
-links the AWS SDK, below, the opt-in `redis`, `tcp`, `ldap`, `icmp` and `snmp` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
+links already; `s3file` links the AWS SDK, about 6.7 MB, `sshexec` the SSH
+client, without the SFTP client `sshfile` links, and `redis`, `tcp`,
+`ldap`, `icmp` and `snmp` nothing outside the standard library either. The
+`sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
 `SQL_DRIVERS` build argument ([Building with more
 drivers](SQL.md#building-with-more-drivers)).
 
-An opt-in type is one no build carries unless asked, the default build and
-the published image among them: `s3file`, which links the AWS SDK, about
-6.7 MB, `redis`, `tcp`, `ldap`, `icmp` and `snmp`, which need nothing outside the
-standard library and are left out of the builds of deployments with no Redis
-or text-protocol service to read, directory to search, host to ping or SNMP
-agent to read, and `sshexec`,
-which runs commands on the hosts it reaches, and is in no build that does
-not ask to run them.
-`OPT_IN_REQUEST_TYPES` adds them, comma-separated, to the types a build
-carries, whatever `REQUEST_TYPES` says, and `REQUEST_TYPES` may name one like
-any type:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=s3file
-make build OPT_IN_REQUEST_TYPES=s3file,redis,ldap
-docker build --build-arg OPT_IN_REQUEST_TYPES=redis -t exporter:redis .
-go build -tags "$(sh tools/request-type-tags.sh '' '' s3file,redis,tcp,ldap,sshexec,icmp,snmp)" .
-```
-
-Its tag alone, `request_type_s3file`, `request_type_redis`,
-`request_type_tcp`, `request_type_ldap`, `request_type_sshexec`,
-`request_type_icmp` or `request_type_snmp`, adds a type to a default build, and the tags together
-each of them. A collector of an opt-in type is refused by a build without it
-with a message that says the type is opt-in and how to build with it
-([Building with s3file](S3FILE.md#building-with-s3file), [Building with
-redis](REDIS.md#building-with-redis), [Building with
-tcp](TCP.md#building-with-tcp), [Building with
-ldap](LDAP.md#building-with-ldap), [Building with
-sshexec](SSHEXEC.md#building-with-sshexec), [Building with
-icmp](ICMP.md#building-with-icmp), [Building with
-snmp](SNMP.md#building-with-snmp)).
+A type may also be opt-in: one no build carries unless asked, the default
+build and the published image among them, made so with `make
+new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type))
+for a type whose libraries few deployments want in the binary. There are
+none now. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+Dockerfile's build argument, adds such types, comma-separated, to the types
+a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
+`request_type_<name>`, adds one to a default build; a collector of one is
+refused by a build without it with a message that says the type is opt-in
+and how to build with it.
 
 ### When a metric cannot be extracted
 
@@ -3714,7 +3690,7 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   that text there, quote it: "true"`. A key that takes one of a few words
   is told the words, which quoting a number would not make it one of: `line
   5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert`. And a boolean is `true` or
+  of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`. And a boolean is `true` or
   `false`.
   `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
   text now, to an editor and wherever the exporter takes text — a label
@@ -7132,13 +7108,13 @@ nothing there.
 - [TLSCERT.md](TLSCERT.md) — the `tlscert` request type.
 - [NTP.md](NTP.md) — the `ntp` request type.
 - [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.
-- [S3FILE.md](S3FILE.md) — the opt-in `s3file` request type.
-- [REDIS.md](REDIS.md) — the opt-in `redis` request type.
-- [TCP.md](TCP.md) — the opt-in `tcp` request type.
-- [LDAP.md](LDAP.md) — the opt-in `ldap` request type.
-- [SSHEXEC.md](SSHEXEC.md) — the opt-in `sshexec` request type.
-- [ICMP.md](ICMP.md) — the opt-in `icmp` request type.
-- [SNMP.md](SNMP.md) — the opt-in `snmp` request type.
+- [S3FILE.md](S3FILE.md) — the `s3file` request type.
+- [REDIS.md](REDIS.md) — the `redis` request type.
+- [TCP.md](TCP.md) — the `tcp` request type.
+- [LDAP.md](LDAP.md) — the `ldap` request type.
+- [SSHEXEC.md](SSHEXEC.md) — the `sshexec` request type.
+- [ICMP.md](ICMP.md) — the `icmp` request type.
+- [SNMP.md](SNMP.md) — the `snmp` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

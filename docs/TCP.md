@@ -29,38 +29,7 @@ Whatever reads a body reads the answer: `regex` for lines of text, `csv`,
 `prometheus` for a service that writes exposition, `jq` for one that answers
 JSON, `yq`, `python`, and `binary` for a binary answer.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with tcp](#building-with-tcp)). It needs nothing outside Go's
-standard library.
-
-## Building with tcp
-
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
-
-```sh
-make build OPT_IN_REQUEST_TYPES=tcp              # bin/prometheus-universal-exporter
-make build OPT_IN_REQUEST_TYPES=redis,tcp        # more than one opt-in type
-docker build --build-arg OPT_IN_REQUEST_TYPES=tcp -t exporter:tcp .
-go build -tags "$(sh tools/request-type-tags.sh '' '' tcp)" .
-```
-
-The tag is `request_type_tcp`, which is all `go build -tags
-request_type_tcp .` needs by hand: every type of the default build, and
-`tcp`. `OPT_IN_REQUEST_TYPES` goes with `REQUEST_TYPES` (see [Choosing
-request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)):
-`REQUEST_TYPES=http OPT_IN_REQUEST_TYPES=tcp` builds the two, and
-`REQUEST_TYPES` may name `tcp` itself, `REQUEST_TYPES=tcp` building it
-alone.
-
-A configuration with a `tcp` collector is refused by a build without the
-type, at startup, on a reload and by `--dry-run`, saying how to build one
-that has it:
-
-```text
-collector "memcached" uses request.type "tcp", which this build of the exporter does not include; it was built with: dns, graphite, grpc, http, kubernetes, localfile, ntp, sql, sshfile, tlscert. tcp is an opt-in type, which the default build and the published image leave out: build with OPT_IN_REQUEST_TYPES=tcp (make build, or the Dockerfile's build argument), which adds the tag request_type_tcp
-```
+It needs nothing outside Go's standard library.
 
 ## A collector
 
@@ -566,9 +535,6 @@ targets:
     collector: host_ports
     target: db.example
 ```
-
-Both are opt-in types, so the build names them:
-`OPT_IN_REQUEST_TYPES=icmp,tcp`.
 
 ## Services that speak first
 
@@ -1263,7 +1229,6 @@ open is an answer, not a failure.
 
 | The scrape says | Do |
 | --- | --- |
-| `... uses request.type "tcp", which this build of the exporter does not include` | Build with `OPT_IN_REQUEST_TYPES=tcp` (see [Building with tcp](#building-with-tcp)); the published image does not carry it. |
 | `target "..." is not host:port; a tcp target names its port` | Add the port: `memcached-0.cache:11211`. |
 | `the greeting of ..., [withheld; in the exporter's log], does not match request.greeting ...` | The server greeted otherwise: the exporter's log, or a [debug probe](CONFIGURATION.md#debug-probes), shows what it said. Over several lines the pattern is matched against them all: `^220[ -]` takes `220-` on the first. |
 | `waiting for the greeting of ..., as request.greeting expects, 0 bytes read` | The server says nothing first: it is not a service that greets, or it greets only over TLS, which `tls` asks for. |

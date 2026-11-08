@@ -31792,6 +31792,10 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestChartReadmeICMPExampleRenders` (chart, test/repository): the chart README's ICMP and SNMP collectors section shows one example, of the ping sysctl, which renders on the exporter's pod as `securityContext.sysctls` beside the chart's own `runAsGroup` and `runAsNonRoot`.
 
+## 34.322 A refused connection counted apart from another's request
+
+- `TestAddressesAreCheckedWithoutASecondLookup` (fetch), changed: the connections the target's server counts are those closed without a request, the refused one closed as soon as its address is checked; a request another client makes to the same port, as a client of an earlier test whose server had the port may, is not counted, where it made the test see two connections for a refused target now and then under the race detector.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,

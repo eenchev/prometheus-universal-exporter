@@ -69,7 +69,17 @@ type S3FileConfig struct {
 	AccessKeyIDFile     string `yaml:"access_key_id_file,omitempty"`
 	SecretAccessKeyFile string `yaml:"secret_access_key_file,omitempty"`
 	SessionTokenFile    string `yaml:"session_token_file,omitempty"`
+	// Checksums is how the checksums the store keeps of an object are
+	// checked as it is read: when_present, the default, required or off.
+	Checksums string `yaml:"checksums,omitempty"`
 }
+
+// The values of request.checksums.
+const (
+	s3ChecksumsWhenPresent = "when_present"
+	s3ChecksumsRequired    = "required"
+	s3ChecksumsOff         = "off"
+)
 
 // s3FileRequest is an s3file collector's own request keys: the zero
 // S3FileConfig of a collector built in code whose request has not been
@@ -184,6 +194,11 @@ func validateS3FileRequest(x *model.Collector) error {
 	}
 	if err := checkS3CredentialKeys(own.AccessKeyIDFile, own.SecretAccessKeyFile, own.SessionTokenFile); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
+	switch own.Checksums {
+	case "", s3ChecksumsWhenPresent, s3ChecksumsRequired, s3ChecksumsOff:
+	default:
+		return fmt.Errorf("collector %q request.checksums is %q; want when_present, the default, which checks the checksum the store keeps of an object when it has one, required, which fails a read of an object without one, or off", x.Name, own.Checksums)
 	}
 	policy, err := compileTargetPolicy(r.AllowedTargets, r.DeniedTargets)
 	if err != nil {
@@ -337,7 +352,7 @@ func fetchS3File(ctx context.Context, target string, c *model.Collector, overrid
 	if err != nil {
 		return nil, err
 	}
-	src := &s3Source{ctx: ctx, client: client, bucket: bucket, prefix: s3Prefix(c.Request.Root)}
+	src := &s3Source{ctx: ctx, client: client, bucket: bucket, prefix: s3Prefix(c.Request.Root), required: s3FileRequest(c).Checksums == s3ChecksumsRequired}
 	if readsDirectory(c) {
 		traceRequest(ctx, localFileMethod, s3URL(bucket, src.prefix), nil, "", false)
 		progress := &directoryProgress{}
@@ -391,6 +406,9 @@ type s3Settings struct {
 	region, endpoint                                       string
 	pathStyle                                              bool
 	accessKeyIDFile, secretAccessKeyFile, sessionTokenFile string
+	// checksumsOff turns the checking of checksums off; required is the
+	// source's to check (s3Source.required).
+	checksumsOff bool
 }
 
 func s3SettingsOf(c *model.Collector) s3Settings {
@@ -398,6 +416,7 @@ func s3SettingsOf(c *model.Collector) s3Settings {
 	return s3Settings{
 		region: r.Region, endpoint: r.Endpoint, pathStyle: r.PathStyle,
 		accessKeyIDFile: r.AccessKeyIDFile, secretAccessKeyFile: r.SecretAccessKeyFile, sessionTokenFile: r.SessionTokenFile,
+		checksumsOff: r.Checksums == s3ChecksumsOff,
 	}
 }
 
@@ -434,6 +453,14 @@ func (cache *s3ClientCache) client(ctx context.Context, settings s3Settings) (*s
 		}
 		o.UsePathStyle = settings.pathStyle
 		o.Retryer = aws.NopRetryer{}
+		// The SDK checks a checksum the store sends with an object, asking
+		// for it, unless checksums is off; it would also write to stderr,
+		// by itself, of each object sent without one, which is no failure.
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenSupported
+		if settings.checksumsOff {
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		}
+		o.DisableLogOutputChecksumValidationSkipped = true
 		if settings.accessKeyIDFile != "" {
 			// Set on the client rather than given to the configuration,
 			// which would keep what it first read for good: the files are
@@ -532,5 +559,6 @@ func s3FileKeyRules() map[string]map[string]any {
 		"access_key_id_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with secret_access_key_file: the file of a static access key's ID, read at every request. Without the two the AWS SDK's default chain finds the credentials: the environment, a web identity token (IRSA), the shared files, the container's or the instance's role. See docs/S3FILE.md#credentials."},
 		"secret_access_key_file": {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file: the file of the static access key's secret."},
 		"session_token_file":     {"not": SchemaOnlyBlanks(), "description": "s3file, with access_key_id_file and secret_access_key_file: the file of a temporary access key's session token."},
+		"checksums":              {"enum": SchemaOptionalEnum([]string{s3ChecksumsWhenPresent, s3ChecksumsRequired, s3ChecksumsOff}), "description": "s3file: when_present, the default, checks the checksum the store keeps of an object (CRC32, CRC32C, CRC64NVME, SHA-1 or SHA-256) as it is read, when it has one of the whole object; required fails a read of an object without one; off checks none. See docs/S3FILE.md#checksums."},
 	}
 }

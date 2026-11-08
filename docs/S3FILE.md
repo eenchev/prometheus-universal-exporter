@@ -88,6 +88,7 @@ The object read is `reports/backup/last-run.json` in the bucket
 | `path_style` | `false` | Name the bucket in the URL's path, `endpoint/bucket/key`, rather than in its host, `bucket.endpoint/key`. A bucket whose name has a dot needs it over HTTPS, since the store's certificate does not cover the dotted host. |
 | `access_key_id_file`, `secret_access_key_file` | — | The files of a static access key, both or neither. Left out, the SDK's default chain finds the credentials. See [Credentials](#credentials). |
 | `session_token_file` | — | The file of a temporary access key's session token; only with the two above. |
+| `checksums` | `when_present` | How the checksum the store keeps of an object is checked as it is read: `when_present`, `required` or `off`. See [Checksums](#checksums). |
 | `allowed_targets`, `denied_targets` | — | The buckets the collector may and may not read, by name or glob, such as `metrics-*`. See [Which object is read](#which-object-is-read). |
 
 No other request key applies, and setting one — `method`, `headers`, a
@@ -281,6 +282,30 @@ Transforms see an object as `localfile`'s file: no status (`$status` is
 name's extension, `Content-Length` and `Last-Modified`, with `ETag`, the
 object's entity tag, besides.
 
+## Checksums
+
+S3 keeps a checksum of an object uploaded with one — CRC32, CRC32C,
+CRC64NVME, SHA-1 or SHA-256, which current SDKs and the console add by
+default — and sends it with the object when asked. `checksums` says what
+the exporter does with it:
+
+- `when_present`, the default, asks for it and checks it as the object is
+  read: a body that does not match fails the read, saying `checksum did not
+  match`, as a body cut or changed on the way would. An object the store
+  keeps no checksum of, uploaded without one or in parts (whose checksum is
+  of the parts, `COMPOSITE`, and is not checked), is read unchecked.
+- `required` fails the read of such an object too: `the store sent no
+  checksum of the whole object`. Use it where every object is uploaded
+  with one, and an unchecked read should not pass for a checked one.
+- `off` checks nothing, for a store that sends checksums it computes some
+  other way, or a large object read often where the CPU counts more.
+
+A store other than AWS that keeps no checksums reads every object
+unchecked under `when_present`, and fails every read under `required`.
+The setting is the collector's, whatever `AWS_RESPONSE_CHECKSUM_VALIDATION`
+or the shared config says. A read stopped at `max_response_bytes` fails
+before its checksum is checked.
+
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of an `s3file` collector names the
@@ -346,8 +371,6 @@ placeholders, or the prefix's ending in `/`, and `http_method="READ"`.
   a prefix's objects are read four at a time.
 - **No anonymous access.** A public bucket is read with credentials too, any
   the store takes.
-- **Checksums are not checked.** An object is read as the store sends it;
-  the transport's TLS is what guards it on the way.
 - **One object store per collector.** `endpoint` and `region` are the
   collector's; a probe chooses the bucket alone.
 

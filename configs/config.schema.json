@@ -2432,6 +2432,16 @@
                   "boolean"
                 ]
               },
+              "checksums": {
+                "description": "s3file: when_present, the default, checks the checksum the store keeps of an object (CRC32, CRC32C, CRC64NVME, SHA-1 or SHA-256) as it is read, when it has one of the whole object; required fails a read of an object without one; off checks none. See docs/S3FILE.md#checksums.",
+                "enum": [
+                  "when_present",
+                  "required",
+                  "off",
+                  ""
+                ],
+                "type": "string"
+              },
               "command": {
                 "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. sshexec is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/SSHEXEC.md.",
                 "items": {

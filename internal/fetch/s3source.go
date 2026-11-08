@@ -17,6 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -48,6 +49,9 @@ type s3Source struct {
 	// prefix is root as a key prefix: "" for /, and otherwise root without
 	// its leading /, ending in one.
 	prefix string
+	// required fails the read of an object the store sends no checksum of
+	// the whole object with (request.checksums required).
+	required bool
 	// listed are the objects a listing described, by name under root.
 	mu     sync.Mutex
 	listed map[string]s3Info
@@ -124,6 +128,10 @@ func (s *s3Source) OpenFile(name string) (sourceFile, error) {
 	if err != nil {
 		return nil, s3Error(err)
 	}
+	if s.required && !s3WholeChecksum(out) {
+		_ = out.Body.Close()
+		return nil, errors.New("the store sent no checksum of the whole object, which request.checksums required asks for: an object uploaded without one, or in parts (a composite checksum), cannot be checked; upload it with a checksum, or set checksums to when_present")
+	}
 	info := objectInfo(name, out.ContentLength, out.LastModified, out.ETag)
 	// An object replaced since the listing described it is described by its
 	// own answers from now on, so the read tried again (readSourceFile)
@@ -142,6 +150,21 @@ func (s *s3Source) OpenDir(name string) (sourceDir, error) {
 		prefix += "/"
 	}
 	return &s3Dir{src: s, dir: path.Clean(name), prefix: prefix}, nil
+}
+
+// s3WholeChecksum says whether the store sent a checksum of the whole
+// object, which the SDK checks as the body is read: not a composite one,
+// of the parts of an object uploaded in parts, which it does not.
+func s3WholeChecksum(out *s3.GetObjectOutput) bool {
+	if out.ChecksumType == types.ChecksumTypeComposite {
+		return false
+	}
+	for _, sum := range []*string{out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME, out.ChecksumSHA1, out.ChecksumSHA256} {
+		if aws.ToString(sum) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // s3File is an object being read: the body of its GetObject, and what the

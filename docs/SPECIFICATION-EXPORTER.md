@@ -2653,6 +2653,7 @@ carries it. Its keys:
 | `path_style` | `false` | The bucket in the URL's path rather than its host. |
 | `access_key_id_file`, `secret_access_key_file` | none | Both or neither. |
 | `session_token_file` | none | Only with the two above. |
+| `checksums` | `when_present` | `when_present`, `required` or `off`; any other MUST be refused at load. Unless `off`, the GetObject MUST ask for the object's checksum and a checksum of the whole object the store sends MUST be checked as the body is read, a mismatch failing the read; with `required`, an object sent without one, or with a composite one, MUST fail before its body is read; with `off` none MUST be checked. The SDK's own environment and shared config MUST NOT change it, and the SDK MUST NOT log by itself of an object sent without one. |
 | `allowed_targets`, `denied_targets` | none | Bucket names and globs of them; an address or a network MUST be refused at load. |
 
 - The credential files MUST be read at every request, not at load, as every
@@ -31512,6 +31513,11 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestADNSCollectorAnswersTheSignaturesOfAName` (fetch, dns): the signatures of an A and an SOA record answer their type covered, algorithm, labels, original TTL, key tag, signer, inception and expiration, the SOA's a day left; the question sets DO, an A question does not; a server refusing EDNS answers FORMERR, asked once.
 - `TestADNSSignaturesTimesWrapAsSerialNumbers` (fetch, dns): 100 seconds before 2^32, an expiration of 50 is 2^32+50 and has 150 seconds left.
 - `TestADNSCollectorAsksOverTLS` (fetch, dns): a question over TLS to a stand-in verified with its CA answers, the server asked over `tls`; without the CA the handshake fails; a server without a port is port 853, one with a port keeps it; `tls` without a server, and a tls block without `transport: tls`, are refused.
+
+## 34.309 An s3file collector's checksums are optional
+
+- `TestS3FileChecksAnObjectsChecksum` (fetch, s3file): by default and with `when_present` an object whose CRC32 matches is read, one whose does not fails saying the checksum did not match, and one without is read; `off` reads the mismatched one; `required` fails an object without a checksum, and one with a composite one, and reads one with a whole one; `md5` is refused.
+- `TestSchemaAndExporterAgreeOnS3FileKeysWrittenEmpty` (repository, s3file), changed: a row of `checksums`.
 
 ## 42.1 OTLP export
 

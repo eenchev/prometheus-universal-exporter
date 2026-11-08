@@ -39,6 +39,7 @@ func s3fileSchemaKeys() []schemaKey {
 		{key: "collectors[].request.endpoint", document: s3Collector, at: request, setting: "      endpoint: %s\n", valid: "https://minio.example.com:9000", invalid: `"https://minio.example.com/bucket"`, absent: true, empty: true, emptyWas: refused, built: true},
 		{key: "collectors[].request.access_key_id_file", document: s3Collector, at: request, setting: "      access_key_id_file: %s\n      secret_access_key_file: /s\n", valid: "/id", invalid: `" "`, absent: true, emptyWas: taken, built: true},
 		{key: "collectors[].request.secret_access_key_file", document: s3Collector, at: request, setting: "      secret_access_key_file: %s\n      access_key_id_file: /id\n", valid: "/s", invalid: `"\t"`, absent: true, emptyWas: taken, built: true},
+		{key: "collectors[].request.checksums", document: s3Collector, at: request, setting: "      checksums: %s\n", valid: "required", invalid: "md5", absent: true, empty: true, emptyWas: refused, built: true},
 		{key: "collectors[].request.session_token_file", document: withKey, at: request, setting: "      session_token_file: %s\n", valid: "/t", invalid: `" "`, absent: true, empty: true, built: true},
 	}
 }

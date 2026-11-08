@@ -86,6 +86,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An `s3file` collector's `checksums` sets how an object's checksum is
+  checked: `when_present`, the default, `required` or `off`
+  ([Checksums](docs/S3FILE.md#checksums)).
 - A `dns` collector asks for a name's DNSSEC signatures, `record_type:
   RRSIG`, each with its expiry and the seconds it has left, and asks over
   TLS with `transport: tls` (RFC 7858)

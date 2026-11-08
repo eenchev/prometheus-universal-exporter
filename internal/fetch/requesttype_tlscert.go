@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"golang.org/x/crypto/ocsp"
 )
 
 // The tlscert request type makes a TLS handshake with the target and hands
@@ -238,6 +239,90 @@ type tlsCertDocument struct {
 	SecondsUntilExpiry int64             `json:"seconds_until_expiry"`
 	Certificates       []tlsCertificate  `json:"certificates"`
 	Chain              *tlsCertChainInfo `json:"chain"`
+	// OCSP is the OCSP response the server stapled to the handshake, if
+	// any (tlsCertOCSP).
+	OCSP tlsCertOCSP `json:"ocsp"`
+}
+
+// tlsCertOCSP is the OCSP response the server stapled to the handshake:
+// whether there was one, the status it gives the server's certificate,
+// good, revoked or unknown, whether it is signed by the certificate's
+// issuer, or a responder that issuer delegated to, for that certificate,
+// why not or why it could not be read, and its times, Unix seconds, 0 for
+// one it does not have.
+type tlsCertOCSP struct {
+	Stapled  bool   `json:"stapled"`
+	Status   string `json:"status"`
+	Verified bool   `json:"verified"`
+	Error    string `json:"error"`
+	// ProducedAt is when the responder signed it; ThisUpdate when the
+	// status was known to be true; NextUpdate when a newer one is due, 0
+	// when the responder names no time, and SecondsUntilNextUpdate that
+	// less the time of the scrape, negative for a staple gone stale.
+	ProducedAt             int64 `json:"produced_at"`
+	ThisUpdate             int64 `json:"this_update"`
+	NextUpdate             int64 `json:"next_update"`
+	SecondsUntilNextUpdate int64 `json:"seconds_until_next_update"`
+	// RevokedAt and RevocationReason are of a revoked certificate.
+	RevokedAt        int64  `json:"revoked_at"`
+	RevocationReason string `json:"revocation_reason"`
+}
+
+// ocspStatuses are the names of the statuses an OCSP response gives.
+var ocspStatuses = map[int]string{ocsp.Good: "good", ocsp.Revoked: "revoked", ocsp.Unknown: "unknown"}
+
+// ocspReasons are the names RFC 5280 gives the reasons of a revocation.
+var ocspReasons = map[int]string{
+	ocsp.Unspecified: "unspecified", ocsp.KeyCompromise: "keyCompromise", ocsp.CACompromise: "cACompromise",
+	ocsp.AffiliationChanged: "affiliationChanged", ocsp.Superseded: "superseded", ocsp.CessationOfOperation: "cessationOfOperation",
+	ocsp.CertificateHold: "certificateHold", ocsp.RemoveFromCRL: "removeFromCRL", ocsp.PrivilegeWithdrawn: "privilegeWithdrawn",
+	ocsp.AACompromise: "aACompromise",
+}
+
+// stapledOCSP reads the OCSP response raw the server stapled for leaf,
+// checked against issuer, the certificate after it in the chain it
+// verified by, or as presented: its signature and that it is of leaf. A
+// response that cannot be read says why, with no status; one whose
+// signature does not check is read for its status and times all the same,
+// with verified false and why.
+func stapledOCSP(raw []byte, leaf, issuer *x509.Certificate, now time.Time) tlsCertOCSP {
+	out := tlsCertOCSP{Stapled: len(raw) > 0}
+	if !out.Stapled || leaf == nil {
+		return out
+	}
+	var response *ocsp.Response
+	var err error
+	if issuer == nil {
+		err = errors.New("no issuer certificate was presented to check its signature against")
+	} else if response, err = ocsp.ParseResponseForCert(raw, leaf, issuer); err == nil {
+		out.Verified = true
+	}
+	if response == nil {
+		// Read without the issuer, for what it says, when it is no
+		// response of the certificate's issuer for it.
+		read, readErr := ocsp.ParseResponse(raw, nil)
+		if readErr != nil {
+			out.Error = "the stapled response cannot be read: " + readErr.Error()
+			return out
+		}
+		response = read
+		if issuer != nil && response.SerialNumber.Cmp(leaf.SerialNumber) != 0 {
+			err = errors.New("it is of another certificate than the server's")
+		}
+	}
+	if err != nil {
+		out.Error = "the stapled response is not verified: " + err.Error()
+	}
+	out.Status = ocspStatuses[response.Status]
+	out.ProducedAt, out.ThisUpdate = response.ProducedAt.Unix(), response.ThisUpdate.Unix()
+	if !response.NextUpdate.IsZero() {
+		out.NextUpdate = response.NextUpdate.Unix()
+		out.SecondsUntilNextUpdate = out.NextUpdate - now.Unix()
+	}
+	if response.Status == ocsp.Revoked {
+		out.RevokedAt, out.RevocationReason = response.RevokedAt.Unix(), ocspReasons[response.RevocationReason]
+	}
+	return out
 }
 
 // tlsCertChainInfo is what is true of the chain as a whole.
@@ -337,8 +422,12 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		traced.Set("Tls-Starttls", protocol)
 	}
 	traceRequest(ctx, tlsCertMethod, "tls://"+address.hostPort, traced, "", false)
+	// The lookup, the connection and the handshake are the request's
+	// phases, whether the handshake went through or not.
+	timedCtx, timing := withConnTiming(ctx)
+	defer func() { tracePhases(ctx, timing.phases()) }()
 	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", address.hostPort)
 	if err != nil {
 		if !errors.Is(err, ErrTargetRefused) {
 			err = fmt.Errorf("connecting to %s: %w", address.hostPort, err)
@@ -356,7 +445,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	}
 	tlsConn := tls.Client(conn, cfg)
 	defer func() { _ = tlsConn.Close() }()
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 		err = fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err)
 		// After STARTTLS the report tells the dialogue that led to the
 		// handshake, as it does before a handshake that succeeds.
@@ -375,6 +464,16 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 		doc.VerifyError = err.Error()
 	} else {
 		doc.Verified = true
+	}
+	if len(state.PeerCertificates) > 0 {
+		var issuer *x509.Certificate
+		switch {
+		case len(verifiedChains) > 0 && len(verifiedChains[0]) > 1:
+			issuer = verifiedChains[0][1]
+		case len(state.PeerCertificates) > 1:
+			issuer = state.PeerCertificates[1]
+		}
+		doc.OCSP = stapledOCSP(state.OCSPResponse, state.PeerCertificates[0], issuer, now)
 	}
 	for _, cert := range state.PeerCertificates {
 		doc.Certificates = append(doc.Certificates, describeCertificate(cert, now))
@@ -544,8 +643,9 @@ func tlsCertSchemaRule() map[string]any {
 // OpenTelemetry's conventions the protocol's version and the cipher, by
 // the names Go and the IANA registry give them, and when the first
 // certificate expires; and how many certificates the server presented,
-// whether the chain verified, and the days the first has left, a fraction
-// of a day included. Never a certificate's subject or issuer, which the
+// whether the chain verified, whether an OCSP response was stapled and the
+// status it gives, and the days the first has left, a fraction of a day
+// included. Never a certificate's subject or issuer, which the
 // server wrote, nor why the chain did not verify.
 func tlsCertFacts(doc *tlsCertDocument, state tls.ConnectionState) []TraceFact {
 	facts := []TraceFact{
@@ -554,6 +654,10 @@ func tlsCertFacts(doc *tlsCertDocument, state tls.ConnectionState) []TraceFact {
 		nameFact("tls.cipher", tls.CipherSuiteName(state.CipherSuite)),
 		intFact("tlscert.certificates", len(doc.Certificates)),
 		boolFact("tlscert.verified", doc.Verified),
+		boolFact("tlscert.ocsp.stapled", doc.OCSP.Stapled),
+	}
+	if doc.OCSP.Status != "" {
+		facts = append(facts, nameFact("tlscert.ocsp.status", doc.OCSP.Status))
 	}
 	if len(doc.Certificates) > 0 {
 		facts = append(facts,

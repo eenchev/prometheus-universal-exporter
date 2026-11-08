@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -750,26 +751,33 @@ func pingConn(ctx context.Context, p *sqlPool, conn *sql.Conn) (closed bool, err
 }
 
 // sqlResult is what a statement returned: its rows, as the transforms read
-// them, its columns, and the rows written as JSON.
+// them, its columns, and the rows written as JSON; of several statements
+// (request.statements), named is each one's rows by its name, and rows and
+// columns are nil.
 type sqlResult struct {
 	rows    []any
 	columns []string
 	shown   []byte
+	named   map[string]any
+	// size is what the response limit counts of the rows, with those of
+	// the statements before (readSQLRows).
+	size int64
 }
 
-// query runs c's statement with args on a connection of the pool of key,
-// within ctx.
-func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Collector, args []any) (*sqlResult, error) {
+// query runs c's statements, runs, on a connection of the pool of key, in
+// order, within ctx.
+func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Collector, runs []sqlRun) (*sqlResult, error) {
+	first := runs[0]
 	p, err := c.acquire(key, sqlRequest(col).Options)
 	if err != nil {
-		traceSQL(ctx, key, len(args), false, err)
+		traceSQL(ctx, key, first, false, err)
 		return nil, err
 	}
 	sem := p.target.sem
 	if sem != nil {
 		if err := c.wait(ctx, p); err != nil {
 			c.release(p)
-			traceSQL(ctx, key, len(args), false, err)
+			traceSQL(ctx, key, first, false, err)
 			return nil, err
 		}
 		c.makeRoom(ctx, p)
@@ -787,30 +795,98 @@ func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Col
 	if err != nil {
 		giveUp()
 		err = sqlDeadline(ctx, "connecting", err)
-		traceSQL(ctx, key, len(args), false, err)
+		traceSQL(ctx, key, first, false, err)
 		return nil, err
 	}
 	dc := sqlConnKey(conn)
 	if p.idle != nil {
 		p.idle.mark(dc)
 	}
-	traceSQL(ctx, key, len(args), p.made.Load() == before, nil)
-	result, finish, err := p.statement(ctx, conn, col, args)
+	reused := p.made.Load() == before
+	if first.name == "" {
+		traceSQL(ctx, key, first, reused, nil)
+		result, finish, err := p.statement(ctx, conn, col, first, 0)
+		c.end(ctx, p, conn, dc, finish, giveUp)
+		if err != nil {
+			return nil, err
+		}
+		c.countRows(p, col, len(result.rows))
+		return result, nil
+	}
+	result, finish, err := p.statements(ctx, key, conn, col, runs, reused)
 	c.end(ctx, p, conn, dc, finish, giveUp)
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	if !p.uncounted {
-		c.rows[col.Name] = len(result.rows)
-	}
-	c.mu.Unlock()
 	return result, nil
 }
 
-// statement runs c's statement with args on conn, within ctx, and reads its
-// rows; finish ends it, which query bounds by the scrape's deadline (end).
-func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Collector, args []any) (result *sqlResult, finish func(), err error) {
+// countRows keeps the rows a scrape of col returned, for
+// http_exporter_sql_rows.
+func (c *sqlPoolCache) countRows(p *sqlPool, col *model.Collector, n int) {
+	c.mu.Lock()
+	if !p.uncounted {
+		c.rows[col.Name] = n
+	}
+	c.mu.Unlock()
+}
+
+// statements runs runs, request.statements, in order on conn, each as a
+// collector's one statement is run, its own transaction ended before the
+// next begins, within ctx; finish ends the last, which query bounds by the
+// scrape's deadline (end). The response limit bounds the rows of all of
+// them together, as max_rows bounds each. The first that fails fails the
+// scrape, naming it. A statement's end that the scrape's deadline outlasts
+// fails the scrape too, and finish then waits for it, which end bounds and
+// abandons the connection after.
+func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn, col *model.Collector, runs []sqlRun, reused bool) (result *sqlResult, finish func(), err error) {
+	named := make(map[string]any, len(runs))
+	var used int64
+	total := 0
+	finish = func() {}
+	for i, run := range runs {
+		traceSQL(ctx, key, run, reused || i > 0, nil)
+		one, end, err := p.statement(ctx, conn, col, run, used)
+		if err != nil {
+			return nil, end, fmt.Errorf("request.statements[%d], %s: %w", i, run.name, err)
+		}
+		named[run.name] = one.rows
+		total += len(one.rows)
+		used = one.size
+		if i == len(runs)-1 {
+			finish = end
+			break
+		}
+		// The next runs on the same connection, after this one's
+		// transaction has ended.
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			end()
+		}()
+		select {
+		case <-ended:
+		case <-ctx.Done():
+			return nil, func() { <-ended }, p.sqlDeadline(ctx, "ending the statement "+run.name, ctx.Err())
+		}
+	}
+	shown := make(map[string]any, len(named))
+	for name, rows := range named {
+		shown[name] = sqlShownRows(rows.([]any))
+	}
+	body, err := json.Marshal(shown)
+	if err != nil {
+		return nil, finish, err
+	}
+	sqlPools.countRows(p, col, total)
+	return &sqlResult{shown: body, named: named}, finish, nil
+}
+
+// statement runs run on conn, within ctx, and reads its rows, which with
+// the used bytes of the statements before it are held to the response
+// limit; finish ends it, which query bounds by the scrape's deadline
+// (end).
+func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Collector, run sqlRun, used int64) (result *sqlResult, finish func(), err error) {
 	var timeout time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)
@@ -822,7 +898,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	// whose context has ended is abandoned by the driver, its connection
 	// closed with it.
 	stmtCtx, stop := context.WithCancel(ctx)
-	rows, done, err := p.driver.run(stmtCtx, conn, sqlStatement(col), args, timeout)
+	rows, done, err := p.driver.run(stmtCtx, conn, run.statement, run.args, timeout)
 	if err != nil {
 		err = p.driver.sqlServerAnswer(err)
 		err = p.sqlMessageLimit(col, err)
@@ -831,7 +907,7 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 		return nil, stop, err
 	}
 	finish = func() { done(); stop() }
-	result, err = readSQLRows(rows, sqlMaxRows(col), responseLimit(col))
+	result, err = readSQLRows(rows, sqlMaxRows(col), responseLimit(col), used)
 	if err != nil {
 		// Ended before done closes the rows.
 		stop()
@@ -1072,7 +1148,7 @@ func (p *sqlPool) sqlDeadline(ctx context.Context, doing string, err error) erro
 // the database with its placeholders filled, whether the connection was
 // kept from an earlier scrape, and how many values were bound. Neither the
 // values, which come from the probe, nor a credential is shown.
-func traceSQL(ctx context.Context, key sqlPoolKey, args int, reused bool, err error) {
+func traceSQL(ctx context.Context, key sqlPoolKey, run sqlRun, reused bool, err error) {
 	connection := "new"
 	if reused {
 		connection = "reused"
@@ -1086,7 +1162,10 @@ func traceSQL(ctx context.Context, key sqlPoolKey, args int, reused bool, err er
 		"Sql-User":       {key.base.username},
 		"Sql-Database":   {database},
 		"Sql-Connection": {connection},
-		"Sql-Args":       {strconv.Itoa(args)},
+		"Sql-Args":       {strconv.Itoa(len(run.args))},
+	}
+	if run.name != "" {
+		header["Sql-Statement"] = []string{run.name}
 	}
 	traceRequest(ctx, sqlMethod, pathURL(key.base.driver, key.address.hostPort, "/"+database), header, "", false)
 	if err != nil {

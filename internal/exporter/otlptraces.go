@@ -577,10 +577,20 @@ func phaseSpans(trace, state, parent string, phases []fetch.TracedPhase) []otlpS
 			continue
 		}
 		id := newSpanID()
-		spans = append(spans, otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: under, Name: "http." + phase.Name, Kind: otlpSpanKindInternal,
+		spans = append(spans, otlpSpan{TraceID: trace, SpanID: hex.EncodeToString(id[:]), TraceState: state, ParentSpanID: under, Name: phaseSpanName(phase.Name), Kind: otlpSpanKindInternal,
 			StartTimeUnixNano: nanos(phase.Start), EndTimeUnixNano: nanos(phase.End)})
 	}
 	return spans
+}
+
+// phaseSpanName is a phase's span's name: http.<phase> of an http
+// request's, the name itself of a connection another type made for its
+// request, which is connection.<phase> already (fetch.TracedPhase).
+func phaseSpanName(name string) string {
+	if strings.Contains(name, ".") {
+		return name
+	}
+	return "http." + name
 }
 
 // stageFailed says whether a stage that ended as outcome failed: neither

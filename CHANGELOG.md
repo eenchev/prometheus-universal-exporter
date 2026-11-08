@@ -16,6 +16,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- A `dns` collector asks its question with a client of its own rather than
+  Go's resolver. A `SERVFAIL`, `REFUSED` or other response code is now the
+  document's `rcode` rather than a failed scrape, so a rule that relied on
+  the failure reads `.rcode`; `/etc/hosts` is no longer read, its names
+  asked of the server like any other; and each answer has a `ttl`
+  ([The question](docs/DNS.md#the-question)).
 - A `kubernetes` collector lists its namespaces at once, four at a time,
   rather than one after another; the document keeps them in the order
   `namespaces` names them. Its requests, and the allocator's listings of
@@ -74,6 +80,46 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- Exported traces time the connections of `tcp`, `tlscert`, `ldap`,
+  `redis`, `sshexec`, `sshfile` and `grpc` requests, as an http request's
+  are: `connection.dns`, `connection.connect` and `connection.tls`, or
+  `connection.handshake` for SSH, under the request's span
+  ([Traces of slow requests](docs/OTLP.md#traces-of-slow-requests)).
+- A `dns` collector answers each record's TTL, the response code as
+  `rcode`, the answer's AA, RA and AD bits, and records of `SOA`, `CAA` and
+  `DNSKEY` ([The document](docs/DNS.md#the-document)).
+- A `grpc` collector calls a server streaming method with
+  `stream_messages`, reading its stream until the server ends it or that many
+  messages have come, the health service's `Watch` among them
+  ([Server streaming](docs/GRPC.md#server-streaming)).
+- A `redis` collector reads the primary a Sentinel names with `sentinel`:
+  its target is the Sentinel, asked which server is the primary of
+  `sentinel.master` now, and the document's `sentinel` holds what the
+  Sentinel knows of it, its flags, replicas and quorum
+  ([Sentinel](docs/REDIS.md#sentinel)).
+- A `tcp` collector speaks a conversation with `steps`, each a `send` and
+  the `until` its answer matches, as SMTP's `EHLO` then `QUIT`
+  ([A conversation](docs/TCP.md#a-conversation)).
+- An `ldap` collector follows an attribute answered in ranges, as Active
+  Directory answers a large group's `member;range=0-1499`, and holds every
+  value under `member`.
+- An `ntp` collector sends a server `samples` requests, `sample_interval`
+  apart, and answers the one of the least delay with the jitter of their
+  offsets; a target may name several servers by commas, compared by the
+  median and spread of their offsets
+  ([Several samples](docs/NTP.md#several-samples),
+  [Several servers](docs/NTP.md#several-servers)).
+- An `icmp` collector pings every address of a name with `all_addresses`,
+  each in the document's `addresses` and the top of all of them together
+  ([Every address](docs/ICMP.md#every-address)).
+- A `tlscert` collector's document has `ocsp`, the OCSP response the server
+  stapled: its status, `good`, `revoked` or `unknown`, whether the issuer
+  signed it for the certificate, its updates, and a revocation's time and
+  reason ([The document](docs/TLSCERT.md#the-document)).
+- A `sql` collector runs several statements with `statements`, each with its
+  name, its statement and its own `args` and `arg_types`, in order on one
+  connection; the document holds each one's rows under its name
+  ([Several statements](docs/SQL.md#several-statements)).
 - `kubernetes` collectors ask the nodes' kubelets for their Summary API
   with `kubelet: stats/summary`: what each pod, container and volume uses
   of CPU, memory and file systems, ephemeral storage among them, directly

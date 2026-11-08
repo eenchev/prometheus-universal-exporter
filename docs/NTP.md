@@ -19,7 +19,9 @@ a server over the network, any server the exporter can reach, and measures
 the offset itself.
 
 One request is sent, in one UDP datagram, as RFC 4330 (SNTP) and RFC 5905
-(NTPv4) describe; nothing is configured but the target.
+(NTPv4) describe, or a few, `samples`, of which the one of the least delay
+is the answer; a target may name several servers, asked at once, whose
+offsets the document compares.
 
 ## A collector
 
@@ -55,10 +57,11 @@ collectors:
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `ntp`. |
+| `samples` | `1` | How many requests a scrape sends each server, from 1 to 8 (see [Several samples](#several-samples)). |
+| `sample_interval` | `2s` | How long apart they are sent, at least `1s`. |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the address the request is sent to. |
 
-The type has no keys of its own: the request is an NTPv4 client request,
-whatever the server. No other request key applies, and setting one —
+The request is an NTPv4 client request, whatever the server. No other request key applies, and setting one —
 `path`, `headers`, `tls` — is a startup error. A probe takes `timeout` and
 `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values); a static target's request block
@@ -77,7 +80,9 @@ static target's when it loads. An IPv6 address without brackets is the
 address whole, on port 123, as for every type whose target is `host` or
 `host:port`: `2001:db8::1:123` is the address `2001:db8::1:123`, since it
 is one, and not `2001:db8::1` on port 123, which is `[2001:db8::1]:123`. A name is resolved when the request is
-sent, and the request goes to its first address.
+sent, and the request goes to its first address. A target may name up to 8
+servers by commas, `time1.example.com,time2.example.com:123`, none twice:
+see [Several servers](#several-servers).
 
 ## The document
 
@@ -175,8 +180,9 @@ has gone away, says `before the scrape was cancelled` instead, and
 
 Nothing is sent again: a server that limits its clients' rate answers a
 client that asks twice in quick succession with a Kiss-o'-Death instead of
-the time. One request is made a scrape, and the deadline, the probe's
-`timeout` or the scrape's own, 30 seconds when neither is set, bounds it.
+the time. One request is made a scrape, `samples` with that key, and the
+deadline, the probe's `timeout` or the scrape's own, 30 seconds when
+neither is set, bounds it.
 
 **A server that does not keep the time fails the scrape.** The reply is the
 server's, but its offset would be to a clock nobody vouches for, and a rule
@@ -196,6 +202,84 @@ A server that is not synchronised is told by the scrape failing — the
 collector's series absent, `http_exporter_scrape_success_total` not
 counting it — as a server that does not answer is, rather than by a field
 a rule must know to look at.
+
+## Several samples
+
+One request's offset is off by up to half its round trip, and a round trip
+a queue somewhere lengthened makes it worse. `samples` sends a server that
+many requests, `sample_interval` apart, and takes the reply of the least
+delay as its answer, as NTP's clock filter does:
+
+```yaml
+    request:
+      type: ntp
+      samples: 4
+      sample_interval: 2s
+    metrics:
+      - name: ntp_offset_seconds
+        expression: .offset_seconds
+      - name: ntp_jitter_seconds
+        expression: .jitter_seconds
+```
+
+- The document is that reply's, with `samples`, how many requests were
+  sent, `samples_answered`, how many were answered, and `jitter_seconds`,
+  the population standard deviation of their offsets, 0 of one.
+- A request that is not answered before the next is due is unanswered, and
+  the next is sent; the last waits until the scrape's deadline. A server
+  that answers a Kiss-o'-Death, or is not synchronised, ends its samples
+  and fails as one request does, and so does one that answers none.
+- The requests are `sample_interval` apart, at least `1s`, which a server
+  that limits its clients' rate allows: a scrape takes about
+  `(samples - 1) × sample_interval`, which must fit its timeout.
+- A debug probe shows each request, and an exported trace has a span of
+  each.
+
+## Several servers
+
+A target of several servers, by commas, asks each at once, each with its
+`samples`, and the document compares them, so one that disagrees with the
+others shows:
+
+```text
+/probe?collector=clock&target=time1.example.com,time2.example.com,time3.example.com
+```
+
+```json
+{
+  "servers": [
+    {"host": "time1.example.com", "port": 123, "offset_seconds": 0.0012, "delay_seconds": 0.011, "stratum": 2, "samples": 1, "samples_answered": 1, "jitter_seconds": 0, "...": "..."},
+    {"host": "time2.example.com", "port": 123, "offset_seconds": 0.0009, "...": "..."},
+    {"host": "time3.example.com", "port": 123, "offset_seconds": 0, "stratum": 0, "...": "...", "error": "time3.example.com:123 is not synchronised: its stratum is 16"}
+  ],
+  "servers_answered": 2,
+  "offset_median_seconds": 0.00105,
+  "offset_spread_seconds": 0.0003,
+  "duration_seconds": 0.02
+}
+```
+
+- `servers` are each server's document, as one server's is, in the
+  target's order; one that answered no time has its `host`, `port` and
+  `error`, and its other fields empty.
+- `servers_answered` is how many answered, and `offset_median_seconds` and
+  `offset_spread_seconds`, the greatest offset less the least, are of
+  theirs, left out when none did. The scrape fails only when no server
+  answers, with the first's failure.
+- A rule over a server reads `.servers[]`, labelled by `.host`:
+
+```yaml
+      - name: ntp_server_offset_seconds
+        items: .servers[] | select(.error == null)
+        expression: .offset_seconds
+        labels:
+          - name: server
+            expression: .host
+      - name: ntp_servers_offset_spread_seconds
+        expression: .offset_spread_seconds
+```
+
+The verbose `url` label names every server, `ntp://time1.example.com:123,time2.example.com:123`.
 
 ## Examples
 
@@ -259,10 +343,11 @@ a request is labelled `url="ntp://time.example.com:123"` and
 
 ## Limitations
 
-- **One server, one sample.** The offset is that of one request, with the
-  error its delay allows, about half of it; a client such as chrony or ntpd
-  filters many samples of several servers. Watch the offset over time, or
-  against `delay_seconds`, rather than one scrape's.
+- **A few samples, not a clock filter.** The offset is that of the request
+  of the least delay, of at most 8 a scrape, with the error its delay
+  allows, about half of it; a client such as chrony or ntpd filters many
+  samples over hours. Watch the offset over time, or against
+  `delay_seconds`, rather than one scrape's.
 - **No authentication.** Neither NTP's symmetric keys nor NTS is spoken;
   the random transmit timestamp keeps a third party that does not see the
   request from answering it, and no more.

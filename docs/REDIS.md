@@ -143,6 +143,61 @@ request:
   password_file: /var/run/secrets/redis/password
 ```
 
+## Sentinel
+
+With `sentinel`, the target is a Sentinel rather than the server: the
+scrape asks it which server is the primary of `sentinel.master` now, with
+`SENTINEL GET-MASTER-ADDR-BY-NAME`, and what it knows of it, with
+`SENTINEL MASTER`, on a connection of its own, closed before the primary is
+dialed; then it reads that server as it reads any target, `INFO` and the
+commands, logged in with the collector's `username` and `password_file`.
+After a failover, the next scrape reads the new primary, whatever the
+Sentinel the target names.
+
+```yaml
+request:
+  type: redis
+  password_file: /var/run/secrets/redis/password     # the servers'
+  info_sections: [replication, memory]
+  sentinel:
+    master: mymaster                                 # as sentinel monitor names it
+    password_file: /var/run/secrets/redis/sentinel   # the Sentinel's requirepass, if any
+```
+
+The document holds `sentinel` beside `info`: each field `SENTINEL MASTER`
+answers, a number as a JSON number as `INFO`'s are, and `address`, the
+`host:port` the primary was read at.
+
+```json
+{"sentinel": {"name": "mymaster", "ip": "10.0.0.5", "port": 6379, "flags": "master",
+  "num-slaves": 2, "num-other-sentinels": 2, "quorum": 2, "address": "10.0.0.5:6379", "...": "..."},
+ "info": {"replication": {"role": "master", "connected_slaves": 2, "...": "..."}}}
+```
+
+```yaml
+metrics:
+  - name: redis_sentinel_known_replicas
+    expression: .sentinel["num-slaves"]
+  - name: redis_sentinel_primary_down
+    expression: if (.sentinel.flags | test("o_down")) then 1 else 0 end
+```
+
+The Sentinel logs in with `sentinel.username` and `sentinel.password_file`,
+not the servers' account: a Sentinel's `requirepass` is its own. Without
+`sentinel.password_file` no `AUTH` is sent to it. `master` is required, is
+written as `sentinel monitor` names it, and takes no placeholder;
+`username` needs `password_file` beside it.
+
+A master the Sentinel does not know fails the scrape, saying so. The
+primary it names is held to `allowed_targets` and `denied_targets` as the
+target is, before it is dialed and at the address dialed, and the cloud
+metadata service is refused; one refused is never connected to. Over TLS,
+`rediss://` or a `tls` block, both connections speak TLS, the primary's
+certificate verified for `tls.server_name` or else the address the
+Sentinel answered, most often an IP address; set `tls.server_name` when
+the servers' certificates name a host. The Sentinel's replies and the
+primary's are read against the response limit together.
+
 ## What a scrape reads
 
 A scrape makes one connection, logs in with `AUTH` when `password_file` is
@@ -433,9 +488,9 @@ commands.
 
 - **RESP2 only.** The client never sends `HELLO 3`, and every Redis and
   Valkey server answers RESP2 to a client that does not.
-- **No Sentinel or cluster routing.** A collector reads the server its
-  target names; a cluster's nodes are each a target, and a command on a key
-  another node holds fails with the `MOVED` error.
+- **No cluster routing.** A collector reads the server its target names, or
+  the primary its Sentinel names; a cluster's nodes are each a target, and
+  a command on a key another node holds fails with the `MOVED` error.
 - **Text values only.** The document is JSON, whose strings are text, so a
   reply holding bytes that are not UTF-8 — a serialized object, a
   compressed value, a counter written in binary, or a hash field named so —

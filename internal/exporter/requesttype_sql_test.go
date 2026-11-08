@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql/driver"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -418,5 +419,94 @@ func TestASQLStatementFileAndTypedArgsThroughAProbe(t *testing.T) {
 	}
 	if r := probeOnce(t, server, "/probe?collector=jobs&target=db.example", nil); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "jobs 4") {
 		t.Errorf("after the reload: %d %s", r.Code, r.Body)
+	}
+}
+
+// A sql collector of several statements runs each, in order, on one
+// connection, each in a transaction of its own, with its own args, a
+// probe's parameter filling one: the document is each one's rows by its
+// name, which jq and python read; a statement that fails fails the probe,
+// naming it, the statements after it not run.
+func TestASQLCollectorOfSeveralStatements(t *testing.T) {
+	requirePython(t)
+	db := &sqltest.DB{Results: map[string]sqltest.Result{
+		"SELECT count(*) AS n FROM jobs WHERE queue = $1": {Columns: []string{"n"}, Rows: [][]driver.Value{{int64(3)}}},
+		"SELECT name, size FROM queues LIMIT $1":          {Columns: []string{"name", "size"}, Rows: [][]driver.Value{{"mail", int64(7)}, {"sms", int64(2)}}},
+		"SELECT broken":                                   {Err: errors.New("relation does not exist")},
+	}}
+	t.Cleanup(fetch.UseSQLTestDriver(func(ctx context.Context, _ fetch.SQLConnectInfo) (driver.Conn, error) { return db.Connect(ctx) }))
+	t.Cleanup(fetch.CloseConnections)
+	request := `    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      statements:
+        - name: jobs
+          statement: SELECT count(*) AS n FROM jobs WHERE queue = $1
+          args: ["{{param_queue:mail}}"]
+        - name: queues
+          statement: SELECT name, size FROM queues LIMIT $1
+          args: ["10"]
+          arg_types: [int]
+`
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", `collectors:
+  - name: jobs
+`+request+`    transform:
+      type: jq
+    metrics:
+      - name: jobs
+        expression: .jobs[0].n
+      - name: queue_size
+        items: .queues[]
+        expression: .size
+        labels:
+          - name: queue
+            expression: .name
+  - name: jobs_python
+`+request+`    transform:
+      type: python
+      script: |
+        metric(name="jobs", value=data["jobs"][0]["n"], labels={"queues": str(len(data["queues"]))})
+    metrics: []
+  - name: broken
+    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      statements:
+        - name: first
+          statement: SELECT broken
+        - name: second
+          statement: SELECT name, size FROM queues LIMIT $1
+          args: ["1"]
+    transform:
+      type: jq
+    metrics:
+      - name: v
+        expression: .second | length
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	r := probeOnce(t, server, "/probe?collector=jobs&target=db.example&param_queue=sms", nil)
+	want := []string{`jobs 3`, `queue_size{queue="mail"} 7`, `queue_size{queue="sms"} 2`}
+	if got := seriesLines(r.Body.String()); r.Code != http.StatusOK || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("%d %v, want %v\n%s", r.Code, got, want, r.Body)
+	}
+	if q := db.Queries(); len(q) != 2 || q[0].Args[0] != "sms" || q[1].Args[0] != int64(10) {
+		t.Errorf("queries %#v", q)
+	}
+	if db.Opened() != 1 || db.RolledBack() != 2 {
+		t.Errorf("%d connections opened and %d transactions rolled back, want one connection and a transaction for each statement", db.Opened(), db.RolledBack())
+	}
+	if got := seriesLines(probeOnce(t, server, "/probe?collector=jobs_python&target=db.example", nil).Body.String()); len(got) != 1 || got[0] != `jobs{queues="2"} 3` {
+		t.Errorf("python: %v", got)
+	}
+	before := len(db.Queries())
+	r = probeOnce(t, server, "/probe?collector=broken&target=db.example", nil)
+	if r.Code == http.StatusOK || !strings.Contains(r.Body.String(), "request.statements[0], first") || len(db.Queries()) != before+1 {
+		t.Errorf("a statement that fails: %d %s, %d queries", r.Code, r.Body, len(db.Queries())-before)
 	}
 }

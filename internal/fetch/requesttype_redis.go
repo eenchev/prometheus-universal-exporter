@@ -71,6 +71,17 @@ type RedisConfig struct {
 	DB           int            `yaml:"db,omitempty"`
 	InfoSections []string       `yaml:"info_sections,omitempty"`
 	Commands     []RedisCommand `yaml:"commands,omitempty"`
+	Sentinel     *RedisSentinel `yaml:"sentinel,omitempty"`
+}
+
+// RedisSentinel is a redis collector's request.sentinel: the name of the
+// primary its target, a Sentinel, watches, and the Sentinel's own account,
+// which is not the servers': the scrape asks the Sentinel which server is
+// that primary now and reads that server.
+type RedisSentinel struct {
+	Master       string `yaml:"master,omitempty"`
+	Username     string `yaml:"username,omitempty"`
+	PasswordFile string `yaml:"password_file,omitempty"`
 }
 
 // RedisCommand is one entry of a redis collector's request.commands: the
@@ -292,12 +303,45 @@ func validateRedisRequest(x *model.Collector) error {
 		}
 		seen[section] = true
 	}
+	if err := checkRedisSentinel(own.Sentinel, x.RequestNotMade); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
 	names := map[string]bool{}
 	// The entries are written in place, in the list Own holds.
 	for i := range own.Commands {
 		if err := checkRedisCommand(&own.Commands[i], i, names); err != nil {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
+	}
+	return nil
+}
+
+// checkRedisSentinel checks request.sentinel: a master named, by a name
+// with no blank at its ends and no control character, and no placeholder,
+// since the Sentinel is asked of one primary; a username beside the
+// password_file of its password, as the collector's own.
+func checkRedisSentinel(s *RedisSentinel, notMade bool) error {
+	if s == nil {
+		return nil
+	}
+	switch {
+	case s.Master == "":
+		return errors.New("request.sentinel names no master; write the name the Sentinels know the primary by, as sentinel.conf's sentinel monitor names it")
+	case strings.TrimSpace(s.Master) != s.Master || strings.ContainsFunc(s.Master, func(c rune) bool { return c < ' ' || c == 0x7f }):
+		return fmt.Errorf("request.sentinel.master %q has a blank at an end or a control character; write the primary's name as sentinel monitor names it", s.Master)
+	case strings.Contains(s.Master, "{{"):
+		return fmt.Errorf("request.sentinel.master %q has a placeholder; the Sentinel is asked of the primary named as it is written", s.Master)
+	}
+	if s.Username != "" {
+		if err := checkRedisUsername(s.Username); err != nil {
+			return errors.New(strings.Replace(err.Error(), "request.username", "request.sentinel.username", 1))
+		}
+		if s.PasswordFile == "" && !notMade {
+			return errors.New("sets request.sentinel.username without request.sentinel.password_file; a Sentinel's ACL user logs in with AUTH username password, so name the file of its password")
+		}
+	}
+	if s.PasswordFile != "" && strings.TrimSpace(s.PasswordFile) == "" {
+		return errors.New("request.sentinel.password_file is blanks alone; name the file of the Sentinel's password, or take the key out")
 	}
 	return nil
 }
@@ -556,6 +600,7 @@ func redisCalls(c *model.Collector, params map[string]string) ([]redisCall, erro
 type redisDocument struct {
 	Info     map[string]map[string]any `json:"info,omitempty"`
 	Commands map[string]any            `json:"commands,omitempty"`
+	Sentinel map[string]any            `json:"sentinel,omitempty"`
 }
 
 // redisShownCommand is a command as a debug report shows it: its words,
@@ -618,59 +663,51 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 		if cfg, err = tlsConfig(c.Request.TLS); err != nil {
 			return nil, fmt.Errorf("request.tls: %w", err)
 		}
-		if cfg.ServerName == "" {
-			cfg.ServerName = address.host
-		}
 	}
 	// The host's name now; the address the connection is made to when it
 	// is made, as an http request's connections are checked.
+	var guard *policyGuard
 	if policy := policyOf(c); policy != nil {
-		guard := &policyGuard{policy: policy, hosts: map[string]bool{}}
+		guard = &policyGuard{policy: policy, hosts: map[string]bool{}}
 		if err := guard.check(ctx, &url.URL{Scheme: "redis", Host: address.hostPort}); err != nil {
 			return nil, err
 		}
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
 	own := redisRequest(c)
-	label := redisURL(address, secure, own.DB)
-	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", address.hostPort)
-	if err != nil {
-		if !errors.Is(err, ErrTargetRefused) {
-			err = redisFailure(ctx, fmt.Errorf("connecting to %s: %w", address.hostPort, err))
-		}
-		return nil, err
-	}
-	defer func() { _ = conn.Close() }()
-	// Every read and write ends at the scrape's deadline, or as soon as it
-	// is cancelled.
-	deadline, _ := ctx.Deadline()
-	_ = conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
-	defer stop()
-	if secure {
-		tlsConn := tls.Client(conn, cfg)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			return nil, redisFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err))
-		}
-		conn = tlsConn
-	}
-	session := newRedisConn(conn, responseLimit(c))
-	if password != "" {
-		args := []string{"AUTH", password}
-		if c.Request.Username != "" {
-			args = []string{"AUTH", c.Request.Username, password}
-		}
-		if _, err := redisSend(ctx, session, label, args); err != nil {
+	var sentinel map[string]any
+	limit := responseLimit(c)
+	if own.Sentinel != nil {
+		primary, view, used, err := redisAskSentinel(ctx, address, secure, cfg, limit, *own.Sentinel)
+		if err != nil {
 			return nil, err
 		}
+		// The primary the Sentinel named is held to the target lists as
+		// the Sentinel is: by its address now, and when it is dialed.
+		if guard != nil {
+			if err := guard.check(ctx, &url.URL{Scheme: "redis", Host: primary.hostPort}); err != nil {
+				return nil, fmt.Errorf("the primary %s the Sentinel named: %w", primary.hostPort, err)
+			}
+		}
+		// The Sentinel's replies and the primary's are held to the
+		// response limit together.
+		address, sentinel, limit = primary, view, limit-used
+	}
+	label := redisURL(address, secure, own.DB)
+	session, done, err := redisDial(ctx, address, secure, cfg, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	if err := redisLogin(ctx, session, label, c.Request.Username, password); err != nil {
+		return nil, err
 	}
 	if own.DB != 0 {
 		if _, err := redisSend(ctx, session, label, []string{"SELECT", strconv.Itoa(own.DB)}); err != nil {
 			return nil, err
 		}
 	}
-	var doc redisDocument
+	doc := redisDocument{Sentinel: sentinel}
 	for _, call := range calls {
 		reply, err := redisSend(ctx, session, label, call.args)
 		if err != nil {
@@ -721,6 +758,121 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 		Collector:  c.Name,
 		Duration:   time.Since(start),
 	}, nil
+}
+
+// redisDial makes a connection to address, over TLS when secure, cfg's
+// server name the address's host unless the tls block names one, whose
+// every read and write ends at the scrape's deadline, or as soon as it is
+// cancelled; done closes it. Its lookup, connection and handshake are the
+// phases of the first command sent on it.
+func redisDial(ctx context.Context, address redisAddress, secure bool, cfg *tls.Config, limit int64) (*redisConn, func(), error) {
+	timedCtx, timing := withConnTiming(ctx)
+	dialer := &net.Dialer{}
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", address.hostPort)
+	if err != nil {
+		if !errors.Is(err, ErrTargetRefused) {
+			err = redisFailure(ctx, fmt.Errorf("connecting to %s: %w", address.hostPort, err))
+		}
+		return nil, nil, err
+	}
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	if secure {
+		own := cfg.Clone()
+		if own.ServerName == "" {
+			own.ServerName = address.host
+		}
+		tlsConn := tls.Client(conn, own)
+		if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
+			stop()
+			_ = conn.Close()
+			return nil, nil, redisFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", address.hostPort, err))
+		}
+		conn = tlsConn
+	}
+	// The connection's phases are the first command's, sent on it next.
+	traceNextPhases(ctx, timing.phases())
+	return newRedisConn(conn, limit), func() { stop(); _ = conn.Close() }, nil
+}
+
+// redisLogin sends AUTH, with the username when there is one, when there
+// is a password.
+func redisLogin(ctx context.Context, session *redisConn, label, username, password string) error {
+	if password == "" {
+		return nil
+	}
+	args := []string{"AUTH", password}
+	if username != "" {
+		args = []string{"AUTH", username, password}
+	}
+	_, err := redisSend(ctx, session, label, args)
+	return err
+}
+
+// redisAskSentinel asks the Sentinel at address which server is the
+// primary of s.Master now, with SENTINEL GET-MASTER-ADDR-BY-NAME, and what
+// it knows of that primary, with SENTINEL MASTER: its fields, each number
+// a JSON number as INFO's are, and the address read, as the document's
+// sentinel holds them. The Sentinel's connection is its own, logged in
+// with the Sentinel's account, and closed before the primary is dialed; it
+// answers the bytes the Sentinel's replies took of the response limit.
+func redisAskSentinel(ctx context.Context, address redisAddress, secure bool, cfg *tls.Config, limit int64, s RedisSentinel) (redisAddress, map[string]any, int64, error) {
+	var primary redisAddress
+	var password string
+	if s.PasswordFile != "" {
+		var err error
+		if password, err = ReadCredentialFile(s.PasswordFile); err != nil {
+			return primary, nil, 0, fmt.Errorf("reading request.sentinel.password_file: %w", err)
+		}
+		if password == "" {
+			return primary, nil, 0, fmt.Errorf("request.sentinel.password_file %s is empty", s.PasswordFile)
+		}
+	}
+	label := strings.TrimSuffix(redisURL(address, secure, 0), "/0")
+	session, done, err := redisDial(ctx, address, secure, cfg, limit)
+	if err != nil {
+		return primary, nil, 0, err
+	}
+	defer done()
+	if err := redisLogin(ctx, session, label, s.Username, password); err != nil {
+		return primary, nil, 0, err
+	}
+	ask := []string{"SENTINEL", "GET-MASTER-ADDR-BY-NAME", s.Master}
+	reply, err := redisSend(ctx, session, label, ask)
+	if err != nil {
+		return primary, nil, 0, err
+	}
+	pair, ok := reply.([]any)
+	if reply == nil || (ok && len(pair) == 0) {
+		return primary, nil, 0, fmt.Errorf("the Sentinel at %s knows no primary named %q; SENTINEL MASTERS lists those it watches", address.hostPort, s.Master)
+	}
+	var host, port []byte
+	if ok && len(pair) == 2 {
+		host, _ = pair[0].([]byte)
+		port, _ = pair[1].([]byte)
+	}
+	if host == nil || port == nil {
+		return primary, nil, 0, fmt.Errorf("%s: the reply is %s, not the primary's address and port", redisShownCommand(ask), redisKind(reply))
+	}
+	if primary, err = parseRedisTarget(net.JoinHostPort(string(host), string(port))); err != nil {
+		return primary, nil, 0, fmt.Errorf("%s: the Sentinel answered an address that is none: %w", redisShownCommand(ask), err)
+	}
+	ask = []string{"SENTINEL", "MASTER", s.Master}
+	if reply, err = redisSend(ctx, session, label, ask); err != nil {
+		return primary, nil, 0, err
+	}
+	view, err := redisObject(reply)
+	if err != nil {
+		return primary, nil, 0, fmt.Errorf("%s: %w", redisShownCommand(ask), err)
+	}
+	for name, value := range view {
+		if text, ok := value.(string); ok {
+			view[name] = redisInfoScalar(text)
+		}
+	}
+	view["address"] = primary.hostPort
+	return primary, view, session.read, nil
 }
 
 // redisSend sends one command and reads its reply, recording both in a
@@ -784,10 +936,21 @@ func redisFailure(ctx context.Context, err error) error {
 
 // checkRedisFiles reads the files a scrape reads, for --dry-run: the
 // password file, and the tls block's when the collector sets one, or those
-// a static target names of its own. Loading the configuration reads none of
+// a static target names of its own, and the collector's Sentinel's
+// password file. Loading the configuration reads none of
 // them, since a file may be mounted after the exporter starts.
 func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
-	return accountFileWarnings(c, t)
+	warnings := accountFileWarnings(c, t)
+	if s := redisRequest(c).Sentinel; s != nil && s.PasswordFile != "" && t == nil {
+		password, err := ReadCredentialFile(s.PasswordFile)
+		switch {
+		case err != nil:
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.sentinel.password_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
+		case password == "":
+			warnings = append(warnings, fmt.Sprintf("collector %q: request.sentinel.password_file %s is empty; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, s.PasswordFile))
+		}
+	}
+	return warnings
 }
 
 // redisSchemaRule is what a redis collector's request is held to beyond its
@@ -818,12 +981,16 @@ func redisTemplates(c *model.Collector, _ RequestOverrides) []templateField {
 // collector's own keys.
 func redisKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"db":                 {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
-		"info_sections":      {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
-		"info_sections[]":    {"pattern": redisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
-		"commands":           {"description": "redis: read-only commands whose replies the document holds under .commands.<name>, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands."},
-		"commands[]":         {"required": []string{"name", "command"}},
-		"commands[].name":    {"pattern": redisCommandNamePattern, "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands."},
-		"commands[].command": {"minItems": 1, "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold."},
+		"db":                     {"description": "redis: the logical database SELECTed after logging in, numbered from 0. Defaults to 0. redis is in a build with OPT_IN_REQUEST_TYPES naming it alone. See docs/REDIS.md."},
+		"info_sections":          {"description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads."},
+		"info_sections[]":        {"pattern": redisInfoSectionPattern, "description": "A section of INFO, in lower case, as the server names it: server, clients, memory, persistence, stats, replication, cpu, commandstats, errorstats, latencystats, cluster, keyspace, or all or everything."},
+		"commands":               {"description": "redis: read-only commands whose replies the document holds under .commands.<name>, such as {name: queue_len, command: [LLEN, jobs]}. Only the commands docs/REDIS.md#commands lists are taken. See docs/REDIS.md#commands."},
+		"commands[]":             {"required": []string{"name", "command"}},
+		"commands[].name":        {"pattern": redisCommandNamePattern, "description": "The name the reply is put under in the document's commands: letters, digits and _, not starting with a digit, unique among the collector's commands."},
+		"sentinel":               {"required": []string{"master"}, "if": SchemaWrittenKey("username"), "then": SchemaWrittenKey("password_file"), "description": "redis: the target is a Sentinel, asked which server is the primary of master now (SENTINEL GET-MASTER-ADDR-BY-NAME); the scrape reads that server, held to the target lists as the target is, and the document's sentinel holds what the Sentinel knows of it (SENTINEL MASTER). See docs/REDIS.md#sentinel."},
+		"sentinel.master":        {"minLength": 1, "not": SchemaOnlyBlanks(), "description": "The name the Sentinels know the primary by, as sentinel.conf's sentinel monitor names it, such as mymaster. No placeholder."},
+		"sentinel.username":      {"description": "The Sentinel's ACL user, which logs in with sentinel.password_file. The servers' account is request.username's."},
+		"sentinel.password_file": {"not": SchemaOnlyBlanks(), "description": "The file of the Sentinel's password (sentinel.conf's requirepass), read at every scrape, sent with AUTH before the Sentinel is asked. The servers' password is request.password_file's."},
+		"commands[].command":     {"minItems": 1, "description": "The command and its arguments, such as [LLEN, jobs] or [XINFO, GROUPS, events]. An argument after the command's name, and its subcommand, may contain {{param_name}} placeholders, sent as written, whatever they hold."},
 	}
 }

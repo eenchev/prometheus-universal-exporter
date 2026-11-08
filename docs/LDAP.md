@@ -357,10 +357,14 @@ the probe:
 ```
 
 Active Directory answers a `member` of more than 1500 values in ranges,
-`member;range=0-1499`, which the document holds under that name; count
-such a group's members with a `count_only` search of the users whose
-`memberOf` is the group instead,
-`(memberOf=CN=Admins,OU=Groups,DC=corp,DC=example,DC=com)`.
+`member;range=0-1499`: the exporter asks for the rest, a range at a time,
+with a search of the group alone for `member;range=1500-*` and so on until
+the last, and the document holds every value under `member`, in order. Each
+search of a range is a request of a debug probe's report. A group's members
+can also be counted with a `count_only` search of the users whose
+`memberOf` is the group,
+`(memberOf=CN=Admins,OU=Groups,DC=corp,DC=example,DC=com)`, which asks for
+no value at all.
 
 ## Static targets
 
@@ -509,8 +513,6 @@ start, and `http_method="SEARCH"`.
   holds the base, or for Active Directory a global catalog, port 3268.
 - **Text values only.** A value that is not UTF-8 fails the scrape: leave
   binary attributes out of `attributes`.
-- **Ranged attributes are not followed.** Active Directory's
-  `member;range=0-1499` holds the first values of a large attribute alone.
 - **One connection per scrape.** No connection is kept between scrapes, so
   each costs a TCP handshake, a TLS one with TLS, and a bind.
 

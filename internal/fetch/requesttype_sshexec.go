@@ -487,7 +487,7 @@ func (c *sshConnCache) run(ctx context.Context, key sshConnKey, x *model.Collect
 	limit := responseLimit(x)
 	for attempt := 0; ; attempt++ {
 		entry, reused, err := c.get(ctx, key, x.Name, x.Request.MaxOpenConnections)
-		traceSSH(ctx, sshExecMethod, key, shown, http.Header{"Ssh-Command": {model.CutTo(line, model.MaxFailureBytes, false)}}, reused, err)
+		traceSSH(ctx, sshExecMethod, key, shown, http.Header{"Ssh-Command": {model.CutTo(line, model.MaxFailureBytes, false)}}, entry, reused, err)
 		if err != nil {
 			return nil, err
 		}

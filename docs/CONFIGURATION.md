@@ -2687,7 +2687,7 @@ request:
 There are nine types in a default build: `http` asks a URL, `localfile` reads a file from the
 exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
 asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
-`grpc` calls a unary gRPC method — see [gRPC](GRPC.md) — `sshfile`
+`grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
 reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
 `sql` runs a statement on a database — see [Databases over SQL](SQL.md) —
 `dns` resolves a name — see [DNS](DNS.md) — `tlscert` reads the
@@ -2949,7 +2949,9 @@ HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
 their own, which a build without them does not link: gRPC and protobuf, about
 6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
 database drivers, about 6 MB for the three built in by default; `dns`,
-`tlscert`, `ntp` and `kubernetes` need nothing outside the standard library; the opt-in `s3file`
+`ntp` and `kubernetes` need nothing outside the standard library, and
+`tlscert` only `golang.org/x/crypto/ocsp`, of a module the default build
+links already; the opt-in `s3file`
 links the AWS SDK, below, the opt-in `redis`, `tcp`, `ldap` and `icmp` nothing outside it either, and the opt-in `sshexec` the SSH client, without the SFTP client `sshfile` links. The `sql` type's `oracle`, `clickhouse`, `snowflake` and
 `vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
 `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's

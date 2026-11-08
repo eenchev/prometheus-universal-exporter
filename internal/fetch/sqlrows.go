@@ -42,9 +42,10 @@ import (
 // values could not be read by name.
 
 // readSQLRows reads the rows of rs, at most maxRows of them and, of their
-// values with their columns' names, at most maxBytes: each value its size
-// (sqlValue) and its column's name's length, a NULL nothing.
-func readSQLRows(rs *sql.Rows, maxRows int, maxBytes int64) (*sqlResult, error) {
+// values with their columns' names, at most maxBytes with the used bytes of
+// the statements before them in one scrape (request.statements): each
+// value its size (sqlValue) and its column's name's length, a NULL nothing.
+func readSQLRows(rs *sql.Rows, maxRows int, maxBytes, used int64) (*sqlResult, error) {
 	columns, err := rs.Columns()
 	if err != nil {
 		return nil, err
@@ -71,7 +72,7 @@ func readSQLRows(rs *sql.Rows, maxRows int, maxBytes int64) (*sqlResult, error) 
 		targets[i] = &values[i]
 	}
 	rows := []any{}
-	var size int64
+	size := used
 	for rs.Next() {
 		if len(rows) == maxRows {
 			return nil, model.MarkError(fmt.Errorf("the statement returned more than request.max_rows, %d, rows; return fewer, with WHERE, GROUP BY or LIMIT, or raise max_rows", maxRows), model.ErrLimitExceeded)
@@ -108,7 +109,7 @@ func readSQLRows(rs *sql.Rows, maxRows int, maxBytes int64) (*sqlResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &sqlResult{rows: rows, columns: columns, shown: shown}, nil
+	return &sqlResult{rows: rows, columns: columns, shown: shown, size: size}, nil
 }
 
 // sqlValue is a value a driver read as the transforms read it, whether the

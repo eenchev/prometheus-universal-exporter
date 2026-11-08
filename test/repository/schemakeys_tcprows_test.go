@@ -17,10 +17,29 @@ const tcpCollector = `collectors:
         expression: 'STAT curr_connections (\d+)'
 `
 
+// tcpSteps is a configuration of one tcp collector of two steps, the
+// first's send where a row writes it, a line of its own after its until, so
+// that it may be left out.
+const tcpSteps = `collectors:
+  - name: demo
+    request:
+      type: tcp
+      steps:
+        - until: '^250 '
+          send: "EHLO x\r\n"
+        - send: "QUIT\r\n"
+    transform:
+      type: regex
+    metrics:
+      - name: v
+        expression: '^(\d+)'
+`
+
 // tcpSchemaKeys are the keys of a tcp collector that a schema holds to a
 // rule: an entry of allowed_targets and denied_targets, which is not "" and
 // is written in ASCII, as for every type that reaches a host, and
-// starttls, one of four protocols, exactly, "" the key left out. send and
+// starttls, one of four protocols, exactly, "" the key left out; and a
+// step's send, required and not "". send and
 // terminator are free text, "" the key left out. They are held in every
 // build's schema, the default build's among them, which does not carry the
 // opt-in type (TestEveryConstrainedKeyOfTheSchemasIsInATable), and the two
@@ -30,6 +49,7 @@ func tcpSchemaKeys() []schemaKey {
 	return []schemaKey{
 		{key: "collectors[].request.allowed_targets[]", of: "a tcp collector's", document: tcpCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "memcached.cache", invalid: "bücher.example", absent: true, emptyWas: taken, built: true},
 		{key: "collectors[].request.starttls", of: "a tcp collector's", document: tcpCollector, at: request, setting: "      starttls: %s\n", valid: "smtp", invalid: "SMTP", absent: true, empty: true, emptyWas: refused, built: true},
+		{key: "collectors[].request.steps[].send", document: tcpSteps, at: "          send: \"EHLO x\\r\\n\"\n", setting: "          send: %s\n", valid: `"HELO x\r\n"`, built: true},
 		{key: "collectors[].request.denied_targets[]", of: "a tcp collector's", document: tcpCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "10.0.0.0/8", invalid: "bücher.example", absent: true, emptyWas: taken, built: true},
 	}
 }

@@ -293,7 +293,7 @@ func (c *sshConnCache) size() int {
 func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource) error) error {
 	for attempt := 0; ; attempt++ {
 		entry, reused, err := c.get(ctx, key, collector, limit)
-		traceSSH(ctx, localFileMethod, key, shown, nil, reused, err)
+		traceSSH(ctx, localFileMethod, key, shown, nil, entry, reused, err)
 		if err != nil {
 			return err
 		}
@@ -334,7 +334,7 @@ func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector st
 func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource, *directoryProgress) error, answer func(*DirectoryRead)) error {
 	for attempt := 0; ; attempt++ {
 		entry, reused, err := c.get(ctx, key, collector, limit)
-		traceSSH(ctx, localFileMethod, key, shown, nil, reused, err)
+		traceSSH(ctx, localFileMethod, key, shown, nil, entry, reused, err)
 		if err != nil {
 			return err
 		}

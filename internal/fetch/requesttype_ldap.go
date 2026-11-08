@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -616,8 +618,9 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 		ctx = context.WithValue(ctx, policyGuardKey{}, guard)
 	}
 	label := address.url(security)
+	timedCtx, timing := withConnTiming(ctx)
 	dialer := &net.Dialer{}
-	conn, err := policyDialer(dialer.DialContext)(ctx, "tcp", hostPort)
+	conn, err := policyDialer(dialer.DialContext)(timedCtx, "tcp", hostPort)
 	if err != nil {
 		if !errors.Is(err, ErrTargetRefused) {
 			err = ldapFailure(ctx, fmt.Errorf("connecting to %s: %w", hostPort, err))
@@ -633,11 +636,14 @@ func fetchLDAP(ctx context.Context, target string, c *model.Collector, overrides
 	defer stop()
 	if security == ldapImplicitTLS {
 		tlsConn := tls.Client(conn, cfg)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if err := timing.handshake("tls", func() error { return tlsConn.HandshakeContext(ctx) }); err != nil {
 			return nil, ldapFailure(ctx, fmt.Errorf("TLS handshake with %s: %w", hostPort, err))
 		}
 		conn = tlsConn
 	}
+	// The connection's phases are the first operation's, sent on it next:
+	// STARTTLS, whose handshake is added to them, or BIND.
+	traceNextPhases(ctx, timing.phases())
 	session := newLDAPConn(conn, responseLimit(c))
 	if security == ldapStartTLS {
 		if err := ldapStartTLSOn(ctx, session, label, cfg, hostPort); err != nil {
@@ -694,10 +700,14 @@ func ldapStartTLSOn(ctx context.Context, session *ldapConn, label string, cfg *t
 		return err
 	}
 	tlsConn := tls.Client(session.conn, cfg)
+	began := time.Now()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = ldapFailure(ctx, fmt.Errorf("STARTTLS: TLS handshake with %s: %w", hostPort, err))
 		traceFailedOutcome(ctx, "error: "+err.Error())
 		return err
+	}
+	if tracing(ctx) {
+		traceAddPhases(ctx, []TracedPhase{{Name: "connection.tls", Start: began, End: time.Now()}})
 	}
 	if err := session.startTLS(tlsConn); err != nil {
 		err = fmt.Errorf("STARTTLS: %w", err)
@@ -843,9 +853,155 @@ func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapC
 		if entries == nil {
 			entries = []ldapEntry{}
 		}
+		for i := range entries {
+			if err := ldapFollowRanges(ctx, session, label, call, &entries[i], deadline); err != nil {
+				return nil, err
+			}
+		}
 		result.Entries = &entries
 	}
 	return result, nil
+}
+
+// ldapMaxRangeRounds bounds the searches a ranged attribute of an entry is
+// followed with: at Active Directory's 1500 values a range, a million and
+// a half values, which the response limit stops long before.
+const ldapMaxRangeRounds = 1000
+
+// ldapRange reads an attribute's name with a range option, as Active
+// Directory answers an attribute of more values than it sends at once,
+// member;range=0-1499: the name without the option, the first and last
+// value it holds, and whether it holds the last of them, member;range=
+// 3000-*. ok is false of a name without the option.
+func ldapRange(name string) (attribute string, low, high int, last, ok bool) {
+	parts := strings.Split(name, ";")
+	kept := parts[:1]
+	for _, option := range parts[1:] {
+		if len(option) < 6 || !strings.EqualFold(option[:6], "range=") {
+			kept = append(kept, option)
+			continue
+		}
+		from, to, found := strings.Cut(option[6:], "-")
+		var err error
+		if low, err = strconv.Atoi(from); !found || err != nil || low < 0 {
+			return name, 0, 0, false, false
+		}
+		if to == "*" {
+			last = true
+		} else if high, err = strconv.Atoi(to); err != nil || high < low {
+			return name, 0, 0, false, false
+		}
+		ok = true
+	}
+	return strings.Join(kept, ";"), low, high, last, ok
+}
+
+// ldapFollowRanges asks for the rest of each attribute of entry that a
+// server answered in a range, member;range=0-1499, with a search of the
+// entry alone for its next range, member;range=1500-*, until the range of
+// the last value, and puts every value under the attribute's name without
+// the option, member. Each search is a request of the trace.
+func ldapFollowRanges(ctx context.Context, session *ldapConn, label string, call ldapCall, entry *ldapEntry, deadline time.Time) error {
+	for _, name := range slices.Sorted(maps.Keys(entry.Attributes)) {
+		attribute, _, high, last, ok := ldapRange(name)
+		if !ok {
+			continue
+		}
+		values := entry.Attributes[name]
+		delete(entry.Attributes, name)
+		for round := 0; !last; round++ {
+			if round == ldapMaxRangeRounds {
+				return fmt.Errorf("%s: the values of %s of %s come in more than %d ranges", ldapShownSearch(call), attribute, ldapShown(entry.DN), ldapMaxRangeRounds)
+			}
+			asked := fmt.Sprintf("%s;range=%d-*", attribute, high+1)
+			more, err := ldapRangeSearch(ctx, session, label, entry.DN, asked, deadline)
+			if err != nil {
+				return ldapFailure(ctx, fmt.Errorf("%s: the range %s of %s: %w", ldapShownSearch(call), asked, ldapShown(entry.DN), err))
+			}
+			found := false
+			for got, gotValues := range more {
+				gotAttribute, low, gotHigh, gotLast, ok := ldapRange(got)
+				if !ok || !strings.EqualFold(gotAttribute, attribute) {
+					continue
+				}
+				if low != high+1 {
+					return fmt.Errorf("%s: the server answered %s of %s for the range %s", ldapShownSearch(call), got, ldapShown(entry.DN), asked)
+				}
+				values, high, last, found = append(values, gotValues...), gotHigh, gotLast, true
+			}
+			// A server that answers no further range has no more values.
+			if !found {
+				break
+			}
+		}
+		entry.Attributes[attribute] = append(entry.Attributes[attribute], values...)
+	}
+	return nil
+}
+
+// ldapRangeSearch searches the entry dn alone for the attribute asked, a
+// range of an attribute, and answers the entry's attributes; none of an
+// entry the server answered without.
+func ldapRangeSearch(ctx context.Context, session *ldapConn, label, dn, asked string, deadline time.Time) (map[string][]string, error) {
+	shown := fmt.Sprintf("SEARCH base=%q scope=base attributes=%s", ldapShown(dn), asked)
+	traceRequest(ctx, "SEARCH", label, http.Header{"Ldap-Operation": {shown}}, "", false)
+	present, err := parseLDAPFilter(ldapDefaultFilter)
+	if err != nil {
+		return nil, err
+	}
+	timeLimit := int64(math.Ceil(time.Until(deadline).Seconds()))
+	op := berElement(ldapSearchRequest,
+		berString(berOctetString, dn),
+		berInt(berEnumerated, ldapScopes["base"]),
+		berInt(berEnumerated, 0),
+		berInt(berInteger, 0),
+		berInt(berInteger, max(timeLimit, 1)),
+		berBool(false),
+		present,
+		berElement(berSequence, berString(berOctetString, asked)),
+	)
+	id, err := session.send(op)
+	if err != nil {
+		traceFailedOutcome(ctx, "error: "+err.Error())
+		return nil, err
+	}
+	attributes := map[string][]string{}
+	for {
+		m, err := session.await(id)
+		if err != nil {
+			traceFailedOutcome(ctx, "error: "+err.Error())
+			return nil, err
+		}
+		switch m.op {
+		case ldapSearchEntry:
+			entry, err := decodeLDAPEntry(m.content, true)
+			if err != nil {
+				traceFailedOutcome(ctx, "error: "+err.Error())
+				return nil, err
+			}
+			maps.Copy(attributes, entry.Attributes)
+		case ldapSearchReference:
+		case ldapSearchDone:
+			done, err := decodeLDAPResult(m.content)
+			if err == nil && done.code != 0 {
+				err = done.err()
+			}
+			if err != nil {
+				traceFailedOutcome(ctx, "error: "+err.Error())
+				return nil, err
+			}
+			values := 0
+			for _, v := range attributes {
+				values += len(v)
+			}
+			traceOutcome(ctx, fmt.Sprintf("success, %d values", values))
+			return attributes, nil
+		default:
+			err := fmt.Errorf("%w: a response of the tag 0x%02x to a search", errLDAPProtocol, m.op)
+			traceFailedOutcome(ctx, "error: "+err.Error())
+			return nil, err
+		}
+	}
 }
 
 // ldapSearchPage sends a page of a search and reads its entries,

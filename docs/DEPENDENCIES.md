@@ -185,7 +185,7 @@ for every type but `sql` against 17.9 MB for
 Dependabot's Go group and `govulncheck` cover them with no change.
 
 The [`dns`](DNS.md) and [`tlscert`](TLSCERT.md) request types have no
-dependency of their own: the first asks Go's own resolver (`net`), the second
+dependency of their own: the first asks its questions with a DNS client of its own over `net`, the second
 makes its handshake with `crypto/tls` and verifies with `crypto/x509`, and the
 same test finds none of the other types' modules in a build of either.
 
@@ -235,6 +235,12 @@ endpoint for a token with the OAuth 2.0 client credentials grant
 with either type, so a build of neither, such as `REQUEST_TYPES=grpc`, does
 not link it. A `json` login needs no module: it is a request the exporter
 makes itself, read with `gojq`.
+
+The [`tlscert`](TLSCERT.md) request type reads an OCSP response a server
+staples with `golang.org/x/crypto/ocsp`, which parses the response and checks
+its signature against the certificate's issuer: a package of a module the
+default build links already, for SSH and the `sqlserver` driver, so it adds
+no module.
 
 The [`sshfile`](SSHFILE.md) request type has two direct dependencies of its
 own: `golang.org/x/crypto`, for its SSH client (`ssh`) and the check of a

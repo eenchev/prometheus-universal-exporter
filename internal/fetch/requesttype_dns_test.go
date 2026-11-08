@@ -91,14 +91,14 @@ func TestADNSCollectorAnswersEachRecordTypeAsADocument(t *testing.T) {
 	for _, tc := range []struct {
 		recordType, target, want string
 	}{
-		{"A", "WWW.example.test.", `[{"address":"192.0.2.1"},{"address":"192.0.2.2"}]`},
-		{"aaaa", "www.example.test", `[{"address":"2001:db8::1"}]`},
-		{"CNAME", "alias.example.test", `[{"target":"www.example.test"}]`},
-		{" mx ", "example.test", `[{"host":"mx1.example.test","preference":10},{"host":"mx2.example.test","preference":20}]`},
-		{"NS", "example.test", `[{"host":"ns1.example.test"}]`},
-		{"TXT", "example.test", `[{"text":"hello"},{"text":"v=spf1 -all"}]`},
-		{"SRV", "_http._tcp.example.test", `[{"target":"front.example.test","priority":0,"weight":1,"port":80},{"target":"web.example.test","priority":10,"weight":5,"port":8080}]`},
-		{"PTR", "192.0.2.1", `[{"name":"www.example.test"}]`},
+		{"A", "WWW.example.test.", `[{"address":"192.0.2.1","ttl":60},{"address":"192.0.2.2","ttl":60}]`},
+		{"aaaa", "www.example.test", `[{"address":"2001:db8::1","ttl":60}]`},
+		{"CNAME", "alias.example.test", `[{"target":"www.example.test","ttl":60}]`},
+		{" mx ", "example.test", `[{"host":"mx1.example.test","preference":10,"ttl":60},{"host":"mx2.example.test","preference":20,"ttl":60}]`},
+		{"NS", "example.test", `[{"host":"ns1.example.test","ttl":60}]`},
+		{"TXT", "example.test", `[{"text":"hello","ttl":60},{"text":"v=spf1 -all","ttl":60}]`},
+		{"SRV", "_http._tcp.example.test", `[{"target":"front.example.test","priority":0,"weight":1,"port":80,"ttl":60},{"target":"web.example.test","priority":10,"weight":5,"port":8080,"ttl":60}]`},
+		{"PTR", "192.0.2.1", `[{"name":"www.example.test","ttl":60}]`},
 	} {
 		c := dnsCollector(t, s.Addr, tc.recordType)
 		doc, err := resolveDoc(t, c, tc.target)
@@ -127,9 +127,10 @@ func TestADNSCollectorAnswersEachRecordTypeAsADocument(t *testing.T) {
 }
 
 // A name that does not exist, and one without records of the type, are
-// answers: no records and not_found true. A server failure, a refusal and
-// a server that does not answer within the deadline fail the scrape,
-// naming the server asked, not the system's.
+// answers: no records and not_found true, rcode NXDOMAIN and NOERROR. A
+// server failure and a refusal are answers too, with their rcode and
+// not_found false; a server that does not answer within the deadline fails
+// the scrape, naming the server asked, not the system's.
 func TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails(t *testing.T) {
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"))
 	for _, target := range []string{"missing.example.test", "www.example.test"} {
@@ -138,15 +139,16 @@ func TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails(t *testing.T) {
 			recordType = "MX"
 		}
 		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, recordType), target)
-		if err != nil || !doc.NotFound || doc.Count != 0 || doc.Answers == nil || len(doc.Answers) != 0 {
+		want := map[string]string{"A": "NXDOMAIN", "MX": "NOERROR"}[recordType]
+		if err != nil || !doc.NotFound || doc.Rcode != want || doc.Count != 0 || doc.Answers == nil || len(doc.Answers) != 0 {
 			t.Errorf("%s %s: %+v, %v", recordType, target, doc, err)
 		}
 	}
 	for rcode, name := range map[int]string{2: "SERVFAIL", 5: "REFUSED"} {
 		s.SetRcode(rcode)
-		_, err := resolveDoc(t, dnsCollector(t, s.Addr, "A"), "www.example.test")
-		if err == nil || !strings.Contains(err.Error(), "on "+s.Addr) {
-			t.Errorf("%s: %v", name, err)
+		doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "A"), "www.example.test")
+		if err != nil || doc.Rcode != name || doc.NotFound || doc.Count != 0 {
+			t.Errorf("%s: %+v, %v", name, doc, err)
 		}
 	}
 	s.SetRcode(0)
@@ -188,7 +190,7 @@ func TestADNSCollectorAsksOverTheTransportItNames(t *testing.T) {
 // host:port; udp or tcp. A key of another type is refused.
 func TestADNSCollectorsKeysAreCheckedAtLoad(t *testing.T) {
 	for name, edit := range map[string]func(*model.Collector){
-		"an unknown record type":   dnsKeys(func(r *DNSConfig) { r.RecordType = "SOA" }),
+		"an unknown record type":   dnsKeys(func(r *DNSConfig) { r.RecordType = "HINFO" }),
 		"a server with a scheme":   dnsKeys(func(r *DNSConfig) { r.Server = "udp://10.0.0.53" }),
 		"a server with a bad port": dnsKeys(func(r *DNSConfig) { r.Server = "10.0.0.53:99999" }),
 		"a server of blanks":       dnsKeys(func(r *DNSConfig) { r.Server = "  " }),
@@ -315,8 +317,8 @@ func TestADNSLookupIsTracedForADebugProbe(t *testing.T) {
 // the name its record points to; a name that is no alias — with addresses,
 // with a TXT record alone — and a name that does not exist have no CNAME
 // record, and are not found, as a name without records of the type is for
-// every other type. A server failure fails, naming the server; transport tcp
-// asks over TCP.
+// every other type. A server failure is the document's rcode; transport
+// tcp asks over TCP.
 func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 	s := newStubDNS(t,
 		recName("alias.example.test", dnsTypeCNAME, "www.example.test"),
@@ -324,7 +326,7 @@ func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 		recTXT("text.example.test", "only text"),
 	)
 	for target, want := range map[string]string{
-		"alias.example.test":   `[{"target":"www.example.test"}]`,
+		"alias.example.test":   `[{"target":"www.example.test","ttl":60}]`,
 		"www.example.test":     "not found",
 		"text.example.test":    "not found",
 		"missing.example.test": "not found",
@@ -361,8 +363,8 @@ func TestADNSCNAMELookupAsksForTheCNAMERecordAlone(t *testing.T) {
 	}
 	s.SetRcode(2)
 	s.SetTruncate(false)
-	if _, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME"), "alias.example.test"); err == nil || !strings.Contains(err.Error(), "resolving CNAME alias.example.test on "+s.Addr) || !strings.Contains(err.Error(), "SERVFAIL") {
-		t.Errorf("SERVFAIL: %v", err)
+	if doc, err := resolveDoc(t, dnsCollector(t, s.Addr, "CNAME"), "alias.example.test"); err != nil || doc.Rcode != "SERVFAIL" || doc.NotFound {
+		t.Errorf("SERVFAIL: %+v, %v", doc, err)
 	}
 	s.SetRcode(0)
 	s.SetSilent(true)
@@ -386,14 +388,14 @@ func TestTheSystemsNameserversAreReadForACNAMELookup(t *testing.T) {
 	}
 }
 
-// A lookup's span tells the record type asked for and how many records
-// came, and that the name was not found when it was not; never a record,
+// A lookup's span tells the record type asked for, how many records came
+// and the response code, and that the name was not found when it was not; never a record,
 // nor the name, which its url.full has.
 func TestADNSLookupsSpanTellsItsFacts(t *testing.T) {
 	s := newStubDNS(t, recA("www.example.test", "192.0.2.1"), recA("www.example.test", "192.0.2.2"))
 	for target, want := range map[string]map[string]string{
-		"www.example.test":     {"dns.question.type": "A", "dns.answer.count": "2"},
-		"missing.example.test": {"dns.question.type": "A", "dns.answer.count": "0", "dns.response.not_found": "true"},
+		"www.example.test":     {"dns.question.type": "A", "dns.answer.count": "2", "dns.response.code": "NOERROR"},
+		"missing.example.test": {"dns.question.type": "A", "dns.answer.count": "0", "dns.response.code": "NXDOMAIN", "dns.response.not_found": "true"},
 	} {
 		ctx, trace := WithSpanTrace(context.Background())
 		if _, err := FetchCollector(ctx, target, dnsCollector(t, s.Addr, "A"), RequestOverrides{}, nil); err != nil {

@@ -1,6 +1,10 @@
 package fetch
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+)
 
 // The database drivers of the sql request type, by the names request.driver
 // gives them (sqldriver.go). They are named in every build, so that the
@@ -28,3 +32,14 @@ func BuiltSQLDrivers() []string {
 	slices.Sort(names)
 	return names
 }
+
+// SQLNamedResults reports whether a sql collector runs several statements
+// (request.statements), whose document is an object of each one's rows by
+// its name, which only jq, yq and python read, not the list of rows a csv
+// transform reads by column. False in a build without the sql type.
+func SQLNamedResults(c *model.Collector) bool {
+	return sqlNamedResults != nil && sqlNamedResults(c)
+}
+
+// sqlNamedResults is SQLNamedResults of the sql type, set by its init.
+var sqlNamedResults func(c *model.Collector) bool

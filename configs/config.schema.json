@@ -1912,6 +1912,46 @@
                   ]
                 },
                 "then": {
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "statements": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "statements"
+                        ]
+                      },
+                      "then": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "args": {
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "args"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "arg_types": {
+                                  "minItems": 1
+                                }
+                              },
+                              "required": [
+                                "arg_types"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
                   "oneOf": [
                     {
                       "properties": {
@@ -1935,6 +1975,16 @@
                       },
                       "required": [
                         "statement_file"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "statements": {
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "statements"
                       ]
                     }
                   ],
@@ -2198,6 +2248,10 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "all_addresses": {
+                "description": "icmp: ping every address of the target's name, of the families ip_family takes, at most 16, at once, each in the document's addresses and the top of the document of all of them; the first alone when false, the default. See docs/ICMP.md#every-address.",
+                "type": "boolean"
               },
               "all_namespaces": {
                 "description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false.",
@@ -3876,8 +3930,8 @@
                 "type": "object"
               },
               "record_type": {
-                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, or PTR, whose target is an IP address. See docs/DNS.md.",
-                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, or PTR, whose target is an IP address. See docs/DNS.md.",
+                "pattern": "^$|^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Aa]|[Aa][Aa][Aa][Aa]|[Cc][Nn][Aa][Mm][Ee]|[Mm][Xx]|[Nn][Ss]|[Tt][Xx][Tt]|[Ss][Rr][Vv]|[Pp][Tt][Rr]|[Ss][Oo][Aa]|[Cc][Aa][Aa]|[Dd][Nn][Ss][Kk][Ee][Yy])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
                 "type": "string"
               },
               "redirect_trusted_hosts": {
@@ -3980,6 +4034,29 @@
                 "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
               },
+              "sample_interval": {
+                "description": "ntp: how long apart the requests to a server are sent, at least 1s; 2s when left out. A scrape of samples takes about (samples - 1) × sample_interval, within its deadline.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "samples": {
+                "description": "ntp: how many requests a scrape sends each server, sample_interval apart, from 1 to 8; 1 when left out. The reply of the least delay is the server's answer, and the spread of the offsets its jitter. See docs/NTP.md#several-samples.",
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              },
               "searches": {
                 "description": "ldap, required: the searches whose results the document holds under .searches.\u003cname\u003e, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches.",
                 "items": {
@@ -4071,6 +4148,73 @@
                   "boolean"
                 ]
               },
+              "sentinel": {
+                "additionalProperties": false,
+                "description": "redis: the target is a Sentinel, asked which server is the primary of master now (SENTINEL GET-MASTER-ADDR-BY-NAME); the scrape reads that server, held to the target lists as the target is, and the document's sentinel holds what the Sentinel knows of it (SENTINEL MASTER). See docs/REDIS.md#sentinel.",
+                "if": {
+                  "properties": {
+                    "username": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "username"
+                  ]
+                },
+                "properties": {
+                  "master": {
+                    "description": "The name the Sentinels know the primary by, as sentinel.conf's sentinel monitor names it, such as mymaster. No placeholder.",
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "password_file": {
+                    "description": "The file of the Sentinel's password (sentinel.conf's requirepass), read at every scrape, sent with AUTH before the Sentinel is asked. The servers' password is request.password_file's.",
+                    "not": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "description": "The Sentinel's ACL user, which logs in with sentinel.password_file. The servers' account is request.username's.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "master"
+                ],
+                "then": {
+                  "properties": {
+                    "password_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "password_file"
+                  ]
+                },
+                "type": "object"
+              },
               "server": {
                 "description": "dns: the server every question is sent to, host or host:port, port 53 when left out; the system's resolver, as /etc/resolv.conf names it, when the key is left out.",
                 "not": {
@@ -4142,6 +4286,99 @@
                 },
                 "pattern": "^/",
                 "type": "string"
+              },
+              "statements": {
+                "description": "sql: several statements, in place of statement, statement_file, args and arg_types, run in order on one connection, each in a transaction of its own as the one statement is: the document is an object of each one's rows, a list of objects, under its name, which jq, yq and python read, and not a csv transform. At most 16. See docs/SQL.md#several-statements.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "arg_types": {
+                      "description": "The type each of the statement's args is bound as, as request.arg_types.",
+                      "items": {
+                        "enum": [
+                          "text",
+                          "int",
+                          "float",
+                          "bool"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "args": {
+                      "description": "The values of the statement's placeholders, in order, as request.args are of the one statement. May contain {{param_name}} placeholders.",
+                      "items": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "description": "The name the statement's rows are under in the document: letters, digits and _, not starting with a digit, unique among the collector's statements.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "statement": {
+                      "description": "The statement, with the driver's own placeholders for its args, as request.statement is written.",
+                      "minLength": 1,
+                      "not": {
+                        "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                        "type": "string"
+                      },
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "statement"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "steps": {
+                "description": "tcp: a conversation, in place of send, send_hex, terminator and answer_bytes: each step's send written, after the greeting and starttls when set, and its answer read until it matches the step's until, a regular expression, the last step's read until the server closes the connection when it has none. The answer is the steps' answers one after another; with document, steps holds each one's send, answer and seconds. At most 16 steps; not with udp. See docs/TCP.md#a-conversation.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "send": {
+                      "description": "The text written, as send is, such as \"EHLO exporter.example\\r\\n\": not empty, at most 64 KiB, with {{param_name}} placeholders as send takes them.",
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "until": {
+                      "description": "A regular expression (Go's, RE2) the step's answer, as read so far, matches when it has all come, such as '(?m)^250 ' for an SMTP reply's last line: reading stops then. Required of every step but the last, whose answer, without it, ends when the server closes the connection. No placeholder; at most 64 KiB.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "send"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "stream_messages": {
+                "description": "grpc: a server streaming method is called, and its stream read until the server ends it or this many messages have come, at most 1000; the answer is {\"messages\": [...], \"ended\": true or false}. Left out, or 0, only unary methods are called. See docs/GRPC.md#server-streaming.",
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
               },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",

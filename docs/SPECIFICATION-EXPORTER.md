@@ -1465,8 +1465,9 @@ lines: it only pulls. Its keys:
 
 #### `grpc`
 
-A `grpc` collector calls one unary gRPC method on the probe's `target`, the
-server, and hands the answer to the transforms as JSON (§ 9a). The call MUST
+A `grpc` collector calls one unary gRPC method, or one server streaming
+method with `stream_messages`, on the probe's `target`, the server, and hands
+the answer to the transforms as JSON (§ 9a). The call MUST
 be described in configuration alone, with message types built at run time
 from descriptors, so no service needs generated code or a new build. Its
 keys:
@@ -1482,6 +1483,7 @@ keys:
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
 | `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent`, `statuses` and `retry_after` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `stream_messages` | none | From 1 to 1000; set, the method MUST be server streaming, and unset it MUST be unary, either refused naming the key otherwise. The stream MUST be read until the server ends it or that many messages have come, when the call MUST end it; the answer MUST be `{"messages": [...], "ended": ...}`, each message rendered as a unary answer, `ended` true when the server ended the stream. A status other than `OK` ending it MUST be the call's status, as a unary call's; the messages MUST be held to the response limit together as JSON, a limit exceeded past it naming the message. |
 | `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
@@ -1505,7 +1507,8 @@ keys:
   JSON.
 - With `protoset` or `proto`, the service and method MUST be looked up at load
   and by `--dry-run`: a missing service or method, naming the methods the
-  service has, and a client, server or bidirectional streaming method, naming
+  service has, and a client or bidirectional streaming method, a server
+  streaming method without `stream_messages` and a unary one with it, naming
   its kind, MUST be refused; a message whose placeholders all have defaults,
   and a static target's message, MUST be checked against the input type,
   unknown fields refused. A descriptor set MUST be read with its imports, an
@@ -2041,7 +2044,21 @@ of objects, one a row, of its columns by name. Its keys:
   with the defaults, is not of its type; and one a probe's parameters fill
   MUST be checked when they are, a value not of its type answered `400`
   before the server is asked and refused in a static target's `params` when
-  its file loads. A `vertica` statement its driver would not prepare, and
+  its file loads. `statements` MUST run, in place of `statement`,
+  `statement_file`, `args` and `arg_types`, which beside it MUST be refused
+  at load, up to 16 entries of a `name` — letters, digits and `_`, not
+  beginning with a digit, unique among the collector's —, a `statement`
+  and its own `args` and `arg_types`, held to the rules of the one
+  statement's, each placeholder of a `statement` refused naming its entry:
+  in order, on one connection of the pool, each in a transaction of its
+  own ended before the next begins, as the one statement's; `max_rows` MUST
+  hold each, and the response limit their rows together. The first that
+  fails MUST fail the scrape, `request.statements[<i>], <name>:` before its
+  error, the rest not run. The document MUST be an object of each one's rows
+  by its name, a `csv` transform MUST be refused at load beside it, and
+  `http_exporter_sql_rows` MUST count all of their rows; a debug report MUST
+  show each as a request, `Sql-Statement` its name, the connection of each
+  after the first `reused`. A `vertica` statement its driver would not prepare, and
   so would write the values into, doubling a `'` and leaving a `\` as it
   is, MUST be refused at load: any `COPY`, its first word as the driver
   reads the text (outside quotes, quoted identifiers, `--` and unnested
@@ -2278,13 +2295,14 @@ of objects, one a row, of its columns by name. Its keys:
 #### `dns`
 
 A `dns` collector resolves the probe's `target`, a DNS name, and hands its
-records to the transforms as a JSON document. The lookup MUST be Go's own
-resolver (`net.Resolver` with `PreferGo`), so the type needs no library,
-but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
+records to the transforms as a JSON document. The question MUST be the
+exporter's own, sent with a DNS client that imports the standard library
+alone, not a resolver's lookup, so that the answer's TTLs, response code and
+flags are known. Its keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |
-| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
+| `record_type` | `A` | One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA`, `DNSKEY`, matched without regard to case or surrounding whitespace and stored in upper case; any other MUST be refused at load. |
 | `server` | the system's resolver | `host`, `host:port` or `[v6]:port`, port 53 when left out. A scheme, path, query or user, a port outside 1–65535 and blanks alone MUST be refused at load. Every question MUST be sent to it when it is set. |
 | `transport` | `udp` | `udp` or `tcp`, exactly; anything else MUST be refused. `udp` MUST ask again over TCP for an answer marked truncated; `tcp` MUST ask over TCP alone. |
 | `allowed_targets`, `denied_targets` | none | Matched against the name; see below. |
@@ -2304,31 +2322,47 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
   the system's configuration is appended to it.
 - The answer MUST be a JSON document of `name` (lower case, no trailing
   dot), `record_type`, `server` (`host:port`, `""` for the system's
-  resolver), `transport`, `not_found`, `count`, `duration_seconds` and
-  `answers`, one object a record with the fields of its type alone:
+  resolver), `transport`, `rcode`, the response code by name (`NOERROR`,
+  `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, the names of RFC
+  2136's codes, `RCODE<n>` for another), `not_found`, `authoritative`,
+  `recursion_available` and `authenticated_data`, the answer's AA, RA and
+  AD bits, `count`, `duration_seconds` and `answers`, one object a record
+  with its `ttl` and the fields of its type alone:
   `address` (A, AAAA); `target` (CNAME, the name the CNAME record of the
   name points to); `host` and `preference` (MX); `host` (NS);
   `text`, the record's strings joined (TXT); `target`, `port`, `priority`
-  and `weight` (SRV); `name` (PTR). Names MUST be given without their
+  and `weight` (SRV); `name` (PTR); `host`, `mailbox`, `serial`,
+  `refresh`, `retry`, `expire` and `minimum` (SOA); `flags`, `tag` and
+  `value` (CAA); `flags`, `protocol`, `algorithm` and `key_tag`, computed
+  as RFC 4034 appendix B does (DNSKEY). Names MUST be given without their
   trailing dot, and the records MUST be in an order of their own — by
   preference or priority first, then by their data — so that two lookups of
   the same records give the same document.
-- A name that does not exist, or has no records of the type, MUST be an
-  answer: `not_found` true, `answers` empty and `count` 0. For `CNAME` that
-  MUST be every name without a CNAME record, whatever other records it has. A server failure,
-  a refusal, a malformed answer and a server that does not answer MUST fail
-  the scrape in the `dns` stage, naming the record type, the name and the
-  server asked, not the system's; a lookup cut short by the scrape's
-  deadline MUST wrap the context's error. TTLs and response codes are not
-  given by the resolver and MUST NOT be invented.
-- A `CNAME` lookup MUST send one question of type `CNAME` and no other,
-  over the transport as above (UDP sent again while no answer comes, TCP
-  for an answer marked truncated), to `server`, or without it to the
-  `nameserver` lines of `/etc/resolv.conf` in order, port 53, `127.0.0.1`
-  and `::1` when there are none, the next asked when one fails or does not
-  answer within 5 seconds. `/etc/hosts` and the file's other lines MUST NOT
-  be read for it. A response code other than `NOERROR` and `NXDOMAIN` MUST
-  fail the scrape, naming the code.
+- Every answer to the question MUST be the document, whatever its response
+  code. `not_found` MUST be true for `NXDOMAIN`, and for `NOERROR` without
+  records of the type, `answers` empty and `count` 0; for `CNAME` that MUST
+  be every name without a CNAME record, whatever other records it has. A
+  server that does not answer, an answer of another id, name or type, and
+  one whose records do not parse MUST fail the scrape in the `dns` stage,
+  naming the record type, the name and the server asked, not the system's;
+  a lookup cut short by the scrape's deadline MUST wrap the context's
+  error.
+- The question MUST be one of the record type, class `IN`, with RD and AD
+  set and an EDNS(0) OPT record offering 1232 bytes; a `FORMERR` answer to
+  it MUST be asked again once without the OPT record. For `PTR` it MUST be
+  of the address's `in-addr.arpa` or `ip6.arpa` name. Over `udp` it MUST be
+  sent again every 2 seconds while no answer comes and asked again over TCP
+  for an answer marked truncated; over `tcp`, over TCP alone. It MUST go to
+  `server`, or without it to the `nameserver` lines of `/etc/resolv.conf`
+  in order, port 53, `127.0.0.1` and `::1` when there are none, the next
+  asked when one fails, does not answer within 5 seconds, or answers
+  `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`; the last such answer MUST
+  be the document when no server answers better, kept over a later
+  server's failure, and the scrape MUST fail only when none answers. `/etc/hosts` and the file's other lines MUST NOT
+  be read.
+- The records MUST be those of the record type whose owner is the name, or
+  but for `CNAME` a name the answer's CNAME records lead to from it, in any
+  order, at most 16 deep; for `CNAME` the name's own CNAME record alone.
 - The target lists MUST be matched against the name by name alone, never
   by what it resolves to: a denied name, and with `allowed_targets` one that
   matches none of its names, MUST be refused with `403` before the server is
@@ -2339,7 +2373,8 @@ but for `CNAME`, which that resolver cannot ask alone (below). Its keys:
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `QUERY`, the DNS URI without
   its query, and the record type, server and transport, with the number of
-  records, `not found` or the error as its outcome. The verbose `url` label
+  records, `not found`, a response code other than `NOERROR` and
+  `NXDOMAIN`, or the error as its outcome. The verbose `url` label
   MUST be the DNS URI of RFC 4501, `dns:name?type=T` with the system's
   resolver and `dns://host:port/name?type=T` with `server`, and
   `http_method` MUST be `QUERY`.
@@ -2383,7 +2418,22 @@ handshake. Its keys are `tls`, `starttls` and `allowed_targets` /
   `dns_names`, `ip_addresses`, `email_addresses`, `uris`, `not_before` and
   `not_after` in Unix seconds and as RFC 3339 in UTC (`_rfc3339`),
   `seconds_until_expiry` (negative once expired), `is_ca`,
-  `signature_algorithm` and `sha256_fingerprint`.
+  `signature_algorithm` and `sha256_fingerprint`; and `ocsp`, of the OCSP
+  response the server stapled, which the handshake MUST ask for.
+- `ocsp` MUST hold `stapled`, whether one was; `status`, `good`, `revoked`
+  or `unknown`, `""` without one or of one that cannot be read; `verified`,
+  whether `golang.org/x/crypto/ocsp` checked its signature against the
+  server certificate's issuer — the certificate after it in the first
+  chain it verified by, or as presented when it verified by none — or a
+  responder that issuer delegated to, and that it is of the server's
+  certificate; `error`, why not, or why it could not be read, a response
+  whose signature does not check read for its status and times all the
+  same; `produced_at`, `this_update` and `next_update` in Unix seconds,
+  `next_update` 0 when the responder names none, and
+  `seconds_until_next_update`, `next_update` less the time of the scrape;
+  and of a revoked certificate `revoked_at` and `revocation_reason`, RFC
+  5280's name of the reason (`keyCompromise`). A staple MUST NOT fail the
+  scrape, whatever it is.
 - `chain.length` MUST be the number of certificates presented. When the
   chain verifies, `chain.earliest_not_after` MUST be, over the chains the
   verification built from the server's certificate to a trusted root, the
@@ -2476,14 +2526,28 @@ types at build time). Its keys:
   `rtt_stddev_seconds` (the population deviation) when a reply came and
   left out otherwise, `duplicates`, `payload_bytes` and `duration_seconds`,
   with the `Content-Type` `application/json` and no status.
+- With `all_addresses`, every address of the name of the families
+  `ip_family` takes, `prefer_ip4` and `prefer_ip6` both, that family's
+  first, MUST be pinged, the first 16 in that order, at once, each as an
+  address alone is, its own request in a debug report and its span. The
+  document MUST have `addresses`, each one's `address`, `family`, `sent`,
+  `received`, `loss_ratio`, `rtts_seconds`, the statistics when a reply
+  came and `duplicates`, in that order, and `addresses_found`, how many
+  the name has of those families; its top MUST then have `address` `""`
+  and `family` 0, and the counts, the round trips and their statistics of
+  all of them together. An address whose ping fails MUST fail the scrape,
+  naming it. Without it, the document MUST have neither key.
 
 #### `ntp`
 
 An `ntp` collector sends one SNTP client request (RFC 4330, the packet of
 NTPv4, RFC 5905) to the probe's `target` and hands the server's reply to
 the transforms as a JSON document. It MUST need nothing outside Go's
-standard library, and MUST be in the default build. It has no keys of its
-own; of the common part it takes `allowed_targets` and `denied_targets`,
+standard library, and MUST be in the default build. Its keys are
+`samples`, how many requests a scrape sends each server, from 1 to 8, 1
+when left out, and `sample_interval`, how long apart, at least 1s, 2s when
+left out, anything else refused at load; of the common part it takes
+`allowed_targets` and `denied_targets`,
 as for `http`, the host's name before the request and the address the UDP
 socket is connected to before anything is sent (§ 26.1).
 
@@ -2492,9 +2556,29 @@ socket is connected to before anything is sent (§ 26.1).
   on port 123, as every `host[:port]` target is read. A scheme, path,
   query or user and a port outside 1–65535 MUST be
   refused, a probe's with `400` before anything is sent and a static
-  target's at load. A probe MUST take `timeout` and `param_<name>`
-  parameters, and a static target's request block `timeout`.
-- A scrape MUST send one request, of 48 bytes, version 4, mode 3, whose
+  target's at load. A target MAY name up to 8 servers by commas, each held
+  to those rules; more, an empty one, and one named twice MUST be refused
+  likewise, and the target lists MUST hold each. A probe MUST take
+  `timeout` and `param_<name>` parameters, and a static target's request
+  block `timeout`.
+- A scrape MUST send each server `samples` requests, `sample_interval`
+  apart, each as one request is below, waiting for the reply of each but
+  the last until the next is due, and of the last until the deadline: one
+  unanswered then is unanswered, and one that fails otherwise, or a reply
+  that fails the scrape below, MUST end the server's requests with that
+  failure. The server's answer MUST be the reply of the least delay, with
+  `samples`, `samples_answered` and `jitter_seconds`, the population
+  standard deviation of the answered offsets, in its document; a server
+  that answered none MUST fail with the last request's failure. Each
+  request MUST be one of a debug report and of an exported trace.
+- A target of several servers MUST ask each at once, and its document
+  MUST be of `servers`, each server's document in the target's order, a
+  server that failed with its `host`, `port` and `error` alone;
+  `servers_answered`; `offset_median_seconds` and `offset_spread_seconds`,
+  the greatest offset less the least, of those that answered, left out when
+  none did; and `duration_seconds`. It MUST fail only when no server
+  answered, with the first's failure.
+- A scrape MUST send one request to a server of one sample, of 48 bytes, version 4, mode 3, whose
   only field set besides is the transmit timestamp, which MUST be a random
   number and not the exporter's clock. Nothing MUST be sent again within
   the scrape. The scrape's deadline — the probe's `timeout`, the scrape's
@@ -2537,8 +2621,9 @@ socket is connected to before anything is sent (§ 26.1).
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A debug probe's request section MUST show `QUERY`, `ntp://host:port` and
   the version sent, with the stratum, offset and delay, or the error, as
-  its outcome. The verbose `url` label MUST be `ntp://host:port` and
-  `http_method` MUST be `QUERY`.
+  its outcome. The verbose `url` label MUST be `ntp://host:port`, of several
+  servers each `host:port` by commas after `ntp://`, and `http_method` MUST
+  be `QUERY`.
 
 #### `s3file`
 
@@ -2799,6 +2884,7 @@ carries it. Its keys:
 | `db` | `0` | The logical database, selected with `SELECT` after the login; at least 0. `0`, the database a connection starts in, MUST send no `SELECT`. |
 | `info_sections` | INFO's default sections | Sections of INFO, each lower-case letters and `_`, each named once. |
 | `commands` | none | Entries of `name` and `command`, the reply of each put under its name. |
+| `sentinel` | none | `master`, required, not blanks, with no blank at an end, control character or placeholder; `username`, only with `password_file`, and `password_file`, not blanks alone: the Sentinel's own account. |
 | `tls` | none | As `http`'s; written, even empty (`tls: {}`), the scrape speaks TLS. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
@@ -2859,6 +2945,23 @@ carries it. Its keys:
   deeper than 16, nor a line other than a bulk string's data be longer than
   64 KiB. Each failure past the limit MUST be a limit exceeded; a reply
   that is no RESP2 reply MUST fail the scrape saying so.
+- With `sentinel`, the target MUST be read as a Sentinel: on a connection
+  of its own, logged in with `sentinel.username` and
+  `sentinel.password_file` (read at every scrape, as `password_file` is,
+  and by `--dry-run`), never the collector's, the scrape MUST send
+  `SENTINEL GET-MASTER-ADDR-BY-NAME <master>` then
+  `SENTINEL MASTER <master>`, close that connection, and read the server
+  at the address answered as it reads a target, with the collector's
+  account. A nil or empty answer MUST fail the scrape saying the Sentinel
+  knows no primary of that name; an answer that is no address and port
+  MUST fail it saying so. The primary MUST be held to the target lists
+  as the target is, before it is dialed and at the address dialed, and
+  one refused MUST never be connected to. Over TLS both connections MUST
+  speak it, the primary's certificate verified for `tls.server_name` or
+  else the address answered. The document MUST hold `sentinel`, an
+  object of `SENTINEL MASTER`'s fields, each value read as an INFO value
+  is, and `address`, the `host:port` read. The Sentinel's replies and the
+  primary's MUST be held to the response limit together.
 - The target MUST be `host`, `host:port`, `[v6]:port`, or a `redis://` or
   `rediss://` URL of one, port 6379 when it names none, with no user,
   path, query or other scheme, which MUST be answered `400` before
@@ -2921,6 +3024,7 @@ types at build time): only a build asked for it carries it. Its keys:
 | `send_hex` | none | `send` as pairs of hexadecimal digits, blanks between them or none; no placeholder. At most 64 KiB of bytes. |
 | `answer_bytes` | none | How many bytes the answer is; reading stops once that many came. |
 | `udp` | `false` | `true`: one UDP datagram is sent and the first back is the answer. |
+| `steps` | none | A conversation, in place of `send`, `send_hex`, `terminator` and `answer_bytes`, each refused beside it, as is `udp`: up to 16 entries of `send`, required, not `""`, held as `send` is, and `until`, a regular expression held as `greeting` is, required of each but the last. |
 | `unix_socket` | none | The absolute path of a Unix stream socket the exchange is made over; of the common part, as `http`'s. |
 | `max_response_bytes`, `allowed_targets`, `denied_targets` | as `http` | |
 
@@ -3102,6 +3206,18 @@ types at build time): only a build asked for it carries it. Its keys:
   list what a scrape would fail on as warnings of the `config` check.
 - A static target MAY set `timeout` and its own `tls` block (§ 42.14); a
   probe MAY set `timeout` and `param_<name>`.
+- With `steps`, after the greeting and the request for TLS when set, each
+  step's `send`, its placeholders filled as `send`'s, MUST be written in
+  order, and its answer read until what came of it matches its `until`, or,
+  the last without `until`, until the server closes the connection: one
+  that closes it before the answer matches, or the deadline first, MUST
+  fail the scrape, quoting what came and naming the step. The steps'
+  answers together, with the greeting a document holds, MUST be held to the
+  response limit. The answer MUST be their answers one after another, and
+  the document of `document` MUST hold `steps`, each step's `send`,
+  `answer` and `seconds`. The method MUST be `SEND`; a debug report MUST
+  show each step's send, quoted, in `Tcp-Steps`, and the outcome the steps
+  taken and the bytes read.
 
 #### `sshexec`
 
@@ -3282,6 +3398,17 @@ asked for it carries it. Its keys:
   name or a value that is not UTF-8 MUST fail the scrape naming the
   attribute and the entry, and MUST NOT be put in the document with U+FFFD
   in place of its bytes.
+- An attribute an entry holds with a range option, `member;range=0-1499`
+  as Active Directory answers one of more values than it sends at once,
+  the option among the name's in any case, MUST be followed, after the
+  search's pages, with a search of the entry alone, scope base, filter
+  `(objectClass=*)`, of the next range, `member;range=1500-*`, until a
+  range whose end is `*` or an answer with none, at most 1000 searches of
+  an attribute; a range whose start is not the one asked for MUST fail the
+  scrape. Every value MUST be under the attribute's name without the range
+  option, `member`, in the order answered. Each such search MUST be a
+  request of a debug report and an exported trace, `SEARCH` with its base
+  and the range asked for, its outcome the values it answered.
 - The messages of a scrape MUST be read against the response limit
   together, counted in their bytes as they come off the connection, a
   `count_only` search's among them. A message's declared length past what
@@ -31271,6 +31398,91 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestSchemaAndExporterAgreeOnKubernetesKeysWrittenEmpty` (repository), changed: a row of `kubelet` in a collector of nodes across the cluster: left out and `""` taken by both, `stats/summary` taken and `metrics/cadvisor` refused by both, the schema as it was, without the key, refusing `""`.
 - `TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed` (repository), changed: `kubernetesAccess.kubelet` `stats` and `proxy` add `get` on `nodes/stats` and `nodes/proxy` after the rules of the ClusterRole; `TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing` (repository), changed: `kubelet` without `clusterWide` and `kubelet: exec` fail rendering, by the schema and by the templates.
 
+## 34.296 Several sql statements
+
+- `TestSQLStatementsAreCheckedWhenTheConfigurationLoads` (fetch): `statements` beside `statement`, `statement_file`, `args` or `arg_types`; 17 entries; an entry without a name, of a name with a `-`, of another's name, without a statement, with a `{{param_...}}` placeholder in its statement, with `arg_types` and no `args`, and with an `int` arg of `ten`: each refused naming the entry; 16 entries load, and the collector has named results.
+- `TestSQLStatementsAreBoundedAndTracedTogether` (fetch): two statements answer an object of each one's rows by its name, `Rows` nil; a debug trace has two requests, `Sql-Statement` `a` and `b`, the second `reused` and `returned 1 rows`; under a response limit of 1000 bytes, two statements of a 600-byte value each fail as a limit exceeded, naming the second.
+- `TestASQLCollectorOfSeveralStatements` (exporter): two statements, a probe's parameter filling the first's arg and the second's an `int`, run on one connection, each rolled back, give a jq collector a series of the first's count and one of each of the second's rows, and a python one `data["jobs"]` and `data["queues"]`; a first statement that fails fails the probe naming `request.statements[0], first`, the second not run.
+- `TestSQLStatementsRefuseACSVTransform` (config): a csv transform beside `statements` is refused at load, naming jq, yq and python.
+- `TestSchemaAndExporterAgreeOnSQLKeysWrittenEmpty` (repository), changed: rows of `statements[].name`, `b` taken and `queue-size` refused by both, and `statements[].statement`, `SELECT 3 AS v` taken and blanks refused by both, either left out or written `""` refused by both; `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `request.statements[].name` is held to text.
+
+## 34.297 A tlscert collector reads the stapled OCSP response
+
+- `TestATLSCertCollectorReadsTheStapledOCSPResponse` (fetch): a server stapling a good response its intermediate signed for its certificate has `ocsp` stapled, `good`, verified, with its this and next updates and a produced time; a revoked one has its revocation's time and `keyCompromise`; one signed with another key reads `good`, not verified, with why; one of another certificate is not verified; bytes that are no response are stapled with no status and why; none stapled is all zero; the span tells `tlscert.ocsp.stapled` and `tlscert.ocsp.status`.
+- `TestATLSCertHandshakesSpanTellsItsFacts` (fetch), changed: `tlscert.ocsp.stapled` false.
+
+## 34.298 An icmp collector pings every address of a name
+
+- `TestAnICMPCollectorPingsEveryAddressOfAName` (fetch, icmp): with `all_addresses`, a name resolving to 127.0.0.1, ::1 and 127.0.0.2 of `ip4` pings the two IPv4 addresses, each in `addresses` with its two replies and a request of its own in the trace, `addresses_found` 2, the top of four echoes and four replies with no address; of both families, three addresses, the second of family 6; without it, 127.0.0.1 alone, with no `addresses`. Skipped where the system opens no ICMP datagram socket.
+- `TestICMPTargetsAndFamilies` (fetch, icmp), changed: `icmpAddresses`, the addresses a host may be pinged at.
+
+## 34.299 An ntp collector samples a server, and compares several
+
+- `TestNTPSamplesAndServersAreChecked` (fetch): `samples` and `sample_interval` default to 1 and 2s; 9 samples, -1 and an interval of 500ms are refused; a target of 9 servers, with an empty server, naming one twice in another case, or with a path in one is refused; a target of two servers is labelled with both.
+- `TestAnNTPServerIsSampled` (fetch): of four samples a second apart, the first answered after 60ms, the second not, the third and fourth at once, 5, 7 and 6 seconds ahead, the scrape takes 3 to 5 seconds and answers the offset of an immediate reply, 4 samples, 3 answered, a jitter of about 0.82s; the trace has four requests, the second failed with no reply.
+- `TestAnNTPTargetOfSeveralServers` (fetch): of three servers, 5s ahead, one answering a Kiss-o'-Death `DENY` and one 1s behind, the document has each in order, the second with its error, 2 answered, a median of 2s and a spread of 6s; of servers none of which answers the time, the scrape fails with the first's.
+- `TestSchemaAndExporterAgreeOnNTPKeysWrittenEmpty` (repository), changed: rows of `sample_interval`, `5s` taken and `often` refused by both, and `1s` taken and `500ms` refused by both, the schema as it was having taken it.
+
+## 34.300 An ldap collector follows ranged attributes
+
+- `TestAnLDAPRangedAttributeIsFollowed` (fetch, ldap): a stand-in answering in ranges of 10 a group of 25 members, `member;range=0-9`, is asked with searches of the group alone for `member;range=10-*` and `member;range=20-*`, and the entry has the 25 under `member`, in order; a group of 3 is as the server sent it; each search of a range is traced, `success, 10 values` and `success, 5 values`.
+- `TestLDAPRangesAreRead` (fetch, ldap): the range option is read among other options and in any case, `*` its last; a name with none, a range that ends before it starts and one that is no number are no range.
+
+## 34.301 A tcp collector speaks a conversation of steps
+
+- `TestATCPConversationOfSteps` (fetch, tcp): after a `220` greeting, a step whose send a probe's parameter fills reads a three-line `250` reply, in two writes, until `(?m)^250 `, and a last step without until reads `221 bye` until the server closes; the document's answer is the two answers, its steps each one's send, answer and seconds, the trace `SEND`, `Tcp-Steps` both sends and `2 steps, 62 bytes read`.
+- `TestATCPStepThatIsNotAnsweredFailsTheScrape` (fetch, tcp): an answer that does not come to match its until fails at the deadline quoting it; a last step without until on a server that keeps the connection open fails saying so; a server that closes the connection before the answer matches fails naming the step.
+- `TestTCPStepsAreCheckedAtLoad` (fetch, tcp): `steps` beside `send`, `send_hex`, `terminator`, `answer_bytes` or `udp`, 17 steps, a step without send, a step but the last without until, an until that is no regular expression or has a placeholder, and a send whose default a line refuses, are refused.
+- `TestSchemaAndExporterAgreeOnTCPKeysWrittenEmpty` (repository, tcp), changed: a row of `steps[].send`, `"HELO x\r\n"` taken by both, left out or `""` refused by both.
+
+## 34.302 A redis collector reads the primary its Sentinel names
+
+- `TestARedisCollectorAsksItsSentinelForThePrimary` (fetch, redis): the Sentinel is sent `AUTH watcher sentinel-pass`, `SENTINEL GET-MASTER-ADDR-BY-NAME mymaster` and `SENTINEL MASTER mymaster`, and the primary it names `AUTH server-pass` and `INFO`; the document holds the primary's `info` and `sentinel` with `num-slaves` a number, `flags`, `name` and `address`.
+- `TestARedisSentinelsUnknownMasterFailsTheScrape` (fetch, redis): a nil answer fails saying the Sentinel knows no primary named `mymaster`; an array of one element, and an address of port 0, fail saying so.
+- `TestTheRedisPrimaryASentinelNamesIsHeldToTheTargetLists` (fetch, redis): a primary at the cloud metadata service is refused as a target and never dialed.
+- `TestARedisSentinelsRepliesCountTowardTheResponseLimit` (fetch, redis): a limit the Sentinel's replies and INFO each fit alone but not together fails the scrape as a limit exceeded; a larger one does not.
+- `TestARedisSentinelsKeysAreChecked` (fetch, redis): no master, a master with a blank at an end or a placeholder, a username without a password file, a username with a blank and a password file of blanks are refused.
+- `TestADryRunReadsTheRedisSentinelsPasswordFile` (fetch, redis): a missing `sentinel.password_file` is a `--dry-run` warning naming the key.
+- `TestRedisSentinelDocumentationExample` (repository, redis): docs/REDIS.md's Sentinel example answers the known replicas and the primary not down.
+- `TestSchemaAndExporterAgreeOnRedisKeysWrittenEmpty` (repository, redis), changed: rows of `sentinel.master` and `sentinel.password_file` beside `sentinel.username`.
+
+## 34.303 A grpc collector reads a server stream, bounded
+
+- `TestAGRPCCollectorReadsAServerStream` (fetch, grpc): a Watch that sends two messages and ends is answered `{"messages":[...],"ended":true}` with both, the server called once with the message; one that holds the stream open after three is cut at `stream_messages: 2`, answered with two and `ended:false`, at once.
+- `TestAGRPCServerStreamsFailures` (fetch, grpc): a stream ended with `RESOURCE_EXHAUSTED` after a message fails with that status; one held open short of `stream_messages` fails `DEADLINE_EXCEEDED` at the deadline; fifty messages past a 600-byte limit together fail as a limit exceeded naming the stream's messages.
+- `TestGRPCStreamMessagesIsChecked` (fetch, grpc): with a descriptor set, Watch without `stream_messages`, GetStats with it, Push and Sync with it, and 1001 and -1 are refused; Watch with 1000 is taken; the built-in health service's Watch with 1 answers `{"messages":[{"status":"SERVING"}],"ended":false}`.
+- `TestAGRPCStreamsMessagesAreWrittenAsRendered` (fetch, grpc): a string with `<`, `&` and `>` is written in the stream's answer as it is, not escaped again.
+- `TestAReflectedServerStreamingMethodNeedsStreamMessages` (fetch, grpc): a reflected Watch without `stream_messages` fails at the call saying to set it.
+- `TestGRPCServerStreamingDocumentationExample` (repository, grpc): docs/GRPC.md's Watch example answers its two updates and the last total, the server called once with the probe's queue.
+
+## 34.304 A dns collector asks its own question and answers TTLs, response codes, flags and SOA, CAA and DNSKEY
+
+- `TestADNSDocumentHoldsTheTTLsAndTheFlags` (fetch, dns): records of TTLs 300 and 7 carry them; RA set and AA and AD not, then AA and AD set by the server, are the document's flags; `rcode` is `NOERROR`.
+- `TestADNSCollectorAsksForSOACAAAndDNSKEY` (fetch, dns): an SOA's primary, mailbox and five numbers; two CAA records, by tag; a DNSKEY's flags, protocol, algorithm and key tag; the key tag of a short key matches RFC 4034's sum worked by hand.
+- `TestADNSAnswerFollowsTheCNAMEChain` (fetch, dns): an A question of an alias of an alias answers the end's address; an A record of a name the chain does not reach is left out.
+- `TestADNSQuestionAsksForADWithEDNSAndFallsBackWithout` (fetch, dns): the question has RD and AD and an OPT record of 1232 bytes; a server answering FORMERR to EDNS is asked twice and answers.
+- `TestADNSPTRQuestionIsOfTheReverseName` (fetch, dns): the reverse names of an IPv4 and an IPv6 address.
+- `TestTheNextDNSServerIsAskedAndAnAnswerIsKeptOverAFailure` (fetch, dns): a SERVFAIL then a server that cannot be reached answer the SERVFAIL; a failure, a SERVFAIL and then a good answer answer the good one; a failure alone fails, naming its server.
+- `TestAMalformedDNSAnswerFails` (fetch, dns): another id, name or type, an A record of 3 bytes, an MX of one, a record cut short and a TXT string past its record fail saying the message cannot be read.
+- `TestADNSNameNotFoundIsAnAnswerAndAServerFailureFails` (fetch, dns), changed: NXDOMAIN and NOERROR without records are `not_found` with their `rcode`; SERVFAIL and REFUSED are documents with their `rcode`, `not_found` false.
+- `TestADNSCNAMELookupAsksForTheCNAMERecordAlone` (fetch, dns), changed: SERVFAIL is the document's `rcode`.
+- `TestADNSLookupsSpanTellsItsFacts` (fetch, dns), changed: `dns.response.code` among the facts.
+- `TestADNSCollectorAnswersEachRecordTypeAsADocument` (fetch, dns), changed: each answer carries its `ttl`.
+- `TestDNSDocumentationExamples` (repository, dns), changed: the TTL and SOA serial examples load.
+
+## 34.305 The connections of tcp, tlscert, ldap, redis, sshexec, sshfile and grpc have phase spans
+
+- `TestATCPRequestHasItsConnectionsPhases` (fetch, tcp): a request to `localhost` has `connection.dns` and `connection.connect`; one over TLS to an address `connection.connect` and `connection.tls`, each within the request.
+- `TestATLSCertRequestHasItsConnectionsPhases` (fetch, tlscert): the handshake's request has `connection.connect` and `connection.tls`.
+- `TestARedisConnectionsPhasesAreItsFirstCommands` (fetch, redis): over TLS the first INFO has `connection.connect` and `connection.tls` and the second none; with a Sentinel the first SENTINEL command has the Sentinel's connection, the second none, and the primary's INFO its own.
+- `TestAnLDAPConnectionsPhasesAreItsFirstOperations` (fetch, ldap): with StartTLS, STARTTLS has `connection.connect` and then `connection.tls`; BIND and SEARCH none.
+- `TestAnSSHExecConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshexec) and `TestAnSSHFileConnectionsPhasesAreTheScrapesThatMadeIt` (fetch, sshfile): the first scrape's request has `connection.connect` and `connection.handshake`, the next scrape's, on the kept connection, none.
+- `TestAGRPCCallsConnectionPhasesAreTheCallThatMadeIt` (fetch, grpc): without and with target lists, the first call over TLS has `connection.connect` and `connection.tls`, the next none.
+- `TestAGRPCConnectionMadeBeforeTheCallIsNotItsPhase` (fetch, grpc): phases of a connection begun before the call are not the call's; those begun during it are, once.
+- `TestAnSSHConnectionsPhasesAreOnlyItsMakersScrapes` (fetch, sshexec): of two scrapes waiting for one connection, the one whose trace began making it has its phases, the other none.
+- `TestAConnectionOfAnUntracedTripIsNotTimed` and `TestHeldPhasesAreTheNextRequestsAndAddedOnesTheLasts` (fetch): no timing without a trace; phases held go to the next request, its start moved to theirs, and phases added go to the last.
+- `TestAConnectionsPhasesAreSpansUnderItsRequest` (exporter): `connection.*` phases are spans of their names under the request's span; an http request's are `http.*` under `http.first_byte`.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -31798,7 +32010,21 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   its own span. The phases MUST be timed while the trip is traced whether or
   not a rule reads `$timings`, and each request's MUST be its own, a
   redirect's not the request's before it, and a redirect the trip refused
-  to follow, never sent, MUST have none. Trace and span ids MUST come from `crypto/rand` and be written in
+  to follow, never sent, MUST have none. Under the CLIENT span of a tcp,
+  tlscert, ldap, redis, sshexec, sshfile or grpc request there MUST be
+  INTERNAL `connection.dns`, `connection.connect` and `connection.tls`
+  spans, `connection.handshake` for an SSH handshake, for the connection
+  made for it, each only when it was made: of tcp's and tlscert's request,
+  whose connection is made for it; of the first command, operation or
+  call sent on an ldap or redis connection, a redis Sentinel's and its
+  primary's each their own, and `connection.tls` of ldap's StartTLS that
+  of the STARTTLS operation; of the first request of the sshexec or
+  sshfile scrape that began making its connection, none of another scrape
+  that came to wait for it, and none on one kept; of the grpc call during
+  which grpc-go made its connection, not one it made before the call, without
+  `connection.dns`, the name's lookup being grpc-go's resolver's, and none
+  on a connection kept or behind a proxy for `connection.connect`. A
+  request's span MUST begin no later than the phases under it. Trace and span ids MUST come from `crypto/rand` and be written in
   lowercase hex; times MUST be decimal nanoseconds.
 - A probe whose request carries a readable W3C `traceparent` MUST continue
   its trace: its span of the header's trace id, the header's span its
@@ -31879,8 +32105,9 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   `ntp.delay_seconds`; for ldap `ldap.result_code` of each operation the
   server answered and `ldap.search.entries` of each `SEARCH` page; for
   tlscert `tls.protocol.name`, `tls.protocol.version`, `tls.cipher`,
-  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified` and
-  `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
+  `tls.server.not_after`, `tlscert.certificates`, `tlscert.verified`,
+  `tlscert.ocsp.stapled`, `tlscert.ocsp.status` when a staple gives one,
+  and `tlscert.leaf.days_until_expiry`; for redis `redis.reply.type` and a
   bulk string's `redis.reply.bytes` or an array's `redis.reply.elements`,
   never a reply's value; for sshfile `sshfile.files` and `sshfile.bytes`
   and for s3file `s3file.objects` and `s3file.bytes`, of the read that

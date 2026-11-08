@@ -8,7 +8,12 @@ where the exporter runs:
   behind a load balancer, the MX records of a mail domain;
 - that an internal resolver answers, and how long it takes;
 - that a record holds what it should: an SPF or verification TXT record, the
-  port of an SRV record, the name a PTR record gives an address.
+  port of an SRV record, the name a PTR record gives an address;
+- how long a record is cached for, a zone's SOA serial on each of its
+  servers, its CAA records, its DNSSEC keys, and whether the resolver
+  validated the answer (the AD bit);
+- what a server answers when it fails: `SERVFAIL` and `REFUSED` are data,
+  not a failed scrape.
 
 It needs nothing but a resolver to ask: the system's, or a server the
 collector names.
@@ -50,7 +55,7 @@ collectors:
 | Key | Default | Notes |
 | --- | --- | --- |
 | `type` | — | **Required.** `dns`. |
-| `record_type` | `A` | The record type asked for: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV` or `PTR`, in any case and with blanks around it or not. |
+| `record_type` | `A` | The record type asked for: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `PTR`, `SOA`, `CAA` or `DNSKEY`, in any case and with blanks around it or not. |
 | `server` | the system's resolver | The server every question is sent to: `host` or `host:port`, port 53 when it is left out, an IPv6 address in brackets with a port. Left out, the servers of `/etc/resolv.conf`. |
 | `transport` | `udp` | `udp`, which asks again over TCP when an answer is too long for UDP, as every resolver does, or `tcp`, which asks over TCP alone. |
 | `allowed_targets`, `denied_targets` | — | The names the collector may and may not resolve: see [Target lists](#target-lists). |
@@ -94,12 +99,16 @@ a name inside a Kubernetes cluster is written out in full,
   "record_type": "MX",
   "server": "10.0.0.53:53",
   "transport": "udp",
+  "rcode": "NOERROR",
   "not_found": false,
+  "authoritative": false,
+  "recursion_available": true,
+  "authenticated_data": false,
   "count": 2,
   "duration_seconds": 0.0042,
   "answers": [
-    {"host": "mx1.example.com", "preference": 10},
-    {"host": "mx2.example.com", "preference": 20}
+    {"host": "mx1.example.com", "preference": 10, "ttl": 3600},
+    {"host": "mx2.example.com", "preference": 20, "ttl": 3600}
   ]
 }
 ```
@@ -107,7 +116,8 @@ a name inside a Kubernetes cluster is written out in full,
 - `name` is the target as it was asked, in lower case and without the
   trailing dot; `server` is `request.server` as `host:port`, `""` for the
   system's resolver.
-- `answers` holds one object a record, with the fields of its type alone:
+- `answers` holds one object a record, with the fields of its type and its
+  `ttl`, the seconds the server said it may be cached for:
 
   | Record type | Fields |
   | --- | --- |
@@ -118,6 +128,9 @@ a name inside a Kubernetes cluster is written out in full,
   | `TXT` | `text`, the record's strings joined into one |
   | `SRV` | `target`, `port`, `priority`, `weight` |
   | `PTR` | `name` |
+  | `SOA` | `host`, the zone's primary server, `mailbox`, its contact as a name, `serial`, `refresh`, `retry`, `expire`, `minimum` |
+  | `CAA` | `flags`, `tag` (`issue`, `issuewild`, `iodef`), `value` |
+  | `DNSKEY` | `flags` (257 a key-signing key, 256 a zone-signing key), `protocol`, `algorithm`, `key_tag`, as DS records and signatures name the key |
 
   Names are given without their trailing dot. The records are in an order of
   their own — by preference or priority first where the type has one, then
@@ -125,55 +138,59 @@ a name inside a Kubernetes cluster is written out in full,
   document and the same series, though a resolver shuffles records of the
   same priority.
 - `count` is the number of records, `answers | length`.
-- `not_found` is `true` when the name does not exist (NXDOMAIN), and when it
-  exists without records of the type: the resolver does not tell the two
-  apart. `answers` is then empty and `count` 0, and the scrape succeeds, so
-  a rule can say a record is missing. For `CNAME` that is any name that is
-  no alias, whatever other records it has: a name with addresses and one
-  with a TXT record alone are `not_found` as one that does not exist is.
+- `rcode` is the answer's response code: `NOERROR`, `NXDOMAIN`, `SERVFAIL`,
+  `REFUSED`, `FORMERR`, `NOTIMP`, or another by name or as `RCODE<n>`.
+  Whatever it is, the scrape succeeds with the document, so a rule can say
+  that a server fails: `if .rcode == "SERVFAIL" then 1 else 0 end`.
+- `not_found` is `true` when the name does not exist (`NXDOMAIN`), and when
+  it exists without records of the type (`NOERROR` and no record); `rcode`
+  tells the two apart. `answers` is then empty and `count` 0. For `CNAME`
+  that is any name that is no alias, whatever other records it has: a name
+  with addresses and one with a TXT record alone are `not_found` as one
+  that does not exist is. A `SERVFAIL` or `REFUSED` is not `not_found`.
+- `authoritative`, `recursion_available` and `authenticated_data` are the
+  answer's AA, RA and AD bits: whether the server is authoritative for the
+  name, offers recursion, and, a validating resolver, validated the answer
+  with DNSSEC.
 - `duration_seconds` is how long the lookup took, the retries of the
   resolver included.
 
-## What the resolver gives, and what it does not
+## The question
 
-The lookup is Go's own resolver, built into the exporter, which needs no
-library and no C resolver. It gives the records' data and tells a name not
-found from a failure. It does **not** give:
+The exporter asks the question itself, with a client of its own: one
+question of the record type, class `IN`, recursion desired, the AD bit set
+so that a validating resolver reports it (RFC 6840), and an EDNS(0) record
+offering answers of 1232 bytes over UDP, as resolvers do since DNS Flag Day
+2020; a server that answers it `FORMERR`, knowing no EDNS, is asked again
+without it. Over `udp` the question is sent again every 2 seconds while no
+answer comes, and asked again over TCP when the answer is marked truncated;
+over `tcp` it is asked over TCP alone. For `PTR` the question is of the
+address's `in-addr.arpa` or `ip6.arpa` name.
 
-- **TTLs.** No record's time to live is known, so none is in the document.
-- **Response codes** beyond not found. `SERVFAIL`, `REFUSED`, a malformed
-  answer and a server that does not answer within the deadline are all
-  failures of the scrape, in the `dns` stage, saying what was asked of which
-  server: `resolving A www.example.com on 10.0.0.53:53: server misbehaving`.
-  A lookup cut short by the scrape's deadline says so and counts as a
-  timeout.
-- **Records of other types**: SOA, CAA, DNSKEY and the like cannot be asked
-  for.
-- **DNSSEC**: nothing is validated, and the AD bit is not reported.
-
-Records whose names are not valid DNS names are left out by the resolver;
-the others are answered. The resolver reads `/etc/hosts` before it asks a
-server for `A`, `AAAA` and `PTR`, as it does for any other lookup of the
-exporter, `server` or not: a name there is answered from it.
-
-### CNAME
-
-Go's resolver has no lookup of a name's CNAME record alone: it asks for the
-name's addresses beside it, and cannot tell a name that is no alias from
-one that does not exist. So a `CNAME` question is sent by the exporter
-itself: one question of type `CNAME`, recursion desired, over `udp` — sent
-again every 2 seconds while no answer comes, and asked again over TCP when
-the answer is marked truncated — or over `tcp` alone. It goes to `server`,
-or without one to the `nameserver` lines of `/etc/resolv.conf` in their
-order, on port 53, `127.0.0.1` and `::1` when the file names none; the next
-is asked when one fails, or does not answer within 5 seconds. The file's
+It goes to `server`, or without one to the `nameserver` lines of
+`/etc/resolv.conf` in their order, on port 53, `127.0.0.1` and `::1` when
+the file names none; the next is asked when one fails, does not answer
+within 5 seconds, or answers `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`;
+the last of those answers is the document when no server answers better,
+kept over a later server's failure, and the scrape fails only when no server
+answers at all. The file's
 `search`, `options` (`timeout`, `attempts`, `rotate`, `ndots`) and
-`/etc/hosts` are not read for it. The answer's `CNAME` record of the name
-is the `target`; a resolver answers the question with that record alone, so
-an alias of an alias gives the next name of the chain, not its end. A
-response code other than `NOERROR` and `NXDOMAIN` fails the scrape, naming
-it: `resolving CNAME www.example.com on 10.0.0.53:53: server misbehaving
-(SERVFAIL)`.
+`/etc/hosts` are not read: a name in `/etc/hosts` is asked of the server
+like any other.
+
+The answer is the server's records of the type of the name, or of the
+names its CNAME records lead to, followed to the end of the chain however
+the server orders them, as a resolver gives them; for `CNAME` it is the
+name's own CNAME record alone, so an alias of an alias gives the next name
+of the chain, not its end. Nothing is validated by the exporter:
+`authenticated_data` is the resolver's word.
+
+A server that does not answer within the deadline, and an answer that is no
+answer to the question — another id, name or type — or whose records do not
+parse fail the scrape, in the `dns` stage, saying what was asked of which
+server: `resolving A www.example.com on 10.0.0.53:53: cannot unmarshal DNS
+message`. A lookup cut short by the scrape's deadline says so and counts as
+a timeout.
 
 ## Target lists
 
@@ -225,6 +242,41 @@ Whether a domain's SPF record is in place:
         expression: '[.answers[].text | select(startswith("v=spf1"))] | length'
 ```
 
+How long the records of a name may be cached, the least of their TTLs:
+
+```yaml
+  - name: record_ttl
+    request:
+      type: dns
+      record_type: A
+    transform:
+      type: jq
+    metrics:
+      - name: dns_record_ttl_seconds
+        expression: '[.answers[].ttl] | min // 0'
+      - name: dns_server_failing
+        expression: 'if .rcode == "SERVFAIL" or .rcode == "REFUSED" then 1 else 0 end'
+```
+
+A zone's SOA serial as each of its servers has it, one collector each, so
+that a secondary behind the primary shows:
+
+```yaml
+  - name: zone_serial_ns1
+    request:
+      type: dns
+      record_type: SOA
+      server: ns1.example.com
+    transform:
+      type: jq
+    metrics:
+      - name: dns_zone_serial
+        expression: .answers[0].serial // 0
+        labels:
+          - name: server
+            expression: .server
+```
+
 ## Static targets
 
 A static target names the name to resolve, and may set `timeout`:
@@ -246,7 +298,8 @@ status (`$status` is `null`, Python's `response.status_code` `None`) and the
 header `Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows the lookup in its
-request section, with how it ended — the number of records, `not found`, or
+request section, with how it ended — the number of records, `not found`, a
+response code other than `NOERROR` and `NXDOMAIN`, such as `SERVFAIL`, or
 the error:
 
 ```text

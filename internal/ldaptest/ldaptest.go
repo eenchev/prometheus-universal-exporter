@@ -52,6 +52,7 @@ type Server struct {
 	anonymousDenied bool
 	refuseStartTLS  bool
 	ignorePaging    bool
+	rangeSize       int
 	entries         []Entry
 	references      []string
 	searchResult    *Result
@@ -177,6 +178,17 @@ func (s *Server) IgnorePaging() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ignorePaging = true
+}
+
+// SetRangeSize has the server answer an attribute of more than size values
+// in ranges, as Active Directory answers member past its MaxValRange:
+// asked for by its name, the first size values as name;range=0-<size-1>;
+// asked for as name;range=<low>-*, size values from low, as
+// name;range=<low>-<high>, or name;range=<low>-* with the last of them.
+func (s *Server) SetRangeSize(size int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rangeSize = size
 }
 
 // AddEntry adds entries to the directory.
@@ -335,7 +347,7 @@ func (s *Server) reply(sess *session, req Request) bool {
 func (s *Server) search(sess *session, req Request, write func([]byte) bool) bool {
 	s.mu.Lock()
 	denied := s.anonymousDenied && sess.boundDN == ""
-	ignorePaging := s.ignorePaging
+	ignorePaging, rangeSize := s.ignorePaging, s.rangeSize
 	entries := append([]Entry(nil), s.entries...)
 	references := append([]string(nil), s.references...)
 	failure := s.searchResult
@@ -364,7 +376,7 @@ func (s *Server) search(sess *session, req Request, write func([]byte) bool) boo
 		start = min(start, end)
 	}
 	for _, e := range matched[start:end] {
-		if !write(Message(req.ID, entryOp(e, req.Attributes))) {
+		if !write(Message(req.ID, entryOp(e, req.Attributes, rangeSize))) {
 			return false
 		}
 	}
@@ -392,12 +404,23 @@ func (s *Server) search(sess *session, req Request, write func([]byte) bool) boo
 
 // entryOp is a SearchResultEntry of e with the attributes asked for: none
 // for 1.1, every one for * or for none asked, and those named otherwise,
-// in any case.
-func entryOp(e Entry, asked []string) []byte {
+// in any case; with rangeSize, one of more values than it in ranges
+// (SetRangeSize).
+func entryOp(e Entry, asked []string, rangeSize int) []byte {
 	var attributes [][]byte
 	for name, values := range e.Attributes {
-		if !wanted(name, asked) {
+		low, ranged := rangeAsked(name, asked)
+		if !ranged && !wanted(name, asked) {
 			continue
+		}
+		if rangeSize > 0 && (ranged || len(values) > rangeSize) {
+			low = min(low, len(values))
+			high := min(low+rangeSize, len(values))
+			last := strconv.Itoa(high - 1)
+			if high == len(values) {
+				last = "*"
+			}
+			name, values = name+";range="+strconv.Itoa(low)+"-"+last, values[low:high]
 		}
 		var items [][]byte
 		for _, v := range values {
@@ -406,6 +429,21 @@ func entryOp(e Entry, asked []string) []byte {
 		attributes = append(attributes, Element(0x30, Element(0x04, []byte(name)), Element(0x31, items...)))
 	}
 	return Element(0x64, Element(0x04, []byte(e.DN)), Element(0x30, attributes...))
+}
+
+// rangeAsked is the first value asked for of name as name;range=<low>-*,
+// and whether it was.
+func rangeAsked(name string, asked []string) (int, bool) {
+	for _, a := range asked {
+		attribute, option, found := strings.Cut(a, ";range=")
+		if !found || !strings.EqualFold(attribute, name) || !strings.HasSuffix(option, "-*") {
+			continue
+		}
+		if low, err := strconv.Atoi(strings.TrimSuffix(option, "-*")); err == nil {
+			return low, true
+		}
+	}
+	return 0, false
 }
 
 func wanted(name string, asked []string) bool {

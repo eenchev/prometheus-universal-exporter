@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,6 +84,76 @@ type grpcConnEntry struct {
 	// connection, and that call has let it go again, leaves it be.
 	idle     *time.Timer
 	released uint64
+	// phases are those of the connection grpc-go last made, its dial and
+	// TLS handshake, until a call takes them (grpcPhases.take).
+	phases *grpcPhases
+}
+
+// grpcPhases are the phases of a connection grpc-go makes, timed by the
+// dialer and the credentials the exporter gives it, which the next call
+// on it takes as its own: the call that made grpc-go connect. The name's
+// lookup is grpc-go's resolver's, apart from any call, and not among them.
+type grpcPhases struct {
+	mu      sync.Mutex
+	pending []TracedPhase
+}
+
+// add adds a phase that ended now.
+func (p *grpcPhases) add(name string, start time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if name == "connection.connect" {
+		// A new connection's phases begin anew.
+		p.pending = nil
+	}
+	p.pending = append(p.pending, TracedPhase{Name: name, Start: start, End: time.Now()})
+}
+
+// take returns the phases held that began at since or after, and holds
+// none: those of a connection grpc-go made before the call began, as it
+// reconnects on its own, are none of the call's.
+func (p *grpcPhases) take(since time.Time) []TracedPhase {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	phases := p.pending
+	p.pending = nil
+	if len(phases) > 0 && phases[0].Start.Before(since) {
+		return nil
+	}
+	return phases
+}
+
+// timedCredentials are a connection's TLS credentials, the handshake timed.
+type timedCredentials struct {
+	credentials.TransportCredentials
+	phases *grpcPhases
+}
+
+func (c timedCredentials) ClientHandshake(ctx context.Context, authority string, conn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	start := time.Now()
+	tlsConn, info, err := c.TransportCredentials.ClientHandshake(ctx, authority, conn)
+	if err == nil {
+		c.phases.add("connection.tls", start)
+	}
+	return tlsConn, info, err
+}
+
+// Clone keeps the timing, which grpc-go's clone of the credentials would
+// leave out.
+func (c timedCredentials) Clone() credentials.TransportCredentials {
+	return timedCredentials{TransportCredentials: c.TransportCredentials.Clone(), phases: c.phases}
+}
+
+// timedDialer is dial, each connection it makes timed.
+func timedDialer(dial func(context.Context, string) (net.Conn, error), phases *grpcPhases) func(context.Context, string) (net.Conn, error) {
+	return func(ctx context.Context, address string) (net.Conn, error) {
+		start := time.Now()
+		conn, err := dial(ctx, address)
+		if err == nil {
+			phases.add("connection.connect", start)
+		}
+		return conn, err
+	}
 }
 
 type grpcConnCache struct {
@@ -125,13 +197,14 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 		delete(c.entries, key)
 		c.retireLocked(entry)
 	}
+	phases := &grpcPhases{}
 	creds := insecure.NewCredentials()
 	if key.tls {
 		cfg, err := tlsConfig(key.settings)
 		if err != nil {
 			return nil, err
 		}
-		creds = credentials.NewTLS(cfg)
+		creds = timedCredentials{TransportCredentials: credentials.NewTLS(cfg), phases: phases}
 	}
 	// An answer's headers, and its trailers, are each held to the bound an
 	// http answer's headers are, where grpc-go's own is 16 MiB, all of it
@@ -142,8 +215,15 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	// dialer of the exporter's would bypass; the call resolved and checked
 	// the server's addresses instead.
 	refusal := &atomic.Pointer[TargetRefusedError]{}
-	if key.policy != nil && !key.proxied {
-		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, key.dial, refusal)))
+	switch {
+	case key.policy != nil && !key.proxied:
+		options = append(options, grpc.WithContextDialer(timedDialer(grpcPolicyDialer(key.policy, key.dial, refusal), phases)))
+	case key.policy == nil && !viaProxy(http.ProxyFromEnvironment, &url.URL{Scheme: "https", Host: key.dial}):
+		// grpc-go's own dialer, timed; behind a proxy grpc-go's dialer
+		// is left to connect through it.
+		options = append(options, grpc.WithContextDialer(timedDialer(func(ctx context.Context, address string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp", address)
+		}, phases)))
 	}
 	// grpc-go is always handed the dns:/// form. A bare host:port is read
 	// as a URL first, so unix:8443, unix-abstract:8443 or passthrough:8443
@@ -155,7 +235,7 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	if err != nil {
 		return nil, err
 	}
-	entry := &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal, calls: 1}
+	entry := &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal, calls: 1, phases: phases}
 	c.entries[key] = entry
 	c.trimLocked()
 	return entry, nil

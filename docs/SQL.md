@@ -47,7 +47,8 @@ collectors:
 | --- | --- | --- |
 | `type` | — | **Required.** `sql`. |
 | `driver` | — | **Required.** `mysql`, `postgres` or `sqlserver`; `oracle`, `clickhouse`, `snowflake` or `vertica` in a build that has them. In any case, blanks around it aside. |
-| `statement` | — | **Required**, unless `statement_file` names the file of it. The one statement run, with the driver's own placeholders for `args` (see [The statement](#the-statement)). Not blanks alone. |
+| `statement` | — | **Required**, unless `statement_file` names the file of it or `statements` lists several. The one statement run, with the driver's own placeholders for `args` (see [The statement](#the-statement)). Not blanks alone. |
+| `statements` | — | Several statements, each with its `name`, `statement`, `args` and `arg_types`, in place of `statement`, `statement_file`, `args` and `arg_types`, run in order on one connection (see [Several statements](#several-statements)). At most 16. |
 | `statement_file` | — | The absolute path of a file holding the statement, in place of `statement` (see [A statement in a file](#a-statement-in-a-file)). |
 | `args` | — | The values bound to the statement's placeholders, in order, as text unless `arg_types` says otherwise. May use [placeholders](REQUESTS.md#path-parameters), `{{param_name}}` and `{{param_name:default}}`. |
 | `arg_types` | all `text` | The type each of `args` is bound as, one for each, in their order: `text`, `int`, `float` or `bool` (see [Typed args](#typed-args)). |
@@ -324,6 +325,68 @@ target's `params` fill, when the target file loads. A parameter left empty
 is one not given, which the default fills. A database without a boolean
 type, as Oracle before 23ai, may refuse a `bool`: bind `1` or `0` as an
 `int` there.
+
+### Several statements
+
+A collector runs one statement, so five related metrics of a database are
+five collectors, five logins and five round trips a scrape. `statements`
+runs several, each with a name, in order, on one connection, and the
+document holds each one's rows under its name:
+
+```yaml
+    request:
+      type: sql
+      driver: postgres
+      username: metrics
+      statements:
+        - name: jobs
+          statement: SELECT state, count(*) AS n FROM jobs WHERE queue = $1 GROUP BY state
+          args: ["{{param_queue:mail}}"]
+        - name: oldest
+          statement: SELECT extract(epoch FROM now() - min(created)) AS age FROM jobs
+        - name: workers
+          statement: SELECT host, busy FROM workers LIMIT $1
+          args: ["50"]
+          arg_types: [int]
+    transform:
+      type: jq
+    metrics:
+      - name: jobs
+        items: .jobs[]
+        expression: .n
+        labels:
+          - name: state
+            expression: .state
+      - name: oldest_job_age_seconds
+        expression: .oldest[0].age
+      - name: workers_busy
+        expression: '[.workers[] | select(.busy)] | length'
+```
+
+```json
+{"jobs": [{"state": "queued", "n": 12}], "oldest": [{"age": 341.5}], "workers": [{"host": "w1", "busy": true}]}
+```
+
+- Each entry has a `name`, letters, digits and `_`, not beginning with a
+  digit and unique among the collector's, which a rule reads its rows by,
+  `.jobs`; its `statement`, written as `statement` is, the driver's
+  placeholders for its own `args`; and its `args` and `arg_types`, as
+  [Typed args](#typed-args) has them, each with placeholders of its own. At
+  most 16 entries; `statement`, `statement_file`, `args` and `arg_types` are
+  then refused beside them.
+- They run in the order written, on one connection of the pool, each in a
+  transaction of its own, rolled back, with its own time limits, as the
+  one statement is ([The statement](#the-statement)): each sees the
+  database as it is when it begins.
+- `max_rows` holds each statement; the response limit holds their rows
+  together. The first statement that fails fails the scrape, naming it,
+  `request.statements[1], oldest: …`, and those after it do not run.
+- The document is an object, which `jq`, `yq` and `python` (`data["jobs"]`)
+  read; a `csv` transform, which reads one statement's rows by column, is
+  refused at load. `http_exporter_sql_rows` counts the rows of all of them.
+- A debug probe shows each statement as a request of its own, its name in
+  `Sql-Statement`, the first on the connection as it was got and the rest
+  on it `reused`.
 
 ## The rows
 

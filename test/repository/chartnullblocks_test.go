@@ -2,7 +2,9 @@ package repository
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
@@ -78,6 +80,11 @@ func TestChartNamesABlockOfValuesThatIsNull(t *testing.T) {
 	if len(blocks) < 40 {
 		t.Fatalf("found %d blocks in values.yaml; it has moved", len(blocks))
 	}
+	// One render of the chart for each block: side by side, they take a
+	// fraction of the time they take in turn.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	slots := make(chan struct{}, runtime.GOMAXPROCS(0))
 	for _, block := range blocks {
 		var values strings.Builder
 		for depth, key := range block {
@@ -90,16 +97,20 @@ func TestChartNamesABlockOfValuesThatIsNull(t *testing.T) {
 		if len(block) > 1 && (block[0] == "allocator" || block[0] == "staticTargets") {
 			values.WriteString("  enabled: true\n")
 		}
-		args := []string{"-f", valuesFile(t, values.String())}
-		out, ok := helmTemplate(t, helm, chartDir, args...)
-		if ok {
-			continue
-		}
-		for _, unnamed := range []string{"nil pointer", "error calling", "wrong type", "interface conversion", "can't evaluate"} {
-			if strings.Contains(out, unnamed) {
-				t.Errorf("%s null fails without naming it (%s):\n%s", strings.Join(block, "."), unnamed, out)
-				break
+		file := valuesFile(t, values.String())
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			out, ok := helmTemplate(t, helm, chartDir, "-f", file)
+			if ok {
+				return
 			}
-		}
+			for _, unnamed := range []string{"nil pointer", "error calling", "wrong type", "interface conversion", "can't evaluate"} {
+				if strings.Contains(out, unnamed) {
+					t.Errorf("%s null fails without naming it (%s):\n%s", strings.Join(block, "."), unnamed, out)
+					break
+				}
+			}
+		})
 	}
 }

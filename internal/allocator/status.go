@@ -962,12 +962,12 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 		fmt.Fprintf(b, "pue_allocator_peer_up{peer=\"%s\"} %d\n", escape(c.Address), up)
 	}
 	family("pue_allocator_is_leader", "gauge", "1 while this allocator instance leads its peers and asks the discovery sources, 0 while it follows the leader.")
-	family("pue_allocator_leader", "gauge", "1, with the address of the instance this one takes for the leader; self when it leads and its own address is not known.")
 	isLeader := 0
 	if st.Role == "leader" {
 		isLeader = 1
 	}
 	fmt.Fprintf(b, "pue_allocator_is_leader %d\n", isLeader)
+	family("pue_allocator_leader", "gauge", "1, with the address of the instance this one takes for the leader; self when it leads and its own address is not known.")
 	if st.Leader != "" {
 		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(st.Leader))
 	}

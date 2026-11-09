@@ -13251,7 +13251,8 @@ address, `self` while it leads without knowing its own),
 (since the instance last held what the leader's snapshot holds, having fetched
 it, or the start before the first time; `0` while it leads) and `pue_allocator_peer_failures_total{request}` (`check` or
 `snapshot`). The families' `HELP` texts, like the flags' help, MUST call an
-allocator process an instance, never a copy. `/healthz` MUST answer `200`; `/ready`
+allocator process an instance, never a copy, and every sample MUST stand
+under its own family's `# TYPE` line. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 

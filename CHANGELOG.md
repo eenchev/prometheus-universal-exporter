@@ -82,6 +82,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- Target Allocator: with `--peers`, `/metrics` wrote the sample of
+  `pue_allocator_is_leader` under the `# TYPE` line of
+  `pue_allocator_leader`, so a parser that holds to the text format took
+  both for series without a type. Each now stands under its own.
+
 - Target Allocator: an exporter that refused a bundle kept reporting the
   refusal after the allocator's files were put back as they were, so the
   allocator's status showed the member up to date and refusing a bundle at

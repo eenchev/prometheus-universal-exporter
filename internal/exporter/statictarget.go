@@ -198,6 +198,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, revalidateKey: cacheKey, log: log,
 		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
+		lastSuccess: lastSuccessKey(c, &target, target.Target, overrides),
 	}
 	// A target failure_backoff is backing off from is not contacted, and
 	// its scrape waits for no slot: it fails at once, as its fetch would

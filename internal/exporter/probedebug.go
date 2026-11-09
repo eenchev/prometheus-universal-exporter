@@ -589,6 +589,9 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
 		scrape: p.static != nil, log: debugLog(p),
 		pasted: p.pasted, requester: p.requester,
+		// It starts from the last success the same trip would, and keeps
+		// none of its own (collect).
+		lastSuccess: lastSuccessKey(p.collector, p.static, p.target, p.overrides),
 		// A debug probe revalidates the response the same probe would,
 		// and shows the conditional request; it keeps nothing.
 		revalidateKey: p.staleKey,

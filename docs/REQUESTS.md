@@ -24,6 +24,8 @@ map renders into.
 - [Path parameters](#path-parameters)
   - [In the body, headers and query](#in-the-body-headers-and-query)
   - [In label values](#in-label-values)
+  - [Dates and times](#dates-and-times)
+  - [Since the last success](#since-the-last-success)
 - [Redirects and HTTP/2](#redirects-and-http2)
   - [What a followed redirect carries](#what-a-followed-redirect-carries)
 - [Restricting targets](#restricting-targets)
@@ -616,8 +618,9 @@ A scrape at 22:30 UTC on 9 November 2026 asks for
 already the 10th.
 
 A clock placeholder is the name of its format and then, each part optional
-and in this order, an offset, a truncation and a time zone:
-`{{name[:offset][/unit][@zone]}}`.
+and in this order, a [last success](#since-the-last-success) to start
+from, an offset, a truncation and a time zone:
+`{{name[~last_success(fallback)][:offset][/unit][@zone]}}`.
 
 | Name | Writes, at 22:30:15.25 UTC on 9 November 2026 |
 | --- | --- |
@@ -659,9 +662,16 @@ write is refused when the configuration loads, as a default would be:
 `{{date|number}}`, and a `date_us` in a `localfile` path, whose slashes
 would be directories.
 
-A clock placeholder is no probe parameter. No probe or static target gives
-it a value, none is asked for on the collectors page, and a probe
-parameter named `date` is no business of the request. It may not stand in
+Every clock placeholder of a scrape is of one moment, read when the scrape
+starts: `{{date}}` in the path and `{{datetime}}` in a query value are of
+the same day even a second before midnight, and a retry and a page after the
+first send the values the first request sent.
+
+A clock placeholder is no probe parameter. No probe gives it a value, none
+is asked for on the collectors page, and a probe parameter named `date` is
+no business of the request. A [static
+target](STATIC-TARGETS.md#dates-and-times-in-a-parameter) may write clock
+placeholders into the values of its own `params`. It may not stand in
 a [label value](#in-label-values): a label that changes with the clock is
 a new series every day, hour or second. Like a `{{param_...}}` one, it is
 found outside a path only when the name follows the two braces directly, so
@@ -671,8 +681,63 @@ A [cached](CONFIGURATION.md#response-caching) answer is kept for its
 `cache.ttl` whatever the clock says, so a collector whose request asks for
 today's date, cached for an hour, may answer with yesterday's for the first
 hour of the day: keep the TTL short against the unit the request changes
-by. The verbose self-metrics' `url` label keeps a placeholder of the path
-as it is written.
+by. A cached answer is not
+[revalidated](CONFIGURATION.md#revalidating-expired-responses) when its
+request holds a clock placeholder, the collector's or a static target's:
+the validators of yesterday's answer say nothing of today's, and a target
+asked `If-Modified-Since` would answer today's request `304`, keeping
+yesterday's answer for it. The verbose self-metrics' `url` label keeps a
+placeholder of the path as it is written.
+
+### Since the last success
+
+An API that answers with what happened in a window of time — activities,
+events, log lines, orders — is asked best for each stretch of time once:
+from where the last successful scrape ended, to now. `~last_success`, after
+a clock placeholder's name, starts it from the time of the last successful
+scrape of the same collector, target and parameters, rather than from the
+scrape's own:
+
+```yaml
+collectors:
+  - name: new_events
+    request:
+      type: http
+      path: /api/events
+      query:
+        from: "{{datetime~last_success(-1h)}}"
+        to: "{{datetime}}"
+```
+
+The first scrape asks for the last hour, the fallback in the parentheses.
+Each scrape after a successful one asks from the `to` that one sent: the
+time of a scrape is read once, when it starts, so the windows meet with no
+gap and no overlap. A scrape that fails, or carries on past a failed stage
+under `error_handling`, moves nothing, and the next asks for its time
+again.
+
+- **The fallback is required**: `-` and amounts as an offset's,
+  `~last_success(-1h)`, `~last_success(-1d)`. It is where the window starts
+  while there is no last success: on the first scrape of a target, of a new
+  value of a parameter, and after the exporter starts, since the times are
+  kept in memory. A reload keeps them.
+- **The rest applies after it.** `{{datetime~last_success(-1h):-5m}}` starts
+  five minutes before the last success, an overlap for an API whose events
+  arrive late; `{{date~last_success(-1d)@Europe/Sofia}}` is the day of the
+  last success, in Sofia. Truncate both ends alike, or the windows overlap
+  or leave gaps: `from` of `{{datetime~last_success(-1h)/m}}` meets `to` of
+  `{{datetime/m}}`.
+- **Each target has its own.** A probe's last success is that of its
+  collector, target, `path` and `param_<name>` parameters; a static
+  target's is its own, and a parameter value of the target may hold
+  `~last_success` too. A [debug](AUTHENTICATION.md#debugging-collectors)
+  run starts from the last success and keeps none, and an answer from the
+  [response cache](CONFIGURATION.md#response-caching) is no scrape and
+  moves nothing.
+- **There is no cap.** A target that failed for a day is asked for the day
+  at its next success. The exporter keeps the last success of 10,000
+  collectors, targets and parameters at most, forgetting the one kept
+  longest ago past that, which then starts from its fallback.
 
 ## Redirects and HTTP/2
 

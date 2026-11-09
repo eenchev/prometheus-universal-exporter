@@ -73,13 +73,20 @@ func revalidationFrom(ctx context.Context) *CachedResponse {
 // Revalidable reports whether a request of c, with overrides, is one whose
 // response can be revalidated: a request of a type that says so
 // (RequestType.Revalidates), http and graphite, that fetches one response
-// with GET or HEAD. A paginated collector's response is many
+// with GET or HEAD, and holds no clock placeholder. A paginated collector's response is many
 // responses merged, of which no one validator speaks. Another method is
 // left alone: a matching If-None-Match on it asks for 412 Precondition
 // Failed, not 304 (RFC 9110 § 13.1.2), and a graphite request too long for a
 // URL is sent as a POST (requesttype_graphite.go).
 func Revalidable(c *model.Collector, overrides RequestOverrides) bool {
 	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || CollectorPolicy(c).Pagination != nil {
+		return false
+	}
+	// A request with a clock placeholder asks for something else as the
+	// clock moves: the validators of yesterday's answer say nothing of
+	// today's, and a Last-Modified older than the new day would have the
+	// target answer 304 and yesterday's answer kept for today's.
+	if c.Clock.Any || overrides.targetClock {
 		return false
 	}
 	method := RequestMethodFor(c, overrides)

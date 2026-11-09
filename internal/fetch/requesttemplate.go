@@ -145,7 +145,7 @@ func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered st
 // else an error. An empty probe value counts as not given.
 func placeholderValue(where string, p pathPlaceholder, params map[string]string) (string, error) {
 	if p.Clock != nil {
-		return p.Clock.at(clockNow()), nil
+		return p.Clock.at(scrapeClockOf(params)), nil
 	}
 	value, given := params[p.Name]
 	if given && value != "" {
@@ -505,6 +505,13 @@ func (check *RequestParamsCheck) CheckRequestParams(c *model.Collector, override
 // errors come in the order they always did: those finding the placeholders,
 // of the path and then of each field, and then those binding them.
 func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, overrides RequestOverrides) (unused []string, err error) {
+	if overrides.targetClock {
+		// A static target's value with a clock placeholder is checked as
+		// it is written at clockSample, as the placeholder is in a request.
+		if overrides.Params, err = renderTargetParams(overrides.Params, ScrapeClock{Now: clockSample}); err != nil {
+			return nil, err
+		}
+	}
 	used := map[string]bool{}
 	path := parsed.hasPath && !overrides.PathSet
 	if path {
@@ -547,7 +554,7 @@ func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, o
 		}
 	}
 	for name := range overrides.Params {
-		if !used[name] {
+		if !used[name] && !isClockParam(name) {
 			unused = append(unused, name)
 		}
 	}

@@ -146,7 +146,8 @@ targets:
 Every placeholder must be filled, by `params` or a default, and every entry of
 `params` must fill one; otherwise the exporter refuses to start, naming the
 target, the collector and the parameter. A target's own `target`, `request.path`, `body`
-and `headers` are written out in full, without placeholders.
+and `headers` are written out in full, without placeholders. A value of `params` may hold [clock
+placeholders](#dates-and-times-in-a-parameter), filled in at each scrape.
 
 So one collector whose labels take a parameter serves several targets, each
 labelled with its own value:
@@ -274,6 +275,42 @@ Check a target file together with its configuration before deploying it:
 reports whether each would load, including whether every target names a
 collector that exists and whether a target exported over OTLP has OTLP export
 to go to — see [Dry run](CONFIGURATION.md#dry-run).
+
+### Dates and times in a parameter
+
+A value of `params` may hold [clock
+placeholders](REQUESTS.md#dates-and-times), which each scrape of the target
+fills in, from the same moment as the collector's own: one collector that
+asks for a day serves targets that each want their own day, in their own
+time zone.
+
+```yaml
+# the collector:  request: {type: http, path: "/summary/{{param_day}}"}
+interval: 1h
+targets:
+  - name: sofia
+    collector: daily_summary
+    target: https://api.example
+    params: {param_day: "{{date@Europe/Sofia}}"}
+  - name: new_york
+    collector: daily_summary
+    target: https://api.example
+    params: {param_day: "{{date@America/New_York}}"}
+```
+
+A value may hold text around them, `day-{{date:-1d}}`, and a
+[`~last_success`](REQUESTS.md#since-the-last-success) one, which starts from
+the last successful scrape of that target. It may hold no `{{param_…}}`
+placeholder, which nothing would fill, and no filter: the collector's
+placeholder writes the value as it writes every value. A parameter that
+fills a label value of the collector may hold no clock placeholder, since a
+label whose value changes with the clock is a new series every day, hour or
+second. Each is refused when the file loads, naming the target and the
+parameter. When the file loads, the value is checked where the collector
+writes it as it would be written at 13:04:05 on 9 November 2026, so a
+`date_us` value, with its slashes, is refused in a Graphite expression as
+the date itself would be. A target's own `target`, `request.path`, `body`
+and `headers` are written out as they are, clock placeholders and all.
 
 ## Credentials and TLS of a target
 

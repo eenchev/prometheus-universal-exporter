@@ -68,6 +68,9 @@ type collectJob struct {
 	// the fetch stage, under on_fetch_error, as the fetch it stands for
 	// would have.
 	backingOff error
+	// lastSuccess is the key the trip's last success is kept under
+	// (lastsuccess.go), "" when its clock placeholders read none.
+	lastSuccess string
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
@@ -275,12 +278,23 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	var response *fetch.HTTPResponse
 	var err error
 	revalidates := revalidatesFor(j)
+	// The trip's clock placeholders are filled from one reading of the
+	// clock, and those that read ~last_success from the last success kept;
+	// a trip that succeeds is kept as the last success, when it is not a
+	// debug run, which keeps nothing.
+	var clock fetch.ScrapeClock
+	if j.lastSuccess != "" || requester.Clock.Any {
+		clock = fetch.NewScrapeClock(s.lastSuccesses.get(j.lastSuccess))
+	}
 	if j.pasted != nil {
 		response, err = pastedResponse(c, j.pasted)
 	} else {
 		fetchCtx := ctx
 		if revalidates {
 			fetchCtx = fetch.WithRevalidation(ctx, s.cache.Revalidation(j.revalidateKey, time.Now()))
+		}
+		if !clock.Now.IsZero() {
+			fetchCtx = fetch.WithScrapeClock(fetchCtx, clock)
 		}
 		response, err = s.fetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
@@ -496,6 +510,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// removed or changed since the trip read it (PutFor).
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
 		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, kept, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+	}
+	if j.lastSuccess != "" && trace == nil && j.pasted == nil {
+		s.lastSuccesses.record(j.lastSuccess, clock.Now)
 	}
 	return collected{set: set, answer: answer, fetched: now}
 }

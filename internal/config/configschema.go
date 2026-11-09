@@ -1172,7 +1172,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].interval":  {"not": fetch.SchemaLeastDuration(time.Second, true), "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
-			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder.",
+			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder. A value may hold clock placeholders, such as {{date@Europe/Sofia}}, which each scrape fills in, and no {{param_...}} one. See docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter.",
 		},
 		"targets[].labels": {
 			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},

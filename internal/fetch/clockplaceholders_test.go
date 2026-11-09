@@ -54,7 +54,7 @@ func TestAClockPlaceholderWritesTheMomentInItsFormat(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("{{%s}}: %v, %v", text, ok, err)
 		}
-		if got := c.at(now); got != want {
+		if got := c.at(ScrapeClock{Now: now}); got != want {
 			t.Errorf("{{%s}} writes %q, want %q", text, got, want)
 		}
 	}
@@ -67,7 +67,7 @@ func TestAClockPlaceholderWritesTheMomentInItsFormat(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := c.at(acrossDST); got != want {
+		if got := c.at(ScrapeClock{Now: acrossDST}); got != want {
 			t.Errorf("across the change, {{%s}} writes %q, want %q", text, got, want)
 		}
 	}

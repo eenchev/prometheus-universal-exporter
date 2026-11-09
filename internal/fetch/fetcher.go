@@ -205,6 +205,9 @@ type RequestOverrides struct {
 	// Params are the param_<name> probe parameters, bound into the
 	// {{param_<name>}} placeholders of the collector's request.path.
 	Params map[string]string
+	// targetClock says Params are a static target's, of which a value
+	// holds a clock placeholder, filled in at each trip (statictargets.go).
+	targetClock bool
 	// Login is a static target's request.login, replacing an http or
 	// graphite collector's; no probe parameter sets it, so a probe can
 	// neither change where a login goes nor what it sends (login.go).

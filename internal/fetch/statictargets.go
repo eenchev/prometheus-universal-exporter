@@ -84,6 +84,7 @@ func checkTargetRetryStatuses(t *model.StaticTarget, c *model.Collector) error {
 // override structure the /probe endpoint produces.
 func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout), Params: t.Params, From: t.Request.From, Until: t.Request.Until}
+	out.targetClock = TargetClockUse(t).Any
 	if len(t.Request.Targets) > 0 {
 		out.Targets = append([]string(nil), t.Request.Targets...)
 	}

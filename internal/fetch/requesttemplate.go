@@ -82,7 +82,7 @@ func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered st
 		if !strict {
 			after := text[open+2:]
 			trimmed := strings.TrimLeft(after, " \t")
-			if !strings.HasPrefix(trimmed, PathParamPrefix) {
+			if !strings.HasPrefix(trimmed, PathParamPrefix) && !clockNameAt(after) {
 				// These two braces open nothing, but the second may be
 				// the first of two that do, as in {{{param_x}}: it is
 				// looked at next, where a step over both would pass the
@@ -111,9 +111,22 @@ func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered st
 			}
 			inner = inner[:i]
 		}
+		if clock, ok, err := parseClock(where, inner); err != nil {
+			return nil, err
+		} else if ok {
+			// A clock placeholder always has a value, and stands, wherever
+			// a default is checked when the configuration loads, for the
+			// value it writes at clockSample.
+			out = append(out, pathPlaceholder{Name: inner, Default: clock.sample(), HasDefault: true, Filter: filter, Clock: clock, start: open, end: closing + 2})
+			offset = closing + 2
+			continue
+		}
 		name, def, hasDefault := strings.Cut(inner, ":")
-		if !PathParamName.MatchString(name) {
+		if !PathParamName.MatchString(name) && strings.HasPrefix(name, PathParamPrefix) {
 			return nil, fmt.Errorf("%s placeholder {{%s}} is not a path parameter; placeholders are named %s<name>, with letters, digits and underscores, e.g. {{param_tenant}}", where, inner, PathParamPrefix)
+		}
+		if !PathParamName.MatchString(name) {
+			return nil, fmt.Errorf("%s placeholder {{%s}} is not a path parameter or a clock placeholder; placeholders are named %s<name>, with letters, digits and underscores, e.g. {{param_tenant}}, or are a clock placeholder, one of %s, e.g. {{date:-1d}}", where, inner, PathParamPrefix, strings.Join(clockFormatNames(), ", "))
 		}
 		// A default ends at the first }}, so braces inside it can only come
 		// from something the author did not mean as a default. The common case
@@ -131,6 +144,9 @@ func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered st
 // placeholderValue is a placeholder's value: the probe's, else the default,
 // else an error. An empty probe value counts as not given.
 func placeholderValue(where string, p pathPlaceholder, params map[string]string) (string, error) {
+	if p.Clock != nil {
+		return p.Clock.at(clockNow()), nil
+	}
 	value, given := params[p.Name]
 	if given && value != "" {
 		return value, nil
@@ -420,6 +436,9 @@ func RequestParams(c *model.Collector) []RequestParam {
 	byName := map[string]*RequestParam{}
 	var names []string
 	for _, p := range placeholders {
+		if p.Clock != nil {
+			continue // no probe parameter fills it
+		}
 		param := byName[p.Name]
 		if param == nil {
 			param = &RequestParam{Name: p.Name}

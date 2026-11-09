@@ -16,7 +16,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
-- Nothing; you can upgrade without changes.
+- In a request's body, header, query and type's own templated values, a
+  `{{` followed directly by the name of a clock format (`{{date}}`,
+  `{{unix_ms|number}}`, `{{time:-1h}}` and the rest below) is now a clock
+  placeholder and is filled in, where it was sent as text. A body that
+  must send such text literally writes it otherwise, for example with a
+  space after the braces, `{{ date }}`, which stays text.
+
+### New
+
+- **Clock placeholders.** `{{date}}`, `{{datetime}}`, `{{unix}}` and eight
+  more formats write the time of the scrape wherever a `{{param_...}}`
+  placeholder may stand, in every request type: an API's daily summary
+  for today, a history window from yesterday's midnight, a timestamp in
+  milliseconds. An offset (`{{date:-1d}}`, `{{datetime:-1d12h}}`), a
+  truncation to the start of the day, hour or minute (`{{datetime:-1d/d}}`)
+  and a time zone (`{{date@Europe/Sofia}}`) are each optional. See
+  [Dates and times](docs/REQUESTS.md#dates-and-times).
 
 ## chart 2.1.0
 

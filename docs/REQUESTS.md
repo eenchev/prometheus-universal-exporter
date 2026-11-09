@@ -592,6 +592,88 @@ a digest of it. Its verbose self-metrics never carry a value. A collector
 whose label values hold no placeholder pays nothing for the feature; one
 that has some makes a copy of its labels for each probe.
 
+### Dates and times
+
+Many APIs want a date or a time in the request: the day a daily summary is
+for, the start of a history window, the hour of an electricity price. A
+clock placeholder writes the time of the scrape, wherever a
+`{{param_<name>}}` placeholder may stand, in any request type:
+
+```yaml
+collectors:
+  - name: daily_summary
+    request:
+      type: http
+      path: /usersummary/daily/{{date@Europe/Sofia}}
+      query:
+        from: "{{datetime:-1d/d}}"
+        to: "{{datetime/d}}"
+```
+
+A scrape at 22:30 UTC on 9 November 2026 asks for
+`/usersummary/daily/2026-11-10?from=2026-11-08T00:00:00Z&to=2026-11-09T00:00:00Z`
+(the query values encoded as every query value is): in Sofia, it is
+already the 10th.
+
+A clock placeholder is the name of its format and then, each part optional
+and in this order, an offset, a truncation and a time zone:
+`{{name[:offset][/unit][@zone]}}`.
+
+| Name | Writes, at 22:30:15.25 UTC on 9 November 2026 |
+| --- | --- |
+| `date` | `2026-11-09` |
+| `date_compact` | `20261109` |
+| `date_eu` | `09.11.2026` |
+| `date_us` | `11/09/2026` |
+| `month` | `2026-11` |
+| `year` | `2026` |
+| `time` | `22:30:15` |
+| `datetime` | `2026-11-09T22:30:15Z`, RFC 3339 |
+| `datetime_ms` | `2026-11-09T22:30:15.250Z`, RFC 3339 with milliseconds |
+| `unix` | `1794263415`, seconds since 1970 |
+| `unix_ms` | `1794263415250`, milliseconds since 1970 |
+
+**Offset.** After a colon, `+` or `-` and one or more amounts of `w`
+(weeks), `d` (days), `h`, `m` and `s`: `{{date:-1d}}` is yesterday,
+`{{date:+1w}}` a week from today, `{{datetime:-1d12h}}` a day and a half
+ago. Weeks and days are calendar days in the zone, so `-1d` is yesterday's
+date also on the day summer time starts or ends; hours, minutes and seconds
+are elapsed time. An amount is at most 100000.
+
+**Truncation.** After a slash, `d`, `h` or `m`: the start of the day, hour
+or minute the moment falls in, in the zone, taken after the offset.
+`{{datetime:-1d/d}}` is midnight at the start of yesterday;
+`{{unix/h}}` the start of this hour, in seconds.
+
+**Time zone.** After an at sign, an IANA name such as `Europe/Sofia` or
+`America/New_York`, `UTC`, or `Local`, the zone the exporter runs in. It is
+UTC when left out. The zone decides which day it is as well as how
+`datetime` writes its offset: `{{datetime@Europe/Sofia}}` is
+`2026-11-10T00:30:15+02:00`. The exporter carries the time zone database,
+so a container without one reads every name.
+
+In a body, a clock placeholder takes a filter as a `{{param_...}}` one
+does: `"day": {{date|json}}` writes `"day": "2026-11-09"`, and
+`"since": {{unix_ms:-1h|number}}` a number. A format its place cannot
+write is refused when the configuration loads, as a default would be:
+`{{date|number}}`, and a `date_us` in a `localfile` path, whose slashes
+would be directories.
+
+A clock placeholder is no probe parameter. No probe or static target gives
+it a value, none is asked for on the collectors page, and a probe
+parameter named `date` is no business of the request. It may not stand in
+a [label value](#in-label-values): a label that changes with the clock is
+a new series every day, hour or second. Like a `{{param_...}}` one, it is
+found outside a path only when the name follows the two braces directly, so
+`{{ date }}` and `{{dates}}` in a body are text.
+
+A [cached](CONFIGURATION.md#response-caching) answer is kept for its
+`cache.ttl` whatever the clock says, so a collector whose request asks for
+today's date, cached for an hour, may answer with yesterday's for the first
+hour of the day: keep the TTL short against the unit the request changes
+by. The verbose self-metrics' `url` label keeps a placeholder of the path
+as it is written.
+
 ## Redirects and HTTP/2
 
 Three transport settings live on the collector request, all off by default:

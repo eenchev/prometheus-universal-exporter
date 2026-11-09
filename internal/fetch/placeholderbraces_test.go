@@ -61,8 +61,13 @@ func placeholdersSteppingTwo(where, text string, strict, filters bool, unfiltere
 			inner = inner[:i]
 		}
 		name, def, hasDefault := strings.Cut(inner, ":")
-		if !PathParamName.MatchString(name) {
+		if !PathParamName.MatchString(name) && strings.HasPrefix(name, PathParamPrefix) {
 			return nil, fmt.Errorf("%s placeholder {{%s}} is not a path parameter; placeholders are named %s<name>, with letters, digits and underscores, e.g. {{param_tenant}}", where, inner, PathParamPrefix)
+		}
+		// A name of neither kind is refused in the words that name the
+		// clock placeholders too (clockplaceholders.go), which came after.
+		if !PathParamName.MatchString(name) {
+			return nil, fmt.Errorf("%s placeholder {{%s}} is not a path parameter or a clock placeholder; placeholders are named %s<name>, with letters, digits and underscores, e.g. {{param_tenant}}, or are a clock placeholder, one of %s, e.g. {{date:-1d}}", where, inner, PathParamPrefix, strings.Join(clockFormatNames(), ", "))
 		}
 		if strings.ContainsAny(def, "{}") {
 			return nil, fmt.Errorf("%s placeholder {{%s}} has a default containing a brace; if it is an environment reference, run with --config.expand-env so it is expanded first", where, inner)
@@ -196,7 +201,7 @@ func TestOnlyABraceBeforeAPlaceholderIsReadOtherwise(t *testing.T) {
 // read it, but the lines that show a brace before a placeholder, which the
 // documentation of that has.
 func TestTheShippedFilesAreReadForPlaceholdersAsTheyWere(t *testing.T) {
-	lines, shown := 0, 0
+	lines, shown, clocks := 0, 0, 0
 	for _, root := range []string{"../../examples", "../../configs", "../../charts", "../../testdata", "../../docs", "../../README.md"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
@@ -208,6 +213,12 @@ func TestTheShippedFilesAreReadForPlaceholdersAsTheyWere(t *testing.T) {
 			}
 			for _, line := range strings.Split(string(content), "\n") {
 				if !strings.Contains(line, "{{") {
+					continue
+				}
+				// A clock placeholder, which came after, is one for the
+				// parser as it is and text for the parser as it was.
+				if hasClockPlaceholder(line) {
+					clocks++
 					continue
 				}
 				lines++
@@ -230,8 +241,8 @@ func TestTheShippedFilesAreReadForPlaceholdersAsTheyWere(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if lines < 100 || shown == 0 {
-		t.Errorf("%d lines with braces were read, %d of them showing a brace before a placeholder", lines, shown)
+	if lines < 100 || shown == 0 || clocks == 0 {
+		t.Errorf("%d lines with braces were read, %d of them showing a brace before a placeholder, and %d with a clock placeholder passed by", lines, shown, clocks)
 	}
 }
 
@@ -367,4 +378,20 @@ func TestAValueIsFilledInBetweenTheBracesAroundIt(t *testing.T) {
 			t.Errorf("a label value %q: %v", value, err)
 		}
 	}
+}
+
+// hasClockPlaceholder reports whether a `{{` of line opens a clock
+// placeholder.
+func hasClockPlaceholder(line string) bool {
+	for i := strings.Index(line, "{{"); i >= 0; {
+		if clockNameAt(line[i+2:]) {
+			return true
+		}
+		next := strings.Index(line[i+1:], "{{")
+		if next < 0 {
+			return false
+		}
+		i += 1 + next
+	}
+	return false
 }

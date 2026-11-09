@@ -72,6 +72,10 @@ func ParseLabelParams(c *model.Collector, ruleName func(index int) string) (*mod
 			return t, false
 		}
 		for _, p := range placeholders {
+			if p.Clock != nil {
+				errs = append(errs, fmt.Errorf("collector %q %s: the clock placeholder {{%s}} may stand in a request, not in a label value: a label whose value changes with the clock makes a new series every day, hour or second", c.Name, t.Where, p.Name))
+				return t, false
+			}
 			if !utf8.ValidString(p.Default) {
 				errs = append(errs, fmt.Errorf("collector %q %s: the default of %s is not valid UTF-8, which a label value must be; change the default", c.Name, t.Where, p.Name))
 				return t, false

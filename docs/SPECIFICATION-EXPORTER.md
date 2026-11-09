@@ -31796,6 +31796,18 @@ The chart values and monitors that expose this endpoint are specified in
 
 - `TestAddressesAreCheckedWithoutASecondLookup` (fetch), changed: the connections the target's server counts are those closed without a request, the refused one closed as soon as its address is checked; a request another client makes to the same port, as a client of an earlier test whose server had the port may, is not counted, where it made the test see two connections for a refused target now and then under the race detector.
 
+## 34.323 Clock placeholders
+
+- `TestAClockPlaceholderWritesTheMomentInItsFormat` (fetch): every format at a fixed moment; offsets of days, weeks and elapsed time; truncation to the day, hour and minute after the offset; a zone east of UTC that is already the next day; across Sofia's change from summer time, -1d is the calendar day before and -24h elapsed time (§ 42.10d).
+- `TestAClockPlaceholderWrittenWrongIsRefused` (fetch): an offset without a sign, with an unknown unit, without amounts or over 100000, a truncation to weeks, an unknown zone and parts out of order are refused saying so; `param_date`, `dates`, `today` and `Date` are no clock placeholder (§ 42.10d).
+- `TestAClockPlaceholderIsFoundWhereAParameterIs` (fetch): in a body, clock placeholders with filters are found beside a `{{param_...}}` one, `{{dates}}` and `{{ date }}` are text, and `|json` and `|number` write a date and a unix time; an unknown name in a path is refused listing the formats (§ 42.10d).
+- `TestAClockPlaceholderItsPlaceCannotWriteIsRefusedAtLoad` (fetch, http): `{{date|number}}` is refused at load naming the clock placeholder; `{{unix|number}}` loads (§ 42.10d).
+- `TestAClockPlaceholderIsFilledAtEveryScrape` (fetch, http): a collector with clock placeholders in its path, a header, a query value and its body is sent each scrape's date and time, each encoded for its place, at two moments; only its `param_user` is a probe parameter, a probe without parameters is checked fine, and a `date` probe parameter is not refused as unused (§ 42.10d).
+- `TestAClockPlaceholderInALabelValueIsRefused` (fetch, http): `transform.labels` with `{{date}}` is refused at load (§ 42.10d).
+- `TestAClockPlaceholderInAGraphiteExpression` (fetch, graphite): `{{date_compact}}` fills an expression, and `{{date_us}}`, whose slashes an expression may not hold, is refused at load naming the clock placeholder (§ 42.10d).
+- `TestAClockPlaceholderNamesALocalFile` (fetch, localfile): `{{date:-1d}}.prom` reads yesterday's file, and `{{date_us}}`, whose slashes would be directories, is refused at load naming it (§ 42.10d).
+- `TestOnlyABraceBeforeAPlaceholderIsReadOtherwise` and `TestTheShippedFilesAreReadForPlaceholdersAsTheyWere` (fetch), changed: the parser as it was refuses a path placeholder that is no `param_<name>` in today's words, which list the clock formats, and a shipped line with a clock placeholder is passed by, at least one being found (§ 42.10d).
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33226,6 +33238,48 @@ and MUST allocate nothing for it. A probe of a collector that has some reads
 a copy of the collector's labels with the values filled in; the collector's
 own configuration, which its probes share, MUST NOT be written to. The
 collectors page (§ 23) MUST list a label's parameters with the request's.
+
+## 42.10d Clock placeholders
+
+A clock placeholder MUST be accepted wherever a `{{param_<name>}}`
+placeholder is (§ 42.10a, § 42.10b), in every request type, and MUST be
+filled, at every scrape, with the time of that scrape. It is written
+`{{name[:offset][/unit][@zone]}}`, the parts after the name optional and in
+that order, and, where a filter may stand, MAY end with one (§ 42.10b).
+
+- **Formats.** `name` MUST be one of `date` (`2006-01-02`), `date_compact`
+  (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `month`
+  (`2006-01`), `year` (`2006`), `time` (`15:04:05`), `datetime` (RFC 3339,
+  seconds), `datetime_ms` (RFC 3339, milliseconds, always three digits),
+  `unix` (seconds since the epoch) and `unix_ms` (milliseconds).
+- **Offset.** `+` or `-` and one or more amounts of `w`, `d`, `h`, `m` and
+  `s`, each at most 100000. Weeks and days MUST move the calendar date in
+  the zone, so that `-1d` is the day before also across a daylight saving
+  change; hours, minutes and seconds MUST be elapsed time.
+- **Truncation.** `d`, `h` or `m`: the start of the day, hour or minute in
+  the zone, taken after the offset.
+- **Zone.** An IANA time zone name, `UTC` or `Local`; UTC when left out.
+  The exporter MUST carry the time zone database, so that a name is read
+  where the host has none. `datetime` and `datetime_ms` MUST write the
+  zone's offset, `Z` for UTC.
+- **Load.** A clock placeholder written wrong (an offset, a truncation or a
+  zone not as above, or the parts out of order) MUST be refused when the
+  configuration loads, saying what is wrong. A format its place cannot
+  write (`date` under `|number`, a `date_us` in a `localfile` path, a
+  value a Graphite expression may not hold) MUST be refused at load as the
+  same default would be, naming the clock placeholder. A name of a path
+  placeholder that is neither `param_<name>` nor a clock format MUST be
+  refused listing the clock formats. Outside the path, `{{` MUST open a
+  clock placeholder only where a format's name follows it directly, then
+  `}}`, `:`, `/`, `@` or `|`; `{{ date }}` and `{{dates}}` stay text.
+- **No probe parameter.** A clock placeholder MUST NOT be filled from a
+  probe or a static target, MUST NOT make a probe parameter required or
+  used (a `date` probe parameter is no `param_<name>` one), and MUST NOT
+  be listed among a collector's parameters on the collectors page (§ 23).
+- **Not in a label value.** A clock placeholder in a label value (§ 42.10c)
+  MUST be refused at load, saying that it may stand in a request only.
+- **Cache.** The clock MUST NOT be part of the response cache key: a cached
+  answer is kept for its `cache.ttl`, and the documentation MUST say so.
 
 ## 42.12 CI, container, and chart releases
 

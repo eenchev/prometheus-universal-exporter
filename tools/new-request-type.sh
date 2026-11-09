@@ -28,11 +28,12 @@
 # It writes
 # internal/fetch/requesttype_<name>.go, its tests in internal/fetch and
 # internal/exporter, its table of schema rows in test/repository and
-# docs/<NAME>.md; adds the type to the lists of
+# docs/<NAME>.md, and its specification, docs/SPECIFICATION-<NAME>.md; adds the type to the lists of
 # internal/fetch/requesttype.go, the guard of requesttype_none.go, the loops
 # and the opt-in lists of the Makefile and .github/workflows/ci.yml, the
 # lists the documentation marks <!-- request-types -->, the indexes of the
-# README and docs/CONFIGURATION.md, spec § 35's list of pages, the copies in
+# README and docs/CONFIGURATION.md, spec § 35's list of pages and § 5.1's of
+# the types' specifications, the copies in
 # the documentation of the sorted list of a default build's types, the tables of
 # the repository tests that name every type and the pages whose static
 # targets they read; runs make schemas; and prints what is left to write by
@@ -110,7 +111,7 @@ a | an) a="$articleGiven" ;;
 *) fail "the article is \"a\" or \"an\", not \"$articleGiven\"" ;;
 esac
 A=$(printf '%s' "$a" | sed 's/^a/A/')
-for file in "docs/${NAME}.md" "internal/fetch/requesttype_${name}_test.go" "internal/exporter/requesttype_${name}_test.go" \
+for file in "docs/${NAME}.md" "docs/SPECIFICATION-${NAME}.md" "internal/fetch/requesttype_${name}_test.go" "internal/exporter/requesttype_${name}_test.go" \
 	"test/repository/schemakeys_${name}_test.go" "test/repository/schemakeys_${name}rows_test.go"; do
 	[ ! -e "$file" ] || fail "$file exists already"
 done
@@ -131,6 +132,9 @@ need .github/workflows/ci.yml '^  request-types:$'
 need README.md '^- \[.*\](docs/[A-Z0-9]*\.md) — the `[a-z0-9]*` request type'
 need docs/CONFIGURATION.md '^- \[[A-Z0-9]*\.md\]([A-Z0-9]*\.md) — the .*`[a-z0-9]*` request type'
 need docs/SPECIFICATION-EXPORTER.md ', with `localfile` and `grpc` above'
+need docs/SPECIFICATION-EXPORTER.md '^#### The other request types$'
+need docs/SPECIFICATION-EXPORTER.md '^- \[`[a-z0-9]*`\](SPECIFICATION-[A-Z0-9]*\.md)$'
+need README.md "^- The request types' specifications, "
 need test/repository/readmesources_test.go '^var readmeSourceNames = '
 need test/repository/requesttypefacts_test.go '^var chartSourceNames = '
 need test/repository/schema_fullbuild_test.go '^//go:build !select_request_types'
@@ -510,7 +514,49 @@ each.
 EOF
 } >"docs/${NAME}.md"
 
+# --- docs/SPECIFICATION-<NAME>.md -------------------------------------------
+
+# The type's section of spec § 5.1, in a document of its own as each type's
+# but http's is, opened as theirs are.
+fill <<'EOF' >"docs/SPECIFICATION-${NAME}.md"
+# Prometheus Universal Exporter — `@name@` Request Type Specification
+
+This is the `@name@` request type's section of § 5.1 of the
+[exporter specification](SPECIFICATION-EXPORTER.md), in a document of its
+own so that a change to the type is a change to this document. Everything
+the request types share — the registry and the rules every type is held to
+(§ 5.1), building without a type, decoding, transforms, error policies,
+limits, caching, static targets and exposition — is in the exporter
+specification, and a section number here, such as § 42.14, is one of its
+sections. What a user reads of the type is [@NAME@.md](@NAME@.md).
+
+## `@name@`
+
+TODO(@name@): what @a@ `@name@` collector reads and hands the transforms, its
+keys in a table of `Key`, `Default` and `Rule`, what a target is for it, its
+fetch, its limits and how each of its failures reads, each as MUST rules, as
+the other types' specifications hold theirs.
+EOF
+
 # --- the lists of the types -------------------------------------------------
+
+# Spec § 5.1's list of the types' specifications, sorted, and the README's
+# line of them, written again from it.
+rewrite docs/SPECIFICATION-EXPORTER.md awk -v item="- [\`${name}\`](SPECIFICATION-${NAME}.md)" '
+	$0 == "#### The other request types" { inSection = 1 }
+	inSection && /^- \[`[a-z0-9]+`\]\(SPECIFICATION-[A-Z0-9]+\.md\)$/ {
+		if (!placed && $0 > item) { print item; placed = 1 }
+		inList = 1; print; next
+	}
+	inList && !placed { print item; placed = 1 }
+	inList { inList = 0; inSection = 0 }
+	{ print }
+'
+specLinks=$(sed -n '/^#### The other request types$/,/^#/s/^- \[`\([a-z0-9]*\)`\](SPECIFICATION-\([A-Z0-9]*\)\.md)$/[`\1`](docs\/SPECIFICATION-\2.md)/p' docs/SPECIFICATION-EXPORTER.md | paste -s -d '|' - | sed 's/|/, /g')
+rewrite README.md awk -v links="$specLinks" '
+	index($0, "- The request types\047 specifications, ") == 1 { sub(/: .*/, ": " links ".") }
+	{ print }
+'
 
 # The types of the tree, this one among them, and the opt-in ones, sorted.
 types=$(for f in internal/fetch/requesttype_*.go; do
@@ -804,8 +850,8 @@ TestNoScaffoldPlaceholderIsLeftInTheTree fails on until it is gone:
      the type in the words readmeSourceNames and chartSourceNames give.
   5. The prose that lists every type, which the script cannot write: each
      place docs/DEVELOPMENT.md lists under "Prose that names the types".
-  6. Spec: § 5.1's rules of the type (a subsection of its own, as the other
-     types have).
+  6. Its specification, docs/SPECIFICATION-${NAME}.md: the type's section of
+     spec § 5.1, its rules as MUST rules, as the other types' are.
   7. Examples under examples/, and the chart README's section of the type, if
      it is deployed with anything of its own.
   8. go test ./... and make ci.

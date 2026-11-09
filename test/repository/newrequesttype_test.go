@@ -152,6 +152,7 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 		"test/repository/schemakeys_zzdemorows_test.go", "test/repository/schemakeys_zzdemo_test.go", "docs/ZZDEMO.md",
 		"internal/fetch/requesttype_ozdefault.go", "internal/fetch/requesttype_ozdefault_test.go", "internal/exporter/requesttype_ozdefault_test.go",
 		"test/repository/schemakeys_ozdefault_test.go", "docs/OZDEFAULT.md",
+		"docs/SPECIFICATION-ZZDEMO.md", "docs/SPECIFICATION-OZDEFAULT.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
 			t.Errorf("the scaffold wrote no %s", file)
@@ -202,6 +203,9 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 	inOrder("docs/STATIC-TARGETS.md", "| [`kubernetes`](KUBERNETES.md#static-targets)", "| [`snmp`](SNMP.md#static-targets) |", "| [`ozdefault`](OZDEFAULT.md#static-targets) |", "| [`zzdemo`](ZZDEMO.md#static-targets), opt-in |", "<!-- /request-types -->")
 	inOrder("docs/CONFIGURATION.md", "- [KUBERNETES.md](KUBERNETES.md) — the `kubernetes` request type.\n", "- [SNMP.md](SNMP.md) — the `snmp` request type.\n- [OZDEFAULT.md](OZDEFAULT.md) — the `ozdefault` request type.\n- [ZZDEMO.md](ZZDEMO.md) — the opt-in `zzdemo` request type.\n")
 	inOrder("docs/SPECIFICATION-EXPORTER.md", "`kubernetes` in `docs/KUBERNETES.md`, `s3file` in", "`snmp` in `docs/SNMP.md`, `ozdefault` in `docs/OZDEFAULT.md`, and the opt-in `zzdemo` in `docs/ZZDEMO.md`, with `localfile` and `grpc` above")
+	inOrder("docs/SPECIFICATION-EXPORTER.md", "#### The other request types\n", "- [`ntp`](SPECIFICATION-NTP.md)\n- [`ozdefault`](SPECIFICATION-OZDEFAULT.md)\n- [`redis`](SPECIFICATION-REDIS.md)\n", "- [`tlscert`](SPECIFICATION-TLSCERT.md)\n- [`zzdemo`](SPECIFICATION-ZZDEMO.md)\n\n---\n\n## 6. ")
+	inOrder("README.md", "[`ntp`](docs/SPECIFICATION-NTP.md), [`ozdefault`](docs/SPECIFICATION-OZDEFAULT.md), [`redis`]", "[`tlscert`](docs/SPECIFICATION-TLSCERT.md), [`zzdemo`](docs/SPECIFICATION-ZZDEMO.md).\n")
+	inOrder("docs/SPECIFICATION-OZDEFAULT.md", "# Prometheus Universal Exporter — `ozdefault` Request Type Specification\n", "[OZDEFAULT.md](OZDEFAULT.md)", "\n## `ozdefault`\n\nTODO(ozdefault): what an `ozdefault` collector reads")
 	inOrder("docs/CONFIGURATION.md", "write one\n  of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, ozdefault, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`")
 	if spec := read(t, filepath.Join(dir, "docs/SPECIFICATION-EXPORTER.md")); strings.Contains(spec, "in its place in this list") {
 		t.Error("spec § 35's list was given a TODO, not the types in their places")

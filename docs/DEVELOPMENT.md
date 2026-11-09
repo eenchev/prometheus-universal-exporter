@@ -66,6 +66,19 @@ section becomes a GitHub Release's description, so its lines are written for
 users; a refactor, a test or a CI change adds none. [Releases](RELEASING.md#release-notes)
 says how a release moves the lines into a section of its own.
 
+## The specifications
+
+A change writes its rules, as MUST rules, once, in the section of the
+feature it changes: [`SPECIFICATION-EXPORTER.md`](SPECIFICATION-EXPORTER.md)
+for the exporter, [`SPECIFICATION-CHART.md`](SPECIFICATION-CHART.md) for the
+chart, and `SPECIFICATION-<TYPE>.md` for what is one request type's alone,
+its section of § 5.1 (every type but `http` has one, listed under
+[The other request types](SPECIFICATION-EXPORTER.md#the-other-request-types)).
+§ 34 holds only the rules the test suite is held to: a change adds no list of
+its tests or of the cases they cover, since each test says what it checks in
+its name and its comment, and `TestTheSpecificationsListNoTests` fails on a
+test named in a specification or a § 34 section that lists an area's cases.
+
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`), its
@@ -434,6 +447,9 @@ without writing anything. For a new name it writes
   with `<name>` for an opt-in type, A collector with its keys' table, The
   target, Static targets, Limits, Errors and self-metrics, Limitations and
   Troubleshooting;
+- `docs/SPECIFICATION-<NAME>.md`, the type's section of spec § 5.1 in a
+  document of its own, opened as the other types' are, with a
+  `TODO(<name>)` for its rules;
 
 and adds the type to every list that names each type: its
 `RequestType<Name>` constant, `knownRequestTypes` and, opt-in,
@@ -445,8 +461,9 @@ constraints that name every opt-in type (`optinkeys_test.go`,
 `optinkeys_check_test.go`, `schema_fullbuild_test.go`); the lists the
 documentation marks `<!-- request-types -->`, a row in a table of the types
 and a sentence in the others, and the build information's list of a default
-build; the README's index, the related pages of `docs/CONFIGURATION.md` and
-spec § 35's list of pages; for a type of the default build, every copy in
+build; the README's index and its line of the types' specifications, the
+related pages of `docs/CONFIGURATION.md`, spec § 35's list of pages and
+§ 5.1's list of the types' specifications; for a type of the default build, every copy in
 the documentation of the sorted list of a default build's types the
 exporter writes in its messages (`it was built with: dns, graphite, …` in
 the opt-in types' pages, `write one of dns, graphite, …`); and the tables of the repository's and the fetch
@@ -457,8 +474,8 @@ test holds to the keys a target may set, its page among them, whose
 section names `timeout`.
 
 Where it adds the type follows how each list is ordered. A list the
-exporter or a script writes is sorted, and so are the Makefile's loops and
-ci.yml's matrix. The documentation's lists of the types name those of the
+exporter or a script writes is sorted, and so are the Makefile's loops,
+ci.yml's matrix and the lists of the types' specifications. The documentation's lists of the types name those of the
 default build first and the opt-in ones after them, each group in the order
 the types came: a table of the types (`docs/STATIC-TARGETS.md`), the
 related pages of `docs/CONFIGURATION.md` and spec § 35's list get a type of
@@ -507,7 +524,8 @@ written. The script ends by printing what is left:
    words it gave `readmeSourceNames` and `chartSourceNames`;
 5. the prose that lists every type, below, which the script cannot write,
    since each sentence says what the types it names have in common;
-6. spec § 5.1's rules of the type;
+6. its specification, `docs/SPECIFICATION-<NAME>.md`: the type's rules, as
+   MUST rules, as the other types' specifications hold theirs;
 7. examples, and a section of the chart README if the type is deployed
    with anything of its own.
 

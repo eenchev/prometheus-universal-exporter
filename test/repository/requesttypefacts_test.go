@@ -359,7 +359,7 @@ func TestSpecTestSectionsAreNumberedInOrder(t *testing.T) {
 		}
 		last, lastSuffix = n, m[2]
 	}
-	if count < 30 {
+	if count < 8 {
 		t.Fatalf("found %d sections of § 34; the spec has moved", count)
 	}
 }

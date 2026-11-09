@@ -49,7 +49,10 @@ type pathPlaceholder struct {
 	Default    string
 	HasDefault bool
 	// Filter is how the value is written into a request body; empty is raw.
-	Filter     string
+	Filter string
+	// Clock is set for a clock placeholder, {{date}} and the rest
+	// (clockplaceholders.go), whose Name is its text between the braces.
+	Clock      *clockPlaceholder
 	start, end int // byte offsets of the whole placeholder, braces included
 }
 

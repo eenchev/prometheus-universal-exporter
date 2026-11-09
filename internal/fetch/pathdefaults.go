@@ -21,6 +21,9 @@ func checkPathParamDefaults(collector string, placeholders []pathPlaceholder, ch
 			continue
 		}
 		if err := check(p.Name, p.Default); err != nil {
+			if p.Clock != nil {
+				return fmt.Errorf("collector %q request.path: the clock placeholder {{%s}} writes values such as %q, which no probe could use (%w), so every probe would fail; choose another format", collector, p.Name, p.Default, err)
+			}
 			return fmt.Errorf("collector %q request.path: the default of %s is %q, which no probe could use (%w), so every probe that leaves %s out would fail; change the default", collector, p.Name, p.Default, err, p.Name)
 		}
 	}

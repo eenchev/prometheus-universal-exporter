@@ -2809,7 +2809,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | --- | --- | --- |
 | `type` | — | **Required.** `http`. |
 | `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
-| `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). A `%XX` escape in it is sent as written ([Target requests](REQUESTS.md#the-request-url)). |
+| `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters) and [clock placeholders](REQUESTS.md#dates-and-times). A `%XX` escape in it is sent as written ([Target requests](REQUESTS.md#the-request-url)). |
 | `query` | — | Query parameters added to the request, after the target's own query, which is sent as written; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). A name is sent escaped, and may not be empty or hold a control character. |
 | `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). Not `Accept-Encoding`, which is the exporter's own ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |

@@ -26,6 +26,9 @@ func (f templateField) check() error {
 			continue
 		}
 		if _, err := f.write(p, p.Default); err != nil {
+			if p.Clock != nil {
+				return fmt.Errorf("%w; the clock placeholder writes values such as that one, so every probe would fail — choose another format or filter", err)
+			}
 			return fmt.Errorf("%w; that value is the placeholder's default, so every probe that leaves %s out would fail — change the default", err, p.Name)
 		}
 	}

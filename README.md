@@ -180,6 +180,7 @@ Not sure which request type reads what you want? [Which request type?](docs/CONF
 - [Logging](docs/LOGGING.md) — the log format.
 - [Exporter specification](docs/SPECIFICATION-EXPORTER.md) — the implementation specification for the exporter.
 - [Chart specification](docs/SPECIFICATION-CHART.md) — the implementation specification for the Helm chart.
+- The request types' specifications, each type's section of the exporter's: [`dns`](docs/SPECIFICATION-DNS.md), [`graphite`](docs/SPECIFICATION-GRAPHITE.md), [`grpc`](docs/SPECIFICATION-GRPC.md), [`icmp`](docs/SPECIFICATION-ICMP.md), [`kubernetes`](docs/SPECIFICATION-KUBERNETES.md), [`ldap`](docs/SPECIFICATION-LDAP.md), [`localfile`](docs/SPECIFICATION-LOCALFILE.md), [`ntp`](docs/SPECIFICATION-NTP.md), [`redis`](docs/SPECIFICATION-REDIS.md), [`s3file`](docs/SPECIFICATION-S3FILE.md), [`snmp`](docs/SPECIFICATION-SNMP.md), [`sql`](docs/SPECIFICATION-SQL.md), [`sshexec`](docs/SPECIFICATION-SSHEXEC.md), [`sshfile`](docs/SPECIFICATION-SSHFILE.md), [`tcp`](docs/SPECIFICATION-TCP.md), [`tlscert`](docs/SPECIFICATION-TLSCERT.md).
 
 For contributors: [development](docs/DEVELOPMENT.md), [dependencies](docs/DEPENDENCIES.md) and [releasing](docs/RELEASING.md).
 

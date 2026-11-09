@@ -156,6 +156,52 @@ func TestOnlyMutatingMethodsCountAsProducingData(t *testing.T) {
 	}
 }
 
+// A part of data under another name is still data: the commonest pre-script
+// there is walks the rows and changes each, which mutates nothing rooted at
+// the name data, and was refused at startup as a script that produces none.
+// So was one that hands data to a function of its own. A copy under another
+// name, and a builtin handed data, still produce nothing.
+func TestPreScriptChangingDataThroughAnotherNameIsAccepted(t *testing.T) {
+	accepted := map[string]string{
+		"rows in a loop":        "for row in data[\"rows\"]:\n    row[\"cpu\"] = float(row[\"cpu\"].rstrip(\"%\"))",
+		"items in a loop":       "for name, row in data.items():\n    row[\"name\"] = name",
+		"enumerated rows":       "for i, row in enumerate(data):\n    row[\"i\"] = i",
+		"a part by name":        "rows = data[\"rows\"]\nrows.append({\"cpu\": 1})",
+		"a part of a part":      "rows = data[\"rows\"]\nfirst = rows[0]\nfirst[\"cpu\"] = 1",
+		"a part from get":       "rows = data.get(\"rows\") or []\nfor row in rows:\n    del row[\"noise\"]",
+		"an attribute of a row": "for row in data:\n    row.cpu = 1",
+		"a function of its own": "def clean(d):\n    d[\"cpu\"] = 1\nclean(data)",
+		"a function of a part":  "def clean(rows):\n    rows.sort()\nclean(data[\"rows\"])",
+		"a comprehension":       "[row.update(cpu=1) for row in data[\"rows\"]]",
+		"the dunder method":     "data.__setitem__(\"cpu\", 1)",
+	}
+	for name, script := range accepted {
+		t.Run("accepted/"+name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("accepted", script))
+			if err := transform.ValidatePythonScripts("python3", cfg); err != nil {
+				t.Fatalf("%q changes data and was rejected: %v", script, err)
+			}
+		})
+	}
+	rejected := map[string]string{
+		"a copy changed":             "other = dict(data)\nother[\"cpu\"] = 1",
+		"a method's copy changed":    "other = data.copy()\nother[\"cpu\"] = 1",
+		"a list of the rows grown":   "rows = list(data[\"rows\"])\nrows.append(1)",
+		"a part named and only read": "rows = data[\"rows\"]\ntotal = len(rows)",
+		"a part's name bound anew":   "for row in data[\"rows\"]:\n    row = 1",
+		"a builtin handed data":      "print(data)\nn = len(data)",
+		"a module's function":        "import json\ntext = json.dumps(data)",
+	}
+	for name, script := range rejected {
+		t.Run("rejected/"+name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("rejected", script))
+			if err := transform.ValidatePythonScripts("python3", cfg); err == nil {
+				t.Fatalf("%q produces no data and was accepted", script)
+			}
+		})
+	}
+}
+
 func TestPreScriptSyntaxErrorIsRejected(t *testing.T) {
 	cfg := validatedConfig(t, preScriptCollector("broken", "data = {'value': 1"))
 	err := transform.ValidatePythonScripts("python3", cfg)

@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_http || request_type_graphite || request_type_grpc
+//go:build !select_request_types || request_type_http || request_type_graphite || request_type_grpc || request_type_sql
 
 package fetch
 
@@ -6,9 +6,9 @@ import "fmt"
 
 // The load-time rule of a templated field, for the types that have one: http
 // and graphite, in the body, the header and query values and the Graphite
-// expressions, and grpc, in the message and the metadata values. localfile
-// has placeholders in its path alone, so a build with only it leaves this
-// out.
+// expressions, grpc, in the message and the metadata values, and sql, in
+// the database's name. localfile has placeholders in its path alone, so a
+// build with only it leaves this out.
 
 // check is what a field is held to when the configuration loads: its
 // placeholders well formed, and each default one that can be written where

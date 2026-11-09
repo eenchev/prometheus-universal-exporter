@@ -80,6 +80,26 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `nil pointer evaluating interface {}.enabled`, naming no key. It now
   fails naming the block and saying what to do
   ([Values](charts/prometheus-universal-exporter/README.md#values)).
+- A `sql` scrape that took from its pool a connection PostgreSQL had ended
+  while it was idle — `idle_session_timeout`, `pg_terminate_backend` —
+  failed with `SQLSTATE 57P05` or `57P01`, and with a timeout shorter than
+  the scrape interval every other scrape did. The scrape now closes that
+  connection and makes another
+  ([Connections](docs/SQL.md#connections)).
+- A pre-script that changed `data` through another name — the usual
+  `for row in data["rows"]: row["cpu"] = ...`, `rows = data["rows"]` and
+  then `rows.append(...)`, or a function of its own handed `data` — was
+  refused at startup as one that produces no `data`, though it does. Such
+  scripts now load
+  ([Reshaping a response](docs/PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform)).
+- A `sql` collector whose `database` had a placeholder default that is no
+  database name, `{{param_db:a b}}`, loaded, and answered `400` to every
+  probe that left the parameter out. It is refused when the configuration
+  loads, as such a default is in every other place.
+- A PostgreSQL `timetz` column reached the rules as text, `13:45:30+02`,
+  where a time of day is its seconds since midnight, as a `time` column's
+  was: the driver names the type by a number, which the exporter did not
+  read.
 - A panic where a fetch does part of its work on the side — the servers of
   an `ntp` scrape, the addresses of an `icmp` one, the ports of a `tcp`
   check, the requests of a `kubernetes` scrape, a file or a directory being

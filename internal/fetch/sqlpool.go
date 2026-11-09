@@ -790,35 +790,71 @@ func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Col
 		}
 		c.release(p)
 	}
-	before := p.made.Load()
-	conn, err := p.db.Conn(ctx)
-	if err != nil {
-		giveUp()
-		err = sqlDeadline(ctx, "connecting", err)
-		traceSQL(ctx, key, first, false, err)
-		return nil, err
-	}
-	dc := sqlConnKey(conn)
-	if p.idle != nil {
-		p.idle.mark(dc)
-	}
-	reused := p.made.Load() == before
-	if first.name == "" {
-		traceSQL(ctx, key, first, reused, nil)
-		result, finish, err := p.statement(ctx, conn, col, first, 0)
+	// A connection kept idle may have been ended by the server meanwhile,
+	// and not every driver finds that out before its first statement: a
+	// PostgreSQL server that ends an idle session (idle_session_timeout, an
+	// administrator's pg_terminate_backend) leaves its last words on the
+	// socket, which pgx takes for a connection alive and reads as the
+	// answer to BEGIN. The transaction that could not begin has run nothing,
+	// so the scrape closes that connection and takes another, a new one
+	// once the idle ones are used up, rather than fail for a connection it
+	// only found.
+	for attempt := 0; ; attempt++ {
+		before := p.made.Load()
+		conn, err := p.db.Conn(ctx)
+		if err != nil {
+			giveUp()
+			err = sqlDeadline(ctx, "connecting", err)
+			traceSQL(ctx, key, first, false, err)
+			return nil, err
+		}
+		dc := sqlConnKey(conn)
+		if p.idle != nil {
+			p.idle.mark(dc)
+		}
+		reused := p.made.Load() == before
+		var result *sqlResult
+		var finish func()
+		var began bool
+		if first.name == "" {
+			traceSQL(ctx, key, first, reused, nil)
+			result, finish, err = p.statement(ctx, conn, col, first, 0)
+			began = !sqlBeginFailed(err)
+		} else {
+			var failed int
+			result, finish, failed, err = p.statements(ctx, key, conn, col, runs, reused)
+			began = failed != 0 || !sqlBeginFailed(err)
+		}
+		if err != nil && !began && reused && attempt < sqlStaleConnRetries && ctx.Err() == nil {
+			finish()
+			if p.idle != nil {
+				p.idle.mark(dc)
+			}
+			discardSQLConn(conn)
+			sqlEvent("stale connection", p.key.address.hostPort)
+			continue
+		}
 		c.end(ctx, p, conn, dc, finish, giveUp)
 		if err != nil {
 			return nil, err
 		}
-		c.countRows(p, col, len(result.rows))
+		if first.name == "" {
+			c.countRows(p, col, len(result.rows))
+		}
 		return result, nil
 	}
-	result, finish, err := p.statements(ctx, key, conn, col, runs, reused)
-	c.end(ctx, p, conn, dc, finish, giveUp)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+}
+
+// sqlStaleConnRetries is how many connections taken from the pool's idle
+// ones a scrape gives up, each ended by the server while it was kept,
+// before it fails with what the next says.
+const sqlStaleConnRetries = 2
+
+// sqlBeginFailed says err is the failure of a transaction to begin, before
+// anything of the statement was sent.
+func sqlBeginFailed(err error) bool {
+	var step *sqlStepError
+	return errors.As(err, &step) && strings.HasPrefix(step.step, "beginning ")
 }
 
 // countRows keeps the rows a scrape of col returned, for
@@ -838,8 +874,9 @@ func (c *sqlPoolCache) countRows(p *sqlPool, col *model.Collector, n int) {
 // them together, as max_rows bounds each. The first that fails fails the
 // scrape, naming it. A statement's end that the scrape's deadline outlasts
 // fails the scrape too, and finish then waits for it, which end bounds and
-// abandons the connection after.
-func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn, col *model.Collector, runs []sqlRun, reused bool) (result *sqlResult, finish func(), err error) {
+// abandons the connection after. failed is the place of the statement that
+// failed among runs.
+func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn, col *model.Collector, runs []sqlRun, reused bool) (result *sqlResult, finish func(), failed int, err error) {
 	named := make(map[string]any, len(runs))
 	var used int64
 	total := 0
@@ -848,7 +885,7 @@ func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn
 		traceSQL(ctx, key, run, reused || i > 0, nil)
 		one, end, err := p.statement(ctx, conn, col, run, used)
 		if err != nil {
-			return nil, end, fmt.Errorf("request.statements[%d], %s: %w", i, run.name, err)
+			return nil, end, i, fmt.Errorf("request.statements[%d], %s: %w", i, run.name, err)
 		}
 		named[run.name] = one.rows
 		total += len(one.rows)
@@ -867,7 +904,7 @@ func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn
 		select {
 		case <-ended:
 		case <-ctx.Done():
-			return nil, func() { <-ended }, p.sqlDeadline(ctx, "ending the statement "+run.name, ctx.Err())
+			return nil, func() { <-ended }, i, p.sqlDeadline(ctx, "ending the statement "+run.name, ctx.Err())
 		}
 	}
 	shown := make(map[string]any, len(named))
@@ -876,10 +913,10 @@ func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn
 	}
 	body, err := json.Marshal(shown)
 	if err != nil {
-		return nil, finish, err
+		return nil, finish, len(runs), err
 	}
 	sqlPools.countRows(p, col, total)
-	return &sqlResult{shown: body, named: named}, finish, nil
+	return &sqlResult{shown: body, named: named}, finish, 0, nil
 }
 
 // statement runs run on conn, within ctx, and reads its rows, which with

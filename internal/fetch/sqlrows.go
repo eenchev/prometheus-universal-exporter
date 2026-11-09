@@ -53,7 +53,7 @@ func readSQLRows(rs *sql.Rows, maxRows int, maxBytes, used int64) (*sqlResult, e
 	types := make([]string, len(columns))
 	if columnTypes, err := rs.ColumnTypes(); err == nil {
 		for i, t := range columnTypes {
-			types[i] = t.DatabaseTypeName()
+			types[i] = sqlColumnType(t.DatabaseTypeName())
 		}
 	}
 	place := make(map[string]int, len(columns))
@@ -176,6 +176,21 @@ func sqlValue(v any, dbType string) (value any, present bool, size int64, err er
 	return nil, false, 0, fmt.Errorf("holds a value of the Go type %T, of the column type %s, which the exporter does not read; convert it in the statement to a number or text", v, sqlTypeName(dbType))
 }
 
+// sqlPostgresTypes are the types pgx has no name for, and names by their
+// OID in the server's catalogue: a TIMETZ column's type was "1266" to every
+// rule that reads a type, so its time of day stayed text, and a message
+// about a MONEY column named the type 790.
+var sqlPostgresTypes = map[string]string{"790": "MONEY", "1266": "TIMETZ"}
+
+// sqlColumnType is a column's type as its driver names it, or, for a type
+// pgx names by its OID, the name the server has for it.
+func sqlColumnType(name string) string {
+	if known, ok := sqlPostgresTypes[name]; ok {
+		return known
+	}
+	return name
+}
+
 // sqlTypeName names a column's type for a message.
 func sqlTypeName(dbType string) string {
 	if dbType == "" {
@@ -230,7 +245,9 @@ func sqlNumericType(dbType string) bool {
 		}
 	}
 	name, _, _ = strings.Cut(name, "(")
-	name = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(name), " UNSIGNED"))
+	// MySQL's driver names an unsigned type with the word first, UNSIGNED
+	// BIGINT; ClickHouse and the servers' own catalogues write it last.
+	name = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(name), " UNSIGNED"), "UNSIGNED "))
 	if sqlNumericTypes[name] {
 		return true
 	}

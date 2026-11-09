@@ -81,7 +81,9 @@ func TestChartNamesABlockOfValuesThatIsNull(t *testing.T) {
 	for _, block := range blocks {
 		var values strings.Builder
 		for depth, key := range block {
-			values.WriteString(strings.Repeat("  ", depth) + key + ":\n")
+			values.WriteString(strings.Repeat("  ", depth))
+			values.WriteString(key)
+			values.WriteString(":\n")
 		}
 		// A block under the allocator's or the static targets' is read when
 		// they are on.

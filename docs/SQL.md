@@ -361,12 +361,16 @@ document holds each one's rows under its name:
       - name: oldest_job_age_seconds
         expression: .oldest[0].age
       - name: workers_busy
-        expression: '[.workers[] | select(.busy)] | length'
+        expression: '[.workers[] | select(.busy == 1)] | length'
 ```
 
 ```json
-{"jobs": [{"state": "queued", "n": 12}], "oldest": [{"age": 341.5}], "workers": [{"host": "w1", "busy": true}]}
+{"jobs": [{"state": "queued", "n": 12}], "oldest": [{"age": 341.5}], "workers": [{"host": "w1", "busy": 1}]}
 ```
+
+`busy` is a boolean column, which the rows hold as `1` or `0`
+([The rows](#the-rows)): compare it, since jq takes `0` for true, and
+`select(.busy)` would keep every row.
 
 - Each entry has a `name`, letters, digits and `_`, not beginning with a
   digit and unique among the collector's, which a rule reads its rows by,
@@ -409,9 +413,9 @@ not apply: the driver reads the values, and there is no body to decode.
 | The column holds | The transforms see |
 | --- | --- |
 | an integer or a floating-point number | the number |
-| a decimal (`NUMERIC`, `DECIMAL`, `NUMBER`, `MONEY`; Snowflake's `NUMBER`, which its driver names `FIXED`, and `DECFLOAT`), which drivers give as text | the number it writes, or its text when it writes none |
+| a decimal (`NUMERIC`, `DECIMAL`, `NUMBER`, `MONEY`; Snowflake's `NUMBER`, which its driver names `FIXED`, and `DECFLOAT`), which drivers give as text | the number it writes, or its text when it writes none: PostgreSQL writes `money` with its currency, `$12.34`, so cast it there, `amount::numeric` |
 | a boolean | `1` or `0` |
-| a date or a timestamp (`DATE`, `DATETIME`, `TIMESTAMP`) | its Unix time in seconds, with the fraction |
+| a date or a timestamp (`DATE`, `DATETIME`, `TIMESTAMP`) | its Unix time in seconds, with the fraction; PostgreSQL's `infinity` and `-infinity`, which are no time, the text |
 | a time of day (`TIME`, `TIMETZ`, ClickHouse's `Time` and `Time64`) | the seconds since midnight, with the fraction, as its clock reads where it was written: `13:45:30.5` is `49530.5`; a MySQL `TIME`, a duration, may be negative or past 24 hours, `-01:00:00` is `-3600` |
 | text | the text |
 | binary data | its text when it is UTF-8; otherwise the scrape fails, naming the column |
@@ -546,7 +550,13 @@ reach.
 | `keepalive.check` | `tcp` | `tcp`: TCP keepalives on every connection at the interval, so one a firewall or a dead host dropped is found broken. `ping`: every interval, each idle connection of the pool is pinged, and a connection the driver then reports broken is closed. Each ping takes one of the target's places at `max_per_target`, without waiting, so that no more connections are pinged than there are places free: when the scrapes hold every place the pings are skipped for that interval. They never make a connection, and are given the interval to answer in: one that does not answer by then fails, counted, and frees its place; the connections have no TCP keepalives, as with an interval of `0`, even with a driver that would switch them on (`mysql`). |
 
 A connection that broke is found by the scrape that takes it, or by a
-keepalive, and made again. A reload that removes a collector, or changes any
+keepalive, and made again. So is one the server ended while it was kept
+idle, by PostgreSQL's `idle_session_timeout` or an administrator's
+`pg_terminate_backend`, or MySQL's `wait_timeout`: the scrape that finds it
+closes it and connects anew, since nothing of its statement was sent, and
+fails only if the new connection does. A server that ends idle sessions
+sooner than the scrape interval costs a connection every scrape; give the
+account a longer timeout, or set `max_idle_per_target: 0`. A reload that removes a collector, or changes any
 of its connection settings, closes its pools: the next scrape makes a pool of
 the new settings, while the scrapes using an old pool then — a statement
 still running, a scrape waiting at `max_per_target` — finish on it, and it is

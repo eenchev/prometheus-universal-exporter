@@ -37,6 +37,11 @@ func TestASQLTimeOfDayIsItsSecondsSinceMidnight(t *testing.T) {
 		{"13:45:30.25", "TIME", 49530.25},
 		{"13:45:30+02", "TIMETZ", 49530.0},
 		{"08:00:00-05:30", "TIMETZ", 28800.0},
+		// pgx names timetz by its OID, having no name for it.
+		{"13:45:30+02", sqlColumnType("1266"), 49530.0},
+		{"13:45:30.5-05:30", sqlColumnType("1266"), 49530.5},
+		{"$12.34", sqlColumnType("790"), "$12.34"},
+		{"7", sqlColumnType("23"), "7"},
 		{[]byte("838:59:59"), "TIME", 3020399.0},
 		{[]byte("-01:00:00"), "TIME", -3600.0},
 		{"12:30", "TIME", 45000.0},

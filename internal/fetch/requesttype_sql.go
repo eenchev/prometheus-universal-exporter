@@ -434,7 +434,10 @@ func validateSQLRequest(x *model.Collector) error {
 	if own.Database != "" && strings.TrimSpace(own.Database) == "" {
 		return fmt.Errorf("collector %q request.database is written with blanks alone; name the database, or leave the key out for the account's default", x.Name)
 	}
-	if _, err := (templateField{"request.database", own.Database, "database"}).parse(); err != nil {
+	// A default, or a clock placeholder's format, that is no database
+	// name is refused now: every probe that left the parameter out would
+	// be answered 400, for the configuration's mistake.
+	if err := (templateField{"request.database", own.Database, "database"}).check(); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if err := checkSQLArgs("request.", own.Args, own.ArgTypes); err != nil {

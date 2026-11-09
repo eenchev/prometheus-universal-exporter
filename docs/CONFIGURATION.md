@@ -4178,6 +4178,21 @@ collector, and rejects such a configuration on reload with the previous one left
 active. Replacing `data`, mutating it by key or attribute, augmenting it,
 binding it as a loop or `with` target or with `:=` (`(data := ...)`), deleting
 from it (`del data["noise"]`), and calling a method that mutates it all count.
+So does changing a part of `data` under another name, as the usual clean-up
+of rows does, and handing `data` to a function of the script's own:
+
+```python
+for row in data["rows"]:
+    row["cpu"] = float(row["cpu"].rstrip("%"))    # row is a part of data
+
+def clean(rows):
+    rows.sort(key=lambda row: row["name"])
+clean(data["rows"])
+```
+
+A copy under another name is not `data`: `rows = list(data["rows"])` and
+`other = dict(data)` are new objects, and a script that changes only those
+is refused.
 
 Reading `data` does not count, however much of it the script does. A method call
 only counts when the method mutates: `data.update(...)` and

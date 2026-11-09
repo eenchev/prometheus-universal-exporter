@@ -4925,6 +4925,18 @@ or attribute, augmenting it, binding it as a loop or `with` target or with an
 assignment expression (`(data := ...)`), deleting from it (`del data["x"]`),
 and calling a method that mutates it all satisfy this.
 
+A part of `data` under another name is `data` still, and changing it MUST
+satisfy the rule as changing `data` does: a name assigned a part
+(`rows = data["rows"]`, `rows = data.get("rows") or []`), the target of a
+loop or a comprehension over `data` or a part of it, `enumerate`, `sorted`
+and the like between them or not (`for row in data["rows"]: row["cpu"] =
+...`), and a name bound to a part of one of those in turn. Handing `data`
+or such a part to a function the script defines MUST satisfy it too, since
+the function may change what it is handed. A copy does not: `dict(data)`,
+`list(data["rows"])` and `data.copy()` under another name are other
+objects, binding a part's name anew changes nothing, and a builtin or a
+module's function handed `data` reads it.
+
 Reading `data` MUST NOT satisfy it, however thoroughly the script reads. A
 method call counts only when the method mutates its receiver: `data.update(...)`
 and `data["rates"].append(...)` produce `data`, while `data.items()`,

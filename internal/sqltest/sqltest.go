@@ -88,6 +88,21 @@ type DB struct {
 	pingStarted chan struct{}
 	pinged      map[*conn]bool
 	rollHang    bool
+	// open are the connections made and not closed.
+	open map[*conn]bool
+}
+
+// EndSessions has the server end every connection open now, as an
+// administrator or an idle-session timeout does, without closing its
+// network connection first: the connection is found out at its next
+// transaction, which fails to begin with err, as pgx reads the server's
+// last words there. A connection made afterwards is not ended.
+func (db *DB) EndSessions(err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for c := range db.open {
+		c.ended = err
+	}
 }
 
 // Connect makes a connection to the database, as a driver's connector does.
@@ -96,7 +111,14 @@ func (db *DB) Connect(context.Context) (driver.Conn, error) {
 		return nil, db.ConnectErr
 	}
 	db.opened.Add(1)
-	return &conn{db: db}, nil
+	c := &conn{db: db}
+	db.mu.Lock()
+	if db.open == nil {
+		db.open = map[*conn]bool{}
+	}
+	db.open[c] = true
+	db.mu.Unlock()
+	return c, nil
 }
 
 // ConnectOver makes a connection to the database over nc, a network
@@ -198,6 +220,9 @@ type conn struct {
 	closed bool
 	// nc is the network connection of a connection made by ConnectOver.
 	nc net.Conn
+	// ended is what the connection's transactions fail to begin with, once
+	// the server has ended it (EndSessions).
+	ended error
 }
 
 var errNotSupported = errors.New("sqltest: not supported")
@@ -208,6 +233,9 @@ func (c *conn) Close() error {
 	if !c.closed {
 		c.closed = true
 		c.db.closed.Add(1)
+		c.db.mu.Lock()
+		delete(c.db.open, c)
+		c.db.mu.Unlock()
 		select {
 		case c.db.Closes <- struct{}{}:
 		default:
@@ -225,6 +253,9 @@ func (c *conn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, err
 	c.db.mu.Lock()
 	defer c.db.mu.Unlock()
 	c.db.txOptions = append(c.db.txOptions, opts)
+	if c.ended != nil {
+		return nil, c.ended
+	}
 	if c.db.BeginErr != nil {
 		return nil, c.db.BeginErr
 	}

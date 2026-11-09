@@ -10,16 +10,28 @@ import (
 
 // The quick tier is the developer's alone: `make test-quick` runs go test
 // with -short, which tier.Slow skips the slow tests under, and nothing that
-// gates a change does. `make test` and every go test of ci.yml run without
-// -short, so every slow test runs in CI; tier.Slow skips only under -short.
+// gates a change does. `make test`, every workflow and every script of
+// tools run without -short, in go test's flags or in GOFLAGS, so every slow
+// test runs in CI; tier.Slow skips only under -short.
 func TestOnlyTheQuickTierLeavesTheSlowTestsOut(t *testing.T) {
 	makefile := read(t, "Makefile")
 	quick := regexp.MustCompile(`(?m)^test-quick:\n\tgo test -short `).FindString(makefile)
 	if quick == "" {
 		t.Fatal("the Makefile has no test-quick target running go test -short")
 	}
-	short := regexp.MustCompile(`go test[^\n]*\s-short\b`)
-	for _, path := range []string{"Makefile", ".github/workflows/ci.yml"} {
+	short := regexp.MustCompile(`(^|[\s'"=])-(test\.)?short\b`)
+	paths := []string{"Makefile"}
+	for _, pattern := range []string{".github/workflows/*.yml", ".github/workflows/*.yaml", "tools/*.sh"} {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, matches...)
+	}
+	if len(paths) < 3 {
+		t.Fatalf("found only %v; the workflows have moved", paths)
+	}
+	for _, path := range paths {
 		text := read(t, path)
 		if path == "Makefile" {
 			text = strings.Replace(text, quick, "", 1)

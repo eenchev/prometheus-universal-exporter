@@ -11367,8 +11367,9 @@ what the tests of each area MUST cover at the least. It names no test and
 keeps no record of the tests a change added: what each test checks is said
 by its name and its comment, beside the code it holds, and a requirement a
 test holds the code to is written where that requirement is, in the
-section of the feature. A test of the
-`grpc` request type MUST run against an in-process gRPC server on a loopback
+section of the feature.
+
+A test of the `grpc` request type MUST run against an in-process gRPC server on a loopback
 listener, with its service compiled from `.proto` sources at run time, so
 that it needs neither the network nor `protoc`.
 
@@ -11379,7 +11380,7 @@ race detector, under `go test -short`, and MUST leave out the scaffold's
 test and every test that takes a second or more, each of which
 MUST say so as its first line by calling `tier.Slow`
 (`internal/testutil/tier`), which skips a test under `-short` alone.
-Nothing that gates a change — `make test`, `make ci` or a job of CI — MAY
+What gates a change — `make test`, `make ci` and every job of CI — MUST NOT
 pass `-short`, and a test MUST hold them to that.
 
 ## 34.1 Test layers
@@ -11786,7 +11787,7 @@ Also required, for the parser in §14.1:
 - Output order is deterministic.
 - `go.mod` does not require `prometheus/common`, `prometheus/client_model`,
   `google.golang.org/protobuf` or `munnerz/goautoneg`.
-- A fuzz target (`FuzzParsePrometheusText`) whose seeds run with the ordinary
+- A fuzz target of the Prometheus text parser, whose seeds run with the ordinary
   suite, and which never produces a metric without a name.
 - A label value that is not valid UTF-8 is repaired with U+FFFD and counted as
   a repair, and the scrape's other series are kept.
@@ -12594,7 +12595,7 @@ The repository MUST include documentation covering:
     repository test, which MUST find the series the page shows. Beside it,
     `docs/HOW-DO-I.md`, linked from the README's index, MUST list tasks a
     reader comes with, each linked to the section of the reference that
-    does it; its links, as every page's, MUST resolve
+    does it; its links, as every page's, MUST resolve.
 27. Uptime probes of HTTP sites, in `docs/REQUESTS.md`, linked from the
     README's index and from `docs/CONFIGURATION.md`: the collector of
     `configs/config.uptime.example.yaml` — `report_failures`, `method:

@@ -11,7 +11,7 @@ that does it, usually with an example to copy. New here? Start with
 | Turn a JSON API into metrics | [Getting started](GETTING-STARTED.md), then [Metrics per item](CONFIGURATION.md#metrics-per-item) |
 | Know which request type fits my source | [Which request type?](CONFIGURATION.md#which-request-type) |
 | Read YAML, XML, CSV, HTML, logfmt, TOML, INI or plain text | [Collectors](CONFIGURATION.md#collectors), and for CSV [Reading CSV](CONFIGURATION.md#reading-csv-what-to-expect) |
-| Pass through, filter or rename metrics a service already exposes in Prometheus format | a `prometheus` transform with no `metrics` rules, and its `include`, `exclude` and `rename`, in [Collectors](CONFIGURATION.md#collectors) |
+| Pass through, filter or rename metrics a service already exposes in Prometheus format | a `prometheus` transform with no `metrics` rules, and its `include`, `exclude` and `rename`, in [Collector-wide labels](CONFIGURATION.md#collector-wide-labels) |
 | Make one series per item of a list | [Metrics per item](CONFIGURATION.md#metrics-per-item) |
 | Turn a status text such as `"healthy"` into a number | [Turning a status into metrics](CONFIGURATION.md#turning-a-status-into-metrics) and [Mapping text to values](CONFIGURATION.md#mapping-text-to-values-and-scaling-them) |
 | Use a date or a time as the value | [Reading a date or a time as the value](CONFIGURATION.md#reading-a-date-or-a-time-as-the-value) |

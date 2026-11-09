@@ -58,6 +58,23 @@ func TestTheGettingStartedPageWorksAsWritten(t *testing.T) {
 		t.Errorf("the API was asked %v", asked)
 	}
 
+	// A value the expression finds nothing for is only left out, the rest
+	// served, and a target that cannot be reached fails the probe, as the
+	// page says after its curl.
+	answer = `{"current": {"wind_speed_10m": 3.1}}`
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector=weather&target="+url.QueryEscape(api.URL), nil))
+	if body := recorder.Body.String(); recorder.Code != http.StatusOK || strings.Contains(body, "weather_temperature_celsius") || !strings.Contains(body, "weather_wind_speed_meters_per_second 3.1\n") {
+		t.Errorf("an answer without the temperature is answered %d\n%s", recorder.Code, body)
+	}
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector=weather&target="+url.QueryEscape(gone.URL), nil))
+	if recorder.Code < 500 || !strings.Contains(recorder.Body.String(), "failed") {
+		t.Errorf("a target that cannot be reached is answered %d\n%s", recorder.Code, recorder.Body)
+	}
+
 	targets := testutil.WriteIn(t, t.TempDir(), "static-targets.yaml", docBlock(t, blocks, "interval: 5m\n"))
 	file, err := config.LoadStaticTargets(targets)
 	if err == nil {

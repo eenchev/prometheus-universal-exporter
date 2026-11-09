@@ -12,10 +12,12 @@ import (
 // code. § 34 keeps the rules the suite is held to, its subsections 34.1 to
 // 34.34, and no section after them, and no specification lists a test by its
 // name, as the sections that recorded each change's tests did, some
-// nineteen thousand lines of them.
+// nineteen thousand lines of them, nor in passing, as the chart's Helm
+// tests named theirs in parentheses. A pattern of names, as
+// `TestExternal*`, is a rule and stays.
 func TestTheSpecificationsListNoTests(t *testing.T) {
 	section := regexp.MustCompile(`^## 34\.(\d+)`)
-	listed := regexp.MustCompile("^\\s*[-*] `(Test|Fuzz|Benchmark)[A-Z]")
+	listed := regexp.MustCompile("`(Test|Fuzz|Benchmark)[A-Z][A-Za-z0-9_]*`")
 	for _, path := range []string{"docs/SPECIFICATION-EXPORTER.md", "docs/SPECIFICATION-CHART.md"} {
 		sections := 0
 		for n, line := range strings.Split(read(t, path), "\n") {

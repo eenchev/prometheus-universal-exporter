@@ -570,14 +570,14 @@ that calls `tier.Slow(t)` (`internal/testutil/tier`) as its first line,
 which `-short` skips. A test is marked slow when it takes a second or more
 on its own: the tests that compare a parser with an oracle over
 many generated inputs, render the chart with helm, or run a schedule on the
-real clock. About two hundred of some five thousand are, and the quick tier
+real clock. About two hundred of some 4,400 are, and the quick tier
 takes a few minutes where `make test`, which runs the suite three times,
 twice under the race detector, takes far longer.
 
 The quick tier is no gate. Before you push, run `make test`, or `make ci` for
 everything CI runs; CI runs every test, slow ones included, on every change,
-and neither `make test` nor `ci.yml` passes `-short` (a test holds them to
-that). A new test that takes a second or more starts with
+and neither `make test` nor any workflow passes `-short` (a test holds them
+to that). A new test that takes a second or more starts with
 `tier.Slow(t)`; one that is fast leaves it out, so that the quick tier still
 covers what it covers.
 

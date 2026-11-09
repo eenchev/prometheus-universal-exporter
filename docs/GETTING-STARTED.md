@@ -65,7 +65,8 @@ collectors:
 
 Each entry under `metrics` is one metric: its name, and a jq expression
 that picks its value out of the answer. If the file has a mistake, the
-exporter refuses to start and says which collector and which line.
+exporter refuses to start and says where: the line of an unknown key, or the
+collector and metric of an expression that does not parse.
 
 ## 3. Probe it
 
@@ -87,12 +88,16 @@ weather_wind_speed_meters_per_second 3.1
 ```
 
 `target` is the source's address and `collector` the collector's name. A
-probe that fails answers with an HTTP error status and a line saying what
-failed, such as the expression that found no value.
+probe that fails, such as one whose target cannot be reached, answers with an
+HTTP error status and a line saying what failed. A metric whose expression
+finds no value is only left out, and the rest are served; to fail the probe
+instead, see [When a metric cannot be extracted](CONFIGURATION.md#when-a-metric-cannot-be-extracted).
 
 To try expressions without restarting, start the exporter with
-`--web.debug=edit` and open <http://localhost:8080/debug>: it fetches a
-target, shows the answer, and runs a collector you edit in the page. See
+`--web.debug=edit` and open <http://localhost:8080/debug>: paste an answer,
+such as the JSON above, and run the collector on it, or one you edit in the
+page, with each stage shown. `--web.debug=full` lets the page fetch the
+answer from a target as well. See
 [Debugging collectors](CONFIGURATION.md#debugging-collectors).
 
 ## 4. Point Prometheus at it
@@ -138,7 +143,8 @@ targets:
       city: Sofia
 ```
 
-Start the exporter with `--static-targets-file=static-targets.yaml` and
+Start the exporter with `--static-targets-file=static-targets.yaml` (with
+Docker, mount the file as you did `config.yaml`) and
 scrape `http://localhost:8080/static-targets` like any other exporter. The
 page <http://localhost:8080/static-targets/status> shows each target's last
 scrape. See [Static targets](STATIC-TARGETS.md).

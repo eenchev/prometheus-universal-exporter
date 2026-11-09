@@ -5,12 +5,14 @@ package fetch
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -283,15 +285,38 @@ func TestAddressesAreCheckedWithoutASecondLookup(t *testing.T) {
 		lookups.Add(1)
 		return restoreResolve(ctx, host)
 	}
+	// The connections closed without a request: the refused one is closed
+	// as soon as its address is checked, before anything is written. A
+	// connection that sends a request is another's: the port the server
+	// listens on may have been another test's server's, which a client of
+	// that test, a retry or a keep-alive, may still be reaching.
 	var connections atomic.Int64
+	var mu sync.Mutex
+	active := map[net.Conn]bool{}
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
-	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateNew {
-			connections.Add(1)
+	server.Config.ConnState = func(conn net.Conn, state http.ConnState) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch state {
+		case http.StateActive:
+			active[conn] = true
+		case http.StateClosed, http.StateHijacked:
+			if !active[conn] {
+				connections.Add(1)
+			}
+			delete(active, conn)
 		}
 	}
 	server.Start()
 	defer server.Close()
+	// Another's request to the same port, which is not the collector's.
+	stray, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, stray.Body)
+	_ = stray.Body.Close()
+	http.DefaultClient.CloseIdleConnections()
 	// By name, so the address is only known once looked up.
 	byName := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
 	c := httpCollector(t, func(c *model.Collector) {
@@ -304,8 +329,8 @@ func TestAddressesAreCheckedWithoutASecondLookup(t *testing.T) {
 	if n := lookups.Load(); n != 0 {
 		t.Fatalf("a direct target was looked up %d times before connecting", n)
 	}
-	// The server sees a connection after the client has closed it.
-	testutil.WaitFor(t, "the server to see the refused connection", func() bool { return connections.Load() > 0 })
+	// The server sees the connection closed after the client has closed it.
+	testutil.WaitFor(t, "the server to see the refused connection closed", func() bool { return connections.Load() > 0 })
 	time.Sleep(50 * time.Millisecond)
 	if n := connections.Load(); n != 1 {
 		t.Fatalf("%d connections for a refused target, want the one refused, not retried", n)

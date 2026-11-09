@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if .Values.ingress.enabled }}
 {{- /* The Ingress routes to the exporter's Service; without it every request
        through the Ingress is answered 503 by the controller. */}}

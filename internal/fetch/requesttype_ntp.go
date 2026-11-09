@@ -486,10 +486,12 @@ func ntpServers(ctx context.Context, addresses []ntpAddress, r NTPConfig) (ntpSe
 	results := make([]ntpServerResult, len(addresses))
 	errs := make([]error, len(addresses))
 	var wg sync.WaitGroup
+	var panicked goroutinePanics
 	for i, address := range addresses {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer panicked.keep()
 			doc, err := ntpServer(ctx, address, r)
 			if err != nil {
 				doc = ntpDocument{Host: address.host, Port: address.port}
@@ -499,6 +501,7 @@ func ntpServers(ctx context.Context, addresses []ntpAddress, r NTPConfig) (ntpSe
 		}()
 	}
 	wg.Wait()
+	panicked.raise()
 	doc := ntpServersDocument{Servers: results}
 	var offsets []float64
 	for i, result := range results {

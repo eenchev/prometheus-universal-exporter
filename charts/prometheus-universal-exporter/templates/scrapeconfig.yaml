@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* A Prometheus Operator ScrapeConfig per probe job: Prometheus fetches
        the job's targets from the allocator, each with __address__ set to the
        exporter pod the allocator chose and __metrics_path__, the __param_

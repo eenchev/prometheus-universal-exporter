@@ -1292,7 +1292,11 @@ func (c *loginCache) get(ctx context.Context, key, collector, fingerprint string
 		go func() {
 			defer cancel()
 			start := loginNow()
-			token, err := login(detached)
+			var token loginToken
+			err := panicToError(func() (err error) {
+				token, err = login(detached)
+				return err
+			})
 			c.finish(e, call, start, token, err)
 		}()
 	}

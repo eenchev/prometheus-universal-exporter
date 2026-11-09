@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* The monitor that scrapes the static targets endpoint: the latest result of
        every static target, which the exporter scrapes on the document's own
        intervals. A ServiceMonitor for type service, a PodMonitor for type pod.

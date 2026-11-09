@@ -337,10 +337,20 @@ func readSourceDirectory(src fileSource, c *model.Collector, dir string, progres
 	slack := (budget - reserved) / int64(max(len(picks), 1))
 	work := make(chan pick)
 	var wg sync.WaitGroup
+	var panicked goroutinePanics
 	for range min(localFileDirectoryWorkers, len(picks)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A worker that panicked reads no more, and takes what is left
+			// of the work so that whoever hands it out is not left waiting.
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					panicked.hold(recovered)
+					for range work {
+					}
+				}
+			}()
 			for p := range work {
 				base := names[p.index]
 				rel := filepath.Join(dir, base)
@@ -371,6 +381,7 @@ func readSourceDirectory(src fileSource, c *model.Collector, dir string, progres
 	}
 	close(work)
 	wg.Wait()
+	panicked.raise()
 	return nil
 }
 

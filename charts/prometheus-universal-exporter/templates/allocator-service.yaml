@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if and .Values.allocator .Values.allocator.enabled }}
 {{- /* Headless: the name resolves to every allocator pod, and the exporter
        pods heartbeat to each address, so every allocator hears every pod. */}}

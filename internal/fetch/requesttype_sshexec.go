@@ -497,8 +497,12 @@ func (c *sshConnCache) run(ctx context.Context, key sshConnKey, x *model.Collect
 			if hook := beforeSSHRead.Load(); hook != nil {
 				(*hook)()
 			}
-			run, started, err := es.run(entry.client, line, limit)
-			done <- sshExecDone{run, started, err}
+			var result sshExecDone
+			result.err = panicToError(func() (err error) {
+				result.run, result.started, err = es.run(entry.client, line, limit)
+				return err
+			})
+			done <- result
 		}()
 		var result sshExecDone
 		select {

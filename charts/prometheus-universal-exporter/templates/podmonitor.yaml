@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- $root := . }}
 {{- include "prometheus-universal-exporter.requireServiceForProbes" . }}
 {{- range $index, $monitor := .Values.monitors }}

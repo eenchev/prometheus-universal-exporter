@@ -1722,6 +1722,19 @@ it `200` with success `0` and the stage `panic`, § 19.5): its caller keeps the 
 error, out of the exporter's hands, and a panic says whatever its code had at
 hand, a target's URL with its password as much as anything.
 
+A panic MUST be the failure of its trip alone wherever in the trip it is
+raised, and MUST NOT end the exporter. A fetch that runs part of its work on
+goroutines of its own — the servers of an `ntp` scrape, the addresses of an
+`icmp` scrape and the reader of its socket, the ports of a `tcp` check, the
+requests of a `kubernetes` scrape, the read of a file or a directory and
+the run of a command over SSH, which a deadline may leave behind, a login
+and a gRPC reflection question shared by
+the requests waiting for them — MUST recover a panic of each, log it once with
+the stack of the goroutine it was raised on, and raise it on the trip's own
+goroutine, where it is answered and counted as any panic of the trip is. A
+panic of a login or of a reflection question MUST be the error of every
+request that waited for it.
+
 That bound loses what an error says after a long part, so where an error of
 those stages says why after a part the target, the scraper or a script can
 make as long as a response, the part MUST be shown by its start and its
@@ -11202,6 +11215,16 @@ with one (§ 42.10b).
   change; hours, minutes and seconds MUST be elapsed time.
 - **Truncation.** `d`, `h` or `m`: the start of the day, hour or minute in
   the zone, taken after the offset.
+- **A zone's changes of clock.** A placeholder MUST write the moment it is
+  in the hour a zone's clocks show twice when its summer time ends, in
+  both passes of it: its `unix` MUST be the moment's, its `datetime` MUST
+  carry the offset in force, and the start of its hour and of its minute
+  MUST be in the same pass. An offset of hours, minutes or seconds alone
+  MUST be elapsed time from that moment. The start of a day MUST be the
+  first moment of that date in the zone: the earlier midnight where the
+  clocks are set back over midnight, and, where they are set forward over
+  it so that the day has no 00:00, the moment they first show that date,
+  never an hour of the day before.
 - **Zone.** An IANA time zone name, `UTC` or `Local`; UTC when left out.
   The exporter MUST carry the time zone database, so that a name is read
   where the host has none. `datetime` and `datetime_ms` MUST write the

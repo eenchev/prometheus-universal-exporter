@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* The allocator's two target files, each a ConfigMap of its own mounted
        into the allocator only, outside the configuration directory, so no
        collector_files pattern there matches them. The configuration itself

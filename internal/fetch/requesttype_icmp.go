@@ -365,15 +365,18 @@ func icmpPingAll(ctx context.Context, host string, addresses []netip.Addr, r ICM
 	docs := make([]icmpDocument, len(addresses))
 	errs := make([]error, len(addresses))
 	var wg sync.WaitGroup
+	var panicked goroutinePanics
 	for i, address := range addresses {
 		at := traceRequestAt(ctx, icmpMethod, "icmp://"+host, http.Header{"Icmp-Address": {address.String()}, "Icmp-Count": {strconv.Itoa(r.Count)}}, "", false)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer panicked.keep()
 			docs[i], errs[i] = icmpPingAddress(ctx, host, address, r, at)
 		}()
 	}
 	wg.Wait()
+	panicked.raise()
 	if err := errors.Join(errs...); err != nil {
 		return icmpDocument{}, err
 	}
@@ -486,7 +489,14 @@ func icmpChecksum(b []byte) uint16 {
 // header too, which is taken off.
 func icmpReply(b []byte, v6 bool, data []byte) (uint16, bool) {
 	if !v6 && len(b) >= 20 && b[0]>>4 == 4 {
-		b = b[int(b[0]&0x0f)*4:]
+		// A header that says it is longer than the datagram is no header
+		// of a reply to read, and no slice to take: this runs in the
+		// goroutine that reads the socket, where a panic is the process's.
+		header := int(b[0]&0x0f) * 4
+		if header > len(b) {
+			return 0, false
+		}
+		b = b[header:]
 	}
 	want := byte(0)
 	if v6 {
@@ -520,7 +530,16 @@ func icmpPing(ctx context.Context, conn net.Conn, address netip.Addr, r ICMPConf
 	readErr := make(chan error, 1)
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Unix(1, 0)) })
 	defer stop()
+	var panicked goroutinePanics
 	go func() {
+		// A panic of the reader ends the scrape as a read error does, and
+		// is raised below, on the scrape's goroutine.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicked.hold(recovered)
+				readErr <- net.ErrClosed
+			}
+		}()
 		buf := make([]byte, 65536)
 		for {
 			n, err := conn.Read(buf)
@@ -589,6 +608,7 @@ loop:
 			break loop
 		}
 	}
+	panicked.raise()
 	// Replies that came with the last are counted too.
 	for {
 		select {

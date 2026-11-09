@@ -72,6 +72,22 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   target of one collector its own day. See
   [Dates and times in a parameter](docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter).
 
+### Fixed
+
+- Chart: an empty block in a values file, such as `ingress:` or
+  `autoscaling:` with every key under it commented out, is a null to Helm,
+  which removes the chart's defaults under it, and rendering failed with
+  `nil pointer evaluating interface {}.enabled`, naming no key. It now
+  fails naming the block and saying what to do
+  ([Values](charts/prometheus-universal-exporter/README.md#values)).
+- A panic where a fetch does part of its work on the side — the servers of
+  an `ntp` scrape, the addresses of an `icmp` one, the ports of a `tcp`
+  check, the requests of a `kubernetes` scrape, a file or a directory being
+  read, a command run over SSH, a login, a gRPC reflection question — would
+  end the exporter, with every token and every result it held. It now
+  fails that scrape alone, answered `500` as any scrape that panicked is,
+  and is logged with its stack.
+
 ## chart 2.1.0
 
 ### What changed for you

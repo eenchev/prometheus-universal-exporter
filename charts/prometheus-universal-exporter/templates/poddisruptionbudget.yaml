@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if .Values.podDisruptionBudget.enabled }}
 {{- $pdb := .Values.podDisruptionBudget }}
 {{- if and (not (kindIs "invalid" $pdb.minAvailable)) (not (kindIs "invalid" $pdb.maxUnavailable)) }}

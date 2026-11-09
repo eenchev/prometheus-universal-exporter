@@ -734,6 +734,21 @@ again.
   run starts from the last success and keeps none, and an answer from the
   [response cache](CONFIGURATION.md#response-caching) is no scrape and
   moves nothing.
+- **One asker for each window.** A window is handed to whoever's scrape
+  succeeded, once. Two Prometheus servers probing the same target each get
+  every other window, and of several exporter replicas behind one Service
+  each keeps its own last success, so their windows overlap. Where either
+  is so, make the target a [static target](STATIC-TARGETS.md): the exporter
+  asks on its own schedule, once, and every Prometheus reads the same
+  answer. With the [target allocator](ALLOCATOR.md), a static target that
+  moves to another replica starts there from its fallback, as after a
+  restart.
+- **What a success is.** A scrape succeeds when it is answered with
+  metrics, so a `HEAD` of `/probe`, which runs the probe and reads no body,
+  moves the window, and so does a scrape in which a rule failed under
+  `error_mode: log` or `ignore`, its metric left out. Give a rule whose
+  window must not be lost [`error_mode: fail`](CONFIGURATION.md#when-a-metric-cannot-be-extracted),
+  which fails the scrape and keeps the window for the next.
 - **There is no cap.** A target that failed for a day is asked for the day
   at its next success. The exporter keeps the last success of 10,000
   collectors, targets and parameters at most, forgetting the one kept

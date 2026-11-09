@@ -311,8 +311,12 @@ func fetchLocalFile(ctx context.Context, target string, c *model.Collector, over
 	done := make(chan localFileRead, 1)
 	go func() {
 		defer started.done()
-		body, info, err := readLocalFile(c.Request.Root, file, responseLimit(c))
-		done <- localFileRead{body: body, info: info, err: err}
+		var read localFileRead
+		read.err = panicToError(func() (err error) {
+			read.body, read.info, err = readLocalFile(c.Request.Root, file, responseLimit(c))
+			return err
+		})
+		done <- read
 	}()
 	var read localFileRead
 	select {
@@ -403,7 +407,7 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 	done := make(chan error, 1)
 	go func() {
 		defer started.done()
-		done <- readLocalDirectory(c, dir, progress)
+		done <- panicToError(func() error { return readLocalDirectory(c, dir, progress) })
 	}()
 	read, err := awaitDirectory(ctx, full, progress, done, started.abandon)
 	if err != nil {

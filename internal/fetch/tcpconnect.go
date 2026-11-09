@@ -236,12 +236,14 @@ func fetchTCPConnect(ctx context.Context, start time.Time, target string, addres
 		ports := make([]tcpPort, len(r.Ports))
 		errs := make([]error, len(r.Ports))
 		var wg sync.WaitGroup
+		var panicked goroutinePanics
 		for i, number := range r.Ports {
 			dialed := tcpAddress{host: address.host, hostPort: net.JoinHostPort(address.host, strconv.Itoa(number))}
 			at := traceRequestAt(ctx, tcpMethodConnect, tcpURL(dialed, c), traced, "", false)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer panicked.keep()
 				timedCtx, timing := withConnTiming(ctx)
 				ports[i], errs[i] = tcpConnect(timedCtx, dialed.hostPort, cfg, deadline)
 				at.phases(timing.phases())
@@ -254,6 +256,7 @@ func fetchTCPConnect(ctx context.Context, start time.Time, target string, addres
 			}()
 		}
 		wg.Wait()
+		panicked.raise()
 		// The first port's failure: a name that does not resolve, or a
 		// host the target lists refuse, fails every port alike.
 		for _, err := range errs {

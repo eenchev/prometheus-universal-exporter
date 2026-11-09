@@ -189,8 +189,37 @@ type clockOffset struct {
 	elapsed time.Duration
 }
 
+// from is t moved by the offset. Without days it is t and the elapsed
+// time alone: AddDate reads the wall clock and makes a time of it again,
+// which in the hour a zone repeats when its summer time ends is the hour's
+// second pass whichever t was in, an hour late for the whole first pass.
 func (o clockOffset) from(t time.Time) time.Time {
-	return t.AddDate(0, 0, o.days).Add(o.elapsed)
+	if o.days != 0 {
+		t = t.AddDate(0, 0, o.days)
+	}
+	return t.Add(o.elapsed)
+}
+
+// startOfDay is the first moment of t's day in its zone. Where the zone's
+// clock is set back over midnight the day's first midnight is the earlier
+// one, and where it is set forward over midnight, so that the day has no
+// 00:00, the moment the day starts at, as 01:00: time.Date alone says
+// neither which it gives.
+func startOfDay(t time.Time) time.Time {
+	year, month, day := t.Date()
+	wall := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	guess := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	// Midnight on the wall clock under each offset the zone has around the
+	// day: the day starts at the earliest of them that is in the day.
+	start := t
+	for _, near := range []time.Time{guess.Add(-24 * time.Hour), guess, guess.Add(24 * time.Hour)} {
+		_, offset := near.Zone()
+		candidate := wall.Add(-time.Duration(offset) * time.Second).In(t.Location())
+		if y, m, d := candidate.Date(); y == year && m == month && d == day && candidate.Before(start) {
+			start = candidate
+		}
+	}
+	return start
 }
 
 var clockPattern = regexp.MustCompile(`^([a-z_]+)(~[a-z_]+(?:\(([^)]*)\))?)?(?::([+-][0-9a-z]+))?(?:/([a-z]+))?(?:@(.+))?$`)
@@ -308,12 +337,15 @@ func (c *clockPlaceholder) at(clock ScrapeClock) string {
 	}
 	t = c.offset.from(t)
 	switch c.truncate {
+	// The start of the hour and of the minute are t less what its wall
+	// clock shows past them, not a time made of the wall clock again: that
+	// would be an hour off in one pass of an hour the zone repeats.
 	case "d":
-		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, c.zone)
+		t = startOfDay(t)
 	case "h":
-		t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, c.zone)
+		t = t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
 	case "m":
-		t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, c.zone)
+		t = t.Add(-time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
 	}
 	switch c.format {
 	case "unix":

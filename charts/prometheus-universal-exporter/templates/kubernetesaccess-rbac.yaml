@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* What kubernetes collectors need: the right of the exporter's own
        ServiceAccount to list the resources kubernetesAccess.rules name, and
        no more, since a collector only lists, but for the get of the nodes'

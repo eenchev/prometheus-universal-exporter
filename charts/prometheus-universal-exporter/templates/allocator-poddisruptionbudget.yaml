@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if and .Values.allocator .Values.allocator.enabled .Values.allocator.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget

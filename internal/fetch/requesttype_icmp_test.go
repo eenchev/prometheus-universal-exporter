@@ -189,6 +189,11 @@ func TestICMPEchoesAndReplies(t *testing.T) {
 	if seq, ok := icmpReply(append([]byte{129, 0, 0, 0, 0, 9, 0, 2}, data...), true, data); !ok || seq != 2 {
 		t.Errorf("an ICMPv6 reply: %d %v", seq, ok)
 	}
+	// A datagram whose IP header says it is 60 bytes and is 20: no reply,
+	// where reading past it panicked.
+	if _, ok := icmpReply(append([]byte{0x4f}, make([]byte, 19)...), false, data); ok {
+		t.Error("a datagram shorter than the header it claims was taken as a reply")
+	}
 }
 
 // A target is a host, and the address picked is of the family ip_family

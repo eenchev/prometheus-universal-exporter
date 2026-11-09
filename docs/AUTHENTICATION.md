@@ -147,7 +147,8 @@ out a token at a login, and want it on every request. An `http` or
 sends the token it was given, in `Authorization` as a bearer token unless
 the login says otherwise. The login is made once and its token kept for the
 requests after it (see [How long a token is kept](#how-long-a-token-is-kept)).
-There are two kinds, `json` and `oauth2`. A `grpc` collector does not log
+There are three kinds, `json`, `oauth2` and
+[`steps`](#a-login-of-several-steps). A `grpc` collector does not log
 in: its credential is `bearer_token_file` or basic authentication. A secret
 of a login is never written in the configuration: it is read from a file at
 each login, so a rotated Secret is used by the next one.
@@ -323,6 +324,170 @@ internal to a Workspace, for one that lasts. Mail itself is never read:
 `gmail.readonly` reads a label's counts, and nothing in the collector asks
 for a message.
 
+### A login of several steps
+
+Some sites log in with no one request: a sign-in page whose form carries a
+token against cross-site requests, a form posted with the password and that
+token, a ticket read from the page it answers with, traded for a token,
+perhaps signed with OAuth 1.0a. `type: steps` makes such a login: a list of
+requests, made in order, each reading values from its answer that the
+steps after it send, one of them the token.
+
+```yaml
+collectors:
+  - name: wellness_daily
+    request:
+      type: http
+      path: /usersummary/daily/{{date@Europe/Sofia}}
+      login:
+        type: steps
+        values:                       # as written: nothing secret
+          username: me@example.com
+          consumer_key: fc3e99d2-118c-44b8-8ae3-03370dde24c0
+        secret_files:                 # each read from its file at every login
+          password: /var/run/secrets/wellness/password
+          consumer_secret: /var/run/secrets/wellness/consumer_secret
+        steps:
+          - url: https://sso.example/sso/signin
+            query: {service: https://sso.example/sso/embed}
+            extract:
+              csrf: {regex: 'name="_csrf"\s+value="([^"]+)"'}
+          - url: https://sso.example/sso/signin
+            query: {service: https://sso.example/sso/embed}
+            headers: {User-Agent: "Mozilla/5.0"}
+            form:
+              username: "{{login.username}}"
+              password: "{{login.password}}"
+              _csrf: "{{login.csrf}}"
+              embed: "true"
+            extract:
+              ticket: {regex: 'ticket=([^"]+)"'}
+          - url: https://api.example/oauth-service/oauth/preauthorized
+            query: {ticket: "{{login.ticket}}", accepts-mfa-tokens: "true"}
+            oauth1:
+              consumer_key: "{{login.consumer_key}}"
+              consumer_secret: "{{login.consumer_secret}}"
+            extract:
+              oauth_token: {form: oauth_token}
+              oauth_token_secret: {form: oauth_token_secret}
+          - url: https://api.example/oauth-service/oauth/exchange/user/2.0
+            method: POST
+            oauth1: &signed
+              consumer_key: "{{login.consumer_key}}"
+              consumer_secret: "{{login.consumer_secret}}"
+              token: "{{login.oauth_token}}"
+              token_secret: "{{login.oauth_token_secret}}"
+            extract:
+              access_token: {json: .access_token}
+              expires_in: {json: .expires_in}
+        token: access_token
+        expires_in: expires_in
+        keep:                         # the OAuth 1.0a token lasts a year
+          oauth_token: 8760h
+          oauth_token_secret: 8760h
+        refresh_steps:                # it makes the next token, no sign-in
+          - url: https://api.example/oauth-service/oauth/exchange/user/2.0
+            method: POST
+            oauth1: *signed
+            extract:
+              access_token: {json: .access_token}
+              expires_in: {json: .expires_in}
+        keep_file: /var/lib/prometheus-universal-exporter/wellness-login.json
+    transform:
+      type: jq
+    metrics:
+      - name: wellness_steps
+        expression: .totalSteps
+```
+
+**Steps.** Each step is one request, at most 16 of them, made with one
+cookie jar, so a cookie the sign-in page sets is sent with the form that
+follows it, and with nothing else: each run of `steps`, or of
+`refresh_steps`, starts with an empty one. A step's `url` is absolute or a path
+from the root, as [`login.url`](#where-a-login-goes) is, and is held to the
+collector's `allowed_schemes`, `allowed_targets` and `denied_targets`; it
+holds no placeholder, a value the step sends going in its `query`, whose
+parameters are added to the url's, each replacing one of the same name. A step
+is sent with `GET`, or `POST` when it sends a body, unless `method` says
+`GET`, `POST`, `PUT` or `PATCH`; `form` sends
+`application/x-www-form-urlencoded` and `json` a JSON object of text, one
+of the two. `headers` are sent as written, such as a `User-Agent` a site
+wants; `Host`, `Content-Type`, `Content-Length`, `Transfer-Encoding`,
+`Connection`, `Cookie` and `Accept-Encoding`, whose compression an answer
+read for its values would be left in, are the
+step's own. A step succeeds on a `2xx` answer, or on one of its `status`
+list: a login follows no redirect, so a `302` whose `Location` holds what
+is wanted is listed, `status: [302]`, and read with a header; a step whose
+`status` lists others, and is answered with a redirect it does not list,
+fails saying so.
+
+**Values.** What a step sends — its `query`, `headers`, `form`, `json`
+and `oauth1` values — may hold `{{login.<name>}}`: one of `values`, as
+written, one of `secret_files`, read from its file at each login, or one a
+step before it read. A name used before it is given is refused when the
+configuration loads, naming the step and the key. A step reads values
+with `extract`, each from exactly one place:
+
+| Key | The value is |
+| --- | --- |
+| `regex` | the first group of this regular expression's first match on the body, or the whole match without a group |
+| `json` | what this jq expression gives of the body read as JSON, text or a number |
+| `form` | this field of the body read as a form, as an OAuth 1.0a token endpoint answers: `oauth_token=...&oauth_token_secret=...` |
+| `header` | this header of the answer |
+| `cookie` | the cookie of this name the answer sets; its `Max-Age` or `Expires` is the value's expiry, and one the answer deletes, with `Max-Age` below 0 or an `Expires` past, is not read |
+
+A value not found, or empty, fails the login, naming the step and the
+value, never the answer: it may hold the password. `token` names the
+value that is the token, which a step reads, and it is sent as a `json`
+login's is, in `Authorization` as a bearer token unless `header` and
+`prefix` say otherwise: a session cookie a step read with `cookie` is sent
+back with `header: Cookie` and `prefix: "SESSION="`, its name and an
+equals sign.
+
+#### Signing a step with OAuth 1.0a
+
+`oauth1` signs a step with OAuth 1.0a's HMAC-SHA1 (RFC 5849), in its
+`Authorization` header: the consumer's key and secret, and, once a step
+has read one, the token and its secret, each written or a value. The
+signature covers the method, the URL, the query and a `form` body, with a
+fresh nonce and the time; no step may set `Authorization` beside it.
+
+#### Refreshing with values kept
+
+A login whose whole run is costly — a sign-in a site limits to a few a day,
+or watches for robots — keeps values of it to make later tokens with:
+`keep` names them, each with how long it is used, and `refresh_steps` are
+the requests that send them, as `{{login.<name>}}`, and read a new token.
+When the token is due, `refresh_steps` are made while every value kept
+lasts; when one has expired, or the refresh fails, the whole `steps` are
+made, and logged as a warning when a refresh failed. A value kept expires
+at its `keep` duration, or sooner at its cookie's or its JWT's expiry; `0`
+uses it for as long as `refresh_steps` succeed with it. `refresh_steps`
+read `token` again, and `expires_in` or `expires_at` when the login sets
+one, and may read a kept value anew, which then replaces
+it. The two go together: `keep` without `refresh_steps`, or the other way
+round, is refused.
+
+#### Keeping the token across restarts
+
+`keep_file` writes the token, its expiry and the values kept to a file
+after each login, and a login reads it first: an exporter that starts
+again sends the token the file holds while it lasts, and makes the next
+with `refresh_steps`, so a restart makes no sign-in. The file is written
+whole, beside itself and renamed over, readable by the exporter's user
+alone; it holds secrets, so it belongs on a volume of its own, never in
+the image. Its directory must exist and be writable: a file that cannot be
+written leaves the login made, logs a warning, and
+[`--dry-run`](CONFIGURATION.md#dry-run) warns of a directory that is not
+there. Several logins may share one file, each under a digest of the
+collector, the login and where it goes, which change with the login: a
+login changed in any way starts anew. A login of which nothing would be used — its
+token and every value kept expired — is dropped from the file when another
+is written to it. Exporters that share the file on a
+shared volume take each other's tokens: a login reads the file again
+whenever its token is due or refused, and takes a token there that is not
+the one it last had.
+
 ### Where a login goes
 
 Where a login goes is the configuration's alone. No probe parameter sets or
@@ -349,6 +514,10 @@ of its own, which replaces the collector's for it:
   `https://10.0.0.5/api/v2/login` with `Host: api.example`, as the request
   itself is sent, rather than to the server's default virtual host. An
   absolute `url` names its own host and is sent no `Host` of the target's.
+- **A `steps` login** goes where each step's `url` says: a step whose
+  `url` is a path goes to the target, with its `Host`, and then the login
+  keeps a token for each target, though its first step goes to an identity
+  provider every target shares.
 
 The login request is held to the collector's `allowed_schemes`,
 `allowed_targets` and `denied_targets` as the request is; a login URL they
@@ -371,9 +540,17 @@ virtual hosts on one address keep a token each and neither is sent the
 other's, nor are two static targets that log in with client certificates or
 CAs of their own, and sent on every request until shortly before it expires. Its lifetime is
 `expires_in` for a `json` login, the answer's `expires_in` for `oauth2`, the
-cookie's `Max-Age` or `Expires` for `token_cookie`, and, where the answer
-says none, `ttl`, such as `15m`; with neither, the token is kept until the
-target refuses it. A token is fetched again once a tenth of its life is
+cookie's `Max-Age` or `Expires` for `token_cookie`, and, for a `steps`
+login, the value `expires_in` names, in seconds, or `expires_at`, a time —
+seconds or milliseconds since 1970, RFC 3339 or an HTTP date — else the
+token's cookie's expiry when a step read it as one; an `expires_at`
+before the login began, as a lifetime in seconds read as a time would be,
+fails the login. Where the login says
+none, a token that is a JSON Web Token lasts until its `exp` claim, read
+without checking its signature, which the target checks, when it is after
+the login began: one already past, of a clock behind the issuer's, says
+nothing; else `ttl`, such
+as `15m`; with neither, the token is kept until the target refuses it. A token is fetched again once a tenth of its life is
 left, or 30 seconds, whichever is more, but never before half of it has
 passed: a token of an hour at 54 minutes, one of five minutes at four and a
 half, one of a minute at 30 seconds.
@@ -390,7 +567,10 @@ A target that answers `401` has the token it was sent dropped, and the
 request is sent once more with the token of a new login, whatever its
 method. That second request is not one of `retry.attempts`, and is made
 within the probe's deadline; a `401` to it is the probe's answer, failing
-in the `http_status` stage. A `403` is not taken for a token gone bad. Nor
+in the `http_status` stage. A `403` is not taken for a token gone bad,
+unless `relogin_on` says: it lists the statuses, `4xx`, that refuse the
+token, in place of `401`, such as `relogin_on: [401, 403]` for a site that
+answers an expired session `403`; any kind of login takes it. Nor
 is a `401` from where a [followed redirect](REQUESTS.md#what-a-followed-redirect-carries)
 led without the token, such as another origin, which is not sent it: that
 `401` is the probe's answer, and no new login is made.
@@ -450,11 +630,21 @@ read as a token`; a connection that failed, or an answer without
 `access_token`, is answered as it is logged.
 
 An error of a `token` or `expires_in` expression says what it gave, such as
-"an object", never the value, which may be the token itself.
+"an object", never the value, which may be the token itself. A `steps`
+login's failure names the step, as `login.steps[1]: the login was
+answered with HTTP status 403` or `login.refresh_steps[0].extract.access_token matched
+nothing in the answer`, and never a value it read.
 
 Each collector's logins are counted in
-[`http_exporter_logins_total` and `http_exporter_login_failures_total`](SELF-METRICS.md#collector-metrics).
-A [debug probe](CONFIGURATION.md#debugging-collectors) lists the login
+[`http_exporter_logins_total` and `http_exporter_login_failures_total`](SELF-METRICS.md#collector-metrics),
+and those a `steps` login's `refresh_steps` made in
+`http_exporter_login_refreshes_total`; a token read from a `keep_file` is
+no login, and is counted in none. With
+[OTLP traces](OTLP.md#traces-of-slow-requests) on, each request of a login, each step of a
+`steps` login, is a span of the trace of the probe or the scrape that
+needed the token, and a failed login, logged with the stage `login`, is
+exported with [OTLP logs](OTLP.md#the-exporters-own-log) as every log line is.
+A [debug probe](CONFIGURATION.md#debugging-collectors) lists each login
 request, marked `(login)`, before the request it was made for, with its
 headers shown as every request's are, a credential's value withheld, and
 never its body; it shows no login when the token was kept from an earlier
@@ -464,8 +654,26 @@ their login gives for the probes after them, but their logins are not
 counted in those self-metrics. [`--dry-run`](CONFIGURATION.md#dry-run) lists the login
 under `request_policies`, with its header and prefix filled in, the files
 its secrets are read from and never what they hold, and a field or endpoint
-parameter whose name reads as a credential's without its value; a secret
-file that is missing or empty is listed under `warnings`.
+parameter whose name reads as a credential's without its value; a `steps`
+login's `values`, and what each step sends, are shown so too, and an OAuth
+1.0a secret written in a step without its value. A secret file that is
+missing or empty is listed under `warnings`, and so is a `keep_file` whose
+directory is not there.
+
+### Logins and the target allocator
+
+Each exporter keeps its own tokens, in memory, and logs in when a scrape
+first needs one: a replica of the [target allocator](ALLOCATOR.md)'s that
+scrapes no target of a collector, and is sent no probe of it, makes no
+login. A static target the allocator moves to another replica is logged in
+to there at its first scrape, the replica it left keeping the token unused
+until the token expires or a reload drops it. A `steps` login with
+`keep_file` on a volume each replica has to itself starts there with its
+whole `steps`; on a volume the replicas share, `ReadWriteMany`, the new
+replica takes the token and the values kept that the other wrote, and makes
+no sign-in. Two replicas that write the file at once, as while a target
+moves, may each replace the other's line for another login, which then
+logs in again; the file itself is never left half written.
 
 ### Secrets from a Kubernetes Secret
 
@@ -474,8 +682,11 @@ password as the files the JSON login above reads. Any other Secret, an
 OAuth client's secret say, is mounted with `extraVolumes` and
 `extraVolumeMounts` (see the
 [chart README](../charts/prometheus-universal-exporter/README.md)), and its
-files named in `field_files`, `client_id_file`, `client_secret_file` or
-`refresh_token_file`.
+files named in `field_files`, `client_id_file`, `client_secret_file`,
+`refresh_token_file` or `secret_files`. A `keep_file` goes on a volume of
+its own, written to, an `emptyDir` for a pod's restarts of its container or
+a PersistentVolumeClaim for the pod's own, with `extraVolumes` and
+`extraVolumeMounts` as well.
 
 ## Probing from the browser
 

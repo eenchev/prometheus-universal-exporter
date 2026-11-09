@@ -704,6 +704,59 @@ func TestDryRunReportsALogin(t *testing.T) {
 	}
 }
 
+// --dry-run lists a steps login with its values and what each step sends
+// masked as a json login's fields are, an OAuth 1.0a secret written in a
+// step withheld and one named as a value shown, as the name it is; a
+// keep_file whose directory is not there is a warning.
+func TestDryRunReportsAStepsLogin(t *testing.T) {
+	password := testutil.WriteFile(t, "password", "dry-run-secret")
+	config := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: api
+    request:
+      type: http
+      login:
+        type: steps
+        values: {user: me, api_key: inline-key}
+        secret_files: {password: `+password+`}
+        steps:
+          - url: https://sso.example/signin
+            headers: {X-Api-Key: header-key, User-Agent: probe}
+            form: {user: "{{login.user}}", password: "{{login.password}}"}
+            oauth1: {consumer_key: ck, consumer_secret: written-secret}
+            extract: {ticket: {regex: 't=(\w+)'}}
+          - url: https://sso.example/token
+            oauth1: {consumer_key: ck, consumer_secret: "{{login.password}}"}
+            extract: {tok: {json: .t}}
+        token: tok
+        keep_file: /nonexistent-dir/keep.json
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	for _, secret := range []string{"dry-run-secret", "inline-key", "header-key", "written-secret"} {
+		if strings.Contains(check.stdout, secret) {
+			t.Errorf("the report holds %s:\n%s", secret, check.stdout)
+		}
+	}
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	login, _ := policies["api"].(map[string]any)["login"].(map[string]any)
+	steps, _ := login["steps"].([]any)
+	if check.code != 0 || len(steps) != 2 || !reflect.DeepEqual(login["values"], map[string]any{"user": "me", "api_key": "<redacted>"}) {
+		t.Fatalf("exit=%d, login %v", check.code, login)
+	}
+	first, _ := steps[0].(map[string]any)
+	second, _ := steps[1].(map[string]any)
+	if !reflect.DeepEqual(first["form"], map[string]any{"user": "{{login.user}}", "password": "<redacted>"}) ||
+		!reflect.DeepEqual(first["headers"], map[string]any{"X-Api-Key": "<redacted>", "User-Agent": "probe"}) ||
+		first["oauth1"].(map[string]any)["consumer_secret"] != "<redacted>" ||
+		second["oauth1"].(map[string]any)["consumer_secret"] != "{{login.password}}" {
+		t.Fatalf("steps %v", steps)
+	}
+	if warnings, _ := check.result(t, "config").Details["warnings"].([]any); len(warnings) != 1 || !strings.Contains(fmt.Sprint(warnings[0]), `collector "api" request.login.keep_file /nonexistent-dir/keep.json`) {
+		t.Errorf("warnings %v, want the keep_file's missing directory", warnings)
+	}
+}
+
 // --dry-run takes a status of request.accept_status written as a number with
 // a point, an exponent or in hex, as startup does and as the schema an editor
 // checks the file against does, and lists it as the status it is; a number

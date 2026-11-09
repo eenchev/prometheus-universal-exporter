@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"slices"
 	"time"
 
@@ -253,6 +254,13 @@ func requestProxy(c *model.Collector, socket string) string {
 	return c.Request.ProxyURL
 }
 
+// loginValueOnly is text that is one {{login.<name>}}, which names a value
+// and holds none.
+var loginValueOnly = regexp.MustCompile(`^\{\{login\.[A-Za-z0-9_]+\}\}$`)
+
+// onlyLoginValues reports whether text is {{login.<name>}} alone.
+func onlyLoginValues(text string) bool { return loginValueOnly.MatchString(text) }
+
 // shownLogin is l as --dry-run shows it (requestPolicy.Login).
 func shownLogin(l *model.LoginConfig) *model.LoginConfig {
 	if l == nil {
@@ -272,7 +280,30 @@ func shownLogin(l *model.LoginConfig) *model.LoginConfig {
 		}
 		return out
 	}
-	shown.Fields, shown.EndpointParams = masked(l.Fields), masked(l.EndpointParams)
+	shown.Fields, shown.EndpointParams, shown.Values = masked(l.Fields), masked(l.EndpointParams), masked(l.Values)
+	// A steps login's steps are shown with what they send masked as the
+	// fields are, and an OAuth 1.0a secret written in them withheld.
+	steps := func(list []model.LoginStep) []model.LoginStep {
+		if list == nil {
+			return nil
+		}
+		out := make([]model.LoginStep, len(list))
+		for i, step := range list {
+			step.Query, step.Headers, step.Form, step.JSON = masked(step.Query), masked(step.Headers), masked(step.Form), masked(step.JSON)
+			if step.OAuth1 != nil {
+				signed := *step.OAuth1
+				for _, secret := range []*string{&signed.ConsumerSecret, &signed.TokenSecret} {
+					if *secret != "" && !onlyLoginValues(*secret) {
+						*secret = fetch.Redacted
+					}
+				}
+				step.OAuth1 = &signed
+			}
+			out[i] = step
+		}
+		return out
+	}
+	shown.Steps, shown.RefreshSteps = steps(l.Steps), steps(l.RefreshSteps)
 	shown.Header = fetch.LoginHeader(l)
 	if l.TokenCookie == "" {
 		prefix := fetch.LoginPrefix(l)

@@ -109,6 +109,15 @@ var (
 	oauth2LoginKeys = []string{"client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style"}
 )
 
+// loginKindKeys are the keys each kind of login takes of those only some
+// kinds take; a steps login takes token and expires_in, as a json login
+// does, as the names of values.
+var loginKindKeys = map[string][]string{
+	"json":   jsonLoginKeys,
+	"oauth2": oauth2LoginKeys,
+	"steps":  append([]string{"token", "expires_in"}, stepsLoginKeys...),
+}
+
 // oauth2OwnParams are the parameters of a token request the grant sets
 // itself, which endpoint_params may not set.
 var oauth2OwnParams = []string{"grant_type", "scope", "client_id", "client_secret", "refresh_token"}
@@ -122,24 +131,37 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, 
 	order = loginKeyOrder(order)
 	if !slices.Contains(model.LoginTypes, l.Type) {
 		if l.Type == "" {
-			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, or type: oauth2, for the OAuth 2.0 client credentials or refresh token grant", where)
+			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, type: oauth2, for the OAuth 2.0 client credentials or refresh token grant, or type: steps, for a login of several requests", where)
 		}
-		return fmt.Errorf("%s.type is %q; it is json or oauth2", where, l.Type)
+		return fmt.Errorf("%s.type is %q; it is json, oauth2 or steps", where, l.Type)
 	}
-	if err := checkLoginURL(l.URL, allowedSchemes); err != nil {
-		return fmt.Errorf("%s.url %w", where, err)
+	if l.Type != "steps" {
+		if err := checkLoginURL(l.URL, allowedSchemes); err != nil {
+			return fmt.Errorf("%s.url %w", where, err)
+		}
 	}
 	set := setKeys(reflect.ValueOf(l).Elem())
-	other := oauth2LoginKeys
-	if l.Type == "oauth2" {
-		other = jsonLoginKeys
-	}
+	own := loginKindKeys[l.Type]
 	for _, key := range model.InFileOrder(set, order) {
-		if slices.Contains(other, key) {
-			return fmt.Errorf("%s sets %s, which a login of type %s does not take", where, key, l.Type)
+		if slices.Contains(own, key) {
+			continue
+		}
+		for _, keys := range loginKindKeys {
+			if slices.Contains(keys, key) {
+				return fmt.Errorf("%s sets %s, which a login of type %s does not take", where, key, l.Type)
+			}
+		}
+	}
+	for i, status := range l.ReloginOn {
+		if status < 400 || status > 499 {
+			return fmt.Errorf("%s.relogin_on[%d] is %d; it lists the statuses, 4xx, a target answers a token it no longer takes with, such as 401 and 403", where, i, status)
 		}
 	}
 	switch l.Type {
+	case "steps":
+		if err := checkStepsLogin(l, allowedSchemes, where); err != nil {
+			return err
+		}
 	case "json":
 		if err := checkJSONLogin(l, where, order); err != nil {
 			return err
@@ -419,6 +441,48 @@ func relativeLoginURL(l *model.LoginConfig) bool {
 	return err == nil && !ref.IsAbs()
 }
 
+// firstLoginURL is the login whose url is where l goes first: l, or, for
+// a steps login, its first step's.
+func firstLoginURL(l *model.LoginConfig) *model.LoginConfig {
+	if l.Type == "steps" && len(l.Steps) > 0 {
+		return &model.LoginConfig{URL: l.Steps[0].URL}
+	}
+	return l
+}
+
+// stepsTargetKey is what tells apart the tokens of a steps login l at two
+// targets when its first step's url, the login's place in the key, is
+// absolute and another step's is a path resolved against the target: the
+// target's scheme, host and port; "" for every other login.
+func stepsTargetKey(l *model.LoginConfig, target string) string {
+	if l.Type != "steps" || relativeLoginURL(firstLoginURL(l)) || !relativeLogin(l) {
+		return ""
+	}
+	base, err := loginURL(&model.LoginConfig{URL: "/"}, target)
+	if err != nil {
+		return ""
+	}
+	return "\x00" + base.String()
+}
+
+// relativeLogin says whether a login of l goes to the target: its url, or
+// a url of one of its steps, is a path resolved against it. Such a login
+// is sent with the request's Host override, and its token kept for each
+// target.
+func relativeLogin(l *model.LoginConfig) bool {
+	if l.Type != "steps" {
+		return relativeLoginURL(l)
+	}
+	for _, steps := range [][]model.LoginStep{l.Steps, l.RefreshSteps} {
+		for i := range steps {
+			if relativeLoginURL(&model.LoginConfig{URL: steps[i].URL}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // loginFingerprint identifies a login block: two that differ in anything
 // keep tokens apart.
 func loginFingerprint(l *model.LoginConfig) string {
@@ -468,6 +532,20 @@ type requestLogin struct {
 	renew  func(ctx context.Context, used string) (string, error)
 	// renewed says the token has been fetched again once for this request.
 	renewed bool
+	// reloginOn are the statuses that refuse the token, 401 when empty.
+	reloginOn []int
+}
+
+// refuses reports whether a target's answer of status refuses the token
+// it was sent (login.relogin_on).
+func (r *requestLogin) refuses(status int) bool {
+	if r == nil {
+		return false
+	}
+	if len(r.reloginOn) == 0 {
+		return status == http.StatusUnauthorized
+	}
+	return slices.Contains(r.reloginOn, status)
 }
 
 // startLogin is the login of a request of c to target, its token taken from
@@ -488,20 +566,22 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 			return nil, nil
 		}
 	}
-	u, err := loginURL(l, target)
+	u, err := loginURL(firstLoginURL(l), target)
 	if err != nil {
 		return nil, &StageError{Stage: loginStage, Err: err}
 	}
-	if !relativeLoginURL(l) {
+	if !relativeLogin(l) {
 		// An absolute login.url names the host it logs in at.
 		host = ""
 	}
 	fingerprint := loginTokenFingerprint(c, l)
 	// The Host is part of the key: two virtual hosts on one address are
-	// two logins, and neither is sent the other's token.
-	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host
+	// two logins, and neither is sent the other's token. So is the target
+	// a steps login's relative step goes to when its first step's url is
+	// absolute, which alone would not tell two targets apart.
+	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host + stepsTargetKey(l, target)
 	login := func(ctx context.Context) (loginToken, error) {
-		return logIn(ctx, c, l, u, host)
+		return logIn(ctx, c, l, u, target, host, key)
 	}
 	shown := RedactURL(u, MaskQueryValues)
 	get := func(ctx context.Context) (string, error) {
@@ -516,7 +596,7 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 	if err != nil {
 		return nil, err
 	}
-	return &requestLogin{header: header, value: value, key: key, renew: func(ctx context.Context, used string) (string, error) {
+	return &requestLogin{header: header, value: value, key: key, reloginOn: l.ReloginOn, renew: func(ctx context.Context, used string) (string, error) {
 		logins.invalidate(key, used)
 		return get(ctx)
 	}}, nil
@@ -595,11 +675,14 @@ func (r *requestLogin) sends(name string) bool {
 type loginToken struct {
 	value   string
 	expires time.Time
+	// kept says the token was read from a steps login's keep_file: no
+	// request was made, and it is counted as no login.
+	kept bool
 }
 
 // logIn makes one login of l at u for a request of c, sent with the Host
 // host when it is not "".
-func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, host string) (loginToken, error) {
+func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, target, host, key string) (loginToken, error) {
 	tlsSettings := loginTLS(c, l)
 	// No redirect is followed: the login's secrets go where the
 	// configuration says and nowhere a redirect would take them. The
@@ -612,6 +695,19 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		proxy = transport.Proxy
 	}
+	start := loginNow()
+	if l.Type == "steps" {
+		// Each step goes where its url says, and is held to the policy
+		// there (runLoginStep), the Host override sent with those that go
+		// to the target.
+		traced := *client
+		traced.Transport = loginTracer{next: client.Transport}
+		token, err := stepsLogin(ctx, &traced, c, l, target, host, key, start)
+		if err != nil {
+			return loginToken{}, err
+		}
+		return finishLoginToken(l, token, start)
+	}
 	// A login follows no redirect, so whose certificate it presents is
 	// never a redirect's refusal to name.
 	ctx, err = withTargetPolicy(ctx, c, u, proxy, false, "")
@@ -620,7 +716,6 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	}
 	traced := *client
 	traced.Transport = loginTracer{next: client.Transport, host: host}
-	start := loginNow()
 	var token loginToken
 	switch l.Type {
 	case "oauth2":
@@ -631,12 +726,17 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	if err != nil {
 		return loginToken{}, err
 	}
+	return finishLoginToken(l, token, start)
+}
+
+// finishLoginToken is the token a login gave as it is sent and kept: with
+// its prefix, and, when the answer said no lifetime, the one its JWT exp
+// claim says, else ttl's.
+func finishLoginToken(l *model.LoginConfig, token loginToken, start time.Time) (loginToken, error) {
+	defaultExpiry(&token, l, start)
 	token.value = LoginPrefix(l) + token.value
 	if err := checkHeaderValue(token.value); err != nil {
 		return loginToken{}, errors.New("the token the login gave holds a control character, which a header may not hold")
-	}
-	if token.expires.IsZero() && l.TTL > 0 {
-		token.expires = start.Add(time.Duration(l.TTL))
 	}
 	return token, nil
 }
@@ -1121,6 +1221,9 @@ type loginCache struct {
 	entries map[string]*loginEntry
 	made    map[string]uint64
 	failed  map[string]uint64
+	// refreshed counts the logins of each collector that a steps login's
+	// refresh_steps made (loginsteps.go).
+	refreshed map[string]uint64
 }
 
 // loginEntry is one token kept, or being fetched.
@@ -1147,7 +1250,7 @@ type loginCall struct {
 	counted bool
 }
 
-var logins = &loginCache{entries: map[string]*loginEntry{}, made: map[string]uint64{}, failed: map[string]uint64{}}
+var logins = &loginCache{entries: map[string]*loginEntry{}, made: map[string]uint64{}, failed: map[string]uint64{}, refreshed: map[string]uint64{}}
 
 // loginRefreshAt is when a token obtained at start that expires at expires
 // is fetched again: when a tenth of its life is left, or 30 seconds,
@@ -1224,6 +1327,10 @@ func (c *loginCache) finish(e *loginEntry, call *loginCall, start time.Time, tok
 			call.err = err
 		}
 	} else {
+		// A token read from a keep file is no login made.
+		if token.kept && call.counted && c.made[e.collector] > 0 {
+			c.made[e.collector]--
+		}
 		e.value, e.expires, e.refresh = token.value, token.expires, time.Time{}
 		if !token.expires.IsZero() {
 			e.refresh = loginRefreshAt(start, token.expires)
@@ -1296,12 +1403,17 @@ func (c *loginCache) follow(collectors []model.Collector, targets []model.Static
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	kept := map[string]bool{}
 	for key, e := range c.entries {
 		if !wanted[e.collector][e.fingerprint] {
 			delete(c.entries, key)
+			continue
 		}
+		kept[key] = true
 	}
-	for _, counts := range []map[string]uint64{c.made, c.failed} {
+	// A steps login keeps its values as long as its token is kept.
+	stepsStates.keepOnly(kept)
+	for _, counts := range []map[string]uint64{c.made, c.failed, c.refreshed} {
 		for name := range counts {
 			if !names[name] {
 				delete(counts, name)
@@ -1316,10 +1428,32 @@ func (c *loginCache) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = map[string]*loginEntry{}
-	c.made, c.failed = map[string]uint64{}, map[string]uint64{}
+	c.made, c.failed, c.refreshed = map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
+	stepsStates.reset()
 	oauth2Rotated.Lock()
 	clear(oauth2Rotated.byLogin)
 	oauth2Rotated.Unlock()
+}
+
+// refreshes reports how many logins of a collector refresh_steps made.
+func (c *loginCache) refreshes(collector string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshed[collector]
+}
+
+// noteRefresh counts a login refresh_steps made for collector, when it is
+// counted as the login is (get): not a debug run's alone.
+func (c *loginCache) noteRefresh(ctx context.Context, collector string) {
+	if debugRun(ctx) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// A collector a reload removed meanwhile has no counts left to raise.
+	if _, followed := c.made[collector]; followed {
+		c.refreshed[collector]++
+	}
 }
 
 // counts reports how many logins a collector made and how many failed.
@@ -1339,6 +1473,9 @@ func loginFiles(l *model.LoginConfig, who string) []string {
 	for name, path := range l.FieldFiles {
 		files["field_files."+name] = path
 	}
+	for name, path := range l.SecretFiles {
+		files["secret_files."+name] = path
+	}
 	var warnings []string
 	for _, key := range model.SortedKeys(files) {
 		path := files[key]
@@ -1353,7 +1490,7 @@ func loginFiles(l *model.LoginConfig, who string) []string {
 			warnings = append(warnings, fmt.Sprintf("%s request.login.%s %s is empty; a login would fail on it now", who, key, path))
 		}
 	}
-	return warnings
+	return append(warnings, keepFileFiles(l, who)...)
 }
 
 // checkLoginFiles is RequestType.CheckFiles of the types that log in: the

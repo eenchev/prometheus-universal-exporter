@@ -26,6 +26,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `param_day: "{{date}}"`, is now filled in at each scrape, where it was
   sent as text; one that holds a `{{param_...}}` placeholder is refused
   when the targets load.
+- A `json` or `oauth2` login whose answer says no lifetime now keeps a
+  token that is a JSON Web Token until its `exp` claim, when that is after
+  the login, where it was kept for `ttl`, or until the target refused it.
 
 ### New
 
@@ -47,6 +50,19 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   stretch of time once, with no gap and no overlap, however often or
   seldom the target is scraped. A failed scrape moves nothing. See
   [Since the last success](docs/REQUESTS.md#since-the-last-success).
+- **A login of several steps.** `request.login.type: steps` logs in to a
+  site no one request logs in to: a list of requests sharing a cookie jar,
+  each reading values from its answer — with a regex, a jq expression, a
+  form field, a header or a cookie — that later steps send as
+  `{{login.<name>}}`, one of them the token. A step can be signed with
+  OAuth 1.0a. `keep` and `refresh_steps` make later tokens of a long-lived
+  value without signing in again, and `keep_file` keeps the token and those
+  values across restarts. `http_exporter_login_refreshes_total` counts the
+  refreshes. See [A login of several steps](docs/AUTHENTICATION.md#a-login-of-several-steps).
+- **A token's own expiry, and `relogin_on`.** A login whose answer says no
+  lifetime keeps a token that is a JSON Web Token until its `exp` claim,
+  before `ttl`; `relogin_on: [401, 403]` takes a `403`, or another `4xx`,
+  for a token the target no longer takes, for every kind of login.
 - **Clock placeholders in a static target's parameters.**
   `params: {param_day: "{{date@America/New_York}}"}` gives each static
   target of one collector its own day. See

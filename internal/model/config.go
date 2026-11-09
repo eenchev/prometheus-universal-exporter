@@ -409,7 +409,8 @@ type HostRateLimit struct {
 // it sends to an http or graphite target. Type json posts a JSON object of
 // Fields and FieldFiles to URL and reads the token from the answer's body
 // (Token, a jq expression), a header of it (TokenHeader) or a cookie it sets
-// (TokenCookie); type oauth2 asks the token endpoint URL for a token with
+// (TokenCookie); type steps makes a list of requests, each reading values
+// from its answer, one of which is the token; type oauth2 asks the token endpoint URL for a token with
 // the client credentials grant (RFC 6749 § 4.4), or, with GrantType
 // refresh_token, with the refresh token of RefreshTokenFile (§ 6). A
 // secret is read from a file at each login, never written in the
@@ -453,11 +454,71 @@ type LoginConfig struct {
 	// TLS is the login's own tls block, for a login server the target's
 	// does not fit; unset, the collector's request.tls.
 	TLS *TLSConfig `yaml:"tls" json:"tls,omitempty"`
+	// ReloginOn are the statuses of a target's answer that drop the token
+	// it was sent and send the request again with a new login's: 401 when
+	// unset. Any type of login.
+	ReloginOn []int `yaml:"relogin_on" json:"relogin_on,omitempty"`
+	// Steps, RefreshSteps, Values, SecretFiles, ExpiresAt, Keep and
+	// KeepFile are a steps login's (fetch/loginsteps.go): the requests of a
+	// whole login, in order, each reading values from its answer that the
+	// steps after it, and the token, are made of; the requests that make a
+	// new token of the values kept from a whole login; the values written
+	// in the configuration and those read from files; the value that is
+	// the token's expiry, beside ExpiresIn, its lifetime; the values kept
+	// for RefreshSteps, each for how long; and the file the token and the
+	// kept values are written to, to be read after a restart. Token and
+	// ExpiresIn, a json login's jq expressions, name values in a steps
+	// login.
+	Steps        []LoginStep         `yaml:"steps" json:"steps,omitempty"`
+	RefreshSteps []LoginStep         `yaml:"refresh_steps" json:"refresh_steps,omitempty"`
+	Values       map[string]string   `yaml:"values" json:"values,omitempty"`
+	SecretFiles  map[string]string   `yaml:"secret_files" json:"secret_files,omitempty"`
+	ExpiresAt    string              `yaml:"expires_at" json:"expires_at,omitempty"`
+	Keep         map[string]Duration `yaml:"keep" json:"keep,omitempty"`
+	KeepFile     string              `yaml:"keep_file" json:"keep_file,omitempty"`
+}
+
+// LoginStep is one request of a steps login: where it goes and how, what
+// it sends, the statuses it is answered with when it succeeds, and the
+// values it reads from the answer. Its query, header, form, json and oauth1
+// values may hold {{login.<name>}}, a value of the login's.
+type LoginStep struct {
+	URL     string                  `yaml:"url" json:"url"`
+	Method  string                  `yaml:"method" json:"method,omitempty"`
+	Query   map[string]string       `yaml:"query" json:"query,omitempty"`
+	Headers map[string]string       `yaml:"headers" json:"headers,omitempty"`
+	Form    map[string]string       `yaml:"form" json:"form,omitempty"`
+	JSON    map[string]string       `yaml:"json" json:"json,omitempty"`
+	OAuth1  *LoginOAuth1            `yaml:"oauth1" json:"oauth1,omitempty"`
+	Status  []int                   `yaml:"status" json:"status,omitempty"`
+	Extract map[string]LoginExtract `yaml:"extract" json:"extract,omitempty"`
+}
+
+// LoginOAuth1 signs a step's request with OAuth 1.0a's HMAC-SHA1 (RFC
+// 5849): the consumer's key and secret, and, when the step has one, the
+// token and its secret, each a value or text holding {{login.<name>}}.
+type LoginOAuth1 struct {
+	ConsumerKey    string `yaml:"consumer_key" json:"consumer_key"`
+	ConsumerSecret string `yaml:"consumer_secret" json:"consumer_secret"`
+	Token          string `yaml:"token" json:"token,omitempty"`
+	TokenSecret    string `yaml:"token_secret" json:"token_secret,omitempty"`
+}
+
+// LoginExtract is where a step's answer holds a value, exactly one of: a
+// regular expression on the body, its first group or the whole match; a jq
+// expression on the body read as JSON; a field of the body read as a form;
+// a header; or a cookie the answer sets.
+type LoginExtract struct {
+	Regex  string `yaml:"regex" json:"regex,omitempty"`
+	JSON   string `yaml:"json" json:"json,omitempty"`
+	Form   string `yaml:"form" json:"form,omitempty"`
+	Header string `yaml:"header" json:"header,omitempty"`
+	Cookie string `yaml:"cookie" json:"cookie,omitempty"`
 }
 
 // The values of request.login.type and request.login.auth_style.
 var (
-	LoginTypes      = []string{"json", "oauth2"}
+	LoginTypes      = []string{"json", "oauth2", "steps"}
 	LoginAuthStyles = []string{"header", "params"}
 	// LoginGrantTypes are request.login.grant_type's of an oauth2 login.
 	LoginGrantTypes = []string{"client_credentials", "refresh_token"}

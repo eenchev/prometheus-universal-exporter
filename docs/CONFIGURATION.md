@@ -2815,7 +2815,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
-| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401` makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
+| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's; `type: steps` makes a list of requests, each reading values from its answer for the steps after it, one of them the token, with `refresh_steps` and `keep_file` for a sign-in made seldom. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401`, or a status of `relogin_on`, makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
@@ -2966,7 +2966,7 @@ further left on the same line, and once that is fixed the next. So does a
 check that refuses two keys alike — an ssh collector's negative
 `keepalive_interval` and `idle_timeout`, or its credential files written
 blank or with a placeholder, a kubernetes collector's blank selectors, a
-json login's blank `token` and `expires_in`, a login's keys of the other
+json login's blank `token` and `expires_in`, a login's keys of another
 kind — on every load. A key the type does not take is refused for that
 whatever its value: `starttls: true` in an `ldap` collector is not told
 that `true` is no protocol of `tcp`'s, but that the key does not apply,
@@ -4904,7 +4904,7 @@ a 304. A collector with [`request.pagination`](REQUESTS.md#pagination)
 stores its pages merged into one response, which no page's validator
 speaks for, so its responses are neither kept nor revalidated. Every attempt
 of a conditional request carries the validators: a retry, and the request
-sent again after a `401` made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
+sent again after a `401`, or a status of `relogin_on`, made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
 in again.
 
 Revalidation is on by default. A collector whose target sends validators it

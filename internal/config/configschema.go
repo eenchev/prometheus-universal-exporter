@@ -1267,7 +1267,14 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 		"description": description,
 		"allOf": []any{
 			writtenKey("type"),
-			writtenKey("url"),
+			// A steps login sends each step to its own url.
+			map[string]any{"if": kind("steps"), "then": map[string]any{"allOf": []any{
+				writtenKey("token"), map[string]any{"required": []string{"steps"}, "properties": map[string]any{"steps": map[string]any{"minItems": 1}}},
+				none("url", "fields", "field_files", "token_header", "token_cookie", "client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style"),
+				map[string]any{"not": map[string]any{"allOf": []any{writtenKey("expires_in"), writtenKey("expires_at")}}},
+				// keep and refresh_steps go together.
+				map[string]any{"if": writtenKey("refresh_steps"), "then": writtenKey("keep"), "else": none("keep")},
+			}}, "else": map[string]any{"allOf": []any{writtenKey("url"), none("steps", "refresh_steps", "values", "secret_files", "expires_at", "keep", "keep_file")}}},
 			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style")}}},
 			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in"),
 				// The refresh token grant sends the refresh token of its
@@ -1284,15 +1291,52 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 			map[string]any{"if": writtenKey("token_cookie"), "then": map[string]any{"allOf": []any{none("header"), map[string]any{"not": map[string]any{"required": []string{"prefix"}}}}}},
 		},
 	}
+	for _, steps := range []string{"steps", "refresh_steps"} {
+		step := login + "." + steps + "[]"
+		rules[step] = map[string]any{"required": []string{"url"}, "allOf": []any{writtenKey("url"), map[string]any{"not": map[string]any{"required": []string{"form", "json"}}}}}
+		for key, rule := range map[string]map[string]any{
+			"url":                    {"pattern": `^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))`, "description": "Required. Where the step is sent: an absolute http or https URL, or a path from the root resolved against the target's scheme, host and port, as login.url is. Without placeholders: a value the step sends goes in its query."},
+			"method":                 {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH"}), "description": "GET, or POST when the step sends form or json, when left out."},
+			"query":                  {"description": "Parameters added to the url's query, their values holding {{login.<name>}} as need be."},
+			"headers":                {"description": "Headers sent, such as User-Agent or Accept, their values holding {{login.<name>}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1."},
+			"form":                   {"description": "The fields of a form body, sent as application/x-www-form-urlencoded. Not with json."},
+			"json":                   {"description": "The members of a JSON object body, each text. Not with form."},
+			"oauth1":                 {"required": []string{"consumer_key", "consumer_secret"}, "description": "Signs the step with OAuth 1.0a's HMAC-SHA1 (RFC 5849), in its Authorization header. See docs/AUTHENTICATION.md#signing-a-step-with-oauth-10a."},
+			"oauth1.consumer_key":    {"minLength": 1, "description": "The consumer's key, or {{login.<name>}}."},
+			"oauth1.consumer_secret": {"minLength": 1, "description": "The consumer's secret, or {{login.<name>}}, best a secret_files value."},
+			"oauth1.token":           {"description": "The token the step is signed with, such as {{login.oauth_token}}; with token_secret."},
+			"oauth1.token_secret":    {"description": "The token's secret; with token."},
+			"status":                 {"description": "The statuses that answer the step when it succeeds: 2xx when left out. A redirect, which a login never follows, is read when listed, such as [302], its Location with a header extract."},
+			"status[]":               {"type": "integer", "minimum": 100, "maximum": 599},
+			"extract":                {"propertyNames": map[string]any{"pattern": `^[A-Za-z_][A-Za-z0-9_]*$`}, "description": "The values the step reads from its answer, by name, each from exactly one of regex, json, form, header and cookie. The last step reads the token."},
+			"extract.*":              {"minProperties": 1, "maxProperties": 1},
+			"extract.*.regex":        {"description": "A regular expression on the body: its first group, or the whole match without one."},
+			"extract.*.json":         {"description": "A jq expression on the body read as JSON, giving text or a number."},
+			"extract.*.form":         {"description": "A field of the body read as a form, as an OAuth 1.0a token endpoint answers."},
+			"extract.*.header":       {"description": "A header of the answer."},
+			"extract.*.cookie":       {"description": "A cookie the answer sets; its Max-Age or Expires is the value's expiry."},
+		} {
+			rules[step+"."+key] = rule
+		}
+	}
 	for key, rule := range map[string]map[string]any{
-		"type":               {"enum": model.LoginTypes, "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4), or the refresh token grant (section 6) with grant_type: refresh_token."},
-		"url":                {"pattern": `^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))`, "description": "Required. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect."},
+		"type":               {"enum": model.LoginTypes, "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4), or the refresh token grant (section 6) with grant_type: refresh_token. steps: make the requests of steps in order, one cookie jar between them, each reading values of its answer that the steps after it send, one of them the token. See docs/AUTHENTICATION.md#a-login-of-several-steps."},
+		"url":                {"pattern": `^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))`, "description": "Required, but for steps, whose steps each have one. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect."},
 		"fields":             {"description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant."},
 		"field_files":        {"description": "json: members of the JSON object posted, each read from its file at every login, such as {username: /var/run/secrets/login/username, password: /var/run/secrets/login/password}. Required: at least one. A field is in fields or here, not both."},
-		"token":              {"description": "json: the jq expression of the token in the answer's JSON body, such as .access_token, with $status and $headers as in a rule. Exactly one of token, token_header and token_cookie."},
+		"token":              {"description": "json: the jq expression of the token in the answer's JSON body, such as .access_token, with $status and $headers as in a rule. Exactly one of token, token_header and token_cookie. steps: required, the name of the value that is the token, which a step reads."},
 		"token_header":       {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "json: the header of the answer that holds the token, such as X-Subject-Token."},
 		"token_cookie":       {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "json: the cookie the answer sets that is the session, such as JSESSIONID; it is sent back in the Cookie header, and its Max-Age or Expires is its lifetime."},
-		"expires_in":         {"description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. Left out, or null, ttl applies."},
+		"expires_in":         {"description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. steps: the name of the value that is the token's lifetime in seconds. Left out, or null, the token's own expiry, as its cookie or its JWT exp claim says it, then ttl, applies."},
+		"expires_at":         {"description": "steps: the name of the value that is when the token expires: seconds or milliseconds since 1970, RFC 3339 or an HTTP date. Not with expires_in."},
+		"relogin_on":         {"description": "The statuses of the target's answer, 4xx, that drop the token it was sent and send the request again, once, with a new login's: [401] when left out. Such as [401, 403], for a target that answers an expired session 403. The list replaces 401."},
+		"relogin_on[]":       {"type": "integer", "minimum": 400, "maximum": 499},
+		"values":             {"propertyNames": map[string]any{"pattern": `^[A-Za-z_][A-Za-z0-9_]*$`}, "description": "steps: values the steps send as {{login.<name>}}, as written: for what is no secret, such as a user name or an app's client id."},
+		"secret_files":       {"propertyNames": map[string]any{"pattern": `^[A-Za-z_][A-Za-z0-9_]*$`}, "description": "steps: values the steps send as {{login.<name>}}, each read from its file at every login, such as {password: /var/run/secrets/site/password}. A name is in values or here, not both."},
+		"steps":              {"description": "steps: required, the requests of a whole login, made in order, at most 16. Each step's query, headers, form, json and oauth1 values may hold {{login.<name>}}, a value given or read by a step before it."},
+		"refresh_steps":      {"description": "steps: the requests that make a new token of the values kept (keep), as a long-lived token traded for a short-lived one: made in place of steps while the values kept last, and steps made when they fail. With keep."},
+		"keep":               {"description": "steps: the values of steps that refresh_steps send, each with how long it is used, such as {refresh_token: 720h}; 0 for as long as refresh_steps succeed with it. A value's cookie or JWT expiry shortens it. With refresh_steps."},
+		"keep_file":          {"pattern": optionalPattern("^/"), "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets."},
 		"client_id":          {"description": "oauth2: the client's id. Exactly one of client_id and client_id_file."},
 		"client_id_file":     {"description": "oauth2: the file holding the client's id, read at every login."},
 		"client_secret_file": {"description": "oauth2: the file holding the client's secret, read at every login. Required with the client credentials grant; with refresh_token, left out for a public client, which sends its id as a form parameter."},

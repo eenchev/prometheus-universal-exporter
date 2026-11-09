@@ -234,5 +234,3 @@ by it; it MUST be exact but for floating-point numbers, which count as a
 digit, and the well-known types written in a form of their own, which count
 at their shortest. An answer the count lets through MUST still fail when its
 rendered JSON is over the limit.
-
----

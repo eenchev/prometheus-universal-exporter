@@ -174,5 +174,3 @@ elasticsearch_cluster
 legacy_application
 vendor_status
 ```
-
----

@@ -12,7 +12,9 @@ change when it was split. Each document therefore keeps its own sections' number
 and skips the other's, so a reference to § 33.13 or § 42.8 still points at the
 same requirement it always did. A section that carried requirements for both is
 present in both documents under the same number, each holding only its own half
-and linking the other.
+and linking the other. The request types' documents hold no numbers of their
+own but the ones they took with them: § 5.1a, reading a directory, is in
+`localfile`'s, and § 9a, gRPC answers as JSON, in `grpc`'s.
 
 Sections about the repository as a whole — purpose, implementation order,
 acceptance criteria, CI gates, documentation requirements — stay here, and name
@@ -1268,6 +1270,8 @@ as it is to the rest of this specification:
 - [`tcp`](SPECIFICATION-TCP.md)
 - [`tlscert`](SPECIFICATION-TLSCERT.md)
 
+---
+
 ## 6. Response format / decoder model
 
 Supported decoder types MUST include:
@@ -1958,6 +1962,13 @@ Example:
         - name: environment
           expression: '.environment'
 ```
+
+---
+
+# 9a. gRPC answers as JSON
+
+In the `grpc` request type's specification,
+[SPECIFICATION-GRPC.md](SPECIFICATION-GRPC.md#9a-grpc-answers-as-json).
 
 ---
 
@@ -5086,9 +5097,11 @@ not apply; `required` decides whether an absent value is a failure at all, and
 
 Neither setting makes anything else a missing value: a body the decoder
 cannot read MUST still be a decode error with `allow_missing_keys: true`, and
-a value that is present but invalid — text where a number is expected, a
-label of a kind a label cannot hold — MUST still be the rule's
-transformation or validation error, never an absent value omitted silently.
+a value that is present but invalid — text that is not a number, a label
+that is an object or an array — MUST still be the rule's error, by its
+`error_mode` (§ 18.1), never an absent value left out without one. The one
+exception is § 11's: an XPath expression that computes a value, whose
+string that is not a number is the rule's missing value.
 
 ### 19.4 What a failed probe's caller is answered
 
@@ -8965,10 +8978,10 @@ Use at least these test layers:
 
 Tests SHOULD use fixtures and golden files for representative input/output combinations.
 
-What the tests of an area MUST cover is the rules of its sections:
+What the tests of an area MUST cover are the rules of its sections:
 
-- Every MUST and MUST NOT of a feature's section MUST be held by a test that
-  fails without it, and every SHOULD the exporter follows by one, its
+- Every MUST and MUST NOT of a feature's section, and every SHOULD the
+  exporter follows, MUST be held by a test that fails without it, its
   failure cases included: each kind of malformed input, each invalid value of
   each key refused when the configuration loads, a bound at its limit and
   one past it, and every mode of a setting — each `error_mode`,
@@ -8979,9 +8992,9 @@ What the tests of an area MUST cover is the rules of its sections:
   on; a reload through the mechanism that triggers it — the signal, the file
   watch or `/-/reload`.
 - The common metric model (§ 7) MUST be tested apart from every decoder,
-  and every decoder and transform with it through `/probe`, for an
-  exposition a Prometheus parser reads, which the test SHOULD parse rather
-  than only compare as text.
+  and every combination of a decoder and a transform the exporter supports
+  end to end through `/probe`, for an exposition a Prometheus parser reads,
+  which the test SHOULD parse rather than only compare as text.
 - The HTML decoder's tests MUST include malformed and legacy HTML, since
   scraping pages never meant for it is what it is for.
 - The Python sandbox (§ 16.5) MUST be held by tests that try what it
@@ -8990,9 +9003,9 @@ What the tests of an area MUST cover is the rules of its sections:
   library the runtime ships (§ 16.3) by a script that imports it and uses
   what it is shipped for, so that a library missing from the image fails the
   suite.
-- No credential — an `Authorization` header, a password, a token — MUST
-  appear in a log line, a probe's answer or a self-metric in any test that
-  sends one.
+- A credential — an `Authorization` header, a password, a token — MUST NOT
+  appear in a log line, a probe's answer or a self-metric, and a test that
+  sends one MUST check that it does not.
 
 ## 34.2 Required test tooling
 

@@ -40,6 +40,7 @@ func TestEveryRequestTypeHasASpecificationOfItsOwn(t *testing.T) {
 	}
 
 	exporter := read(t, "docs/SPECIFICATION-EXPORTER.md")
+	opening, _, _ := strings.Cut(exporter, "\n## 1. ")
 	_, list, ok := strings.Cut(exporter, "\n#### The other request types\n")
 	if !ok {
 		t.Fatal("spec § 5.1 has no \"The other request types\"; it has moved")
@@ -75,6 +76,14 @@ func TestEveryRequestTypeHasASpecificationOfItsOwn(t *testing.T) {
 		}
 		if _, err := os.Stat("docs/" + NAME + ".md"); err == nil && !strings.Contains(text, "["+NAME+".md]("+NAME+".md)") {
 			t.Errorf("%s does not link the type's page, %s.md", path, NAME)
+		}
+		// A numbered section a type's document took with it, as § 9a and
+		// § 5.1a, is one a reference may name: the exporter's opening says
+		// where it went.
+		for _, m := range regexp.MustCompile(`(?m)^#+ ([0-9]+(?:\.[0-9]+)*[a-z]?)\.? `).FindAllStringSubmatch(text, -1) {
+			if !strings.Contains(opening, "§ "+m[1]+",") {
+				t.Errorf("%s holds § %s, which the exporter's specification does not say it moved to", path, m[1])
+			}
 		}
 		if strings.Contains(exporter, "\n#### `"+typ+"`\n") {
 			t.Errorf("the exporter's specification has a section of `%s` again; it belongs in %s", typ, path)

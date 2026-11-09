@@ -512,6 +512,10 @@ of its own, which replaces the collector's for it:
   `https://10.0.0.5/api/v2/login` with `Host: api.example`, as the request
   itself is sent, rather than to the server's default virtual host. An
   absolute `url` names its own host and is sent no `Host` of the target's.
+- **A `steps` login** goes where each step's `url` says: a step whose
+  `url` is a path goes to the target, with its `Host`, and then the login
+  keeps a token for each target, though its first step goes to an identity
+  provider every target shares.
 
 The login request is held to the collector's `allowed_schemes`,
 `allowed_targets` and `denied_targets` as the request is; a login URL they
@@ -541,7 +545,9 @@ token's cookie's expiry when a step read it as one; an `expires_at`
 before the login began, as a lifetime in seconds read as a time would be,
 fails the login. Where the login says
 none, a token that is a JSON Web Token lasts until its `exp` claim, read
-without checking its signature, which the target checks; else `ttl`, such
+without checking its signature, which the target checks, when it is after
+the login began: one already past, of a clock behind the issuer's, says
+nothing; else `ttl`, such
 as `15m`; with neither, the token is kept until the target refuses it. A token is fetched again once a tenth of its life is
 left, or 30 seconds, whichever is more, but never before half of it has
 passed: a token of an hour at 54 minutes, one of five minutes at four and a

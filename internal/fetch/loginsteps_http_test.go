@@ -404,6 +404,14 @@ func TestAStepsLoginsTokenLifetime(t *testing.T) {
 			t.Errorf("%s: %v", at, err)
 		}
 	}
+	// A JWT whose exp is not after the login is no lifetime: ttl, or none.
+	stale := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, `{"exp":%d}`, start.Add(-time.Minute).Unix())) + ".sig"
+	for ttl, want := range map[model.Duration]time.Time{0: {}, model.Duration(time.Minute): start.Add(time.Minute)} {
+		token, err := finishLoginToken(&model.LoginConfig{Type: "json", TTL: ttl}, loginToken{value: stale}, start)
+		if err != nil || !token.expires.Equal(want) {
+			t.Errorf("an expired JWT with ttl %v: expires %v, %v; want %v", ttl, token.expires, err, want)
+		}
+	}
 	// A json login's token that says no lifetime takes its JWT's too.
 	token, err := finishLoginToken(&model.LoginConfig{Type: "json"}, loginToken{value: jwt}, start)
 	if err != nil || !token.expires.Equal(exp) || token.value != "Bearer "+jwt {
@@ -671,5 +679,47 @@ func TestADeletedCookieIsNotRead(t *testing.T) {
 	gone := &http.Response{Header: http.Header{"Set-Cookie": {"SESSION=old; Max-Age=-1"}}}
 	if _, err := extractLoginValue(context.Background(), model.LoginExtract{Cookie: "SESSION"}, gone, nil, start); err == nil {
 		t.Fatal("a deleted cookie was read")
+	}
+}
+
+// A steps login whose first step goes to an identity provider, absolute,
+// and a later one to the target, a path, keeps a token for each target:
+// two targets asked in turn make one login each, not one each time the
+// other's token is refused.
+func TestAStepsLoginWithAStepAtTheTargetKeepsATokenForEachTarget(t *testing.T) {
+	freshLogins(t)
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ticket": "t"}`)
+	}))
+	defer idp.Close()
+	target := func(name string) *httptest.Server {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/session" {
+				_, _ = fmt.Fprintf(w, `{"token": %q}`, name)
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer "+name {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, "value=1")
+		}))
+		t.Cleanup(server.Close)
+		return server
+	}
+	one, two := target("one"), target("two")
+	c := loginCollector(t, model.LoginConfig{Type: "steps", Token: "token", Steps: []model.LoginStep{
+		{URL: idp.URL + "/ticket", Extract: map[string]model.LoginExtract{"ticket": {JSON: ".ticket"}}},
+		{URL: "/session", Query: map[string]string{"ticket": "{{login.ticket}}"}, Extract: map[string]model.LoginExtract{"token": {JSON: ".token"}}},
+	}})
+	for range 2 {
+		for _, server := range []*httptest.Server{one, two} {
+			if response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil); err != nil || response.StatusCode != http.StatusOK {
+				t.Fatalf("fetch: %v, %+v", err, response)
+			}
+		}
+	}
+	if made, _ := logins.counts("api"); made != 2 {
+		t.Fatalf("%d logins for two targets asked twice each, want 2", made)
 	}
 }

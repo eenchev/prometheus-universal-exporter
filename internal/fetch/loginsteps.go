@@ -444,10 +444,13 @@ func stepsToken(l *model.LoginConfig, values map[string]loginValue, start time.T
 }
 
 // defaultExpiry gives a token whose login said no lifetime the one its JWT
-// exp claim says, else ttl's.
+// exp claim says, when it is after start, else ttl's.
 func defaultExpiry(token *loginToken, l *model.LoginConfig, start time.Time) {
-	if token.expires.IsZero() {
-		token.expires = jwtExpiry(token.value)
+	// An exp not after the login's start, of a clock behind the issuer's
+	// or a token issued expired, says nothing the token could be kept by:
+	// taken, every request would make a login.
+	if exp := jwtExpiry(token.value); token.expires.IsZero() && exp.After(start) {
+		token.expires = exp
 	}
 	if token.expires.IsZero() && l.TTL > 0 {
 		token.expires = start.Add(time.Duration(l.TTL))

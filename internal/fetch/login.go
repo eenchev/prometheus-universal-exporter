@@ -450,6 +450,21 @@ func firstLoginURL(l *model.LoginConfig) *model.LoginConfig {
 	return l
 }
 
+// stepsTargetKey is what tells apart the tokens of a steps login l at two
+// targets when its first step's url, the login's place in the key, is
+// absolute and another step's is a path resolved against the target: the
+// target's scheme, host and port; "" for every other login.
+func stepsTargetKey(l *model.LoginConfig, target string) string {
+	if l.Type != "steps" || relativeLoginURL(firstLoginURL(l)) || !relativeLogin(l) {
+		return ""
+	}
+	base, err := loginURL(&model.LoginConfig{URL: "/"}, target)
+	if err != nil {
+		return ""
+	}
+	return "\x00" + base.String()
+}
+
 // relativeLogin says whether a login of l goes to the target: its url, or
 // a url of one of its steps, is a path resolved against it. Such a login
 // is sent with the request's Host override, and its token kept for each
@@ -561,8 +576,10 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 	}
 	fingerprint := loginTokenFingerprint(c, l)
 	// The Host is part of the key: two virtual hosts on one address are
-	// two logins, and neither is sent the other's token.
-	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host
+	// two logins, and neither is sent the other's token. So is the target
+	// a steps login's relative step goes to when its first step's url is
+	// absolute, which alone would not tell two targets apart.
+	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host + stepsTargetKey(l, target)
 	login := func(ctx context.Context) (loginToken, error) {
 		return logIn(ctx, c, l, u, target, host, key)
 	}

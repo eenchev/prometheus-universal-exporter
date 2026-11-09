@@ -31850,6 +31850,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAStepThatFailsIsNamed` (fetch, http), changed: a redirect that a step's `status` does not list fails saying to list it, as one does without `status` (§ 42.6b).
 - `TestADeletedCookieIsNotRead` (fetch, http): of a cookie set three times, deleted with `Max-Age=-1`, with an `Expires` in 1970, and anew, the new one is read with its expiry; one only deleted is not found (§ 42.6b).
 
+## 34.328 The third audit of the steps login
+
+- `TestAStepsLoginWithAStepAtTheTargetKeepsATokenForEachTarget` (fetch, http): a steps login whose first step goes to an identity provider and whose second is a path at the target logs in once for each of two targets asked twice in turn; with the target left out of the token's key, each target's token was the other's, refused and fetched again at every request (§ 42.6a).
+- `TestAStepsLoginsTokenLifetime` (fetch, http), changed: a JWT whose `exp` is a minute before the login gives no lifetime, `ttl`'s or none, where it made a login at every request (§ 42.6a).
+- `TestDryRunReportsAStepsLogin` (main, http): `--dry-run` shows a steps login's `values` and each step's headers and form masked by name, a written OAuth 1.0a secret withheld and one named as a value shown as its name, holds no secret, and warns of a `keep_file` whose directory is not there; the masking had no test (§ 42.6b).
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32881,11 +32887,14 @@ target.
 
 A token MUST be kept, by the collector, the login block, the `tls` block the
 login was made with (the login's own, a static target's or the
-collector's), the URL the login was sent to and the `Host` it was sent with, and sent on every request
+collector's), the URL the login was sent to and the `Host` it was sent with
+(for a `steps` login, its first step's, and, when that is absolute and
+another step's `url` a path, the target's scheme, host and port as well),
+and sent on every request
 until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
 else, for a token that is a JSON Web Token, its `exp` claim, read without
-checking the signature, else `ttl`, else until the target refuses it. Requests that need a token
+checking the signature, when it is after the login's start, else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own
 deadline, and the login MUST NOT be cut short by the request that began it
 going away or reaching its deadline: it MUST run within a bound of its own,

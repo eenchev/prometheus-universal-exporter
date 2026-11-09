@@ -1931,7 +1931,7 @@
                     "type": "object"
                   },
                   "keep_file": {
-                    "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read when the exporter starts, so that a restart makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
+                    "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
                     "pattern": "^$|^/",
                     "type": "string"
                   },
@@ -4423,7 +4423,7 @@
                     "type": "object"
                   },
                   "keep_file": {
-                    "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read when the exporter starts, so that a restart makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
+                    "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
                     "pattern": "^$|^/",
                     "type": "string"
                   },

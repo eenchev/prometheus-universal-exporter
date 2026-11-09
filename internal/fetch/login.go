@@ -658,6 +658,9 @@ func (r *requestLogin) sends(name string) bool {
 type loginToken struct {
 	value   string
 	expires time.Time
+	// kept says the token was read from a steps login's keep_file: no
+	// request was made, and it is counted as no login.
+	kept bool
 }
 
 // logIn makes one login of l at u for a request of c, sent with the Host
@@ -1307,6 +1310,10 @@ func (c *loginCache) finish(e *loginEntry, call *loginCall, start time.Time, tok
 			call.err = err
 		}
 	} else {
+		// A token read from a keep file is no login made.
+		if token.kept && call.counted && c.made[e.collector] > 0 {
+			c.made[e.collector]--
+		}
 		e.value, e.expires, e.refresh = token.value, token.expires, time.Time{}
 		if !token.expires.IsZero() {
 			e.refresh = loginRefreshAt(start, token.expires)

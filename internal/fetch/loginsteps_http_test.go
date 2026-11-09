@@ -282,6 +282,10 @@ func TestAKeepFileOutlivesARestart(t *testing.T) {
 	if server.hit("/signin") != 2 || server.hit("/exchange") != 1 || server.hit("/refresh") != 0 {
 		t.Fatalf("after a restart: %d sign-ins, %d exchanges, %d refreshes", server.hit("/signin")/2, server.hit("/exchange"), server.hit("/refresh"))
 	}
+	// The token read from the file is no login.
+	if made, failed := logins.counts("api"); made != 0 || failed != 0 {
+		t.Fatalf("a token read from the keep file counted as %d logins, %d failed", made, failed)
+	}
 	logins.reset()
 	advance(61 * time.Minute)
 	fetch()
@@ -363,7 +367,7 @@ func TestReloginOnTakesOtherStatusesForARefusedToken(t *testing.T) {
 func TestAStepsLoginsTokenLifetime(t *testing.T) {
 	start := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
 	exp := time.Date(2026, 11, 9, 9, 30, 0, 0, time.UTC)
-	jwt := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"sub":"me","exp":%d}`, exp.Unix()))) + ".sig"
+	jwt := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, `{"sub":"me","exp":%d}`, exp.Unix())) + ".sig"
 	cookie := time.Date(2026, 11, 9, 8, 45, 0, 0, time.UTC)
 	for name, tc := range map[string]struct {
 		l      model.LoginConfig
@@ -384,6 +388,14 @@ func TestAStepsLoginsTokenLifetime(t *testing.T) {
 		token, err := stepsToken(&tc.l, tc.values, start)
 		if err != nil || !token.expires.Equal(tc.want) {
 			t.Errorf("%s: expires %v, %v; want %v", name, token.expires, err, tc.want)
+		}
+	}
+	// A time before the login, as a lifetime in seconds read as one, is
+	// refused: kept, the token would be fetched again at every request.
+	for _, text := range []string{"3600", start.Add(-time.Second).Format(time.RFC3339), start.Format(time.RFC3339)} {
+		l := model.LoginConfig{Token: "t", ExpiresAt: "at"}
+		if _, err := stepsToken(&l, map[string]loginValue{"t": {Text: "x"}, "at": {Text: text}}, start); err == nil || !strings.Contains(err.Error(), "is a time before the login") {
+			t.Errorf("expires_at %s: %v", text, err)
 		}
 	}
 	for at, want := range map[string]string{"in": "no lifetime in seconds", "at": "no time"} {
@@ -507,5 +519,72 @@ func TestAStepsLoginIsCheckedWhenItLoads(t *testing.T) {
 	json := model.LoginConfig{Type: "json", URL: "/login", Token: ".t", FieldFiles: map[string]string{"p": "/f"}, KeepFile: "/k"}
 	if err := validateLogin(&json, nil, "request.login", nil); err == nil || !strings.Contains(err.Error(), "sets keep_file, which a login of type json does not take") {
 		t.Fatalf("a json login with keep_file: %v", err)
+	}
+}
+
+// A field of a form-encoded answer is read whatever else the answer holds,
+// a pair Go's parser refuses among them.
+func TestAFormFieldIsReadBesideAPairThatIsNoForms(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	value, err := extractLoginValue(context.Background(), model.LoginExtract{Form: "oauth_token"}, resp, []byte("a=b;c&oauth_token=t1&oauth_token_secret=ts1\n"), time.Now())
+	if err != nil || value.Text != "t1" {
+		t.Fatalf("read %+v, %v", value, err)
+	}
+	if _, err := extractLoginValue(context.Background(), model.LoginExtract{Form: "missing"}, resp, []byte("a=b"), time.Now()); err == nil || !strings.Contains(err.Error(), "found nothing") {
+		t.Fatalf("a field not there: %v", err)
+	}
+}
+
+// A keep file forgets a login of which nothing would be used, its token
+// and its values kept all expired, when another is written to it, and
+// keeps one with anything left to use.
+func TestAKeepFileForgetsWhatExpired(t *testing.T) {
+	freshLogins(t)
+	path := filepath.Join(t.TempDir(), "keep.json")
+	now := loginNow()
+	keepFiles.write(path, "spent", keptLogin{Token: "a", Expires: now.Add(-time.Minute), Kept: map[string]loginValue{"r": {Text: "r", Expires: now.Add(-time.Second)}}})
+	keepFiles.write(path, "refreshable", keptLogin{Token: "b", Expires: now.Add(-time.Minute), Kept: map[string]loginValue{"r": {Text: "r", Expires: now.Add(time.Hour)}}})
+	keepFiles.write(path, "unbounded", keptLogin{Token: "c"})
+	keepFiles.write(path, "new", keptLogin{Token: "d", Expires: now.Add(time.Hour)})
+	file, err := readKeepFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]bool{"spent": false, "refreshable": true, "unbounded": true, "new": true} {
+		if _, ok := file.Logins[keepDigest(key)]; ok != want {
+			t.Errorf("%s kept: %v, want %v", key, ok, want)
+		}
+	}
+}
+
+// The values kept are this exporter's when the keep file holds its own last
+// token: a write that failed leaves older values in the file, which a
+// refresh would send.
+func TestTheValuesKeptAreThisExportersAfterAFailedWrite(t *testing.T) {
+	advance := freshLogins(t)
+	server := newSSOServer(t)
+	l := garminLike(t)
+	l.KeepFile = filepath.Join(t.TempDir(), "keep.json")
+	c := loginCollector(t, l)
+	fetch := func() {
+		t.Helper()
+		if response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil); err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("fetch: %v, %+v", err, response)
+		}
+	}
+	fetch()
+	stepsStates.mu.Lock()
+	var key string
+	for k := range stepsStates.byKey {
+		key = k
+	}
+	stepsStates.mu.Unlock()
+	// The file as an earlier write left it: this exporter's token, values
+	// kept that the target no longer takes.
+	keepFiles.write(l.KeepFile, key, keptLogin{Token: "bearer-1", Expires: loginNow().Add(time.Hour), Kept: map[string]loginValue{"oauth_token": {Text: "stale"}, "oauth_token_secret": {Text: "stale"}}})
+	advance(55 * time.Minute)
+	fetch()
+	if server.hit("/refresh") != 1 || server.hit("/exchange") != 1 {
+		t.Fatalf("%d refreshes, %d exchanges; want the refresh made with the values this exporter kept", server.hit("/refresh"), server.hit("/exchange"))
 	}
 }

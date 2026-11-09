@@ -324,9 +324,9 @@ type loginValue struct {
 }
 
 // stepsLogin makes the login l, for a request of c to target, whose token
-// is kept under key: the token the keep file holds, the first time and
-// while it lasts; else refresh_steps with the values kept, while they
-// last; else, or when those fail, the steps.
+// is kept under key: the token the keep file holds, when it is not the
+// last one this exporter's logins gave and lasts; else refresh_steps with
+// the values kept, while they last; else, or when those fail, the steps.
 func stepsLogin(ctx context.Context, client *http.Client, c *model.Collector, l *model.LoginConfig, target, host, key string, start time.Time) (loginToken, error) {
 	state := stepsStates.of(key)
 	state.load(l)
@@ -423,6 +423,13 @@ func stepsToken(l *model.LoginConfig, values map[string]loginValue, start time.T
 			at, ok := loginTime(text)
 			if !ok {
 				return loginToken{}, fmt.Errorf("login.expires_at %s is no time: seconds or milliseconds since 1970, RFC 3339 or an HTTP date", l.ExpiresAt)
+			}
+			// A token that expired before the login began is no token:
+			// kept, it would be fetched again at every request. A
+			// lifetime in seconds read as a time is one, 3600 being an
+			// hour after 1970 began.
+			if !at.After(start) {
+				return loginToken{}, fmt.Errorf("login.expires_at %s is a time before the login, %s; if it is the token's lifetime in seconds, name it with expires_in", l.ExpiresAt, at.UTC().Format(time.RFC3339))
 			}
 			token.expires = at
 		}
@@ -680,10 +687,9 @@ func extractLoginValue(ctx context.Context, e model.LoginExtract, resp *http.Res
 			return value, fmt.Errorf("gave %s; it must give text or a number", kind)
 		}
 	case e.Form != "":
-		form, err := url.ParseQuery(strings.TrimSpace(string(answer)))
-		if err != nil {
-			return value, errors.New("found an answer that is not a form")
-		}
+		// A pair ParseQuery cannot read, such as one with a semicolon,
+		// leaves the others read: the field is looked for among them.
+		form, _ := url.ParseQuery(strings.TrimSpace(string(answer)))
 		value.Text = form.Get(e.Form)
 	case e.Header != "":
 		value.Text = resp.Header.Get(e.Header)
@@ -838,7 +844,10 @@ func (s *stepsState) load(l *model.LoginConfig) {
 	if !ok {
 		return
 	}
-	if saved.Kept != nil {
+	// The values kept are the file's when another exporter wrote them,
+	// its token not this one's last, or when this one keeps none yet; else
+	// this one's are as new, and newer when its last write failed.
+	if saved.Kept != nil && (s.kept == nil || saved.Token != s.last) {
 		s.kept = saved.Kept
 	}
 	if saved.Token != "" && saved.Token != s.last {
@@ -857,6 +866,7 @@ func (s *stepsState) takeKeptToken(now time.Time) (loginToken, bool) {
 		return loginToken{}, false
 	}
 	s.last = token.value
+	token.kept = true
 	return *token, true
 }
 
@@ -1004,13 +1014,19 @@ var keepFileWarning = func(path string, err error) {
 // write puts the login key's state in path, replacing the file whole: a
 // file of its own beside it, renamed over it, readable by the exporter's
 // user alone. Logins that wrote to the file before are kept, but for those
-// expired.
+// whose token and values kept have all expired, which no login would use.
 func (k *keepFileStore) write(path, key string, saved keptLogin) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	file, err := readKeepFile(path)
 	if err != nil || file.Logins == nil {
 		file = keepFile{Logins: map[string]keptLogin{}}
+	}
+	now := loginNow()
+	for digest, other := range file.Logins {
+		if keptExpired(other, now) {
+			delete(file.Logins, digest)
+		}
 	}
 	file.Logins[keepDigest(key)] = saved
 	if len(file.Logins) > maxLoginEntries {
@@ -1023,6 +1039,21 @@ func (k *keepFileStore) write(path, key string, saved keptLogin) {
 	if err != nil {
 		keepFileWarning(path, err)
 	}
+}
+
+// keptExpired reports whether nothing of a login a keep file holds would
+// be used at now: its token has expired, or it has none, and so has every
+// value kept. A token or a value that says no expiry is used.
+func keptExpired(saved keptLogin, now time.Time) bool {
+	if saved.Token != "" && (saved.Expires.IsZero() || now.Before(saved.Expires)) {
+		return false
+	}
+	for _, value := range saved.Kept {
+		if value.Expires.IsZero() || now.Before(value.Expires) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeFileAtomically replaces path with raw, written beside it first.

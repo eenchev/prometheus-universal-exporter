@@ -26,6 +26,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `param_day: "{{date}}"`, is now filled in at each scrape, where it was
   sent as text; one that holds a `{{param_...}}` placeholder is refused
   when the targets load.
+- A `json` or `oauth2` login whose answer says no lifetime now keeps a
+  token that is a JSON Web Token until its `exp` claim, where it was kept
+  for `ttl`, or until the target refused it.
 
 ### New
 

@@ -31836,6 +31836,14 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `keep_file` and each step's `url` and `method` are held to text.
 - `TestAuthenticationPageExamplesLoad` (repository): the steps example of AUTHENTICATION.md loads.
 
+## 34.326 The audit of the steps login
+
+- `TestAKeepFileOutlivesARestart` (fetch, http), changed: the token read from the keep file after a restart counts as no login, and no failure (§ 42.6b).
+- `TestAStepsLoginsTokenLifetime` (fetch, http), changed: an `expires_at` of 3600, read as a time in 1970, one a second before the login and one at its start are refused saying so (§ 42.6b).
+- `TestAFormFieldIsReadBesideAPairThatIsNoForms` (fetch, http): `oauth_token` is read from `a=b;c&oauth_token=t1&...`, whose first pair Go's parser refuses; a field not there is not found (§ 42.6b).
+- `TestAKeepFileForgetsWhatExpired` (fetch, http): of four logins written to one file, the one whose token and values kept have all expired is dropped, and one with a value kept left, one whose token says no expiry and the new one are kept (§ 42.6b).
+- `TestTheValuesKeptAreThisExportersAfterAFailedWrite` (fetch, http): after a keep file write that failed, the values kept in memory are used for the refresh, not the older ones in the file (§ 42.6b).
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32952,11 +32960,15 @@ values from its answer, and send the value `token` names as the token.
   together.
 - **Lifetime.** The token's lifetime MUST be, of the first that says one,
   the value `expires_in` names, in seconds, or `expires_at`, a time in
-  seconds or milliseconds since 1970, RFC 3339 or an HTTP date, not both;
-  the token's cookie's expiry; its JWT `exp`; `ttl`.
+  seconds or milliseconds since 1970, RFC 3339 or an HTTP date, not both,
+  an `expires_at` not after the login's start failing the login;
+  the token's cookie's expiry; its JWT `exp`; `ttl`. A `form` value MUST be
+  read among the pairs of the body Go reads, a pair it refuses, with a
+  semicolon, not failing the step.
 - **Refresh.** `keep` MUST name values of `steps`, each with a duration, 0
   for none, and MUST go with `refresh_steps`, which MAY send them and the
-  given values. When a token is due, `refresh_steps` MUST be made while
+  given values, and MUST read `token`, and `expires_in` or `expires_at`
+  when set. When a token is due, `refresh_steps` MUST be made while
   every value kept lasts — its `keep` duration from the login that read it,
   shortened by its cookie's or JWT's expiry — and the whole `steps` when one
   has expired or the refresh fails, which MUST be logged as a warning. A
@@ -32966,11 +32978,15 @@ values from its answer, and send the value `token` names as the token.
 - **The keep file.** `keep_file`, an absolute path, MUST be written after
   each login with the token, its expiry and the values kept, under a
   digest of the login's key, whole, beside itself and renamed over,
-  readable by the exporter's user alone, keeping the other logins it holds.
+  readable by the exporter's user alone, keeping the other logins it holds
+  but those of which nothing would be used, their token and every value
+  kept expired.
   A login MUST read it first, each time, and send a token it holds that is
   not the last one this exporter's logins gave while it lasts past its
-  refresh margin, counted as a login with no request; the values kept it
-  holds MUST be used for `refresh_steps`. A file that cannot be written
+  refresh margin, counted as no login; the values kept it holds MUST be
+  used for `refresh_steps` when another exporter wrote them, the token not
+  this one's last, or when this one keeps none, and this one's kept
+  otherwise, so that a write that failed leaves no older values used. A file that cannot be written
   MUST leave the login made, logged as a warning, and `--dry-run` MUST warn
   of a directory that is not there.
 - **Counted, traced and shown.** A login of `refresh_steps` MUST be

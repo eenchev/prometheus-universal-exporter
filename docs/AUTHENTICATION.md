@@ -455,7 +455,8 @@ lasts; when one has expired, or the refresh fails, the whole `steps` are
 made, and logged as a warning when a refresh failed. A value kept expires
 at its `keep` duration, or sooner at its cookie's or its JWT's expiry; `0`
 uses it for as long as `refresh_steps` succeed with it. `refresh_steps`
-read `token` again, and may read a kept value anew, which then replaces
+read `token` again, and `expires_in` or `expires_at` when the login sets
+one, and may read a kept value anew, which then replaces
 it. The two go together: `keep` without `refresh_steps`, or the other way
 round, is refused.
 
@@ -472,7 +473,9 @@ written leaves the login made, logs a warning, and
 [`--dry-run`](CONFIGURATION.md#dry-run) warns of a directory that is not
 there. Several logins may share one file, each under a digest of the
 collector, the login and where it goes, which change with the login: a
-login changed in any way starts anew. Exporters that share the file on a
+login changed in any way starts anew. A login of which nothing would be used — its
+token and every value kept expired — is dropped from the file when another
+is written to it. Exporters that share the file on a
 shared volume take each other's tokens: a login reads the file again
 whenever its token is due or refused, and takes a token there that is not
 the one it last had.
@@ -528,7 +531,9 @@ CAs of their own, and sent on every request until shortly before it expires. Its
 cookie's `Max-Age` or `Expires` for `token_cookie`, and, for a `steps`
 login, the value `expires_in` names, in seconds, or `expires_at`, a time —
 seconds or milliseconds since 1970, RFC 3339 or an HTTP date — else the
-token's cookie's expiry when a step read it as one. Where the login says
+token's cookie's expiry when a step read it as one; an `expires_at`
+before the login began, as a lifetime in seconds read as a time would be,
+fails the login. Where the login says
 none, a token that is a JSON Web Token lasts until its `exp` claim, read
 without checking its signature, which the target checks; else `ttl`, such
 as `15m`; with neither, the token is kept until the target refuses it. A token is fetched again once a tenth of its life is
@@ -612,15 +617,15 @@ read as a token`; a connection that failed, or an answer without
 
 An error of a `token` or `expires_in` expression says what it gave, such as
 "an object", never the value, which may be the token itself. A `steps`
-login's failure names the step, as `login.steps[1] was answered with HTTP
-status 403` or `login.refresh_steps[0].extract.access_token matched
+login's failure names the step, as `login.steps[1]: the login was
+answered with HTTP status 403` or `login.refresh_steps[0].extract.access_token matched
 nothing in the answer`, and never a value it read.
 
 Each collector's logins are counted in
 [`http_exporter_logins_total` and `http_exporter_login_failures_total`](SELF-METRICS.md#collector-metrics),
 and those a `steps` login's `refresh_steps` made in
-`http_exporter_login_refreshes_total`; a token read from a `keep_file`
-counts as a login, with no request. With
+`http_exporter_login_refreshes_total`; a token read from a `keep_file` is
+no login, and is counted in none. With
 [OTLP traces](OTLP.md#traces-of-slow-requests) on, each request of a login, each step of a
 `steps` login, is a span of the trace of the probe or the scrape that
 needed the token, and a failed login, logged with the stage `login`, is
@@ -635,8 +640,11 @@ their login gives for the probes after them, but their logins are not
 counted in those self-metrics. [`--dry-run`](CONFIGURATION.md#dry-run) lists the login
 under `request_policies`, with its header and prefix filled in, the files
 its secrets are read from and never what they hold, and a field or endpoint
-parameter whose name reads as a credential's without its value; a secret
-file that is missing or empty is listed under `warnings`.
+parameter whose name reads as a credential's without its value; a `steps`
+login's `values`, and what each step sends, are shown so too, and an OAuth
+1.0a secret written in a step without its value. A secret file that is
+missing or empty is listed under `warnings`, and so is a `keep_file` whose
+directory is not there.
 
 ### Logins and the target allocator
 

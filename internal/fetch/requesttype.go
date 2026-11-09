@@ -251,6 +251,9 @@ type RequestType struct {
 	// Logins reports how many logins a collector's request.login made and
 	// how many of them failed (login.go). Unset, the type does not log in.
 	Logins func(collector string) (made, failed uint64)
+	// LoginRefreshes reports how many of those logins a steps login's
+	// refresh_steps made.
+	LoginRefreshes func(collector string) uint64
 
 	// What the rest of the exporter knows of the type, which it reads from
 	// here rather than naming the type, so a new type says it in its own
@@ -347,6 +350,16 @@ func TypeArticle(name string) string {
 		return "an"
 	}
 	return "a"
+}
+
+// CollectorLoginRefreshes reports how many logins of a collector of
+// requestType refresh_steps made (RequestType.LoginRefreshes); zero for a
+// type that does not log in.
+func CollectorLoginRefreshes(requestType, collector string) uint64 {
+	if rt := RequestTypes[requestType]; rt != nil && rt.LoginRefreshes != nil {
+		return rt.LoginRefreshes(collector)
+	}
+	return 0
 }
 
 // CollectorLogins reports how many logins a collector of requestType made

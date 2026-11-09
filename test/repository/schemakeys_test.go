@@ -292,6 +292,15 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 	t.Helper()
 	node := schema
 	for _, part := range strings.Split(path, ".") {
+		// A value of a mapping, as keep.* is a login's.
+		if part == "*" {
+			next, ok := node["additionalProperties"].(map[string]any)
+			if !ok {
+				t.Fatalf("the schema has no %s", path)
+			}
+			node = next
+			continue
+		}
 		properties, _ := node["properties"].(map[string]any)
 		next, ok := properties[strings.TrimRight(part, "[]{}")].(map[string]any)
 		switch {

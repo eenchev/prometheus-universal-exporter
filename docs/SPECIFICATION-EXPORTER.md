@@ -31822,6 +31822,20 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestLastSuccessesAreBounded` (exporter): an earlier success replaces no later one, and past 10,000 the one kept longest ago is forgotten (§ 42.10d).
 - `TestAPagesContentsListsEverySection` (repository): every `##` and `###` heading of REQUESTS.md and CONFIGURATION.md is in its Contents; it found Dates and times missing from REQUESTS.md.
 
+## 34.325 A login of several steps
+
+- `TestAStepsLoginIsMadeInOrder` (fetch, http): a Garmin-like sign-in, page, form with the cookie and the token against cross-site requests, a ticket in a query signed by the consumer with OAuth 1.0a, a form-encoded OAuth 1.0a token signing the exchange, and the bearer token sent and kept (§ 42.6b).
+- `TestRefreshStepsMakeTheNextTokenOfTheValuesKept` (fetch, http): a token due is made with `refresh_steps`, counted; a refresh that fails makes the whole steps; values kept past their `keep` make the whole steps without a refresh (§ 42.6b).
+- `TestAKeepFileOutlivesARestart` (fetch, http): the file is 0600, holds the token and the values kept and neither the CSRF token nor the URL; after a restart the token is sent with no login, and past its life `refresh_steps` make the next; another exporter's token in the file is taken; a file that cannot be written leaves the login made, warned of, and `--dry-run`'s check of the files warns (§ 42.6b).
+- `TestReloginOnTakesOtherStatusesForARefusedToken` (fetch, http): a `403` is the answer without `relogin_on`, and with `[401, 403]` drops the token and sends the request again with a new login's (§ 42.6a).
+- `TestAStepsLoginsTokenLifetime` (fetch, http): `expires_in`, `expires_at` in seconds, milliseconds, RFC 3339 and an HTTP date, the cookie's expiry, the JWT's `exp`, `ttl` and none, in that order; a lifetime or time that is none refused; a json login's JWT read too (§ 42.6a, § 42.6b).
+- `TestTheOAuth1SignatureIsRFC5849s` (fetch, http): the signature of Twitter's documented example (§ 42.6b).
+- `TestAStepThatFailsIsNamed` (fetch, http): a redirect not listed, a regex that matches nothing and an answer that is no JSON fail naming the step and the value, never the answer; a listed `302`'s `Location` is read (§ 42.6b).
+- `TestAStepsLoginIsCheckedWhenItLoads` (fetch, http): a `url`, no steps, no token, a token no step reads, a value used before it is read, a json key, two places of a value, a regex that does not compile, `keep` of the token, `refresh_steps` without `keep`, a `Cookie` header, half an OAuth 1.0a token, a body with `GET`, a status out of range, `relogin_on` of a `5xx`, a relative `keep_file`, a name given twice and a refresh sending a value not kept are refused; a json login with `keep_file` too (§ 42.6a, § 42.6b).
+- `TestSchemaAndExporterAgreeOnKeysWrittenEmpty` and `TestEveryConstrainedKeyOfTheSchemasIsInATable` (repository), changed: rows for `values`, `secret_files`, `keep_file`, `keep`, and each list's `url`, `method`, `oauth1` keys and `extract` names; `schemaNode` reads a mapping's values, `.*`.
+- `TestTheKeysHeldToTextAloneAreTheSchemas` (config), changed: `keep_file` and each step's `url` and `method` are held to text.
+- `TestAuthenticationPageExamplesLoad` (repository): the steps example of AUTHENTICATION.md loads.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32775,8 +32789,8 @@ fact that the exporter Basic Auth credential is not forwarded to the target.
 
 An `http` or `graphite` collector, and a static target of one, MAY set
 `request.login`: a login made before the request, whose token MUST be sent
-on it. A `grpc` collector MUST refuse it as a key of another type. Two kinds
-MUST be supported:
+on it. A `grpc` collector MUST refuse it as a key of another type. Three
+kinds MUST be supported, `steps` as § 42.6b says:
 
 - `type: json` MUST post, with `Content-Type: application/json`, a JSON
   object of the members of `fields`, as written, and of `field_files`, each
@@ -32810,8 +32824,8 @@ MUST be supported:
   refused without `grant_type: refresh_token`, and a `grant_type` other than
   `client_credentials`, the default, and `refresh_token` MUST be refused.
 
-A key of the other kind MUST be refused, and so MUST a login without `type`
-or `url`, at load, naming the collector or the target and the key. A secret
+A key of another kind MUST be refused, and so MUST a login without `type`,
+or, but for `steps`, without `url`, at load, naming the collector or the target and the key. A secret
 MUST NOT be read from the configuration: it MUST be read from its file at
 each login, so a rotated file is used by the next one. `--dry-run` MUST read
 the login's secret files and the files of its own `tls` block, and those of
@@ -32856,13 +32870,15 @@ login was made with (the login's own, a static target's or the
 collector's), the URL the login was sent to and the `Host` it was sent with, and sent on every request
 until it is due to be fetched again: when a tenth of its life is left or 30 seconds, whichever is more,
 but not before half of it has passed. Its lifetime is what the answer says,
-else `ttl`, else until the target refuses it. Requests that need a token
+else, for a token that is a JSON Web Token, its `exp` claim, read without
+checking the signature, else `ttl`, else until the target refuses it. Requests that need a token
 while its login is made MUST wait for that one login, each within its own
 deadline, and the login MUST NOT be cut short by the request that began it
 going away or reaching its deadline: it MUST run within a bound of its own,
 30 seconds, and a request that stops waiting MUST NOT fail it. A login that fails while the token kept has not expired MUST
-leave that token in use, counted as a failure. A target that answers `401`
-to a request that carried the token — the last request of a followed
+leave that token in use, counted as a failure. A target that answers `401`,
+or, with `relogin_on`, one of the statuses it lists in its place, each
+`4xx` and anything else refused at load, to a request that carried the token — the last request of a followed
 redirect, which MUST NOT be taken for a refusal of the token when a hop to
 another origin left it behind — MUST have the token it was sent dropped, unless a newer one replaced it
 meanwhile, and the request MUST be sent once more with the token of a new
@@ -32901,6 +32917,70 @@ gives, the collector's, but its logins MUST NOT be counted in
 a request that is no debug run's waited for the same login. A
 static target's `login` MUST be part of its cache key, and the debug page
 MUST refuse a collector written on it that sets `login`.
+
+## 42.6b A login of several steps
+
+`type: steps` MUST make the requests of `steps`, at least one and at most
+16, in order, sharing one cookie jar of the login's own, each reading
+values from its answer, and send the value `token` names as the token.
+
+- **A step.** `url` MUST be held as a login's `url` is (§ 42.6a), the
+  `Host` override sent with a step whose `url` is a path; it MUST hold no
+  placeholder. `method` MUST be `GET`, `POST`, `PUT` or `PATCH`, `GET` when
+  left out and `POST` with a body; a body with `GET` MUST be refused.
+  `query` MUST be added to the URL's query; `headers` sent, but `Host`,
+  `Content-Type`, `Content-Length`, `Cookie`, and `Authorization` beside
+  `oauth1`, refused; `form` sent as `application/x-www-form-urlencoded` and
+  `json` as a JSON object of text, not both. A step MUST succeed on a `2xx`
+  answer, or, with `status`, on one it lists; it MUST NOT follow a
+  redirect, and one not listed MUST fail the login saying to list it.
+- **Values.** What a step sends MAY hold `{{login.<name>}}`: a value of
+  `values`, as written, of `secret_files`, read from its file at each
+  login, or read by a step before it; any other MUST be refused at load,
+  naming the step and the key. A name MUST be letters, digits and `_`, not
+  first a digit, given once. `extract` MUST read each value from exactly
+  one of: `regex`, its first group or its whole match, on the body; `json`,
+  a jq expression on the body, giving text or a number; `form`, a field of
+  the body read as a form; `header`; `cookie`, whose `Max-Age` or `Expires`
+  is the value's expiry. A value not found or empty MUST fail the login,
+  naming the step and the value and never what the answer holds. The last
+  step MUST read something, and `token` MUST name a value a step reads.
+- **OAuth 1.0a.** `oauth1` MUST sign the step with HMAC-SHA1 as RFC 5849
+  § 3.4 says, over the method, the URL, the query and a `form` body, with a
+  fresh nonce and the time, in `Authorization`; `consumer_key` and
+  `consumer_secret` are required, and `token` and `token_secret` go
+  together.
+- **Lifetime.** The token's lifetime MUST be, of the first that says one,
+  the value `expires_in` names, in seconds, or `expires_at`, a time in
+  seconds or milliseconds since 1970, RFC 3339 or an HTTP date, not both;
+  the token's cookie's expiry; its JWT `exp`; `ttl`.
+- **Refresh.** `keep` MUST name values of `steps`, each with a duration, 0
+  for none, and MUST go with `refresh_steps`, which MAY send them and the
+  given values. When a token is due, `refresh_steps` MUST be made while
+  every value kept lasts — its `keep` duration from the login that read it,
+  shortened by its cookie's or JWT's expiry — and the whole `steps` when one
+  has expired or the refresh fails, which MUST be logged as a warning. A
+  value `refresh_steps` read anew MUST replace the one kept; one they sent
+  and did not read MUST keep its expiry. `keep` naming the token MUST be
+  refused.
+- **The keep file.** `keep_file`, an absolute path, MUST be written after
+  each login with the token, its expiry and the values kept, under a
+  digest of the login's key, whole, beside itself and renamed over,
+  readable by the exporter's user alone, keeping the other logins it holds.
+  A login MUST read it first, each time, and send a token it holds that is
+  not the last one this exporter's logins gave while it lasts past its
+  refresh margin, counted as a login with no request; the values kept it
+  holds MUST be used for `refresh_steps`. A file that cannot be written
+  MUST leave the login made, logged as a warning, and `--dry-run` MUST warn
+  of a directory that is not there.
+- **Counted, traced and shown.** A login of `refresh_steps` MUST be
+  counted in `http_exporter_login_refreshes_total` besides
+  `http_exporter_logins_total`, but for a debug run's. Each step MUST be
+  a login request in a debug report and a span of the trip's trace.
+  `--dry-run` MUST show the steps with what they send masked as a json
+  login's `fields` are, and an OAuth 1.0a secret written in them withheld.
+  The states of a login MUST be dropped as its tokens are (§ 42.6a), and at
+  most 1000 kept.
 
 ## 42.9 OTLP TLS configuration
 

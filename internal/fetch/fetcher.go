@@ -1121,14 +1121,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// known and is not made up.
 			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", limit), model.ErrLimitExceeded)
 		}
-		// A 401 to a request that logged in is the target refusing the
-		// token, which may have been revoked or expired early: it is
+		// A 401 to a request that logged in, or a status of
+		// login.relogin_on, is the target refusing the token, which may
+		// have been revoked or expired early: it is
 		// dropped and the request sent once more with a token from a new
 		// login. That is no attempt of request.retry's, and is made within
 		// the request's deadline. A 401 from where a redirect led without
 		// the token, to another origin, refused no token, and is answered
 		// as any other.
-		if resp.StatusCode == http.StatusUnauthorized && login.carried(resp.Request) {
+		if login.refuses(resp.StatusCode) && login.carried(resp.Request) {
 			again, err := login.again(requestContext)
 			if err != nil {
 				return nil, err

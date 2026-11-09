@@ -129,6 +129,7 @@ func init() {
 		Follow:           logins.follow,
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,
+		LoginRefreshes:   logins.refreshes,
 	})
 	templateEscapers["graphite"] = escapeGraphiteValue
 	// A probe's targets replace request.targets whole.

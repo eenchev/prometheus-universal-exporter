@@ -195,6 +195,13 @@ with `discovered_targets`. Start the file with
 and an editor with the YAML language server completes and checks it as it
 does the exporter's files ([Editor support](CONFIGURATION.md#editor-support)).
 
+A target that logs in ([`request.login`](AUTHENTICATION.md#logging-in-to-a-target))
+is logged in to by the exporter it is given to, at its first scrape there;
+an exporter given none of a collector's targets makes no login for it. A
+`steps` login's `keep_file` on a volume the exporters share hands its token
+and the values kept to the exporter a target moves to (see
+[Logins and the target allocator](AUTHENTICATION.md#logins-and-the-target-allocator)).
+
 ### Probe targets
 
 `--probe-targets-file` lists probe jobs: targets probed with one collector,

@@ -182,6 +182,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	// requests, so its logins have no per-request value either.
 	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401; 0 without request.login.", nil},
 	{"http_exporter_login_failures_total", model.CounterMetricType, "Logins of this http or graphite collector that failed: the scrapes that needed their token failed in the login stage, unless the token kept was still valid and was used instead.", nil},
+	{"http_exporter_login_refreshes_total", model.CounterMetricType, "Logins of this http or graphite collector, of those counted in http_exporter_logins_total, that a steps login's refresh_steps made with the values kept, in place of its whole steps; 0 without refresh_steps.", nil},
 	// The buckets of request.rate_limit are the collector's, shared by its
 	// requests to an origin, so their waits have no per-request value
 	// either; they are counted by collector, never by target or origin,
@@ -223,6 +224,7 @@ var requestTypeFamilies = map[string]func(rt *fetch.RequestType, family string) 
 	"http_exporter_sql_rows":                           ownFamily,
 	"http_exporter_logins_total":                       logsIn,
 	"http_exporter_login_failures_total":               logsIn,
+	"http_exporter_login_refreshes_total":              logsIn,
 	"http_exporter_rate_limit_waits_total":             takesKey("rate_limit"),
 	"http_exporter_rate_limit_refused_total":           takesKey("rate_limit"),
 }
@@ -495,6 +497,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		"http_exporter_login_failures_total": func(name string) float64 {
 			_, failed := fetch.CollectorLogins(requestTypes[name], name)
 			return float64(failed)
+		},
+		"http_exporter_login_refreshes_total": func(name string) float64 {
+			return float64(fetch.CollectorLoginRefreshes(requestTypes[name], name))
 		},
 		"http_exporter_rate_limit_waits_total": func(name string) float64 {
 			waited, _ := fetch.CollectorRateLimit(name)

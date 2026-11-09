@@ -361,7 +361,11 @@ func httpSchemaKeys() []schemaKey {
 		oauth2 := logged("login:", "  type: oauth2", "  url: https://idp.example/token", "  client_id: x", "  client_secret_file: /s", "  # login")
 		in := func(text string) string { return indent + "  " + text }
 		mark := in("# login\n")
-		return []schemaKey{
+		// The first step of each list is where a row writes a key; the
+		// last reads the token.
+		steps := logged("login:", "  type: steps", "  token: t", "  steps:", "    - url: /login", "      # step", "    - url: /token", "      extract: {t: {json: .t}}", "  # login")
+		refreshing := logged("login:", "  type: steps", "  token: t", "  steps:", "    - url: /login", "      extract: {t: {json: .t}, r: {json: .r}}", "  keep: {r: 1h}", "  refresh_steps:", "    - url: /refresh", "      # refresh", "    - url: /refresh/token", "      extract: {t: {json: .t}}", "  # login")
+		rows := []schemaKey{
 			{key: prefix + ".login.type", document: json, at: in("type: json\n"), setting: in("type: %s\n"), valid: "json", invalid: "form"},
 			{key: prefix + ".login.url", document: json, at: in("url: /login\n"), setting: in("url: %s\n"), valid: "/api/login", invalid: "login"},
 			{key: prefix + ".login.token_header", document: json, at: in("token: .t\n"), setting: in("token_header: %s\n"), valid: "X-Subject-Token", invalid: `"X Token"`},
@@ -372,7 +376,33 @@ func httpSchemaKeys() []schemaKey {
 			{key: prefix + ".login.grant_type", document: oauth2, at: mark, setting: in("grant_type: %s\n"), valid: "client_credentials", invalid: "password", absent: true, empty: true, emptyWas: refused},
 			{key: prefix + ".login.scopes[]", document: oauth2, at: mark, setting: in("scopes: [%s]\n"), valid: "metrics", invalid: `"a b"`, absent: true},
 			{key: prefix + ".login.endpoint_params{}", document: oauth2, at: mark, setting: in("endpoint_params: {%s: x}\n"), valid: "audience", invalid: "grant_type", absent: true},
+			// A steps login: its values and secret_files are named as a
+			// value is; a step's url is login.url's, its method one of
+			// four, "" its default, and the names it reads a value's;
+			// oauth1 needs the consumer's key and secret; keep, a
+			// duration for each value, goes with refresh_steps; keep_file
+			// is an absolute path.
+			{key: prefix + ".login.values{}", document: steps, at: mark, setting: in("values: {%s: x}\n"), valid: "user", invalid: "1st", absent: true},
+			{key: prefix + ".login.secret_files{}", document: steps, at: mark, setting: in("secret_files: {%s: /f}\n"), valid: "password", invalid: "1st", absent: true},
+			{key: prefix + ".login.keep_file", document: steps, at: mark, setting: in("keep_file: %s\n"), valid: "/var/lib/pue/login.json", invalid: "login.json", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.keep.*", document: refreshing, at: in("keep: {r: 1h}\n"), setting: in("keep: {r: %s}\n"), valid: "720h", invalid: "soon", duration: true},
 		}
+		for _, list := range []struct{ name, document, first, mark string }{
+			{"steps", steps, "  - url: /login\n", "    # step\n"},
+			{"refresh_steps", refreshing, "  - url: /refresh\n", "    # refresh\n"},
+		} {
+			key := prefix + ".login." + list.name + "[]."
+			first, step := in(list.first), in(list.mark)
+			rows = append(rows,
+				// Left out, the line is the first step, which goes with it.
+				schemaKey{key: key + "url", document: list.document, at: first, setting: in("  - url: %s\n"), valid: "/api/login", invalid: "login", absent: true},
+				schemaKey{key: key + "method", document: list.document, at: step, setting: in("    method: %s\n"), valid: "POST", invalid: "FETCH", absent: true, empty: true, emptyWas: refused},
+				schemaKey{key: key + "oauth1.consumer_key", document: list.document, at: step, setting: in("    oauth1: {consumer_key: %s, consumer_secret: s}\n"), valid: "k", absent: true},
+				schemaKey{key: key + "oauth1.consumer_secret", document: list.document, at: step, setting: in("    oauth1: {consumer_key: k, consumer_secret: %s}\n"), valid: "s", absent: true},
+				schemaKey{key: key + "extract{}", document: list.document, at: step, setting: in(list.mark[:4] + "extract: {%s: {json: .x}}\n"), valid: "csrf", invalid: "1st", absent: true},
+			)
+		}
+		return rows
 	}
 	keys = append(keys, login("collectors[].request", jqCollector, request, "      ")...)
 	keys = append(keys, defaultsSchemaKeys(keys, collector, request)...)

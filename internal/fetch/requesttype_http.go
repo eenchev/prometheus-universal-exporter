@@ -91,6 +91,7 @@ func init() {
 		Follow:           logins.follow,
 		CloseConnections: logins.reset,
 		Logins:           logins.counts,
+		LoginRefreshes:   logins.refreshes,
 	})
 }
 

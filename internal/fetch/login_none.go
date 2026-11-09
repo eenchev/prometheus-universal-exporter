@@ -23,6 +23,8 @@ func (*requestLogin) again(context.Context) (bool, error) { return false, nil }
 
 func (*requestLogin) set(*http.Request) {}
 
+func (*requestLogin) refuses(int) bool { return false }
+
 func (*requestLogin) sends(string) bool { return false }
 
 func (*requestLogin) carried(*http.Request) bool { return false }

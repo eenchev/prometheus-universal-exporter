@@ -1600,7 +1600,7 @@
                               "boolean"
                             ]
                           },
-                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Cookie, which the step sets, nor Authorization with oauth1.",
+                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1.",
                           "type": "object"
                         },
                         "json": {
@@ -1843,7 +1843,7 @@
                               "boolean"
                             ]
                           },
-                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Cookie, which the step sets, nor Authorization with oauth1.",
+                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1.",
                           "type": "object"
                         },
                         "json": {

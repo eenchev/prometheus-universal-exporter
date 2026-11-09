@@ -31856,6 +31856,10 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAStepsLoginsTokenLifetime` (fetch, http), changed: a JWT whose `exp` is a minute before the login gives no lifetime, `ttl`'s or none, where it made a login at every request (§ 42.6a).
 - `TestDryRunReportsAStepsLogin` (main, http): `--dry-run` shows a steps login's `values` and each step's headers and form masked by name, a written OAuth 1.0a secret withheld and one named as a value shown as its name, holds no secret, and warns of a `keep_file` whose directory is not there; the masking had no test (§ 42.6b).
 
+## 34.329 The fourth audit of the steps login
+
+- `TestAStepsLoginIsCheckedWhenItLoads` (fetch, http), changed: a step's `Accept-Encoding` header, which would leave the answer read for values compressed, is refused, and so is `Connection`, as `Transfer-Encoding` was already (§ 42.6b).
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32953,7 +32957,8 @@ values from its answer, and send the value `token` names as the token.
   left out and `POST` with a body; a body with `GET` MUST be refused.
   `query` MUST be added to the URL's query, a parameter of it replacing
   one of the same name; `headers` sent, but `Host`,
-  `Content-Type`, `Content-Length`, `Cookie`, and `Authorization` beside
+  `Content-Type`, `Content-Length`, `Transfer-Encoding`, `Connection`,
+  `Cookie`, `Accept-Encoding`, and `Authorization` beside
   `oauth1`, refused; `form` sent as `application/x-www-form-urlencoded` and
   `json` as a JSON object of text, not both. A step MUST succeed on a `2xx`
   answer, or, with `status`, on one it lists; it MUST NOT follow a

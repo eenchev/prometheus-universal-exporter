@@ -412,7 +412,9 @@ is sent with `GET`, or `POST` when it sends a body, unless `method` says
 `GET`, `POST`, `PUT` or `PATCH`; `form` sends
 `application/x-www-form-urlencoded` and `json` a JSON object of text, one
 of the two. `headers` are sent as written, such as a `User-Agent` a site
-wants; `Host`, `Content-Type`, `Content-Length` and `Cookie` are the
+wants; `Host`, `Content-Type`, `Content-Length`, `Transfer-Encoding`,
+`Connection`, `Cookie` and `Accept-Encoding`, whose compression an answer
+read for its values would be left in, are the
 step's own. A step succeeds on a `2xx` answer, or on one of its `status`
 list: a login follows no redirect, so a `302` whose `Location` holds what
 is wanted is listed, `status: [302]`, and read with a header; a step whose

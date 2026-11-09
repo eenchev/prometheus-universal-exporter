@@ -500,6 +500,8 @@ func TestAStepsLoginIsCheckedWhenItLoads(t *testing.T) {
 		"keep alone":                    {func(l *model.LoginConfig) { l.Keep = map[string]model.Duration{"tok": 0} }, "keep names the token"},
 		"refresh_steps alone":           {func(l *model.LoginConfig) { l.RefreshSteps = []model.LoginStep{{URL: "/r", Extract: read("tok")}} }, "has refresh_steps and no keep"},
 		"a Cookie header":               {func(l *model.LoginConfig) { l.Steps[0].Headers = map[string]string{"Cookie": "a=b"} }, "request.login.steps[0].headers sets Cookie, which the step sets itself"},
+		"an Accept-Encoding header":     {func(l *model.LoginConfig) { l.Steps[0].Headers = map[string]string{"accept-encoding": "gzip"} }, "request.login.steps[0].headers sets Accept-Encoding, which the step sets itself"},
+		"a Connection header":           {func(l *model.LoginConfig) { l.Steps[0].Headers = map[string]string{"Connection": "close"} }, "request.login.steps[0].headers sets Connection, which the step sets itself"},
 		"half an oauth1 token": {func(l *model.LoginConfig) {
 			l.Steps[0].OAuth1 = &model.LoginOAuth1{ConsumerKey: "k", ConsumerSecret: "s", Token: "t"}
 		}, "request.login.steps[0].oauth1 sets one of token and token_secret"},

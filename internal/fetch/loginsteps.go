@@ -236,8 +236,8 @@ func checkLoginSteps(steps []model.LoginStep, allowedSchemes []string, where str
 				return nil, fmt.Errorf("%s.headers %q is not a header name", at, name)
 			}
 			switch http.CanonicalHeaderKey(name) {
-			case "Host", "Content-Length", "Content-Type", "Transfer-Encoding", "Connection", "Cookie":
-				return nil, fmt.Errorf("%s.headers sets %s, which the step sets itself: the Host of the url, the body's type and length, and the cookies of the steps before it", at, http.CanonicalHeaderKey(name))
+			case "Host", "Content-Length", "Content-Type", "Transfer-Encoding", "Connection", "Cookie", "Accept-Encoding":
+				return nil, fmt.Errorf("%s.headers sets %s, which the step sets itself: the Host of the url, the body's type and length, the connection, the cookies of the steps before it, and the compression it reads the answer in", at, http.CanonicalHeaderKey(name))
 			}
 			if s.OAuth1 != nil && strings.EqualFold(name, "Authorization") {
 				return nil, fmt.Errorf("%s.headers sets Authorization, which oauth1 signs the step with", at)

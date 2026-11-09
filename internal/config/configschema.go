@@ -1298,7 +1298,7 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 			"url":                    {"pattern": `^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))`, "description": "Required. Where the step is sent: an absolute http or https URL, or a path from the root resolved against the target's scheme, host and port, as login.url is. Without placeholders: a value the step sends goes in its query."},
 			"method":                 {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH"}), "description": "GET, or POST when the step sends form or json, when left out."},
 			"query":                  {"description": "Parameters added to the url's query, their values holding {{login.<name>}} as need be."},
-			"headers":                {"description": "Headers sent, such as User-Agent or Accept, their values holding {{login.<name>}} as need be. Not Host, Content-Type, Content-Length, Cookie, which the step sets, nor Authorization with oauth1."},
+			"headers":                {"description": "Headers sent, such as User-Agent or Accept, their values holding {{login.<name>}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1."},
 			"form":                   {"description": "The fields of a form body, sent as application/x-www-form-urlencoded. Not with json."},
 			"json":                   {"description": "The members of a JSON object body, each text. Not with form."},
 			"oauth1":                 {"required": []string{"consumer_key", "consumer_secret"}, "description": "Signs the step with OAuth 1.0a's HMAC-SHA1 (RFC 5849), in its Authorization header. See docs/AUTHENTICATION.md#signing-a-step-with-oauth-10a."},

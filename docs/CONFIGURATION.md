@@ -2966,7 +2966,7 @@ further left on the same line, and once that is fixed the next. So does a
 check that refuses two keys alike — an ssh collector's negative
 `keepalive_interval` and `idle_timeout`, or its credential files written
 blank or with a placeholder, a kubernetes collector's blank selectors, a
-json login's blank `token` and `expires_in`, a login's keys of the other
+json login's blank `token` and `expires_in`, a login's keys of another
 kind — on every load. A key the type does not take is refused for that
 whatever its value: `starttls: true` in an `ldap` collector is not told
 that `true` is no protocol of `tcp`'s, but that the key does not apply,
@@ -4904,7 +4904,7 @@ a 304. A collector with [`request.pagination`](REQUESTS.md#pagination)
 stores its pages merged into one response, which no page's validator
 speaks for, so its responses are neither kept nor revalidated. Every attempt
 of a conditional request carries the validators: a retry, and the request
-sent again after a `401` made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
+sent again after a `401`, or a status of `relogin_on`, made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
 in again.
 
 Revalidation is on by default. A collector whose target sends validators it

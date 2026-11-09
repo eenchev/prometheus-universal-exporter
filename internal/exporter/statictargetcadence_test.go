@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A scrape that uses its whole interval ends just after the next turn has
@@ -363,6 +364,7 @@ func TestTheCadenceOfAFirstScrapeMadeFarTooLateIsCountedFromWhenItBegan(t *testi
 // interval of a second, which answers at once, is scraped a second time
 // about a second after the first, where it was two seconds.
 func TestTheLoopScrapesAShortIntervalASecondTimeOneIntervalAfterTheFirst(t *testing.T) {
+	tier.Slow(t)
 	const interval = time.Second
 	var mu sync.Mutex
 	var started []time.Time
@@ -420,6 +422,7 @@ func TestTheLoopScrapesAShortIntervalASecondTimeOneIntervalAfterTheFirst(t *test
 // with its interval and the next starting as it ends, rather than every
 // second interval; and no scrape is logged as skipped, since no turn is lost.
 func TestAHangingTargetIsScrapedOncePerInterval(t *testing.T) {
+	tier.Slow(t)
 	const interval = 500 * time.Millisecond
 	const scrapes = 6
 	var mu sync.Mutex
@@ -534,6 +537,7 @@ func TestAChangedCollectorStartsItsTargetsAgain(t *testing.T) {
 // the static targets endpoint within the first-scrape window, although the
 // target's interval is an hour and its own definition did not change.
 func TestAReloadedCollectorShowsOnTheEndpointPromptly(t *testing.T) {
+	tier.Slow(t)
 	target := textTarget(t, "value=1\n")
 	dir := t.TempDir()
 	configPath, targetsPath := filepath.Join(dir, "config.yaml"), filepath.Join(dir, "targets.yaml")
@@ -645,6 +649,7 @@ func TestAFailedScrapeLeavesOnlyTheHealthSeries(t *testing.T) {
 // scrapes with its collector, rather than looking the old name up in the new
 // configuration; the renamed collector's targets are then scraped again.
 func TestAScrapeUsesTheConfigurationItsTargetWasReadWith(t *testing.T) {
+	tier.Slow(t)
 	waiting := make(chan string, 16)
 	hook := func(name string) { waiting <- name }
 	slotWaitHook.Store(&hook)

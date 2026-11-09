@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // What counts against limits.max_script_memory, and that the thread which
@@ -217,6 +218,7 @@ metric(name="filled", value=i)
 // outlived a killed exporter. The watch outlives the script's use of all
 // the memory, and the worker serves the next run with both its threads.
 func TestThePythonParentWatchOutlivesAScriptThatUsesAllTheMemory(t *testing.T) {
+	tier.Slow(t)
 	requireProcStatus(t)
 	c := limitedCollector("exhausts", usesAllTheMemory, 64<<20)
 	c.Limits.ScriptTimeout = model.Duration(20 * time.Second)

@@ -21,6 +21,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A probe that carries on past a failed stage, under error_handling log or
@@ -657,6 +658,7 @@ func tripOf(t *testing.T, server *Server, name, target string, trip func(context
 // ends it before the body, and a second trip that no cache answers is the
 // first again.
 func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	type collectorCase struct {
 		name      string

@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -129,6 +130,7 @@ func toldAs(told string) func(string) string { return func(string) string { retu
 // Under the race detector the failures are made of 256 kB, a hundred times
 // the bound.
 func TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	testutil.CaptureLogs(t)
 	refusing := testutil.RefusingAddress(t)

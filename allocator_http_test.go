@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // An exporter in allocator mode, run in a child process against a stand-in
@@ -165,6 +166,7 @@ func valueTarget(t *testing.T) string {
 // first signal sends a heartbeat saying it is shutting down at once, before
 // --web.shutdown-delay is over.
 func TestAllocatorModeIsUnreadyUntilTheFirstBundle(t *testing.T) {
+	tier.Slow(t)
 	a := newAllocatorStandIn(t)
 	dir := t.TempDir()
 	p := startAllocatorExporter(t, "--allocator.url="+a.server.URL, "--allocator.cache-dir="+dir, "--allocator.member=pod-0", "--allocator.advertise=10.0.0.7:8080", "--web.shutdown-delay=1s")

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,6 +51,7 @@ func yamlAsTheLibrary(t *testing.T, document string, large int) yamlOutcome {
 // allocation is measured under, the lists are of a thousand items, eight
 // parts of yamlLargeMapping, with ten mappings a hundred items apart.
 func TestTheItemsOfAYAMLSequenceBesideALargeMappingAreHandedToTheLibraryTogether(t *testing.T) {
+	tier.Slow(t)
 	items := alloctest.UnlessRaced(20000, 1000)
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
 	for name, tc := range map[string]struct {
@@ -147,6 +149,7 @@ var yamlSequenceItemsRefused = []string{"!!int foo", "&q [1, *q]", "&q [*big, [*
 // of it, for each such item of each sequence. A sequence of five is still
 // three parts of two.
 func TestAYAMLSequenceOfItemsOfTheWalkAndOfTheLibraryIsWhatTheLibraryMakesOfIt(t *testing.T) {
+	tier.Slow(t)
 	random := rand.New(rand.NewPCG(3, 129)) //nolint:gosec // documents for a test
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
 	head := "s: &s text\nm: &m {a: 1, b: 2}\nl: &l [1, 2]\nbig: &big " + large + "\nseq:\n"
@@ -277,6 +280,7 @@ func yamlNumbers(count int) string {
 //
 // Each is what the library alone makes of the whole document.
 func TestAliasesInThePartsOfALargeYAMLMappingAreCountedAsTheLibraryCountsThem(t *testing.T) {
+	tier.Slow(t)
 	plain := "real: " + yamlNumbers(600) + "\n"
 	large := manyYAMLPairs(129, "", ", ")
 	sizes := []int{150, 199, 200, 300, 332, 333, 499, 500}
@@ -348,6 +352,7 @@ func TestAliasesInThePartsOfALargeYAMLMappingAreCountedAsTheLibraryCountsThem(t 
 // which the library is handed whole, from the 182nd, as the library alone
 // refuses them, which is one alias further than without those keys counted.
 func TestTheKeysOfAYAMLMappingWithAMergeAreCountedOnceMore(t *testing.T) {
+	tier.Slow(t)
 	for name, tc := range map[string]struct {
 		mappings    string
 		refusedFrom int
@@ -382,6 +387,7 @@ func TestTheKeysOfAYAMLMappingWithAMergeAreCountedOnceMore(t *testing.T) {
 // document is refused for the value, as the library alone refuses it, and
 // not for the aliases.
 func TestAnItemOfAYAMLSequenceFailsBeforeALaterItemsAliasesAreRefused(t *testing.T) {
+	tier.Slow(t)
 	document := func(aliases int, before, last string) string {
 		return "- &t " + yamlNumbers(997) + "\n- &u " + yamlNumbers(900) + "\n" + strings.Repeat("- *t\n", aliases) + "- " + before + "\n" + last + "- {" + manyYAMLPairs(129, "", ", ") + "}\n"
 	}

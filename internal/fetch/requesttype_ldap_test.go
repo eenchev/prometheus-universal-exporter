@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/ldaptest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // An ldap collector's placeholders are in its searches' base and filter.
@@ -538,6 +539,7 @@ func ldapAnswer(server *ldaptest.Server, raw func(id int) []byte) {
 // message of another ID are refused as no LDAP. A length the server does
 // not go on to send costs only the bytes that came.
 func TestAnLDAPServersMessagesAreHeldToTheResponseLimit(t *testing.T) {
+	tier.Slow(t)
 	server := ldaptest.New(t)
 	ldapMany(server, 50)
 	if _, err := ldapScrape(t, ldapCollector(t, func(c *model.Collector) { c.Request.MaxResponseBytes = 1000 }), server.Addr, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "the server's messages are larger than the response limit") {

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // Three kinds of value got past the chart to fail only when Kubernetes was
@@ -130,6 +132,7 @@ strategy: {rollingUpdate: {maxSurge: "200%", maxUnavailable: "100%"}}
 // zero before another digit, naming the value; what they take renders bare,
 // as it did. A number keeps the last round's rule.
 func TestChartHoldsADisruptionBudgetStringToWhatKubernetesTakes(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	refused := []string{"3000000000", "2147483648", "010", "00", "200%", "101%", "050%", "-1", "1.5", "1e3", "1 ", ""}
@@ -231,6 +234,7 @@ func TestTheDisruptionBudgetPatternTakesExactlyTheCountsKubernetesTakes(t *testi
 // below 0.1 is now refused too (the test after this one); what renders is
 // from 0.1 to 1.
 func TestChartRendersASmallMemoryLimitRatioWrittenOut(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for written, rendered := range map[string]string{
@@ -270,6 +274,7 @@ func TestChartRendersASmallMemoryLimitRatioWrittenOut(t *testing.T) {
 // with it skipped, the templates with a message saying the floor and the
 // value written out; 0.1 and above render as before.
 func TestChartRefusesAMemoryLimitRatioBelowATenth(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for written, rendered := range map[string]string{
@@ -320,6 +325,7 @@ func TestChartRefusesAMemoryLimitRatioBelowATenth(t *testing.T) {
 // rollingUpdate. The repository's own schema validator gives helm's verdict
 // on each strategy as helm merges it over the defaults.
 func TestChartRefusesARollingUpdateOfNoSurgeAndNoUnavailable(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	schema := schemaAt(t, "strategy")
@@ -387,6 +393,7 @@ const oldMemoryLimitRatio = `{{- define "old.memoryLimitRatio" -}}
 // ratio of up to four decimals from 0.1, the floor, numbers of many digits,
 // written with an exponent and without, and generated ones.
 func TestTheMemoryLimitRatioRendersAsBeforeWhereItRendered(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	dir := filepath.Join(t.TempDir(), "ratios")
 	if err := os.MkdirAll(filepath.Join(dir, "templates"), 0o750); err != nil {

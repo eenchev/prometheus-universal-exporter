@@ -2,11 +2,16 @@
 
 package exporter
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
+)
 
 // A dns playground's request.server is never asked: it reads a pasted
 // lookup, the JSON document the exporter makes of one.
 func TestADNSPlaygroundMakesNoRequest(t *testing.T) {
+	tier.Slow(t)
 	requirePlaygroundMakesNoRequest(t, playgroundCase{
 		collector: func(name, addr string, _ bool) string {
 			return "name: " + name + "\nrequest: {type: dns, record_type: A, server: '" + addr + "'}\ntransform: {type: jq}\nmetrics: [{name: dns_records, expression: .count}]\n"

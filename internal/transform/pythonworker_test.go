@@ -18,6 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // Python scripts run in long-lived workers (pythonworker.go). These tests pin
@@ -379,6 +380,7 @@ for i in range(30):
 
 // The sandbox is installed once, at start-up, and holds for every run.
 func TestPythonWorkerSandbox(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	for _, test := range []struct{ script, want string }{
 		{`import socket`, "module disabled by exporter"},

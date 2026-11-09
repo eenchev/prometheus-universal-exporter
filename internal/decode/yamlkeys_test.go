@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -712,6 +713,7 @@ func yamlOtherError(root *yaml.Node, library yamlOutcome) string {
 // with all five bounds: every outcome counted below is still met, and held
 // to the least there is to be of it among so many.
 func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMapping(t *testing.T) {
+	tier.Slow(t)
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	written := len(documents)
 	maker := yamlMaker{random: rand.New(rand.NewPCG(16, 17))} //nolint:gosec // documents for a test
@@ -1015,6 +1017,7 @@ func keysWrittenTwice(random *rand.Rand, names []string, count int) string {
 // yamlLargeMapping, and the failures are still recognised by one problem,
 // by each number of them up to ten, and by more.
 func TestKeysWrittenTwiceInALargeYAMLMappingAreRefusedAsTheLibraryRefusedThem(t *testing.T) {
+	tier.Slow(t)
 	names := []string{"a", "b", "c", `"x already defined at line 7"`, `"line 5: x"`, `"a\n  line 9: boo"`, `"#"`, "3", "'it''s'", "[s]", "{m: 1}", "~", "true", "2024-06-01", "!!str 5", `"quoted \"q\""`, "d", "e"}
 	var documents []string
 	for count := 46; count <= 60; count++ {
@@ -1184,6 +1187,7 @@ func TestALargeYAMLMappingIsHandedToTheLibraryAPartAtATime(t *testing.T) {
 // are. A thousand items of six keys and a nested mapping are looked through
 // with fewer comparisons than the document has nodes.
 func TestLookingThroughAYAMLDocumentCostsOneWalkOverIt(t *testing.T) {
+	tier.Slow(t)
 	if raceDetector {
 		t.Skip("the race detector changes what is allocated")
 	}
@@ -1260,6 +1264,7 @@ func typicalYAML(items int) string {
 // The library is handed no more than 10,000 parts of any of them: the nine
 // levels are refused after 55, and followed they would be 387 million nodes.
 func TestAliasesBesideALargeYAMLMappingAreRefusedAsTheLibraryRefusesThem(t *testing.T) {
+	tier.Slow(t)
 	thousand := "d: &d [" + strings.Repeat("1, ", 1000) + "]\n"
 	aliases := func(count int) string { return "l: [" + strings.Repeat("*d, ", count) + "]\n" }
 	large := "{" + manyYAMLPairs(200, "", ", ")

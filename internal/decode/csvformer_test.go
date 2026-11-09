@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The CSV decoder as it was before it refused a row with a value past the
@@ -233,6 +234,7 @@ func compareWithFormerCSV(t *testing.T, body []byte, cfg model.CSVConfig) csvDif
 // the settings, which is still every field beside every other and after
 // every header, with a seventh of each kind to find among them.
 func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
+	tier.Slow(t)
 	no := false
 	var settings []model.CSVConfig
 	for _, delimiter := range []string{"", ";", "\t", "|", ":", " "} {
@@ -305,6 +307,7 @@ func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 // detector every seventh of the 87,000 bodies is read, counted through them
 // all, which is still every field beside every other under every delimiter.
 func TestCSVIsReadAsBeforeButForBlanksAfterQuotes(t *testing.T) {
+	tier.Slow(t)
 	atoms := []string{`a`, `b c`, ` lead`, `trail `, ``, `"q"`, ` "q"`, `"q" `, "\"q\"\u00a0 ", "\"q\"\t", ` "a|b"  `, `"x""y"`, "\"two\nlines\"", "\"two\nlines\" ", `"open`, `"st"ray"`, `"st"ray" `, `5" disk`, `"q" x`, `"q" "r"`, `x "mid" `, "\"cr\"\r"}
 	thirds := []string{`a`, ` "q" `, `"open`, `5" disk`, `"st"ray" `, "\"two\nlines\""}
 	read, refused, differ, ended := 0, 0, 0, 0

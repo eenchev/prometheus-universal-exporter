@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The chart's target allocator: allocator.enabled deploys pue-allocator beside
@@ -459,6 +461,7 @@ func TestChartScrapesTheAllocatorsStaticTargetsAndLetsThePodsReachIt(t *testing.
 // sentence saying what to change, refused by the values schema where it can
 // say so, and by the templates with the schema skipped.
 func TestChartRefusesWhatTheAllocatorCannotRunWith(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for name, tc := range map[string]struct {

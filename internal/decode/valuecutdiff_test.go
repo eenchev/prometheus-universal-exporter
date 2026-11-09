@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The errors of the Graphite decoder, of the sample lines the Prometheus
@@ -391,6 +392,7 @@ func TestACSVColumnNamedTwiceIsRefusedAsItWas(t *testing.T) {
 // next two for the next line: a tenth of the readings, which still end a
 // file inside every kind of token and spoil each kind in every third line.
 func TestTheRepositorysExpositionsAreReadAndRefusedAsTheyWere(t *testing.T) {
+	tier.Slow(t)
 	files, err := filepath.Glob("../../testdata/prometheus/*.prom")
 	if err != nil || len(files) < 2 {
 		t.Fatalf("the expositions are %v: %v", files, err)

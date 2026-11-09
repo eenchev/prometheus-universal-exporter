@@ -20,7 +20,7 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-scaffold test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers new-request-type
+.PHONY: test-quick build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-scaffold test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers new-request-type
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
 # but the opt-in ones, of which there are none now.
@@ -148,6 +148,13 @@ test-opt-in-types:
 # containers, is commented out for now. See docs/DEVELOPMENT.md.
 test-sql-live:
 	go test -count=1 -run TestLiveSQL -v ./internal/fetch/
+
+# The quick tier, for while a change is being written: one run, without the
+# race detector, and without the tests tier.Slow marks (a second or more
+# each) or the scaffold's. It is no gate: `make test` and CI run
+# every test. See "Running the tests" in docs/DEVELOPMENT.md.
+test-quick:
+	go test -short -skip '^TestANewRequestTypeIsWiredByTheScaffold$$' ./...
 
 # The scaffold test builds a copy of the tree, minutes of work, so `test`
 # leaves it to `test-scaffold`, as ci.yml leaves it to a job of its own.

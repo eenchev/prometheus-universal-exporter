@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // csvPaddedBodies are bodies of about size bytes that trim_space takes
@@ -51,6 +52,7 @@ func csvReadCost(t *testing.T, read func() error) (bytesPerRun uint64, allocatio
 // the race detector the bodies are of 4 KiB and of 32, a sixteenth of each:
 // still hundreds of runs of blanks, and one body eight times the other.
 func TestCSVBlanksAroundQuotesCostOneCopyOfTheBody(t *testing.T) {
+	tier.Slow(t)
 	for _, size := range alloctest.UnlessRaced([]int{64 << 10, 512 << 10}, []int{4 << 10, 32 << 10}) {
 		for name, padded := range csvPaddedBodies(size) {
 			clean, removed := withoutBlanksAroundQuotes(padded, ',', false)

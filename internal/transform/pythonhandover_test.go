@@ -13,6 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The whole hand-over, as it is and as it was (pythonoracle_test.go), with
@@ -422,6 +423,7 @@ func (h *handover) runDeep(mode, script string, input handoverInput, state strin
 // may nest, where it failed as a recursion without end, and data whose
 // values are many times the same list is the line it was.
 func TestPythonAnswersNestedDeepEndAsTheyEndedButForData(t *testing.T) {
+	tier.Slow(t)
 	h := newHandover(t)
 	input := handoverInputs(t)[1]
 	nested := `
@@ -525,6 +527,7 @@ for _ in range(%[1]d):
 // with the output limit's error and its worker, as it did. And a script
 // that does not end is ended by its timeout, as it was.
 func TestPythonAnswerMeetsItsLimitsWhereItMetThem(t *testing.T) {
+	tier.Slow(t)
 	h := newHandover(t)
 	input := handoverInputs(t)[1]
 	for _, script := range []string{

@@ -7,6 +7,7 @@ make lint       # golangci-lint, same configuration and version as CI
 make gopls-check  # gopls check, what VS Code shows, at CI's version
 make hooks      # once per clone: a pre-commit hook runs make precommit
 make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
+make test-quick # while writing a change: go test -short ./..., once, no race detector, the slow tests left out; a few minutes
 make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
 make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
@@ -95,7 +96,7 @@ the ones above them in this list:
 | `internal/pagekit` | What the HTML pages of the exporter and of the target allocator share, so they look and behave alike: the stylesheet with its light and dark colours, the theme picker and the head script that applies the theme kept, the logo as the browser-tab icon (`logo.svg`, a copy of `docs/logo.svg`), the pages' Content-Security-Policy, the refresh controls of a page that refreshes itself, and how a page writes a duration (`1m`, not `1m0s`). |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/allocator` | The target allocator, whose command line is `cmd/pue-allocator`: its input files and the probe targets file, the member list from heartbeats, allocation and handover, bundles, service discovery and its HTTP API. Its time goes through a `Clock`, so its tests move a clock of their own by hand ([Target allocator](ALLOCATOR.md)). |
-| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. Among them `TCPStub`, the stand-in server of the `tcp` type's tests in `internal/fetch` and `internal/exporter`: a TCP or TLS server, its certificate written to a file, handing each connection to the test, which plays memcached, ZooKeeper or a server that never ends its answer; `DNSStub`, the stand-in DNS server of the `dns` type's tests and the allocator's `dns_sd` tests, over UDP, TCP and TLS; and `SNMPAgent`, the stand-in agent of the `snmp` type's, answering v1, v2c and v3 at every security level. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
+| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. Among them `TCPStub`, the stand-in server of the `tcp` type's tests in `internal/fetch` and `internal/exporter`: a TCP or TLS server, its certificate written to a file, handing each connection to the test, which plays memcached, ZooKeeper or a server that never ends its answer; `DNSStub`, the stand-in DNS server of the `dns` type's tests and the allocator's `dns_sd` tests, over UDP, TCP and TLS; and `SNMPAgent`, the stand-in agent of the `snmp` type's, answering v1, v2c and v3 at every security level. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. `internal/testutil/tier`, which imports nothing of the module either, holds `tier.Slow`, the first line of a slow test, which `make test-quick` leaves out ("Running the tests" below). |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 | `internal/sqltest` | A stand-in database for the `sql` type's tests: a `database/sql/driver` that answers each statement with the rows the test gave it, holds a query until its context ends, fails pings or connections, and records the transactions begun and how, the statements run before the query, the values bound and the connections opened and closed. It imports `database/sql/driver` alone, and the exporter reaches it through the type's own pools (`fetch.UseSQLTestDriver`). |
 | `internal/kubetest` | A stand-in Kubernetes API server for the tests of `internal/kubeapi` and of the `kubernetes` type: an HTTPS server answering a listing of the objects a test gave it a page at a time, as the limit asks, with continue tokens, refusing a request without the token of its service account directory with `401`, answering `403` and `404` as the API server does, slow to answer when told to, and recording the requests; it writes the service account directory and sets the environment of a pod. It imports nothing but the standard library. |
@@ -506,7 +507,7 @@ written. The script ends by printing what is left:
    words it gave `readmeSourceNames` and `chartSourceNames`;
 5. the prose that lists every type, below, which the script cannot write,
    since each sentence says what the types it names have in common;
-6. spec § 5.1's rules of the type and § 34's bullets of its tests;
+6. spec § 5.1's rules of the type;
 7. examples, and a section of the chart README if the type is deployed
    with anything of its own.
 
@@ -552,6 +553,33 @@ true of it by hand. Most have no test that fails when the type is left out
   nothing outside the standard library.
 - For an opt-in type, the Makefile's comment on `OPT_IN_REQUEST_TYPES`,
   which names the opt-in types and their pages.
+
+## Running the tests
+
+There are two tiers. While you write a change, run the quick one:
+
+```sh
+make test-quick                                   # every package
+go test -short ./internal/fetch/                  # one package
+go test -short -run 'Login' ./internal/fetch/     # the tests you are working on
+```
+
+It runs each test once, without the race detector, and leaves out two
+kinds: the scaffold's test, which builds a copy of the tree, and every test
+that calls `tier.Slow(t)` (`internal/testutil/tier`) as its first line,
+which `-short` skips. A test is marked slow when it takes a second or more
+on its own: the tests that compare a parser with an oracle over
+many generated inputs, render the chart with helm, or run a schedule on the
+real clock. About two hundred of some five thousand are, and the quick tier
+takes a few minutes where `make test`, which runs the suite three times,
+twice under the race detector, takes far longer.
+
+The quick tier is no gate. Before you push, run `make test`, or `make ci` for
+everything CI runs; CI runs every test, slow ones included, on every change,
+and neither `make test` nor `ci.yml` passes `-short` (a test holds them to
+that). A new test that takes a second or more starts with
+`tier.Slow(t)`; one that is fast leaves it out, so that the quick tier still
+covers what it covers.
 
 ## Repeatable tests
 

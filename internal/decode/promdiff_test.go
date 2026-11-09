@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The parser of Prometheus and OpenMetrics text was made cheaper
@@ -626,6 +627,7 @@ func (g *promGenerator) corrupt(body []byte) []byte {
 // empty value, and are compared with the parser as it was; a tenth at least
 // of the parses, of bodies that may hold one, with it under its switch.
 func TestPromParserAgreesWithTheOneItWasOnRandomExpositions(t *testing.T) {
+	tier.Slow(t)
 	g := &promGenerator{random: rand.New(rand.NewPCG(2026, 1003))}
 	expositions := alloctest.UnlessRaced(12000, 1200)
 	accepted, refused, asItWas, switched := 0, 0, 0, 0

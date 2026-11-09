@@ -11,6 +11,7 @@ import (
 
 	"github.com/antchfx/xmlquery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // xmlAsItWas is the error an XML document was refused with before a name in
@@ -40,6 +41,7 @@ func xmlAsItWas(body string) (text, same string) {
 // and no longer the library's, which holds the name. A name of 64 bytes or
 // fewer reads, and is recognised, as the library's error was.
 func TestAnXMLErrorNamesTheStartOfANameAndKeepsWhatFollowsIt(t *testing.T) {
+	tier.Slow(t)
 	long := strings.Repeat("a", longTokenBytes())
 	const syntax, decode = "XML decode: XML syntax error on line L: ", "XML decode: "
 	type show = func(string) string

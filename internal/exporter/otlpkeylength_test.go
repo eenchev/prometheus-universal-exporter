@@ -18,6 +18,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // headOTLPKeys is the export as it was before a key was remembered by its
@@ -57,6 +58,7 @@ func keyLengthTarget(run *keyRun, n int) string {
 // again, are sent byte for byte as they were sent while every key was
 // remembered whole: the points, their order, and every start time.
 func TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests(t *testing.T) {
+	tier.Slow(t)
 	runs := alloctest.UnlessRaced(120, 30)
 	const rounds = 6
 	collector := &model.Collector{Name: "app"}

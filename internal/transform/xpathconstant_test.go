@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"golang.org/x/net/html"
 )
 
@@ -179,6 +180,7 @@ func someOf[N any](nodes []N, limit int) []N {
 // documents three: every expression is still read over every document in
 // both orders, at fewer of its nodes.
 func TestALabelReadOnceIsTheLabelReadAtEveryNode(t *testing.T) {
+	tier.Slow(t)
 	forward, back := alloctest.UnlessRaced(50, 4), alloctest.UnlessRaced(12, 2)
 	expressions := append([]string{}, constantXPathLabels...)
 	// Over the fixtures' own names too.
@@ -427,6 +429,7 @@ func TestARuleWithAConstantLabelGivesWhatItGaveWithTheLabelReadAtEachNode(t *tes
 // failed on another. An evaluation at every row costs that measure once for
 // each of the four hundred rows.
 func TestAConstantLabelIsEvaluatedOnceForItsRule(t *testing.T) {
+	tier.Slow(t)
 	if raceDetector {
 		t.Skip("allocations cannot be counted under the race detector")
 	}

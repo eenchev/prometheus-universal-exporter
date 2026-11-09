@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // What following a reload is to do is worked out before the statistics lock
@@ -627,6 +628,7 @@ func (r *followRig) play(seed uint64, steps int) []string {
 // and without, with a static target file and without. It is 16 sequences of
 // 8 reloads, and 4 of 6 under the race detector.
 func TestFollowingAReloadWorkedOutAheadDoesWhatItDid(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	targets := map[string]*followTarget{}
 	for _, name := range followCollectors {
@@ -689,6 +691,7 @@ func countFingerprints(t *testing.T, server *Server) (encoded, locked *atomic.In
 // with that no probe had asked for, those the reload kept: before the lock
 // is taken as well.
 func TestFollowingAReloadEncodesNoCollectorUnderTheStatisticsLock(t *testing.T) {
+	tier.Slow(t)
 	n := alloctest.UnlessRaced(100, 10)
 	for _, shape := range followBenchShapes {
 		for _, static := range []bool{false, true} {

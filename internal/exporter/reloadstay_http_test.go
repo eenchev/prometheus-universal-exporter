@@ -21,6 +21,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // Every stay of a static target has a first scrape of its own, and what a
@@ -128,6 +129,7 @@ func TestATargetChangedAndChangedBackBetweenTwoLooksIsScrapedAnew(t *testing.T) 
 // starts it again for that: the test then shows less, and passes all the
 // same.
 func TestTheScrapeLoopScrapesAnewATargetChangedBackWhileItsScrapeRan(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	name := soonScraped(t, time.Hour, 1)[0]
 	// Each request is answered with its number.
@@ -275,6 +277,7 @@ func stayVariants() (collectors [][]model.Collector, files [][]model.StaticTarge
 // scrape after the start comes as it did. Under the race detector it is the
 // first four of the 25 runs, 320 looks that start a hundred scrapes.
 func TestTheScheduleThatLooksAfterEveryReloadPlansAsItDid(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	collectors, files := stayVariants()
 	steps := []time.Duration{0, 100 * time.Millisecond, time.Second, 3 * time.Second, firstScrapeWindow, time.Minute}

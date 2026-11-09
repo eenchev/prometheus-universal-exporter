@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // logSubject is one thing the failure log tells from every other, as the
@@ -322,6 +323,7 @@ func (g *logSubjects) next() logSubject {
 // Under the race detector it is 60,000 subjects, and the allocations, which
 // the detector changes, are not counted.
 func TestNoTwoSubjectsHaveOneKey(t *testing.T) {
+	tier.Slow(t)
 	const hex = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 	for _, pair := range []struct {
 		what string
@@ -558,6 +560,7 @@ func (s logSubject) reportedWas() reportedFailure {
 // hundreds of them. Under the race detector it is two of the fifteen
 // rounds.
 func TestForgettingDropsExactlyWhatIsTheCollectorsOrTheStaticTargets(t *testing.T) {
+	tier.Slow(t)
 	logger := slog.New(slog.DiscardHandler)
 	failed := errors.New("connection refused")
 	var dropped, kept, strayed, alike int

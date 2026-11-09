@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The loop scrapes each target on its own interval and queues the results,
@@ -203,6 +204,7 @@ func TestTheScrapeLoopKeepsToTheFilesConcurrency(t *testing.T) {
 // came for theirs, still find one, and are scraped while the hung ones
 // hold the rest.
 func TestHungTargetsOfOneCollectorLeaveASlotForAnother(t *testing.T) {
+	tier.Slow(t)
 	release := make(chan struct{})
 	letGo := sync.OnceFunc(func() { close(release) })
 	var hung, fastScraped atomic.Int64

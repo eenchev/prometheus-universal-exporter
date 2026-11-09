@@ -11,6 +11,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The decoder of a prometheus transform stops at the first series past
@@ -149,6 +150,7 @@ func linesBefore(body []byte, line int) []byte {
 // takes, and many of bodies both refuse. Under the race detector the
 // expositions are a twelfth as many, drawn as the first twelfth is.
 func TestThePromParserStopsOnlyForTheSeriesThatCount(t *testing.T) {
+	tier.Slow(t)
 	g := &promGenerator{random: rand.New(rand.NewPCG(2026, 1006))}
 	expositions := alloctest.UnlessRaced(6000, 500)
 	spared, stopped, taken := 0, 0, 0

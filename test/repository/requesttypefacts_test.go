@@ -333,9 +333,10 @@ func routePattern(expr ast.Expr, constants map[string]string) (string, bool) {
 	return "", false
 }
 
-// The test-list sections of spec § 34 are numbered in order, each heading
-// after a blank line: a section written as "34.x" while its number was
-// unknown stayed so, between 34.162 and 34.163, after a line of text.
+// The subsections of spec § 34 are numbered in order, each heading after a
+// blank line: a section written as "34.x" while its number was unknown
+// stayed so, between 34.162 and 34.163, after a line of text, when § 34
+// still recorded each change's tests.
 func TestSpecTestSectionsAreNumberedInOrder(t *testing.T) {
 	lines := strings.Split(read(t, "docs/SPECIFICATION-EXPORTER.md"), "\n")
 	heading := regexp.MustCompile(`^## 34\.([0-9]+)([a-z]?) `)
@@ -359,7 +360,7 @@ func TestSpecTestSectionsAreNumberedInOrder(t *testing.T) {
 		}
 		last, lastSuffix = n, m[2]
 	}
-	if count < 100 {
+	if count < 30 {
 		t.Fatalf("found %d sections of § 34; the spec has moved", count)
 	}
 }

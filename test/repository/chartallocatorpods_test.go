@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The allocator's pods as the chart renders them beyond what
@@ -93,6 +94,7 @@ func TestChartSchedulesTheAllocatorByItsOwnValues(t *testing.T) {
 // allocator's --heartbeat.interval, left out when empty. At settle's bound,
 // 1h, a rollout waits a little over an hour for each new allocator pod.
 func TestChartHoldsANewAllocatorUnavailableUntilItAllocates(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for _, c := range []struct{ settle, interval, want string }{

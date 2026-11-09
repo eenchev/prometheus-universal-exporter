@@ -18,6 +18,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // What a trip writes to the failure log goes nowhere once reloads have ended
@@ -262,6 +263,7 @@ func runLoop(t *testing.T, server *Server) (stop func()) {
 // back, and that target's last success is its own; and what it is answered
 // is not cached under the collector brought back.
 func TestTheScrapeLoopsLateScrapeLeavesNothingUnderATargetBroughtBack(t *testing.T) {
+	tier.Slow(t)
 	for _, removed := range []string{"the target and its collector", "the target alone"} {
 		t.Run(removed, func(t *testing.T) {
 			names := soonScraped(t, time.Minute, 2)
@@ -331,6 +333,7 @@ func TestTheScrapeLoopsLateScrapeLeavesNothingUnderATargetBroughtBack(t *testing
 // target that is skipped meanwhile, and forgotten with the reload, changes
 // what it shows.
 func TestAScrapeThatFindsNoSlotAfterItsCollectorWasRemovedIsNotRemembered(t *testing.T) {
+	tier.Slow(t)
 	for _, removed := range []string{"the target and its collector", "the target alone"} {
 		t.Run(removed, func(t *testing.T) {
 			holder, waiter := soonScraped(t, time.Minute, 1)[0], ""

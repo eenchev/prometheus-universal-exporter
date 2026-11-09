@@ -7,6 +7,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A key written many times is refused in memory linear in the body: the
@@ -22,6 +23,7 @@ import (
 // has room for (yamlKeysKept), and 49,995,000 problems, counted and not
 // listed.
 func TestAYAMLKeyWrittenManyTimesIsRefusedInMemoryLinearInTheBody(t *testing.T) {
+	tier.Slow(t)
 	for _, count := range alloctest.UnlessRaced([]int{1200, 100000, (1 << 20) / 5}, []int{1200, 10000}) {
 		body := []byte(strings.Repeat("a: 1\n", count))
 		var err error

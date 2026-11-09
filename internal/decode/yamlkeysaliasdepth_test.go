@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // yamlFlowSeq is a flow sequence nested d deep, `[[[x]]]`, which the parser
@@ -72,6 +74,7 @@ func isYAMLTooDeep(err error) bool {
 // deep. The chain runs through a sequence, through a mapping and through a
 // merge key, whose value counts as it is written, one level in.
 func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanAResponseMayNestIsRefused(t *testing.T) {
+	tier.Slow(t)
 	// A single alias of a deeply nested anchor: the library decodes it (its
 	// aliases expand to no more than twice its size), and so does the exporter
 	// up to the bound.
@@ -318,6 +321,7 @@ func TestTheDepthBoundRefusesNoDocumentOfTheDifferentialCorpus(t *testing.T) {
 // the bound and decoded by the library in a stack grown to 16 MB and no
 // further, and one more is refused for its depth in a shallow one.
 func TestAYAMLDocumentAcceptedAtTheDepthBoundIsDecodedInABoundedStack(t *testing.T) {
+	tier.Slow(t)
 	if raceDetector {
 		t.Skip("the race detector keeps a stack of its own")
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A response describing far more series than limits.max_metrics allows fails
@@ -49,6 +50,7 @@ var manySeries = alloctest.UnlessRaced(100000, 10000)
 func repeated(item string, n int) string { return strings.Repeat(item, n) }
 
 func TestTransformsStopAtTheSeriesLimit(t *testing.T) {
+	tier.Slow(t)
 	tests := []struct {
 		name      string
 		collector model.Collector

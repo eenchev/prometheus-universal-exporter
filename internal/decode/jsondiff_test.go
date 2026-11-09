@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The json decoder reads a body itself, in one pass (jsonvalue.go). What it
@@ -386,6 +387,7 @@ func (g *jsonGenerator) corrupt(body []byte) []byte {
 // the race detector 2,000 documents, 8,000 bodies: the first tenth, of which
 // as large a share is to be accepted and refused.
 func TestJSONDecoderAgreesWithTheOneItReplacedOnRandomDocuments(t *testing.T) {
+	tier.Slow(t)
 	g := &jsonGenerator{random: rand.New(rand.NewPCG(2026, 1002))}
 	documents := alloctest.UnlessRaced(20000, 2000)
 	accepted, refused := 0, 0

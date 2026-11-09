@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // Identical probes in flight share a trip only when they are of the same stay
@@ -96,6 +97,7 @@ func TestAProbeDoesNotJoinTheTripOfAnEarlierStayOfItsCollector(t *testing.T) {
 // seventh sequence, 37 of the 256, which have every step at every place, and
 // every step after every other.
 func TestProbesOfOneStayShareATripThroughReloads(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	shared, beside := cachingCollector("shared", time.Hour), cachingCollector("beside", time.Hour)
 	steps := []string{"probe", "add", "remove", "same"}

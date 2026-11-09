@@ -12,6 +12,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A metric is flat: a name, a type, a value, a help and a timestamp, each
@@ -338,6 +339,7 @@ if how == "cut": metrics[:] = __main__.flat(metrics)
 // failure. So an entry is refused in the same words, or read the same way,
 // whether the worker could write all of it or not.
 func TestAnEntryCutForItsDepthIsReadAsTheEntryItself(t *testing.T) {
+	tier.Slow(t)
 	h := newHandover(t)
 	text := func(lines ...string) handoverInput {
 		body := strings.Join(lines, "\n")

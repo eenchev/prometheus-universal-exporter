@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // otlpMetricsReceiver is a collector that keeps the bodies of the metrics
@@ -44,6 +45,7 @@ func exporterInstanceAttribute(value string) string {
 // Outside allocator mode the exporter's resource is named by the host name,
 // read when the configuration loads, which the start's line says.
 func TestTheExporterInstanceIsTheHostName(t *testing.T) {
+	tier.Slow(t)
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		t.Skipf("the host name cannot be read: %v", err)

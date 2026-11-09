@@ -31,6 +31,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubetest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -641,6 +642,7 @@ func TestAKubernetesListingOfLargeSlicesFallsToSmallerPages(t *testing.T) {
 // is shorter, so a source asked every 5s is never asked again while an
 // earlier ask still runs; a timeout written is taken as it is.
 func TestAnUnsetTimeoutIsCutToTheRefreshInterval(t *testing.T) {
+	tier.Slow(t)
 	for _, c := range []struct {
 		refresh, timeout model.Duration
 		want             time.Duration
@@ -688,6 +690,7 @@ func TestAnUnsetTimeoutIsCutToTheRefreshInterval(t *testing.T) {
 // each request alone: a listing of pages each well within the timeout but
 // together longer fails.
 func TestAKubernetesListingIsBoundedWhole(t *testing.T) {
+	tier.Slow(t)
 	k := newKubeAPI(t)
 	k.delay = 400 * time.Millisecond
 	path := "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices"

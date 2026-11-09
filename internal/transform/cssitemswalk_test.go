@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A css rule with items finds what its value and label selectors match
@@ -248,6 +249,7 @@ func sameCSSItems(t *testing.T, name, body, items, expression string, required b
 // with items gives the series, the failure and the logged failures it gave
 // when each item was searched on its own.
 func TestCSSItemsFindWhatTheyFoundItemByItem(t *testing.T) {
+	tier.Slow(t)
 	label := func(expression string) model.LabelRule {
 		return model.LabelRule{Name: "server", Expression: expression}
 	}

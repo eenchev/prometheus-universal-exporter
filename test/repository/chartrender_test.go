@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The chart's options, rendered with helm: what each renders, and each value
@@ -82,6 +84,7 @@ config:
 }
 
 func TestChartRendersItsOptions(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	for name, tc := range map[string]struct {
 		args        []string
@@ -327,6 +330,7 @@ func TestChartRendersItsOptions(t *testing.T) {
 }
 
 func TestChartRefusesInvalidOptions(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	for name, tc := range map[string]struct {
 		args []string
@@ -472,6 +476,7 @@ func TestChartHoldsTheGzipLevelWithTheSchemaSkipped(t *testing.T) {
 // neither a render nor one that skips the schema can start an exporter that
 // refuses its flag; the bounds themselves render.
 func TestChartHoldsTheStatusRefreshToTheExportersBounds(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for _, value := range []string{"4s", "0s", "0m0s", "24h1s", "25h", "1.5s", "500ms", "30", "never", "OFF"} {
@@ -887,6 +892,7 @@ func chartWithNotesAsAManifest(t *testing.T) string {
 // the chart's to know, so only 100%, which blocks at any count, is warned
 // about.
 func TestChartNotesWarnAboutABudgetOfEveryReplica(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	dir := chartWithNotesAsAManifest(t)
 	for name, tc := range map[string]struct {
@@ -1041,6 +1047,7 @@ func TestChartProbeMonitorsLeaveOutTimingsTheyAreNotGiven(t *testing.T) {
 // hyphens in a row — with at least one letter in either, so a number is
 // refused whether it is written as one or as a string.
 func TestChartProbeMonitorsTakeAPortNameAndRefuseANumber(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	monitor := func(kind, port string) string {
 		return `monitors=[{"name":"apps","enabled":true,"type":"` + kind + `","collector":"example","port":` + port + `}]`
@@ -1077,6 +1084,7 @@ func TestChartProbeMonitorsTakeAPortNameAndRefuseANumber(t *testing.T) {
 // was written. A number is told to be one, since the fix is to name the port
 // on the Service or the pod; a null port is none, and the default.
 func TestChartMonitorTemplatesRefuseAPortThatIsNoName(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	if out, _ := helmTemplate(t, helm, chartDir, "--skip-schema-validation"); strings.Contains(out, "unknown flag") {
 		t.Skip("this helm cannot skip the values schema")

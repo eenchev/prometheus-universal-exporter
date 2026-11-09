@@ -27,6 +27,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // pushOTLP sends resources as an export sends them, without the exporter's
@@ -512,6 +513,7 @@ func exportCounts(server *Server) (successes, failures uint64, dropped int) {
 // once. Under the race detector the export is 9,000 points, past a
 // receiver's bound of 2MiB, with otlp.batch_max_bytes 1MiB.
 func TestAnOTLPExportOfNinetyThousandPointsIsDeliveredWithinAReceiversBound(t *testing.T) {
+	tier.Slow(t)
 	size := alloctest.UnlessRaced(struct{ points, bound, maxBytes int }{90000, 20 << 20, 0}, struct{ points, bound, maxBytes int }{9000, 2 << 20, 1 << 20})
 	endpoint := newBatchEndpoint(t, func(_ int, body []byte, w http.ResponseWriter, _ *http.Request) bool {
 		if len(body) > size.bound {

@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // engineXPathLabels is xpathLabels as it was before labels were planned and
@@ -291,6 +292,7 @@ func randomXML(r *rand.Rand) string {
 // from a node of its own: every expression is still read over every
 // document under each of them, at fewer of its nodes.
 func TestXPathLabelFastPathsAgreeWithTheEngine(t *testing.T) {
+	tier.Slow(t)
 	walked := xpathWalkedExpressions()
 	for _, expression := range walked {
 		if _, _, _, ok := xpathLabelShape(expression, false); !ok {

@@ -28,6 +28,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // otlpStream is a point of an export's body as a receiver tells it from
@@ -933,6 +934,7 @@ func ofTheLastWriters(t *testing.T, all []otlpStream) (kept []string, kinds, twi
 // else is left out and nothing added, a gauge's point has no start time
 // and every other has one.
 func TestNoOTLPExportHasTwoPointsOfOneStream(t *testing.T) {
+	tier.Slow(t)
 	runs := alloctest.UnlessRaced(300, 40)
 	const rounds = 5
 	exports, plain, withKinds, withTwice, withOwn, waitedAgain := 0, 0, 0, 0, 0, 0

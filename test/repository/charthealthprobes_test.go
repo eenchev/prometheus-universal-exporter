@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // healthProbes.mode: the liveness and readiness probes as GETs on the http
@@ -48,6 +50,7 @@ func TestTheChartsHealthProbesAreGETsByDefault(t *testing.T) {
 // without the allocator, and its timings still come from the values. The
 // command's flags are the exporter's.
 func TestTheChartsHealthProbesRunTheHealthcheckInExecMode(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	help := helpText(t)
 	if !strings.Contains(help, "\n  -healthcheck\n") {

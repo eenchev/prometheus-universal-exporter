@@ -20,6 +20,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The state kept per collector follows a reload when the reload is made, and
@@ -442,6 +443,7 @@ func windowedDocument(flipSeries string, collectors ...string) string {
 // end throughout the reloads however fast the machine. A probe has half a
 // minute and more.
 func TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	var asked atomic.Int64
 	target, _ := countingTarget(func(*http.Request) string { return "value=42\n" })

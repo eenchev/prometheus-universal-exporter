@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // What a probe or a static target scrape writes under its collector's name
@@ -403,6 +404,7 @@ func writesOf(server *Server) string {
 // the race detector it is every seventh sequence, 31 of the 216, which have
 // every step first, second and third, and every step after every other.
 func TestACollectorThatStaysCachesAndLogsAsItDidThroughReloads(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	target, _, failing := failableTarget(t)
 	kept, gone, added := windowCollector("kept", "ttl"), windowCollector("gone", "ttl"), windowCollector("added", "ttl")
@@ -567,6 +569,7 @@ func keptState(server *Server) string {
 // which have every configuration at every step, and every configuration
 // after every other.
 func TestFollowingAReloadDropsAndKeepsWhatItDid(t *testing.T) {
+	tier.Slow(t)
 	logger := testutil.QuietLogger(t)
 	kept, gone, added := testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), testutil.Collector("added", "text")
 	changed := testutil.Collector("kept", "text")

@@ -308,9 +308,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// TODO(@name@): the type's tests, against a stand-in of what it reads, and a
-// bullet for each in spec § 34. This one holds until Fetch is written, and
-// goes then.
+// TODO(@name@): the type's tests, against a stand-in of what it reads, each
+// saying in its comment what it checks. This one holds until Fetch is
+// written, and goes then.
 
 // Until the @name@ type is written, a collector of it validates, and its
 // scrape fails, saying the type is not implemented yet.
@@ -805,7 +805,7 @@ TestNoScaffoldPlaceholderIsLeftInTheTree fails on until it is gone:
   5. The prose that lists every type, which the script cannot write: each
      place docs/DEVELOPMENT.md lists under "Prose that names the types".
   6. Spec: § 5.1's rules of the type (a subsection of its own, as the other
-     types have) and § 34's bullets for its tests.
+     types have).
   7. Examples under examples/, and the chart README's section of the type, if
      it is deployed with anything of its own.
   8. go test ./... and make ci.

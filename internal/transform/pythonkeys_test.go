@@ -12,6 +12,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A script can leave one long string in an answer many times as a key: of
@@ -911,6 +912,7 @@ metric("differ", value=len(differ), labels={"first": differ[0] if differ else ""
 // being parts of how many there are, and of the thirty-two depths around
 // where the worker's walks end every fourth is left.
 func TestAnswersWithinTheLimitByTheirKeysAreTheLinesTheyWere(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := workerCollector("keys oracle", keysWas+keysOracle)
 	c.Limits.MaxOutputBytes = 1 << 14

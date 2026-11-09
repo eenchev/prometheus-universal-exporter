@@ -11,6 +11,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/sqltest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // sqlPoolsOf is the pools of a collector open now, by the host, database
@@ -35,6 +36,7 @@ func sqlPoolsOf(collector string) map[string]*sqlPool {
 // interval, and when it fails at its end, counted as a failed keepalive, the
 // place is free again and a waiting scrape goes on, on the one connection.
 func TestAHangingSQLKeepalivePingHoldsOnePlaceAtMaxPerTargetUntilItsInterval(t *testing.T) {
+	tier.Slow(t)
 	f := newSQLFixture(t)
 	events := watchSQLEvents(t)
 	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}

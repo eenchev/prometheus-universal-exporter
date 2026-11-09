@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A target file read alone was checked, to learn which descriptor files its
@@ -62,6 +63,7 @@ func mustRead(t *testing.T, path string) string {
 // same files in force, errors, log lines in their order, reload metrics,
 // and the same files watched for a refused file, stamped alike.
 func TestAReloadOfDescriptorFilesThatChecksEachPairOnceDoesWhatItDid(t *testing.T) {
+	tier.Slow(t)
 	sequences := alloctest.UnlessRaced(60, 12)
 	outcomes := compareReloads(t, sequences, func(t *testing.T, dir string) []reloadFile {
 		set := grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)

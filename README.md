@@ -145,6 +145,8 @@ which `--help` prints too.
 
 ## Documentation
 
+New here? [Getting started](docs/GETTING-STARTED.md) takes you from nothing to Prometheus scraping your first metric in about 15 minutes, and [How do I…](docs/HOW-DO-I.md) finds the page for a task: a JSON API, a login, a CSV over SSH, a certificate's expiry.
+
 Not sure which request type reads what you want? [Which request type?](docs/CONFIGURATION.md#which-request-type) has a table of what each one is for.
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.

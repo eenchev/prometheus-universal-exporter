@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The allocator's extra volumes: the chart mounted nothing into the
@@ -92,6 +94,7 @@ func volumeNames(node *yaml.Node) []string {
 // those files, the token's always, the service account token's while
 // that token is mounted.
 func TestChartRefusesAnAllocatorMountWhereTheAllocatorsPodMountsAlready(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	const static = "allocator:\n  staticTargets:\n    data: |\n      interval: 1m\n      targets:\n        - name: legacy\n          collector: example\n          target: http://legacy.example:8080\n"

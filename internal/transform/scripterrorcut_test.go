@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A script's error that may be longer than limits.max_output_bytes is cut
@@ -296,6 +297,7 @@ var failureLimits = []int{27, 120, 600, 2048, 16384, 1 << 20}
 // error is a part of what is shown: fewer of its lines, the exception's
 // own line among them, or the start of that line alone.
 func TestAScriptErrorIsWhatTheExporterShowsOfItUnderAnyOutputLimit(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	former := formerErrorPool(t)
 	scripts := failingScripts(alloctest.UnlessRaced(150, 16))
@@ -568,6 +570,7 @@ func TestWithoutMarkersLeavesOutOnlyTheMarkersUnderASourceLine(t *testing.T) {
 // It is run with python3 from PATH and with each release the worker is known
 // to run on that is installed (eachInterpreterOfTheSandbox).
 func TestAScriptThatRaisesMoreThanTheOutputLimitFailsWithItsException(t *testing.T) {
+	tier.Slow(t)
 	const megabyte = 1 << 20
 	shown := func(script string, line string, characters int) string {
 		return fmt.Sprintf("Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    %s\n%s%s... (%d bytes)", script, line, strings.Repeat("x", 200-len(line)), len(line)+characters)

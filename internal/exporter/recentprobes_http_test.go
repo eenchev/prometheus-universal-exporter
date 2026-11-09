@@ -19,6 +19,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // probeRows is the status page's recent probes, as JSON, by collector and
@@ -210,6 +211,7 @@ func TestTheRecentProbesAreBounded(t *testing.T) {
 // first, over the 500 keys kept of 1,000 probed, 200 under the race
 // detector.
 func TestTheRecentProbesHoldLittleOfLongTargets(t *testing.T) {
+	tier.Slow(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "down", http.StatusInternalServerError)
 	}))

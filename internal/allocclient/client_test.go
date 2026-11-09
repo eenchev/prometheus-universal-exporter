@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // fakeAllocator is the target allocator as the client sees it: it answers
@@ -1364,6 +1365,7 @@ func (h *hungInstance) RoundTrip(req *http.Request) (*http.Response, error) {
 // lookup of the instances' addresses, is given up on within the interval
 // rather than after 5s.
 func TestAHungInstanceDoesNotDelayTheHeartbeatsToTheOthers(t *testing.T) {
+	tier.Slow(t)
 	transport := &hungInstance{hung: "10.1.0.4"}
 	var mu sync.Mutex
 	var lookups []time.Duration
@@ -1446,6 +1448,7 @@ func (s *slowAnnouncer) RoundTrip(req *http.Request) (*http.Response, error) {
 // says none, and whose schedule waited the hour the client started with, is
 // heartbeated every second from then on.
 func TestAnAnnouncedIntervalReachesTheScheduleOfEveryInstance(t *testing.T) {
+	tier.Slow(t)
 	transport := &slowAnnouncer{announcer: "10.1.0.4"}
 	c := startClient(t, newFakeAllocator(t), func(o *Options) {
 		o.URL = "http://pue-allocator.monitoring.svc:9116"
@@ -1533,6 +1536,7 @@ func (f *firstHeard) RoundTrip(req *http.Request) (*http.Response, error) {
 // set, 4s in. An instance told 1s waits no longer than that for the replicas
 // to reach it.
 func TestTheLookupFollowsAShortenedInterval(t *testing.T) {
+	tier.Slow(t)
 	transport := &firstHeard{at: map[string]time.Time{}, said: map[string]float64{}}
 	var second atomic.Bool
 	start := time.Now()
@@ -1609,6 +1613,7 @@ func (f *twoIntervals) RoundTrip(req *http.Request) (*http.Response, error) {
 // is sent to every instance at once, not at the next turn of the interval,
 // so an instance that heard none first hears the longest within moments.
 func TestAReplicaHeartbeatsAtTheShortestAndSaysTheLongest(t *testing.T) {
+	tier.Slow(t)
 	transport := &twoIntervals{start: time.Now(), heard: map[string][]saidAt{}}
 	c := startClient(t, newFakeAllocator(t), func(o *Options) {
 		o.URL = "http://pue-allocator.monitoring.svc:9116"

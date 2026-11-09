@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // sqlAuth mounts what an sql collector reads — a Secret's database
@@ -308,6 +310,7 @@ rows:
 // extraVolumeMounts entry inside it, rendering fails naming the read-only
 // Secret volume. Beside the others, and not enabled, it renders.
 func TestChartRefusesAnSQLAuthMountPathTakenByAnotherMount(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	const static = "staticTargets: {enabled: true, data: \"targets: []\\n\"}\n"

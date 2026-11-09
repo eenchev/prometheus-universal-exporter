@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // startRun runs the allocator with args, a configuration of its own and a
@@ -99,6 +100,7 @@ func TestTheStatusNamesTheInstanceByItsAddressAndBuild(t *testing.T) {
 // With --peers.leader-only, an instance alone among its peers leads and serves
 // the whole of /metrics and of the status; the flag reaches the allocator.
 func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
+	tier.Slow(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +122,7 @@ func TestTheLeaderOnlyFlagReachesTheAllocator(t *testing.T) {
 // and --peers.snapshot-timeout reach the allocator, which says them in the
 // peers' part of its status.
 func TestThePeerTimingFlagsReachTheAllocator(t *testing.T) {
+	tier.Slow(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -653,6 +653,7 @@ func TestTheVulnerabilityCheckScansWhatShips(t *testing.T) {
 		module + "/internal/sshtest":            "the stand-in SSH and SFTP server of the sshfile tests",
 		module + "/internal/testutil":           "helpers of the tests",
 		module + "/internal/testutil/alloctest": "the tests' measure of allocations",
+		module + "/internal/testutil/tier":      "the tests' two tiers, the quick one leaving the slow tests out",
 		module + "/test/repository":             "the repository's own tests, a package of tests only",
 	}
 	for _, pkg := range list("./...") {

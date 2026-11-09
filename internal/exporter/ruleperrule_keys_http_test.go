@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -189,6 +190,7 @@ func sameEntriesAs(now, was *failureLog, as func(key string) string, among map[s
 // that file it logs no recovery, and the scrapes here log them. Under the
 // race detector it is every tenth of the collectors.
 func TestRulesAreLoggedAsTheyWereWhenEveryKeyWasMade(t *testing.T) {
+	tier.Slow(t)
 	modes := []string{model.ErrorModeLog, model.ErrorModeLog, model.ErrorModeLog, model.ErrorModeIgnore, model.ErrorModeFail}
 	long := strings.Repeat("x", 2000)
 	expressions := []string{".e0", ".e1", ".e2", ".e0 | " + long + "a", ".e0 | " + long + "b", ".e1 #\x00 " + long}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // ciRun is a run of ci.yml as the GitHub API lists it, with the fields
@@ -179,6 +181,7 @@ func runCIPassed(t *testing.T, handler http.Handler, timeout string) (string, bo
 // runs out, and counts no run a pull request started, which tested a merge
 // rather than the commit.
 func TestTheCIGateOfTheReleasesPassesOnlyWhenCIPassedOnTheCommit(t *testing.T) {
+	tier.Slow(t)
 	const advice = "CI has not passed on " + ciPassedSHA + ": run CI or wait for it, then push the tag again"
 	pullRequest := ciRun{ID: 9, Event: "pull_request", HeadSHA: ciPassedSHA, Status: "completed", Conclusion: "success", UpdatedAt: "2026-10-14T10:09:00Z"}
 	for _, test := range []struct {

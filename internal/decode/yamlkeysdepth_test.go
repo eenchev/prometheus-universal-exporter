@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // yamlListedByCalls is yamlLearnt.listed as it was, a call for each node and
@@ -151,6 +153,7 @@ func TestTheProblemsOfAYAMLDocumentAreAddedUpInAStackNoDeeperThanItIsNested(t *t
 // cut off after fewer of their lines (yamlFixtureDocuments), with the least
 // there is to be of each kind among so many.
 func TestTheProblemsOfAYAMLDocumentComeToWhatTheyDidByACallForEachNode(t *testing.T) {
+	tier.Slow(t)
 	twice := "{k: 1, k: 2}"
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	documents = append(documents,

@@ -9,6 +9,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 func fingerprintTestConfig() *model.Config {
@@ -89,6 +90,7 @@ func TestFingerprintMemoComputesCollectorsOutsideTheConfiguration(t *testing.T) 
 // Under the race detector, which this test is for, each asks 25 times and
 // not 200: the memo is traded from the first turn on.
 func TestFingerprintMemoIsSafeForConcurrentProbes(t *testing.T) {
+	tier.Slow(t)
 	memo := &fingerprintMemo{}
 	configs := []*model.Config{fingerprintTestConfig(), fingerprintTestConfig()}
 	configs[1].Collectors[1].Request.Path = "/v2"

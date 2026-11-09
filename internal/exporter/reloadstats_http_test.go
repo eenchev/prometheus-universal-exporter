@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // holdFirstProbeOf makes the first probe of collector wait where it has read
@@ -406,6 +407,7 @@ func oldStatsFor(s *Server, name string) *serverStats {
 // configuration at every step, and every configuration after every other,
 // with verbose self-metrics and without.
 func TestACollectorThatStaysHasTheStatisticsItHadThroughEveryReload(t *testing.T) {
+	tier.Slow(t)
 	kept, gone, added := testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), testutil.Collector("added", "text")
 	changed := testutil.Collector("kept", "text")
 	changed.Limits.MaxResponseBytes = 2048

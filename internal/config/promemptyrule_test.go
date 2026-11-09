@@ -8,6 +8,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -129,6 +130,7 @@ func rulesAsBefore(t *testing.T, x *model.Collector, rules []model.MetricRule) (
 // which the ways of writing any three of a rule's keys still meet each
 // other, every one of them, and those of three rules end in one of three.
 func TestOnlyAPrometheusRuleOfNeitherANameNorAnExpressionIsRefusedAnew(t *testing.T) {
+	tier.Slow(t)
 	// The shipped collectors, each with the rules it has.
 	var shipped []*model.Collector
 	files, shippedRuleCount := shippedRules(t, func(_ string, x *model.Collector, _ model.MetricRule) {

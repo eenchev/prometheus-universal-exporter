@@ -17,6 +17,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A rule over HTML that selects attributes, as `//td/@data-value` does,
@@ -524,6 +525,7 @@ var differentialLabels = []string{
 // each page is read by a quarter of the expressions and each expression
 // reads a quarter of the pages (pairTaken).
 func TestElementAndTextRulesOverHTMLReadWhatTheyRead(t *testing.T) {
+	tier.Slow(t)
 	expressions := []string{
 		"//td", "//tr", "//tr/td[1]", "//li", "//span", "//p", "//div", "//dt", "//a", "//time", "//*[@id]", "//*[@class]", "//*", "//h1 | //h2 | //title",
 		"//td/text()", "//li/text()", "//body//text()", "//text()[normalize-space()]", "//node()", "//comment()", "/html", "/", "//svg//*", "//td[not(*)]",

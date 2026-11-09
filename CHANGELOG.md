@@ -32,6 +32,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- **Getting started and How do I….** [Getting started](docs/GETTING-STARTED.md)
+  takes you from nothing to Prometheus scraping a first metric in about 15
+  minutes, and [How do I…](docs/HOW-DO-I.md) finds the page of the
+  reference for a task. Both are linked from the README.
 - **Clock placeholders.** `{{date}}`, `{{datetime}}`, `{{unix}}` and eight
   more formats write the time of the scrape wherever a `{{param_...}}`
   placeholder may stand, in every request type: an API's daily summary

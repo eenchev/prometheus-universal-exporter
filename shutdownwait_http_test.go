@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // What the shutdown waits for (main.go): the probes in progress, which it
@@ -118,6 +119,7 @@ func TestAShutdownDoesNotWaitForStaticTargetScrapes(t *testing.T) {
 // The probe's target never answers, so the shutdown waits all of its seven
 // seconds, which holds one progress line, at five.
 func TestAShutdownSaysWhatItWaitsFor(t *testing.T) {
+	tier.Slow(t)
 	address, accepted := silentListener(t)
 	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 1m\ntargets:\n  - name: "+soonScrapedName(t)+"\n    collector: slow\n    target: http://"+address+"/\n")
 	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-timeout=7s")
@@ -190,6 +192,7 @@ func TestASecondSignalInTheShutdownDelayExitsAtOnce(t *testing.T) {
 // The shutdown would wait ten minutes for the probe, so a process that has
 // exited 130 half a minute after the second signal was ended by it.
 func TestASecondSignalEndsAnExporterStartedWithItIgnored(t *testing.T) {
+	tier.Slow(t)
 	p := startExporterProcess(t, "", childOptions{holdProbe: true, ignoreSIGINT: true}, "--web.shutdown-timeout=10m")
 	p.signal(t, syscall.SIGINT)
 	testutil.WaitFor(t, "the shutdown to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: waiting for 1 probe") })

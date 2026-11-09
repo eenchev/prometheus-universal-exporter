@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A script can leave one list or dict in an answer many times over, or in
@@ -227,6 +228,7 @@ func TestDataThatHoldsItselfIsRefusedWhereTheWalkComesBackToIt(t *testing.T) {
 // multiple of the output limit. One worker refuses them all and then
 // answers.
 func TestDataThatHoldsOneListManyTimesOverIsRefusedForItsLength(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := sharedCollector()
 	want := "python pre-script failed: " + fmt.Sprintf(tooLong, "data")

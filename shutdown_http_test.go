@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // syncBuffer is a bytes.Buffer safe to read while a child process writes it.
@@ -227,6 +228,7 @@ func TestSecondSignalExitsAtOnce(t *testing.T) {
 // the timeout, as its log says, and not before the timeout was over. How
 // long after is the machine's to say and not measured.
 func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
+	tier.Slow(t)
 	p := startHeldExporter(t, "--web.shutdown-timeout=1s")
 	start := time.Now()
 	p.signal(t, syscall.SIGTERM)
@@ -256,6 +258,7 @@ func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 // and has probed (endDelay), however long the machine takes over that, and
 // is not out of it before the delay, a second, is over.
 func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
+	tier.Slow(t)
 	p := startHeldExporter(t, "--web.shutdown-delay=1s", "--web.shutdown-timeout=1s")
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("v=7\n"))
@@ -331,6 +334,7 @@ func TestNoShutdownDelayStopsListeningAtOnce(t *testing.T) {
 // the budget it names: that is no report of the shutdown's, and is not held
 // against it.
 func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
+	tier.Slow(t)
 	var scrapes atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		scrapes.Add(1)
@@ -372,6 +376,7 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 // of a second and a half, and a second for the probe after it, a test later
 // than that sends the signal to a process that has ended.
 func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
+	tier.Slow(t)
 	p := startHeldExporter(t, "--web.shutdown-delay=100ms", "--web.shutdown-timeout=1s")
 	p.signal(t, syscall.SIGTERM)
 	testutil.WaitFor(t, "the shutdown to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down") })
@@ -412,6 +417,7 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 // so. The exporter stays in its delay until that export has arrived
 // (endDelay), however long the machine takes to make one.
 func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
+	tier.Slow(t)
 	var exports atomic.Int64
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		exports.Add(1)

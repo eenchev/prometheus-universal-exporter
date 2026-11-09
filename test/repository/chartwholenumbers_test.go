@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // Helm reads the numbers of a values file, and of --set-json, as floating
@@ -460,6 +462,7 @@ func TestChartRefusesAWholeNumberOutOfRange(t *testing.T) {
 // writes the number out, and a number is refused by the range of its own
 // value: a port by a port's, a count that may not be 0 by 1.
 func TestChartTemplatesRefuseWhatIsNoWholeNumberByItsValue(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	const count = " must be a whole number from 0 to 2147483647"

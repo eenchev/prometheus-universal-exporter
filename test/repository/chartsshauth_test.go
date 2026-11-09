@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // sshAuth mounts what an sshfile collector reads — a Secret's private key,
@@ -195,6 +197,7 @@ func TestChartMountsTheSSHCredentialsAndKnownHosts(t *testing.T) {
 // with no entry would each render a pod Kubernetes refuses or whose every
 // SSH scrape fails.
 func TestChartRefusesAnIncompleteSSHAuth(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for name, tc := range map[string]struct {

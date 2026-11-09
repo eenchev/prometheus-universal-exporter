@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The YAML decoder's bound on nesting as it was before every response had
@@ -171,6 +173,7 @@ func yamlSurveyOf(l *yamlLearnt) yamlSurvey {
 // an alias that the bound let through then is refused now for being counted
 // otherwise.
 func TestAYAMLDocumentFarFromTheDepthBoundIsDecodedAsItWas(t *testing.T) {
+	tier.Slow(t)
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	maker := yamlMaker{random: rand.New(rand.NewPCG(22, 25))} //nolint:gosec // documents for a test
 	generated := 10000

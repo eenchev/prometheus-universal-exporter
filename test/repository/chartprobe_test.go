@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The chart's Prometheus Operator Probes, one per probes entry: uptime checks
@@ -240,6 +242,7 @@ func TestChartProbesPresentTheExporterCredential(t *testing.T) {
 // What the chart refuses of a probes entry, by the values schema and, with
 // the schema skipped, by the templates, each saying which entry and why.
 func TestChartRefusesInvalidProbes(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	// The refusals are of these entries and not of the key: an entry the
 	// chart takes renders, so a schema without probes, which would refuse

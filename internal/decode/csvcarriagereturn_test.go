@@ -13,6 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // readCSVBeforeCarriageReturns is readCSV as it was before a carriage return
@@ -202,6 +203,7 @@ func (f csvField) former(trim bool, delimiter rune) string {
 // through them all, which is still every field beside every other under
 // every delimiter, and every field with every end of a line.
 func TestCSVReadsCarriageReturnLinesAsItReadLineFeedLines(t *testing.T) {
+	tier.Slow(t)
 	atoms := []csvField{{written: `a`}, {written: ``}, {written: ` b c `}, {written: `"q"`}, {written: ` "q"`}, {written: `"q" `}, {written: "\"c\rr\""}, {written: "\"c\rr|\r\n\" "},
 		{written: " \"c\rr\"", untrimmed: " \"c\nr\""}, {written: "\"two\nlines\""}, {written: `"x""y"`}, {written: `5" disk`}, {written: `"q" x`}, {written: `"st"ray"`}, {written: "\t\"t\""}}
 	ends := []csvLineEnd{{"\n", "\n"}, {"\r\n", "\r\n"}, {"\r", "\n"}, {"\r\r", "\n\n"}, {"\r\r\n", "\n\r\n"}}

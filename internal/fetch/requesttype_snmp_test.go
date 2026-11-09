@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // snmpCollector is a validated snmp collector, as edit makes it, of a
@@ -422,6 +423,7 @@ func TestAnSNMPv3RequestTheAgentRefusesSaysWhy(t *testing.T) {
 // the agent decrypts with the wrong key is garbage that, now and then, reads
 // as the start of a value, and is no scoped PDU all the same.
 func TestAWrongSNMPv3PrivPasswordIsADecryptionErrorEachTime(t *testing.T) {
+	tier.Slow(t)
 	engine := []byte{0x80, 0x00, 0x1f, 0x88, 0x04, 'p', 'u', 'e'}
 	for _, priv := range []string{"DES", "AES"} {
 		agent := testutil.NewSNMPAgent(t, testutil.SNMPAgentConfig{EngineID: engine, Values: switchValues, Users: map[string]testutil.SNMPAgentUser{

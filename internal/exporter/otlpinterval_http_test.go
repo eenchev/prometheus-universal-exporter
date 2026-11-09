@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The OTLP export loops wait by the intervals of the configuration in
@@ -86,6 +87,7 @@ var everyEndpoint = []string{"/v1/logs", "/v1/metrics", "/v1/traces"}
 // intervals are the defaults; the bundle's of 1s are followed from when it
 // comes.
 func TestTheFirstBundlesOTLPIntervalsAreFollowedAtOnce(t *testing.T) {
+	tier.Slow(t)
 	receiver := newLogReceiver(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	manager := config.NewAwaitingManager(path, testutil.QuietLogger(t))
@@ -107,6 +109,7 @@ func TestTheFirstBundlesOTLPIntervalsAreFollowedAtOnce(t *testing.T) {
 // A reload that shortens the intervals from 45s to 1s has the next exports
 // a second after the last, not 45s after it.
 func TestAReloadShorteningTheOTLPIntervalsIsFollowedAtOnce(t *testing.T) {
+	tier.Slow(t)
 	receiver := newLogReceiver(t)
 	r := newReloadable(t, intervalDocument(receiver, "45s"), "")
 	r.server = NewServer(r.manager, "python3", testutil.QuietLogger(t))
@@ -125,6 +128,7 @@ func TestAReloadShorteningTheOTLPIntervalsIsFollowedAtOnce(t *testing.T) {
 // A reload that lengthens the intervals from 1s to 1h makes no export when
 // the second runs out: the next is an hour after the last.
 func TestAReloadLengtheningTheOTLPIntervalsExportsNothingEarly(t *testing.T) {
+	tier.Slow(t)
 	receiver := newLogReceiver(t)
 	r := newReloadable(t, intervalDocument(receiver, "1s"), "")
 	r.server = NewServer(r.manager, "python3", testutil.QuietLogger(t))

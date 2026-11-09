@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // dnsSource is a dns_sd source of names asking s, with what the test
@@ -130,6 +131,7 @@ func TestDNSSDAnswersAlikeWhateverTheRecordsOrder(t *testing.T) {
 // the timeout, fails the whole answer: the targets of the last good one
 // stay, and the failure is counted once while it stays the same.
 func TestDNSSDKeepsItsLastGoodAnswerWhenALookupFails(t *testing.T) {
+	tier.Slow(t)
 	stub := testutil.NewDNSStub(t, srvRecords()...)
 	a, s := dnsSource(t, stub, 10, func(n *DNSSDConfig) { n.RefreshInterval = model.Duration(time.Second) }, "_metrics._tcp.b.test", "_metrics._tcp.a.test")
 	ctx := context.Background()

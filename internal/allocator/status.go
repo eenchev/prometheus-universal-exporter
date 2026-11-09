@@ -167,6 +167,10 @@ type MemberStatus struct {
 	Live         bool `json:"live"`
 	InList       bool `json:"in_list"`
 	ShuttingDown bool `json:"shutting_down"`
+	// SameName says another process heartbeats under the member's name
+	// too: two exporters were given one name, and each scrapes the
+	// member's share.
+	SameName bool `json:"same_name,omitempty"`
 	// Generation is the generation of the bundle it reports in force,
 	// Current the one it is to have; UpToDate says they are the same.
 	Generation string `json:"generation"`
@@ -473,6 +477,7 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 			ms.Current = b.Generation
 		}
 		ms.UpToDate = ms.Current != "" && ms.Generation == ms.Current
+		ms.SameName = a.twice(m, now)
 		ms.Late = ms.Live && now.Sub(m.lastSeen) > a.heartbeatInterval*3/2
 		if ms.Live {
 			out.Live++

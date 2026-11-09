@@ -256,6 +256,9 @@ type Client struct {
 	// address, so an error repeated at every try is logged once, until it
 	// changes or ends: with several addresses failing, each has its own.
 	lastLogged map[logKey]string
+	// sameNameAt is when a heartbeat's answer last said another process
+	// heartbeats under this replica's name (allocapi.HeartbeatReply).
+	sameNameAt time.Time
 }
 
 // said is what an instance of the allocator said in its last answer: the
@@ -663,7 +666,19 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 		c.says[key] = s
 	}
 	c.takeAnnounced()
+	// The allocator hears another process under this replica's name: said
+	// once while it lasts, which is until no answer has said so for a
+	// member TTL.
+	sameName := false
+	if err == nil && reply.SameName {
+		now := c.now()
+		sameName = c.sameNameAt.IsZero() || now.Sub(c.sameNameAt) > allocapi.MemberTTL(c.interval)
+		c.sameNameAt = now
+	}
 	c.mu.Unlock()
+	if sameName {
+		c.o.Logger.Warn("the target allocator hears another exporter under this one's member name: both have the member's bundle and scrape its share of the static targets; give each exporter a name of its own with --allocator.member", "member", c.o.Member, "allocator", c.base.String())
+	}
 	if generation := reply.Generation; err == nil && generation != "" && generation != seen && generation != inForce {
 		signal(c.wake)
 	}
@@ -886,7 +901,19 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 	c.mu.Lock()
 	c.lastSync = time.Now()
 	same := b == nil || b.Generation == c.seen || b.Generation == c.inForce
+	// The allocator is back at the bundle in force after one that was
+	// refused: there is nothing left to report, and the next request names
+	// the bundle in force, so the allocator holds it until it has another
+	// rather than answering with the whole bundle each time.
+	back := b != nil && b.Generation == c.inForce && c.seen != c.inForce
+	if back {
+		c.seen, c.refused = c.inForce, nil
+	}
 	c.mu.Unlock()
+	if back {
+		c.o.Logger.Info("the target allocator is back at the bundle in force; the refused bundle is no longer reported", "generation", b.Generation)
+		signal(c.beat)
+	}
 	if same {
 		c.event(Event{Kind: EventUnchanged})
 		return true, true, 0

@@ -12873,7 +12873,18 @@ answered as any other and change nothing; a heartbeat of another `instance`
 MUST be applied whatever its `sequence`. A member not live MUST be kept,
 with its `instance` and `sequence`, until its last heartbeat is
 the member TTL old, so a heartbeat arriving after the one saying
-`shutting_down` does not make it live again. A refusal a heartbeat reports
+`shutting_down` does not make it live again. A heartbeat of the `instance`
+a member's current one replaced that does not say `shutting_down` and comes
+more than the member TTL after the replacement is no late one: two
+exporters heartbeat under one member name, each holds the member's bundle
+and each scrapes its share. The allocator MUST then change nothing of the
+member, MUST say `same_name` in the answers to both, MUST log it once
+while it lasts, naming the member and both addresses, MUST show
+`same_name` on the member in the status and on the status page, and MUST
+count the member in `pue_allocator_members_same_name`, until no such
+heartbeat has come for the member TTL. An exporter whose heartbeat is
+answered `same_name` MUST log so, once while the answers keep saying it.
+A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`; from `0` to `1h`, else exit 2), so a
@@ -13226,7 +13237,8 @@ in the status or on the status page),
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
 `pue_allocator_member_changes_total`,
-`pue_allocator_members_refused_total`, and for each discovery source, by
+`pue_allocator_members_refused_total`,
+`pue_allocator_members_same_name`, and for each discovery source, by
 `kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
 `pue_allocator_discovery_refreshes_total{result}` and
 `pue_allocator_discovery_last_success_timestamp_seconds`, and with
@@ -13372,7 +13384,11 @@ generation after the files and directories in it and before the swap, and
 the cache directory after the new links are made, before `..data` is
 replaced, and again after it is, so a restart after a crash finds the
 generation before or the whole new one. A refused bundle MUST NOT be
-fetched again until the allocator serves another generation.
+fetched again until the allocator serves another generation. When that is
+the generation in force, nothing MUST be written or reloaded, the refusal
+MUST leave the heartbeats at once, and the next bundle request MUST name
+the generation in force, so the allocator holds the request until it has
+another bundle.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the

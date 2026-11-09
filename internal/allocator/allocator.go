@@ -203,6 +203,20 @@ type member struct {
 	// retired the instance before it, so a late heartbeat is known.
 	instance, retired string
 	sequence          uint64
+	// retiredAt is when the process before the current one was replaced,
+	// and twiceAt when a heartbeat of it last came long enough after that
+	// to be no late one (twice): two processes then heartbeat under the
+	// one name. twiceLogged says so was logged, once while it lasts.
+	retiredAt, twiceAt time.Time
+	twiceLogged        bool
+}
+
+// twice reports whether two processes heartbeat as m: one of the process the
+// current one replaced came within the last member TTL, and more than a
+// member TTL after it was replaced, which no heartbeat that was merely late
+// is. Each of the two has the member's bundle and scrapes its share.
+func (a *Allocator) twice(m *member, now time.Time) bool {
+	return !m.twiceAt.IsZero() && now.Sub(m.twiceAt) <= a.memberTTL
 }
 
 type drainKey struct{ target, member string }
@@ -308,7 +322,26 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	}
 	m := a.members[hb.Member]
 	if (m != nil && m.stale(hb)) || (m == nil && hb.ShuttingDown) {
-		return a.replyLocked(hb.Member), nil
+		reply := a.replyLocked(hb.Member)
+		// A heartbeat of the process the member's current one replaced is
+		// a late one for as long as a heartbeat may be on its way, and the
+		// member TTL is longer than that. After it the process is alive:
+		// two exporters run under one name, as two hosts of one host name
+		// or a copied --allocator.member do, each with the member's bundle
+		// and each scraping its share. Both are told, and it is logged
+		// once while it lasts.
+		if now := a.clock.Now(); m != nil && hb.Instance == m.retired && !hb.ShuttingDown && now.Sub(m.retiredAt) > a.memberTTL {
+			if !a.twice(m, now) {
+				m.twiceLogged = false
+			}
+			m.twiceAt = now
+			reply.SameName = true
+			if !m.twiceLogged {
+				m.twiceLogged = true
+				a.logger.Warn("two exporters heartbeat under one member name: each has the member's bundle and scrapes its share of the static targets, and probes go to the one that started last; give each exporter a name of its own with --allocator.member", "member", hb.Member, "address", m.advertise, "other_address", hb.Advertise)
+			}
+		}
+		return reply, nil
 	}
 	if m == nil {
 		if n := a.liveCount(); n >= a.maxMembers {
@@ -325,6 +358,7 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	}
 	if m.instance != hb.Instance {
 		m.retired, m.instance = m.instance, hb.Instance
+		m.retiredAt, m.twiceAt, m.twiceLogged = a.clock.Now(), time.Time{}, false
 	}
 	m.sequence = hb.Sequence
 	m.advertise, m.lastSeen, m.generation, m.shuttingDown = hb.Advertise, a.clock.Now(), hb.Generation, hb.ShuttingDown
@@ -341,7 +375,9 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 		a.logger.Warn("a replica refused its bundle and keeps its last good one; fix the configuration the allocator serves", "member", hb.Member, "generation", hb.Refused.Generation, "error", hb.Refused.Error)
 	}
 	a.update()
-	return a.replyLocked(hb.Member), nil
+	reply := a.replyLocked(hb.Member)
+	reply.SameName = a.twice(m, m.lastSeen)
+	return reply, nil
 }
 
 // stale reports whether hb is older than the last heartbeat applied to m:

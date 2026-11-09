@@ -72,7 +72,24 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   target of one collector its own day. See
   [Dates and times in a parameter](docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter).
 
+- **Two exporters under one member name are said.** Two exporters given one
+  `--allocator.member`, or two hosts of one host name, were one member to
+  the target allocator: both took its bundle and scraped its share, every
+  target twice, and nothing said so. The allocator now logs it, marks the
+  member on the status page and in `/v1/status`, counts it in
+  `pue_allocator_members_same_name`, and tells both exporters, which log it
+  too ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+
 ### Fixed
+
+- Target Allocator: an exporter that refused a bundle kept reporting the
+  refusal after the allocator's files were put back as they were, so the
+  allocator's status showed the member up to date and refusing a bundle at
+  once, for as long as nothing else changed; and it asked for the whole
+  bundle again every few seconds instead of waiting for a change. The
+  refusal now leaves its heartbeats as soon as the allocator serves the
+  bundle it has in force
+  ([Heartbeats](docs/ALLOCATOR.md#heartbeats)).
 
 - Chart: an empty block in a values file, such as `ingress:` or
   `autoscaling:` with every key under it commented out, is a null to Helm,

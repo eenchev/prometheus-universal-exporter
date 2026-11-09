@@ -776,6 +776,19 @@ timing alone. Until then the bundle and service
 discovery endpoints answer `503`, and replicas and Prometheus keep what they
 have.
 
+**One name, one exporter.** A member is its name, `--allocator.member`, the
+host name when left out. Two exporters given one name — two hosts of one
+host name, a unit file copied with its `--allocator.member` — are one
+member to the allocator: both are served the member's bundle and both
+scrape its share of the static targets, every target of it twice, while
+probes go to the one that started last. The allocator tells them apart by
+their processes: when the one a restart would have replaced keeps
+heartbeating past the member TTL, it logs `two exporters heartbeat under
+one member name`, once while it lasts, with the member and both addresses,
+marks the member `same_name` in the [status](#status-page), counts it in
+`pue_allocator_members_same_name`, and says so in its answers to both, each
+of which logs it too. Give each exporter a name of its own.
+
 The allocator takes `--members.max` live members, 1000 by default. A heartbeat
 names any member it likes, so without a bound every new name would add one;
 beyond it the heartbeat of a member the allocator does not know is answered
@@ -841,6 +854,13 @@ is given about twice the weight of a member of capacity 1.
   to 100, 1 by default, which every heartbeat says. The allocator takes a
   heartbeat's capacity below 0.1 as 0.1 and above 100 as 100, so no replica
   can claim nearly every target, and one that says none as 1.
+
+The allocator weighs a target by its weight alone: how often it is
+scraped is not counted, neither a static target's `interval` nor the
+scrape interval of a probe job in Prometheus. Give a target scraped more
+often than the others a weight in proportion, twice the weight for half
+the interval, when the replicas should carry equal work rather than
+equal numbers.
 
 A weight is a number above 0 and at most 1000, with at most three
 decimals, such as `2` or `0.5`; any other in a file is refused at load,
@@ -988,7 +1008,9 @@ and instance, or whose instance is the one its member's current instance
 replaced, is answered as any other but changes nothing. A member that said
 it is shutting down is remembered for the member TTL after its last heartbeat, though
 not live, so a late heartbeat of it is still known for one. A replica
-reports a refused bundle until it puts a later one in force; the allocator
+reports a refused bundle until it puts a later one in force, or until the
+allocator serves the bundle it has in force again, as it does when the
+input files are put back as they were; the allocator
 logs a refusal once, and again when the replica refuses a bundle after
 having reported none. `interval_seconds` is the longest heartbeat interval the instances of the
 allocator the replica finds last said to it, which may be longer than the
@@ -999,7 +1021,9 @@ is answered `413`, and the heartbeat of a new member beyond `--members.max`
 `429`. The answer is `{"generation": "…", "heartbeat_interval_seconds": 10,
 "instance": "…"}`: the generation of the member's bundle, or `""` while the
 member list has not formed, `--heartbeat.interval` in seconds, and the name
-of the instance that answered, random and made at its start. A replica
+of the instance that answered, random and made at its start; and
+`"same_name": true` while another process heartbeats under the member's
+name ([Members and allocation](#members-and-allocation)). A replica
 whose bundle differs fetches it, and heartbeats at the interval from its
 next heartbeat on ([Members and allocation](#members-and-allocation)).
 
@@ -1235,7 +1259,7 @@ and its `value`); `partial`, true on a follower under `--peers.leader-only`,
 whose `members`, `spread` and `sources` are `null`; `members` (`formed`,
 `in_list`, `live`, `heartbeat_interval_seconds`, `member_ttl_seconds`,
 `settle_seconds` and `list`, each with `id`, `address`, `static_targets_path`, the one its last heartbeat said, left out when it said none the page can link, `last_heartbeat`, `late`, `live`,
-`in_list`, `shutting_down`, `generation`, `current`, `up_to_date`, `refused`,
+`in_list`, `shutting_down`, `same_name`, there and `true` while two exporters heartbeat under the member's name, `generation`, `current`, `up_to_date`, `refused`,
 `draining`, `capacity`, the one its last heartbeat said as the allocator
 takes it, and `capacity_in_list`, the one the member list places by, left
 out for a member not in it); `spread` (`members`, each with its `member`,
@@ -1437,6 +1461,7 @@ leader, and the JSON is `partial`.
 | `pue_allocator_reloads_total{result}` | counter | Changed input files put in force (`success`) or refused (`failure`). |
 | `pue_allocator_member_changes_total` | counter | Changes of the member list after the first. |
 | `pue_allocator_members_refused_total` | counter | Heartbeats of new members refused because `--members.max` members were live. |
+| `pue_allocator_members_same_name` | gauge | Members under whose name two exporters heartbeat, each scraping the member's share; `0` unless two exporters were given one `--allocator.member` ([Members and allocation](#members-and-allocation)). |
 | `pue_allocator_discovered_targets{kind,owner,source}` | gauge | Targets of each discovery source's last good answer, by `kind` (`probe` or `static`), `owner` (the probe job or the `discovered_targets` entry) and `source` (its name); `0` before it answers. |
 | `pue_allocator_discovery_refreshes_total{kind,owner,source,result}` | counter | Answers of each discovery source taken (`success`), and its failures (`failure`), one counted once while its text stays the same. |
 | `pue_allocator_discovery_last_success_timestamp_seconds{kind,owner,source}` | gauge | When each discovery source last answered, in Unix seconds; `0` before it does. |

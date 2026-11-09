@@ -115,6 +115,15 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 	family("pue_allocator_members_refused_total", "counter", "Heartbeats of new members refused because as many members as --members.max allows were live.")
 	fmt.Fprintf(&b, "pue_allocator_members_refused_total %d\n", a.membersRefused)
 
+	sameName, sameNameNow := 0, a.clock.Now()
+	for _, m := range a.members {
+		if a.twice(m, sameNameNow) {
+			sameName++
+		}
+	}
+	family("pue_allocator_members_same_name", "gauge", "Members under whose name two exporters heartbeat, each scraping the member's share of the static targets; 0 unless two exporters were given one --allocator.member.")
+	fmt.Fprintf(&b, "pue_allocator_members_same_name %d\n", sameName)
+
 	family("pue_allocator_weight_label_fallbacks_total", "counter", "Discovered targets whose owner's weight_label gave no weight, which took the owner's weight instead, by kind (probe or static), owner (the probe job or the discovered_targets entry) and reason: missing, not_a_number, out_of_range (not above 0 and at most 1000) or too_many_decimals; a target is counted when it begins to fall back.")
 	keys := make([]fallbackKey, 0, len(a.fallbacksTotal))
 	for key := range a.fallbacksTotal {

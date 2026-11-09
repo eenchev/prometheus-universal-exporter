@@ -2,11 +2,16 @@
 
 package exporter
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
+)
 
 // An ntp playground reads a pasted reply, the JSON document the exporter
 // makes of one, and asks no server.
 func TestAnNTPPlaygroundMakesNoRequest(t *testing.T) {
+	tier.Slow(t)
 	requirePlaygroundMakesNoRequest(t, playgroundCase{
 		collector: func(name, _ string, _ bool) string {
 			return "name: " + name + "\nrequest: {type: ntp}\ntransform: {type: jq}\nmetrics: [{name: ntp_stratum, expression: .stratum}]\n"

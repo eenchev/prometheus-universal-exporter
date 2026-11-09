@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -188,6 +189,7 @@ func checkValuesAsItWas(document []byte, decoded reflect.Value) (problems []stri
 // float64's range, checkValues gives the problems, the decoder's messages it
 // says instead, and the values it writes, that it gave.
 func TestTheWalkOfADocumentWithoutAnAliasKeyIsAsItWas(t *testing.T) {
+	tier.Slow(t)
 	var documents [][]byte
 	for _, pattern := range []string{"../../examples/*.yaml", "../../examples/*/*.yaml", "../../configs/*.yaml", "testdata/*.yaml"} {
 		paths, err := filepath.Glob(pattern)

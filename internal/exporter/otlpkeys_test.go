@@ -36,6 +36,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // oldOTLPResourceKey is a resource's key as it was made: the service name,
@@ -1069,6 +1070,7 @@ func (r *keyRun) scrape(at int64) model.MetricSet {
 // written earlier, which is not what was sent while every series was a
 // point.
 func TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey(t *testing.T) {
+	tier.Slow(t)
 	runs := alloctest.UnlessRaced(400, 60)
 	const rounds = 6
 	apart, apartWithNUL, together, wrong, twoKinds, otherwise, exports := 0, 0, 0, 0, 0, 0, 0

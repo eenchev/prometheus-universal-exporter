@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The Go garbage collector's target is a chart value, goGC.percent, rendered
@@ -132,6 +134,7 @@ func exporterEnvironment(t *testing.T, helm string, args ...string) (env []strin
 // own limit and counts as one. A number needs none. GOGC in env with no
 // percent set is rendered as the user wrote it.
 func TestChartRendersTheGarbageCollectorTarget(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	quotedOff := filepath.Join(t.TempDir(), "values.yaml")
 	if err := os.WriteFile(quotedOff, []byte("goGC:\n  percent: \"off\"\n"), 0o600); err != nil {
@@ -223,6 +226,7 @@ func TestChartWithoutAGarbageCollectorTargetRendersAsBefore(t *testing.T) {
 // memory limit in resources, or GOMEMLIMIT=off in env — where nothing would
 // ever collect.
 func TestChartRefusesAnInvalidGarbageCollectorTarget(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	bareOff := filepath.Join(t.TempDir(), "values.yaml")
 	if err := os.WriteFile(bareOff, []byte("goGC:\n  percent: off\n"), 0o600); err != nil {

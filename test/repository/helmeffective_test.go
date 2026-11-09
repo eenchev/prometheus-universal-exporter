@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The two lists of helm checks are compared check by check (helmtest_test.go),
@@ -1266,6 +1268,7 @@ var helmCheckMutations = []struct {
 // the reader has to report it, naming the file and saying what is wrong with
 // which line. The files themselves have nothing reported, and are not written.
 func TestAHelmCheckMadeToothlessIsNoticed(t *testing.T) {
+	tier.Slow(t)
 	makefile, workflow := readHelmLists(t)
 	if findings := helmCheckFindings(t, makefile, workflow); len(findings) > 0 {
 		t.Fatalf("the helm checks as they are have findings, so a change to them would not be told from none:\n%s", strings.Join(findings, "\n"))

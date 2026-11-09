@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -342,6 +343,7 @@ func rulesAsBeforeSameRules(t *testing.T, x *model.Collector, rules []model.Metr
 // python rule, no rule that is refused for something else, and no rule of
 // the shipped configurations.
 func TestOnlyTheSameRuleTwiceIsRefusedAnew(t *testing.T) {
+	tier.Slow(t)
 	var shipped []*model.Collector
 	files, shippedRuleCount := shippedRules(t, func(_ string, x *model.Collector, _ model.MetricRule) {
 		if len(shipped) == 0 || shipped[len(shipped)-1] != x {

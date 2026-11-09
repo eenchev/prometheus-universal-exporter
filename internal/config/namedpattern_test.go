@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -872,6 +873,7 @@ func rulesAsWhileEveryPatternWasRefused(t *testing.T, x *model.Collector, rules 
 // configurations is among the pairs taken again. Under the race detector
 // the pairs and the collectors of three rules are of fewer rules.
 func TestOnlyANameBesideAPatternOfHistogramsOrSummariesLoadsAgain(t *testing.T) {
+	tier.Slow(t)
 	var shipped []*model.Collector
 	files, shippedRuleCount := shippedRules(t, func(_ string, x *model.Collector, _ model.MetricRule) {
 		if len(shipped) == 0 || shipped[len(shipped)-1] != x {

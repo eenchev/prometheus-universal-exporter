@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A reload works out the fingerprints of its configuration before it puts
@@ -69,6 +70,7 @@ func newReloadWindow(t *testing.T, document string) *reloadWindow {
 // then the collectors it started with and kept, which nothing had asked for.
 // None is encoded with the statistics lock held.
 func TestAReloadedConfigurationGoesInForceWithItsFingerprintsMade(t *testing.T) {
+	tier.Slow(t)
 	n := alloctest.UnlessRaced(100, 10)
 	for _, shape := range followBenchShapes {
 		documents := [2]string{shape.first(n), shape.second(n)}
@@ -250,6 +252,7 @@ func TestAProbeIsAnsweredByTheFormerConfigurationWhileAReloadPrepares(t *testing
 // any configuration that was in force before but the last few, which the
 // collector of garbage may not have looked at: the others are gone.
 func TestTheFingerprintsKeptDoNotGrowWithTheReloads(t *testing.T) {
+	tier.Slow(t)
 	reloads := alloctest.UnlessRaced(1000, 200)
 	documents := [2]string{cachedDocument("kept", "changed"), strings.Replace(cachedDocument("kept", "changed"), "changed_value", "renamed_value", 1)}
 	r := newReloadable(t, documents[0], "")

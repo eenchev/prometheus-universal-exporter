@@ -23,6 +23,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // How a script's run is handed to a worker, timed, and ended, and what
@@ -183,6 +184,7 @@ func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 // a worker stopped for it; one that overruns script_timeout with time left
 // on the probe's deadline is a timeout, as before.
 func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	holdScriptsToTheirTimeout(t)
 	c := workerCollector("deadline", "import time\nif data == 'slow': time.sleep(30)\nmetric(name='v', value=1)")
@@ -397,6 +399,7 @@ func TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt(t *testing.T) {
 // the alarm is to end is looked up, idle, when the run has returned: got by
 // a second run, that run had to end within the alarm's second as well.
 func TestPythonWorkerKilledByItsOwnAlarmIsReplaced(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := workerCollector("alarm", "import signal\nif data != 'go': signal.alarm(int(data))\nmetric(name='v', value=1)")
 	for seconds := 1; ; seconds *= 2 {
@@ -423,6 +426,7 @@ func TestPythonWorkerKilledByItsOwnAlarmIsReplaced(t *testing.T) {
 // exporter alone, idle or busy, for longer than its interval, and a script
 // cannot make it end the worker by replacing what it calls.
 func TestPythonWorkerOfALivingExporterIsLeftAlone(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := workerCollector("watched", "import time\nos.getppid = lambda: 1\ntime.sleep(float(data))\nmetric(name='v', value=1)")
 	c.Limits.ScriptTimeout = model.Duration(10 * time.Second)
@@ -484,6 +488,7 @@ func processRuns(pid int) bool {
 // reads the pipe whose closing ends an idle one and which nobody is left to
 // stop, ends by itself within seconds, having seen that its parent is gone.
 func TestBusyPythonWorkerDoesNotOutliveAKilledExporter(t *testing.T) {
+	tier.Slow(t)
 	if runtime.GOOS != "linux" {
 		t.Skip("reads /proc to see the worker end")
 	}

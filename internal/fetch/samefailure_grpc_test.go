@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -32,6 +33,7 @@ import (
 // replicas is lagging, as two addresses with an arrow between them, fails
 // the calls with another failure for another replica.
 func TestAGRPCCallsFailureIsRecognisedWithoutWhatBelongsToOneConnection(t *testing.T) {
+	tier.Slow(t)
 	t.Run("a reset during the TLS handshake", func(t *testing.T) {
 		target := resettingTarget(t)
 		c := validGRPC(t, protosetCollector(t))

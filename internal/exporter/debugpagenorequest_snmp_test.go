@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // An snmp playground reads a pasted document, as the exporter makes one of
@@ -13,6 +14,7 @@ import (
 // noAuthNoPriv, which names no file, since a playground may not name the
 // community file a v2c collector needs.
 func TestAnSNMPPlaygroundMakesNoRequest(t *testing.T) {
+	tier.Slow(t)
 	requirePlaygroundMakesNoRequest(t, playgroundCase{
 		collector: func(name, _ string, source bool) string {
 			account := "snmp_version: 3, username: exporter, security_level: noAuthNoPriv"

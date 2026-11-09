@@ -23,6 +23,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A scrape of a static target that ends asks whether its target is in force
@@ -399,6 +400,7 @@ func TestTheRequestsOfTheStaticTargetsAreTheOnesGoingThroughTheCollectorsFound(t
 // finds for the static targets are, at these sizes too, the ones the
 // former search finds.
 func TestAScrapeAndAVerboseReadGoThroughNeitherTheTargetsNorTheCollectors(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	target := textTarget(t, "value=42\n")
 	collectors, targets := countCollectorScans(t), countTargetScans(t)

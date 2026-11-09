@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // MaxDepth is how deep a decoded value nests at most, whichever decoder made
@@ -133,6 +135,7 @@ func yamlDepthVerdict(outcome yamlOutcome) string {
 // and where it decodes, into what the library alone makes of it, nested as
 // deep as the table says.
 func TestNoYAMLDocumentNestsDeeperThanMaxDepth(t *testing.T) {
+	tier.Slow(t)
 	const decoded, tooDeep, parser, aliases, twice = "decoded", "too deep", "the parser's bound", "too deep through its aliases", "a key written twice"
 	indented := func(levels int) string { return strings.Repeat("- ", levels) }
 	bracketed := func(levels int, inside string) string {

@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // collectorStatsBefore is collectorStats as it was while it did all of its
@@ -137,6 +138,7 @@ func sameReadOfATwin(got, want statsRead, gotKept, wantKept map[string]*serverSt
 // counters are counted in between, so that each name is seen to have its
 // own. 40 sequences of eight reloads, and 8 under the race detector.
 func TestTheStatisticsOfEveryCollectorAreReadAsTheyWereUnderTheLock(t *testing.T) {
+	tier.Slow(t)
 	pool := make([]model.Collector, 12)
 	for i := range pool {
 		pool[i] = testutil.Collector(fmt.Sprintf("c%02d", (i*7)%len(pool)), "text")

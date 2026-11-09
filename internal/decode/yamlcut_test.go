@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -300,6 +301,7 @@ func yamlHasNoLongPart(text string) bool {
 // document is decoded with the first and the last of the bounds: some 1,500
 // decodings, with their own least of each outcome.
 func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
+	tier.Slow(t)
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	maker := yamlMaker{random: rand.New(rand.NewPCG(20, 26))} //nolint:gosec // documents for a test
 	generated, mappings := 6000, 150
@@ -430,6 +432,7 @@ func heapHeldAfter(made func() error) (held uint64, err error) {
 // failure log keeps what a failure is recognised by for as long as it is
 // remembered, and whoever holds the error holds this much.
 func TestACutYAMLErrorHoldsNothingOfTheDocument(t *testing.T) {
+	tier.Slow(t)
 	if raceDetector {
 		t.Skip("what the heap holds is not measured under the race detector")
 	}

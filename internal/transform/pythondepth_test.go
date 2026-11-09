@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A response nested as deep as its decoder reads one is handed to a script
@@ -200,6 +201,7 @@ func handOverDeep(t *testing.T, name string, c *model.Collector, d *decode.Decod
 // the decoder, as it always was. One worker serves every body of a
 // collector, the deepest among them, and is there for the next.
 func TestAJSONBodyNestedAsDeepAsItDecodesIsHandedToItsScripts(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := deepCollector("json")
 	depths, shapes := []int{9998, 9999, 10000}, deepShapes
@@ -346,6 +348,7 @@ data = value
 // deepest it writes and the first it refuses, and the next request after
 // them.
 func TestWhatAPreScriptLeavesIsReadBackAsDeepAsADecodedValue(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := deepCollector("text")
 	c.Transform = model.TransformConfig{Type: "jq", PreScript: deepBuild}

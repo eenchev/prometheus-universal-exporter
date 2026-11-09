@@ -2015,120 +2015,103 @@ are skipped and the text checks of the templates still run:
      cache or token directory, and a ScrapeConfig timeout longer than its
      interval.
    - With a discovery source, of a probe job or of a `discovered_targets`
-     entry, the allocator's Deployment has 2 replicas, or
-     `allocator.replicas`, 3 and 1 included, and the default strategy; its
-     arguments end with `--peers=<fullname>-allocator.monitoring.svc:9116`
-     and `--peers.self=$(POD_IP)`, its first environment variable is
-     `POD_IP` from `status.podIP`, its NetworkPolicy admits the allocator's
-     own pods and its disruption budget stays `maxUnavailable: 1`; without
-     discovery the allocator has 2 replicas and no `--peers`, no `env` and
-     no rule for its own pods (`TestChartRunsAllocatorPeersWithDiscovery`).
+     entry, the allocator's Deployment has 2 replicas, or `allocator.replicas`,
+     3 and 1 included, and the default strategy; its arguments end with
+     `--peers=<fullname>-allocator.monitoring.svc:9116` and
+     `--peers.self=$(POD_IP)`, its first environment variable is `POD_IP` from
+     `status.podIP`, its NetworkPolicy admits the allocator's own pods and its
+     disruption budget stays `maxUnavailable: 1`; without discovery the
+     allocator has 2 replicas and no `--peers`, no `env` and no rule for its
+     own pods.
    - With a discovery source, `allocator.leaderOnly: true` makes the
      allocator's arguments end with `--peers.self=$(POD_IP)` and
-     `--peers.leader-only`, and `false` leaves the flag out
-     (`TestChartRunsTheAllocatorLeaderOnly`); `allocator.leaderOnly: true`
-     without a discovery source fails rendering, with the values schema and
-     with it skipped (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+     `--peers.leader-only`, and `false` leaves the flag out;
+     `allocator.leaderOnly: true` without a discovery source fails rendering,
+     with the values schema and with it skipped.
    - With a discovery source the peers' timings render their flags after
-     `--peers.self` when set and nothing when empty or null, and the
-     allocator pods' `terminationGracePeriodSeconds` is 30 by default, 36
-     for a `20s` interval and a `500ms` timeout and 135 for `1m` and
-     `59.5s`, and is not rendered without a discovery source
-     (`TestChartSetsThePeersTimings`); a preStop sleep is rendered as the
+     `--peers.self` when set and nothing when empty or null, and the allocator
+     pods' `terminationGracePeriodSeconds` is 30 by default, 36 for a `20s`
+     interval and a `500ms` timeout and 135 for `1m` and `59.5s`, and is not
+     rendered without a discovery source; a preStop sleep is rendered as the
      exporter's and the allocator's `lifecycle.preStop` and raises the grace
-     period, the exporter's to 40 for 10 seconds and the allocator's to 35
-     for 20 without discovery and 38 with it, 30 for 5 with it, an `exec`
-     or `httpGet` hook raising neither, and
-     `allocator.terminationGracePeriodSeconds` renders 60 without discovery
-     and 120 with it (`TestChartRendersPreStopHooksAndTheAllocatorsGracePeriod`);
-     a grace period below its need, the sleep counted, fails naming both,
-     and a `tcpSocket`, two handlers, none, an empty command, an `httpGet`
-     of no port, and a sleep that is negative, fractional or of no seconds
-     fail at either key, by the schema and with it skipped
-     (`TestChartRefusesAGracePeriodShorterThanItsPreStop`); each set without a discovery source,
-     or outside the allocator's bounds, fails rendering, with the values
-     schema and with it skipped
-     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
+     period, the exporter's to 40 for 10 seconds and the allocator's to 35 for
+     20 without discovery and 38 with it, 30 for 5 with it, an `exec` or
+     `httpGet` hook raising neither, and
+     `allocator.terminationGracePeriodSeconds` renders 60 without discovery and
+     120 with it; a grace period below its need, the sleep counted, fails
+     naming both, and a `tcpSocket`, two handlers, none, an empty command, an
+     `httpGet` of no port, and a sleep that is negative, fractional or of no
+     seconds fail at either key, by the schema and with it skipped; each set
+     without a discovery source, or outside the allocator's bounds, fails
+     rendering, with the values schema and with it skipped.
    - `allocator.heartbeatInterval` renders `--heartbeat.interval` with its
      value and nothing when empty; the Deployment's `minReadySeconds` is
-     `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with
-     both empty, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 310 with
-     `settle: 5m`, 3610 with `settle: 1h`, the bound, and 130 with an integer
-     `0` of `settle` and the values schema skipped, which renders
-     `--settle=0` (`TestChartHoldsANewAllocatorUnavailableUntilItAllocates`); a
-     `heartbeatInterval` that is no duration fails with the values schema
-     and with it skipped, and one under `1s` or over `2m` with the template
-     (`TestChartRefusesWhatTheAllocatorCannotRunWith`); `make helm-test`
-     renders `30s`, with `minReadySeconds: 150`, and refuses `3m`.
+     `max(settle, 2m)` plus `heartbeatInterval`, each rounded up, 130 with both
+     empty, 150 with `30s`, 122 with `settle: 0s` and `1.5s`, 310 with `settle:
+     5m`, 3610 with `settle: 1h`, the bound, and 130 with an integer `0` of
+     `settle` and the values schema skipped, which renders `--settle=0`; a
+     `heartbeatInterval` that is no duration fails with the values schema and
+     with it skipped, and one under `1s` or over `2m` with the template; `make
+     helm-test` renders `30s`, with `minReadySeconds: 150`, and refuses `3m`.
    - `allocator.configWatchInterval` renders `--config.watch-interval` and
-     `allocator.discoveryRefreshInterval` `--discovery.refresh-interval`
-     with their values, `0s` included for the first, `24h` and `1440m`
-     included, an integer `0` of the first with the values schema skipped
-     as `--config.watch-interval=0`, and nothing when empty
-     (`TestChartSetsHowOftenTheAllocatorLooksForChanges`); a value of either
+     `allocator.discoveryRefreshInterval` `--discovery.refresh-interval` with
+     their values, `0s` included for the first, `24h` and `1440m` included, an
+     integer `0` of the first with the values schema skipped as
+     `--config.watch-interval=0`, and nothing when empty; a value of either
      that is no duration, the integer `30` included, fails with the values
-     schema and with it skipped, a `discoveryRefreshInterval` under `1s`,
-     `0s` and the integer `0` included, and either over `24h`, `24h0m1s`,
-     `1441m` and `99999999h`, which no Go duration holds, with the template
-     (`TestChartRefusesWhatTheAllocatorCannotRunWith`).
-   - The allocator's Role allows only `list` on EndpointSlices
-     (`TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery`).
+     schema and with it skipped, a `discoveryRefreshInterval` under `1s`, `0s`
+     and the integer `0` included, and either over `24h`, `24h0m1s`, `1441m`
+     and `99999999h`, which no Go duration holds, with the template.
+   - The allocator's Role allows only `list` on EndpointSlices.
    - Every example query of an allocator metric in `docs/*.md` and the chart
-     README, and every prometheus-adapter rule over one, takes the `max` of
-     the allocator instances' series
-     (`TestExampleQueriesOfAllocatorMetricsTakeTheirMax`).
+     README, and every prometheus-adapter rule over one, takes the `max` of the
+     allocator instances' series.
    - The chart's renders without the allocator are unchanged: `make helm-test`
      and the CI chart steps also render allocator mode and reject the allocator
      beside static targets and a probe monitor beside the allocator.
 46. Python idle workers (§ 33.1): the default renders neither
-   `--python.max-idle-workers` nor `--python.idle-timeout`;
-   `server.pythonMaxIdleWorkers: 0` renders `"--python.max-idle-workers=0"` and
-   `3` renders `=3`, `server.pythonIdleTimeout: 5m` renders
-   `"--python.idle-timeout=5m"` and `1s` renders `=1s`
-   (`TestChartRendersThePythonIdleWorkerFlags`). `server.pythonIdleTimeout`
-   of `0s`, `500ms` and `ten` fail rendering, `0s` with the schema skipped
-   too, naming the value; `server.pythonMaxIdleWorkers` of `-1`, `1.5` and
-   `"010"` fail, the last with the schema skipped saying that 0 keeps no
-   worker idle; and `extraArgs` entries of either flag fail naming the value
-   to set instead (`TestChartRefusesPythonIdleWorkerValuesOutOfRange`). The
-   whole-number tests hold `server.pythonMaxIdleWorkers` to the count range
-   and pattern, and render it written as `2e6`, as the other count flags.
+    `--python.max-idle-workers` nor `--python.idle-timeout`;
+    `server.pythonMaxIdleWorkers: 0` renders `"--python.max-idle-workers=0"`
+    and `3` renders `=3`, `server.pythonIdleTimeout: 5m` renders
+    `"--python.idle-timeout=5m"` and `1s` renders `=1s`.
+    `server.pythonIdleTimeout` of `0s`, `500ms` and `ten` fail rendering, `0s`
+    with the schema skipped too, naming the value;
+    `server.pythonMaxIdleWorkers` of `-1`, `1.5` and `"010"` fail, the last
+    with the schema skipped saying that 0 keeps no worker idle; and `extraArgs`
+    entries of either flag fail naming the value to set instead. The
+    whole-number tests hold `server.pythonMaxIdleWorkers` to the count range
+    and pattern, and render it written as `2e6`, as the other count flags.
 47. Probes (§ 33.6a):
    - The default values and `probes: []` render no `Probe`, and `values.yaml`
-     defaults `probes` to `[]` (`TestChartRendersNoProbeByDefault`).
-   - An entry with static targets renders a `Probe` named
-     `<fullname>-<name>` in `namespaceOverride`, with the default and the
-     entry's labels and the entry's annotations, its prober the Service's
-     address, `http` and `/probe`, `spec.params` holding `collector` and the
-     entry's `params` (a value `true` rendered as a string), the targets as
-     `staticConfig.static` with `targetLabels` and `relabelingConfigs`, its
-     `interval`, `scrapeTimeout`, `jobName` and `metricRelabelings`, no
-     `spec.module`, no credential without `webAuth` and no `ingress`, beside
-     the self-metrics monitor; an entry without the optional values renders
-     none of them (`TestChartProbesProbeStaticTargetsThroughTheService`).
+     defaults `probes` to `[]`.
+   - An entry with static targets renders a `Probe` named `<fullname>-<name>`
+     in `namespaceOverride`, with the default and the entry's labels and the
+     entry's annotations, its prober the Service's address, `http` and
+     `/probe`, `spec.params` holding `collector` and the entry's `params` (a
+     value `true` rendered as a string), the targets as `staticConfig.static`
+     with `targetLabels` and `relabelingConfigs`, its `interval`,
+     `scrapeTimeout`, `jobName` and `metricRelabelings`, no `spec.module`, no
+     credential without `webAuth` and no `ingress`, beside the self-metrics
+     monitor; an entry without the optional values renders none of them.
    - An entry with `ingress` renders its selector, `namespaceSelector` and
-     `relabelingConfigs` under `spec.targets.ingress` and no static config,
-     and `selector: {}` as the empty mapping
-     (`TestChartProbesProbeTheIngressesTheySelect`).
+     `relabelingConfigs` under `spec.targets.ingress` and no static config, and
+     `selector: {}` as the empty mapping.
    - With `webAuth.enabled` a `Probe` without `auth` presents the `webAuth`
      Secret and its keys as `basicAuth`, and one with its own bearer or basic
-     `auth` that alone; without `webAuth`, none
-     (`TestChartProbesPresentTheExporterCredential`).
+     `auth` that alone; without `webAuth`, none.
    - Rendering fails for an entry with neither `targets` nor `ingress`, an
      empty `ingress`, both, an `ingress` without `selector`, `targetLabels`
      beside `ingress` (the message pointing to `relabelings`), no collector, a
-     collector `config.data` does not define, no name, a name in upper case
-     or with `_`, two entries of one name, `params.collector`,
-     `params.target`, a `scrapeTimeout` over the `interval`, an `auth`
-     without a Secret or a type, `service.enabled: false`, and
-     `allocator.enabled`, each with a message naming the entry, also with the
-     schema skipped; the schema refuses an unknown key such as `module`, an
-     empty target, an empty `params` list, a fractional `interval` and an
-     unknown `namespaceSelector` key; and a valid entry renders
-     (`TestChartRefusesInvalidProbes`).
+     collector `config.data` does not define, no name, a name in upper case or
+     with `_`, two entries of one name, `params.collector`, `params.target`, a
+     `scrapeTimeout` over the `interval`, an `auth` without a Secret or a type,
+     `service.enabled: false`, and `allocator.enabled`, each with a message
+     naming the entry, also with the schema skipped; the schema refuses an
+     unknown key such as `module`, an empty target, an empty `params` list, a
+     fractional `interval` and an unknown `namespaceSelector` key; and a valid
+     entry renders.
    - The chart README's Uptime probes values render the `Probe` the section
-     shows, and their configuration loads
-     (`TestChartReadmeUptimeProbeExampleRenders`).
+     shows, and their configuration loads.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

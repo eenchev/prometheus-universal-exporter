@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The flag reference, docs/FLAGS.md, lists every flag the exporter has, and
@@ -44,6 +46,7 @@ func TestFlagReferenceListsEveryFlag(t *testing.T) {
 // exporter's own prefixes are checked, which leaves helm's and go's out. A
 // flag of the target allocator, cmd/pue-allocator, is one too.
 func TestDocsNameOnlyFlagsTheExporterHas(t *testing.T) {
+	tier.Slow(t)
 	flags := map[string]bool{}
 	allocator, err := allocatorHelp()
 	if err != nil {

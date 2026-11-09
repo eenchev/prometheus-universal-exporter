@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // server.allocatorCapacity renders --allocator.capacity on the exporter pods
@@ -12,6 +13,7 @@ import (
 // without the allocator, or to what the exporter refuses, it fails
 // rendering, with the values schema and with it skipped.
 func TestChartSetsTheAllocatorCapacity(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	allocator := []string{"--set", "allocator.enabled=true"}
 	for value, want := range map[string]string{"2": "2", "0.1": "0.1", "100": "100", "1.25": "1.25", `"2.5"`: "2.5"} {
@@ -67,6 +69,7 @@ func TestChartProbeJobsTakeWeights(t *testing.T) {
 // null; what the allocator refuses fails rendering, with the values schema
 // and with it skipped.
 func TestChartSetsTheBalanceFactor(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	allocator := []string{"--set", "allocator.enabled=true"}
 	for value, want := range map[string]string{"1": "1", "1.5": "1.5", "10": "10", "2.125": "2.125", `"3"`: "3", `"1.25"`: "1.25"} {

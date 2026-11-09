@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // recordingDial is a dial that records the networks it was asked for, and
@@ -284,6 +285,7 @@ func TestNoAddressOfTheFamily(t *testing.T) {
 // its context, as one to an address that never answers waits for the
 // Dialer's timeout.
 func TestPreferIP6FallsBackWithinTheProbeWhenIPv6NeverAnswers(t *testing.T) {
+	tier.Slow(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 	defer server.Close()
 	collector := httpCollector(t, func(x *model.Collector) { x.Request.IPFamily = "prefer_ip6"; x.Request.NewConnection = true })

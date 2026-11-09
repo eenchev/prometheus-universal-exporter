@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // exampleCollectors is a config.yaml the chart's own checks accept.
@@ -84,6 +86,7 @@ func configMapFiles(t *testing.T, helm string, args ...string) (files map[string
 // in the pod. Each text file is also rendered as the ConfigMap's last, where
 // nothing follows to end its scalar, and as the static target document.
 func TestChartRendersConfigurationFilesAsGiven(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	files := map[string]struct {
 		content string
@@ -206,6 +209,7 @@ func TestTheIndentedFileOfTheHelmChecksStaysIndentedAndRendersAsGiven(t *testing
 // collector file, a file rendered under binaryData, a file's name and the
 // static target document.
 func TestChartChecksumFollowsEveryConfigurationFile(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	checksum := func(data map[string]string, targets string) string {
 		args := append(setFiles(t, "config.data.", data), "--show-only", "templates/deployment.yaml")

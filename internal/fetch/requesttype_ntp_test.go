@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // ntpReply is what a stand-in server answers a request with.
@@ -276,6 +277,7 @@ func TestNTPTimestampsAreReadAcrossTheEndOfAnEra(t *testing.T) {
 // it. When only such datagrams come, the scrape fails at its deadline,
 // saying how many were ignored and why the last was.
 func TestAnNTPReplyThatIsNotTheRequestsIsIgnored(t *testing.T) {
+	tier.Slow(t)
 	forged := uint64(0x0123456789abcdef)
 	wrongOrigin := func() ntpReply { r := goodNTPReply(1000 * time.Second); r.origin = &forged; return r }
 	s := newNTPStub(t, ntpAnswering(wrongOrigin, func() ntpReply { return goodNTPReply(0) }))

@@ -19,6 +19,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The schedule of the static targets tells whether a target's collector
@@ -301,6 +302,7 @@ func describeLook(s *targetSchedule, was map[string]*staticTargetState, due, ski
 // collector the configuration does not have, one never configured or one a
 // reload removed, which has no fingerprint, the empty one, before and after.
 func TestTheScheduleThatReadsTheReloadsFingerprintsPlansAsItDid(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	steps := []time.Duration{0, 100 * time.Millisecond, time.Second, 3 * time.Second, firstScrapeWindow, time.Minute}
 	type inFlight struct {
@@ -523,6 +525,7 @@ func TestTheScheduleEncodesNoCollectorAfterAReload(t *testing.T) {
 // none, where it encoded every one again, and the reload none of the
 // configuration the exporter started with, which the loop had asked for.
 func TestTheScrapeLoopEncodesNoCollectorAfterAReload(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	target := textTarget(t, "value=42\n")
 	collectors := followBenchNames(0, 4)
@@ -746,6 +749,7 @@ func countCollectorScans(t *testing.T) *atomic.Int64 {
 // A caller that follows no configuration goes through them once for each
 // collector it asks about, as before, however many targets share it.
 func TestTheCollectorsOfAConfigurationAreGoneThroughOnce(t *testing.T) {
+	tier.Slow(t)
 	testutil.CaptureLogs(t)
 	target := textTarget(t, "value=42\n")
 	scans := countCollectorScans(t)

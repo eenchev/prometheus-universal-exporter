@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // greeter is a server that speaks first, as SMTP, FTP, POP3, IMAP and SSH
@@ -487,6 +488,7 @@ func TestATCPDocumentIsHeldToTheResponseLimit(t *testing.T) {
 // against a pattern of a few bytes does, where compiling the long one
 // takes tens of thousands of allocations.
 func TestATCPGreetingIsCompiledOnce(t *testing.T) {
+	tier.Slow(t)
 	server := testutil.NewTCPStub(t, greeter(0, "220 ready\r\n", "", nil))
 	long := "^(?:220 ready|" + strings.Repeat("abcdefghij|", 5000) + "zz)"
 	allocations := func(pattern string) float64 {

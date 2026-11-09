@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // staticTargetsDirectory is where the chart mounts the static target
@@ -22,6 +24,7 @@ var configMapKey = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)
 // the templates naming it, what a key may hold and that the directory is
 // flat. Every other key renders, with the schema and without.
 func TestChartRefusesAConfigDataKeyKubernetesRefuses(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	type key struct{ name, enabled string }
 	var keys []key

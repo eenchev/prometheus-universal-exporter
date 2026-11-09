@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // CI runs the target allocator's tests when its filter output, allocator,
@@ -323,6 +325,7 @@ func sideFilterProblems(side string, patterns []string, needed map[string]bool) 
 // side's filter matches the go filter matches too, so a change that runs a
 // side's tests also runs the setup steps they need, which run under go.
 func TestEachSideOfCIRunsWhenAFileItsTestsNeedChanges(t *testing.T) {
+	tier.Slow(t)
 	needed, err := ciNeeded()
 	if err != nil {
 		t.Fatalf("could not work out the files each side of CI needs: %v", err)
@@ -417,6 +420,7 @@ func TestTheFilterPatternsAreMatchedAsPathsFilterMatchesThem(t *testing.T) {
 // empty list, which go test would read as the package in the directory it
 // runs in.
 func TestEveryPackageIsTestedByOneSideOfCI(t *testing.T) {
+	tier.Slow(t)
 	out, err := exec.Command("go", "list", "./...").Output()
 	if err != nil {
 		t.Fatal(err)

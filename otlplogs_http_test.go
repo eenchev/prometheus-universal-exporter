@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The running exporter forwards its own log with otlp.logs: the lines it
@@ -21,6 +22,7 @@ import (
 // the collector the metrics go to, and the lines of its shutdown in the last
 // export before it exits. stderr has every line as before.
 func TestTheExporterForwardsItsOwnLogOverOTLP(t *testing.T) {
+	tier.Slow(t)
 	logs := &syncBuffer{}
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

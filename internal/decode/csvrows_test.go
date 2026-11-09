@@ -18,6 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // decodeCSVBeforeRows is decodeCSV as it was before the rows were CSVRows:
@@ -193,6 +194,7 @@ func csvSettingsEvery() []model.CSVConfig {
 // them, which is what a script was handed when the encoder of its request
 // did not write the data itself.
 func TestCSVRowsAreTheRowsTheDecoderGaveBefore(t *testing.T) {
+	tier.Slow(t)
 	counted := map[string]int{}
 	var files []string
 	fixtures, err := filepath.Glob("../../testdata/csv/*")
@@ -350,6 +352,7 @@ func TestCSVShortRowsUnderAWideHeaderCostTheCellsTheyHold(t *testing.T) {
 // 184 times its size, 1.9 GB for a body of 10 MiB that is 80 MB as a JSON
 // array.
 func TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody(t *testing.T) {
+	tier.Slow(t)
 	body := csvOneColumn(alloctest.UnlessRaced(2<<20, 256<<10))
 	// The least of three, since the heap of a test holds what other code
 	// left on it, each run's rows let go of before the next.

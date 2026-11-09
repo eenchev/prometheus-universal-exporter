@@ -18,6 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A target slower than Prometheus will wait gets an answer naming the budget,
@@ -123,6 +124,7 @@ func TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer(t *testing.T) {
 // A static target scrape that runs out of its interval says so, rather than
 // only that a context deadline was exceeded.
 func TestAStaticTargetScrapeSaysItsIntervalRanOut(t *testing.T) {
+	tier.Slow(t)
 	release := make(chan struct{})
 	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {

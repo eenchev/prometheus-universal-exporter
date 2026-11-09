@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // sharedAddress is one allocator address behind which two instances answer
@@ -53,6 +54,7 @@ func (f *sharedAddress) RoundTrip(req *http.Request) (*http.Response, error) {
 // flipped between 2s and 4s at every answer, each flip of the longest
 // heartbeated at once and each flip of the shortest was logged.
 func TestInstancesAnsweringOneAddressInTurnDoNotFlipTheInterval(t *testing.T) {
+	tier.Slow(t)
 	transport := &sharedAddress{}
 	var logs syncBuffer
 	c := startClient(t, newFakeAllocator(t), func(o *Options) {

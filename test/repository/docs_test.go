@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,30 +47,66 @@ func read(t *testing.T, path string) string {
 }
 
 // A link to a page that is not there is the failure this split makes most
-// likely, and the one a reader hits rather than a maintainer.
+// likely, and the one a reader hits rather than a maintainer. A link to a
+// section of a page, on another page or its own, names a heading the page
+// has, by the anchor GitHub gives it: a renamed section otherwise leaves a
+// link that opens the page at its top, as How do I…, a page of nothing but
+// such links, would be most exposed to.
 func TestDocumentationLinksResolve(t *testing.T) {
+	anchors := map[string]map[string]bool{}
 	for _, path := range markdownFiles(t) {
 		t.Run(path, func(t *testing.T) {
 			for _, match := range markdownLink.FindAllStringSubmatch(read(t, path), -1) {
 				target := match[1]
-				if strings.Contains(target, "://") || strings.HasPrefix(target, "#") ||
-					strings.HasPrefix(target, "mailto:") {
+				if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
 					continue
 				}
-				// A link may carry an anchor; only the file has to exist.
-				if index := strings.Index(target, "#"); index >= 0 {
-					target = target[:index]
+				target, anchor, _ := strings.Cut(target, "#")
+				resolved := path
+				if target != "" {
+					resolved = filepath.Join(filepath.Dir(path), target)
 				}
-				if target == "" {
-					continue
-				}
-				resolved := filepath.Join(filepath.Dir(path), target)
 				if _, err := os.Stat(resolved); err != nil {
 					t.Errorf("%s links to %s, which does not exist", path, target)
+					continue
+				}
+				if anchor == "" || !strings.HasSuffix(resolved, ".md") {
+					continue
+				}
+				if anchors[resolved] == nil {
+					anchors[resolved] = headingAnchors(read(t, resolved))
+				}
+				if !anchors[resolved][anchor] {
+					t.Errorf("%s links to %s#%s, a section %s does not have", path, target, anchor, resolved)
 				}
 			}
 		})
 	}
+}
+
+// headingAnchors are the anchors GitHub gives the headings of a page, those
+// in code blocks left out, a heading's second and later namesakes taking
+// -1, -2 and on.
+func headingAnchors(text string) map[string]bool {
+	heading := regexp.MustCompile(`^#{1,6} (.+)$`)
+	anchors, seen, fenced := map[string]bool{}, map[string]int{}, false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+		}
+		m := heading.FindStringSubmatch(line)
+		if fenced || m == nil {
+			continue
+		}
+		anchor := githubAnchor(m[1])
+		if n := seen[anchor]; n > 0 {
+			anchors[fmt.Sprintf("%s-%d", anchor, n)] = true
+		} else {
+			anchors[anchor] = true
+		}
+		seen[anchor]++
+	}
+	return anchors
 }
 
 // A page nothing links to is a page nobody reads. The README's index is the way

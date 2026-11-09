@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -330,6 +331,7 @@ func shippedDocuments(t *testing.T) map[string]reflect.Type {
 // and every tenth after it is tried, and under the race detector, where one
 // costs many times more, every hundred and twentieth.
 func TestOnlyAValueThatIsNoneIsRefusedAnew(t *testing.T) {
+	tier.Slow(t)
 	documents := shippedDocuments(t)
 	shipped := len(documents)
 	for _, document := range []string{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // snmpSwitch is a stand-in switch: its name and uptime, and two
@@ -104,6 +105,7 @@ func TestAnSNMPCollectorProbe(t *testing.T) {
 // refuse 403 before anything is sent; an agent that never answers fails
 // the probe in the snmp stage.
 func TestADebugProbeOfAnSNMPCollector(t *testing.T) {
+	tier.Slow(t)
 	server, agent := snmpExporter(t), snmpSwitch(t, testutil.SNMPAgentConfig{Community: "public"})
 	server.SetDebug(DebugFull)
 	body := probeOnce(t, server, "/probe?debug=true&collector=switch&target="+agent.Addr, nil).Body.String()

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // exporterRBAC are the RBAC objects rendered for the exporter's own
@@ -41,6 +43,7 @@ const kubernetesAccessRules = `kubernetesAccess.rules=[{"apiGroups":["apps"],"re
 // mounted, and an extra mount at the token's directory, which would hide
 // the token, fails rendering with it.
 func TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	const name = "test-prometheus-universal-exporter"
 	automount := func(docs map[string]*yaml.Node) (pod, account string) {
@@ -131,6 +134,7 @@ func TestChartGrantsTheExporterTheKubernetesAccessItsCollectorsNeed(t *testing.T
 // group's secrets, namespaces beside clusterWide, and kubelet without
 // clusterWide or other than stats or proxy.
 func TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	for what, c := range map[string]struct {
 		args []string
@@ -164,6 +168,7 @@ func TestChartRefusesKubernetesAccessThatGrantsTooMuchOrNothing(t *testing.T) {
 // are refused, by the schema and by the templates alike, unless
 // allowBroadExtraRules grants them as written.
 func TestChartAddsTheOperatorsExtraKubernetesRules(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	extra := `kubernetesAccess.extraRules=[{"apiGroups":[""],"resources":["configmaps"],"verbs":["get","watch"],"resourceNames":["cluster-info"]}]`
 	for _, scope := range [][]string{{"--set", "kubernetesAccess.clusterWide=true"}, {"--set-json", `kubernetesAccess.namespaces=["shop"]`}} {

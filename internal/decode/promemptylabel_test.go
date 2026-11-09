@@ -11,6 +11,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The prometheus decoder leaves a label with an empty value off its series:
@@ -489,6 +490,7 @@ func (g *emptyLabelGenerator) exposition() (with, without string) {
 // it was, as every one of the differential test's is (promdiff_test.go).
 // Under the race detector 600 expositions, 1,200 readings.
 func TestGeneratedExpositionsAreReadAsTheyWereWithoutTheirEmptyLabels(t *testing.T) {
+	tier.Slow(t)
 	g := &emptyLabelGenerator{random: rand.New(rand.NewPCG(2026, 1006))}
 	expositions := alloctest.UnlessRaced(6000, 600)
 	accepted, refused, same, labelled, followed := 0, 0, 0, 0, 0

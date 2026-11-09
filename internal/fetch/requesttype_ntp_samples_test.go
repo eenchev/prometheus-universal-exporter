@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // samples and sample_interval are held to their bounds, and default to 1
@@ -56,6 +57,7 @@ func TestNTPSamplesAndServersAreChecked(t *testing.T) {
 // request a later one follows that is not answered before that one is due
 // is unanswered; and each request is one of the trace.
 func TestAnNTPServerIsSampled(t *testing.T) {
+	tier.Slow(t)
 	var n atomic.Int32
 	// The first answered after 60ms, the second not at all, the third and
 	// fourth at once; 5, -, 7 and 6 seconds ahead.

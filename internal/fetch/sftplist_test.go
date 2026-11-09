@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/sshtest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -131,6 +132,7 @@ func (s oracleSFTPSource) OpenDir(name string) (sourceDir, error) {
 // allocates what that many entries cost, not what the directory's do. Before,
 // the whole directory was listed at every scrape.
 func TestSSHFileListsADirectoryOnlyAsFarAsItsBound(t *testing.T) {
+	tier.Slow(t)
 	f := newSSHFixture(t)
 	size := alloctest.UnlessRaced(50_000, 20_000)
 	for i := range size {
@@ -725,6 +727,7 @@ func countHostCloseWaits(t *testing.T) *atomic.Int64 {
 // connection; and the scrape could answer before the connection remembered
 // the host, so that the next one waited too.
 func TestSSHFileWaitsOnceForAHostThatKeepsListingSessionsOpen(t *testing.T) {
+	tier.Slow(t)
 	f := keepingSSHFixture(t, nil, holdSession)
 	waits := countHostCloseWaits(t)
 	c := f.collector(t, "dir", "", func(r *model.RequestConfig) { r.Files = []string{"*.prom"} })

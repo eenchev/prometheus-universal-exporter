@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // yamlBoundaryPairs are the pairs of a mapping that are no plain text key
@@ -42,6 +43,7 @@ var yamlBoundaryPairs = []struct {
 // and of a pair 2 to 9, where it has 12 to 67. What the documents must hold
 // of each is less there with them, and held to as well.
 func TestAYAMLMappingAtTheBoundOfAPartIsWhatTheLibraryMakesOfIt(t *testing.T) {
+	tier.Slow(t)
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
 	head := "s: &s text\nn: &n 7\nt: &t !!str 8\nm: &m {key5: of m, extra: 1}\nl: &l [1, 2]\nbig: &big " + large + "\nmain:\n"
 	written, decoded, each := 0, map[string]int{}, map[string]int{}

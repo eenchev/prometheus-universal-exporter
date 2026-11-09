@@ -21,6 +21,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
@@ -404,6 +405,7 @@ func TestGRPCAnAnswerWithAnyOfTheServicesOwnTypes(t *testing.T) {
 // returned is answered because it ended that wait, and it has a minute to
 // connect in: a busy machine makes the test slower, and no time is measured.
 func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
+	tier.Slow(t)
 	connectionsWaitAnHour(t)
 	server := grpctest.Start(t, grpctest.Options{Answer: statsAnswer})
 	addr := server.Addr

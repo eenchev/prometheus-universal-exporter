@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // stableSD is an http_sd server answering every path with one target named
@@ -361,6 +362,7 @@ func followFake(c *peerInstance, addr netip.AddrPort) {
 // a busy network does, is taken: a fetch has SnapshotTimeout, not
 // DefaultPeerCheckTimeout.
 func TestASnapshotMayTakeLongerThanACheck(t *testing.T) {
+	tier.Slow(t)
 	srv := stableSD(t)
 	p := writeInputs(t, testConfig, "", twoJobs(srv.URL, false))
 	c := newPeerInstance(t, p, nil)

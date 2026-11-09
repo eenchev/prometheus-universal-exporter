@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The configuration directory is a ConfigMap volume and the credential
@@ -35,6 +37,7 @@ const configurationDirectory = "/etc/prometheus-universal-exporter"
 // directory it is inside and where to mount instead. A path written with
 // doubled or dotted segments is compared cleaned.
 func TestChartRefusesAMountInsideAReadOnlyVolume(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for name, tc := range map[string]struct {
@@ -135,6 +138,7 @@ func TestChartRefusesAMountInsideAReadOnlyVolume(t *testing.T) {
 // directory on a credential that is not enabled, which the chart does not
 // mount.
 func TestChartRendersAMountBesideTheReadOnlyVolumes(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	requireSchemaSkipping(t, helm)
 	for name, values := range map[string]string{

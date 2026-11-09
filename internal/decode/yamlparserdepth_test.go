@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A YAML document nested deeper than a response may be is refused by one of
@@ -70,6 +71,7 @@ func yamlDepthRefusalNow(was error) error {
 // the library writes none for that line. And a document nested 10,000 deep
 // decodes, each way.
 func TestAYAMLDocumentTooDeepIsRefusedTheSameWhicheverRefusesIt(t *testing.T) {
+	tier.Slow(t)
 	bracketed := func(open, shut string, levels int) string {
 		return strings.Repeat(open, levels) + "7" + strings.Repeat(shut, levels) + "\n"
 	}

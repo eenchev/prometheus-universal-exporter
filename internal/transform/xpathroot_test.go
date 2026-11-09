@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // rootedMarkup is a document whose jobs are told apart by what stands
@@ -438,6 +439,7 @@ func rootDifference[N comparable](t *testing.T, nodes xpathNodes[N], root N, nam
 // nodes of a document at most, spread over all of it, so every expression is
 // still read over every document.
 func TestLabelsWithoutAnAbsolutePathAreWhatTheyWere(t *testing.T) {
+	tier.Slow(t)
 	absolute := map[string]bool{}
 	for _, expression := range xpathAbsoluteLabels {
 		absolute[expression] = true

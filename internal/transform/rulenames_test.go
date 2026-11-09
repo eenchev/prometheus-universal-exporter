@@ -7,6 +7,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // checkMetricRuleBeforePatternNames is CheckMetricRule as it was before a
@@ -274,6 +275,7 @@ func TestARuleWithoutANameIsNamedByItsPlace(t *testing.T) {
 // and of one that has none the same with the place where `metric ""` or the
 // blanks stood.
 func TestOnlyAPatternUnderAPrometheusRulesNameReadsDifferently(t *testing.T) {
+	tier.Slow(t)
 	zero, two := 0.0, 2.0
 	type shape struct{ expression, label, items string }
 	shapes := map[string]shape{

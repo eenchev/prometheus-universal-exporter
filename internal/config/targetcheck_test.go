@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // The check of a static target file against a configuration found each
@@ -262,6 +263,7 @@ var checkRefusals = []string{
 // configurations given in any order, one of them twice, and none; and the
 // collector found by a name is the very one going through them finds.
 func TestTheCheckOfATargetFileFindsEachCollectorAsGoingThroughThemDid(t *testing.T) {
+	tier.Slow(t)
 	types := slices.Sorted(maps.Keys(fetch.RequestTypes))
 	if len(types) == 0 {
 		t.Fatal("the build carries no request type")

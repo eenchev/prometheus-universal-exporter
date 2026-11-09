@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A reload asks whether a static target file agrees with a configuration up
@@ -168,6 +169,7 @@ func BenchmarkRefusedPairReload(b *testing.B) {
 // same errors and log lines in the same order, the same reload metrics and
 // the same files watched, stamped alike.
 func TestAReloadThatChecksEachPairOnceDoesWhatItDid(t *testing.T) {
+	tier.Slow(t)
 	otlp := "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\n"
 	exported := strings.Replace(pairTargets(2, "b"), "    target: http://t1.invalid\n", "    target: http://t1.invalid\n    export_via_otlp: true\n", 1)
 	sequences := alloctest.UnlessRaced(100, 20)

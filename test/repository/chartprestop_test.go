@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // chartGrace renders the chart with args and returns the exporter's and
@@ -26,6 +28,7 @@ func chartGrace(t *testing.T, helm string, args ...string) (exporter, allocator 
 // allocator.terminationGracePeriodSeconds sets the allocator's grace
 // period, with or without discovery.
 func TestChartRendersPreStopHooksAndTheAllocatorsGracePeriod(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
 	for _, c := range []struct {
@@ -78,6 +81,7 @@ func TestChartRendersPreStopHooksAndTheAllocatorsGracePeriod(t *testing.T) {
 // lifecycle handler Kubernetes runs, by the schema and, with it skipped, by
 // the templates.
 func TestChartRefusesAGracePeriodShorterThanItsPreStop(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	discoveryJob := `allocator.probeJobs=[{"name":"websites","collector":"example","discovery":[{"http_sd":{"url":"https://cmdb.example/sd"}}]}]`
 	for name, tc := range map[string]struct {

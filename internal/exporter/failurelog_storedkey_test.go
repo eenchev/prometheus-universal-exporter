@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // ruleFailureKey is the key of a rule's failure as a string, of the bytes
@@ -151,6 +152,7 @@ func sameFailuresRemembered(a, b *failureLog, keys []string) bool {
 // directory's file named rule. Under the race detector it is two sequences
 // of 1,500 steps for the four of 3,000.
 func TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey(t *testing.T) {
+	tier.Slow(t)
 	trips := []subjectKey{
 		failureKey("web", "http://a", ""), failureKey("web", "http://b", ""), failureKey("files", "/var/metrics", "rule"),
 		staticTargetKey("web", "store"), failureKey("gone", "http://a", ""),

@@ -14,6 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 	"gopkg.in/yaml.v3"
 )
@@ -292,6 +293,7 @@ var kindsWritten = []struct {
 // ways that are neither too, so that the places tried under the race
 // detector still have some of each among them.
 func TestOnlyAValueOfAnotherKindIsRefusedAnew(t *testing.T) {
+	tier.Slow(t)
 	documents := shippedDocuments(t)
 	shipped := len(documents)
 	for _, document := range []string{

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // retryingAfter is an http collector retrying once, backoff apart, with
@@ -26,6 +27,7 @@ func retryingAfter(t *testing.T, backoff time.Duration, on bool) *model.Collecto
 // deadline cuts short, so the answer kept is the first. With it, the
 // retry is sent at once, as the header asks, and the trace says why.
 func TestRetryAfterReplacesTheBackoffOnlyWhenAsked(t *testing.T) {
+	tier.Slow(t)
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
 		target, hits := retryAfterTarget(t, status, "0")
 		resp, traced, _ := fetchWithin(t, target.URL, retryingAfter(t, time.Hour, false), RequestOverrides{}, 500*time.Millisecond)
@@ -45,6 +47,7 @@ func TestRetryAfterReplacesTheBackoffOnlyWhenAsked(t *testing.T) {
 
 // A Retry-After of seconds is waited, in place of a backoff of none.
 func TestRetryAfterSecondsAreWaited(t *testing.T) {
+	tier.Slow(t)
 	target, hits := retryAfterTarget(t, http.StatusServiceUnavailable, "1")
 	resp, traced, took := fetchWithin(t, target.URL, retryingAfter(t, 0, true), RequestOverrides{}, 10*time.Second)
 	if resp.StatusCode != http.StatusOK || hits.Load() != 2 || took < time.Second {
@@ -58,6 +61,7 @@ func TestRetryAfterSecondsAreWaited(t *testing.T) {
 // A Retry-After that is an HTTP date is waited until, from now; one already
 // past asks for no wait, whatever the backoff.
 func TestRetryAfterDatesAreWaitedUntil(t *testing.T) {
+	tier.Slow(t)
 	soon := time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)
 	target, hits := retryAfterTarget(t, http.StatusServiceUnavailable, soon)
 	resp, _, took := fetchWithin(t, target.URL, retryingAfter(t, 0, true), RequestOverrides{}, 10*time.Second)
@@ -78,6 +82,7 @@ func TestRetryAfterDatesAreWaitedUntil(t *testing.T) {
 // waited as without it; the trace says so. An answer without the header
 // waits the backoff too.
 func TestAnUnreadableRetryAfterFallsBackToTheBackoff(t *testing.T) {
+	tier.Slow(t)
 	for _, header := range []string{"soon", "-1", "1.5", "+1", "0x10", "Tue, 30 Feb"} {
 		target, hits := retryAfterTarget(t, http.StatusServiceUnavailable, header)
 		resp, traced, _ := fetchWithin(t, target.URL, retryingAfter(t, 0, true), RequestOverrides{}, 5*time.Second)

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // allocatorRBAC are the RBAC objects and ServiceAccounts rendered for the
@@ -40,6 +42,7 @@ func allocatorRBAC(t *testing.T, helm string, args ...string) []string {
 // without one, nothing of it is rendered and the allocator keeps the exporter's
 // ServiceAccount without a token.
 func TestChartGrantsTheAllocatorEndpointSlicesForKubernetesDiscovery(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	const name = "test-prometheus-universal-exporter-allocator"
 	podSpec := func(docs map[string]*yaml.Node) (string, string) {

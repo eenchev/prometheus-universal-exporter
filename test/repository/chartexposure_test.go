@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // webAuthArgs enable the exporter's own Basic Auth from a Secret.
@@ -105,6 +107,7 @@ func TestChartExposesTheExporterWithWebAuthOrTheOptOut(t *testing.T) {
 // config.yaml's web.basic_auth is enabled with its password_file in
 // webAuth.mountPath, and the message names that path.
 func TestChartRefusesToExposeTheExporterWhoseConfigurationIgnoresWebAuth(t *testing.T) {
+	tier.Slow(t)
 	helm := requireHelm(t)
 	for name, extra := range map[string][]string{
 		"no web block":                   nil,

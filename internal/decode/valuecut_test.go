@@ -12,6 +12,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // valueCutCase is one error of a decoder that shows a value of the body: the
@@ -286,6 +287,7 @@ func longTokenBytes() int {
 // one of 64 where it is the value: where the error shows it with more, as a
 // carbon line with its fields, it is the value of over 64 bytes that is cut.
 func TestADecoderShowsTheStartOfAValueAndKeepsWhatItSaysAfterIt(t *testing.T) {
+	tier.Slow(t)
 	long := strings.Repeat("a", longTokenBytes())
 	at := func(shift int) func(int) string {
 		return func(place int) string { return strconv.Itoa(place + shift) }

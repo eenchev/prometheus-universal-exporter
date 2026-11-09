@@ -13,6 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // A script can leave one long string in an answer many times: as the items
@@ -577,6 +578,7 @@ metric("differ", value=len(differ), labels={"first": differ[0] if differ else ""
 // which does not slow the worker that makes and compares them: the floors
 // of each kind are parts of how many there are.
 func TestAnswersWithinTheLimitByTheirStringsAreTheLinesTheyWere(t *testing.T) {
+	tier.Slow(t)
 	requirePython(t)
 	c := workerCollector("strings oracle", stringsOracle)
 	c.Limits.MaxOutputBytes = 1 << 14

@@ -17,6 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocator"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 )
 
 // aheadClock is the wall clock, moved ahead by what the test adds to it, so
@@ -36,6 +37,7 @@ func (c *aheadClock) AfterFunc(d time.Duration, f func()) allocator.Timer {
 // would leave an empty 200 that the replica takes for a failed fetch. The
 // server's 30s timeout is shortened here so the test takes a second.
 func TestALongPollOutlastsTheReadTimeout(t *testing.T) {
+	tier.Slow(t)
 	dir := t.TempDir()
 	conf := testutil.WriteIn(t, dir, "config.yaml", `collectors:
   - name: demo
@@ -98,6 +100,7 @@ func TestALongPollOutlastsTheReadTimeout(t *testing.T) {
 // down at their next check and the next instance leads at once, rather
 // than finding its listener closed; then it exits 0.
 func TestAnInstanceAmongPeersAnswers503BeforeItStops(t *testing.T) {
+	tier.Slow(t)
 	for _, c := range []struct {
 		args            []string
 		interval, delay time.Duration

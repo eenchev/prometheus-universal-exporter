@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
 	"gopkg.in/yaml.v3"
 )
 
@@ -274,6 +275,7 @@ func settingsCheckedAsBefore(t *testing.T, x *model.Collector) int {
 // all: every list of include still meets every list of exclude, and every
 // list each of the nine.
 func TestOnlyAnEmptyOrBlankEntryOfIncludeOrExcludeIsRefusedAnew(t *testing.T) {
+	tier.Slow(t)
 	files, collectors := 0, 0
 	for _, root := range []string{"../../examples", "../../configs", "../../testdata", "../../charts"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {

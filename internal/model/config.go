@@ -198,6 +198,11 @@ type Collector struct {
 	// collector's do. It is no key of the configuration: it is made of
 	// transform.labels and the rules' labels, which are.
 	LabelParams *LabelParams `yaml:"-"`
+	// Clock says what the collector's request holds of clock placeholders
+	// ({{date}} and the rest), found once when the configuration loads
+	// (fetch.ClockUseOf); the zero value, as nearly every collector's, when
+	// it holds none. It is no key of the configuration.
+	Clock ClockUse `yaml:"-"`
 	// DescriptorFilesUnread says the configuration was loaded without
 	// opening the files it names (config.WithoutNamedFiles), as the target
 	// allocator loads it: a grpc collector's protoset_file and proto_files

@@ -149,7 +149,7 @@
                 "boolean"
               ]
             },
-            "description": "Values of the collector's {{param_\u003cname\u003e}} placeholders, as a probe's param_\u003cname\u003e parameters give them. Each must be used by a placeholder.",
+            "description": "Values of the collector's {{param_\u003cname\u003e}} placeholders, as a probe's param_\u003cname\u003e parameters give them. Each must be used by a placeholder. A value may hold clock placeholders, such as {{date@Europe/Sofia}}, which each scrape fills in, and no {{param_...}} one. See docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter.",
             "propertyNames": {
               "pattern": "^param_[A-Za-z0-9_]+$"
             },

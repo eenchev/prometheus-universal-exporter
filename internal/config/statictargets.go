@@ -426,6 +426,11 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		// params or a default, since nothing else can fill it; and every
 		// param must fill one, since an unused one is a misspelling.
 		// Catching both here makes them startup errors naming both sides.
+		// A parameter's value may hold clock placeholders only, and none
+		// when it fills a label value.
+		if err := fetch.CheckTargetParams(collector, t); err != nil {
+			return err
+		}
 		unused, err := params.CheckRequestParams(collector, fetch.TargetOverrides(t))
 		var missing *fetch.MissingParamError
 		if errors.As(err, &missing) {

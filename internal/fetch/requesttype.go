@@ -678,7 +678,13 @@ func ValidateRequest(c *model.Collector) error {
 	if err := validateRateLimit(c); err != nil {
 		return err
 	}
-	return rt.Validate(c)
+	if err := rt.Validate(c); err != nil {
+		return err
+	}
+	// What the request holds of clock placeholders is found once, for its
+	// trips (clockplaceholders.go).
+	c.Clock = ClockUseOf(c)
+	return nil
 }
 
 // checkRetryKeys refuses the retry key that does not apply to the type,
@@ -880,6 +886,20 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	rt := requestTypeOf(c)
 	if rt == nil {
 		return nil, fmt.Errorf("collector %q has no registered request type", c.Name)
+	}
+	// Every clock placeholder of the trip, and of the target's parameter
+	// values, is filled from one reading of the clock (clockplaceholders.go).
+	if c.Clock.Any || overrides.targetClock {
+		clock := scrapeClockFrom(ctx)
+		params := overrides.Params
+		if overrides.targetClock {
+			var err error
+			if params, err = renderTargetParams(params, clock); err != nil {
+				return nil, err
+			}
+			overrides.targetClock = false
+		}
+		overrides.Params = withScrapeClock(params, clock)
 	}
 	response, err := rt.Fetch(ctx, target, c, overrides, forwarded)
 	// However a type's fetch failed, the error goes to logs, probe answers

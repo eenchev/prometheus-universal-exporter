@@ -22,6 +22,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   placeholder and is filled in, where it was sent as text. A body that
   must send such text literally writes it otherwise, for example with a
   space after the braces, `{{ date }}`, which stays text.
+- A static target's `params` value that holds a clock placeholder, such as
+  `param_day: "{{date}}"`, is now filled in at each scrape, where it was
+  sent as text; one that holds a `{{param_...}}` placeholder is refused
+  when the targets load.
 
 ### New
 
@@ -33,6 +37,20 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   truncation to the start of the day, hour or minute (`{{datetime:-1d/d}}`)
   and a time zone (`{{date@Europe/Sofia}}`) are each optional. See
   [Dates and times](docs/REQUESTS.md#dates-and-times).
+  Every clock placeholder of a scrape is of one moment, and a retry sends
+  the same values; a request with one is not revalidated, since another
+  day's validators say nothing of today's answer.
+- **Since the last success.** `{{datetime~last_success(-1h)}}` starts from
+  the time of the last successful scrape of the same collector, target and
+  parameters, or an hour back while there is none, so that
+  `from={{datetime~last_success(-1h)}}&to={{datetime}}` asks for each
+  stretch of time once, with no gap and no overlap, however often or
+  seldom the target is scraped. A failed scrape moves nothing. See
+  [Since the last success](docs/REQUESTS.md#since-the-last-success).
+- **Clock placeholders in a static target's parameters.**
+  `params: {param_day: "{{date@America/New_York}}"}` gives each static
+  target of one collector its own day. See
+  [Dates and times in a parameter](docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter).
 
 ## chart 2.1.0
 

@@ -31808,6 +31808,20 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAClockPlaceholderNamesALocalFile` (fetch, localfile): `{{date:-1d}}.prom` reads yesterday's file, and `{{date_us}}`, whose slashes would be directories, is refused at load naming it (§ 42.10d).
 - `TestOnlyABraceBeforeAPlaceholderIsReadOtherwise` and `TestTheShippedFilesAreReadForPlaceholdersAsTheyWere` (fetch), changed: the parser as it was refuses a path placeholder that is no `param_<name>` in today's words, which list the clock formats, and a shipped line with a clock placeholder is passed by, at least one being found (§ 42.10d).
 
+## 34.324 The last success, a static target's clock parameters and one moment per trip
+
+- `TestALastSuccessPlaceholderStartsFromTheLastSuccess` (fetch): `~last_success` with a fallback of hours, a day and a week, with an offset, a truncation and a zone, written with and without a last success; without a fallback, with an empty one, one into the future, one of an unknown unit, another word than last_success, and after the offset, refused saying so; found in a body with a filter (§ 42.10d).
+- `TestATripReadsTheClockOnce` (fetch): a trip's clock, the time and the last success, is carried by its context and its parameters; outside a trip the clock is read anew with no last success (§ 42.10d).
+- `TestTheClockPlaceholdersOfATripAreOfOneMoment` (fetch, http): on a clock that moves a second at each reading, a second before midnight, the path's date, a query value's datetime and a header's unix time are of one moment, and the retry after a 503 sends them again (§ 42.10d).
+- `TestARequestWithAClockPlaceholderIsNotRevalidated` (fetch, http): a collector with `{{date}}` and a static target whose parameter holds one are not revalidated; a request without one, and a target parameter with braces that open none, are (§ 42.10d).
+- `TestAStaticTargetsParameterMayHoldClockPlaceholders` (fetch, http): a parameter `d-{{date:-1d@Europe/Sofia}}` is checked and fills the path at the trip, the target's own value kept; a `{{param_...}}` placeholder, a filter, a clock placeholder written wrong and a clock in a labelled parameter are refused naming the target (§ 42.10d).
+- `TestAStaticTargetsClockParameterInAGraphiteExpression` (fetch, graphite): a target's `{{date_compact}}` parameter is checked in an expression as a date, and a `{{date_us}}` one refused (§ 42.10d).
+- `TestAStaticTargetsParameterIsCheckedForClockPlaceholders` (config, http): the target file's clock parameter loads against the configuration, a `{{param_x}}` one, one written wrong and one that fills a label value are refused, and a collector's clock use is found when it loads (§ 42.10d).
+- `TestALastSuccessIsWhereTheNextWindowStarts` (exporter, http): the first window of a tenant is its fallback, the next starts where the last successful one ended, another tenant has its own, and a failed trip and a debug probe, which starts from the last success, move nothing (§ 42.10d).
+- `TestALastSuccessIsKeptPerStaticTarget` (exporter, http): two static targets whose parameters read the last success have their own keys, a target that reads none has none, and a static target shares none with a probe of the same target (§ 42.10d).
+- `TestLastSuccessesAreBounded` (exporter): an earlier success replaces no later one, and past 10,000 the one kept longest ago is forgotten (§ 42.10d).
+- `TestAPagesContentsListsEverySection` (repository): every `##` and `###` heading of REQUESTS.md and CONFIGURATION.md is in its Contents; it found Dates and times missing from REQUESTS.md.
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -33244,8 +33258,9 @@ collectors page (§ 23) MUST list a label's parameters with the request's.
 A clock placeholder MUST be accepted wherever a `{{param_<name>}}`
 placeholder is (§ 42.10a, § 42.10b), in every request type, and MUST be
 filled, at every scrape, with the time of that scrape. It is written
-`{{name[:offset][/unit][@zone]}}`, the parts after the name optional and in
-that order, and, where a filter may stand, MAY end with one (§ 42.10b).
+`{{name[~last_success(fallback)][:offset][/unit][@zone]}}`, the parts after
+the name optional and in that order, and, where a filter may stand, MAY end
+with one (§ 42.10b).
 
 - **Formats.** `name` MUST be one of `date` (`2006-01-02`), `date_compact`
   (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `month`
@@ -33271,15 +33286,43 @@ that order, and, where a filter may stand, MAY end with one (§ 42.10b).
   placeholder that is neither `param_<name>` nor a clock format MUST be
   refused listing the clock formats. Outside the path, `{{` MUST open a
   clock placeholder only where a format's name follows it directly, then
-  `}}`, `:`, `/`, `@` or `|`; `{{ date }}` and `{{dates}}` stay text.
+  `}}`, `~`, `:`, `/`, `@` or `|`; `{{ date }}` and `{{dates}}` stay text.
+- **One moment.** Every clock placeholder of a trip, wherever it stands and
+  in a static target's parameter values, MUST be filled from one reading
+  of the clock, taken when the trip starts; a retry and a page after the
+  first MUST send the values the first request sent.
+- **Since the last success.** `~last_success(fallback)` MUST start the
+  placeholder from the time (as above) of the last successful trip of the
+  same collector, static target (none for a probe), target, `path` and
+  `param_<name>` parameters, and, while none is known, from the trip's time
+  moved by the fallback, which is required and is `-` and amounts as an
+  offset's; the offset, truncation and zone MUST apply after either. A
+  trip that fails, or carries on past a failed stage, a debug run and an
+  answer from the response cache MUST keep no last success; a debug run
+  MUST start from the one kept. The times MUST be kept in memory, for
+  10,000 keys at most, the one kept longest ago forgotten past that, and a
+  later time MUST NOT be replaced by an earlier one.
 - **No probe parameter.** A clock placeholder MUST NOT be filled from a
-  probe or a static target, MUST NOT make a probe parameter required or
-  used (a `date` probe parameter is no `param_<name>` one), and MUST NOT
-  be listed among a collector's parameters on the collectors page (§ 23).
+  probe, MUST NOT make a probe parameter required or used (a `date` probe
+  parameter is no `param_<name>` one), and MUST NOT be listed among a
+  collector's parameters on the collectors page (§ 23).
+- **A static target's parameters.** A value of a static target's `params`
+  MAY hold clock placeholders, with text around them, filled in at each
+  of its trips; the target's own value MUST NOT be written over. A value
+  with a `{{param_<name>}}` placeholder, a filter, a clock placeholder
+  written wrong, or a clock placeholder in a parameter that fills a label
+  value of the collector (§ 42.10c), MUST be refused when the targets load,
+  naming the target and the parameter. At load the value MUST be checked
+  where the collector writes it as it is written at the moment the
+  configuration's check uses for clock placeholders. A value with braces
+  that open no clock placeholder MUST be sent as written.
 - **Not in a label value.** A clock placeholder in a label value (§ 42.10c)
   MUST be refused at load, saying that it may stand in a request only.
 - **Cache.** The clock MUST NOT be part of the response cache key: a cached
-  answer is kept for its `cache.ttl`, and the documentation MUST say so.
+  answer is kept for its `cache.ttl`, and the documentation MUST say so. A
+  request with a clock placeholder, the collector's or a static target's
+  parameter's, MUST NOT be revalidated (§ 42.13.2): another day's validators
+  could have the target answer `304` for a different request.
 
 ## 42.12 CI, container, and chart releases
 

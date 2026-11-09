@@ -106,6 +106,9 @@ type Server struct {
 	// backoffs keeps the targets failure_backoff keeps trips from
 	// (backoff.go).
 	backoffs *failureBackoffs
+	// lastSuccesses keeps when each trip whose clock placeholders read
+	// ~last_success last succeeded (lastsuccess.go).
+	lastSuccesses lastSuccesses
 	// load adds up the time spent on static target scrapes and probes
 	// (loadmetrics.go).
 	load loadCounters
@@ -796,6 +799,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	job := collectJob{
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		rec: rec, display: logTarget, cacheKey: p.cacheKey, revalidateKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
+		lastSuccess: lastSuccessKey(c, nil, p.target, p.overrides),
 		log: collectLog{
 			key:    p.failureKey(),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",

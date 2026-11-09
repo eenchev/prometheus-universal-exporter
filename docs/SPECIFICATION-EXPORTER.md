@@ -31844,6 +31844,12 @@ The chart values and monitors that expose this endpoint are specified in
 - `TestAKeepFileForgetsWhatExpired` (fetch, http): of four logins written to one file, the one whose token and values kept have all expired is dropped, and one with a value kept left, one whose token says no expiry and the new one are kept (§ 42.6b).
 - `TestTheValuesKeptAreThisExportersAfterAFailedWrite` (fetch, http): after a keep file write that failed, the values kept in memory are used for the refresh, not the older ones in the file (§ 42.6b).
 
+## 34.327 The second audit of the steps login
+
+- `TestRefreshStepsMayReadAValueKeptAnew` (fetch, http): a refresh token the endpoint rotates is read anew by `refresh_steps` and sent at the next refresh, three scrapes making one login and two refreshes; the session cookie a step read is sent back with `header: Cookie` and its name as the prefix; a step reading a name `values` gives is still refused (§ 42.6b).
+- `TestAStepThatFailsIsNamed` (fetch, http), changed: a redirect that a step's `status` does not list fails saying to list it, as one does without `status` (§ 42.6b).
+- `TestADeletedCookieIsNotRead` (fetch, http): of a cookie set three times, deleted with `Max-Age=-1`, with an `Expires` in 1970, and anew, the new one is read with its expiry; one only deleted is not found (§ 42.6b).
+
 ## 42.1 OTLP export
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
@@ -32936,12 +32942,15 @@ values from its answer, and send the value `token` names as the token.
   `Host` override sent with a step whose `url` is a path; it MUST hold no
   placeholder. `method` MUST be `GET`, `POST`, `PUT` or `PATCH`, `GET` when
   left out and `POST` with a body; a body with `GET` MUST be refused.
-  `query` MUST be added to the URL's query; `headers` sent, but `Host`,
+  `query` MUST be added to the URL's query, a parameter of it replacing
+  one of the same name; `headers` sent, but `Host`,
   `Content-Type`, `Content-Length`, `Cookie`, and `Authorization` beside
   `oauth1`, refused; `form` sent as `application/x-www-form-urlencoded` and
   `json` as a JSON object of text, not both. A step MUST succeed on a `2xx`
   answer, or, with `status`, on one it lists; it MUST NOT follow a
-  redirect, and one not listed MUST fail the login saying to list it.
+  redirect, and one not listed, whether `status` is set or not, MUST fail
+  the login saying to list it. Each run of `steps` or `refresh_steps` MUST
+  start with an empty cookie jar.
 - **Values.** What a step sends MAY hold `{{login.<name>}}`: a value of
   `values`, as written, of `secret_files`, read from its file at each
   login, or read by a step before it; any other MUST be refused at load,
@@ -32950,7 +32959,8 @@ values from its answer, and send the value `token` names as the token.
   one of: `regex`, its first group or its whole match, on the body; `json`,
   a jq expression on the body, giving text or a number; `form`, a field of
   the body read as a form; `header`; `cookie`, whose `Max-Age` or `Expires`
-  is the value's expiry. A value not found or empty MUST fail the login,
+  is the value's expiry, one the answer deletes, with `Max-Age` below 0 or
+  an `Expires` past, not read. A value not found or empty MUST fail the login,
   naming the step and the value and never what the answer holds. The last
   step MUST read something, and `token` MUST name a value a step reads.
 - **OAuth 1.0a.** `oauth1` MUST sign the step with HMAC-SHA1 as RFC 5849
@@ -32968,7 +32978,8 @@ values from its answer, and send the value `token` names as the token.
 - **Refresh.** `keep` MUST name values of `steps`, each with a duration, 0
   for none, and MUST go with `refresh_steps`, which MAY send them and the
   given values, and MUST read `token`, and `expires_in` or `expires_at`
-  when set. When a token is due, `refresh_steps` MUST be made while
+  when set; they MAY read a value kept anew, which no other given value
+  may be. When a token is due, `refresh_steps` MUST be made while
   every value kept lasts — its `keep` duration from the login that read it,
   shortened by its cookie's or JWT's expiry — and the whole `steps` when one
   has expired or the refresh fails, which MUST be logged as a warning. A

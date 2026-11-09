@@ -180,7 +180,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_sql_rows", model.GaugeMetricType, "Rows the last statement of this sql collector that succeeded returned, whichever target it ran on; 0 before one has.", nil},
 	// The tokens request.login keeps are the collector's, shared by its
 	// requests, so its logins have no per-request value either.
-	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401; 0 without request.login.", nil},
+	{"http_exporter_logins_total", model.CounterMetricType, "Logins this http or graphite collector's request.login, or a static target's, made for a token: the first, each made again before the token expired or after the target refused it with 401, or a status of relogin_on; 0 without request.login. A token a steps login read from its keep_file is no login.", nil},
 	{"http_exporter_login_failures_total", model.CounterMetricType, "Logins of this http or graphite collector that failed: the scrapes that needed their token failed in the login stage, unless the token kept was still valid and was used instead.", nil},
 	{"http_exporter_login_refreshes_total", model.CounterMetricType, "Logins of this http or graphite collector, of those counted in http_exporter_logins_total, that a steps login's refresh_steps made with the values kept, in place of its whole steps; 0 without refresh_steps.", nil},
 	// The buckets of request.rate_limit are the collector's, shared by its

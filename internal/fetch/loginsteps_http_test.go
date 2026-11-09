@@ -445,9 +445,10 @@ func TestAStepThatFailsIsNamed(t *testing.T) {
 		steps []model.LoginStep
 		want  string
 	}{
-		"a redirect": {[]model.LoginStep{{URL: "/moved", Extract: map[string]model.LoginExtract{"token": {Header: "Location"}}}}, "login.steps[0] was answered with the redirect 302, which a login does not follow; list it in the step's status"},
-		"no match":   {[]model.LoginStep{{URL: "/page", Extract: map[string]model.LoginExtract{"token": {Regex: `token=(\w+)`}}}}, "login.steps[0].extract.token matched nothing in the answer"},
-		"no JSON":    {[]model.LoginStep{{URL: "/page", Extract: map[string]model.LoginExtract{"token": {JSON: ".token"}}}}, "login.steps[0].extract.token found an answer that is not JSON"},
+		"a redirect":                      {[]model.LoginStep{{URL: "/moved", Extract: map[string]model.LoginExtract{"token": {Header: "Location"}}}}, "login.steps[0] was answered with the redirect 302, which a login does not follow; list it in the step's status"},
+		"a redirect status does not list": {[]model.LoginStep{{URL: "/moved", Status: []int{200}, Extract: map[string]model.LoginExtract{"token": {Header: "Location"}}}}, "login.steps[0] was answered with the redirect 302, which a login does not follow; list it in the step's status"},
+		"no match":                        {[]model.LoginStep{{URL: "/page", Extract: map[string]model.LoginExtract{"token": {Regex: `token=(\w+)`}}}}, "login.steps[0].extract.token matched nothing in the answer"},
+		"no JSON":                         {[]model.LoginStep{{URL: "/page", Extract: map[string]model.LoginExtract{"token": {JSON: ".token"}}}}, "login.steps[0].extract.token found an answer that is not JSON"},
 	} {
 		c := loginCollector(t, model.LoginConfig{Type: "steps", Steps: tc.steps, Token: "token"})
 		_, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil)
@@ -586,5 +587,89 @@ func TestTheValuesKeptAreThisExportersAfterAFailedWrite(t *testing.T) {
 	fetch()
 	if server.hit("/refresh") != 1 || server.hit("/exchange") != 1 {
 		t.Fatalf("%d refreshes, %d exchanges; want the refresh made with the values this exporter kept", server.hit("/refresh"), server.hit("/exchange"))
+	}
+}
+
+// refresh_steps may read a value kept anew, as an endpoint that rotates its
+// refresh tokens answers each refresh with the next one, and the value read
+// replaces the one kept: the next refresh sends it. A session cookie read
+// by a step is sent back with header Cookie and its name as the prefix.
+func TestRefreshStepsMayReadAValueKeptAnew(t *testing.T) {
+	advance := freshLogins(t)
+	var mu sync.Mutex
+	refresh, minted := "r1", 0
+	var refreshes atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/login":
+			minted++
+			http.SetCookie(w, &http.Cookie{Name: "SESSION", Value: fmt.Sprintf("s%d", minted)})
+			_, _ = fmt.Fprintf(w, `{"refresh": %q}`, refresh)
+		case "/refresh":
+			refreshes.Add(1)
+			if r.URL.Query().Get("refresh") != refresh {
+				http.Error(w, "an old refresh token", http.StatusUnauthorized)
+				return
+			}
+			minted++
+			refresh = fmt.Sprintf("r%d", minted)
+			http.SetCookie(w, &http.Cookie{Name: "SESSION", Value: fmt.Sprintf("s%d", minted), MaxAge: 3600})
+			_, _ = fmt.Fprintf(w, `{"refresh": %q}`, refresh)
+		default:
+			if cookie, err := r.Cookie("SESSION"); err != nil || cookie.Value != fmt.Sprintf("s%d", minted) {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, "value=1")
+		}
+	}))
+	defer server.Close()
+	prefix := "SESSION="
+	c := loginCollector(t, model.LoginConfig{
+		Type:         "steps",
+		Steps:        []model.LoginStep{{URL: "/login", Extract: map[string]model.LoginExtract{"session": {Cookie: "SESSION"}, "refresh": {JSON: ".refresh"}}}},
+		Keep:         map[string]model.Duration{"refresh": 0},
+		RefreshSteps: []model.LoginStep{{URL: "/refresh", Query: map[string]string{"refresh": "{{login.refresh}}"}, Extract: map[string]model.LoginExtract{"session": {Cookie: "SESSION"}, "refresh": {JSON: ".refresh"}}}},
+		Token:        "session",
+		TTL:          model.Duration(time.Hour),
+		Header:       "Cookie",
+		Prefix:       &prefix,
+	})
+	for range 3 {
+		if response, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil); err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("fetch: %v, %+v", err, response)
+		}
+		advance(59 * time.Minute)
+	}
+	if made, failed := logins.counts("api"); made != 3 || failed != 0 || refreshes.Load() != 2 || logins.refreshes("api") != 2 {
+		t.Fatalf("%d logins, %d failed, %d refreshes asked, %d counted", made, failed, refreshes.Load(), logins.refreshes("api"))
+	}
+	// A value given by values may not be read: only a value kept may.
+	given := model.LoginConfig{Type: "steps", Values: map[string]string{"user": "me"},
+		Steps: []model.LoginStep{{URL: "/login", Extract: map[string]model.LoginExtract{"session": {Cookie: "SESSION"}, "user": {JSON: ".user"}}}}, Token: "session"}
+	if err := validateLogin(&given, nil, "request.login", nil); err == nil || !strings.Contains(err.Error(), "extract reads user, which values gives") {
+		t.Fatalf("a values name read by a step: %v", err)
+	}
+}
+
+// A cookie the answer deletes is not read: one with Max-Age below 0 or an
+// Expires past, as a site sends when it ends an old session, beside the new
+// one.
+func TestADeletedCookieIsNotRead(t *testing.T) {
+	start := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+	resp := &http.Response{Header: http.Header{"Set-Cookie": {
+		"SESSION=old; Max-Age=-1",
+		"SESSION=older; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+		"SESSION=new; Max-Age=600",
+	}}}
+	value, err := extractLoginValue(context.Background(), model.LoginExtract{Cookie: "SESSION"}, resp, nil, start)
+	if err != nil || value.Text != "new" || !value.Expires.Equal(start.Add(10*time.Minute)) {
+		t.Fatalf("read %+v, %v", value, err)
+	}
+	gone := &http.Response{Header: http.Header{"Set-Cookie": {"SESSION=old; Max-Age=-1"}}}
+	if _, err := extractLoginValue(context.Background(), model.LoginExtract{Cookie: "SESSION"}, gone, nil, start); err == nil {
+		t.Fatal("a deleted cookie was read")
 	}
 }

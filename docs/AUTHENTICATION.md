@@ -402,10 +402,12 @@ collectors:
 
 **Steps.** Each step is one request, at most 16 of them, made with one
 cookie jar, so a cookie the sign-in page sets is sent with the form that
-follows it, and with nothing else. A step's `url` is absolute or a path
+follows it, and with nothing else: each run of `steps`, or of
+`refresh_steps`, starts with an empty one. A step's `url` is absolute or a path
 from the root, as [`login.url`](#where-a-login-goes) is, and is held to the
 collector's `allowed_schemes`, `allowed_targets` and `denied_targets`; it
-holds no placeholder, a value the step sends going in its `query`. A step
+holds no placeholder, a value the step sends going in its `query`, whose
+parameters are added to the url's, each replacing one of the same name. A step
 is sent with `GET`, or `POST` when it sends a body, unless `method` says
 `GET`, `POST`, `PUT` or `PATCH`; `form` sends
 `application/x-www-form-urlencoded` and `json` a JSON object of text, one
@@ -413,7 +415,9 @@ of the two. `headers` are sent as written, such as a `User-Agent` a site
 wants; `Host`, `Content-Type`, `Content-Length` and `Cookie` are the
 step's own. A step succeeds on a `2xx` answer, or on one of its `status`
 list: a login follows no redirect, so a `302` whose `Location` holds what
-is wanted is listed, `status: [302]`, and read with a header.
+is wanted is listed, `status: [302]`, and read with a header; a step whose
+`status` lists others, and is answered with a redirect it does not list,
+fails saying so.
 
 **Values.** What a step sends — its `query`, `headers`, `form`, `json`
 and `oauth1` values — may hold `{{login.<name>}}`: one of `values`, as
@@ -428,13 +432,15 @@ with `extract`, each from exactly one place:
 | `json` | what this jq expression gives of the body read as JSON, text or a number |
 | `form` | this field of the body read as a form, as an OAuth 1.0a token endpoint answers: `oauth_token=...&oauth_token_secret=...` |
 | `header` | this header of the answer |
-| `cookie` | the cookie of this name the answer sets; its `Max-Age` or `Expires` is the value's expiry |
+| `cookie` | the cookie of this name the answer sets; its `Max-Age` or `Expires` is the value's expiry, and one the answer deletes, with `Max-Age` below 0 or an `Expires` past, is not read |
 
 A value not found, or empty, fails the login, naming the step and the
 value, never the answer: it may hold the password. `token` names the
 value that is the token, which a step reads, and it is sent as a `json`
 login's is, in `Authorization` as a bearer token unless `header` and
-`prefix` say otherwise.
+`prefix` say otherwise: a session cookie a step read with `cookie` is sent
+back with `header: Cookie` and `prefix: "SESSION="`, its name and an
+equals sign.
 
 #### Signing a step with OAuth 1.0a
 

@@ -251,10 +251,10 @@ func checkLoginSteps(steps []model.LoginStep, allowedSchemes []string, where str
 				return nil, fmt.Errorf("%s.oauth1 needs consumer_key and consumer_secret", at)
 			}
 			if (o.Token == "") != (o.TokenSecret == "") {
-				return nil, fmt.Errorf("%s.oauth1 sets one of token and token_secret; a token is signed with with its secret, so set both or neither", at)
+				return nil, fmt.Errorf("%s.oauth1 sets one of token and token_secret; a token is signed with its secret, so set both or neither", at)
 			}
-			for key, text := range map[string]string{"consumer_key": o.ConsumerKey, "consumer_secret": o.ConsumerSecret, "token": o.Token, "token_secret": o.TokenSecret} {
-				if err := uses("oauth1."+key, text); err != nil {
+			for _, field := range []struct{ key, text string }{{"consumer_key", o.ConsumerKey}, {"consumer_secret", o.ConsumerSecret}, {"token", o.Token}, {"token_secret", o.TokenSecret}} {
+				if err := uses("oauth1."+field.key, field.text); err != nil {
 					return nil, err
 				}
 			}
@@ -271,7 +271,9 @@ func checkLoginSteps(steps []model.LoginStep, allowedSchemes []string, where str
 			if !loginValueName.MatchString(name) {
 				return nil, fmt.Errorf("%s.extract has %q, which is no value's name; a name is letters, digits and _, not first a digit", at, name)
 			}
-			if from, ok := given[name]; ok {
+			// A value kept may be read anew by refresh_steps, as a refresh
+			// token an endpoint rotates is, and replaces the one kept.
+			if from, ok := given[name]; ok && from != "keep" {
 				return nil, fmt.Errorf("%s.extract reads %s, which %s gives; name it otherwise", at, name, from)
 			}
 			if err := checkLoginExtract(s.Extract[name], at+".extract."+name); err != nil {
@@ -634,8 +636,7 @@ func runLoginStep(ctx context.Context, client *http.Client, c *model.Collector, 
 		accepted = slices.Contains(s.Status, resp.StatusCode)
 	}
 	if !accepted {
-		redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
-		if redirect && len(s.Status) == 0 {
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			return fmt.Errorf("%s was answered with the redirect %d, which a login does not follow; list it in the step's status to read its answer, the Location header with it", at, resp.StatusCode)
 		}
 		return fmt.Errorf("%s: %w", at, answeredError(resp.StatusCode, false, answer))
@@ -695,7 +696,10 @@ func extractLoginValue(ctx context.Context, e model.LoginExtract, resp *http.Res
 		value.Text = resp.Header.Get(e.Header)
 	case e.Cookie != "":
 		for _, cookie := range resp.Cookies() {
-			if cookie.Name != e.Cookie || cookie.Value == "" {
+			// A cookie the answer deletes, with Max-Age below 0 or an
+			// Expires past, is none: a site that logs one out first sets
+			// it so before it sets the new one.
+			if cookie.Name != e.Cookie || cookie.Value == "" || cookie.MaxAge < 0 || (!cookie.Expires.IsZero() && !cookie.Expires.After(start)) {
 				continue
 			}
 			value.Text = cookie.Value

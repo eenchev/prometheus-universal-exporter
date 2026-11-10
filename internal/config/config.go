@@ -129,6 +129,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 		return err
 	}
 	x.LabelParams = labels
+	x.ExpressionParams = fetch.ParseExpressionParams(x)
 	// Its requests are timed only when a rule or script reads the timings.
 	x.TimingsUnread = !transform.ReadsTimings(x)
 	if err := checkPlaceholdersAreFilled(x); err != nil {
@@ -229,6 +230,9 @@ func checkLimitValues(x *model.Collector) error {
 	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
 		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
 	}
+	if m := x.Limits.MaxExpressionMemory; m > 0 && m < minExpressionMemory {
+		return fmt.Errorf("collector %q limits.max_expression_memory is %d bytes, and it is at least 1MiB, since it is held against the memory of the whole exporter; leave it out, or 0, for the default, 256MiB", x.Name, m)
+	}
 	return nil
 }
 
@@ -265,6 +269,11 @@ func checkCSVColumns(x *model.Collector) error {
 // interpreter with its libraries needs to start.
 const minScriptMemory = 32 << 20
 
+// minExpressionMemory is the least limits.max_expression_memory: the limit
+// is held against the growth of the whole exporter's memory, which other
+// scrapes move by more than less than this.
+const minExpressionMemory = 1 << 20
+
 func applyLimitDefaults(l *model.Limits) {
 	if l.MaxMetrics <= 0 {
 		l.MaxMetrics = 10000
@@ -292,6 +301,9 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 	if l.MaxCacheEntries <= 0 {
 		l.MaxCacheEntries = 1000
+	}
+	if l.MaxExpressionMemory <= 0 {
+		l.MaxExpressionMemory = 256 << 20
 	}
 }
 
@@ -423,7 +435,7 @@ func checkSQLFormats(x *model.Collector) error {
 	if x.Transform.Type == "csv" && fetch.SQLNamedResults(x) {
 		return fmt.Errorf("collector %q transforms with csv, which reads the rows of one statement by column, and runs request.statements, whose document is an object of each one's rows by its name; use jq, yq or python, which read .<name>, or a collector of each statement", x.Name)
 	}
-	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) || r.Binary.Set() {
+	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) || r.Binary.Set() || r.YAML != (model.YAMLConfig{}) {
 		return fmt.Errorf("collector %q sets response settings, which apply to the body of a response, and a sql collector's rows have none; leave the response block out", x.Name)
 	}
 	return nil
@@ -606,7 +618,7 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 	}
 	// Rules alike in the four texts are few, and only those have their
 	// labels and value_maps compared.
-	type texts struct{ name, expression, items, timeFormat string }
+	type texts struct{ name, expression, items, labelsFrom, timeFormat string }
 	var errs []error
 	alike := map[texts][]int{}
 	// The rules that repeat no earlier one, in their order.
@@ -616,7 +628,7 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 			continue
 		}
 		r := &x.Metrics[i]
-		key := texts{r.Name, r.Expression, r.Items, r.TimeFormat}
+		key := texts{r.Name, r.Expression, r.Items, r.LabelsFrom, r.TimeFormat}
 		first := slices.IndexFunc(alike[key], func(earlier int) bool {
 			other := &x.Metrics[earlier]
 			return maps.Equal(r.ValueMap, other.ValueMap) && alikeInLabels(x, r, other)
@@ -912,10 +924,17 @@ func validateMetricRule(x *model.Collector, index int) error {
 	if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
 		return fmt.Errorf("%s has no expression", where)
 	}
+	names := make(map[string]bool, len(r.Labels))
 	for j, label := range r.Labels {
 		if strings.TrimSpace(label.Name) == "" {
 			return fmt.Errorf("%s has a label without a name", where)
 		}
+		// Two labels of one name would be one label on the series, whose
+		// value the later of them had and the earlier lost unsaid.
+		if names[label.Name] {
+			return fmt.Errorf("%s has two labels named %q; a series has one label of a name, so remove one of them or give it another name", where, label.Name)
+		}
+		names[label.Name] = true
 		// A label's name is held to what a scrape holds it to under the
 		// collector's name_escaping, unless transform.remove_labels or
 		// rename_labels takes it off before the scrape looks at it

@@ -663,6 +663,10 @@ func collectorSchemaRules() map[string]map[string]any {
 			"enum":        optionalEnum(model.GraphiteInvalidLines),
 			"description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
 		},
+		"collectors[].response.yaml.documents": {
+			"enum":        optionalEnum(model.YAMLDocuments),
+			"description": "yaml decoder: one, the default, refuses a body of more than one document; list makes the body a list of its documents, in their order, whether it holds one, several or none, as a stream of Kubernetes manifests is read.",
+		},
 		// What checkCSVDelimiter refuses: more than one character, which a
 		// schema counts as the exporter does, and the four that are one and
 		// cannot separate fields.
@@ -700,6 +704,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].error_handling.on_transform_error": errorPolicy,
 		"collectors[].metrics":                           {"description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. Nor, under a prometheus transform, may the expression of one rule match the name another rule passes on the metric of, where the two give its series one name and the same labels: each would make every series of that metric. A rule with an expression whose type is histogram or summary and whose error_mode is not fail is about the metrics of that type alone, and may match such a name unless the rule of the name sets that type too. The exporter checks both when the configuration loads. A python collector's rules make no series and are not held to it."},
 		"collectors[].metrics[].name":                    {"type": "string", "not": onlyBlanks(), "description": "The metric name, before metrics_prefix: letters, digits, _ and :, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as http.server.duration, and is exported escaped; under its metric_name_validation_scheme utf8 any name too, written as each scraper asks. Text: a name YAML reads as a number or a boolean, such as 404 or true, is written in quotes."},
+		"collectors[].metrics[].labels_from":             {"description": "jq and yq, with items: an expression that gives an object of each item, such as .metadata.labels; each key becomes a label of the item's series, with the key's value as its value. A key whose value is null or empty leaves no label, and a label of the rule's labels with a key's name replaces it. The names are held to name_escaping as every label name is."},
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
@@ -752,6 +757,7 @@ func collectorSchemaRules() map[string]map[string]any {
 			"description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most " + strconv.Itoa(model.MaxHistogramBuckets) + "; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
 		},
 		"collectors[].limits.max_script_memory":      leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
+		"collectors[].limits.max_expression_memory":  leastSizeRule(minExpressionMemory, "jq and yq: the most the exporter's memory may grow by while the collector's transform runs, such as 64MiB. A transform that takes it past that is stopped and its scrape fails as a limit exceeded. The memory is the whole exporter's, so scrapes running beside it count. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1MiB; 0, or left out, is the default, 256MiB."),
 		"collectors[].limits.max_output_bytes":       leastOutputRule(),
 		"collectors[].limits.script_timeout":         {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
 		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),

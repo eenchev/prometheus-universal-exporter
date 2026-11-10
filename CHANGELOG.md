@@ -29,6 +29,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A `json` or `oauth2` login whose answer says no lifetime now keeps a
   token that is a JSON Web Token until its `exp` claim, when that is after
   the login, where it was kept for `ttl`, or until the target refused it.
+- A rule that names a label twice is now refused when the configuration
+  loads, as `collector "c" metric "m" has two labels named "env"`, where the
+  later of the two was the one a series got and the earlier was lost unsaid.
+  Remove one of them, or give it another name.
+- A `jq` or `yq` transform is now stopped when the exporter's memory has
+  grown by more than `limits.max_expression_memory` while it ran, 256 MiB
+  unless set, and its scrape fails as a limit exceeded. A collector whose
+  expressions build more than that at once sets the limit higher.
+- A whole number beyond 64 bits in a YAML answer, such as an identifier of
+  thirty digits, now keeps every digit, as it does in JSON, where it was
+  rounded to a float: a label made of one changes from
+  `1.2345678901234568e+29` to the digits the target wrote.
 
 ### New
 
@@ -102,6 +114,22 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - **[`ftp`](docs/FTP.md)** reads one file from an FTP server, over
   plaintext, explicit TLS (`ftpes://`) or FTPS, as `localfile` and
   `sshfile` read theirs.
+- **[`$params`](docs/REQUESTS.md#in-expressions)**: a jq or yq expression
+  reads the probe's parameters by name, as in
+  `items: .queues[] | select(.name == $params.queue)`, so one collector
+  answers for the queue, tenant or region each probe asks about.
+- **[`labels_from`](docs/CONFIGURATION.md#labels-from-an-object)** gives a
+  series a label for each key of an object the response holds, as
+  `labels_from: .metadata.labels` does for a Kubernetes object's labels,
+  where the names cannot be listed beforehand.
+- **`response.yaml.documents: list`** reads a YAML body of several
+  documents, such as a stream of manifests, as a list of them, where a
+  second document was always refused.
+- jq and yq expressions have the names of jq that the engine left out, so a
+  [program written for jq](docs/CONFIGURATION.md#programs-written-for-jq)
+  loads as it is: `debug`, `stderr`, `input_line_number`, `input_filename`,
+  `toarray`, `have_literal_numbers`, `have_decnum`, and the formats
+  `@base32` and `@base32d`.
 
 ### Fixed
 
@@ -195,6 +223,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   end the exporter, with every token and every result it held. It now
   fails that scrape alone, answered `500` as any scrape that panicked is,
   and is logged with its stack.
+- A `jq` or `yq` expression that built without end, such as a definition
+  that calls itself, or a list of tens of millions, took memory until the
+  kernel ended the exporter, and every collector's scrapes with it: the
+  probe's time bounded how long it ran, and nothing how much it held. It is
+  now stopped at [`limits.max_expression_memory`](docs/CONFIGURATION.md#memory).
 
 ## chart 2.1.0
 

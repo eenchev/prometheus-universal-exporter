@@ -1995,13 +1995,24 @@ The YAML decoder MUST:
 
 - Parse YAML safely.
 - Support YAML documents commonly returned by HTTP APIs.
-- Refuse a stream of more than one document, saying multi-document YAML is
-  not supported, rather than dropping all but the first; a leading `---`, and
+- Refuse a stream of more than one document, naming the setting that reads
+  one, rather than dropping all but the first; a leading `---`, and
   an empty document after the first, as a trailing `---` makes, are not a
   second document.
+- With `response.yaml.documents: list`, decode the body into the list of its
+  documents, in their order, whether it holds several, one or none: a
+  document that holds nothing is none of them, one written `null` is a null
+  among them, and each MUST be decoded, bounded and refused as the one
+  document of a body is. `documents` MUST be `one`, the default, or `list`,
+  and MUST be refused at load for a collector whose decoder is neither
+  `yaml` nor chosen per response.
 - Keep a scalar YAML reads as a timestamp, such as `2024-06-01`, as the text
   it was written as, and an integer beyond int64 as an integer, so jq and
-  labels can use both.
+  labels can use both. A whole number written as digits alone, with a sign
+  or none, MUST decode into what the JSON decoder makes of the same digits,
+  whatever their count: beyond 64 bits it MUST NOT become a float, which
+  keeps 17 of them. A quoted scalar is text, one tagged `!!float` a float,
+  and a mapping's key the text it was (below).
 - Support yq transformations.
 - Handle missing keys according to collector error policy.
 - Name no more than the first ten problems of a document it refuses with a
@@ -3934,6 +3945,17 @@ give exactly what gojq gives: a field of an object its value, or `null`, and a
 field of `null` `null`. Where a step is anything else, the program MUST run, so
 the error is gojq's.
 
+Every jq program MUST have the names of jq that gojq leaves to whoever embeds
+it or does not have, so that a program written for jq loads: `debug`,
+`debug(message)` and `stderr`, which MUST give their input and MUST NOT
+write it anywhere; `input_line_number`, 0; `input_filename`, `null`;
+`toarray`, an array as it is and anything else as an array of it;
+`have_literal_numbers`, `true`, and `have_decnum`, `false`; and the formats
+`@base32` and `@base32d`, alone and before a string, whose interpolated
+parts they encode and whose text they leave. `@base32d` MUST read text with
+its padding or without, and MUST fail on text that is not base32. None of
+the functions MUST be the name of a gojq builtin.
+
 Every jq program MUST have the value-parsing helpers `parse_bytes`,
 `parse_duration`, `parse_time`, `parse_percent` and `parse_quantity`, each a
 function of no
@@ -4051,6 +4073,18 @@ MUST be left out, not shown as `redacted:redacted`. `$redirects` MUST be
 the number of redirects followed to it, `0` for none. Both MUST be `null`
 wherever `$timings` is. Python's `response.url` and `response.redirects`
 MUST be the same.
+
+Every jq program MUST also have `$params` bound. In the expressions of a
+`jq` or `yq` transform's rules it MUST be an object of the parameters the
+probe, or the static target, gave: each `param_<name>` that is not empty, by
+`<name>`, as text, and the empty object when there is none, so a parameter
+that was not given reads `null`. Elsewhere it MUST be `null`. A parameter
+MUST count as used by a collector (§ 42.10a) when an expression of its rules —
+`expression`, `items`, `labels_from` or a label's `expression` — reads it by
+name, as `$params.<name>`, `$params."<name>"` or `$params["<name>"]`, and
+every parameter MUST when one reads `$params` any other way; which, MUST be
+found when the configuration loads. A parameter read by name MUST be listed
+with those the collector takes, and never as required.
 
 Every jq program MUST also have `$http_version` and `$remote_ip` bound. For
 the request `$timings` describes, `$http_version` MUST be the version of
@@ -4515,9 +4549,8 @@ they are alike in
 - `name`, `expression` and `items`, each as written, `""` being the key
   left out;
 - their labels: the same label names, each with the same `value` or the
-  same `expression`, in whatever order the labels are written. Labels of
-  one name keep the order they are written in, the last being the one a
-  series gets; and in a `prometheus` rule one of whose labels reads a label
+  same `expression`, in whatever order the labels are written (a rule
+  names a label once, § 24.2); and in a `prometheus` rule one of whose labels reads a label
   the rule sets under another name, where the order decides the value, all
   the labels are compared in the order they are written;
 - `value_map` and `time_format`, which say which texts the rule reads a
@@ -4682,6 +4715,19 @@ cut and a cut value is never looked up in, nor mapped long again by, a map.
 every series of that name, as a label's `value_map` maps it: those of the
 other rules of the name, and those a `prometheus` rule without a name keeps
 under it.
+
+A jq or yq rule with `items` MAY set `labels_from`, an expression evaluated
+once for each item, as a label's is, that gives an object: the item's series
+MUST have a label for each key, named by the key, with the key's value
+written as a label expression's value is. A key whose value is `null` or
+empty text, and an expression that gives `null` or nothing, MUST leave no
+label. Any other value that is no object, a key's value that is an object or
+an array, and an expression that fails or gives two values MUST be a failure
+of that item, handled by the rule's `error_mode`, naming the item and, of
+several keys, the one that sorts first. A label of the rule's `labels` MUST
+replace a key of its name. The names MUST be held to `name_escaping` and the
+limits as any label name of a series is (§ 21.1). Two rules that differ in
+`labels_from` are not the same rule (§ 24.2).
 
 A jq or yq expression label's value MUST be written as text the way JSON
 writes it: a number without an exponent when its magnitude is at least 1e-6
@@ -5284,6 +5330,7 @@ limits:
   max_label_name_length: 200
   script_timeout: 100ms
   max_cache_entries: 1000
+  max_expression_memory: 256MiB
 ```
 
 The response a collector reads MUST be bounded by `request.max_response_bytes`
@@ -5365,6 +5412,22 @@ for MUST end the scrape with the limit's error at the first series past it,
 also when the rule would have failed as a whole further on and given them
 up, and MUST NOT go on through the response to find that out. The rules of
 a transform run one after another, so the count needs no lock.
+
+`max_expression_memory`, a size (§ 5.0a), 256 MiB when it is left out or 0
+and at least 1 MiB otherwise, bounds what the exporter's heap may grow by
+while a `jq` or `yq` transform of the collector runs, which the probe's time
+does not bound. A transform past it MUST be stopped, and MUST fail as a whole
+as a limit exceeded, whatever the `error_mode` of the rule it was at, naming
+that rule, the key and the limit; no series of it is kept and nothing is
+counted against the rule. The failure MUST be the probe's `validation`
+stage and MUST be counted in `http_exporter_series_limit_exceeded_total`,
+whatever `error_handling` says, as a scrape past `max_metrics` is. What is held to the limit MUST be what is live,
+not what was made and let go of. The memory measured is the process's, so a
+transform MAY be stopped for what other scrapes hold beside it, and MAY hold
+up to twice the limit before it is stopped; it MUST NOT be stopped for
+holding less than the limit when nothing else grows. A transform that ends
+within 20 milliseconds MUST cost no measurement. A transform stopped for its
+time MUST still fail as one, with the deadline's error.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting
@@ -7243,6 +7306,12 @@ checked:
   and relative label expressions, with the collector's namespaces, all but a
   label that is one attribute read by its name (§ 11); and a prometheus
   transform's patterns, `include` and `exclude`.
+- `labels_from` MUST be refused on a rule of any transform but `jq` and
+  `yq`, and on one without `items`, and its expression MUST compile.
+- A rule MUST name each of its labels once, under every transform: a second
+  label of a name, with a `value` or an `expression`, MUST be refused naming
+  the rule and the label, since a series has one label of a name and the
+  later of the two would be that label while the earlier was lost.
 - A regex metric's expression MUST have at least one capture group — the
   value is the group named `value`, or else the first, and the error says so
   — and MUST NOT have two groups named `value`.
@@ -11043,7 +11112,9 @@ more than once, or when nothing of the collector uses it: its path, the
 places of § 42.10b, or a label value (§ 42.10c). The latter is
 almost always a misspelling, and with a default in place a misspelled parameter
 would otherwise succeed against the default and report one tenant's data as
-another's. The refusal MUST name the places a placeholder of the collector
+another's. A parameter an expression of the collector's rules reads as
+`$params` (§ 17) is used too, and the refusal by a collector that has such
+an expression MUST say that none reads the parameter. The refusal MUST name the places a placeholder of the collector
 can stand in, which are those of its request type and its label values, and
 no place its type does not have: the path, the body and the header and query
 values of an `http` collector; the expressions, the path and the header and

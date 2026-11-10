@@ -198,6 +198,9 @@ type Collector struct {
 	// collector's do. It is no key of the configuration: it is made of
 	// transform.labels and the rules' labels, which are.
 	LabelParams *LabelParams `yaml:"-"`
+	// ExpressionParams is what the collector's jq or yq expressions read of
+	// the probe's parameters as $params, nil when they read nothing of it.
+	ExpressionParams *ExpressionParams `yaml:"-"`
 	// Clock says what the collector's request holds of clock placeholders
 	// ({{date}} and the rest), found once when the configuration loads
 	// (fetch.ClockUseOf); the zero value, as nearly every collector's, when
@@ -728,7 +731,20 @@ type ResponseConfig struct {
 	Namespaces map[string]string `yaml:"namespaces"`
 	Graphite   GraphiteConfig    `yaml:"graphite"`
 	Binary     BinaryConfig      `yaml:"binary"`
+	YAML       YAMLConfig        `yaml:"yaml"`
 }
+
+// YAMLConfig is response.yaml: how the yaml decoder reads a body of more
+// than one document.
+type YAMLConfig struct {
+	// Documents is one, the default, which refuses a second document, or
+	// list, which makes the body a list of its documents, in their order,
+	// whether it holds one, several or none.
+	Documents string `yaml:"documents"`
+}
+
+// YAMLDocuments are the values of response.yaml.documents.
+var YAMLDocuments = []string{"one", "list"}
 
 // BinaryConfig is response.binary: the layout the binary decoder reads a
 // body of a binary protocol by (decode/binary.go), its fields in order, and
@@ -1072,7 +1088,10 @@ type Limits struct {
 	// MaxScriptMemory bounds the address space of the collector's Python
 	// workers; 0 leaves it unbounded.
 	MaxScriptMemory ByteSize `yaml:"max_script_memory"`
-	MaxCacheEntries int      `yaml:"max_cache_entries"`
+	// MaxExpressionMemory bounds what the exporter's memory may grow by
+	// while a jq or yq transform of the collector runs.
+	MaxExpressionMemory ByteSize `yaml:"max_expression_memory"`
+	MaxCacheEntries     int      `yaml:"max_cache_entries"`
 }
 
 // MetricRule is one entry of a collector's metrics: a metric, the expression
@@ -1086,9 +1105,13 @@ type MetricRule struct {
 	Description string      `yaml:"description"`
 	Type        MetricType  `yaml:"type"`
 	Labels      []LabelRule `yaml:"labels"`
-	Expression  string      `yaml:"expression"`
-	ErrorMode   string      `yaml:"error_mode"`
-	Required    *bool       `yaml:"required"`
+	// LabelsFrom, for the jq and yq transforms with items, is an expression
+	// that gives an object of each item, whose keys become labels of the
+	// item's series with their values. See transformJQItems.
+	LabelsFrom string `yaml:"labels_from"`
+	Expression string `yaml:"expression"`
+	ErrorMode  string `yaml:"error_mode"`
+	Required   *bool  `yaml:"required"`
 	// ValueMap turns the text an expression gives into the value, such as
 	// {up: 1, down: 0}, with "*" for any other text. Scale multiplies the
 	// value, mapped or read as a number, such as 0.001 for milliseconds to

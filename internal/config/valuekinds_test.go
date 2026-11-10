@@ -222,7 +222,7 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 		"request.login.keep_file", "request.login.steps[].method", "request.login.steps[].url", "request.login.refresh_steps[].method", "request.login.refresh_steps[].url",
 		"request.read[].name", "request.read[].order", "request.read[].table", "request.read[].type", "request.starttls_mode",
 		"request.method", "request.namespaces[]", "request.pagination.type", "request.priv_protocol", "request.proxy_url", "request.record_type", "request.redirect_trusted_hosts[]", "request.region", "request.resource", "request.retry.codes[]", "request.rpc", "request.searches[].attributes[]", "request.searches[].name", "request.searches[].scope", "request.security_level", "request.starttls", "request.statement_file", "request.statements[].name", "request.transport", "request.type", "request.unix_socket", "request.version", "request.walk.*.*",
-		"response.binary.byte_order", "response.binary.fields[].byte_order", "response.binary.fields[].type", "response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "transform.libraries[]", "transform.required_libs[]", "transform.type",
+		"response.binary.byte_order", "response.binary.fields[].byte_order", "response.binary.fields[].type", "response.csv.delimiter", "response.graphite.invalid_lines", "response.graphite.value", "response.yaml.documents", "transform.libraries[]", "transform.required_libs[]", "transform.type",
 	}
 	var ofCollectors []string
 	for _, key := range collector {

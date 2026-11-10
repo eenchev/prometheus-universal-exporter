@@ -43,12 +43,14 @@ start from. This page is the reference for what it may contain.
   - [Prefixing a collector's metrics](#prefixing-a-collectors-metrics)
   - [UTF-8 names](#utf-8-names)
   - [Metrics per item](#metrics-per-item)
+  - [Labels from an object](#labels-from-an-object)
   - [Long label values](#long-label-values)
   - [Long label names](#long-label-names)
   - [Turning a status into metrics](#turning-a-status-into-metrics)
   - [Mapping text to values and scaling them](#mapping-text-to-values-and-scaling-them)
   - [Reading a date or a time as the value](#reading-a-date-or-a-time-as-the-value)
   - [Value-parsing helpers](#value-parsing-helpers)
+  - [Programs written for jq](#programs-written-for-jq)
   - [Histograms from a list of values](#histograms-from-a-list-of-values)
   - [Derived series](#derived-series)
   - [Conditional metrics and labels](#conditional-metrics-and-labels)
@@ -212,7 +214,11 @@ for yq-compatible transformations). A JSON body is one value and a YAML body
 one document: NDJSON, or anything else after the JSON value but whitespace,
 fails the scrape saying so (`decoder.type: ndjson` reads NDJSON), and so does a second YAML document after `---`
 (a leading `---`, and a trailing one with nothing after it, are fine), rather
-than everything after the first being dropped unseen. A key written twice in
+than everything after the first being dropped unseen. With
+`response.yaml.documents: list` the body is instead the list of its
+documents, in their order, whether it holds several, one or none, as a
+stream of Kubernetes manifests is read; an empty document is none of them.
+Rules then read `.[]`, or `items: .[]`. A key written twice in
 one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
 already defined at line 1`, rather than the later value replacing the earlier
 unseen: the error names the first ten such problems and counts the rest. A
@@ -229,7 +235,10 @@ being kept, which for `16` and `0x10` the YAML library did unseen and for
 the others the order of a Go map decided; so does a key merged in with
 `<<` that is the text of one of the mapping's own. A null key (`~`, `null`
 or none at all) has no text and fails the scrape at its line, `line 2:
-mapping key "~" is null, which is no text; quote it to read it as text`. An
+mapping key "~" is null, which is no text; quote it to read it as text`. A
+whole number of any length keeps every digit, in YAML as in JSON, so an
+identifier of thirty digits is the same label from either; one written with
+a fraction or an exponent is a float. An
 error quotes no more than the start of a part of the document, followed by
 the length of the whole — the first 64 bytes of a key written twice (`mapping
 key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
@@ -1478,7 +1487,47 @@ request took, `$tls`, the TLS connection it was sent on, `$url`, where its
 redirects led, `$redirects`, how many there were, `$http_version`, the
 version of HTTP the answer came in, and `$remote_ip`, the address its
 connection was made to, each `null` for other types (see [Timings, TLS and the final
-URL](REQUESTS.md#timings-tls-and-the-final-url)).
+URL](REQUESTS.md#timings-tls-and-the-final-url)); and `$params`, the
+[probe's parameters](REQUESTS.md#in-expressions) by name.
+
+### Labels from an object
+
+A rule with `items` can take its labels from an object of each item, as the
+labels of a Kubernetes object are, where the names are the target's and no
+list of them can be written beforehand. `labels_from` is an expression that
+gives the object; each key becomes a label of the item's series, with the
+key's value as its value:
+
+```yaml
+name_escaping: underscores        # app.kubernetes.io/name -> app_kubernetes_io_name
+metrics:
+  - name: kube_pod_labels
+    items: .items[]
+    expression: "1"
+    labels_from: .metadata.labels
+    labels:
+      - name: pod
+        expression: .metadata.name
+```
+
+A value is written as a label expression's is, a number or a boolean as its
+text. A key whose value is `null` or empty leaves no label, and so does an
+item without the object; anything else that is no object, and a value that
+is an object or a list, is that item's failure, handled by the rule's
+`error_mode`. A label of the rule's `labels` replaces a key of its name. The
+names are held to [`name_escaping`](#utf-8-names) as every
+label name is, so a name with a dot or a slash needs `underscores` or
+`values`. The expression can shape the object first, to give the names a
+prefix or keep some of them:
+
+```yaml
+labels_from: '.metadata.labels | with_entries(.key |= "label_" + .)'
+labels_from: '.metadata.labels | with_entries(select(.key | startswith("app.")))'
+```
+
+Every key is a label, so the number of series a metric has is the target's
+to decide: keep to objects whose keys are few and steady. For a document
+that is one object, set `items: .`.
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
@@ -2383,6 +2432,24 @@ The helpers are gojq functions the exporter adds, named so that none hides
 a builtin of jq or gojq. They are there in every jq expression the exporter
 evaluates, those of [pagination](REQUESTS.md#pagination) and
 [logins](AUTHENTICATION.md#logging-in-to-a-target) included.
+
+### Programs written for jq
+
+The engine is [gojq](https://github.com/itchyny/gojq), which leaves out a
+few names jq has. The exporter adds them, so a program written and tried
+with `jq` loads as it is:
+
+| Name | Here |
+| --- | --- |
+| `debug`, `debug(message)`, `stderr` | Hand their input on and write nothing: the exporter has no terminal, and a target's answer is not for its log. |
+| `input_line_number`, `input_filename` | `0` and `null`: a program has one input, of no file. |
+| `have_literal_numbers`, `have_decnum` | `true` and `false`: a whole number keeps every digit, and there are no decimal numbers. |
+| `toarray` | Its input when that is an array, and otherwise an array of it. |
+| `@base32`, `@base32d` | Encode text as base32, and decode it, padded or not, also in a string, as `@base32 "id=\(.id)"`. |
+
+`input`, `inputs` and a module read with `import` or `include` are refused
+when the configuration loads, since a program has its one input and no
+files; `$ENV` and `env` are empty.
 
 ### Histograms from a list of values
 
@@ -3645,6 +3712,12 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - no rule may be named as a series of another rule's histogram or summary —
   `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
   `foo_count` beside a summary `foo`;
+- `labels_from` is a key of a `jq` or `yq` rule that has `items`, and its
+  expression compiles;
+- a rule names each of its labels once: a second label of a name is refused,
+  as `collector "c" metric "m" has two labels named "env"; a series has one
+  label of a name, so remove one of them or give it another name`, since
+  the later of the two would be the one a series gets and the earlier lost;
 - a label name of a rule, of `transform.labels` or that
   `transform.rename_labels` renames to may be no longer than
   `limits.max_label_name_length` as `name_escaping` exports it, unless
@@ -3686,7 +3759,8 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   `transform.script` to a `python` transform, `transform.libraries` and
   `required_libs` to a collector with a `python` transform or a `pre_script`,
   `response.csv` to the `csv` decoder, `response.graphite` to the `graphite`
-  decoder — either may also be left to each response with `auto` — and
+  decoder, `response.yaml` to the `yaml` decoder — each may also be left to
+  each response with `auto` — and
   `response.namespaces` to an `xpath` transform. Anywhere else the setting
   would be ignored, so it is refused, naming it and the decoder or transform
   the collector has instead;
@@ -3820,11 +3894,10 @@ it is a second value for one series. To export one name from two rules,
 tell their series apart by a label — a static label with another value in
 each is enough — or by reading another `expression` or other `items`.
 
-Labels of one name written twice in a rule keep their order, the last being
-the one a series gets. Under `prometheus`, where a label reads a label of
-the series the rule passes on, the order of a rule's labels is compared too
-when one of them reads a label the rule itself sets under another name,
-since the order then decides the value.
+Under `prometheus`, where a label reads a label of the series the rule
+passes on, the order of a rule's labels is compared too when one of them
+reads a label the rule itself sets under another name, since the order then
+decides the value.
 
 The comparison is of what the rules write, not of what they mean. Two
 expressions that select the same thing in other words — `.v` and `(.v)`, or
@@ -5227,6 +5300,34 @@ first, `--python.max-workers` and
 [`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second, and
 `--python.max-idle-workers` and `--python.idle-timeout` how many workers are
 kept between scrapes, and for how long.
+
+A jq or yq expression can build far more than the response it reads —
+`[range(40000000)]` holds gigabytes, and a definition that calls itself
+never stops building — and the probe's time does not bound that. So a `jq`
+or `yq` transform is stopped when the exporter's memory has grown by more
+than `limits.max_expression_memory` while it ran, 256 MiB unless set, and
+the scrape fails as a limit exceeded, naming the rule:
+
+```text
+the transform was stopped at metric "queue_jobs": the exporter's memory grew by more than limits.max_expression_memory, 268435456 bytes, while it ran; make the expression keep less at once, or raise the limit
+```
+
+The limit is a [size](#sizes) of at least 1 MiB. It is on what the transform
+holds, not on what it makes and lets go of. Go measures memory for the
+process and not for one scrape, so what other scrapes hold in the same
+moments counts too: a transform is not looked at in its first 20
+milliseconds, which nearly all end within, and one that runs longer may be
+stopped anywhere between the limit and twice it. Set the limit well above
+what the collector's answers need, and lower it only on an exporter whose
+memory is short. One step that makes a very large value at once is not
+interrupted part of the way, so an expression that doubles a text at every
+step can pass the limit several times over before it is stopped. The
+failure is the probe's `validation` stage, counted in
+`http_exporter_series_limit_exceeded_total`, whatever `error_handling`
+says. The jq
+expressions of [pagination](REQUESTS.md#pagination) and
+[logins](AUTHENTICATION.md#logging-in-to-a-target) run outside the
+transform, and are bounded by the probe's time alone.
 
 A decoded document is larger than the response it was read from, the more
 so the more of the response is structure: a response of nothing but empty

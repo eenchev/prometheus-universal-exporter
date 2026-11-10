@@ -133,7 +133,7 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 	}
 	switch c.Transform.Type {
 	case "jq", "yq":
-		set, err = transformJQ(ctx, d.Data, c.Metrics, c)
+		set, err = transformJQWithinMemory(ctx, d.Data, c.Metrics, c)
 	case "regex":
 		text, ok := d.Data.(string)
 		if !ok {
@@ -1112,7 +1112,15 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		}
 		labels := make(map[string]string, len(rule.Labels))
 		var labelErr error
+		if rule.LabelsFrom != "" {
+			if err := labelsFrom(ctx, labels, item, data, rule.LabelsFrom); err != nil {
+				labelErr = model.Errorf("metric %q item %d labels_from %w", rule.Name, model.Position(index), err)
+			}
+		}
 		for _, label := range rule.Labels {
+			if labelErr != nil {
+				break
+			}
 			if label.Static() {
 				labels[label.Name] = label.Value
 				continue
@@ -1154,6 +1162,68 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 	}
 	return nil
+}
+
+// labelsFrom gives labels a label for each key of the object the rule's
+// labels_from expression reads of item: the key is the label's name and its
+// value, written as a label expression's is (labelText), the label's. A key
+// whose value is null or empty text leaves no label, and neither does an
+// expression that gives null or nothing. Anything else that is no object,
+// and a value that is an object or an array, is the item's failure. The
+// rule's own labels are read after these, so one of a key's name replaces
+// it.
+func labelsFrom(ctx context.Context, labels map[string]string, item, root any, expression string) error {
+	from, err := evaluateJQOne(ctx, item, root, expression)
+	if err != nil {
+		return fmt.Errorf("expression: %w", err)
+	}
+	if from == nil {
+		return nil
+	}
+	object, ok := from.(map[string]any)
+	if !ok {
+		return fmt.Errorf("gave %s, and labels are read from an object of names and values", jqKind(from))
+	}
+	// Of several values that are no label's the failure names the key that
+	// sorts first, so it reads the same at every scrape.
+	var failed error
+	var at string
+	for name, value := range object {
+		if value == nil {
+			continue
+		}
+		text, err := labelText(value)
+		if err != nil {
+			if failed == nil || name < at {
+				failed, at = err, name
+			}
+			continue
+		}
+		if text != "" {
+			labels[name] = text
+		}
+	}
+	if failed != nil {
+		return model.Errorf("key %s %w", model.Quoted(at), failed)
+	}
+	return nil
+}
+
+// jqKind names the kind of a jq value as jq's type does, with its article.
+func jqKind(v any) string {
+	switch v.(type) {
+	case string:
+		return "a string"
+	case bool:
+		return "a boolean"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "an object"
+	case nil:
+		return "null"
+	}
+	return "a number"
 }
 
 // evaluateJQ runs a compiled program with input as its input and root bound
@@ -1267,16 +1337,40 @@ type responseVariables struct {
 	status, headers any
 	trip            *fetch.HTTPTrip
 	once            sync.Once
-	// read are all the variables, the trip's made, once once is done.
+	// read are all the variables but $params, the trip's made, once once
+	// is done.
 	read expr.JQBindings
+	// given are the probe's parameters as the context carries them
+	// (WithLabelParams), and params the object $params is, made of them
+	// the first time a program that reads it runs.
+	given      map[string]string
+	paramsOnce sync.Once
+	params     map[string]any
+}
+
+// jqParams is $params: each parameter the probe gave, a param_<name> that
+// is not empty, by its name, as text. A probe that gave none has the empty
+// object, so $params.queue is null and never an error.
+func jqParams(given map[string]string) map[string]any {
+	params := make(map[string]any, len(given))
+	for name, value := range given {
+		if name, ok := strings.CutPrefix(name, fetch.PathParamPrefix); ok && value != "" {
+			params[name] = value
+		}
+	}
+	return params
 }
 
 // withResponseVariables puts the jq variables for r into ctx.
 func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
+	given, _ := ctx.Value(labelParamsKey{}).(map[string]string)
 	if r == nil {
-		return ctx
+		if len(given) == 0 {
+			return ctx
+		}
+		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given})
 	}
-	vars := &responseVariables{status: r.Status(), trip: r.Trip}
+	vars := &responseVariables{status: r.Status(), trip: r.Trip, given: given}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {
@@ -1289,17 +1383,27 @@ func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.C
 
 // values are the variables to run program with, root as $root.
 func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
+	var params any
+	if program.ReadsParams {
+		if v == nil {
+			return expr.JQBindings{Params: map[string]any{}}.Values(root)
+		}
+		v.paramsOnce.Do(func() { v.params = jqParams(v.given) })
+		params = v.params
+	}
 	if v == nil {
 		return expr.JQBindings{}.Values(root)
 	}
 	if !program.ReadsTrip {
-		return expr.JQBindings{Status: v.status, Headers: v.headers}.Values(root)
+		return expr.JQBindings{Status: v.status, Headers: v.headers, Params: params}.Values(root)
 	}
 	v.once.Do(func() {
 		trip := v.trip
 		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects(), HTTPVersion: trip.JQHTTPVersion(), RemoteIP: trip.JQRemoteIP()}
 	})
-	return v.read.Values(root)
+	read := v.read
+	read.Params = params
+	return read.Values(root)
 }
 
 // runWithVariables runs program on input with the jq variables of ctx's

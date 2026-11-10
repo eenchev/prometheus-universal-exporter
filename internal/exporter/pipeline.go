@@ -211,7 +211,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// values where the transform reads them, for a response and for each
 	// file of a directory alike (transform.WithLabelParams). Nearly every
 	// collector has none, and its trips carry nothing for it.
-	if c.LabelParams != nil {
+	if c.LabelParams != nil || c.ExpressionParams != nil {
 		ctx = transform.WithLabelParams(ctx, j.overrides.Params)
 	}
 	start := time.Now()
@@ -445,7 +445,8 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.Is(err, model.ErrLimitExceeded) {
 			// A transform stops at the first series past
 			// limits.max_metrics, which is the validation's failure,
-			// found sooner (transform/serieslimit.go).
+			// found sooner (transform/serieslimit.go), and so is a jq
+			// transform stopped for its memory (expressionmemory.go).
 			rec.update(func(x *serverStats) { x.limitErrors++ })
 			return stageFailed("validation", err, model.ErrorPolicyFail)
 		}

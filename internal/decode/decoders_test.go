@@ -128,7 +128,7 @@ func TestJSONTrailingDataIsRefused(t *testing.T) {
 // empty body are fine.
 func TestYAMLMultipleDocumentsAreRefused(t *testing.T) {
 	for _, body := range []string{"a: 1\n---\na: 2\n", "---\na: 1\n---\n- 2\n", "a: 1\n--- ~\n"} {
-		if _, err := decodeAs(t, "yaml", "", body); err == nil || !strings.Contains(err.Error(), "multi-document YAML is not supported") {
+		if _, err := decodeAs(t, "yaml", "", body); err == nil || !strings.Contains(err.Error(), "set response.yaml.documents: list to read them as a list") {
 			t.Errorf("%q: err=%v", body, err)
 		}
 	}

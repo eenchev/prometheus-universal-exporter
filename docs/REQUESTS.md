@@ -24,6 +24,7 @@ map renders into.
 - [Path parameters](#path-parameters)
   - [In the body, headers and query](#in-the-body-headers-and-query)
   - [In label values](#in-label-values)
+  - [In expressions](#in-expressions)
   - [Dates and times](#dates-and-times)
   - [Since the last success](#since-the-last-success)
 - [Redirects and HTTP/2](#redirects-and-http2)
@@ -593,6 +594,35 @@ of them at most, each by at most 256 bytes of its series, a longer series by
 a digest of it. Its verbose self-metrics never carry a value. A collector
 whose label values hold no placeholder pays nothing for the feature; one
 that has some makes a copy of its labels for each probe.
+
+### In expressions
+
+A `jq` or `yq` expression of a metric rule reads the probe's parameters as
+`$params`, an object of each `param_<name>` the probe gave, by its name:
+
+```yaml
+metrics:
+  - name: queue_jobs
+    items: .queues[] | select(.name == $params.queue)
+    expression: .jobs
+    labels:
+      - name: region
+        expression: $params.region // "eu"
+```
+
+```text
+/probe?collector=queues&target=https://broker.example&param_queue=mail
+```
+
+A value is text. A parameter the probe did not give, or gave empty, is
+`null`, so an expression says what happens without it, as `// "eu"` does
+above. A collector takes the parameters its expressions read by name,
+`$params.queue` or `$params["queue"]`, beside those its placeholders name;
+another is refused as [a mistake](#path-parameters). One whose expression
+reads `$params` otherwise, as a whole or by a name it computes, takes any
+parameter. A [static target's `params`](STATIC-TARGETS.md) are read the same
+way, and probes that differ in a parameter are cached apart. `$params` is
+`null` in the expressions of pagination and logins.
 
 ### Dates and times
 

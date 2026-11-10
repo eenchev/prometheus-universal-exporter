@@ -19,6 +19,17 @@ type LabelParams struct {
 	Rules     []LabelTemplate
 }
 
+// ExpressionParams is what the jq or yq expressions of a collector's rules
+// read of $params, the probe's parameters (fetch.ParseExpressionParams):
+// the parameters they read by name, without the param_ prefix and sorted,
+// and whether one reads $params otherwise, as a whole or by a name it
+// makes, which may be any parameter's. It is made when the configuration
+// loads and never changed.
+type ExpressionParams struct {
+	Names []string
+	Any   bool
+}
+
 // LabelTemplate is one label value with its placeholders.
 type LabelTemplate struct {
 	// Name is the label's name. Rule and Label say which label of which

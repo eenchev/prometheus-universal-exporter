@@ -161,6 +161,9 @@ collectors:
     #   # The most memory each of this collector's Python workers, which run
     #   # the pre_script below, may use; at least 32MiB, unbounded by default.
     #   max_script_memory: 256MiB
+    #   # The most the exporter's memory may grow by while this collector's
+    #   # jq transform runs; one that takes more is stopped. Defaults to 256MiB.
+    #   max_expression_memory: 256MiB
     decoder:
       type: json
     transform:

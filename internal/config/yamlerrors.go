@@ -41,6 +41,7 @@ var yamlPlaces = map[string]string{
 	"ResponseConfig":             "response",
 	"CSVConfig":                  "response.csv",
 	"GraphiteConfig":             "response.graphite",
+	"YAMLConfig":                 "response.yaml",
 	"DecoderConfig":              "decoder",
 	"ErrorHandling":              "error_handling",
 	"OTLPConfig":                 "otlp",

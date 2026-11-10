@@ -240,7 +240,11 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
 	case "yaml":
-		v, err := decodeYAML(r.Body)
+		decodeBody := decodeYAML
+		if c.Response.YAML.Documents == "list" {
+			decodeBody = decodeYAMLDocuments
+		}
+		v, err := decodeBody(r.Body)
 		if err == nil {
 			v, err = yamlTextKeys(v)
 		}
@@ -638,7 +642,15 @@ func decodeYAML(body []byte) (any, error) {
 	return yamlReading{large: yamlLargeMapping}.decode(body)
 }
 
-// decode is decodeYAML, as r decodes the document parsed.
+// decodeYAMLDocuments is the body as the list of its documents
+// (yamlReading.documents).
+func decodeYAMLDocuments(body []byte) (any, error) {
+	return yamlReading{large: yamlLargeMapping, list: true}.decode(body)
+}
+
+// errYAMLSecondDocument is the refusal of a body of more than one document.
+var errYAMLSecondDocument = errors.New("the body holds more than one YAML document (separated by ---); set response.yaml.documents: list to read them as a list")
+
 func (r yamlReading) decode(body []byte) (v any, err error) {
 	defer func() {
 		if failed := recover(); failed != nil {
@@ -646,6 +658,9 @@ func (r yamlReading) decode(body []byte) (v any, err error) {
 		}
 	}()
 	decoder := yaml.NewDecoder(bytes.NewReader(body))
+	if r.list {
+		return r.documents(decoder)
+	}
 	var root yaml.Node
 	if err := decoder.Decode(&root); errors.Is(err, io.EOF) {
 		// An empty document.
@@ -663,17 +678,61 @@ func (r yamlReading) decode(body []byte) (v any, err error) {
 			return nil, yamlFailure(err)
 		}
 		if !emptyYAMLDocument(&next) {
-			return nil, errors.New("the body holds more than one YAML document (separated by ---); multi-document YAML is not supported")
+			return nil, errYAMLSecondDocument
 		}
 	}
-	timestampsAsText(&root, map[*yaml.Node]bool{})
-	if v, err = r.value(&root); err != nil {
-		return nil, err
+	v, _, err = r.document(&root, false)
+	return v, err
+}
+
+// documents is the body as the list of its documents, in their order, for
+// response.yaml.documents: list. A document that holds nothing, as the one
+// a trailing --- begins, is none of them, so a body of nothing is the empty
+// list; one written null is a null among them. Each is decoded as the one
+// document of a body is, and the first that is refused refuses the body.
+//
+// The library keeps a document's anchors for the documents after it, so an
+// alias may stand for a node of an earlier one, which was marked when that
+// one was decoded (markYAMLWholeNumbers): once a document had a whole number
+// marked, every later one is looked through for marked text.
+func (r yamlReading) documents(decoder *yaml.Decoder) (any, error) {
+	list := []any{}
+	marked := false
+	for {
+		var root yaml.Node
+		err := decoder.Decode(&root)
+		if errors.Is(err, io.EOF) {
+			return list, nil
+		}
+		if err != nil {
+			return nil, yamlFailure(err)
+		}
+		if emptyYAMLDocument(&root) {
+			continue
+		}
+		var v any
+		if v, marked, err = r.document(&root, marked); err != nil {
+			return nil, err
+		}
+		list = append(list, v)
 	}
-	if err := yamlKeysAsText(&root); err != nil {
-		return nil, err
+}
+
+// document is the value of one parsed document. marked says a document
+// before it had a whole number marked, and whole whether one has by now.
+func (r yamlReading) document(root *yaml.Node, marked bool) (v any, whole bool, err error) {
+	timestampsAsText(root, map[*yaml.Node]bool{})
+	whole = markYAMLWholeNumbers(root, false) || marked
+	if v, err = r.value(root); err != nil {
+		return nil, whole, err
 	}
-	return v, nil
+	if err := yamlKeysAsText(root); err != nil {
+		return nil, whole, err
+	}
+	if whole {
+		v = yamlWholeNumbers(v)
+	}
+	return v, whole, nil
 }
 
 // yamlPlace is where a panic was raised: the file, without its directory,

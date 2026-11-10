@@ -73,7 +73,7 @@ collectors:
 | `client_id` | made for each connection | The client identifier. |
 | `persistent_session` | `false` | The broker keeps the session between scrapes (see [Between scrapes](#between-scrapes)). |
 | `keep_connection` | `false` | The exporter keeps the connection between scrapes. |
-| `idle_timeout` | `5m` | With `keep_connection`, how long a connection no scrape used is kept. |
+| `idle_timeout` | `5m` | With `keep_connection`, how long a connection no scrape used is kept; `0` keeps it as long as the collector is configured. |
 | `keep_alive` | `30s` | The keep alive told to the broker, which counts it in whole seconds. |
 | `tls` | — | How the broker's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls). |
 | `max_response_bytes` | the collector's limit | The most the messages of a scrape may be, together. |
@@ -158,7 +158,7 @@ again by the next scrape when it ended, and closed when no scrape used it
 for `idle_timeout`, when a reload removes its collector, and at shutdown.
 `connection.new` is `true` on the scrape that made it, `received` counts
 its messages, and `dropped` those of topics beyond `max_messages` or
-beyond `max_response_bytes`. What is remembered is in memory alone: a
+beyond `max_response_bytes`, counted as the document holds them. What is remembered is in memory alone: a
 restart begins again. The exporter keeps at most 256 such connections.
 
 With several replicas of the exporter, leave `client_id` out: a broker

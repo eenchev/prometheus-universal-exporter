@@ -149,7 +149,10 @@ func TestAModbusScrapeReadsRegistersAndBits(t *testing.T) {
 		d.set(d.input, 40, float[3], float[2], float[1], float[0]) // dcba
 		d.set(d.holding, 100, 0, 1, 0, 2, 0xFF, 0xFF, 0xFF, 0xFF)  // u32 65538, i32 -1
 		d.set(d.holding, 200, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)
-		d.set(d.holding, 300, 'S', 'N', '-', '4', '2', 0, 0, 0)
+		d.set(d.holding, 300, 'S', 'N', '-', '4', '2', 0, 'x', ' ')
+		// A string whose device puts the low byte first: its registers
+		// stay in their order, whatever the order says of a number's.
+		d.set(d.holding, 310, 'B', 'A', 'D', 'C', 0, 'E')
 		nan := make([]byte, 4)
 		binary.BigEndian.PutUint32(nan, math.Float32bits(float32(math.NaN())))
 		d.set(d.holding, 400, nan...)
@@ -166,6 +169,7 @@ func TestAModbusScrapeReadsRegistersAndBits(t *testing.T) {
 		{Name: "counter", Address: 100, Type: "u32"},
 		{Name: "big", Address: 200, Type: "i64"},
 		{Name: "serial", Address: 300, Type: "string", Count: 4},
+		{Name: "serial_swapped", Address: 310, Type: "string", Count: 3, Order: "dcba"},
 		{Name: "missing", Address: 400, Type: "f32"},
 		{Name: "bits", Table: "coil", Address: 5, Count: 10},
 		{Name: "bit", Table: "discrete", Address: 7},
@@ -173,7 +177,7 @@ func TestAModbusScrapeReadsRegistersAndBits(t *testing.T) {
 	doc := modbusDoc(t, c, d.Addr)
 	want := map[string]string{
 		"word": "65534", "signed": "-2", "volts": "230.5", "volts_cdab": "230.5", "volts_badc": "230.5", "volts_dcba": "230.5",
-		"pair": "[65538,-1]", "counter": "65538", "big": "9223372036854775807", "serial": `"SN-42"`, "missing": "null",
+		"pair": "[65538,-1]", "counter": "65538", "big": "9223372036854775807", "serial": `"SN-42"`, "serial_swapped": `"ABCDE"`, "missing": "null",
 		"bits": "[true,false,true,false,false,false,false,false,false,true]", "bit": "true",
 	}
 	for name, value := range want {
@@ -191,7 +195,7 @@ func TestAModbusScrapeReadsRegistersAndBits(t *testing.T) {
 	if first, pair := requests[0], requests[6]; first[7] != 3 || binary.BigEndian.Uint16(first[10:]) != 1 || pair[7] != 3 || binary.BigEndian.Uint16(pair[8:]) != 100 || binary.BigEndian.Uint16(pair[10:]) != 4 {
 		t.Errorf("the requests were % x and % x", first, pair)
 	}
-	if bits := requests[11]; bits[7] != 1 || binary.BigEndian.Uint16(bits[10:]) != 10 {
+	if bits := requests[12]; bits[7] != 1 || binary.BigEndian.Uint16(bits[10:]) != 10 {
 		t.Errorf("the coils were asked with % x", bits)
 	}
 }
@@ -253,6 +257,11 @@ func TestAModbusScrapeFailsOnWhatIsNoAnswer(t *testing.T) {
 		_, err := FetchCollector(context.Background(), d.Addr, c, RequestOverrides{}, nil)
 		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "request.read[0] (value)") {
 			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
+		}
+		// What the answer held is not told to whoever called the probe,
+		// but for an exception the protocol defines.
+		if told := model.CallerText(err); name != "exception" && (strings.Contains(told, "48 54 54 50") || !strings.Contains(told, model.WithheldMark)) || name == "exception" && told != err.Error() {
+			t.Errorf("%s: a probe's caller is told %q", name, told)
 		}
 	}
 }

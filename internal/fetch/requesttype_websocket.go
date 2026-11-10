@@ -3,6 +3,8 @@
 package fetch
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1" //nolint:gosec // RFC 6455's handshake is SHA-1 of the key; it guards no secret.
@@ -73,6 +75,8 @@ const (
 	webSocketDefaultWindow = 5 * time.Second
 	webSocketMaxMessages   = 10000
 	webSocketSendKind      = "websocket_send"
+	// webSocketHeaderLimit is the most the handshake's answer may be.
+	webSocketHeaderLimit = 64 << 10
 	// webSocketGUID is what the handshake appends to the key (RFC 6455, 1.3).
 	webSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 )
@@ -154,6 +158,8 @@ func (webSocketRequester) Validate(x *model.Collector) error {
 	for _, name := range model.SortedKeys(r.Headers) {
 		canonical := http.CanonicalHeaderKey(name)
 		switch {
+		case strings.Contains(name, "{{"):
+			return fmt.Errorf("collector %q request.headers has a placeholder in the name %q; a placeholder is filled in a header's value, and a name is sent as written", x.Name, name)
 		case canonical == "Host" || canonical == "Upgrade" || canonical == "Connection" || strings.HasPrefix(canonical, "Sec-Websocket-"):
 			return fmt.Errorf("collector %q request.headers sets %s, which the handshake writes itself", x.Name, name)
 		case canonical == "Authorization" && r.BearerTokenFile != "":
@@ -436,18 +442,38 @@ func webSocketHandshake(ctx context.Context, conn *netConn, a netAddress, secure
 	if err := request.Write(conn); err != nil {
 		return "", netFailure(ctx, err)
 	}
-	answer, err := http.ReadResponse(conn.r, request)
-	if answer != nil {
-		// Nothing of a body is read: a 101 has the frames in its place,
-		// which stay in the reader, and another status ends the scrape.
-		defer func() { _ = answer.Body.Close() }()
-	}
-	if err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			err = errors.New("the server closed the connection")
+	// The answer's status line and headers, to the empty line that ends
+	// them and no further: the frames after it stay in the reader, and a
+	// server that never ends its headers is not read until the deadline.
+	var head []byte
+	for {
+		line, err := netLine(conn.r, webSocketHeaderLimit-len(head))
+		if errors.Is(err, errNetLineTooLong) {
+			return "", fmt.Errorf("the answer's headers are longer than %d bytes", webSocketHeaderLimit)
 		}
-		return "", netFailure(ctx, fmt.Errorf("the answer is no HTTP response: %w", err))
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = errors.New("the server closed the connection")
+			}
+			return "", netFailure(ctx, fmt.Errorf("the answer is no HTTP response: %w", err))
+		}
+		// What is no HTTP server is told so at its first line, not when
+		// the headers it will never end have not come by the deadline.
+		if len(head) == 0 && !strings.HasPrefix(line, "HTTP/") {
+			return "", model.Errorf("the answer begins %s, which is no HTTP response; is the target a WebSocket endpoint?", model.Quoted(netShown(line)))
+		}
+		head = append(head, line...)
+		if line == "\r\n" || line == "\n" {
+			break
+		}
 	}
+	answer, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(head)), request)
+	if err != nil {
+		return "", fmt.Errorf("the answer is no HTTP response: %w", withAnswerWithheld(err))
+	}
+	// Nothing of a body is read: a 101 has the frames in its place, and
+	// another status ends the scrape.
+	defer func() { _ = answer.Body.Close() }()
 	if answer.StatusCode != http.StatusSwitchingProtocols {
 		return "", fmt.Errorf("the server answered HTTP status %d, not 101: it does not serve a WebSocket there, or refuses this client", answer.StatusCode)
 	}
@@ -458,11 +484,11 @@ func webSocketHandshake(ctx context.Context, conn *netConn, a netAddress, secure
 	case answer.Header.Get("Sec-Websocket-Accept") != base64.StdEncoding.EncodeToString(sum[:]):
 		return "", errors.New("the answer's Sec-WebSocket-Accept is not the one this handshake's key makes: what answered is no WebSocket server, or a cache answered for it")
 	case answer.Header.Get("Sec-Websocket-Extensions") != "":
-		return "", fmt.Errorf("the server chose the extension %q, and none was offered", netShown(answer.Header.Get("Sec-Websocket-Extensions")))
+		return "", model.Errorf("the server chose the extension %s, and none was offered", model.Quoted(netShown(answer.Header.Get("Sec-Websocket-Extensions"))))
 	}
 	chosen := answer.Header.Get("Sec-Websocket-Protocol")
 	if chosen != "" && !slices.Contains(subprotocols, chosen) {
-		return "", fmt.Errorf("the server chose the subprotocol %q, which request.subprotocols does not offer", netShown(chosen))
+		return "", model.Errorf("the server chose the subprotocol %s, which request.subprotocols does not offer", model.Quoted(netShown(chosen)))
 	}
 	return chosen, nil
 }
@@ -586,7 +612,7 @@ func (w *webSocket) message() (byte, []byte, error) {
 				return 0, nil, errors.New("the server continued a message it had not begun")
 			}
 		default:
-			return 0, nil, fmt.Errorf("the server sent a frame of opcode %d, which RFC 6455 has not", opcode)
+			return 0, nil, model.Errorf("the server sent a frame of opcode %s, which RFC 6455 has not", model.Bare(strconv.Itoa(int(opcode))))
 		}
 		whole = append(whole, payload...)
 		if final {

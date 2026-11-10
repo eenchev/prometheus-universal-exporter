@@ -30,8 +30,8 @@ are CONNECT, SUBSCRIBE, PUBACK, PINGREQ and DISCONNECT.
 
 Of the common part it takes `username`, `password_file` (only beside
 `username`), `tls`, `max_response_bytes`, `allowed_targets`,
-`denied_targets` and `idle_timeout` (only beside `keep_connection`, at
-least 1s, 5m when left out); a static target's request block takes
+`denied_targets` and `idle_timeout` (only beside `keep_connection`, not
+negative, 5m when left out, 0 never closing an idle connection); a static target's request block takes
 `timeout`, `username`, `password_file` and `tls`.
 
 - A target MUST be `host`, `host:port`, `mqtt://host:port` or
@@ -45,7 +45,9 @@ least 1s, 5m when left out); a static target's request block takes
 - A connection MUST be made with protocol level 4, the keep alive, the
   client identifier, the collector's own or `pue-` and 16 random
   hexadecimal digits, and clean session set unless `persistent_session`.
-  A CONNACK that refuses MUST fail the scrape with its code's meaning.
+  A CONNACK that refuses MUST fail the scrape with its code's meaning,
+  a code MQTT 3.1.1 does not define not being told to a probe's caller
+  (§ 19.4).
   The topics MUST then be subscribed at `qos` in one SUBSCRIBE, unless the
   broker said a session was present; a subscription the broker refuses
   MUST fail the scrape naming its topic. A message of QoS 1 MUST be
@@ -53,13 +55,16 @@ least 1s, 5m when left out); a static target's request block takes
 - Without `keep_connection`, a scrape MUST make its own connection, read
   until `window` has passed since it subscribed or `max_messages` have
   come, send DISCONNECT and close. The window MUST end within nine tenths
-  of the time the scrape has left. `messages` MUST be every message in the
+  of the time the scrape has left, and one longer than half `keep_alive`
+  MUST be pinged through. `messages` MUST be every message in the
   order it came.
 - With `keep_connection`, the first scrape of a collector, broker, account
   and topics MUST make the connection and wait `window`; later scrapes
-  MUST answer at once from what came on it, and one that finds it ended
-  MUST make it again. The exporter MUST keep the last message of each
-  topic, of at most `max_messages` topics and the response limit in bytes,
+  MUST answer at once from what came on it, one that finds it ended
+  MUST make it again, and one that waits for another scrape to make it
+  MUST give up at its own deadline. The exporter MUST keep the last message of each
+  topic, of at most `max_messages` topics and the response limit in bytes
+  as the document holds them,
   counting what it could not keep as `dropped`; MUST send a PINGREQ every
   half `keep_alive`, and give the connection up when the broker sent
   nothing for one and a half; MUST close it with DISCONNECT once no scrape

@@ -47,6 +47,7 @@ type wsServer struct {
 	accept   string
 	protocol string
 	frames   []wsFrame
+	banner   string
 	echo     bool
 	// closeAfter closes the connection once the frames are sent.
 	closeAfter bool
@@ -89,9 +90,15 @@ func (s *wsServer) serve(conn net.Conn) {
 	}
 	s.mu.Lock()
 	s.request = request
-	status, accept, protocol, closeAfter := s.status, s.accept, s.protocol, s.closeAfter
+	status, accept, protocol, closeAfter, banner := s.status, s.accept, s.protocol, s.closeAfter, s.banner
 	frames := append([]wsFrame(nil), s.frames...)
 	s.mu.Unlock()
+	if banner != "" {
+		// What is no HTTP server says its own first line and waits.
+		_, _ = io.WriteString(conn, banner)
+		_, _ = io.Copy(io.Discard, conn)
+		return
+	}
 	if status != 0 {
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d Nope\r\nContent-Length: 0\r\n\r\n", status)
 		return
@@ -300,6 +307,7 @@ func TestAWebSocketScrapeFailsOnWhatIsNoWebSocket(t *testing.T) {
 		want   string
 	}{
 		"status":      {func(s *wsServer) { s.status = 404 }, "the server answered HTTP status 404, not 101"},
+		"no http":     {func(s *wsServer) { s.banner = "220 mail.test ESMTP\r\n" }, `the answer begins "220 mail.test ESMTP", which is no HTTP response`},
 		"accept":      {func(s *wsServer) { s.accept = "bm90IGl0" }, "Sec-WebSocket-Accept is not the one this handshake's key makes"},
 		"subprotocol": {func(s *wsServer) { s.protocol = "v9" }, `the server chose the subprotocol "v9"`},
 		"extension":   {func(s *wsServer) { s.frames = []wsFrame{{0xC0 | wsText, "x"}} }, "a frame of an extension"},
@@ -312,6 +320,31 @@ func TestAWebSocketScrapeFailsOnWhatIsNoWebSocket(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
 		}
+		// What the server said is not told to whoever called the probe.
+		if told := model.CallerText(err); strings.Contains(told, "v9") || strings.Contains(told, "mail.test") {
+			t.Errorf("%s: a probe's caller is told %q", name, told)
+		}
+	}
+}
+
+// A server whose answer to the handshake never ends its headers is given
+// up on at 64 KiB of them, long before the scrape's deadline.
+func TestAWebSocketScrapeGivesUpOnHeadersWithoutEnd(t *testing.T) {
+	stub := testutil.NewTCPStub(t, func(conn net.Conn) {
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\n")
+		line := []byte("X-Padding: " + strings.Repeat("x", 1000) + "\r\n")
+		for {
+			if _, err := conn.Write(line); err != nil {
+				return
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	_, err := FetchCollector(ctx, stub.Addr, wsCollector(t, WebSocketConfig{}), RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "the answer's headers are longer than 65536 bytes") || time.Since(start) > 30*time.Second {
+		t.Errorf("err=%v after %s, want the headers refused at once", err, time.Since(start))
 	}
 }
 
@@ -349,6 +382,7 @@ func TestWebSocketConfigurationRules(t *testing.T) {
 		"authorization": {WebSocketConfig{}, func(r *model.RequestConfig) {
 			r.Headers, r.BearerTokenFile = map[string]string{"Authorization": "x"}, "/t"
 		}, "both request.bearer_token_file and the Authorization header"},
+		"header name": {WebSocketConfig{}, func(r *model.RequestConfig) { r.Headers = map[string]string{"X-{{param_a}}": "x"} }, "placeholder"},
 		"subprotocol": {WebSocketConfig{Subprotocols: []string{"a b"}}, nil, `request.subprotocols[0] "a b" is not a subprotocol's name`},
 		"messages":    {WebSocketConfig{ReadMessages: -1}, nil, "request.read_messages -1 is not 1 to 10000"},
 		"filter":      {WebSocketConfig{SendText: "{{param_a|shell}}"}, nil, `the unknown filter "shell"`},

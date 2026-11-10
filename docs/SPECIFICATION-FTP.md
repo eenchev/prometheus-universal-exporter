@@ -55,8 +55,11 @@ block takes `path`, `timeout`, `username`, `password_file` and `tls`.
   extension names (§ 6), `Content-Length`, and `Last-Modified` when the
   server answered `MDTM`. `$tls` MUST describe the control connection's
   certificate.
-- The deadline MUST bound the whole scrape, 30 seconds when none is set.
-  The password MUST be in no error, log line, trace or debug report, which
+- A failure MUST tell a probe's caller a reply's code and not its text,
+  nor a line that is no reply, which are the answer's (§ 19.4).
+- One reply MUST be at most 64 KiB, a longer one failing the scrape when
+  that much has come. The deadline MUST bound the whole scrape, 30 seconds
+  when none is set. The password MUST be in no error, log line, trace or debug report, which
   MUST show `PASS ***`. The verbose `url` label MUST be the file's URL,
   `ftp://`, `ftpes://` or `ftps://host:port/<root>/<path>`, with the
   path's placeholders as written, and `http_method` `RETR`.

@@ -235,7 +235,9 @@ be, the certificate does not verify, or `AUTH` is refused:
 the server smtp.example.com:587 refused AUTH PLAIN for monitor@example.com with 535 5.7.8 Username and Password not accepted.
 ```
 
-A password and a token are in no error, log line or debug report: a
+That is the exporter's log; whoever called `/probe` is answered the code
+and `[withheld; in the exporter's log]` for the server's words, as for
+[any failed probe](CONFIGURATION.md#what-a-failed-probes-caller-is-told). A password and a token are in no error, log line or debug report: a
 [debug probe](CONFIGURATION.md#debug-probes) shows each command and its reply, with
 `AUTH PLAIN ***` for the ones that carry a credential.
 

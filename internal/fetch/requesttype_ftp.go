@@ -185,8 +185,9 @@ func (s *ftpSession) read() (ftpReply, error) {
 	var lines []string
 	size := 0
 	for {
-		line, err := s.conn.r.ReadString('\n')
-		if size += len(line); size > ftpReplyLimit {
+		line, err := netLine(s.conn.r, ftpReplyLimit-size)
+		size += len(line)
+		if errors.Is(err, errNetLineTooLong) {
 			return reply, fmt.Errorf("a reply is longer than %d bytes, which no FTP reply is", ftpReplyLimit)
 		}
 		if err != nil {
@@ -199,7 +200,7 @@ func (s *ftpSession) read() (ftpReply, error) {
 		if reply.code == 0 {
 			code, err := strconv.Atoi(line[:min(3, len(line))])
 			if err != nil || code < 100 || code > 599 || len(line) > 3 && line[3] != ' ' && line[3] != '-' {
-				return reply, fmt.Errorf("the server answered %q, which is no FTP reply; is the target an FTP server?", netShown(line))
+				return reply, model.Errorf("the server answered %s, which is no FTP reply; is the target an FTP server?", model.Quoted(netShown(line)))
 			}
 			reply.code = code
 			lines = append(lines, strings.TrimSpace(line[min(4, len(line)):]))
@@ -256,7 +257,7 @@ func (s *ftpSession) must(line, shown string, want ...int) (ftpReply, error) {
 	if shown == "" {
 		shown = line
 	}
-	return reply, model.Errorf("the server answered %s with %d %s", shown, reply.code, reply.text)
+	return reply, model.Errorf("the server answered %s with %d %s", shown, reply.code, model.Bare(reply.text))
 }
 
 // Fetch reads a scrape's file from the server.
@@ -319,7 +320,7 @@ func (ftpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 		return fail(fmt.Errorf("reading the greeting of %s: %w", address.hostPort, err))
 	}
 	if greeting.code != 220 {
-		return fail(fmt.Errorf("the server %s greeted with %d %s, not 220: it does not serve this client", address.hostPort, greeting.code, greeting.text))
+		return fail(model.Errorf("the server %s greeted with %d %s, not 220: it does not serve this client", address.hostPort, greeting.code, model.Bare(greeting.text)))
 	}
 	traceOutcome(ctx, "220 "+greeting.text)
 	if secured == "explicit" {
@@ -381,7 +382,7 @@ func (ftpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 	}
 	if c.Request.MaxAge > 0 {
 		if modified.IsZero() {
-			return nil, fmt.Errorf("the server did not say when %s was last modified (MDTM answered %d %s), so request.max_age cannot be held; leave max_age out for this server", full, reply.code, reply.text)
+			return nil, model.Errorf("the server did not say when %s was last modified (MDTM answered %d %s), so request.max_age cannot be held; leave max_age out for this server", full, reply.code, model.Bare(reply.text))
 		}
 		if err := checkMaxAge(c, full, modified); err != nil {
 			return nil, err
@@ -415,7 +416,7 @@ func (ftpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 		return fail(fmt.Errorf("the end of the transfer of %s: %w", label, err))
 	}
 	if done.code != 226 && done.code != 250 {
-		return fail(model.Errorf("the server ended the transfer of %s with %d %s", full, done.code, done.text))
+		return fail(model.Errorf("the server ended the transfer of %s with %d %s", full, done.code, model.Bare(done.text)))
 	}
 	_, _ = s.command("QUIT", "")
 	traceFacts(ctx, intFact("ftp.bytes", len(body)))
@@ -470,7 +471,7 @@ func (s *ftpSession) passive(control netAddress) (*netConn, error) {
 		}
 	}
 	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("the server's answer to a passive data connection names no port: %d %s", reply.code, reply.text)
+		return nil, model.Errorf("the server's answer to a passive data connection names no port: %d %s", reply.code, model.Bare(reply.text))
 	}
 	address := netAddress{host: control.host, hostPort: net.JoinHostPort(host, strconv.Itoa(port))}
 	traceRequest(s.ctx, "CONNECT", "ftp-data://"+address.hostPort, nil, "", false)

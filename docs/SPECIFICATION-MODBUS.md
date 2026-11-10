@@ -42,11 +42,13 @@ static target's request block takes `timeout`.
   transaction identifier, unit and function are the request's, and it
   holds as many bytes as the registers or bits asked take. An exception
   MUST fail the scrape naming the read, the exception's code and its
-  meaning; any other answer MUST fail it naming what differs.
+  meaning; any other answer MUST fail it naming what differs. What such
+  an answer held, and an exception code the protocol does not define, MUST
+  NOT be told to a probe's caller (§ 19.4).
 - A register's bytes MUST be read by `order`: `badc` and `dcba` swap the
   two bytes of each register, `cdab` and `dcba` reverse the registers of a
   value. A `string` MUST be two characters a register, its registers never
-  reversed, with NULs and blanks at its end removed. The first bit asked
+  reversed, ended at its first NUL, with blanks at its end removed. The first bit asked
   MUST be the lowest bit of the first byte.
 - The answer MUST be a JSON document with each read's value under its
   name: a number, `true` or `false`, or text, and a list of them when

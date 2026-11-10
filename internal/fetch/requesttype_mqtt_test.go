@@ -404,6 +404,54 @@ func TestTheMQTTConnectionsKeptAreBounded(t *testing.T) {
 	}
 }
 
+// A scrape that waits for a kept connection another scrape is making
+// gives up at its own deadline, and not at the other's.
+func TestAnMQTTScrapeWaitingForAKeptConnectionHoldsItsDeadline(t *testing.T) {
+	silent := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+	c := mqttCollector(t, MQTTConfig{Topics: []string{"a"}, KeepConnection: true})
+	making := make(chan struct{})
+	go func() {
+		defer close(making)
+		_, _ = FetchCollector(context.Background(), silent.Addr, c, RequestOverrides{Timeout: 3 * time.Second}, nil)
+	}()
+	testutil.WaitFor(t, "the first scrape to connect", func() bool { return silent.Accepted() == 1 })
+	start := time.Now()
+	_, err := FetchCollector(context.Background(), silent.Addr, c, RequestOverrides{Timeout: 100 * time.Millisecond}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Errorf("err=%v after %s, want the scrape's own deadline", err, time.Since(start))
+	}
+	<-making
+}
+
+// What a kept connection remembers is counted as the document counts it,
+// a JSON payload twice: messages that would not fit the response limit
+// together are dropped and counted, and the scrape is answered.
+func TestAnMQTTKeptConnectionKeepsWhatFitsTheDocument(t *testing.T) {
+	b := newMQTTBroker(t, false)
+	payload := `{"text":"` + strings.Repeat("x", 380) + `"}`
+	b.seen(func() {
+		b.retained = []mqttSent{{topic: "a", payload: payload}, {topic: "b", payload: payload}, {topic: "c", payload: payload}}
+	})
+	c := mqttCollector(t, MQTTConfig{Topics: []string{"#"}, KeepConnection: true}, func(r *model.RequestConfig) { r.MaxResponseBytes = 1024 })
+	doc := mqttDoc(t, c, b.Addr, nil)
+	if len(doc.Messages) != 1 || doc.Connection.Dropped != 2 || doc.Connection.Received != 3 {
+		t.Errorf("%d messages kept, %d dropped of %d; want one that fits and two dropped", len(doc.Messages), doc.Connection.Dropped, doc.Connection.Received)
+	}
+}
+
+// A window longer than the keep alive is pinged through, so that the
+// broker does not give the connection up in the middle of it.
+func TestAnMQTTScrapePingsThroughALongWindow(t *testing.T) {
+	b := newMQTTBroker(t, false)
+	c := mqttCollector(t, MQTTConfig{Topics: []string{"a"}, KeepAlive: model.Duration(time.Second), Window: model.Duration(1300 * time.Millisecond)})
+	mqttDoc(t, c, b.Addr, nil)
+	pings := 0
+	b.seen(func() { pings = b.pings })
+	if pings == 0 {
+		t.Error("no PINGREQ was sent in a window longer than the keep alive")
+	}
+}
+
 // A broker that refuses the connection, or a subscription, fails the
 // scrape, saying which and why, and never with the password.
 func TestAnMQTTScrapeFailsOnARefusal(t *testing.T) {
@@ -418,6 +466,14 @@ func TestAnMQTTScrapeFailsOnARefusal(t *testing.T) {
 	}
 	if shown := fmt.Sprint(err, trace.Requests()); strings.Contains(shown, "hunter2") {
 		t.Errorf("the error or the trace holds the password: %s", shown)
+	}
+	// A return code MQTT does not define is a value of the answer, not
+	// told to whoever called the probe.
+	b = newMQTTBroker(t, false)
+	b.seen(func() { b.refuse = 77 })
+	_, err = FetchCollector(context.Background(), b.Addr, c, RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "return code 77, which MQTT 3.1.1 does not define") || strings.Contains(model.CallerText(err), "return code 77") {
+		t.Errorf("err=%v, told %q", err, model.CallerText(err))
 	}
 	b = newMQTTBroker(t, false)
 	b.seen(func() { b.subackRefuse = true })
@@ -465,6 +521,10 @@ func TestAnMQTTSTargetIsTLS(t *testing.T) {
 // A collector is refused at load for what no subscription can be made of.
 func TestMQTTConfigurationRules(t *testing.T) {
 	second := model.Duration(time.Second)
+	negative := model.Duration(-time.Second)
+	// 0 keeps a connection as long as its collector is configured.
+	never := model.Duration(0)
+	mqttCollector(t, MQTTConfig{Topics: []string{"a"}, KeepConnection: true}, func(r *model.RequestConfig) { r.IdleTimeout = &never })
 	for name, tc := range map[string]struct {
 		own    MQTTConfig
 		change func(*model.RequestConfig)
@@ -479,6 +539,7 @@ func TestMQTTConfigurationRules(t *testing.T) {
 		"session no id":  {MQTTConfig{Topics: []string{"a"}, PersistentSession: true}, nil, "request.persistent_session without request.client_id"},
 		"both":           {MQTTConfig{Topics: []string{"a"}, PersistentSession: true, ClientID: "x", KeepConnection: true}, nil, "both request.persistent_session and request.keep_connection"},
 		"idle alone":     {MQTTConfig{Topics: []string{"a"}}, func(r *model.RequestConfig) { r.IdleTimeout = &second }, "request.idle_timeout without request.keep_connection"},
+		"idle negative":  {MQTTConfig{Topics: []string{"a"}, KeepConnection: true}, func(r *model.RequestConfig) { r.IdleTimeout = &negative }, "request.idle_timeout is negative"},
 		"password alone": {MQTTConfig{Topics: []string{"a"}}, func(r *model.RequestConfig) { r.PasswordFile = "/p" }, "request.password_file without request.username"},
 	} {
 		c := &model.Collector{Name: "broker", Request: model.RequestConfig{Type: RequestTypeMQTT, Own: tc.own}}

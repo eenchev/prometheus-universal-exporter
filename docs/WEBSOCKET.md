@@ -39,6 +39,8 @@ collectors:
       type: websocket
       send_text: '{"op":"stats","queue":{{param_queue|json}}}'
       bearer_token_file: /etc/exporter/feed-token
+    decoder:
+      type: json
     transform:
       type: jq
     metrics:

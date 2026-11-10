@@ -68,9 +68,13 @@ target's request block takes `timeout`, `username`, `password_file` and
   (`mechanism`, `code`) or `null`, `mail_from` (`address`, `code`,
   `accepted`, `text`) or `null`, and `rcpt_to`, a list of the same. The
   decoder MUST be `json`. `$tls` MUST describe the session's certificate.
-- One reply MUST be at most 64 KiB and the replies together the response
-  limit, more failing as a limit exceeded. The deadline MUST bound the
+- One reply MUST be at most 64 KiB, a longer one failing the scrape when
+  that much has come, and the replies together the response limit, more
+  failing as a limit exceeded. The deadline MUST bound the
   whole scrape, 30 seconds when none is set.
+- A failure MUST tell a probe's caller a reply's code and not its text,
+  nor the mechanisms the server offers, nor a line that is no reply, which
+  are the answer's (§ 19.4).
 - A password, a token and the line that carries one MUST be in no error,
   log line, trace or debug report, which MUST show the command masked. The
   verbose `url` label MUST be `smtp://host:port` or `smtps://host:port`,

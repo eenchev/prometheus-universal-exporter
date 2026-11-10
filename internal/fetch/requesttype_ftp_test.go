@@ -316,6 +316,11 @@ func TestAnFTPScrapeFailsOnAMissingOrALargeFile(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "the server answered RETR /exports/berlin/meters.csv with 550 Failed to open file.") {
 		t.Errorf("err=%v, want the server's refusal", err)
 	}
+	// The server's words are the operator's to read, in the log: whoever
+	// called the probe is told the command and the code.
+	if told := model.CallerText(err); told != "the server answered RETR /exports/berlin/meters.csv with 550 "+model.WithheldMark {
+		t.Errorf("a probe's caller is told %q", told)
+	}
 	s.files["/exports/berlin/meters.csv"] = strings.Repeat("x", 5000)
 	small := ftpCollector(t, func(r *model.RequestConfig) { r.MaxResponseBytes = 1024 })
 	if _, err := FetchCollector(context.Background(), s.Addr, small, berlin, nil); !errors.Is(err, model.ErrLimitExceeded) {
@@ -329,8 +334,28 @@ func TestAnFTPScrapeFailsOnAMissingOrALargeFile(t *testing.T) {
 		t.Errorf("err=%v; want the limit by what was read", err)
 	}
 	stub := testutil.NewTCPStub(t, func(conn net.Conn) { _, _ = fmt.Fprint(conn, "SSH-2.0-OpenSSH_9.6\r\n") })
-	if _, err := FetchCollector(context.Background(), stub.Addr, ftpCollector(t), berlin, nil); err == nil || !strings.Contains(err.Error(), "is the target an FTP server?") {
+	if _, err := FetchCollector(context.Background(), stub.Addr, ftpCollector(t), berlin, nil); err == nil || !strings.Contains(err.Error(), "is the target an FTP server?") || strings.Contains(model.CallerText(err), "OpenSSH") {
 		t.Errorf("err=%v, want what is no FTP server named", err)
+	}
+}
+
+// A server that sends a line without an end is given up on at the most a
+// reply may be, long before the scrape's deadline.
+func TestAnFTPScrapeGivesUpOnALineWithoutEnd(t *testing.T) {
+	stub := testutil.NewTCPStub(t, func(conn net.Conn) {
+		chunk := []byte(strings.Repeat("2", 4096))
+		for {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	_, err := FetchCollector(ctx, stub.Addr, ftpCollector(t), berlin, nil)
+	if err == nil || !strings.Contains(err.Error(), "a reply is longer than 65536 bytes") || time.Since(start) > 30*time.Second {
+		t.Errorf("err=%v after %s, want the length refused at once", err, time.Since(start))
 	}
 }
 

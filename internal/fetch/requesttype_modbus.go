@@ -347,11 +347,11 @@ func modbusExchange(ctx context.Context, conn *netConn, transaction uint16, unit
 	length := int(binary.BigEndian.Uint16(header[4:]))
 	switch {
 	case binary.BigEndian.Uint16(header[2:]) != 0 || length < 3 || length > 254:
-		return nil, fmt.Errorf("the answer begins % x, which is no Modbus TCP header; is the target a Modbus TCP device?", header)
+		return nil, model.Errorf("the answer begins %s, which is no Modbus TCP header; is the target a Modbus TCP device?", model.Bare(fmt.Sprintf("% x", header)))
 	case binary.BigEndian.Uint16(header[0:]) != transaction:
-		return nil, fmt.Errorf("the answer is of transaction %d, not %d, the one asked", binary.BigEndian.Uint16(header[0:]), transaction)
+		return nil, model.Errorf("the answer is of transaction %s, not %d, the one asked", model.Bare(strconv.Itoa(int(binary.BigEndian.Uint16(header[0:])))), transaction)
 	case header[6] != unit:
-		return nil, fmt.Errorf("the answer is of unit %d, not %d, the one asked", header[6], unit)
+		return nil, model.Errorf("the answer is of unit %s, not %d, the one asked", model.Bare(strconv.Itoa(int(header[6]))), unit)
 	}
 	rest := make([]byte, length-2)
 	if _, err := io.ReadFull(conn.r, rest); err != nil {
@@ -361,17 +361,18 @@ func modbusExchange(ctx context.Context, conn *netConn, transaction uint16, unit
 		return nil, netFailure(ctx, err)
 	}
 	if header[7] == table.function|0x80 {
-		meaning, known := modbusExceptions[rest[0]]
-		if !known {
-			meaning = "a code the protocol does not define"
+		// A code the protocol defines is told to whoever asked; another
+		// is a value of the answer.
+		if meaning, known := modbusExceptions[rest[0]]; known {
+			return nil, fmt.Errorf("the device answered with exception %d, %s", rest[0], meaning)
 		}
-		return nil, fmt.Errorf("the device answered with exception %d, %s", rest[0], meaning)
+		return nil, model.Errorf("the device answered with exception %s, a code the protocol does not define", model.Bare(strconv.Itoa(int(rest[0]))))
 	}
 	if header[7] != table.function {
-		return nil, fmt.Errorf("the answer is of function %d, not %d, the one asked", header[7], table.function)
+		return nil, model.Errorf("the answer is of function %s, not %d, the one asked", model.Bare(strconv.Itoa(int(header[7]))), table.function)
 	}
 	if int(rest[0]) != want || len(rest)-1 != want {
-		return nil, fmt.Errorf("the answer holds %d bytes of data and says %d, where %d %s take %d", len(rest)-1, rest[0], quantity, map[bool]string{true: "bits", false: "registers"}[table.bits], want)
+		return nil, model.Errorf("the answer holds %s bytes of data and says %s, where %d %s take %d", model.Bare(strconv.Itoa(len(rest)-1)), model.Bare(strconv.Itoa(int(rest[0]))), quantity, map[bool]string{true: "bits", false: "registers"}[table.bits], want)
 	}
 	return rest[1:], nil
 }
@@ -388,9 +389,10 @@ func modbusValues(read ModbusRead, data []byte) any {
 		}
 	case "string":
 		// Two characters a register, the high byte first unless the order
-		// swaps them; NULs and blanks at the end are padding.
-		text := modbusOrdered(data, read.Order, len(data)/2)
-		return strings.ToValidUTF8(strings.TrimRight(string(text), "\x00 "), "�")
+		// swaps them. A NUL ends the text, what follows it being whatever
+		// the registers held before, and blanks at the end are padding.
+		text, _, _ := strings.Cut(string(modbusOrdered(data, read.Order, 0)), "\x00")
+		return strings.ToValidUTF8(strings.TrimRight(text, " "), "\uFFFD")
 	default:
 		width := modbusWidths[read.Type]
 		for i := range read.Count {
@@ -407,11 +409,12 @@ func modbusValues(read ModbusRead, data []byte) any {
 // order: order names where the bytes of a 32-bit value ABCD are on the
 // wire, and wider and narrower values follow the same two swaps, of the
 // bytes in each register (badc, dcba) and of the registers (cdab, dcba).
-// A string's registers are never reversed, only their bytes swapped.
+// A string's registers are never reversed, only their bytes swapped:
+// words is 0 for one.
 func modbusOrdered(data []byte, order string, words int) []byte {
 	out := make([]byte, len(data))
 	swapBytes := order == "badc" || order == "dcba"
-	swapWords := (order == "cdab" || order == "dcba") && len(data) == words*2 && words <= 4
+	swapWords := (order == "cdab" || order == "dcba") && words > 0
 	for w := range len(data) / 2 {
 		from := w
 		if swapWords {

@@ -3263,7 +3263,7 @@
                 "type": "array"
               },
               "idle_timeout": {
-                "description": "sshfile and sshexec: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
+                "description": "sshfile and sshexec, and mqtt with keep_connection: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
                 "maximum": 0,
                 "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -3320,7 +3320,7 @@
                 ]
               },
               "keep_connection": {
-                "description": "mqtt: true keeps the connection between scrapes and remembers the last message of each topic that came on it, which a scrape answers with at once; closed after request.idle_timeout without a scrape, 5m by default. See docs/MQTT.md#between-scrapes.",
+                "description": "mqtt: true keeps the connection between scrapes and remembers the last message of each topic that came on it, which a scrape answers with at once; closed after request.idle_timeout without a scrape, 5m by default, and with 0 kept as long as the collector is configured. See docs/MQTT.md#between-scrapes.",
                 "type": "boolean"
               },
               "keepalive_count_max": {

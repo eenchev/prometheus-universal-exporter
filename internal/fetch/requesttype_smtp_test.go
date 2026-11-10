@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -278,6 +279,11 @@ func TestAnSMTPScrapeFailsOnARefusedLoginWithoutItsSecrets(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "refused AUTH PLAIN for me@example.com with 535 5.7.8 Username and Password not accepted. 5.7.8 see the help") {
 		t.Fatalf("err=%v, want the refusal", err)
 	}
+	// What the server said is the operator's to read, in the log: whoever
+	// called the probe is told that it refused, and not its words.
+	if told := model.CallerText(err); strings.Contains(told, "not accepted") || !strings.Contains(told, "refused AUTH PLAIN for me@example.com with 535 "+model.WithheldMark) {
+		t.Errorf("a probe's caller is told %q", told)
+	}
 	shown := fmt.Sprint(err, trace.Requests())
 	for _, secret := range []string{"hunter2", base64.StdEncoding.EncodeToString([]byte("\x00me@example.com\x00hunter2-wrong"))} {
 		if strings.Contains(shown, secret) {
@@ -336,7 +342,7 @@ func TestAnSMTPScrapeHoldsTheSessionToTLS(t *testing.T) {
 	}
 	busy := newSMTPStub(t, func(s *smtpStub) { s.greeting = "554 no service for you" })
 	_, err = FetchCollector(context.Background(), busy.Addr, smtpCollector(t, busy, SMTPConfig{}), RequestOverrides{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "greeted with 554 no service for you, not 220") {
+	if err == nil || !strings.Contains(err.Error(), "greeted with 554 no service for you, not 220") || strings.Contains(model.CallerText(err), "no service") {
 		t.Errorf("greeting: err=%v", err)
 	}
 }
@@ -414,6 +420,27 @@ func TestAnSMTPCollectorsFilesAreCheckedForADryRun(t *testing.T) {
 	grant.ClientSecretFile, grant.RefreshTokenFile = "", testutil.WriteFile(t, "refresh", "1//r\n")
 	if warnings := RequestTypes[RequestTypeSMTP].CheckFiles(smtpCollector(t, nil, SMTPConfig{XOAuth2: grant}, withAccount("me@example.com", "")), nil); len(warnings) != 0 {
 		t.Errorf("files that are there are warned of: %q", warnings)
+	}
+}
+
+// A server that sends a line without an end is given up on at the most a
+// reply may be, long before the scrape's deadline, and is not read into
+// memory until then.
+func TestAnSMTPScrapeGivesUpOnALineWithoutEnd(t *testing.T) {
+	stub := testutil.NewTCPStub(t, func(conn net.Conn) {
+		chunk := []byte(strings.Repeat("2", 4096))
+		for {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	_, err := FetchCollector(ctx, stub.Addr, smtpCollector(t, nil, SMTPConfig{}), RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "a reply is longer than 65536 bytes") || time.Since(start) > 30*time.Second {
+		t.Errorf("err=%v after %s, want the length refused at once", err, time.Since(start))
 	}
 }
 

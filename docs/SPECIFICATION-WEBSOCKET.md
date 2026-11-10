@@ -25,8 +25,9 @@ no connection beyond a scrape.
 | `subprotocols` | — | HTTP tokens, none twice. |
 
 Of the common part it takes `headers`, whose values MAY hold placeholders
-and which MUST NOT set `Host`, `Upgrade`, `Connection` or a
-`Sec-WebSocket-` header, nor `Authorization` beside `bearer_token_file`;
+and whose names may not, and which MUST NOT set `Host`, `Upgrade`,
+`Connection` or a `Sec-WebSocket-` header, nor `Authorization` beside
+`bearer_token_file`;
 `bearer_token_file`, `tls`, `max_response_bytes`, `allowed_targets` and
 `denied_targets`. A static target's request block takes `timeout` and
 `tls`.
@@ -42,7 +43,11 @@ and which MUST NOT set `Host`, `Upgrade`, `Connection` or a
   bearer token and its subprotocols, and no extension. It MUST fail the
   scrape unless the answer is a 101 with `Upgrade: websocket`, `Connection`
   holding `Upgrade`, the `Sec-WebSocket-Accept` the key makes, no
-  extension, and no subprotocol but one offered.
+  extension, and no subprotocol but one offered; when the answer's
+  first line is not an HTTP status line, as soon as it has come; and when
+  its status line and headers pass 64 KiB. What the server said — that
+  line, an extension or a subprotocol it chose — MUST NOT be told to a
+  probe's caller (§ 19.4); the status of an answer that is no 101 MUST be.
 - Every frame sent MUST be masked with a random key. A frame received
   that is masked, has a reserved bit set, is a control frame longer than
   125 bytes or not final, is of an unknown opcode, continues no message or

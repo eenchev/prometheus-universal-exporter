@@ -353,10 +353,13 @@ func (s *smtpSession) read() (smtpReply, error) {
 	var reply smtpReply
 	size := 0
 	for {
-		line, err := s.conn.r.ReadString('\n')
+		line, err := netLine(s.conn.r, smtpReplyLimit-size)
 		size += len(line)
 		if s.left -= int64(len(line)); s.left < 0 {
 			return reply, model.MarkError(model.Errorf("the server's replies are larger than the response limit; raise request.max_response_bytes or limits.max_response_bytes"), model.ErrLimitExceeded)
+		}
+		if errors.Is(err, errNetLineTooLong) {
+			return reply, fmt.Errorf("a reply is longer than %d bytes, which no SMTP reply is", smtpReplyLimit)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -364,16 +367,13 @@ func (s *smtpSession) read() (smtpReply, error) {
 			}
 			return reply, netFailure(s.ctx, err)
 		}
-		if size > smtpReplyLimit {
-			return reply, fmt.Errorf("a reply is longer than %d bytes, which no SMTP reply is", smtpReplyLimit)
-		}
 		line = strings.TrimRight(line, "\r\n")
 		if len(line) < 3 {
-			return reply, fmt.Errorf("the server answered %q, which is no SMTP reply; is the target a mail server?", netShown(line))
+			return reply, model.Errorf("the server answered %s, which is no SMTP reply; is the target a mail server?", model.Quoted(netShown(line)))
 		}
 		code, err := strconv.Atoi(line[:3])
 		if err != nil || code < 100 || code > 599 || (len(line) > 3 && line[3] != ' ' && line[3] != '-') {
-			return reply, fmt.Errorf("the server answered %q, which is no SMTP reply; is the target a mail server?", netShown(line))
+			return reply, model.Errorf("the server answered %s, which is no SMTP reply; is the target a mail server?", model.Quoted(netShown(line)))
 		}
 		reply.Code = code
 		text := ""
@@ -414,7 +414,7 @@ func (s *smtpSession) command(line, shown string) (smtpReply, error) {
 
 // refused is the failure of a command the session cannot go on without.
 func smtpRefused(what, hostPort string, reply smtpReply) error {
-	return fmt.Errorf("the server %s answered %s with %d %s", hostPort, what, reply.Code, reply.Text)
+	return model.Errorf("the server %s answered %s with %d %s", hostPort, what, reply.Code, model.Bare(reply.Text))
 }
 
 // Fetch performs one conversation of an smtp collector.
@@ -472,7 +472,7 @@ func (smtpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	}
 	traceOutcome(ctx, strconv.Itoa(greeting.Code)+" "+greeting.Text)
 	if greeting.Code != 220 {
-		return nil, fmt.Errorf("the server %s greeted with %d %s, not 220: it does not serve this client", address.hostPort, greeting.Code, greeting.Text)
+		return nil, model.Errorf("the server %s greeted with %d %s, not 220: it does not serve this client", address.hostPort, greeting.Code, model.Bare(greeting.Text))
 	}
 	doc.Greeting = greeting
 	name := own.Hello
@@ -637,12 +637,12 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		case slices.Contains(offered, "LOGIN"):
 			mechanism = smtpAuthLogin
 		default:
-			return nil, fmt.Errorf("the server %s offers AUTH %s, neither PLAIN nor LOGIN; name the mechanism in request.auth", hostPort, strings.Join(offered, " "))
+			return nil, model.Errorf("the server %s offers AUTH %s, neither PLAIN nor LOGIN; name the mechanism in request.auth", hostPort, model.Bare(netShown(strings.Join(offered, " "))))
 		}
 	}
 	name := strings.ToUpper(mechanism)
 	if !slices.Contains(offered, name) {
-		return nil, fmt.Errorf("the server %s does not offer AUTH %s; it offers %s", hostPort, name, strings.Join(offered, " "))
+		return nil, model.Errorf("the server %s does not offer AUTH %s; it offers %s", hostPort, name, model.Bare(netShown(strings.Join(offered, " "))))
 	}
 	user := c.Request.Username
 	b64 := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
@@ -677,7 +677,7 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		if mechanism == smtpAuthXOAuth2 {
 			smtpTokens.forget(c.Name, own.XOAuth2)
 		}
-		return nil, fmt.Errorf("the server %s refused AUTH %s for %s with %d %s", hostPort, name, user, reply.Code, reply.Text)
+		return nil, model.Errorf("the server %s refused AUTH %s for %s with %d %s", hostPort, name, user, reply.Code, model.Bare(reply.Text))
 	}
 	return &smtpAuthDone{Mechanism: name, Code: reply.Code}, nil
 }
@@ -792,7 +792,7 @@ func smtpAccessToken(ctx context.Context, collector string, o *SMTPXOAuth2) (str
 		if why == "" {
 			why = "no access_token in its answer"
 		}
-		return "", fmt.Errorf("the token endpoint %s answered HTTP status %d, %s", shown, resp.StatusCode, netShown(why))
+		return "", model.Errorf("the token endpoint %s answered HTTP status %d, %s", shown, resp.StatusCode, model.Bare(netShown(why)))
 	}
 	lifetime := time.Duration(answer.ExpiresIn * float64(time.Second))
 	if lifetime > 0 {

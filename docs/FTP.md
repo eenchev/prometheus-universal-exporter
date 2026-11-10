@@ -128,7 +128,9 @@ the server answered RETR /exports/berlin/meters.csv with 550 Failed to open file
 the server answered PASS *** with 530 Login incorrect.
 ```
 
-The password is in no error, log line or debug report. With
+Those are the exporter's log; whoever called `/probe` is answered the
+command and the code, and `[withheld; in the exporter's log]` for the
+server's words. The password is in no error, log line or debug report. With
 `web.self_metrics.verbose`, a scrape is labelled with the file's URL,
 `ftp://host:port/exports/{{param_site}}/meters.csv`, and `RETR`.
 

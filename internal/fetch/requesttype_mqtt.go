@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -228,8 +229,8 @@ func (mqttRequester) Validate(x *model.Collector) error {
 		return fmt.Errorf("collector %q sets both request.persistent_session and request.keep_connection; the one has the broker keep what a scrape missed, the other the exporter, so choose one", x.Name)
 	case r.IdleTimeout != nil && !own.KeepConnection:
 		return fmt.Errorf("collector %q sets request.idle_timeout without request.keep_connection; a scrape's own connection is closed when the scrape ends", x.Name)
-	case r.IdleTimeout != nil && time.Duration(*r.IdleTimeout) < time.Second:
-		return fmt.Errorf("collector %q request.idle_timeout is less than 1s", x.Name)
+	case r.IdleTimeout != nil && *r.IdleTimeout < 0:
+		return fmt.Errorf("collector %q request.idle_timeout is negative", x.Name)
 	}
 	r.Own = own
 	return nil
@@ -427,7 +428,7 @@ func (l *mqttLink) message(first byte, rest []byte) (mqttMessage, error) {
 		}
 		payload = payload[2:]
 	}
-	m = mqttMessage{Topic: strings.ToValidUTF8(topic, "�"), QoS: qos, Retained: first&1 == 1, at: time.Now(), size: int64(len(topic) + len(payload))}
+	m = mqttMessage{Topic: strings.ToValidUTF8(topic, "�"), QoS: qos, Retained: first&1 == 1, at: time.Now()}
 	if utf8.Valid(payload) {
 		text := string(payload)
 		m.Payload = &text
@@ -436,6 +437,12 @@ func (l *mqttLink) message(first byte, rest []byte) (mqttMessage, error) {
 		}
 	} else {
 		m.PayloadBase64 = base64.StdEncoding.EncodeToString(payload)
+	}
+	// What the message takes of the response limit is what it takes of
+	// the document: its payload twice where it is JSON, and a third more
+	// where it is no text, with room for its age and its count.
+	if encoded, err := json.Marshal(m); err == nil {
+		m.size = int64(len(encoded)) + 32
 	}
 	return m, nil
 }
@@ -526,11 +533,10 @@ func mqttOpen(ctx context.Context, s mqttSettings, got func(mqttMessage)) (*mqtt
 		return closed(errors.New("the answer is no CONNACK; is the target an MQTT broker?"), "CONNECT")
 	}
 	if rest[1] != 0 {
-		why, known := mqttRefusals[rest[1]]
-		if !known {
-			why = fmt.Sprintf("return code %d", rest[1])
+		if why, known := mqttRefusals[rest[1]]; known {
+			return closed(fmt.Errorf("the broker refused the connection: %s", why), "CONNECT")
 		}
-		return closed(fmt.Errorf("the broker refused the connection: %s", why), "CONNECT")
+		return closed(model.Errorf("the broker refused the connection: return code %s, which MQTT 3.1.1 does not define", model.Bare(strconv.Itoa(int(rest[1])))), "CONNECT")
 	}
 	link.sessionPresent, link.connected = rest[0]&1 == 1, time.Now()
 	traceOutcome(ctx, "connected")
@@ -676,6 +682,28 @@ func mqttReadOnce(ctx context.Context, s mqttSettings, window time.Duration) (mq
 	defer link.conn.close()
 	end := time.Now().Add(mqttWindow(ctx, window))
 	_ = link.conn.SetReadDeadline(end)
+	// A window longer than the keep alive is pinged through, or the broker
+	// would give the connection up in the middle of it.
+	if alive := time.Duration(s.own.KeepAlive); time.Until(end) > alive/2 {
+		pings := time.NewTicker(alive / 2)
+		stop := make(chan struct{})
+		defer func() { pings.Stop(); close(stop) }()
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					_ = recoveredPanic(recovered)
+				}
+			}()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-pings.C:
+					_ = link.write(mqttPacket(mqttPingreq<<4, nil))
+				}
+			}
+		}()
+	}
 	traceRequest(ctx, "READ", s.label, nil, "", false)
 	for len(doc.Messages) < s.own.MaxMessages && tooLarge == nil {
 		first, rest, err := link.read()
@@ -728,7 +756,8 @@ type mqttKeptKey struct {
 type mqttKept struct {
 	// making orders the scrapes that find the connection gone: one makes
 	// it again, the others use what it made.
-	making sync.Mutex
+	// A channel, so that a scrape waiting for it gives up at its deadline.
+	making chan struct{}
 
 	mu       sync.Mutex
 	link     *mqttLink
@@ -772,12 +801,16 @@ func (cache *mqttConnCache) read(ctx context.Context, s mqttSettings, window tim
 			cache.mu.Unlock()
 			return mqttDocument{}, nil, fmt.Errorf("the exporter keeps %d MQTT connections already, the most it does; a collector whose probes name many brokers or topics reads them without request.keep_connection", mqttMaxKept)
 		}
-		entry = &mqttKept{}
+		entry = &mqttKept{making: make(chan struct{}, 1)}
 		cache.kept[key] = entry
 	}
 	cache.mu.Unlock()
 
-	entry.making.Lock()
+	select {
+	case entry.making <- struct{}{}:
+	case <-ctx.Done():
+		return mqttDocument{}, nil, netFailure(ctx, fmt.Errorf("waiting for the connection to %s another scrape is making: %w", s.label, context.Cause(ctx)))
+	}
 	entry.mu.Lock()
 	alive := entry.link != nil && !mqttEnded(entry.done)
 	entry.lastUsed = time.Now()
@@ -795,14 +828,14 @@ func (cache *mqttConnCache) read(ctx context.Context, s mqttSettings, window tim
 				delete(cache.kept, key)
 			}
 			cache.mu.Unlock()
-			entry.making.Unlock()
+			<-entry.making
 			return mqttDocument{}, nil, err
 		}
 		// The connection outlives the scrape that made it: its deadline
 		// and its cancellation are the scrape's no longer.
 		if !link.conn.stop() {
 			link.conn.close()
-			entry.making.Unlock()
+			<-entry.making
 			return mqttDocument{}, nil, netFailure(ctx, context.Cause(ctx))
 		}
 		link.conn.stop = func() bool { return true }
@@ -840,7 +873,7 @@ func (cache *mqttConnCache) read(ctx context.Context, s mqttSettings, window tim
 	} else {
 		traceRequest(ctx, "READ", s.label, nil, "", false)
 	}
-	entry.making.Unlock()
+	<-entry.making
 
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -944,7 +977,12 @@ func (e *mqttKept) ping(link *mqttLink, done chan struct{}, alive, idle time.Dur
 			e.end(link, done, recoveredPanic(recovered))
 		}
 	}()
-	ticker := time.NewTicker(min(alive/2, max(idle/2, 100*time.Millisecond)))
+	// idle 0 keeps the connection as long as the collector is configured.
+	every := alive / 2
+	if idle > 0 {
+		every = min(every, max(idle/2, 100*time.Millisecond))
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	sent := time.Now()
 	for {
@@ -956,7 +994,7 @@ func (e *mqttKept) ping(link *mqttLink, done chan struct{}, alive, idle time.Dur
 		e.mu.Lock()
 		unused := time.Since(e.lastUsed)
 		e.mu.Unlock()
-		if unused >= idle {
+		if idle > 0 && unused >= idle {
 			_ = link.conn.SetWriteDeadline(time.Now().Add(time.Second))
 			_ = link.write(mqttPacket(mqttDisconnect<<4, nil))
 			e.end(link, done, errors.New("no scrape used it for request.idle_timeout"))
@@ -1054,7 +1092,7 @@ func mqttKeyRules() map[string]map[string]any {
 		"max_messages":       {"minimum": 0, "maximum": mqttMaxMessages, "description": "mqtt: reading ends once this many messages have come, before the window has passed. With keep_connection, the most topics whose last message is kept. Defaults to 1000."},
 		"client_id":          {"description": "mqtt: the client identifier, at most 256 bytes. Left out, one made for each connection. A broker takes one connection of an identifier at a time, so two exporters with the same one cut each other off."},
 		"persistent_session": {"description": "mqtt: true asks the broker to keep the session of client_id between scrapes (clean session 0): what is published at QoS 1 while no scrape is connected is queued by the broker and delivered to the next. Needs client_id and qos: 1; not with keep_connection. See docs/MQTT.md#between-scrapes."},
-		"keep_connection":    {"description": "mqtt: true keeps the connection between scrapes and remembers the last message of each topic that came on it, which a scrape answers with at once; closed after request.idle_timeout without a scrape, 5m by default. See docs/MQTT.md#between-scrapes."},
+		"keep_connection":    {"description": "mqtt: true keeps the connection between scrapes and remembers the last message of each topic that came on it, which a scrape answers with at once; closed after request.idle_timeout without a scrape, 5m by default, and with 0 kept as long as the collector is configured. See docs/MQTT.md#between-scrapes."},
 		"keep_alive":         {"description": "mqtt: the keep alive told to the broker, 30s by default, in whole seconds as MQTT counts it: a part of a second is a second, and the most is 65535s. A kept connection is pinged twice in it, and is given up when the broker sent nothing for one and a half."},
 	}
 }

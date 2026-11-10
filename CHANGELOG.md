@@ -71,6 +71,106 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `params: {param_day: "{{date@America/New_York}}"}` gives each static
   target of one collector its own day. See
   [Dates and times in a parameter](docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter).
+- **Two exporters under one member name are said.** Two exporters given one
+  `--allocator.member`, or two hosts of one host name, were one member to
+  the target allocator: both took its bundle and scraped its share, every
+  target twice, and nothing said so. The allocator now logs it, marks the
+  member on the status page and in `/v1/status`, counts it in
+  `pue_allocator_members_same_name`, and tells both exporters, which log it
+  too ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+
+### Fixed
+
+- Target Allocator: an allocator run without `--web.token-file` took a
+  heartbeat from any page open in a browser on its network, since a form
+  posted from another site's page is a request like any other: such a page
+  could add a member and name the address Prometheus is sent to for its
+  probes. A heartbeat a browser marks as another site's is now answered
+  `403`. The chart always sets a token, and is not affected
+  ([API](docs/ALLOCATOR.md#api)).
+- Chart: with `allocator.enabled` in a cluster whose pods have IPv6
+  addresses, every exporter pod stopped at its start with
+  `--allocator.advertise "fd00::12:8080" must be host:port`: the chart
+  writes the flag from the pod's IP, which Kubernetes gives without
+  brackets. The exporter now takes an IPv6 address written so.
+- With `cache.stale_if_error` and `failure_backoff` together, a target that
+  refused the credential, `401` or `403`, was answered for with the last
+  good result after all: the refusal itself was not, but once the target
+  was backed off from, the probes kept from it were, for as long as
+  `stale_if_error` lasts, so a revoked token went on reading what it was
+  given before. Those probes, and a static target's scrapes, now fail as
+  the refusal did
+  ([Serving the last good result](docs/CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)).
+- `denied_targets` and the default refusal of the cloud metadata service
+  did not hold for an IPv4 address written as a NAT64 gateway reaches it:
+  on an IPv6-only network with one, `64:ff9b::a00:1` reached `10.0.0.1`
+  past `denied_targets: [10.0.0.0/8]`. An address in `64:ff9b::/96` is now
+  refused when its IPv4 address is
+  ([Restricting targets](docs/REQUESTS.md#restricting-targets)).
+- `sshexec`: a probe could make `..` a path component of an argument out of
+  values that are none alone, `param_a=.` and `param_b=.` in
+  `/srv/{{param_a}}{{param_b}}`, or `.` beside a dot the configuration
+  wrote, and so name a file outside the directory the argument is written
+  under. Such a probe is answered `400`, as one whose value is `..` is
+  ([The command](docs/SSHEXEC.md#the-command)).
+- `sshexec`: a command that wrote past the response limit under a forced
+  command, which OpenSSH does not end, left its session open on the kept
+  connection, one more at every scrape, until the host refused another
+  session and every scrape of the host failed. Its connection is now
+  retired, as at a deadline ([Limits](docs/SSHEXEC.md#limits)).
+- A `json` or `steps` login a server refused by answering with what it was
+  sent — a sign-in form with its fields filled in again, a body echoed —
+  had the password in the exporter's log, and with `--web.debug=full` on
+  the status page and in a debug report, when the answer named it
+  otherwise than as a credential (`j_pw`, `value="..."`). The secrets a
+  login reads from its files and the values its steps read are now masked
+  wherever a refusal's answer repeats them
+  ([When a login fails](docs/AUTHENTICATION.md#when-a-login-fails)).
+- Target Allocator: with `--peers`, `/metrics` wrote the sample of
+  `pue_allocator_is_leader` under the `# TYPE` line of
+  `pue_allocator_leader`, so a parser that holds to the text format took
+  both for series without a type. Each now stands under its own.
+- Target Allocator: an exporter that refused a bundle kept reporting the
+  refusal after the allocator's files were put back as they were, so the
+  allocator's status showed the member up to date and refusing a bundle at
+  once, for as long as nothing else changed; and it asked for the whole
+  bundle again every few seconds instead of waiting for a change. The
+  refusal now leaves its heartbeats as soon as the allocator serves the
+  bundle it has in force
+  ([Heartbeats](docs/ALLOCATOR.md#heartbeats)).
+- Chart: an empty block in a values file, such as `ingress:` or
+  `autoscaling:` with every key under it commented out, is a null to Helm,
+  which removes the chart's defaults under it, and rendering failed with
+  `nil pointer evaluating interface {}.enabled`, naming no key. It now
+  fails naming the block and saying what to do
+  ([Values](charts/prometheus-universal-exporter/README.md#values)).
+- A `sql` scrape that took from its pool a connection PostgreSQL had ended
+  while it was idle — `idle_session_timeout`, `pg_terminate_backend` —
+  failed with `SQLSTATE 57P05` or `57P01`, and with a timeout shorter than
+  the scrape interval every other scrape did. The scrape now closes that
+  connection and makes another
+  ([Connections](docs/SQL.md#connections)).
+- A pre-script that changed `data` through another name — the usual
+  `for row in data["rows"]: row["cpu"] = ...`, `rows = data["rows"]` and
+  then `rows.append(...)`, or a function of its own handed `data` — was
+  refused at startup as one that produces no `data`, though it does. Such
+  scripts now load
+  ([Reshaping a response](docs/PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform)).
+- A `sql` collector whose `database` had a placeholder default that is no
+  database name, `{{param_db:a b}}`, loaded, and answered `400` to every
+  probe that left the parameter out. It is refused when the configuration
+  loads, as such a default is in every other place.
+- A PostgreSQL `timetz` column reached the rules as text, `13:45:30+02`,
+  where a time of day is its seconds since midnight, as a `time` column's
+  was: the driver names the type by a number, which the exporter did not
+  read.
+- A panic where a fetch does part of its work on the side — the servers of
+  an `ntp` scrape, the addresses of an `icmp` one, the ports of a `tcp`
+  check, the requests of a `kubernetes` scrape, a file or a directory being
+  read, a command run over SSH, a login, a gRPC reflection question — would
+  end the exporter, with every token and every result it held. It now
+  fails that scrape alone, answered `500` as any scrape that panicked is,
+  and is logged with its stack.
 
 ## chart 2.1.0
 

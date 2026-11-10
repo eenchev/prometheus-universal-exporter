@@ -618,6 +618,19 @@ networkPolicy: {}
 
 The chart MUST provide sane production defaults and avoid hardcoding environment-specific values.
 
+Helm reads a value that is null as its key removed, with the defaults under
+it, and an empty block of a values file, its keys commented out, is a null.
+A block of values written so MUST NOT fail rendering with an error of the
+templates that names no key, as `nil pointer evaluating interface
+{}.enabled` is: a feature's own block — `allocator`, `webAuth`,
+`targetAuth`, `sshAuth`, `sqlAuth`, `kubernetesAccess`, `healthProbes`,
+`goGC` — MUST render as the feature off or at its default, and any other
+block whose keys a template reads MUST fail rendering naming the block, as
+`ingress is null, which removes every default the chart has under it`, with
+what to do: delete the key, or write the keys meant under it. Every template
+MUST make that check before it reads a value, so that the message does not
+depend on which template Helm renders first.
+
 Every flag a serving exporter takes MUST be rendered from a named value rather
 than left to `extraArgs`, so it is documented, validated and covered by the
 values schema:

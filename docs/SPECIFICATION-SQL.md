@@ -230,7 +230,9 @@ of objects, one a row, of its columns by name. Its keys:
   load, never panic the load. A `{{param_...}}` placeholder in
   `statement` MUST be refused at load; one in `database` MUST be filled only
   with letters, digits and `_ - . $`, refused otherwise before anything is
-  sent.
+  sent, and a default of one, or a clock placeholder's format, that is no
+  such name MUST be refused at load, as a default its place cannot write
+  is everywhere (§ 42.10b).
 - **Deadline.** The connection and the statement MUST run within the probe's
   deadline, which the driver cancels the statement at; a statement still
   running then MUST fail the scrape saying the deadline came first.
@@ -280,7 +282,9 @@ of objects, one a row, of its columns by name. Its keys:
   ClickHouse's `Time` and `Time64`), whether the driver gives it as a time,
   as text or as a duration, the seconds since midnight with the fraction, as
   its clock reads where it was written (a MySQL `TIME`, a duration, MAY be
-  negative or past 24 hours); text and UTF-8 binary data text; binary data
+  negative or past 24 hours), a type the driver names by a number being
+  read by its name (pgx names PostgreSQL's `timetz` `1266` and `money`
+  `790`); text and UTF-8 binary data text; binary data
   that is no UTF-8 MUST fail the scrape naming the column; and `NULL` MUST
   leave the column out of its row; a column `NULL` in every row MUST still
   be one the response has, a `csv` rule reading it as a column `NULL` in
@@ -359,7 +363,13 @@ of objects, one a row, of its columns by name. Its keys:
   free, and the pings MUST be skipped for the interval when the scrapes
   hold every place; they MUST NOT make a connection, and MUST be given the
   interval to answer in, one that does not answer by then counted as a
-  failed ping. A static target MAY set each key but `max_targets`, which
+  failed ping. A connection taken from a pool's idle ones whose
+  transaction fails to begin was ended while it was kept, as by
+  PostgreSQL's `idle_session_timeout` or an administrator, whose message
+  the driver reads as the answer to `BEGIN`: nothing of the statement was
+  sent, so the scrape MUST close it and take another, at most twice, and
+  MUST fail only with what a connection made for it says; a statement that
+  fails once its transaction began MUST NOT be run again. A static target MAY set each key but `max_targets`, which
   MUST be refused there, by the loader and the schema, replacing the
   collector's key by key. A reload MUST close the pools of a collector it
   removes or whose connection settings it changes, and the shutdown every

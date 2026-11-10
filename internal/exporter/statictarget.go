@@ -217,6 +217,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	if turn != nil && turn.refusal != nil {
 		job.backingOff = turn.refusal
 		trip = s.collect(ctx, job)
+		trip.unauthorized = turn.unauthorized
 	} else {
 		// A static target scrape shares the collector's max_concurrent_probes
 		// with its probes, and waits for a slot within its budget rather than

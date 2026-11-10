@@ -41,6 +41,12 @@ level and shown in [debug reports](CONFIGURATION.md#debug-probes), and a
 label is kept by Prometheus. When a script needs the host, take it apart
 first, for example `urllib.parse.urlsplit(target).hostname`.
 
+The worker is started with the exporter's environment, so `os.environ` in a
+script holds whatever the exporter was given, a secret passed in a variable
+for [`--config.expand-env`](CONFIGURATION.md#environment-variables) among it.
+The same care applies: a script that prints the environment writes it to the
+debug log, and one that puts a variable in a label hands it to Prometheus.
+
 For example:
 
 ```yaml

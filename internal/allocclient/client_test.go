@@ -42,6 +42,9 @@ type fakeAllocator struct {
 	// announce is the heartbeat interval heartbeat replies say, in seconds;
 	// 0 says none.
 	announce float64
+	// sameName is what heartbeat replies say of another process under the
+	// replica's name.
+	sameName bool
 	// heartbeats and bundleRequests are what the allocator was sent.
 	heartbeats     chan sentHeartbeat
 	bundleRequests chan *http.Request
@@ -75,9 +78,9 @@ func (a *fakeAllocator) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.mu.Lock()
-		generation, announce := a.bundle.Generation, a.announce
+		generation, announce, sameName := a.bundle.Generation, a.announce, a.sameName
 		a.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{Generation: generation, HeartbeatIntervalSeconds: announce})
+		_ = json.NewEncoder(w).Encode(allocapi.HeartbeatReply{Generation: generation, HeartbeatIntervalSeconds: announce, SameName: sameName})
 	case allocapi.BundlePath:
 		select {
 		case a.bundleRequests <- r.Clone(context.Background()):
@@ -490,6 +493,34 @@ func TestABundleTheCheckRefusesKeepsTheFilesInForceAndIsReported(t *testing.T) {
 	hb = a.heartbeatWhere(t, "with the fixed bundle", func(hb sentHeartbeat) bool { return hb.Generation == fixed })
 	if hb.Refused != nil {
 		t.Errorf("the refusal is still reported: %+v", hb.Refused)
+	}
+}
+
+// An allocator that goes back to the bundle in force after one the replica
+// refused has nothing refused left: the heartbeats stop reporting the
+// refusal, and the bundle request names the bundle in force, so the
+// allocator holds it rather than sending the whole bundle at each request.
+func TestARefusedBundleTakenBackIsNoLongerReported(t *testing.T) {
+	a := newFakeAllocator(t)
+	c := startClient(t, a, nil)
+	c.manager.check = func(configPath string) error {
+		if b, _ := os.ReadFile(configPath); string(b) == "broken\n" { // #nosec G304 -- a test's file
+			return errors.New("collectors must not be empty")
+		}
+		return nil
+	}
+	good := a.serveFiles(map[string]string{"config.yaml": "good\n"})
+	c.waitFor(t, EventInstalled)
+	a.serveFiles(map[string]string{"config.yaml": "broken\n"})
+	c.waitFor(t, EventRefused)
+	a.heartbeatWhere(t, "with the refusal", func(hb sentHeartbeat) bool { return hb.Refused != nil })
+	if again := a.serveFiles(map[string]string{"config.yaml": "good\n"}); again != good {
+		t.Fatalf("the same files made generation %s, not %s", again, good)
+	}
+	a.heartbeatWhere(t, "without the refusal", func(hb sentHeartbeat) bool { return hb.Generation == good && hb.Refused == nil })
+	a.bundleRequestNaming(t, good)
+	if _, reloads := c.manager.state(); len(reloads) != 1 {
+		t.Errorf("the bundle in force was reloaded: %q", reloads)
 	}
 }
 

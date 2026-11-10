@@ -303,7 +303,7 @@ func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector st
 			if hook := beforeSSHRead.Load(); hook != nil {
 				(*hook)()
 			}
-			done <- src.run(func() error { return read(src) })
+			done <- panicToError(func() error { return src.run(func() error { return read(src) }) })
 		}()
 		select {
 		case err = <-done:
@@ -341,7 +341,9 @@ func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector 
 		src := &sftpSource{client: entry.sftpClient(), conn: entry.client, hostKeepsSessions: &entry.sftp().listingSessionsKept, root: root}
 		progress := &directoryProgress{}
 		done := make(chan error, 1)
-		go func() { done <- src.run(func() error { return read(src, progress) }) }()
+		go func() {
+			done <- panicToError(func() error { return src.run(func() error { return read(src, progress) }) })
+		}()
 		abandoned := false
 		result, err := awaitDirectory(ctx, root, progress, done, func() {
 			abandoned = true

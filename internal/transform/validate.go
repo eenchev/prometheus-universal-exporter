@@ -29,7 +29,8 @@ const pythonScriptValidator = `import sys,json,ast
 # which is exactly the mistake this check exists to catch.
 MUTATORS={'append','extend','insert','remove','pop','popitem','clear','sort','reverse',
  'add','discard','update','setdefault',
- 'difference_update','intersection_update','symmetric_difference_update'}
+ 'difference_update','intersection_update','symmetric_difference_update',
+ '__setitem__','__delitem__','__ior__','__iadd__'}
 
 def roots(node):
     out=[]
@@ -41,7 +42,50 @@ def roots(node):
         elif isinstance(n,(ast.Tuple,ast.List)): stack.extend(n.elts)
     return out
 
+# A name bound to a part of data is data by another name: rows = data["rows"],
+# for row in data["rows"], for name, value in data.items(). What is changed
+# through it is changed in data, as in the commonest pre-script there is,
+#     for row in data["rows"]:
+#         row["cpu"] = float(row["cpu"].rstrip("%"))
+# which mutates nothing rooted at the name data. PARTS are the methods that
+# hand out parts of their receiver rather than a copy of it, and WALKS the
+# builtins that hand out the items of what they are given, which a loop may
+# stand between itself and data.
+PARTS={'get','setdefault','pop','values','items'}
+WALKS={'enumerate','reversed','sorted','list','tuple','iter','zip','filter'}
+
+def part_of(node,names,walking):
+    if isinstance(node,ast.Name): return node.id in names
+    if isinstance(node,(ast.Subscript,ast.Attribute,ast.Starred)): return part_of(node.value,names,walking)
+    if isinstance(node,(ast.Tuple,ast.List)): return any(part_of(e,names,walking) for e in node.elts)
+    if isinstance(node,ast.BoolOp): return any(part_of(v,names,walking) for v in node.values)
+    if isinstance(node,ast.IfExp): return part_of(node.body,names,walking) or part_of(node.orelse,names,walking)
+    if isinstance(node,ast.Call):
+        if isinstance(node.func,ast.Attribute) and node.func.attr in PARTS: return part_of(node.func.value,names,walking)
+        if walking and isinstance(node.func,ast.Name) and node.func.id in WALKS: return any(part_of(a,names,walking) for a in node.args)
+    return False
+
+def bound(target):
+    return [n.id for n in ast.walk(target) if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Store)]
+
+def parts_of_data(tree):
+    names={'data'}
+    while True:
+        before=len(names)
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Assign) and part_of(node.value,names,False):
+                for t in node.targets: names.update(bound(t))
+            elif isinstance(node,(ast.AnnAssign,ast.NamedExpr)) and node.value is not None and part_of(node.value,names,False):
+                names.update(bound(node.target))
+            elif isinstance(node,(ast.For,ast.AsyncFor,ast.comprehension)) and part_of(node.iter,names,True):
+                names.update(bound(node.target))
+        if len(names)==before: return names
+
 def produces_data(tree):
+    names=parts_of_data(tree)
+    # A function of the script's own that is handed data, or a part of it,
+    # may change what it is handed: def clean(d): ...; clean(data).
+    own={n.name for n in ast.walk(tree) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))}
     for node in ast.walk(tree):
         targets=[]
         # del data['x'] changes data in place, as an assignment to data['x']
@@ -53,10 +97,18 @@ def produces_data(tree):
         elif isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
             # data.update(...), data["rates"].append(...) and friends mutate in
             # place; data.items() and data.get(...) only read.
-            if node.func.attr in MUTATORS and 'data' in roots(node.func.value): return True
+            if node.func.attr in MUTATORS and names.intersection(roots(node.func.value)): return True
+            continue
+        elif isinstance(node,ast.Call):
+            called=isinstance(node.func,ast.Lambda) or isinstance(node.func,ast.Name) and node.func.id in own
+            if called and any(part_of(a,names,False) for a in list(node.args)+[k.value for k in node.keywords]): return True
             continue
         for t in targets:
             if 'data' in roots(t): return True
+            # Through another name only what it names is changed: row["x"] = 1
+            # changes data, row = 1 names something else.
+            for part in ast.walk(t):
+                if isinstance(part,(ast.Subscript,ast.Attribute)) and isinstance(part.ctx,(ast.Store,ast.Del)) and names.intersection(roots(part)): return True
     return False
 
 payload=json.load(sys.stdin)

@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if .Values.staticTargets.enabled }}
 {{- /* The static target document, which the Deployment mounts in a
        directory of its own rather than in the configuration directory, where

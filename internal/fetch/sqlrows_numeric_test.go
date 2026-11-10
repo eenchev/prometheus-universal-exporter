@@ -84,3 +84,22 @@ func TestSnowflakeNumberTypesAreNumericAndNoOtherTypeChanged(t *testing.T) {
 		}
 	}
 }
+
+// MySQL's driver names an unsigned type with the word first, UNSIGNED
+// BIGINT, where the function read it last alone: text of such a column is
+// its number, and a type that is not numeric is none for the word.
+func TestAnUnsignedTypeNamedAsMySQLsDriverNamesItIsNumeric(t *testing.T) {
+	for _, dbType := range []string{"UNSIGNED BIGINT", "UNSIGNED INT", "UNSIGNED TINYINT", "unsigned smallint", "UNSIGNED MEDIUMINT", "BIGINT UNSIGNED"} {
+		if !sqlNumericType(dbType) {
+			t.Errorf("%q is not numeric", dbType)
+		}
+	}
+	for _, dbType := range []string{"UNSIGNED", "UNSIGNED TEXT", "UNSIGNED VARCHAR"} {
+		if sqlNumericType(dbType) {
+			t.Errorf("%q is numeric", dbType)
+		}
+	}
+	if got := sqlText("42", "UNSIGNED BIGINT"); got != 42 {
+		t.Errorf("the text of an UNSIGNED BIGINT column reads as %#v", got)
+	}
+}

@@ -192,6 +192,10 @@ type HeartbeatReply struct {
 	// said would change at every answer. A reply without one is keyed by
 	// its address.
 	Instance string `json:"instance,omitempty"`
+	// SameName says the allocator hears another process heartbeat under
+	// the replica's member name: two exporters were given one name, each
+	// has the member's bundle, and each scrapes its share.
+	SameName bool `json:"same_name,omitempty"`
 }
 
 // Bundle is what BundlePath answers for one member.

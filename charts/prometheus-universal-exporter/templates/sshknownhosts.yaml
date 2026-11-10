@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if and .Values.sshAuth .Values.sshAuth.enabled .Values.sshAuth.knownHosts }}
 {{- /* The known_hosts lines of sshAuth.knownHosts, which the Deployment
        projects into sshAuth.mountPath beside the Secret's keys. They are

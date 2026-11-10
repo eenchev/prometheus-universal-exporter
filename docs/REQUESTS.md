@@ -734,6 +734,21 @@ again.
   run starts from the last success and keeps none, and an answer from the
   [response cache](CONFIGURATION.md#response-caching) is no scrape and
   moves nothing.
+- **One asker for each window.** A window is handed to whoever's scrape
+  succeeded, once. Two Prometheus servers probing the same target each get
+  every other window, and of several exporter replicas behind one Service
+  each keeps its own last success, so their windows overlap. Where either
+  is so, make the target a [static target](STATIC-TARGETS.md): the exporter
+  asks on its own schedule, once, and every Prometheus reads the same
+  answer. With the [target allocator](ALLOCATOR.md), a static target that
+  moves to another replica starts there from its fallback, as after a
+  restart.
+- **What a success is.** A scrape succeeds when it is answered with
+  metrics, so a `HEAD` of `/probe`, which runs the probe and reads no body,
+  moves the window, and so does a scrape in which a rule failed under
+  `error_mode: log` or `ignore`, its metric left out. Give a rule whose
+  window must not be lost [`error_mode: fail`](CONFIGURATION.md#when-a-metric-cannot-be-extracted),
+  which fails the scrape and keeps the window for the next.
 - **There is no cap.** A target that failed for a day is asked for the day
   at its next success. The exporter keeps the last success of 10,000
   collectors, targets and parameters at most, forgetting the one kept
@@ -1006,7 +1021,12 @@ compared without case; `*.example.com` matches `a.b.example.com`, not
 `example.com` itself. An IPv6 address with a zone, `fe80::1%eth0`, is checked
 as the address without it: the zone names the interface that reaches it, so
 `denied_targets: [fe80::/10]` refuses it, and the metadata service's
-`fd00:ec2::254%eth0` is refused as `fd00:ec2::254` is.
+`fd00:ec2::254%eth0` is refused as `fd00:ec2::254` is. An address in
+`64:ff9b::/96`, which a NAT64 gateway sends on to the IPv4 address in its
+last four bytes, is denied by a rule against that IPv4 address too:
+`denied_targets: [10.0.0.0/8]` refuses `64:ff9b::a00:1`, and the metadata
+service is refused as `64:ff9b::a9fe:a9fe`. A network with a NAT64 prefix of
+its own needs that prefix denied by hand.
 
 Names are checked before the request and again for every redirect followed,
 and so is a target written as an address, which needs no lookup, so it is

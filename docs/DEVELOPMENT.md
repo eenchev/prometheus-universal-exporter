@@ -79,6 +79,18 @@ its tests or of the cases they cover, since each test says what it checks in
 its name and its comment, and `TestTheSpecificationsListNoTests` fails on a
 test named in a specification or a § 34 section that lists an area's cases.
 
+## Goroutines of a fetch
+
+A panic of a scrape is recovered where its goroutine starts, and fails that
+scrape alone. A goroutine a fetch starts itself is outside that, and its
+panic would end the exporter, so each one that runs the type's code — asks a
+server, reads or parses an answer — hands its panic back to the scrape
+(`internal/fetch/goroutinepanic.go`): `defer panicked.keep()` in each of
+several goroutines the fetch waits for, with `panicked.raise()` after the
+wait, or `panicToError` around the work of one whose error is what it hands
+over, which `FetchCollector` raises. A goroutine that only closes a
+connection or copies bytes needs neither.
+
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`), its

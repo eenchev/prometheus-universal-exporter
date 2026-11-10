@@ -698,7 +698,12 @@ func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflecte
 		go func() {
 			defer grpcConns.release(held)
 			defer cancel()
-			files, size, err := askReflection(detached, conn, key.service, limit)
+			var files *protoregistry.Files
+			var size int64
+			err := panicToError(func() (err error) {
+				files, size, err = askReflection(detached, conn, key.service, limit)
+				return err
+			})
 			r.mu.Lock()
 			call.files, call.err = files, err
 			if r.asking[key] == call {

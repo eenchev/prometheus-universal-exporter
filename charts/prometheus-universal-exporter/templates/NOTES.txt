@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- if .Values.service.enabled }}
 Exporter is available at:
   http://{{ include "prometheus-universal-exporter.serviceAddress" . }}

@@ -38,8 +38,8 @@ type liveSQL struct {
 var liveDatabases = []liveSQL{
 	{
 		driver: SQLDriverPostgres, prefix: "PUE_TEST_POSTGRES",
-		types: "SELECT 1::int AS i, 1.5::float8 AS f, 2.25::numeric AS d, true AS b, now() AS t, 'x'::text AS s, NULL::text AS n",
-		want:  map[string]any{"i": 1, "f": 1.5, "d": 2.25, "b": 1, "s": "x"},
+		types: "SELECT 1::int AS i, 1.5::float8 AS f, 2.25::numeric AS d, true AS b, now() AS t, 'x'::text AS s, NULL::text AS n, time '13:45:30.5' AS tod, timetz '13:45:30+02' AS todz",
+		want:  map[string]any{"i": 1, "f": 1.5, "d": 2.25, "b": 1, "s": "x", "tod": 49530.5, "todz": 49530.0},
 		write: "CREATE TABLE pue_live_written (x int)", refused: "read-only transaction",
 		sleep: "SELECT pg_sleep(5) AS slept",
 	},

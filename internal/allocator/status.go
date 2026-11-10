@@ -167,6 +167,10 @@ type MemberStatus struct {
 	Live         bool `json:"live"`
 	InList       bool `json:"in_list"`
 	ShuttingDown bool `json:"shutting_down"`
+	// SameName says another process heartbeats under the member's name
+	// too: two exporters were given one name, and each scrapes the
+	// member's share.
+	SameName bool `json:"same_name,omitempty"`
 	// Generation is the generation of the bundle it reports in force,
 	// Current the one it is to have; UpToDate says they are the same.
 	Generation string `json:"generation"`
@@ -473,6 +477,7 @@ func (a *Allocator) membersStatusLocked(now time.Time) *MembersStatus {
 			ms.Current = b.Generation
 		}
 		ms.UpToDate = ms.Current != "" && ms.Generation == ms.Current
+		ms.SameName = a.twice(m, now)
 		ms.Late = ms.Live && now.Sub(m.lastSeen) > a.heartbeatInterval*3/2
 		if ms.Live {
 			out.Live++
@@ -957,12 +962,12 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 		fmt.Fprintf(b, "pue_allocator_peer_up{peer=\"%s\"} %d\n", escape(c.Address), up)
 	}
 	family("pue_allocator_is_leader", "gauge", "1 while this allocator instance leads its peers and asks the discovery sources, 0 while it follows the leader.")
-	family("pue_allocator_leader", "gauge", "1, with the address of the instance this one takes for the leader; self when it leads and its own address is not known.")
 	isLeader := 0
 	if st.Role == "leader" {
 		isLeader = 1
 	}
 	fmt.Fprintf(b, "pue_allocator_is_leader %d\n", isLeader)
+	family("pue_allocator_leader", "gauge", "1, with the address of the instance this one takes for the leader; self when it leads and its own address is not known.")
 	if st.Leader != "" {
 		fmt.Fprintf(b, "pue_allocator_leader{peer=\"%s\"} 1\n", escape(st.Leader))
 	}

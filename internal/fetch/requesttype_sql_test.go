@@ -789,6 +789,14 @@ func TestASQLCollectorsRequestIsCheckedWhenItLoads(t *testing.T) {
 		"a passphrase":          {func(r *model.RequestConfig) { r.Foreign = []string{"passphrase_file"} }, `collector "db" sets request.passphrase_file, which does not apply to request.type "sql"`},
 		"a service name":        {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.ServiceName = "ORCL" }) }, "sets request.service_name, which only the oracle driver takes"},
 		"a blank database":      {func(r *model.RequestConfig) { sqlOwn(r, func(o *SQLConfig) { o.Database = "  " }) }, "request.database is written with blanks alone"},
+		// A default the database's name cannot be, and a clock format that
+		// writes one, loaded, and answered every probe 400.
+		"a database default that is no name": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Database = "{{param_db:a b}}" })
+		}, `request.database: the value of param_db, "a b", may hold only letters, digits and _ - . $, since it names the database the statement runs on; that value is the placeholder's default, so every probe that leaves param_db out would fail`},
+		"a database of a clock format with slashes": {func(r *model.RequestConfig) {
+			sqlOwn(r, func(o *SQLConfig) { o.Database = "app_{{date_us}}" })
+		}, `may hold only letters, digits and _ - . $, since it names the database the statement runs on; the clock placeholder writes values such as that one, so every probe would fail`},
 		"an unknown option": {func(r *model.RequestConfig) {
 			sqlOwn(r, func(o *SQLConfig) { o.Options = map[string]string{"sslrootcert": "/ca"} })
 		}, `request.options sets "sslrootcert", which the postgres driver does not take; it takes: application_name, sslmode`},

@@ -1722,6 +1722,19 @@ it `200` with success `0` and the stage `panic`, § 19.5): its caller keeps the 
 error, out of the exporter's hands, and a panic says whatever its code had at
 hand, a target's URL with its password as much as anything.
 
+A panic MUST be the failure of its trip alone wherever in the trip it is
+raised, and MUST NOT end the exporter. A fetch that runs part of its work on
+goroutines of its own — the servers of an `ntp` scrape, the addresses of an
+`icmp` scrape and the reader of its socket, the ports of a `tcp` check, the
+requests of a `kubernetes` scrape, the read of a file or a directory and
+the run of a command over SSH, which a deadline may leave behind, a login
+and a gRPC reflection question shared by
+the requests waiting for them — MUST recover a panic of each, log it once with
+the stack of the goroutine it was raised on, and raise it on the trip's own
+goroutine, where it is answered and counted as any panic of the trip is. A
+panic of a login or of a reflection question MUST be the error of every
+request that waited for it.
+
 That bound loses what an error says after a long part, so where an error of
 those stages says why after a part the target, the scraper or a script can
 make as long as a response, the part MUST be shown by its start and its
@@ -4911,6 +4924,18 @@ mis-extracting rather than misconfigured. Replacing `data`, mutating it by key
 or attribute, augmenting it, binding it as a loop or `with` target or with an
 assignment expression (`(data := ...)`), deleting from it (`del data["x"]`),
 and calling a method that mutates it all satisfy this.
+
+A part of `data` under another name is `data` still, and changing it MUST
+satisfy the rule as changing `data` does: a name assigned a part
+(`rows = data["rows"]`, `rows = data.get("rows") or []`), the target of a
+loop or a comprehension over `data` or a part of it, `enumerate`, `sorted`
+and the like between them or not (`for row in data["rows"]: row["cpu"] =
+...`), and a name bound to a part of one of those in turn. Handing `data`
+or such a part to a function the script defines MUST satisfy it too, since
+the function may change what it is handed. A copy does not: `dict(data)`,
+`list(data["rows"])` and `data.copy()` under another name are other
+objects, binding a part's name anew changes nothing, and a builtin or a
+module's function handed `data` reads it.
 
 Reading `data` MUST NOT satisfy it, however thoroughly the script reads. A
 method call counts only when the method mutates its receiver: `data.update(...)`
@@ -8140,6 +8165,10 @@ whether or not a proxy is in between.
   network. `denied_targets` MUST win over `allowed_targets`.
 - An IPv6 address with a zone (`fe80::1%eth0`) MUST be checked as the address
   without its zone, against the lists and the metadata addresses alike.
+- An address in NAT64's well-known prefix, `64:ff9b::/96` (RFC 6052), MUST
+  be refused when the IPv4 address in its last four bytes is in a denied
+  network or is a metadata address, as well as when it is itself; it MUST
+  be allowed as the IPv6 address it is alone.
 - Names MUST be checked before the request and again for the host of every
   redirect followed, and so MUST a host written as an address, needing no
   lookup, before anything is sent. For a target reached directly, addresses MUST be checked
@@ -10727,7 +10756,12 @@ it changes.
 A login that fails MUST fail the trip in the `login` stage, saying where it
 went, with its query's values masked, and why: for an answer that is not
 `2xx`, its status and the start of its body, at most 256 bytes, with what
-reads as a credential masked (§ 42.17), and for `oauth2` the error code and
+reads as a credential masked (§ 42.17) and, for a `json` or a `steps` login,
+with every secret the login read from a file, and every value a step read
+or the login kept, of four bytes or more, masked wherever the body holds
+it, as it is, as a form writes it or as JSON does, whatever name the body
+gives it; a value `fields` or `values` writes MUST stay. For `oauth2` it
+MUST say the error code and
 description RFC 6749 has the server send. The start of the body, the error
 code and the description MUST be in the log, and with `--web.debug=full` in
 a debug probe's report and on the status page, alone: the `502` a probe is
@@ -11202,6 +11236,16 @@ with one (§ 42.10b).
   change; hours, minutes and seconds MUST be elapsed time.
 - **Truncation.** `d`, `h` or `m`: the start of the day, hour or minute in
   the zone, taken after the offset.
+- **A zone's changes of clock.** A placeholder MUST write the moment it is
+  in the hour a zone's clocks show twice when its summer time ends, in
+  both passes of it: its `unix` MUST be the moment's, its `datetime` MUST
+  carry the offset in force, and the start of its hour and of its minute
+  MUST be in the same pass. An offset of hours, minutes or seconds alone
+  MUST be elapsed time from that moment. The start of a day MUST be the
+  first moment of that date in the zone: the earlier midnight where the
+  clocks are set back over midnight, and, where they are set forward over
+  it so that the day has no 00:00, the moment they first show that date,
+  never an hour of the day before.
 - **Zone.** An IANA time zone name, `UTC` or `Local`; UTC when left out.
   The exporter MUST carry the time zone database, so that a name is read
   where the host has none. `datetime` and `datetime_ms` MUST write the
@@ -11556,7 +11600,10 @@ changes MUST NOT serve a result stored under the previous one.
 A trip that failed because the target refused its credential — HTTP `401` or
 `403`, or gRPC `UNAUTHENTICATED` or `PERMISSION_DENIED` — MUST NOT be answered
 with a stale result, by a probe or a static target's scrape: the credential
-may have been revoked, and the stored result was given to another. Nor MUST a
+may have been revoked, and the stored result was given to another. Nor MUST
+a trip `failure_backoff` (§ 42.13c) keeps from a target whose last failed
+trip was such a refusal, until a trip to it fails otherwise or succeeds.
+Nor MUST a
 trip the collector's `allowed_targets` or `denied_targets` refused (§ 26.1),
 answered `403`, whether before the request or on a redirect: the target may
 not be reached, and no earlier result stands in for it. A debug probe or
@@ -12838,7 +12885,18 @@ answered as any other and change nothing; a heartbeat of another `instance`
 MUST be applied whatever its `sequence`. A member not live MUST be kept,
 with its `instance` and `sequence`, until its last heartbeat is
 the member TTL old, so a heartbeat arriving after the one saying
-`shutting_down` does not make it live again. A refusal a heartbeat reports
+`shutting_down` does not make it live again. A heartbeat of the `instance`
+a member's current one replaced that does not say `shutting_down` and comes
+more than the member TTL after the replacement is no late one: two
+exporters heartbeat under one member name, each holds the member's bundle
+and each scrapes its share. The allocator MUST then change nothing of the
+member, MUST say `same_name` in the answers to both, MUST log it once
+while it lasts, naming the member and both addresses, MUST show
+`same_name` on the member in the status and on the status page, and MUST
+count the member in `pue_allocator_members_same_name`, until no such
+heartbeat has come for the member TTL. An exporter whose heartbeat is
+answered `same_name` MUST log so, once while the answers keep saying it.
+A refusal a heartbeat reports
 MUST be logged once while the member keeps reporting it, and again when it
 reports one after a heartbeat without. A change of the live members MUST take effect when it has
 held for `--settle` (default `15s`; from `0` to `1h`, else exit 2), so a
@@ -12983,7 +13041,12 @@ logged once while it stays the same. `GET` and `HEAD` of `/`,
 `/v1/status` and `/metrics`, and no other request, MUST also take the token
 as the password of HTTP Basic auth, of any user name, compared in constant
 time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
-one, so a browser prompts; the token MUST NOT be taken from the URL. The
+one, so a browser prompts; the token MUST NOT be taken from the URL. A
+request that is no `GET` or `HEAD` and whose `Sec-Fetch-Site` is
+`cross-site` or `same-site`, in any case, MUST be answered `403`, before
+the token is looked at and with none set, and MUST change nothing; a `GET`
+so marked MUST be answered as any other, so that a link to the allocator's
+page from another origin, as the exporter's status page has, opens it. The
 allocator MUST serve plain HTTP only.
 
 **Status page.** `GET /v1/status` MUST answer the instance's status as JSON,
@@ -13191,7 +13254,8 @@ in the status or on the status page),
 `pue_allocator_generation_info{member,generation}`,
 `pue_allocator_reloads_total{result}`,
 `pue_allocator_member_changes_total`,
-`pue_allocator_members_refused_total`, and for each discovery source, by
+`pue_allocator_members_refused_total`,
+`pue_allocator_members_same_name`, and for each discovery source, by
 `kind`, `owner` and `source`, `pue_allocator_discovered_targets`,
 `pue_allocator_discovery_refreshes_total{result}` and
 `pue_allocator_discovery_last_success_timestamp_seconds`, and with
@@ -13204,7 +13268,8 @@ address, `self` while it leads without knowing its own),
 (since the instance last held what the leader's snapshot holds, having fetched
 it, or the start before the first time; `0` while it leads) and `pue_allocator_peer_failures_total{request}` (`check` or
 `snapshot`). The families' `HELP` texts, like the flags' help, MUST call an
-allocator process an instance, never a copy. `/healthz` MUST answer `200`; `/ready`
+allocator process an instance, never a copy, and every sample MUST stand
+under its own family's `# TYPE` line. `/healthz` MUST answer `200`; `/ready`
 `200` once the inputs are loaded and `503` from the first `SIGTERM` or
 `SIGINT`, which MUST also end every long poll before the server shuts down.
 
@@ -13223,7 +13288,9 @@ default to the host name, and `--allocator.advertise` to the
 `--web.listen-address` host when it is one address that is neither loopback
 nor unspecified, else to the host's first address that is neither loopback
 nor link-local, IPv4 before IPv6, with the listen port; an
-`--allocator.advertise` that is not `host:port` MUST be refused.
+`--allocator.advertise` that is not `host:port` MUST be refused, and an IPv6
+address written without brackets before the port, as a pod's IP is in
+`$(POD_IP):8080`, MUST be taken as that address.
 `--allocator.capacity` MUST default to 1, MUST be refused as a command-line
 error outside `0.1` to `100` or with more than three decimals, and MUST be
 said as `capacity` in every heartbeat. The
@@ -13337,7 +13404,11 @@ generation after the files and directories in it and before the swap, and
 the cache directory after the new links are made, before `..data` is
 replaced, and again after it is, so a restart after a crash finds the
 generation before or the whole new one. A refused bundle MUST NOT be
-fetched again until the allocator serves another generation.
+fetched again until the allocator serves another generation. When that is
+the generation in force, nothing MUST be written or reloaded, the refusal
+MUST leave the heartbeats at once, and the next bundle request MUST name
+the generation in force, so the allocator holds the request until it has
+another bundle.
 
 The manager MUST read `<cache-dir>/config.yaml` and
 `<cache-dir>/static-targets.yaml` with the loader of file mode, so the

@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* What a kubernetes discovery source needs: a ServiceAccount of the
        allocator's own, unless allocator.serviceAccount.name names one, so
        the exporter's keeps no token and no permission, and, with

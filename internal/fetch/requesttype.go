@@ -915,6 +915,9 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 		overrides.Params = withScrapeClock(params, clock)
 	}
 	response, err := rt.Fetch(ctx, target, c, overrides, forwarded)
+	// A panic of a goroutine the fetch started comes back as its error, and
+	// is the trip's own from here (goroutinepanic.go).
+	raiseGoroutinePanic(err)
 	// However a type's fetch failed, the error goes to logs, probe answers
 	// and debug reports without the credentials a URL in it carries, with
 	// a URL as long as a scraper or a redirect made it shown by its start

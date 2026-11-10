@@ -136,6 +136,7 @@ func init() {
 	})
 	templateEscapers[sshExecWordKind] = escapeSSHExecValue
 	templateLeadRules[sshExecWordKind] = sshExecLeadRule
+	templateFilledRules[sshExecWordKind] = sshExecDotDotRule
 }
 
 // sshExecRequester is the sshexec request type's Requester.
@@ -227,10 +228,12 @@ func validateSSHExecRequest(x *model.Collector) error {
 		}
 		// A default is held to what a probe's value is, here rather than at
 		// every scrape that leaves the parameter out.
+		defaults := 0
 		for _, p := range placeholders {
 			if !p.HasDefault {
 				continue
 			}
+			defaults++
 			if character, refused := lineValueRefused(p.Default); refused {
 				return fmt.Errorf("collector %q request.command[%d]: the default of %s holds %s; %s", x.Name, i, p.Name, character, sshExecValueRule)
 			}
@@ -239,6 +242,14 @@ func validateSSHExecRequest(x *model.Collector) error {
 			}
 			if p.start == 0 && strings.HasPrefix(p.Default, "-") {
 				return fmt.Errorf("collector %q request.command[%d]: the default of %s begins with -, and begins the argument, which the program would read as an option; a value that begins an argument of request.command may not begin with -", x.Name, i, p.Name)
+			}
+		}
+		// And so are the defaults together (sshExecDotDotRule), where every
+		// placeholder of the argument has one.
+		if defaults > 0 && defaults == len(placeholders) {
+			field := templateField{fmt.Sprintf("request.command[%d], as its placeholders' defaults fill it", i), word, sshExecWordKind}
+			if _, err := field.renderParsed(placeholders, nil); err != nil {
+				return fmt.Errorf("collector %q %w", x.Name, err)
 			}
 		}
 	}
@@ -303,6 +314,36 @@ func escapeSSHExecValue(where, name, value string) (string, error) {
 // configuration writes, as /var/log/app/{{param_file}}, stays under it.
 func hasDotDot(value string) bool {
 	return value == ".." || strings.HasPrefix(value, "../") || strings.HasSuffix(value, "/..") || strings.Contains(value, "/../")
+}
+
+// sshExecDotDotRule refuses an argument whose values make .. a path
+// component that no one of them is: . and . in {{param_a}}{{param_b}}, or
+// . after a dot the configuration wrote, .{{param_a}}. A .. the
+// configuration itself writes, ../{{param_file}}, is its own.
+func sshExecDotDotRule(where, text string, placeholders []pathPlaceholder, filled string) error {
+	var written strings.Builder
+	previous := 0
+	for _, p := range placeholders {
+		written.WriteString(text[previous:p.start])
+		written.WriteByte('x')
+		previous = p.end
+	}
+	written.WriteString(text[previous:])
+	if dotDots(filled) > dotDots(written.String()) {
+		return fmt.Errorf("%s: its values make .. a path component of the argument, which would name a file outside the directory the argument is meant to stay in; the values written into an argument of request.command may not", where)
+	}
+	return nil
+}
+
+// dotDots counts the path components of word that are ..
+func dotDots(word string) int {
+	n := 0
+	for part := range strings.SplitSeq(word, "/") {
+		if part == ".." {
+			n++
+		}
+	}
+	return n
 }
 
 // sshExecLeadRule refuses a value that begins its argument with a -: the
@@ -497,12 +538,20 @@ func (c *sshConnCache) run(ctx context.Context, key sshConnKey, x *model.Collect
 			if hook := beforeSSHRead.Load(); hook != nil {
 				(*hook)()
 			}
-			run, started, err := es.run(entry.client, line, limit)
-			done <- sshExecDone{run, started, err}
+			var result sshExecDone
+			result.err = panicToError(func() (err error) {
+				result.run, result.started, err = es.run(entry.client, line, limit)
+				return err
+			})
+			done <- result
 		}()
 		var result sshExecDone
 		select {
 		case result = <-done:
+			var stalled *sshExecStalledError
+			if errors.As(result.err, &stalled) {
+				c.retireStalled(entry)
+			}
 			c.release(entry)
 		case <-ctx.Done():
 			c.abandonExec(entry, es, done)
@@ -574,7 +623,7 @@ func (c *sshConnCache) retireStalled(entry *sshConn) {
 	}
 	entry.retired = true
 	sshEvent("retired: stalled", entry.key.address)
-	slog.Default().Warn("an sshexec command did not end at its scrape's deadline; its connection takes no new session and is closed once the commands of other scrapes on it have ended. A host that refuses the signal, as OpenSSH does for a forced command, leaves the command running: bound it with timeout on the host", "address", entry.key.address, "user", entry.key.username)
+	slog.Default().Warn("an sshexec command did not end when its scrape ended it, at its deadline or at the response limit; its connection takes no new session and is closed once the commands of other scrapes on it have ended. A host that refuses the signal, as OpenSSH does for a forced command, leaves the command running: bound it with timeout on the host", "address", entry.key.address, "user", entry.key.username)
 }
 
 // lostExec says a session's error is its connection ending under it.
@@ -668,9 +717,23 @@ func (e *sshExecSession) run(client *ssh.Client, line string, limit int64) (*ssh
 	body, err := readSSHExecStdout(stdout, limit)
 	if err != nil {
 		// The command is ended rather than waited for: what it writes past
-		// the limit is of no use.
+		// the limit is of no use. A host that will not end it, as OpenSSH
+		// will not end a forced command, leaves its session open, and every
+		// scrape that came to the limit would leave one more on the
+		// connection until the host refused another: the session is given
+		// sshAbandonGrace, as at a deadline, and its connection retired
+		// after it (sshExecStalledError).
 		_ = session.Signal(ssh.SIGKILL)
-		_ = session.Close()
+		if !sshExecCloseUnanswered.Load() {
+			_ = session.Close()
+		}
+		grace := time.NewTimer(sshAbandonGrace)
+		defer grace.Stop()
+		select {
+		case <-stderrRead:
+		case <-grace.C:
+			return nil, true, &sshExecStalledError{err}
+		}
 		return nil, true, err
 	}
 	waitErr := session.Wait()
@@ -691,6 +754,13 @@ func (e *sshExecSession) run(client *ssh.Client, line string, limit int64) (*ssh
 	}
 	return run, true, nil
 }
+
+// sshExecStalledError is the failure of a command whose session did not
+// end when the scrape ended it, which retires its connection (run).
+type sshExecStalledError struct{ err error }
+
+func (e *sshExecStalledError) Error() string { return e.err.Error() }
+func (e *sshExecStalledError) Unwrap() error { return e.err }
 
 // readSSHExecStdout reads a command's stdout to its end, failing at the
 // first byte past limit.

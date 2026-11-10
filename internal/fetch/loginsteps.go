@@ -323,6 +323,10 @@ func checkLoginExtract(e model.LoginExtract, where string) error {
 type loginValue struct {
 	Text    string    `json:"value"`
 	Expires time.Time `json:"expires,omitzero"`
+	// written says the value is one of login.values, which the
+	// configuration writes and is no secret; every other is one a file
+	// holds or a step read, and is masked in an answer shown.
+	written bool
 }
 
 // stepsLogin makes the login l, for a request of c to target, whose token
@@ -386,7 +390,7 @@ func copyLoginValues(m map[string]loginValue) map[string]loginValue {
 func stepsGiven(l *model.LoginConfig) (map[string]loginValue, error) {
 	out := make(map[string]loginValue, len(l.Values)+len(l.SecretFiles))
 	for name, text := range l.Values {
-		out[name] = loginValue{Text: text}
+		out[name] = loginValue{Text: text, written: true}
 	}
 	for _, name := range model.SortedKeys(l.SecretFiles) {
 		text, err := ReadCredentialFile(l.SecretFiles[name])
@@ -642,7 +646,13 @@ func runLoginStep(ctx context.Context, client *http.Client, c *model.Collector, 
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			return fmt.Errorf("%s was answered with the redirect %d, which a login does not follow; list it in the step's status to read its answer, the Location header with it", at, resp.StatusCode)
 		}
-		return fmt.Errorf("%s: %w", at, answeredError(resp.StatusCode, false, answer))
+		var secrets []string
+		for _, name := range model.SortedKeys(values) {
+			if !values[name].written {
+				secrets = append(secrets, values[name].Text)
+			}
+		}
+		return fmt.Errorf("%s: %w", at, answeredError(resp.StatusCode, false, answer, secrets...))
 	}
 	if len(answer) > loginAnswerLimit {
 		return fmt.Errorf("%s: the answer is larger than %d bytes", at, loginAnswerLimit)

@@ -4178,6 +4178,21 @@ collector, and rejects such a configuration on reload with the previous one left
 active. Replacing `data`, mutating it by key or attribute, augmenting it,
 binding it as a loop or `with` target or with `:=` (`(data := ...)`), deleting
 from it (`del data["noise"]`), and calling a method that mutates it all count.
+So does changing a part of `data` under another name, as the usual clean-up
+of rows does, and handing `data` to a function of the script's own:
+
+```python
+for row in data["rows"]:
+    row["cpu"] = float(row["cpu"].rstrip("%"))    # row is a part of data
+
+def clean(rows):
+    rows.sort(key=lambda row: row["name"])
+clean(data["rows"])
+```
+
+A copy under another name is not `data`: `rows = list(data["rows"])` and
+`other = dict(data)` are new objects, and a script that changes only those
+is refused.
 
 Reading `data` does not count, however much of it the script does. A method call
 only counts when the method mutates: `data.update(...)` and
@@ -4793,7 +4808,9 @@ credential it was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
 `PERMISSION_DENIED`. A credential forwarded with `forward_authorization` is
 part of the cache key, but a token that has just been revoked would otherwise
 still be answered with what it was given before, for as long as
-`stale_if_error` lasts. The other is the collector's own
+`stale_if_error` lasts; the probes [`failure_backoff`](#backing-off-from-failing-targets)
+keeps from the target after such a refusal are not answered stale either,
+since they stand for it. The other is the collector's own
 [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
 refusing the target, answered `403`: its name now resolves, or a redirect now
 leads, somewhere the collector may not go, and the refusal is the answer.
@@ -5139,6 +5156,14 @@ first, `--python.max-workers` and
 [`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second, and
 `--python.max-idle-workers` and `--python.idle-timeout` how many workers are
 kept between scrapes, and for how long.
+
+A decoded document is larger than the response it was read from, the more
+so the more of the response is structure: a response of nothing but empty
+fields, list items or elements, which a faulty or hostile target can send,
+takes tens of times its bytes while its scrape lasts. The bound on that is
+[`max_response_bytes`](REQUESTS.md#compression-and-the-response-size), 10 MiB unless set, times the
+scrapes in progress: for targets you do not run, set it to what their
+answers need, and `--probe.max-concurrent` to what the memory allows.
 
 `limits.max_metrics` (10000 by default) bounds a scrape's series as they are
 made, not after: every transform stops at the first series past it, and the
@@ -7022,7 +7047,7 @@ prometheus-universal-exporter \
 | `--allocator.url` | none | The allocator's `http://` URL. It turns allocator mode on. |
 | `--allocator.cache-dir` | none, required | The directory the bundle is written into and loaded from. A restart starts with the bundle the exporter installed there. |
 | `--allocator.member` | the host name | This exporter's name among the allocator's members: in Kubernetes the pod's name, which the host name is. |
-| `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. |
+| `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. An IPv6 address may be written without brackets, `fd00::12:8080`, as a pod's `$(POD_IP):8080` is in an IPv6 cluster. |
 | `--allocator.token-file` | none | A file holding a bearer token sent with every request to the allocator, read again for each, so a rotated Secret takes effect at once. |
 | `--allocator.capacity` | `1` | This exporter's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals, said in every heartbeat: a member of capacity 2 is given about twice the weight of one of capacity 1. A change takes effect, as a restart does, once the allocator's member list has held for its `--settle` ([Weights and capacity](ALLOCATOR.md#weights-and-capacity)). |
 

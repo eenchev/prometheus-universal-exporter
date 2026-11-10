@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- include "prometheus-universal-exporter.validateConfigData" . }}
 {{- include "prometheus-universal-exporter.validateTargets" . }}
 {{- include "prometheus-universal-exporter.validateMonitors" . }}

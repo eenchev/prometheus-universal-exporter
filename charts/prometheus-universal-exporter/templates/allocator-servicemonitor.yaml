@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* A ServiceMonitor for the allocator's own /metrics. It selects the
        allocator's Service by its app.kubernetes.io/name, <name>-allocator,
        which neither the exporter's Service nor its pods carry. The token

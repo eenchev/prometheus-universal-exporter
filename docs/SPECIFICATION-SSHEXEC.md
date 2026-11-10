@@ -44,15 +44,20 @@ Its keys:
   component — `..` itself, or one beginning with `../`, ending with `/..`
   or holding `/../` — MUST be refused alike, naming the argument, the
   parameter and why; a `-` after what the configuration wrote in the
-  argument, and a `..` within a name, MUST be taken. `tcp`'s `send` MUST NOT
-  take these two rules. A probe parameter that no placeholder of an
+  argument, and a `..` within a name, MUST be taken. An argument whose
+  values make `..` a path component that no one of them is — `.` and `.`
+  in two placeholders side by side, `.` beside a dot the configuration
+  wrote — MUST be refused alike, and defaults that do at load; a `..` the
+  configuration writes itself MUST be taken. `tcp`'s `send` MUST NOT
+  take these rules. A probe parameter that no placeholder of an
   argument or of a label value names MUST be refused, the refusal naming
   `request.command`.
 - A scrape MUST open one SSH session on the connection kept to the host,
   run the command in it with no environment, terminal or input, and read its
   stdout against the response limit as it arrives: once past the limit the
   scrape MUST fail as a limit exceeded, the command sent `KILL` and its
-  session closed. Of stderr the first 2 KiB MUST be kept, the rest read and
+  session closed, and a session that has not ended two seconds later MUST
+  retire its connection as one at a deadline does (below). Of stderr the first 2 KiB MUST be kept, the rest read and
   dropped. A session that cannot be opened because the connection was lost
   MUST be opened once more on a new connection; once the exec request has
   been written the command MUST NOT be sent again, even when the

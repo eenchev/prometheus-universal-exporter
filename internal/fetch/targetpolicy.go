@@ -190,6 +190,37 @@ func matchesAddr(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
+// nat64 is the well-known prefix of RFC 6052: an address in it is an IPv4
+// address, its last four bytes, that a NAT64 gateway translates and sends
+// on. On a network with one, as an IPv6-only subnet of a cloud has,
+// 64:ff9b::a00:1 reaches 10.0.0.1.
+var nat64 = netip.MustParsePrefix("64:ff9b::/96")
+
+// translated is the IPv4 address a NAT64 gateway makes of addr, when addr
+// is in the well-known prefix.
+func translated(addr netip.Addr) (netip.Addr, bool) {
+	addr = addr.Unmap().WithZone("")
+	if !nat64.Contains(addr) {
+		return netip.Addr{}, false
+	}
+	b := addr.As16()
+	return netip.AddrFrom4([4]byte(b[12:])), true
+}
+
+// refusedBy finds the network of nets that refuses addr: one it is in, or
+// one the IPv4 address a NAT64 gateway would send it on to is in, so that a
+// rule against an IPv4 network holds for the same host written as the
+// gateway reaches it.
+func refusedBy(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
+	if prefix, in := matchesAddr(nets, addr); in {
+		return prefix, true
+	}
+	if v4, ok := translated(addr); ok {
+		return matchesAddr(nets, v4)
+	}
+	return netip.Prefix{}, false
+}
+
 // checkName applies the name rules to host and says whether its name alone
 // allows it, so its addresses need not be.
 func (p *targetPolicy) checkName(host string) (nameAllowed bool, err error) {
@@ -202,10 +233,10 @@ func (p *targetPolicy) checkName(host string) (nameAllowed bool, err error) {
 
 // checkAddr applies the address rules to one address host resolves to.
 func (p *targetPolicy) checkAddr(host string, addr netip.Addr, nameAllowed bool) error {
-	if prefix, denied := matchesAddr(p.denyNets, addr); denied {
+	if prefix, denied := refusedBy(p.denyNets, addr); denied {
 		return &TargetRefusedError{Host: host, Reason: fmt.Sprintf("its address %s is in %s in request.denied_targets", addr.Unmap(), prefix)}
 	}
-	if _, metadata := matchesAddr(p.implicitDeny, addr); metadata {
+	if _, metadata := refusedBy(p.implicitDeny, addr); metadata {
 		return &TargetRefusedError{Host: host, Reason: fmt.Sprintf("its address %s is a cloud metadata service's, refused unless request.allowed_targets lists it", addr.Unmap())}
 	}
 	if nameAllowed || len(p.allowNames)+len(p.allowNets) == 0 {

@@ -262,6 +262,39 @@ func TestAnSSHExecPlaceholderValueIsNoOptionAndNoClimb(t *testing.T) {
 	}
 }
 
+// Values that are no .. alone may not make one together, or with what the
+// configuration wrote beside them: . and . in two placeholders side by
+// side, or . after a written dot. The probe is answered 400, nothing is
+// sent, and defaults that do so are refused at load. A .. the
+// configuration writes itself stays its own.
+func TestSSHExecValuesMakeNoDotDotTogether(t *testing.T) {
+	f := newExecFixture(t, scripted("1\n", "", 0))
+	c := f.collector(t, "c", []string{"cat", "/srv/{{param_a:x}}{{param_b:y}}", "/srv/.{{param_c:z}}/f", "../{{param_d:w}}"})
+	for name, params := range map[string]map[string]string{
+		"two dots of two values":     {"param_a": ".", "param_b": "."},
+		"a dot after a written dot":  {"param_c": "."},
+		"a dot before a written one": {"param_a": "x/.", "param_b": "./y"},
+	} {
+		_, err := f.fetch(c, RequestOverrides{Params: params})
+		if err == nil || !strings.Contains(err.Error(), "its values make .. a path component of the argument") {
+			t.Errorf("%s: err=%v, want it refused", name, err)
+		}
+		if _, err := CheckRequestParams(c, RequestOverrides{Params: params}); err == nil {
+			t.Errorf("%s: the probe's parameters pass the check a probe is answered 400 by", name)
+		}
+	}
+	if f.server.Accepted() != 0 {
+		t.Errorf("the server took %d connections for refused values", f.server.Accepted())
+	}
+	if _, err := f.fetch(c, RequestOverrides{Params: map[string]string{"param_a": ".", "param_b": "x", "param_c": ".x", "param_d": "a.b"}}); err != nil {
+		t.Errorf("dots that make no .. component: %v", err)
+	}
+	x := model.Collector{Name: "c", Request: model.RequestConfig{Type: RequestTypeSSHExec, Username: "m", PrivateKeyFile: "/k", KnownHostsFile: "/kh", Own: SSHExecConfig{Command: []string{"cat", "/srv/{{param_a:.}}{{param_b:.}}"}}}}
+	if err := ValidateRequest(&x); err == nil || !strings.Contains(err.Error(), "request.command[1], as its placeholders' defaults fill it: its values make .. a path component") {
+		t.Errorf("defaults that make ..: %v", err)
+	}
+}
+
 // A failed command's stderr is the operator's: the error says it, and what
 // a probe's caller is answered (model.CallerText) says the status and
 // where stderr is, not what it holds.
@@ -395,6 +428,39 @@ func TestAnSSHExecStalledSessionRetiresItsConnection(t *testing.T) {
 		t.Errorf("the scrape whose command ran on the retired connection: %v", err)
 	}
 	testutil.WaitFor(t, "the retired connection closed", func() bool { return f.server.Open() == 1 })
+}
+
+// A command that writes past the response limit on a host that will not
+// end it leaves its session open: its connection is retired, as at a
+// deadline, so the scrapes after it do not each leave one more session on
+// it until the host refuses another.
+func TestAnSSHExecCommandPastTheLimitThatDoesNotEndRetiresItsConnection(t *testing.T) {
+	stuck := make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	f := newExecFixtureWith(t, sshtest.Options{RefuseSignals: true, Exec: func(_ context.Context, command string, stdout, _ io.Writer) int {
+		if command == "'yes'" {
+			_, _ = io.WriteString(stdout, strings.Repeat("x", 8192))
+			<-stuck
+		}
+		_, _ = io.WriteString(stdout, "done\n")
+		return 0
+	}})
+	sshExecCloseUnanswered.Store(true)
+	t.Cleanup(func() { sshExecCloseUnanswered.Store(false) })
+	saved := sshAbandonGrace
+	sshAbandonGrace = 50 * time.Millisecond
+	t.Cleanup(func() { sshAbandonGrace = saved })
+
+	c := f.collector(t, "c", []string{"yes"}, func(r *model.RequestConfig) { r.MaxResponseBytes = 4096 })
+	if _, err := f.fetch(c, RequestOverrides{}); !errors.Is(err, model.ErrLimitExceeded) {
+		t.Fatalf("err=%v, want the response limit", err)
+	}
+	if resp, err := f.fetch(f.collector(t, "later", []string{"uptime"}), RequestOverrides{}); err != nil || string(resp.Body) != "done\n" {
+		t.Fatalf("a later scrape: %v", err)
+	}
+	if f.server.Accepted() != 2 {
+		t.Errorf("the server took %d connections, want a new one for the scrape after the stalled session", f.server.Accepted())
+	}
 }
 
 // A connection lost once the exec request was written is not retried: the

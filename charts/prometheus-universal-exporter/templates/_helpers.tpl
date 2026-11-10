@@ -1,3 +1,26 @@
+{{- /* The blocks of values the templates read keys of. Helm takes a null for
+     "delete this key and its defaults", and an empty `ingress:` in a values
+     file, its keys commented out, is a null: the templates then failed with
+     "nil pointer evaluating interface {}.enabled", naming no key. Every
+     template includes this first, so the failure names the block and says
+     what to do, whichever template Helm renders first. A null allocator,
+     webAuth, targetAuth, sshAuth, sqlAuth, kubernetesAccess, healthProbes
+     or goGC is that feature off, and is not refused. */ -}}
+{{- define "prometheus-universal-exporter.requireBlocks" -}}
+{{- range $path := list "image" "serviceAccount" "service" "neg" "ingress" "server" "staticTargets" "staticTargets.monitor" "config" "selfMetrics" "goMemLimit" "autoscaling" "podDisruptionBudget" "networkPolicy" "allocator.tokenSecret" "allocator.staticTargets" "allocator.networkPolicy" "allocator.pdb" "allocator.scrapeConfig" -}}
+{{- $parts := splitList "." $path -}}
+{{- $block := index $.Values (first $parts) -}}
+{{- if and (eq (len $parts) 2) (kindIs "map" $block) -}}
+{{- $block = index $block (last $parts) -}}
+{{- else if eq (len $parts) 2 -}}
+{{- $block = dict -}}
+{{- end -}}
+{{- if kindIs "invalid" $block -}}
+{{- fail (printf "%s is null, which removes every default the chart has under it: an empty `%s:` in a values file, its keys commented out, or --set %s=null. Delete the key to keep the defaults, or write the keys you mean under it" $path (last $parts) $path) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "prometheus-universal-exporter.extraArgs" -}}
 {{- /* The chart already renders the flags below from named values. Go's flag
        package keeps the last occurrence, so an extraArgs entry repeating one of

@@ -147,7 +147,11 @@ answer to the scraper after the collector and the stage, the line a debug
 report names it in and the text it is remembered by are each no longer,
 whatever the target sent, the scraper asked for or the script raised, and so
 is the first failure a rule's line shows (`metric extraction failed`) and
-the `panic` of a probe that panicked. A trip that ran out of its budget says
+the `panic` of a probe that panicked. A panic raised where a fetch does
+part of its work at once, as when it pings several addresses or reads a
+directory's files, is logged twice: first as `a goroutine of a scrape
+panicked`, with the stack it was raised on, then as the probe's or the
+static target's. A trip that ran out of its budget says
 so after the error. Where an error says why after the part that can be long,
 that part is shown by its start so that the reason is whole: a URL by its
 first 512 bytes (`Get "http://db.internal/aaaa..."... (8019 bytes): dial tcp

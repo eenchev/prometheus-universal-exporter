@@ -556,6 +556,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 	)
 	turns := make(chan struct{}, kubernetesConcurrency)
 	started := 0
+	var panicked goroutinePanics
 	for i := range n {
 		select {
 		case turns <- struct{}{}:
@@ -569,6 +570,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 		go func() {
 			defer wg.Done()
 			defer func() { <-turns }()
+			defer panicked.keep()
 			if err := do(ctx, i); err != nil {
 				mu.Lock()
 				if first == nil {
@@ -580,6 +582,7 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 		}()
 	}
 	wg.Wait()
+	panicked.raise()
 	if first == nil && started < n {
 		// The scrape's own context ended before every one was begun.
 		return context.Cause(ctx)

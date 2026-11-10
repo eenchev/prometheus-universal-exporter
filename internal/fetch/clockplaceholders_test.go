@@ -73,6 +73,61 @@ func TestAClockPlaceholderWritesTheMomentInItsFormat(t *testing.T) {
 	}
 }
 
+// In the hour a zone's clocks show twice when its summer time ends, a
+// placeholder writes the moment it is, in both passes: the first was
+// written as the second, an hour late, by every placeholder with the zone,
+// and its hour and minute truncated an hour late too. A day whose midnight
+// comes twice starts at the first, and one with no midnight when the
+// clocks first show it; an hour starts on the hour of the zone, also where
+// the zone is half an hour off UTC's.
+func TestAClockPlaceholderInAnHourTheZoneRepeats(t *testing.T) {
+	// Sofia: 04:00 EEST becomes 03:00 EET at 01:00 UTC on 25 October 2026.
+	first := time.Date(2026, time.October, 25, 0, 30, 15, 0, time.UTC)
+	second := first.Add(time.Hour)
+	// Havana: 01:00 CDT becomes 00:00 CST at 05:00 UTC on 1 November 2026,
+	// and 00:00 CST becomes 01:00 CDT at 05:00 UTC on 8 March 2026.
+	twoMidnights := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
+	noMidnight := time.Date(2026, time.March, 8, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		now        time.Time
+		text, want string
+	}{
+		{first, "unix@Europe/Sofia", "1792888215"},
+		{first, "datetime@Europe/Sofia", "2026-10-25T03:30:15+03:00"},
+		{first, "datetime/m@Europe/Sofia", "2026-10-25T03:30:00+03:00"},
+		{first, "datetime/h@Europe/Sofia", "2026-10-25T03:00:00+03:00"},
+		{first, "datetime:-1h@Europe/Sofia", "2026-10-25T02:30:15+03:00"},
+		{first, "datetime:+1h@Europe/Sofia", "2026-10-25T03:30:15+02:00"},
+		{first, "datetime/d@Europe/Sofia", "2026-10-25T00:00:00+03:00"},
+		{second, "unix@Europe/Sofia", "1792891815"},
+		{second, "datetime@Europe/Sofia", "2026-10-25T03:30:15+02:00"},
+		{second, "datetime/m@Europe/Sofia", "2026-10-25T03:30:00+02:00"},
+		{second, "datetime/h@Europe/Sofia", "2026-10-25T03:00:00+02:00"},
+		{second, "unix/h@Europe/Sofia", "1792890000"},
+		{first, "unix/h@Europe/Sofia", "1792886400"},
+		{twoMidnights, "datetime/d@America/Havana", "2026-11-01T00:00:00-04:00"},
+		{twoMidnights, "unix/d@America/Havana", "1793505600"},
+		{noMidnight, "datetime/d@America/Havana", "2026-03-08T01:00:00-04:00"},
+		{noMidnight, "date/d@America/Havana", "2026-03-08"},
+		{first, "datetime/h@Asia/Kolkata", "2026-10-25T06:00:00+05:30"},
+	} {
+		p, ok, err := parseClock("request.path", c.text)
+		if err != nil || !ok {
+			t.Fatalf("{{%s}}: %v, %v", c.text, ok, err)
+		}
+		if got := p.at(ScrapeClock{Now: c.now}); got != c.want {
+			t.Errorf("at %s, {{%s}} writes %q, want %q", c.now.Format(time.RFC3339), c.text, got, c.want)
+		}
+	}
+	// A window from the last success meets the one before it across the
+	// hour: the first pass's end is the second pass's start.
+	from, _, _ := parseClock("request.path", "unix~last_success(-1h)/m@Europe/Sofia")
+	to, _, _ := parseClock("request.path", "unix/m@Europe/Sofia")
+	if end, start := to.at(ScrapeClock{Now: first}), from.at(ScrapeClock{Now: second, Since: first}); end != start || end != "1792888200" {
+		t.Errorf("the window of the first pass ends at %s and the next starts at %s, want both 1792888200", end, start)
+	}
+}
+
 // A clock placeholder written wrong is refused when the configuration
 // loads, saying what is wrong; a name that is no clock format's is left to
 // be read as what else it may be.

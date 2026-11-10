@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.requireBlocks" . -}}
 {{- /* A Prometheus Operator Probe per probes entry, as blackbox_exporter is
        declared: the Prometheus Operator turns each target, a static URL or
        an Ingress it selects, into the target parameter and the instance

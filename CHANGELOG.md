@@ -82,6 +82,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- A `json` or `steps` login a server refused by answering with what it was
+  sent — a sign-in form with its fields filled in again, a body echoed —
+  had the password in the exporter's log, and with `--web.debug=full` on
+  the status page and in a debug report, when the answer named it
+  otherwise than as a credential (`j_pw`, `value="..."`). The secrets a
+  login reads from its files and the values its steps read are now masked
+  wherever a refusal's answer repeats them
+  ([When a login fails](docs/AUTHENTICATION.md#when-a-login-fails)).
+
 - Target Allocator: with `--peers`, `/metrics` wrote the sample of
   `pue_allocator_is_leader` under the `# TYPE` line of
   `pue_allocator_leader`, so a parser that holds to the text format took

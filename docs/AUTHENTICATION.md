@@ -598,7 +598,10 @@ instead of the token, and no login is made for that request.
 A login that fails fails the probe in the `login` stage, as the log, the
 probe's answer and a debug report name it, saying where the login went,
 with its query's values masked, and why: the status and the start of the
-answer, 256 bytes at most, with what reads as a credential masked, or, for
+answer, 256 bytes at most, with what reads as a credential masked, and
+with the secrets the login read from its files and the values its steps
+read masked wherever the answer repeats them, as a sign-in form answered
+again with its fields filled in does; or, for
 `oauth2`, the status and the error code and description RFC 6749 has the
 server send. What the login sent — its body, its secrets — is never shown:
 
@@ -628,6 +631,14 @@ instead. An answer the OAuth library could not read as a token, whose
 complaint quotes it, is answered `the token endpoint's answer could not be
 read as a token`; a connection that failed, or an answer without
 `access_token`, is answered as it is logged.
+
+A login that fails is made again by the next probe or scrape that needs the
+token: a wrong password is sent at every scrape, and a target that refuses
+every token, with `401`, is logged in to anew at every scrape. Where the
+site locks an account after a few failed sign-ins, or limits them, give the
+collector [`failure_backoff`](CONFIGURATION.md#backing-off-from-failing-targets),
+which counts a failed login as a failed scrape and keeps the next ones from
+the target, and from the login, for a while.
 
 An error of a `token` or `expires_in` expression says what it gave, such as
 "an object", never the value, which may be the token itself. A `steps`

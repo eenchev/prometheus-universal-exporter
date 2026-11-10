@@ -10752,7 +10752,12 @@ it changes.
 A login that fails MUST fail the trip in the `login` stage, saying where it
 went, with its query's values masked, and why: for an answer that is not
 `2xx`, its status and the start of its body, at most 256 bytes, with what
-reads as a credential masked (§ 42.17), and for `oauth2` the error code and
+reads as a credential masked (§ 42.17) and, for a `json` or a `steps` login,
+with every secret the login read from a file, and every value a step read
+or the login kept, of four bytes or more, masked wherever the body holds
+it, as it is, as a form writes it or as JSON does, whatever name the body
+gives it; a value `fields` or `values` writes MUST stay. For `oauth2` it
+MUST say the error code and
 description RFC 6749 has the server send. The start of the body, the error
 code and the description MUST be in the log, and with `--web.debug=full` in
 a debug probe's report and on the status page, alone: the `502` a probe is

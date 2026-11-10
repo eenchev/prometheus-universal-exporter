@@ -803,6 +803,7 @@ func traceLogin(ctx context.Context, method string, u *url.URL, header http.Head
 // jsonLogin posts the fields of l to u and reads the token from the answer.
 func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, start time.Time) (loginToken, error) {
 	body := make(map[string]string, len(l.Fields)+len(l.FieldFiles))
+	var secrets []string
 	for name, value := range l.Fields {
 		body[name] = value
 	}
@@ -815,6 +816,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 			return loginToken{}, fmt.Errorf("login.field_files.%s file %s is empty", name, l.FieldFiles[name])
 		}
 		body[name] = value
+		secrets = append(secrets, value)
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -840,7 +842,7 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 		return loginToken{}, fmt.Errorf("reading the login's answer: %w", RedactURLErrors(readErr))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return loginToken{}, answeredError(resp.StatusCode, resp.Header.Get("Location") != "", answer)
+		return loginToken{}, answeredError(resp.StatusCode, resp.Header.Get("Location") != "", answer, secrets...)
 	}
 	if len(answer) > loginAnswerLimit {
 		return loginToken{}, fmt.Errorf("the login's answer is larger than %d bytes", loginAnswerLimit)
@@ -926,15 +928,41 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 // may name the user, the client or the directory it asked, and a probe's
 // caller is answered the status alone, and where the rest is
 // (model.WithOperatorDetail).
-func answeredError(status int, redirect bool, body []byte) error {
+//
+// sent are the secrets the login sent, or read on its way: a server that
+// answers a refused login with what it was sent, a form with its fields
+// filled in again, puts the password in its answer under whatever name the
+// page has for it, which no rule that reads names would mask.
+func answeredError(status int, redirect bool, body []byte, sent ...string) error {
 	if redirect || status >= 300 && status < 400 {
 		return fmt.Errorf("the login was answered with the redirect %d, which a login does not follow; login.url must be the URL that answers the login itself", status)
 	}
 	answered := fmt.Sprintf("the login was answered with HTTP status %d", status)
-	if excerpt := loginExcerpt(body); excerpt != "" {
+	if excerpt := loginExcerpt(withoutSecrets(body, sent)); excerpt != "" {
 		return model.WithOperatorDetail(fmt.Errorf("%s: %s", answered, excerpt), answered+loginAnswerLogged)
 	}
 	return errors.New(answered)
+}
+
+// loginSecretLeast is the shortest secret masked in a login's answer: a
+// shorter one is in any text by chance.
+const loginSecretLeast = 4
+
+// withoutSecrets is body with each of secrets masked, as it is and as a
+// form or JSON writes it.
+func withoutSecrets(body []byte, secrets []string) []byte {
+	for _, secret := range secrets {
+		if len(secret) < loginSecretLeast {
+			continue
+		}
+		quoted, _ := json.Marshal(secret)
+		for _, written := range []string{secret, url.QueryEscape(secret), strings.Trim(string(quoted), `"`)} {
+			if bytes.Contains(body, []byte(written)) {
+				body = bytes.ReplaceAll(body, []byte(written), []byte("<redacted>"))
+			}
+		}
+	}
+	return body
 }
 
 // loginAnswerLogged is what a probe's caller is told of the answer a

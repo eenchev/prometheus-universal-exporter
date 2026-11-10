@@ -5157,6 +5157,14 @@ first, `--python.max-workers` and
 `--python.max-idle-workers` and `--python.idle-timeout` how many workers are
 kept between scrapes, and for how long.
 
+A decoded document is larger than the response it was read from, the more
+so the more of the response is structure: a response of nothing but empty
+fields, list items or elements, which a faulty or hostile target can send,
+takes tens of times its bytes while its scrape lasts. The bound on that is
+[`max_response_bytes`](REQUESTS.md#compression-and-the-response-size), 10 MiB unless set, times the
+scrapes in progress: for targets you do not run, set it to what their
+answers need, and `--probe.max-concurrent` to what the memory allows.
+
 `limits.max_metrics` (10000 by default) bounds a scrape's series as they are
 made, not after: every transform stops at the first series past it, and the
 scrape fails with `metric count 10001 exceeds limit 10000` — one past the

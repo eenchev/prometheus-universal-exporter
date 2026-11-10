@@ -13041,7 +13041,10 @@ logged once while it stays the same. `GET` and `HEAD` of `/`,
 `/v1/status` and `/metrics`, and no other request, MUST also take the token
 as the password of HTTP Basic auth, of any user name, compared in constant
 time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
-one, so a browser prompts; the token MUST NOT be taken from the URL. The
+one, so a browser prompts; the token MUST NOT be taken from the URL. Every
+endpoint but `/healthz` and `/ready` MUST answer `403`, before the token is
+looked at and with none set, to a request whose `Sec-Fetch-Site` is
+`cross-site` or `same-site`, in any case, and MUST change nothing for it. The
 allocator MUST serve plain HTTP only.
 
 **Status page.** `GET /v1/status` MUST answer the instance's status as JSON,

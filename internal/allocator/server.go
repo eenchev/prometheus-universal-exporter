@@ -53,7 +53,7 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 	api.HandleFunc("GET /{$}", a.serveStatusPage)
 	api.HandleFunc("GET "+StatusPath, a.serveStatus)
 	mux := http.NewServeMux()
-	mux.Handle("/", authorized(token, api))
+	mux.Handle("/", sameOriginOnly(authorized(token, api)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("OK\n"))
 	})
@@ -65,6 +65,25 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 		_, _ = w.Write([]byte("OK\n"))
 	})
 	return mux
+}
+
+// sameOriginOnly refuses, with 403 and before the token is looked at, a
+// request a browser marks as made by a page of another site or of another
+// origin of the same site (Sec-Fetch-Site: cross-site or same-site), as
+// the exporter does (exporter/crosssite.go). An allocator without a token
+// answers whoever reaches it, and a page open in a browser on its network
+// reaches it: a form posted from there is a heartbeat, and a heartbeat
+// names the address Prometheus is sent to for a member's probes. The
+// allocator's own page is same-origin, an address typed in is none, and an
+// exporter, Prometheus and curl send no such header; all pass.
+func sameOriginOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); site == "cross-site" || site == "same-site" {
+			http.Error(w, fmt.Sprintf("the browser says this request comes from a page of another site (Sec-Fetch-Site: %s); the allocator answers its own page and clients that are not browsers only. Open the address directly instead", site), http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // authorized refuses a request without the token, when there is one, and

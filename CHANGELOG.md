@@ -82,6 +82,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- Target Allocator: an allocator run without `--web.token-file` took a
+  heartbeat from any page open in a browser on its network, since a form
+  posted from another site's page is a request like any other: such a page
+  could add a member and name the address Prometheus is sent to for its
+  probes. The allocator now answers `403` to a request a browser marks as
+  another site's, as the exporter does. The chart always sets a token, and
+  is not affected ([API](docs/ALLOCATOR.md#api)).
+
 - Chart: with `allocator.enabled` in a cluster whose pods have IPv6
   addresses, every exporter pod stopped at its start with
   `--allocator.advertise "fd00::12:8080" must be host:port`: the chart

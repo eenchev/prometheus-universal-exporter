@@ -43,11 +43,17 @@ func decodeYAMLUncut(r yamlReading, body []byte) (v any, err error) {
 			return nil, yamlFailureUncut(err)
 		}
 		if !emptyYAMLDocument(&next) {
-			return nil, errors.New("the body holds more than one YAML document (separated by ---); multi-document YAML is not supported")
+			return nil, errors.New("the body holds more than one YAML document (separated by ---); set response.yaml.documents: list to read them as a list")
 		}
 	}
 	timestampsAsText(&root, map[*yaml.Node]bool{})
-	return yamlValueUncut(r, &root)
+	// But for a whole number beyond 64 bits, which has since been given
+	// every digit of its own (markYAMLWholeNumbers).
+	whole := markYAMLWholeNumbers(&root, false)
+	if v, err = yamlValueUncut(r, &root); err == nil && whole {
+		v = yamlWholeNumbers(v)
+	}
+	return v, err
 }
 
 // yamlValueUncut is yamlReading.value as it was.

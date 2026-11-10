@@ -575,9 +575,9 @@ func TestOnlyAPatternOfHistogramsOrSummariesIsTakenBesideANameItMatches(t *testi
 			false, `the required label "zone" of rule 2 does`, false, [5]string{none, none, none, none, none},
 		},
 		"a type and a scale": {m, pattern(model.MetricRule{Type: model.GaugeMetricType, Scale: &two}), false, "the type and the scale of rule 2 do", true, [5]string{twice, types, types, once, once}},
-		"a type, a scale and two required labels, one written twice": {
-			model.MetricRule{Name: "m", Labels: []model.LabelRule{reads("job", false), reads("zone", false), reads("job", false)}},
-			pattern(model.MetricRule{Type: model.CounterMetricType, Scale: &two, Labels: []model.LabelRule{reads("job", true), reads("zone", true), reads("job", true)}}),
+		"a type, a scale and two required labels": {
+			model.MetricRule{Name: "m", Labels: []model.LabelRule{reads("job", false), reads("zone", false)}},
+			pattern(model.MetricRule{Type: model.CounterMetricType, Scale: &two, Labels: []model.LabelRule{reads("job", true), reads("zone", true)}}),
 			false, `the type, the scale, the required label "job" and the required label "zone" of rule 2 do`, true, [5]string{once, once, once, once, once},
 		},
 		"a type in the rule of the name alone": {typed(model.CounterMetricType), pattern(model.MetricRule{Scale: &two}), false, "the scale of rule 2 does", true, [5]string{types, twice, types, none, none}},

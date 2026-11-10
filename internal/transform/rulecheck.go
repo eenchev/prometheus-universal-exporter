@@ -75,6 +75,17 @@ func checkMetricRule(x *model.Collector, r *model.MetricRule, where string) erro
 	if r.Items != "" && !jqFamily(x.Transform.Type) && x.Transform.Type != "css" {
 		fail(fmt.Errorf("%s sets items, which only the jq, yq and css transforms support", where))
 	}
+	switch {
+	case r.LabelsFrom == "":
+	case !jqFamily(x.Transform.Type):
+		fail(fmt.Errorf("%s sets labels_from, which only the jq and yq transforms support", where))
+	case r.Items == "":
+		fail(fmt.Errorf("%s sets labels_from, which reads an object of each of the rule's items, and has no items; set items, to . for the whole document", where))
+	default:
+		if _, err := expr.CompileJQ(r.LabelsFrom); err != nil {
+			fail(fmt.Errorf("%s labels_from %q: %w", where, r.LabelsFrom, err))
+		}
+	}
 	fail(checkValueRules(x, r, where))
 	fail(checkTimeRules(x, r, where))
 	fail(checkLabelValueMaps(x, r, where))

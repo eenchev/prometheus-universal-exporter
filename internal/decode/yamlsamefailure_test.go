@@ -187,7 +187,7 @@ func decodeYAMLBeforeLinesWereLeftOut(body []byte) (any, error) {
 			return nil, err
 		}
 		if !emptyYAMLDocument(&next) {
-			return nil, errors.New("the body holds more than one YAML document (separated by ---); multi-document YAML is not supported")
+			return nil, errors.New("the body holds more than one YAML document (separated by ---); set response.yaml.documents: list to read them as a list")
 		}
 	}
 	timestampsAsText(&root, map[*yaml.Node]bool{})

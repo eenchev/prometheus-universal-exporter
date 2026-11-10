@@ -39,6 +39,7 @@ func checkLimits(x *model.Collector) error {
 		{"max_help_length", int64(l.MaxHelpLength)},
 		{"max_output_bytes", int64(l.MaxOutputBytes)},
 		{"max_cache_entries", int64(l.MaxCacheEntries)},
+		{"max_expression_memory", int64(l.MaxExpressionMemory)},
 	} {
 		if limit.value < 0 {
 			return fmt.Errorf("collector %q limits.%s is %d, and a limit must not be negative; leave it out, or 0, for the default", x.Name, limit.key, limit.value)
@@ -241,6 +242,14 @@ func checkSettingsApply(x *model.Collector) error {
 	csv := x.Response.CSV
 	if (csv.Header != nil || csv.Delimiter != "" || csv.TrimSpace) && x.Decoder.Type != "csv" && x.Decoder.Type != "auto" {
 		return fmt.Errorf("collector %q sets response.csv, which applies to the csv decoder, but its decoder is %s", x.Name, x.Decoder.Type)
+	}
+	if documents := x.Response.YAML.Documents; documents != "" {
+		if x.Decoder.Type != "yaml" && x.Decoder.Type != "auto" {
+			return fmt.Errorf("collector %q sets response.yaml, which applies to the yaml decoder, but its decoder is %s", x.Name, x.Decoder.Type)
+		}
+		if !slices.Contains(model.YAMLDocuments, documents) {
+			return fmt.Errorf("collector %q response.yaml.documents is %q; want one or list, in lower case", x.Name, documents)
+		}
 	}
 	// decoder none converts no body (decode.Decode), so a charset would
 	// be ignored.

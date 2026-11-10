@@ -75,10 +75,12 @@ func TestTargetOwnSectionsAreCounted(t *testing.T) {
 // such as one kept out of the encoding. Each settable leaf of the collector,
 // set on its own, changes the key; lists and mappings are set as a whole.
 //
-// LabelParams, Clock, DescriptorFilesUnread, RequestNotMade, TimingsUnread and FromDefaults are the things a
+// LabelParams, ExpressionParams, Clock, DescriptorFilesUnread, RequestNotMade, TimingsUnread and FromDefaults are the things a
 // collector holds that are kept out of its encoding, and none is a
 // setting: LabelParams is what the load read of the placeholders in
 // transform.labels and in the rules' labels (fetch.ParseLabelParams), which are settings, and in the key;
+// ExpressionParams is what it read of $params in the rules' expressions
+// (fetch.ParseExpressionParams), which are settings too;
 // Clock is what it read of the clock placeholders of the request
 // (fetch.ClockUseOf), which is in the key;
 // DescriptorFilesUnread is set only by the target allocator's load
@@ -119,7 +121,7 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				continue
 			}
 			if key == "-" {
-				if name := prefix + field.Name; name != "LabelParams" && name != "Clock" && name != "DescriptorFilesUnread" && name != "RequestNotMade" && name != "TimingsUnread" && name != "FromDefaults" && name != "Written" && name != "WrittenBlocks" {
+				if name := prefix + field.Name; name != "LabelParams" && name != "ExpressionParams" && name != "Clock" && name != "DescriptorFilesUnread" && name != "RequestNotMade" && name != "TimingsUnread" && name != "FromDefaults" && name != "Written" && name != "WrittenBlocks" {
 					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
 				}
 				continue

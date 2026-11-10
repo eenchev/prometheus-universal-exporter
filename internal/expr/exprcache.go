@@ -3,6 +3,7 @@ package expr
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -127,24 +128,29 @@ func (c *exprCache[T]) len() int {
 // name; $timings, how long the phases of the request it answered took;
 // $tls, the TLS connection the request was sent on; $url, where the request
 // went after its redirects; $redirects, how many redirects led there;
-// $http_version, the version of HTTP the answer came in; and $remote_ip, the
-// address the request's connection was made to.
+// $http_version, the version of HTTP the answer came in; $remote_ip, the
+// address the request's connection was made to; and $params, the probe's
+// parameters by name, in a transform's expressions.
 // Every program has them all, whatever the collector's request type, so a
 // rule that names one compiles anywhere and reads null where the request
 // has nothing to give (JQBindings).
-var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip"}
+var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
 // a field left nil is null to the program.
 type JQBindings struct {
-	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP any
+	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP, Params any
 }
 
 // Values are the values to run a program with, root first, in the order of
 // JQVariables.
 func (b JQBindings) Values(root any) []any {
-	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP}
+	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP, b.Params}
 }
+
+// jqCompilerOptions are what every program is compiled with: the variables,
+// the value helpers and the names of jq that gojq leaves out.
+var jqCompilerOptions = slices.Concat([]gojq.CompilerOption{gojq.WithVariables(JQVariables)}, valueFunctions, jqAddedFunctions)
 
 // A compiled program is safe to run from many goroutines at once.
 var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
@@ -152,12 +158,13 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, err := gojq.Compile(query, append([]gojq.CompilerOption{gojq.WithVariables(JQVariables)}, valueFunctions...)...)
+	addJQFormats(expression, query)
+	code, err := gojq.Compile(query, jqCompilerOptions...)
 	if err != nil {
 		return nil, err
 	}
 	path, isPath := fieldPath(query)
-	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression)}, nil
+	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression), ReadsParams: strings.Contains(expression, "$params")}, nil
 })
 
 // tripVariables are the variables of JQVariables that are of the request
@@ -206,6 +213,9 @@ type JQProgram struct {
 	// $redirects, whose values are otherwise not made: a program that
 	// does not name them is run with them null.
 	ReadsTrip bool
+	// ReadsParams says the program may read $params, the probe's
+	// parameters, which is made only for one that names it.
+	ReadsParams bool
 }
 
 // Lookup evaluates the program directly when it is a field path and every

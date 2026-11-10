@@ -462,6 +462,16 @@ func RequestParams(c *model.Collector) []RequestParam {
 			param.Default = p.Default
 		}
 	}
+	// A parameter an expression reads as $params.<name> is taken too, and
+	// is never required: the expression reads null without it.
+	if read := c.ExpressionParams; read != nil {
+		for _, name := range read.Names {
+			if name = PathParamPrefix + name; byName[name] == nil {
+				byName[name] = &RequestParam{Name: name}
+				names = append(names, name)
+			}
+		}
+	}
 	sort.Strings(names)
 	out := make([]RequestParam, 0, len(names))
 	for _, name := range names {
@@ -564,6 +574,7 @@ func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, o
 			return nil, err
 		}
 	}
+	useExpressionParams(c, overrides.Params, used)
 	for name := range overrides.Params {
 		if !used[name] && !isClockParam(name) {
 			unused = append(unused, name)

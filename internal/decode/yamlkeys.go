@@ -566,6 +566,9 @@ func (l *yamlLearnt) way(root *yaml.Node) int {
 type yamlReading struct {
 	large int
 	hands func(n *yaml.Node)
+	// list makes the body a list of its documents
+	// (response.yaml.documents).
+	list bool
 }
 
 // value is the document under root as the YAML library decodes it into

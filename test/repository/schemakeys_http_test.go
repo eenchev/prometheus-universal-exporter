@@ -264,13 +264,16 @@ func httpSchemaKeys() []schemaKey {
 		// however YAML writes the whole number. An output limit has a least
 		// besides, which both hold a number to, so its 1 is refused by both
 		// (TestSchemaAndExporterAgreeOnTheLeastOutputLimit).
+		{key: "collectors[].response.yaml.documents", document: jqCollector, at: collector, setting: "    response:\n      yaml:\n        documents: %s\n", valid: "list", invalid: "all", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].limits.max_output_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, size: true},
+		{key: "collectors[].limits.max_expression_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_expression_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, size: true},
 		// A size under the key's least is refused by both, written as text
 		// too, which the schemas took before they read its digits
 		// (fetch.SchemaLeastSize).
 		{key: "collectors[].limits.max_script_memory", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "32MiB", invalid: "16MiB", absent: true, invalidWas: taken},
+		{key: "collectors[].limits.max_expression_memory", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_expression_memory: %s\n", valid: "1MiB", invalid: "512KiB", absent: true, invalidWas: taken},
 		{key: "collectors[].limits.max_output_bytes", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "38B", invalid: "37B", absent: true, invalidWas: taken},
 		{key: "collectors[].limits.max_response_bytes", of: "under its least", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1KiB", invalid: "1kB", absent: true, invalidWas: taken},
 		{key: "collectors[].request.max_response_bytes", of: "under its least", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1KiB", invalid: "1023B", absent: true, invalidWas: taken},

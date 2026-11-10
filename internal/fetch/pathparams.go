@@ -195,7 +195,13 @@ func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 // placeholder in places, the places a placeholder of the collector can
 // stand in, names (RequestType.UnusedParams).
 func unusedParamsIn(c *model.Collector, unused, places string) error {
-	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them", unused, c.Name, places)
+	// A collector whose expressions read $params has those as one more
+	// place a parameter is named in.
+	expressions := ""
+	if c.ExpressionParams != nil {
+		expressions = ", and no expression of its rules reads them as $params.<name>"
+	}
+	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them%s", unused, c.Name, places, expressions)
 }
 
 // requestLabel is the URL a verbose self-metric carries for a request. Path

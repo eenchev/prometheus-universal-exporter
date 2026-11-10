@@ -82,6 +82,28 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- Chart: with `allocator.enabled` in a cluster whose pods have IPv6
+  addresses, every exporter pod stopped at its start with
+  `--allocator.advertise "fd00::12:8080" must be host:port`: the chart
+  writes the flag from the pod's IP, which Kubernetes gives without
+  brackets. The exporter now takes an IPv6 address written so.
+
+- With `cache.stale_if_error` and `failure_backoff` together, a target that
+  refused the credential, `401` or `403`, was answered for with the last
+  good result after all: the refusal itself was not, but once the target
+  was backed off from, the probes kept from it were, for as long as
+  `stale_if_error` lasts, so a revoked token went on reading what it was
+  given before. Those probes, and a static target's scrapes, now fail as
+  the refusal did
+  ([Serving the last good result](docs/CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)).
+
+- `denied_targets` and the default refusal of the cloud metadata service
+  did not hold for an IPv4 address written as a NAT64 gateway reaches it:
+  on an IPv6-only network with one, `64:ff9b::a00:1` reached `10.0.0.1`
+  past `denied_targets: [10.0.0.0/8]`. An address in `64:ff9b::/96` is now
+  refused when its IPv4 address is
+  ([Restricting targets](docs/REQUESTS.md#restricting-targets)).
+
 - `sshexec`: a probe could make `..` a path component of an argument out of
   values that are none alone, `param_a=.` and `param_b=.` in
   `/srv/{{param_a}}{{param_b}}`, or `.` beside a dot the configuration

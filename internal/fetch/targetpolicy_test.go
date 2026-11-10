@@ -430,3 +430,36 @@ func TestAZonedAddressIsCheckedAsItsAddress(t *testing.T) {
 		t.Fatalf("fetch: %v", err)
 	}
 }
+
+// An address in NAT64's well-known prefix, 64:ff9b::/96, is an IPv4 address
+// a gateway sends the request on to: a rule that denies an IPv4 network
+// denies it written so, and so is the metadata service refused, while an
+// address the gateway sends elsewhere, and the prefix allowed as the IPv6
+// network it is, are not.
+func TestAnAddressANAT64GatewayTranslatesIsDeniedAsItsIPv4(t *testing.T) {
+	denied, err := compileTargetPolicy(nil, []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"64:ff9b::a00:1", "64:ff9b::10.1.2.3", "64:ff9b::a9fe:a9fe"} {
+		if _, err := denied.check(context.Background(), host, false); !errors.Is(err, ErrTargetRefused) {
+			t.Errorf("%s: %v, want it refused", host, err)
+		}
+	}
+	for _, host := range []string{"64:ff9b::c000:201", "64:ff9b:1::a00:1", "2001:db8::a00:1"} {
+		if _, err := denied.check(context.Background(), host, false); err != nil {
+			t.Errorf("%s: %v, want it taken", host, err)
+		}
+	}
+	allowed, err := compileTargetPolicy([]string{"64:ff9b::/96"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allowed.check(context.Background(), "64:ff9b::c000:201", false); err != nil {
+		t.Errorf("the prefix allowed: %v", err)
+	}
+	c := policyCollector(t, nil, []string{"10.0.0.0/8"}, false)
+	if err := fetchRefused(t, "http://[64:ff9b::a00:1]:9100/", c); !errors.Is(err, ErrTargetRefused) {
+		t.Errorf("fetch: %v", err)
+	}
+}

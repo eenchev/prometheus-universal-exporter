@@ -8165,6 +8165,10 @@ whether or not a proxy is in between.
   network. `denied_targets` MUST win over `allowed_targets`.
 - An IPv6 address with a zone (`fe80::1%eth0`) MUST be checked as the address
   without its zone, against the lists and the metadata addresses alike.
+- An address in NAT64's well-known prefix, `64:ff9b::/96` (RFC 6052), MUST
+  be refused when the IPv4 address in its last four bytes is in a denied
+  network or is a metadata address, as well as when it is itself; it MUST
+  be allowed as the IPv6 address it is alone.
 - Names MUST be checked before the request and again for the host of every
   redirect followed, and so MUST a host written as an address, needing no
   lookup, before anything is sent. For a target reached directly, addresses MUST be checked
@@ -11596,7 +11600,10 @@ changes MUST NOT serve a result stored under the previous one.
 A trip that failed because the target refused its credential — HTTP `401` or
 `403`, or gRPC `UNAUTHENTICATED` or `PERMISSION_DENIED` — MUST NOT be answered
 with a stale result, by a probe or a static target's scrape: the credential
-may have been revoked, and the stored result was given to another. Nor MUST a
+may have been revoked, and the stored result was given to another. Nor MUST
+a trip `failure_backoff` (§ 42.13c) keeps from a target whose last failed
+trip was such a refusal, until a trip to it fails otherwise or succeeds.
+Nor MUST a
 trip the collector's `allowed_targets` or `denied_targets` refused (§ 26.1),
 answered `403`, whether before the request or on a redirect: the target may
 not be reached, and no earlier result stands in for it. A debug probe or
@@ -13276,7 +13283,9 @@ default to the host name, and `--allocator.advertise` to the
 `--web.listen-address` host when it is one address that is neither loopback
 nor unspecified, else to the host's first address that is neither loopback
 nor link-local, IPv4 before IPv6, with the listen port; an
-`--allocator.advertise` that is not `host:port` MUST be refused.
+`--allocator.advertise` that is not `host:port` MUST be refused, and an IPv6
+address written without brackets before the port, as a pod's IP is in
+`$(POD_IP):8080`, MUST be taken as that address.
 `--allocator.capacity` MUST default to 1, MUST be refused as a command-line
 error outside `0.1` to `100` or with more than three decimals, and MUST be
 said as `capacity` in every heartbeat. The

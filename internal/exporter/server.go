@@ -817,6 +817,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	if turn != nil && turn.refusal != nil {
 		job.backingOff = turn.refusal
 		result = s.collect(ctx, job)
+		result.unauthorized = turn.unauthorized
 	} else {
 		// Answered at once when the collector's backend already has all it
 		// may get, rather than queued behind the probes in progress
@@ -927,6 +928,7 @@ func (s *Server) settleBackoff(turn *backoffTurn, read configRead, result collec
 	if turn.config.MinBudget != nil {
 		floor = time.Duration(*turn.config.MinBudget)
 	}
+	turn.unauthorized = result.unauthorized
 	started, failures, until := turn.settle(read, outcomeOf(result, floor))
 	if started {
 		s.logger.Warn("target is backing off after consecutive failed scrapes; its probes and scrapes fail without contacting it until the wait has passed (failure_backoff)",

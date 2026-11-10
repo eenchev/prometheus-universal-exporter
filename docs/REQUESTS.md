@@ -1021,7 +1021,12 @@ compared without case; `*.example.com` matches `a.b.example.com`, not
 `example.com` itself. An IPv6 address with a zone, `fe80::1%eth0`, is checked
 as the address without it: the zone names the interface that reaches it, so
 `denied_targets: [fe80::/10]` refuses it, and the metadata service's
-`fd00:ec2::254%eth0` is refused as `fd00:ec2::254` is.
+`fd00:ec2::254%eth0` is refused as `fd00:ec2::254` is. An address in
+`64:ff9b::/96`, which a NAT64 gateway sends on to the IPv4 address in its
+last four bytes, is denied by a rule against that IPv4 address too:
+`denied_targets: [10.0.0.0/8]` refuses `64:ff9b::a00:1`, and the metadata
+service is refused as `64:ff9b::a9fe:a9fe`. A network with a NAT64 prefix of
+its own needs that prefix denied by hand.
 
 Names are checked before the request and again for every redirect followed,
 and so is a target written as an address, which needs no lookup, so it is

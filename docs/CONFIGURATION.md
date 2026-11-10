@@ -4808,7 +4808,9 @@ credential it was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
 `PERMISSION_DENIED`. A credential forwarded with `forward_authorization` is
 part of the cache key, but a token that has just been revoked would otherwise
 still be answered with what it was given before, for as long as
-`stale_if_error` lasts. The other is the collector's own
+`stale_if_error` lasts; the probes [`failure_backoff`](#backing-off-from-failing-targets)
+keeps from the target after such a refusal are not answered stale either,
+since they stand for it. The other is the collector's own
 [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
 refusing the target, answered `403`: its name now resolves, or a redirect now
 leads, somewhere the collector may not go, and the refusal is the answer.
@@ -7037,7 +7039,7 @@ prometheus-universal-exporter \
 | `--allocator.url` | none | The allocator's `http://` URL. It turns allocator mode on. |
 | `--allocator.cache-dir` | none, required | The directory the bundle is written into and loaded from. A restart starts with the bundle the exporter installed there. |
 | `--allocator.member` | the host name | This exporter's name among the allocator's members: in Kubernetes the pod's name, which the host name is. |
-| `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. |
+| `--allocator.advertise` | an address of the host, listen port | `host:port` Prometheus is told to send this exporter's probes to: the `--web.listen-address` host when it is one address and not a loopback one, or else the host's first address that is not, IPv4 first, with the listen port. An IPv6 address may be written without brackets, `fd00::12:8080`, as a pod's `$(POD_IP):8080` is in an IPv6 cluster. |
 | `--allocator.token-file` | none | A file holding a bearer token sent with every request to the allocator, read again for each, so a rotated Secret takes effect at once. |
 | `--allocator.capacity` | `1` | This exporter's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals, said in every heartbeat: a member of capacity 2 is given about twice the weight of one of capacity 1. A change takes effect, as a restart does, once the allocator's member list has held for its `--settle` ([Weights and capacity](ALLOCATOR.md#weights-and-capacity)). |
 

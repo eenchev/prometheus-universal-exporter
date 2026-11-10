@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
@@ -109,10 +111,30 @@ func (f allocatorFlags) setUp(flags *flag.FlagSet, listenAddress string) (*alloc
 			return nil, err
 		}
 		a.advertise = advertise
-	} else if host, port, err := net.SplitHostPort(a.advertise); err != nil || host == "" || port == "" {
-		return nil, fmt.Errorf("--allocator.advertise %q must be host:port, the address Prometheus sends this exporter's probes to", a.advertise)
+	} else {
+		a.advertise = bracketedAdvertise(a.advertise)
+		if host, port, err := net.SplitHostPort(a.advertise); err != nil || host == "" || port == "" {
+			return nil, fmt.Errorf("--allocator.advertise %q must be host:port, the address Prometheus sends this exporter's probes to", f.advertise)
+		}
 	}
 	return a, nil
+}
+
+// bracketedAdvertise is --allocator.advertise with an IPv6 address written
+// without brackets, fd00::12:8080, put in them, [fd00::12]:8080: the flag
+// always holds a port, so what is before the last colon is the address. A
+// pod's IP comes from the downward API bare, and a Deployment that writes
+// $(POD_IP):8080 cannot know whether it will be an IPv6 one.
+func bracketedAdvertise(advertise string) string {
+	last := strings.LastIndexByte(advertise, ':')
+	if last <= 0 || strings.HasPrefix(advertise, "[") {
+		return advertise
+	}
+	host := advertise[:last]
+	if addr, err := netip.ParseAddr(host); err != nil || !addr.Is6() {
+		return advertise
+	}
+	return net.JoinHostPort(host, advertise[last+1:])
 }
 
 // interfaceAddrs lists the host's addresses; a variable for the tests.

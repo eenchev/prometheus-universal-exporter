@@ -46,6 +46,28 @@ func TestAllocatorModeCommandLineErrors(t *testing.T) {
 	}
 }
 
+// An IPv6 address written bare before the port, as $(POD_IP):8080 is in a
+// pod of an IPv6 cluster, is taken as the address it is, in brackets; what
+// is no address before its last colon, and what is in brackets already, is
+// left as it is written.
+func TestAnAdvertisedIPv6AddressNeedsNoBrackets(t *testing.T) {
+	for given, want := range map[string]string{
+		"fd00::12:8080":     "[fd00::12]:8080",
+		"2001:db8::1:9115":  "[2001:db8::1]:9115",
+		"[fd00::12]:8080":   "[fd00::12]:8080",
+		"10.0.0.7:8080":     "10.0.0.7:8080",
+		"exporter-0.x:8080": "exporter-0.x:8080",
+	} {
+		if got := bracketedAdvertise(given); got != want {
+			t.Errorf("%s is advertised as %s, want %s", given, got, want)
+		}
+	}
+	dir := t.TempDir()
+	if out := runCheckCLI(t, "--allocator.url=http://pue-allocator:8080", "--allocator.cache-dir="+dir, "--allocator.advertise=fd00::12:8080"); out.code == 2 {
+		t.Errorf("a bare IPv6 address is a command-line error: %s", out.stderr)
+	}
+}
+
 // --dry-run in allocator mode checks the bundle in the cache directory, which
 // a restart would start with; with none there it fails, saying the
 // configuration file is not there.

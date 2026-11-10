@@ -38,7 +38,8 @@ import (
 //
 // A skipped trip fails in the fetch stage, under error_handling
 // on_fetch_error and with cache.stale_if_error answering for it, exactly as
-// the fetch it stands for would have; it takes no trip slot, and is counted
+// the fetch it stands for would have, so not when that fetch was refused
+// its credential, which no stale result answers; it takes no trip slot, and is counted
 // in http_exporter_backoff_skipped_total. When the wait has passed, the
 // next trip goes to the target alone: one trip at a time, so that a wait
 // running out does not let every probe waiting for it through at once. A
@@ -93,6 +94,10 @@ type backoffTarget struct {
 	// trial is set while the trip let through when the wait had passed is
 	// in progress.
 	trial bool
+	// unauthorized says its last failed trip was the target refusing the
+	// credential: the trips kept from it meanwhile stand for that failure,
+	// and are no more answered with a stale result than it was.
+	unauthorized bool
 }
 
 func newFailureBackoffs() *failureBackoffs {
@@ -113,6 +118,10 @@ type backoffTurn struct {
 	trial   *backoffTarget
 	refusal error
 	settled bool
+	// unauthorized is, for a refused turn, whether the failure it stands
+	// for was a refused credential, and for one let through, set by its
+	// caller before settle, whether its own failure was.
+	unauthorized bool
 }
 
 // backoffError is the failure of a skipped trip. Its text names the number
@@ -156,9 +165,9 @@ func (b *failureBackoffs) admit(c *model.Collector, key, display string) *backof
 	case target.until.IsZero():
 		// Not yet failed `after` times: every trip goes to the target.
 	case target.trial:
-		turn.refusal = backoffError(display, target.failures, target.until, true)
+		turn.refusal, turn.unauthorized = backoffError(display, target.failures, target.until, true), target.unauthorized
 	case b.now().Before(target.until):
-		turn.refusal = backoffError(display, target.failures, target.until, false)
+		turn.refusal, turn.unauthorized = backoffError(display, target.failures, target.until, false), target.unauthorized
 	default:
 		target.trial = true
 		turn.trial = target
@@ -258,6 +267,7 @@ func (t *backoffTurn) settle(read configRead, outcome backoffOutcome) (started b
 		targets.order.MoveToBack(element)
 	}
 	target.failures++
+	target.unauthorized = t.unauthorized
 	after := *t.config.After
 	if target.failures < after {
 		return false, 0, time.Time{}

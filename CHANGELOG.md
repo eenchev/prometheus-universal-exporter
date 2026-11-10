@@ -71,7 +71,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `params: {param_day: "{{date@America/New_York}}"}` gives each static
   target of one collector its own day. See
   [Dates and times in a parameter](docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter).
-
 - **Two exporters under one member name are said.** Two exporters given one
   `--allocator.member`, or two hosts of one host name, were one member to
   the target allocator: both took its bundle and scraped its share, every
@@ -86,16 +85,14 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   heartbeat from any page open in a browser on its network, since a form
   posted from another site's page is a request like any other: such a page
   could add a member and name the address Prometheus is sent to for its
-  probes. The allocator now answers `403` to a request a browser marks as
-  another site's, as the exporter does. The chart always sets a token, and
-  is not affected ([API](docs/ALLOCATOR.md#api)).
-
+  probes. A heartbeat a browser marks as another site's is now answered
+  `403`. The chart always sets a token, and is not affected
+  ([API](docs/ALLOCATOR.md#api)).
 - Chart: with `allocator.enabled` in a cluster whose pods have IPv6
   addresses, every exporter pod stopped at its start with
   `--allocator.advertise "fd00::12:8080" must be host:port`: the chart
   writes the flag from the pod's IP, which Kubernetes gives without
   brackets. The exporter now takes an IPv6 address written so.
-
 - With `cache.stale_if_error` and `failure_backoff` together, a target that
   refused the credential, `401` or `403`, was answered for with the last
   good result after all: the refusal itself was not, but once the target
@@ -104,14 +101,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   given before. Those probes, and a static target's scrapes, now fail as
   the refusal did
   ([Serving the last good result](docs/CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)).
-
 - `denied_targets` and the default refusal of the cloud metadata service
   did not hold for an IPv4 address written as a NAT64 gateway reaches it:
   on an IPv6-only network with one, `64:ff9b::a00:1` reached `10.0.0.1`
   past `denied_targets: [10.0.0.0/8]`. An address in `64:ff9b::/96` is now
   refused when its IPv4 address is
   ([Restricting targets](docs/REQUESTS.md#restricting-targets)).
-
 - `sshexec`: a probe could make `..` a path component of an argument out of
   values that are none alone, `param_a=.` and `param_b=.` in
   `/srv/{{param_a}}{{param_b}}`, or `.` beside a dot the configuration
@@ -123,7 +118,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   connection, one more at every scrape, until the host refused another
   session and every scrape of the host failed. Its connection is now
   retired, as at a deadline ([Limits](docs/SSHEXEC.md#limits)).
-
 - A `json` or `steps` login a server refused by answering with what it was
   sent — a sign-in form with its fields filled in again, a body echoed —
   had the password in the exporter's log, and with `--web.debug=full` on
@@ -132,12 +126,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   login reads from its files and the values its steps read are now masked
   wherever a refusal's answer repeats them
   ([When a login fails](docs/AUTHENTICATION.md#when-a-login-fails)).
-
 - Target Allocator: with `--peers`, `/metrics` wrote the sample of
   `pue_allocator_is_leader` under the `# TYPE` line of
   `pue_allocator_leader`, so a parser that holds to the text format took
   both for series without a type. Each now stands under its own.
-
 - Target Allocator: an exporter that refused a bundle kept reporting the
   refusal after the allocator's files were put back as they were, so the
   allocator's status showed the member up to date and refusing a bundle at
@@ -146,7 +138,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   refusal now leaves its heartbeats as soon as the allocator serves the
   bundle it has in force
   ([Heartbeats](docs/ALLOCATOR.md#heartbeats)).
-
 - Chart: an empty block in a values file, such as `ingress:` or
   `autoscaling:` with every key under it commented out, is a null to Helm,
   which removes the chart's defaults under it, and rendering failed with

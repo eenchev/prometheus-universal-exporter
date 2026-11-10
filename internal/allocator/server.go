@@ -68,18 +68,24 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 }
 
 // sameOriginOnly refuses, with 403 and before the token is looked at, a
-// request a browser marks as made by a page of another site or of another
-// origin of the same site (Sec-Fetch-Site: cross-site or same-site), as
-// the exporter does (exporter/crosssite.go). An allocator without a token
-// answers whoever reaches it, and a page open in a browser on its network
-// reaches it: a form posted from there is a heartbeat, and a heartbeat
-// names the address Prometheus is sent to for a member's probes. The
-// allocator's own page is same-origin, an address typed in is none, and an
-// exporter, Prometheus and curl send no such header; all pass.
+// request that is no GET or HEAD and that a browser marks as made by a page
+// of another site or of another origin of the same site (Sec-Fetch-Site:
+// cross-site or same-site). An allocator without a token answers whoever
+// reaches it, and a page open in a browser on its network reaches it: a
+// form posted from there is a heartbeat, and a heartbeat names the address
+// Prometheus is sent to for a member's probes. An exporter, Prometheus and
+// curl send no such header, and pass.
+//
+// A GET is let through, where the exporter refuses it too
+// (exporter/crosssite.go): no GET of the allocator changes anything, a page
+// of another site cannot read its answer, and the exporter's status page
+// links to the allocator's view of its member, which is a navigation from
+// another origin.
 func sameOriginOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); site == "cross-site" || site == "same-site" {
-			http.Error(w, fmt.Sprintf("the browser says this request comes from a page of another site (Sec-Fetch-Site: %s); the allocator answers its own page and clients that are not browsers only. Open the address directly instead", site), http.StatusForbidden)
+		site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && (site == "cross-site" || site == "same-site") {
+			http.Error(w, fmt.Sprintf("the browser says this request comes from a page of another site (Sec-Fetch-Site: %s); the allocator takes a heartbeat from its exporters only", site), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

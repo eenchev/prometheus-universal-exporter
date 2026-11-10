@@ -971,14 +971,14 @@ Basic auth, since a browser sends the credentials it was given with any
 request to the allocator, another site's page's included, and a heartbeat
 must not be one of them. The token is never taken from the URL.
 
-With a token or without, every endpoint but `/healthz` and `/ready` answers
-`403` to a request a browser marks as made by another site's page,
-`Sec-Fetch-Site: cross-site` or `same-site`, as the exporter's do
+With a token or without, a heartbeat a browser marks as made by another
+site's page, `Sec-Fetch-Site: cross-site` or `same-site`, is answered `403`
 ([Requests from other sites](AUTHENTICATION.md#requests-from-other-sites)):
 without a token, a form posted from a page open on the allocator's network
 would be a heartbeat, and name where Prometheus sends a member's probes.
-The allocator's own page, an address typed in, the exporters and
-Prometheus pass.
+The exporters send no such header. A `GET` so marked is answered as any
+other, since none changes anything and the exporter's status page links to
+the allocator's view of its member.
 
 | Endpoint | Caller | Answer |
 | --- | --- | --- |

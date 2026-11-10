@@ -13041,10 +13041,12 @@ logged once while it stays the same. `GET` and `HEAD` of `/`,
 `/v1/status` and `/metrics`, and no other request, MUST also take the token
 as the password of HTTP Basic auth, of any user name, compared in constant
 time, and their `401` MUST carry a `Basic` challenge beside the `Bearer`
-one, so a browser prompts; the token MUST NOT be taken from the URL. Every
-endpoint but `/healthz` and `/ready` MUST answer `403`, before the token is
-looked at and with none set, to a request whose `Sec-Fetch-Site` is
-`cross-site` or `same-site`, in any case, and MUST change nothing for it. The
+one, so a browser prompts; the token MUST NOT be taken from the URL. A
+request that is no `GET` or `HEAD` and whose `Sec-Fetch-Site` is
+`cross-site` or `same-site`, in any case, MUST be answered `403`, before
+the token is looked at and with none set, and MUST change nothing; a `GET`
+so marked MUST be answered as any other, so that a link to the allocator's
+page from another origin, as the exporter's status page has, opens it. The
 allocator MUST serve plain HTTP only.
 
 **Status page.** `GET /v1/status` MUST answer the instance's status as JSON,

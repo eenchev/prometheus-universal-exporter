@@ -956,7 +956,7 @@ func withoutSecrets(body []byte, secrets []string) []byte {
 			continue
 		}
 		quoted, _ := json.Marshal(secret)
-		for _, written := range []string{secret, url.QueryEscape(secret), strings.Trim(string(quoted), `"`)} {
+		for _, written := range []string{secret, url.QueryEscape(secret), strings.TrimSuffix(strings.TrimPrefix(string(quoted), `"`), `"`)} {
 			if bytes.Contains(body, []byte(written)) {
 				body = bytes.ReplaceAll(body, []byte(written), []byte("<redacted>"))
 			}

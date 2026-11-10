@@ -201,6 +201,12 @@ type Collector struct {
 	// ExpressionParams is what the collector's jq or yq expressions read of
 	// the probe's parameters as $params, nil when they read nothing of it.
 	ExpressionParams *ExpressionParams `yaml:"-"`
+	// TransformClock is what the collector's expressions and scripts read
+	// of the scrape's clock, as $scrape_time and $last_success or
+	// scrape_time and last_success (fetch.TransformClockUseOf): Since when
+	// one reads the last success, which the exporter then keeps for each
+	// of the collector's targets.
+	TransformClock ClockUse `yaml:"-"`
 	// Clock says what the collector's request holds of clock placeholders
 	// ({{date}} and the rest), found once when the configuration loads
 	// (fetch.ClockUseOf); the zero value, as nearly every collector's, when

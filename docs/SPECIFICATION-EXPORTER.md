@@ -3139,6 +3139,18 @@ collector
 
 Scripts can operate directly on the raw response or decoded structures.
 
+A script, a transform's and a pre-script, MUST also have `scrape_time`, the
+time its scrape began in seconds since the epoch, as a float, the moment
+the request's clock placeholders are filled from, and `last_success`, that
+of the last scrape of the same collector, target and parameters that
+succeeded, `None` while there is none; every jq program MUST have the two as
+`$scrape_time` and `$last_success`, `null` for `None`. The exporter MUST keep
+the last success for the targets of a collector whose scripts or rule
+expressions name it, as for a clock placeholder that reads it, and MUST NOT
+for any other; a scrape that fails, one answered from the cache and a debug
+probe MUST keep none. Without a clock, as in a transform run outside a
+scrape, both MUST be `None` and `null`.
+
 `target` MUST be the target as given, credentials included; the
 documentation MUST say so, and that a script printing it or labelling with it
 exposes them.
@@ -3198,9 +3210,20 @@ fail(...)
 
 The Python API MUST ultimately produce the same internal `MetricSet` as every other decoder.
 `metric(...)` MUST take a value as the other transforms do — a number, a
-numeric string, a boolean as 1 or 0 — and refuse anything else naming the
-metric; a timestamp MUST be milliseconds, a float cut to whole milliseconds,
-and a non-finite one, or one beyond an int64 of milliseconds, refused. A
+numeric string, a boolean as 1 or 0 — and a number of another kind that
+gives its float, as a `Decimal` or a `Fraction` does, and refuse anything
+else naming the metric, a whole number too large for a float among it, as a
+`ValueError` of the script's line; a timestamp MUST be milliseconds, a float
+cut to whole milliseconds, and a non-finite one, or one beyond an int64 of
+milliseconds, refused. A timestamp given to `metric(...)` as a `datetime`
+with a time zone MUST be its moment, one without a zone MUST be refused,
+and a number from 10^9 to under 10^11, which reads as seconds, MUST be
+refused saying so. A label value of `bytes` MUST be their text as UTF-8,
+what is not UTF-8 replaced. A series a script gave no help MUST have the
+first help the script gave a series of its name. What a script leaves in
+`data` or in `metrics` that JSON has no form for MUST fail the script in one
+line naming its kind, without the frames of the worker's own modules, and
+the worker MUST serve the next script. A
 metric a script appends to `metrics` itself MUST be read the same way: its
 value and timestamp as `metric(...)` reads them, `None` refused, its label
 values written as label text with `None` leaving the label off, and a missing

@@ -102,3 +102,54 @@ func useExpressionParams(c *model.Collector, params map[string]string, used map[
 		}
 	}
 }
+
+// A transform reads the scrape's clock too: $scrape_time and $last_success
+// in a jq or yq expression of a rule, scrape_time and last_success in a
+// Python script, each the seconds since the epoch of the trip's clock
+// (ScrapeClock) and of the last successful trip of the same collector,
+// target and parameters, which is null, or None, while there is none.
+
+// scriptClock finds the two names where a Python script may read them.
+var scriptClock = regexp.MustCompile(`\b(scrape_time|last_success)\b`)
+
+// TransformClockUseOf is what the transform of c reads of the scrape's
+// clock, for Collector.TransformClock. As with $params, a name that is
+// only text there costs the collector a clock it did not need.
+func TransformClockUseOf(c *model.Collector) model.ClockUse {
+	var use model.ClockUse
+	note := func(name string) {
+		use.Any = true
+		use.Since = use.Since || strings.HasSuffix(name, "last_success")
+	}
+	script := func(text string) {
+		if strings.Contains(text, "scrape_time") || strings.Contains(text, "last_success") {
+			for _, name := range scriptClock.FindAllString(text, -1) {
+				note(name)
+			}
+		}
+	}
+	script(c.Transform.PreScript)
+	if c.Transform.Type == "python" {
+		script(c.Transform.Script)
+	}
+	if c.Transform.Type != "jq" && c.Transform.Type != "yq" {
+		return use
+	}
+	read := func(expression string) {
+		for _, name := range []string{"$scrape_time", "$last_success"} {
+			if strings.Contains(expression, name) {
+				note(name)
+			}
+		}
+	}
+	for i := range c.Metrics {
+		rule := &c.Metrics[i]
+		read(rule.Items)
+		read(rule.Expression)
+		read(rule.LabelsFrom)
+		for j := range rule.Labels {
+			read(rule.Labels[j].Expression)
+		}
+	}
+	return use
+}

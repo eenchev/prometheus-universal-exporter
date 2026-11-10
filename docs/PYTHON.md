@@ -13,6 +13,38 @@ percentages and Kubernetes quantities written as text with the
 `parse_duration(...)`, `parse_time(...)`, `parse_percent(...)` and
 `parse_quantity(...)`.
 
+## What a script has
+
+A script, a `python` transform's and a `pre_script`, starts with these
+names, and whatever it imports:
+
+| Name | What it is |
+| --- | --- |
+| `data` | The response as its decoder read it ([What `data` is](#what-data-is)). A `pre_script` changes it, or binds the name to another value, for the rules to read. |
+| `response` | The answer: `status_code`, `headers`, `header(name, default=None)`, `body` and `text`, `json()` and `yaml()`, and, of an `http` or `graphite` request, `timings`, `tls`, `url`, `redirects`, `http_version` and `remote_ip`. |
+| `target`, `collector` | The target as the probe gave it, credentials included, and the collector's name. |
+| `params` | The [probe's parameters](REQUESTS.md#in-expressions), a dict of each `param_<name>` that was given, by its name, as text; empty when there is none. jq's `$params`. |
+| `scrape_time` | When the scrape began, in seconds since the epoch, a float as `time.time()` gives one; the same moment the request's [clock placeholders](REQUESTS.md#dates-and-times) were filled from. jq's `$scrape_time`. |
+| `last_success` | When the last scrape of the same collector, target and parameters that succeeded began, in the same seconds; `None` at the first scrape after a start, and for a new target. jq's `$last_success`. |
+| `metric(...)`, `fail(message)` | Make a series; fail the scrape with a message. |
+| `metrics` | The list `metric(...)` appends to, of a `python` transform. |
+| `parse_bytes`, `parse_duration`, `parse_time`, `parse_percent`, `parse_quantity` | The [value-parsing helpers](#value-parsing-helpers). |
+| `json`, `sys`, `os`, `io`, `contextlib`, `builtins` | The modules of those names, as if imported. |
+
+`scrape_time - last_success` is how long ago the last good scrape was,
+which makes a rate of two totals, or says that a gap was longer than it
+should be:
+
+```python
+if last_success is not None:
+    metric(name="app_seconds_since_last_scrape", value=scrape_time - last_success)
+metric(name="app_report_age_seconds", value=scrape_time - parse_time(data["generated_at"]))
+```
+
+The last success is kept in memory, so a restart forgets it. A scrape that
+fails, one answered from the [cache](CONFIGURATION.md#response-caching)
+and a [debug probe](CONFIGURATION.md#debug-probes) keep the one before.
+
 `response.headers` is a dict of each header's values as a list, by the
 header's canonical name (`Content-Type`, `X-Mode`), as the response carried
 them: `response.headers["X-Mode"]` is `["a", "b"]` for a header sent twice.
@@ -175,6 +207,14 @@ deep as it decodes a response`. A list or a dict that holds itself is found
 where the worker comes back to it, at the same cost whether it is in itself
 once or twice, and not by following it ten thousand levels down.
 
+What goes back is a `str`, an `int`, a `float`, a `bool`, `None`, a list, a
+tuple or a dict of those. A set, `bytes`, a date or a `Decimal` left in
+`data`, or in an entry appended to `metrics`, fails the script saying which
+it is and what to make of it: `python pre-script failed: TypeError: what the
+script left in data holds a set, which cannot be handed back to the
+exporter: ...; make it one of those, as list(a_set), str(a_date) or
+float(a_decimal) do`.
+
 `data` goes back to the exporter as JSON, which cannot say that a list or a
 dict is one it has written already. One that is in `data` twice is written
 twice and read back as two: `x = [1, 2]; data = [x, x]` leaves
@@ -299,12 +339,20 @@ the interpreter's own on nested calls in C, which a script cannot change, in
 `json`); and at what the stack holds from 3.14. `copy.deepcopy(data)` stops at
 about half the recursion limit on all of them.
 
-`metric(...)` takes a `value` as the other transforms do: a number, a numeric
-string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`
-included, fails the script naming the metric. A `timestamp` is milliseconds
-since the Unix epoch, and may be a float, as `time.time() * 1000` is; it is
+`metric(name, type="gauge", value=0, labels=None, help=None,
+timestamp=None)` takes a `value` as the other transforms do: a number, a
+numeric string such as `"12"`, or a boolean, as `1` or `0`. A number of
+another kind that says what float it is, a `decimal.Decimal`, a
+`fractions.Fraction` or a numpy number, is that float. Anything else, `None`
+included, fails the script naming the metric, and so does a whole number
+too large for a float. A `timestamp` is milliseconds
+since the Unix epoch, and may be a float, as `scrape_time * 1000` is; it is
 cut to whole milliseconds, and one beyond what 64 bits of milliseconds hold
-fails the script. `name`, `type` and `help` are strings, and `None` for the
+fails the script. Given to `metric(...)`, a `datetime` with a time zone is
+its moment, one without a zone fails the script, and so does a number that
+reads as seconds, as `time.time()` gives them. A label value of `bytes` is
+its text, read as UTF-8. A `help` given with any series of a name is the
+metric's. `name`, `type` and `help` are strings, and `None` for the
 type or the help is none given; anything else fails the script naming the
 metric and the argument, as in `metric 'jobs' help 5 is not a string`. A
 list, a dict, a tuple or a set given where `metric(...)` takes one value is

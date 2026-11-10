@@ -130,6 +130,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	}
 	x.LabelParams = labels
 	x.ExpressionParams = fetch.ParseExpressionParams(x)
+	x.TransformClock = fetch.TransformClockUseOf(x)
 	// Its requests are timed only when a rule or script reads the timings.
 	x.TimingsUnread = !transform.ReadsTimings(x)
 	if err := checkPlaceholdersAreFilled(x); err != nil {

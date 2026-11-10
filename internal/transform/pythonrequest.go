@@ -61,6 +61,10 @@ type pythonEncoder struct {
 	// (pythonParams), set before a request is written; none writes no
 	// member.
 	params map[string]string
+	// clock is the scrape's clock the script is given as scrape_time and
+	// last_success, set before a request is written; without one, or
+	// without a last success, the member is left out and the name is None.
+	clock scrapeClock
 }
 
 // pythonParams is what a script reads as params: each parameter the
@@ -217,6 +221,14 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 		}
 		dst = append(dst, '}')
 	}
+	if at, ok := epochSeconds(e.clock.now).(float64); ok {
+		dst = append(dst, `,"scrape_time":`...)
+		dst = strconv.AppendFloat(dst, at, 'f', -1, 64)
+	}
+	if at, ok := epochSeconds(e.clock.since).(float64); ok {
+		dst = append(dst, `,"last_success":`...)
+		dst = strconv.AppendFloat(dst, at, 'f', -1, 64)
+	}
 	dst = append(dst, '}')
 	e.buf = dst
 	if written && len(dst) > e.limit {
@@ -225,7 +237,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	if !written {
 		// What was being written is not kept from the garbage collector.
 		clear(e.members[:cap(e.members)])
-		return pythonRequestMarshalled(mode, script, d, r, c, e.params)
+		return pythonRequestMarshalled(mode, script, d, r, c, e.params, e.clock)
 	}
 	// A string that is a marker of a float that is not finite is rewritten
 	// as it always was, wherever it stands; only a request that holds one
@@ -241,8 +253,8 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 // pythonRequestMarshalled is the request line as json.Marshal writes it,
 // for data the encoder does not write itself: a value of a type no decoder
 // makes.
-func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, params map[string]string) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Params: params, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
+func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, params map[string]string, clock scrapeClock) ([]byte, error) {
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Params: params, ScrapeTime: epochSeconds(clock.now), LastSuccess: epochSeconds(clock.since), Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
 	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
 		input.DataIsBody = true
 	} else {

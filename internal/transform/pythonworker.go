@@ -1764,6 +1764,8 @@ def label_text(name,v):
             return text.rstrip('0').rstrip('.') if '.' in text else text
         return repr(v)
     if isinstance(v,(dict,list,tuple,set)): raise ValueError('label %r is a %s, not a single value; pass one value, or join them with ",".join(...)'%(name,type(v).__name__))
+    # Bytes are the text they hold, not Python's way of writing them.
+    if isinstance(v,(bytes,bytearray)): return bytes(v).decode('utf-8','replace')
     # Whatever else it is, as it writes itself; what holds so many of its
     # own kind, one inside another, that the interpreter cannot write it is
     # no single value either.
@@ -1809,12 +1811,22 @@ def wire(v):
     return v
 def metric_number(name,what,v):
     # A value or timestamp as a number: a bool as 1 or 0, a numeric string
-    # as the number it reads as, and anything else refused naming the metric.
+    # as the number it reads as, a number of another kind that says what
+    # float it is (a Decimal, a Fraction, a numpy number) as that float, and
+    # anything else refused naming the metric. A whole number too large for
+    # a float is refused the same way, not with the interpreter's
+    # OverflowError, which names neither the metric nor what to do.
     if isinstance(v,bool): return 1.0 if v else 0.0
-    if isinstance(v,(int,float)): return float(v)
+    if isinstance(v,(int,float)):
+        try: return float(v)
+        except OverflowError: pass
+        raise ValueError('metric %r %s is a whole number of %d digits, too large for a float, which every sample is'%(name,what,len(str(abs(v)))))
     if isinstance(v,str):
         try: return float(v.strip())
         except ValueError: pass
+    elif not isinstance(v,(bytes,bytearray)) and hasattr(type(v),'__float__'):
+        try: return float(v)
+        except (TypeError,ValueError,OverflowError): pass
     raise ValueError('metric %r %s %s is not a number'%(name,what,shown(v)))
 def script_error(e):
     # The error as a traceback of the script's own frames, innermost last:
@@ -2602,13 +2614,22 @@ while True:
             labels=texts
             value=metric_number(name,'value',value)
             if timestamp is not None:
+                # A datetime is the moment it names, which one without a
+                # zone does not say.
+                if hasattr(timestamp,'utcoffset') and hasattr(timestamp,'timestamp'):
+                    if timestamp.utcoffset() is None: raise ValueError('metric %r timestamp is a datetime without a time zone, which is no single moment; give it one, as datetime.now(timezone.utc) has'%name)
+                    timestamp=timestamp.timestamp()*1000
                 timestamp=metric_number(name,'timestamp',timestamp)
                 if timestamp!=timestamp or timestamp in (float('inf'),float('-inf')): raise ValueError('metric %r timestamp is not a number of milliseconds'%name)
+                # Seconds, as time.time() gives them, read as milliseconds
+                # are a day of January 1970 to March 1973, which no series
+                # is of: the sample would be dropped by whatever stores it.
+                if 1e9<=timestamp<1e11: raise ValueError('metric %r timestamp %s reads as seconds since the epoch; a timestamp is milliseconds, so multiply it by 1000, or pass a datetime with a time zone'%(name,shown(timestamp)))
                 timestamp=int(timestamp)
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
-               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'data':p['data'],'metrics':metrics}
+               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
         sink=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')
@@ -2619,7 +2640,14 @@ while True:
         result={'ok':True,'log':log}
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics
-        answer(result)
+        try: answer(result)
+        except TypeError as e:
+            # What JSON cannot carry is said in a line, not as the frames
+            # of the json module, which name nothing of the script's.
+            m=str(e)
+            if not (m.startswith('Object of type ') and m.endswith(' is not JSON serializable')): raise
+            left='data' if p.get('mode')=='data' else 'metrics'
+            failed(e,('TypeError: what the script left in %s holds a %s, which cannot be handed back to the exporter: a str, an int, a float, a bool, None, a list, a tuple and a dict can; make it one of those, as list(a_set), str(a_date) or float(a_decimal) do'%(left,m[len('Object of type '):-len(' is not JSON serializable')][:80]),))
     except MemoryError as e:
         failed(e,('MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory,) if max_memory>0 else None)
     except BaseException as e:

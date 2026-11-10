@@ -129,23 +129,25 @@ func (c *exprCache[T]) len() int {
 // $tls, the TLS connection the request was sent on; $url, where the request
 // went after its redirects; $redirects, how many redirects led there;
 // $http_version, the version of HTTP the answer came in; $remote_ip, the
-// address the request's connection was made to; and $params, the probe's
-// parameters by name, in a transform's expressions.
+// address the request's connection was made to; $params, the probe's
+// parameters by name, in a transform's expressions; and $scrape_time and
+// $last_success, when the scrape began and when the last one that
+// succeeded did, in seconds since the epoch.
 // Every program has them all, whatever the collector's request type, so a
 // rule that names one compiles anywhere and reads null where the request
 // has nothing to give (JQBindings).
-var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params"}
+var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params", "$scrape_time", "$last_success"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
 // a field left nil is null to the program.
 type JQBindings struct {
-	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP, Params any
+	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP, Params, ScrapeTime, LastSuccess any
 }
 
 // Values are the values to run a program with, root first, in the order of
 // JQVariables.
 func (b JQBindings) Values(root any) []any {
-	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP, b.Params}
+	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP, b.Params, b.ScrapeTime, b.LastSuccess}
 }
 
 // jqCompilerOptions are what every program is compiled with: the variables,
@@ -168,7 +170,8 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 	}
 	path, isPath := fieldPath(query)
 	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression), ReadsParams: strings.Contains(expression, "$params"),
-		Tells: strings.Contains(expression, "debug") || strings.Contains(expression, "stderr"), Expression: expression}, nil
+		ReadsClock: strings.Contains(expression, "$scrape_time") || strings.Contains(expression, "$last_success"),
+		Tells:      strings.Contains(expression, "debug") || strings.Contains(expression, "stderr"), Expression: expression}, nil
 })
 
 // tripVariables are the variables of JQVariables that are of the request
@@ -220,6 +223,8 @@ type JQProgram struct {
 	// ReadsParams says the program may read $params, the probe's
 	// parameters, which is made only for one that names it.
 	ReadsParams bool
+	// ReadsClock says the program may read $scrape_time or $last_success.
+	ReadsClock bool
 	// Tells says the program may call debug or stderr, and Expression is
 	// its text: a debug probe compiles such a program anew, with functions
 	// that tell its report (CompileJQTold).

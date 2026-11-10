@@ -15,9 +15,8 @@ watch:
 - the certificate the server presents, with
   [`$tls`](REQUESTS.md#timings-tls-and-the-final-url).
 
-It needs the account's name and password and nothing else: no API and no
-OAuth client. The [`smtp` type](SMTP.md) watches the sending side of the
-same server.
+It needs the account's name and password, and no API or OAuth client. The
+[`smtp` type](SMTP.md) watches the sending side of the same server.
 
 The type is opt-in: the default build and the published image leave it out,
 so a build carries it only when asked
@@ -130,13 +129,12 @@ the server offers it. A path, a user or another scheme is refused with
 ```
 
 `capabilities` are those the server names after the login, in upper case.
-A mailbox's `messages`, `unseen`, `recent`, `uidnext` and `uidvalidity` are
-what `STATUS` answered; `size`, its bytes, is there where the server counts
-it (`STATUS=SIZE`), and `null` otherwise. `flags` are those `LIST` gave a
-mailbox found by a pattern. `uidnext` grows by one for each message that
+A mailbox's counts are what `STATUS` answered; `size`, its bytes, is `null`
+unless the server counts it (`STATUS=SIZE`). `flags` are those `LIST` gave
+a mailbox found by a pattern. `uidnext` grows by one for each message that
 arrives, so its increase is the mail received, whatever was deleted since.
-A quota's `usage` and `limit` are in the units IMAP counts in, 1024 bytes
-for `STORAGE`, which `usage_bytes` and `limit_bytes` give in bytes.
+A `STORAGE` quota is counted in units of 1024 bytes, which `usage_bytes`
+and `limit_bytes` give in bytes.
 
 A mailbox the server refuses `STATUS` for is an answer: it is in the
 document with `ok` false, what the server said in `text` and its counts
@@ -183,9 +181,7 @@ A scrape ends at its deadline, the probe's `timeout` or the scrape
 timeout, and after 30 seconds when it has neither. One line of a response
 may be 64 KiB, and the responses together `max_response_bytes`; more fails
 the scrape as a limit exceeded. A scrape asks about at most 500 mailboxes,
-those its patterns list among them, each a command of its own, so a
-collector of an account with hundreds of folders names the ones it wants.
-One connection is made for each scrape and closed with `LOGOUT`; none is
+each a command of its own. One connection is made for each scrape; none is
 kept.
 
 ## Errors and self-metrics

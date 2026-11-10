@@ -239,14 +239,11 @@ mapping key "~" is null, which is no text; quote it to read it as text`. A
 whole number of any length keeps every digit, in YAML as in JSON, so an
 identifier of thirty digits is the same label from either; one written with
 a fraction or an exponent is a float. YAML reads more as a number than
-JSON does, which shows in a label made of one: an unquoted `017` is the
-octal number 15, and `0x1F` is 31, while `007` and `08` are 7 and 8; `1.10`
-is the number 1.1, and `1e3` is 1000; `yes`, `on` and `No` are text, and
-`true` and `False` booleans. A version, a zero-padded identifier or a code
-that must stay as written has to be quoted where the target writes it,
-`"017"` and `"1.10"`; where the target cannot be changed, read the body
-with `decoder.type: text` and a `regex` transform, which see the
-characters. An
+JSON does, which shows in a label made of one: an unquoted `017` is octal,
+15, `0x1F` is 31, `1.10` is 1.1 and `1e3` is 1000. A version or a
+zero-padded identifier keeps its characters only when the target quotes it,
+`"017"`; where it does not, read the body with `decoder.type: text` and a
+`regex` transform. An
 error quotes no more than the start of a part of the document, followed by
 the length of the whole — the first 64 bytes of a key written twice (`mapping
 key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
@@ -1495,8 +1492,13 @@ request took, `$tls`, the TLS connection it was sent on, `$url`, where its
 redirects led, `$redirects`, how many there were, `$http_version`, the
 version of HTTP the answer came in, and `$remote_ip`, the address its
 connection was made to, each `null` for other types (see [Timings, TLS and the final
-URL](REQUESTS.md#timings-tls-and-the-final-url)); and `$params`, the
-[probe's parameters](REQUESTS.md#in-expressions) by name.
+URL](REQUESTS.md#timings-tls-and-the-final-url)); `$params`, the
+[probe's parameters](REQUESTS.md#in-expressions) by name; and
+`$scrape_time` and `$last_success`, when the scrape began and when the last
+one of the same target and parameters that succeeded did, in seconds since
+the epoch, `$last_success` being `null` while there is none
+([What a script has](PYTHON.md#what-a-script-has)), so that
+`$scrape_time - $last_success` is how long ago that was.
 
 ### Labels from an object
 
@@ -2479,8 +2481,7 @@ level=INFO msg="jq debug" rule="metric \"queue_jobs\"" expression=".jobs | debug
 ```
 
 A value is written as JSON, cut after 1024 bytes, and a transform shows
-its first hundred lines. The `debug` can stay in the rule: a scrape pays
-nothing for it.
+its first hundred lines. A scrape pays nothing for a `debug` left in a rule.
 
 ### Histograms from a list of values
 

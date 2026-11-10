@@ -68,10 +68,10 @@ func (l *lastSuccesses) record(key string, now time.Time) {
 // lastSuccessKey is what a last success is kept under: the collector, the
 // static target, "" for a probe, the target, the path a probe or target
 // sets, and the parameters, so that two targets, or two tenants of one,
-// each start from their own. It is "" for a trip whose placeholders read
-// no last success.
+// each start from their own. It is "" for a trip whose placeholders, and
+// whose transform, read no last success.
 func lastSuccessKey(c *model.Collector, static *model.StaticTarget, target string, overrides fetch.RequestOverrides) string {
-	since := c.Clock.Since
+	since := c.Clock.Since || c.TransformClock.Since
 	name := ""
 	if static != nil {
 		name = static.Name

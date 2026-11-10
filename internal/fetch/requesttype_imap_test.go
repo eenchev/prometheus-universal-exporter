@@ -156,7 +156,7 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 // connection.
 func newIMAPStub(t *testing.T, configure ...func(*imapStub)) *imapStub {
 	t.Helper()
-	s := &imapStub{startTLS: true, offers: "SASL-IR AUTH=PLAIN", offersAfter: "QUOTA STATUS=SIZE", user: "me@example.com", pass: `app "pass" word`, greeting: "* OK [CAPABILITY IMAP4rev1] mail.test ready",
+	s := &imapStub{startTLS: true, offers: "SASL-IR AUTH=PLAIN", offersAfter: "QUOTA STATUS=SIZE", user: "me@example.com", pass: `app "pass" word`, greeting: "* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] mail.test ready",
 		boxes: []imapStubBox{
 			{"INBOX", `\HasNoChildren`, "MESSAGES 12 UNSEEN 3 RECENT 1 UIDNEXT 44 UIDVALIDITY 7 SIZE 123456"},
 			{"Sent Mail", `\Sent \HasNoChildren`, "MESSAGES 5 UNSEEN 0 RECENT 0 UIDNEXT 6 UIDVALIDITY 8 SIZE 50"},
@@ -213,7 +213,7 @@ func imapPassword(t *testing.T) string {
 func TestAnIMAPScrapeReadsTheGreetingAndTheCapabilities(t *testing.T) {
 	s := newIMAPStub(t)
 	doc := imapDoc(t, imapCollector(t, s, IMAPConfig{}), s.Addr, RequestOverrides{})
-	if doc.Greeting != "[CAPABILITY IMAP4rev1] mail.test ready" || !doc.TLS || !doc.StartTLS || doc.Authenticated || len(doc.Mailboxes) != 0 || len(doc.Quota) != 0 {
+	if doc.Greeting != "[CAPABILITY IMAP4rev1 AUTH=PLAIN] mail.test ready" || !doc.TLS || !doc.StartTLS || doc.Authenticated || len(doc.Mailboxes) != 0 || len(doc.Quota) != 0 {
 		t.Errorf("the document is %+v", doc)
 	}
 	if got := strings.Join(doc.Capabilities, " "); got != "AUTH=PLAIN IMAP4REV1 SASL-IR" {

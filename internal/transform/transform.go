@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
@@ -1365,6 +1366,31 @@ type responseVariables struct {
 	// told takes what the programs' debug and stderr are given, for a
 	// debug probe; nil for any other scrape (jqdebug.go).
 	told *jqTold
+	// scrapeTime and lastSuccess are $scrape_time and $last_success, nil
+	// where the context carries no clock or no last success.
+	scrapeTime, lastSuccess any
+}
+
+type scrapeClockKey struct{}
+
+// scrapeClock is the clock of the scrape a Transform is of.
+type scrapeClock struct{ now, since time.Time }
+
+// WithScrapeClock returns a context whose Transform reads now as the time
+// its scrape began and since as the time the last successful scrape of the
+// same collector, target and parameters began, zero for none: $scrape_time
+// and $last_success in a jq or yq expression, scrape_time and last_success
+// in a Python script, each in seconds since the epoch.
+func WithScrapeClock(ctx context.Context, now, since time.Time) context.Context {
+	return context.WithValue(ctx, scrapeClockKey{}, scrapeClock{now: now, since: since})
+}
+
+// epochSeconds is t in seconds since the epoch, nil for no time.
+func epochSeconds(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return float64(t.Unix()) + float64(t.Nanosecond())/1e9
 }
 
 // jqParams is $params: each parameter the probe gave, a param_<name> that
@@ -1384,13 +1410,17 @@ func jqParams(given map[string]string) map[string]any {
 func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
 	given, _ := ctx.Value(labelParamsKey{}).(map[string]string)
 	told := newJQTold(ctx)
+	clock, timed := ctx.Value(scrapeClockKey{}).(scrapeClock)
 	if r == nil {
-		if len(given) == 0 && told == nil {
+		if len(given) == 0 && told == nil && !timed {
 			return ctx
 		}
-		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given, told: told})
+		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given, told: told, scrapeTime: epochSeconds(clock.now), lastSuccess: epochSeconds(clock.since)})
 	}
 	vars := &responseVariables{status: r.Status(), trip: r.Trip, given: given, told: told}
+	if timed {
+		vars.scrapeTime, vars.lastSuccess = epochSeconds(clock.now), epochSeconds(clock.since)
+	}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {
@@ -1415,14 +1445,14 @@ func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
 		return expr.JQBindings{}.Values(root)
 	}
 	if !program.ReadsTrip {
-		return expr.JQBindings{Status: v.status, Headers: v.headers, Params: params}.Values(root)
+		return expr.JQBindings{Status: v.status, Headers: v.headers, Params: params, ScrapeTime: v.scrapeTime, LastSuccess: v.lastSuccess}.Values(root)
 	}
 	v.once.Do(func() {
 		trip := v.trip
 		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects(), HTTPVersion: trip.JQHTTPVersion(), RemoteIP: trip.JQRemoteIP()}
 	})
 	read := v.read
-	read.Params = params
+	read.Params, read.ScrapeTime, read.LastSuccess = params, v.scrapeTime, v.lastSuccess
 	return read.Values(root)
 }
 

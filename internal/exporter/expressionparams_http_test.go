@@ -5,8 +5,10 @@ package exporter
 import (
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // paramsConfig has a collector whose expressions read the probe's
@@ -176,5 +178,111 @@ func TestAPythonScriptReadsTheProbesParameters(t *testing.T) {
 		if got.Code != http.StatusBadRequest || !strings.Contains(got.Body.String(), tc.want) {
 			t.Errorf("%s: %d %q, want 400 with %q", name, got.Code, got.Body.String(), tc.want)
 		}
+	}
+}
+
+// clockConfig has a jq collector, a python one and a pre_script that read
+// the scrape's clock, and one that reads none.
+const clockConfig = `collectors:
+  - name: jq
+    request: {type: http, path: /json}
+    transform: {type: jq}
+    metrics:
+      - name: scrape_time_seconds
+        expression: $scrape_time
+      - name: since_last_success_seconds
+        expression: 'if $last_success then $scrape_time - $last_success else -1 end'
+        labels:
+          - {name: tenant, value: "{{param_tenant:none}}"}
+  - name: script
+    request: {type: http, path: /json}
+    transform:
+      type: python
+      script: |
+        metric(name="scrape_time_seconds", value=scrape_time)
+        metric(name="since_last_success_seconds", value=-1 if last_success is None else scrape_time - last_success)
+        metric(name="last_success_seconds", value=last_success or 0)
+  - name: pre
+    request: {type: http, path: /json}
+    transform:
+      type: jq
+      pre_script: |
+        data = {"at": scrape_time, "first": last_success is None}
+    metrics:
+      - name: scrape_time_seconds
+        expression: .at
+      - name: first_scrape
+        expression: .first
+  - name: plain
+    request: {type: http, path: /json}
+    transform: {type: jq}
+    metrics:
+      - name: up
+        expression: .up
+`
+
+// A jq or yq expression reads when its scrape began as $scrape_time and
+// when the last scrape that succeeded began as $last_success, in seconds
+// since the epoch, and a Python script, a pre_script too, as scrape_time
+// and last_success. There is no last success at a first scrape, null and
+// None; after one that succeeded it is that scrape's time, kept for each
+// target and each set of parameters, and a scrape that failed keeps the
+// one before it. A collector that reads neither keeps nothing.
+func TestATransformReadsTheScrapesClock(t *testing.T) {
+	requirePython(t)
+	target := newLabelTarget(t)
+	server := labelServer(t, clockConfig)
+	value := func(collector, query, name string) float64 {
+		t.Helper()
+		got := labelProbe(t, server, target, collector, query, false)
+		for _, line := range seriesLines(got.Body.String()) {
+			if series, text, _ := strings.Cut(line, " "); series == name || strings.HasPrefix(series, name+"{") {
+				n, err := strconv.ParseFloat(text, 64)
+				if err != nil {
+					t.Fatalf("%s: %s: %v", collector, line, err)
+				}
+				return n
+			}
+		}
+		t.Fatalf("%s%s: %d, no %s in\n%s", collector, query, got.Code, name, got.Body.String())
+		return 0
+	}
+	for _, collector := range []string{"jq", "script"} {
+		before := float64(time.Now().UnixNano()) / 1e9
+		first := value(collector, "", "scrape_time_seconds")
+		if after := float64(time.Now().UnixNano()) / 1e9; first < before-0.001 || first > after+0.001 {
+			t.Errorf("%s: the scrape's time is %f, between %f and %f", collector, first, before, after)
+		}
+		time.Sleep(20 * time.Millisecond)
+		second := value(collector, "", "scrape_time_seconds")
+		if since := value(collector, "", "since_last_success_seconds"); since <= 0 || since > 60 || second <= first {
+			t.Errorf("%s: %f seconds since the last success, the scrapes at %f and %f", collector, since, first, second)
+		}
+	}
+	// A first scrape has none, and each set of parameters its own.
+	if since := value("jq", "&param_tenant=new", "since_last_success_seconds"); since != -1 {
+		t.Errorf("a first scrape of other parameters: %f since the last success, want none", since)
+	}
+	if since := value("jq", "&param_tenant=new", "since_last_success_seconds"); since <= 0 {
+		t.Errorf("its second: %f since the last success", since)
+	}
+	if first := value("pre", "", "first_scrape"); first != 1 {
+		t.Errorf("a pre_script's first scrape: first_scrape %f", first)
+	}
+	if first := value("pre", "", "first_scrape"); first != 0 {
+		t.Errorf("a pre_script's second scrape: first_scrape %f", first)
+	}
+	// A scrape that fails keeps the last success it started from.
+	succeeded := value("script", "", "scrape_time_seconds")
+	target.failing.Store(true)
+	if got := labelProbe(t, server, target, "script", "", false); got.Code == http.StatusOK {
+		t.Fatalf("the target is failing, and the probe answered %d", got.Code)
+	}
+	target.failing.Store(false)
+	if last := value("script", "", "last_success_seconds"); last != succeeded {
+		t.Errorf("after a failed scrape the last success is %f, want the scrape before it, %f", last, succeeded)
+	}
+	if value("plain", "", "up") != 1 || len(server.lastSuccesses.at) != 4 {
+		t.Errorf("%d last successes are kept, want those of jq, jq with a tenant, script and pre", len(server.lastSuccesses.at))
 	}
 }

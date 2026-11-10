@@ -429,12 +429,12 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		traceFailedOutcome(ctx, "error: "+err.Error())
 		return nil, err
 	}
-	traceOutcome(ctx, netShown(greeting))
+	traceOutcome(ctx, imapText(greeting))
 	status, text, _ := strings.Cut(strings.TrimPrefix(greeting, "* "), " ")
 	if !strings.HasPrefix(greeting, "* ") || !strings.EqualFold(status, "OK") {
 		return nil, model.Errorf("the server %s greeted with %s, not * OK: it is no IMAP server, or does not serve this client", address.hostPort, model.Quoted(netShown(greeting)))
 	}
-	doc.Greeting = netShown(text)
+	doc.Greeting = imapText(text)
 	capabilities := func() error {
 		answer, err := s.command("CAPABILITY", "")
 		if err != nil {
@@ -513,6 +513,21 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: tlsConnectionOf(state)}
 	}
 	return resp, nil
+}
+
+// imapText is a greeting as the document and a debug report have it: its
+// control characters written as ?, and cut where any failure's text is.
+// It is not looked through for credentials as netShown looks, which reads
+// the AUTH=PLAIN of a greeting's capabilities as one: a greeting holds
+// nothing the scrape sent.
+func imapText(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, text)
+	return model.CutTo(text, model.MaxFailureBytes, false)
 }
 
 // imapMaxCapabilities bounds the capabilities kept of a response, and

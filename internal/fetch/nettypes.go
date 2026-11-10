@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp
+//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap
 
 package fetch
 
@@ -50,8 +50,8 @@ func parseNetTarget(what, raw string, ports map[string]int, withRest bool) (netA
 		}
 	}
 	article := "a"
-	if strings.ContainsRune("fms", rune(what[0])) {
-		// ftp, mqtt and smtp are said by their letters.
+	if strings.ContainsRune("fims", rune(what[0])) {
+		// ftp, imap, mqtt and smtp are said by their letters.
 		article = "an"
 	}
 	forms := article + " " + what + " target is " + strings.Join(written[:len(written)-1], ", ") + " or " + written[len(written)-1]

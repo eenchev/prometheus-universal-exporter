@@ -562,7 +562,7 @@ func TestAScriptIsHandedTheCSVRowsItWasHanded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		marshalled, err := pythonRequestMarshalled("data", "pass", now, r, c)
+		marshalled, err := pythonRequestMarshalled("data", "pass", now, r, c, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

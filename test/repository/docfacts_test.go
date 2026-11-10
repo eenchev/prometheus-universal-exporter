@@ -137,6 +137,7 @@ func TestEveryRequestTypePageNamesTheKeysAStaticTargetMaySet(t *testing.T) {
 		{"docs/MQTT.md", "internal/fetch/requesttype_mqtt.go"},
 		{"docs/WEBSOCKET.md", "internal/fetch/requesttype_websocket.go"},
 		{"docs/FTP.md", "internal/fetch/requesttype_ftp.go"},
+		{"docs/IMAP.md", "internal/fetch/requesttype_imap.go"},
 	} {
 		text := read(t, page.doc)
 		_, section, ok := strings.Cut(text, "\n## Static targets\n")

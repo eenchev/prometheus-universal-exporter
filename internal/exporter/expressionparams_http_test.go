@@ -111,3 +111,70 @@ ESCAPING    metrics:
 		t.Errorf("names that are not escaped: %d %s, want 502 with %q", got.Code, got.Body.String(), want)
 	}
 }
+
+// scriptParamsConfig has a python transform and a pre_script that read
+// the probe's parameters, and a script that reads none.
+const scriptParamsConfig = `collectors:
+  - name: script
+    request: {type: http, path: /json}
+    transform:
+      type: python
+      script: |
+        for item in data["items"]:
+            if params.get("id") in (None, item["id"]):
+                metric(name="item_value", value=item["v"], labels={"id": item["id"], "zone": params.get('zone', "none")})
+  - name: pre
+    request: {type: http, path: /json}
+    transform:
+      type: jq
+      pre_script: |
+        data = {"up": data["up"], "asked": params["who"] if "who" in params else None, "given": len(params)}
+    metrics:
+      - name: up
+        expression: .up
+        labels:
+          - {name: asked, expression: .asked}
+          - {name: given, expression: .given}
+  - name: reads_none
+    request: {type: http, path: /json}
+    transform:
+      type: python
+      script: |
+        metric(name="up", value=data["up"])
+`
+
+// A Python script reads the probe's parameters as params, a dict of each
+// by its name, in a python transform and in a pre_script, as a jq
+// expression reads $params. A parameter the script names is taken, any
+// parameter by a script that reads params otherwise, and none by a script
+// that does not read it.
+func TestAPythonScriptReadsTheProbesParameters(t *testing.T) {
+	requirePython(t)
+	target := newLabelTarget(t)
+	server := labelServer(t, scriptParamsConfig)
+	for name, tc := range map[string]struct {
+		collector, query string
+		want             []string
+	}{
+		"none given":            {"script", "", []string{`item_value{id="a",zone="none"} 1`, `item_value{id="b",zone="none"} 2`}},
+		"two that are named":    {"script", "&param_id=b&param_zone=eu", []string{`item_value{id="b",zone="eu"} 2`}},
+		"an empty one":          {"script", "&param_id=&param_zone=eu", []string{`item_value{id="a",zone="eu"} 1`, `item_value{id="b",zone="eu"} 2`}},
+		"a pre_script":          {"pre", "&param_who=me&param_other=x", []string{`up{asked="me",given="2"} 1`}},
+		"a pre_script, none":    {"pre", "", []string{`up{given="0"} 1`}},
+		"a script without them": {"reads_none", "", []string{`up 1`}},
+	} {
+		got := labelProbe(t, server, target, tc.collector, tc.query, false)
+		if got.Code != http.StatusOK || !slices.Equal(seriesLines(got.Body.String()), tc.want) {
+			t.Errorf("%s: %d\n%s\nwant %v", name, got.Code, got.Body.String(), tc.want)
+		}
+	}
+	for name, tc := range map[string]struct{ collector, query, want string }{
+		"a name the script does not read": {"script", "&param_idd=a", `probe parameters param_idd are not used by collector "script": no placeholder in its request.path ("/json"), body, header or query values or its label values names them, and its script reads none of them as params["<name>"]`},
+		"a script that reads none":        {"reads_none", "&param_id=a", `probe parameters param_id are not used by collector "reads_none"`},
+	} {
+		got := labelProbe(t, server, target, tc.collector, tc.query, false)
+		if got.Code != http.StatusBadRequest || !strings.Contains(got.Body.String(), tc.want) {
+			t.Errorf("%s: %d %q, want 400 with %q", name, got.Code, got.Body.String(), tc.want)
+		}
+	}
+}

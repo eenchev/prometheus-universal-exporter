@@ -37,6 +37,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeMQTT:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.topics or label values names them`,
 	RequestTypeWebSocket:  `probe parameters param_tenat are not used by collector "places": no placeholder in its request.send_text, header values or label values names them`,
 	RequestTypeFTP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
+	RequestTypeIMAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.mailboxes or label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

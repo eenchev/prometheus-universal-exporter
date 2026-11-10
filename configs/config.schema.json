@@ -1349,7 +1349,7 @@
                   "type": "array"
                 },
                 "labels_from": {
-                  "description": "jq and yq, with items: an expression that gives an object of each item, such as .metadata.labels; each key becomes a label of the item's series, with the key's value as its value. A key whose value is null or empty leaves no label, and a label of the rule's labels with a key's name replaces it. The names are held to name_escaping as every label name is.",
+                  "description": "jq and yq: an expression that gives an object, such as .metadata.labels, read of each item of a rule with items and of the whole document otherwise; each key becomes a label of the item's series, or of every series of the rule, with the key's value as its value. A key whose value is null or empty leaves no label, and a label of the rule's labels with a key's name replaces it. The names are held to name_escaping as every label name is.",
                   "type": [
                     "string",
                     "number",
@@ -2734,6 +2734,10 @@
               },
               "all_namespaces": {
                 "description": "kubernetes: list the resource across the cluster, every namespace's objects, or a cluster-scoped resource's, such as nodes. Not with namespaces. Defaults to false.",
+                "type": "boolean"
+              },
+              "allow_plaintext": {
+                "description": "imap: log in over a connection that is not TLS, to a server that offers no STARTTLS. The password is then sent as it is; left out, such a scrape fails before it logs in.",
                 "type": "boolean"
               },
               "allowed_schemes": {
@@ -5013,6 +5017,18 @@
                   "boolean"
                 ]
               },
+              "mailboxes": {
+                "description": "imap: the mailboxes STATUS asks about, each by its name, such as INBOX or Archive/2026, or by a pattern with * (any text) or % (any text within one level), such as *, which is listed and each mailbox of the list asked about; each may contain {{param_name}} placeholders. INBOX when left out. A mailbox the server refuses is in the document with what it said, and fails nothing. See docs/IMAP.md.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
               "max_age": {
                 "description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
                 "maximum": 0,
@@ -5384,7 +5400,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt and ftp, with username: the file of the account's password, read at every scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp and imap, with username: the file of the account's password, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -5542,6 +5558,10 @@
                   "pattern": "^[^\\x00-\\x1F\\x7F]*$"
                 },
                 "type": "object"
+              },
+              "quota": {
+                "description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes.",
+                "type": "boolean"
               },
               "rate_limit": {
                 "additionalProperties": false,
@@ -6322,7 +6342,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt and ftp, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp and imap, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"

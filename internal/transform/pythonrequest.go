@@ -2,8 +2,10 @@ package transform
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"math/big"
 	"slices"
@@ -55,6 +57,28 @@ type pythonEncoder struct {
 	// says the encoder stopped writing it for being longer.
 	limit int
 	over  bool
+	// params are the probe's parameters the script is given as params
+	// (pythonParams), set before a request is written; none writes no
+	// member.
+	params map[string]string
+}
+
+// pythonParams is what a script reads as params: each parameter the
+// probe, or the static target, gave, a param_<name> that is not empty, by
+// its name, as jq reads them in $params. nil when there is none: the
+// worker then gives the script an empty dict.
+func pythonParams(ctx context.Context) map[string]string {
+	given, _ := ctx.Value(labelParamsKey{}).(map[string]string)
+	var params map[string]string
+	for name, value := range given {
+		if name, ok := strings.CutPrefix(name, fetch.PathParamPrefix); ok && value != "" {
+			if params == nil {
+				params = make(map[string]string, len(given))
+			}
+			params[name] = value
+		}
+	}
+	return params
 }
 
 // pythonMember is a member of an object.
@@ -181,6 +205,18 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	dst = appendPythonString(dst, r.Target, &e.nul)
 	dst = append(dst, `,"collector":`...)
 	dst = appendPythonString(dst, c.Name, &e.nul)
+	if len(e.params) > 0 {
+		dst = append(dst, `,"params":{`...)
+		for i, name := range slices.Sorted(maps.Keys(e.params)) {
+			if i > 0 {
+				dst = append(dst, ',')
+			}
+			dst = appendPythonString(dst, name, &e.nul)
+			dst = append(dst, ':')
+			dst = appendPythonString(dst, e.params[name], &e.nul)
+		}
+		dst = append(dst, '}')
+	}
 	dst = append(dst, '}')
 	e.buf = dst
 	if written && len(dst) > e.limit {
@@ -189,7 +225,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 	if !written {
 		// What was being written is not kept from the garbage collector.
 		clear(e.members[:cap(e.members)])
-		return pythonRequestMarshalled(mode, script, d, r, c)
+		return pythonRequestMarshalled(mode, script, d, r, c, e.params)
 	}
 	// A string that is a marker of a float that is not finite is rewritten
 	// as it always was, wherever it stands; only a request that holds one
@@ -205,8 +241,8 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 // pythonRequestMarshalled is the request line as json.Marshal writes it,
 // for data the encoder does not write itself: a value of a type no decoder
 // makes.
-func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
+func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, params map[string]string) ([]byte, error) {
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Params: params, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
 	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
 		input.DataIsBody = true
 	} else {

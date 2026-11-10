@@ -238,7 +238,15 @@ or none at all) has no text and fails the scrape at its line, `line 2:
 mapping key "~" is null, which is no text; quote it to read it as text`. A
 whole number of any length keeps every digit, in YAML as in JSON, so an
 identifier of thirty digits is the same label from either; one written with
-a fraction or an exponent is a float. An
+a fraction or an exponent is a float. YAML reads more as a number than
+JSON does, which shows in a label made of one: an unquoted `017` is the
+octal number 15, and `0x1F` is 31, while `007` and `08` are 7 and 8; `1.10`
+is the number 1.1, and `1e3` is 1000; `yes`, `on` and `No` are text, and
+`true` and `False` booleans. A version, a zero-padded identifier or a code
+that must stay as written has to be quoted where the target writes it,
+`"017"` and `"1.10"`; where the target cannot be changed, read the body
+with `decoder.type: text` and a `regex` transform, which see the
+characters. An
 error quotes no more than the start of a part of the document, followed by
 the length of the whole — the first 64 bytes of a key written twice (`mapping
 key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
@@ -1492,11 +1500,11 @@ URL](REQUESTS.md#timings-tls-and-the-final-url)); and `$params`, the
 
 ### Labels from an object
 
-A rule with `items` can take its labels from an object of each item, as the
-labels of a Kubernetes object are, where the names are the target's and no
-list of them can be written beforehand. `labels_from` is an expression that
-gives the object; each key becomes a label of the item's series, with the
-key's value as its value:
+A rule can take its labels from an object of the response, as the labels
+of a Kubernetes object are, where the names are the target's and no list
+of them can be written beforehand. `labels_from` is an expression that
+gives the object; each key becomes a label, with the key's value as its
+value. With `items` it is read of each item, for that item's series:
 
 ```yaml
 name_escaping: underscores        # app.kubernetes.io/name -> app_kubernetes_io_name
@@ -1525,9 +1533,12 @@ labels_from: '.metadata.labels | with_entries(.key |= "label_" + .)'
 labels_from: '.metadata.labels | with_entries(select(.key | startswith("app.")))'
 ```
 
+Without `items` the expression is read of the whole document, once, and
+its keys are labels of every series of the rule; what it reads that is no
+object of single values then fails the rule as a whole.
+
 Every key is a label, so the number of series a metric has is the target's
-to decide: keep to objects whose keys are few and steady. For a document
-that is one object, set `items: .`.
+to decide: keep to objects whose keys are few and steady.
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
@@ -2441,7 +2452,7 @@ with `jq` loads as it is:
 
 | Name | Here |
 | --- | --- |
-| `debug`, `debug(message)`, `stderr` | Hand their input on and write nothing: the exporter has no terminal, and a target's answer is not for its log. |
+| `debug`, `debug(message)`, `stderr` | Hand their input on. A scrape writes nothing of it: the exporter has no terminal, and a target's answer is not for its log. A [debug probe](#debug-probes) and a run of the debug page show each value, as below. |
 | `input_line_number`, `input_filename` | `0` and `null`: a program has one input, of no file. |
 | `have_literal_numbers`, `have_decnum` | `true` and `false`: a whole number keeps every digit, and there are no decimal numbers. |
 | `toarray` | Its input when that is an array, and otherwise an array of it. |
@@ -2450,6 +2461,26 @@ with `jq` loads as it is:
 `input`, `inputs` and a module read with `import` or `include` are refused
 when the configuration loads, since a program has its one input and no
 files; `$ENV` and `env` are empty.
+
+To see what an expression makes part of the way, put `debug` where the
+value is and probe with `debug=true`, or run the collector on the debug
+page: each value is a line of the report's log, with its rule and its
+expression, `debug(message)` showing the message instead.
+
+```yaml
+- name: queue_jobs
+  items: .queues[] | debug
+  expression: .jobs | debug("jobs of \(.)") | tonumber
+```
+
+```text
+level=INFO msg="jq debug" rule="metric \"queue_jobs\"" expression=".queues[] | debug" value="{\"jobs\":\"7\",\"name\":\"mail\"}"
+level=INFO msg="jq debug" rule="metric \"queue_jobs\"" expression=".jobs | debug(\"jobs of \\(.)\") | tonumber" value="\"jobs of 7\""
+```
+
+A value is written as JSON, cut after 1024 bytes, and a transform shows
+its first hundred lines. The `debug` can stay in the rule: a scrape pays
+nothing for it.
 
 ### Histograms from a list of values
 
@@ -2836,8 +2867,9 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has five more: `smtp` holds a
-mail server's session without sending — see [SMTP](SMTP.md) — `modbus`
+them](#choosing-request-types-at-build-time) has six more: `smtp` holds a
+mail server's session without sending — see [SMTP](SMTP.md) — `imap`
+counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `modbus`
 reads a device's registers — see [Modbus](MODBUS.md) — `mqtt` subscribes
 to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
 messages of an endpoint — see [WebSocket](WEBSOCKET.md) — and `ftp` reads
@@ -3068,6 +3100,13 @@ names the file under it; `max_age`, `username`, `password_file`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 file is read by the decoder its extension names; its table is in [Files
 over FTP](FTP.md#a-collector).
+
+For `imap`, an opt-in type, no key is required: `username` with
+`password_file` logs in, `mailboxes` names the mailboxes `STATUS` asks
+about, by name or by a pattern, `INBOX` when left out, and `quota` asks for
+the account's quota, with no mailbox opened; `allow_plaintext`, `tls`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+decoder is `json`; its table is in [IMAP](IMAP.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3138,6 +3177,10 @@ requires a `target`, the endpoint's `ws://` or `wss://` URL.
 `ftp`, an opt-in type, accepts `path`, `timeout` and `param_<name>`, and
 requires a `target`, the server, `host`, `host:port`, `ftp://`, `ftpes://`
 or `ftps://`.
+
+`imap`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the mail server, `host`, `host:port`, `imap://` or
+`imaps://`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3712,8 +3755,8 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - no rule may be named as a series of another rule's histogram or summary —
   `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
   `foo_count` beside a summary `foo`;
-- `labels_from` is a key of a `jq` or `yq` rule that has `items`, and its
-  expression compiles;
+- `labels_from` is a key of a `jq` or `yq` rule, and its expression
+  compiles;
 - a rule names each of its labels once: a second label of a name is refused,
   as `collector "c" metric "m" has two labels named "env"; a series has one
   label of a name, so remove one of them or give it another name`, since
@@ -7317,6 +7360,7 @@ nothing there.
 - [MQTT.md](MQTT.md) — the opt-in `mqtt` request type.
 - [WEBSOCKET.md](WEBSOCKET.md) — the opt-in `websocket` request type.
 - [FTP.md](FTP.md) — the opt-in `ftp` request type.
+- [IMAP.md](IMAP.md) — the opt-in `imap` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

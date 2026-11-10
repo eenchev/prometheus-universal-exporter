@@ -130,6 +130,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   loads as it is: `debug`, `stderr`, `input_line_number`, `input_filename`,
   `toarray`, `have_literal_numbers`, `have_decnum`, and the formats
   `@base32` and `@base32d`.
+- **[`imap`](docs/IMAP.md)**, an opt-in request type, logs in to a mail
+  account and counts the messages, unread messages and size of its
+  mailboxes, by name or by pattern, and its quota, with no mailbox opened:
+  a mailbox's numbers with a name and a password, and no API or OAuth
+  client.
+- A Python script reads the probe's parameters as
+  [`params`](docs/REQUESTS.md#in-expressions), in a `python` transform and
+  in a `pre_script`, as a jq expression reads `$params`.
+- [`labels_from`](docs/CONFIGURATION.md#labels-from-an-object) works on a
+  rule without `items` too, where its object's keys are labels of every
+  series of the rule.
+- jq's `debug` and `stderr` show their values in a
+  [debug probe's report](docs/CONFIGURATION.md#programs-written-for-jq)
+  and on the debug page, with the rule and the expression, so what an
+  expression makes part of the way can be seen without rewriting the rule.
+- The configuration guide says which unquoted YAML scalars read as numbers
+  (`017` as 15, `1.10` as 1.1) and what to do about a label made of one.
 
 ### Fixed
 

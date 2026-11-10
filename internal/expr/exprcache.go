@@ -150,7 +150,10 @@ func (b JQBindings) Values(root any) []any {
 
 // jqCompilerOptions are what every program is compiled with: the variables,
 // the value helpers and the names of jq that gojq leaves out.
-var jqCompilerOptions = slices.Concat([]gojq.CompilerOption{gojq.WithVariables(JQVariables)}, valueFunctions, jqAddedFunctions)
+var jqCompilerOptions = slices.Concat(jqSharedOptions, jqQuiet)
+
+// jqSharedOptions are jqCompilerOptions but for debug and stderr.
+var jqSharedOptions = slices.Concat([]gojq.CompilerOption{gojq.WithVariables(JQVariables)}, valueFunctions, jqAddedFunctions)
 
 // A compiled program is safe to run from many goroutines at once.
 var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
@@ -164,7 +167,8 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 		return nil, err
 	}
 	path, isPath := fieldPath(query)
-	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression), ReadsParams: strings.Contains(expression, "$params")}, nil
+	return &JQProgram{Code: code, path: path, isPath: isPath, ReadsTrip: readsTrip(expression), ReadsParams: strings.Contains(expression, "$params"),
+		Tells: strings.Contains(expression, "debug") || strings.Contains(expression, "stderr"), Expression: expression}, nil
 })
 
 // tripVariables are the variables of JQVariables that are of the request
@@ -216,6 +220,11 @@ type JQProgram struct {
 	// ReadsParams says the program may read $params, the probe's
 	// parameters, which is made only for one that names it.
 	ReadsParams bool
+	// Tells says the program may call debug or stderr, and Expression is
+	// its text: a debug probe compiles such a program anew, with functions
+	// that tell its report (CompileJQTold).
+	Tells      bool
+	Expression string
 }
 
 // Lookup evaluates the program directly when it is a field path and every

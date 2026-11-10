@@ -924,7 +924,7 @@ jobs:
       # so. A test keeps the list naming every opt-in type.
       - name: Lint with every opt-in request type
         run: |
-          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$tags"
+          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp,imap)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$tags"
         if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
       # golangci-lint does not have. The Makefile pins its version.
@@ -1168,8 +1168,8 @@ jobs:
       # now, the step says so and stops.
       - name: Build and test with every opt-in request type
         run: |
-          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
-          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
+          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp,imap)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go vet -tags "$tags" ./... && go build -tags "$tags" ./...
+          tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp,imap)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go test -count=1 -tags "$tags" ./test/repository/ ./internal/fetch/
         if: steps.changes.outputs.go == 'true'
   # The image the release publishes, built from the Dockerfile and pushed
   # nowhere, so a change that breaks its build fails here rather than in the
@@ -1998,6 +1998,7 @@ jobs:
           - grpc
           - http
           - icmp
+          - imap
           - kubernetes
           - ldap
           - localfile

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"math/big"
 	"regexp"
@@ -644,8 +645,10 @@ func structuredValue(value any) bool {
 func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	var sharing jqSharing
+	told := jqToldOf(ctx)
 	for i, rule := range rules {
 		var err error
+		told.at(RuleName(&rules[i], i))
 		if rule.Items != "" {
 			err = transformJQItems(ctx, out, data, rule, c, &sharing, rules[i+1:])
 		} else {
@@ -755,6 +758,17 @@ func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule
 		}
 		return fail(err, failure)
 	}
+	// labels_from is read of the whole document, once: its object's keys
+	// are labels of every series, as a label of one value is. A failure is
+	// the rule's, before any series is made.
+	var from map[string]string
+	if rule.LabelsFrom != "" {
+		from = map[string]string{}
+		if err := labelsFrom(ctx, from, data, data, rule.LabelsFrom); err != nil {
+			err = model.Errorf("metric %q labels_from %w", rule.Name, err)
+			return fail(err, err)
+		}
+	}
 	paired := make([]jqPaired, len(labels))
 	for ; more; value, more, err = values.next() {
 		count++
@@ -781,7 +795,8 @@ func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule
 			}
 			continue
 		}
-		series := make(map[string]string, len(labels))
+		series := make(map[string]string, len(labels)+len(from))
+		maps.Copy(series, from)
 		for i := range labels {
 			labels[i].set(series, paired[i])
 		}
@@ -1171,7 +1186,8 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 // expression that gives null or nothing. Anything else that is no object,
 // and a value that is an object or an array, is the item's failure. The
 // rule's own labels are read after these, so one of a key's name replaces
-// it.
+// it. Without items the item is the whole document, and the labels are
+// those of every series of the rule.
 func labelsFrom(ctx context.Context, labels map[string]string, item, root any, expression string) error {
 	from, err := evaluateJQOne(ctx, item, root, expression)
 	if err != nil {
@@ -1346,6 +1362,9 @@ type responseVariables struct {
 	given      map[string]string
 	paramsOnce sync.Once
 	params     map[string]any
+	// told takes what the programs' debug and stderr are given, for a
+	// debug probe; nil for any other scrape (jqdebug.go).
+	told *jqTold
 }
 
 // jqParams is $params: each parameter the probe gave, a param_<name> that
@@ -1364,13 +1383,14 @@ func jqParams(given map[string]string) map[string]any {
 // withResponseVariables puts the jq variables for r into ctx.
 func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
 	given, _ := ctx.Value(labelParamsKey{}).(map[string]string)
+	told := newJQTold(ctx)
 	if r == nil {
-		if len(given) == 0 {
+		if len(given) == 0 && told == nil {
 			return ctx
 		}
-		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given})
+		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given, told: told})
 	}
-	vars := &responseVariables{status: r.Status(), trip: r.Trip, given: given}
+	vars := &responseVariables{status: r.Status(), trip: r.Trip, given: given, told: told}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {
@@ -1410,7 +1430,11 @@ func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
 // response, root as $root.
 func runWithVariables(ctx context.Context, program *expr.JQProgram, input, root any) gojq.Iter {
 	vars, _ := ctx.Value(responseVariablesKey{}).(*responseVariables)
-	return program.Code.RunWithContext(ctx, input, vars.values(program, root)...)
+	code := program.Code
+	if program.Tells && vars != nil && vars.told != nil {
+		code = vars.told.program(program)
+	}
+	return code.RunWithContext(ctx, input, vars.values(program, root)...)
 }
 
 // evaluateJQOne runs a program that must produce at most one value; no value

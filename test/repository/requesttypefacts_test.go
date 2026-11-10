@@ -238,6 +238,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"mqtt":       {"an MQTT broker", ""},
 	"websocket":  {"a WebSocket endpoint", ""},
 	"ftp":        {"a file on an FTP server", ""},
+	"imap":       {"the mailboxes of a mail account", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

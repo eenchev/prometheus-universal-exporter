@@ -21,28 +21,32 @@ import (
 // ["name"]. \b after the name keeps $params_of_mine, another variable, out.
 var expressionParam = regexp.MustCompile(`\$params\b(?:\s*(?:\.([A-Za-z_][A-Za-z0-9_]*)|\.?\[?"([^"\\]*)"\]?))?`)
 
+// scriptParam finds params where a Python script may read it, with what
+// follows when that is one parameter read by its name: params["name"] or
+// params.get("name"), in either quote.
+var scriptParam = regexp.MustCompile(`\bparams\b(?:\s*\[\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*\]|\s*\.get\(\s*(?:"([^"\\]*)"|'([^'\\]*)'))?`)
+
 // ParseExpressionParams is what the expressions of c's rules read of
-// $params, and nil for a collector that reads nothing of it: every
-// collector whose transform is not jq or yq, and nearly every one that is.
+// $params, and its Python code, the script of a python transform and a
+// pre_script, of params; nil for a collector that reads nothing of
+// either, as nearly every one does.
 //
 // A program names a variable only as it is written, so one that reads
-// $params holds that text. Text that holds it and reads nothing, as a
-// string or a comment may, only makes the collector take a parameter it
-// has no use for.
+// $params holds that text, and so does a script that reads params. Text
+// that holds it and reads nothing, as a string or a comment may, or a
+// script's own variable of the name, only makes the collector take a
+// parameter it has no use for.
 func ParseExpressionParams(c *model.Collector) *model.ExpressionParams {
-	if c.Transform.Type != "jq" && c.Transform.Type != "yq" {
-		return nil
-	}
 	var out *model.ExpressionParams
-	read := func(expression string) {
-		if !strings.Contains(expression, "$params") {
+	find := func(text, holds string, in *regexp.Regexp) {
+		if !strings.Contains(text, holds) {
 			return
 		}
-		for _, found := range expressionParam.FindAllStringSubmatch(expression, -1) {
+		for _, found := range in.FindAllStringSubmatch(text, -1) {
 			if out == nil {
 				out = &model.ExpressionParams{}
 			}
-			name := found[1] + found[2]
+			name := strings.Join(found[1:], "")
 			switch {
 			case name == "":
 				// Read whole, or by a name the program makes.
@@ -52,6 +56,14 @@ func ParseExpressionParams(c *model.Collector) *model.ExpressionParams {
 			}
 		}
 	}
+	find(c.Transform.PreScript, "params", scriptParam)
+	if c.Transform.Type == "python" {
+		find(c.Transform.Script, "params", scriptParam)
+	}
+	if c.Transform.Type != "jq" && c.Transform.Type != "yq" {
+		return sortedExpressionParams(out)
+	}
+	read := func(expression string) { find(expression, "$params", expressionParam) }
 	for i := range c.Metrics {
 		rule := &c.Metrics[i]
 		read(rule.Items)
@@ -61,6 +73,10 @@ func ParseExpressionParams(c *model.Collector) *model.ExpressionParams {
 			read(rule.Labels[j].Expression)
 		}
 	}
+	return sortedExpressionParams(out)
+}
+
+func sortedExpressionParams(out *model.ExpressionParams) *model.ExpressionParams {
 	if out != nil {
 		slices.Sort(out.Names)
 	}

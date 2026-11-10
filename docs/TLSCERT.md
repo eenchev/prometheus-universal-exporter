@@ -76,7 +76,7 @@ collectors:
 | `starttls` | — | `smtp`, `imap`, `pop3` or `ftp`: begin TLS on a plaintext connection as that protocol asks for it ([STARTTLS](#starttls)). |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
 
-The `tls` block is the one `http`, `graphite`, `grpc`, `sql`, `redis`, `tcp`, `ldap`, the opt-in `smtp`, `mqtt`, `websocket` and `ftp`, `dns`, with `transport: tls`, and,
+The `tls` block is the one `http`, `graphite`, `grpc`, `sql`, `redis`, `tcp`, `ldap`, the opt-in `smtp`, `mqtt`, `websocket`, `ftp` and `imap`, `dns`, with `transport: tls`, and,
 with `api_server`, `kubernetes` take ([TLS](REQUESTS.md#tls)), read by the same
 code, but for
 `insecure_skip_verify`, which is refused, by the exporter and by the

@@ -32,6 +32,9 @@ type pythonInput struct {
 	Response   pythonResponse `json:"response"`
 	Target     string         `json:"target"`
 	Collector  string         `json:"collector"`
+	// Params are the probe's parameters by name; left out when there is
+	// none.
+	Params map[string]string `json:"params,omitempty"`
 }
 
 type pythonResponse struct {
@@ -570,6 +573,7 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	// The request is written into a buffer kept for the next one, which is
 	// free again once the worker has been handed it.
 	encoder := pythonEncoders.Get().(*pythonEncoder)
+	encoder.params = pythonParams(ctx)
 	payload, err := encoder.request(mode, script, d, r, c)
 	if errors.Is(err, errPythonRequestTooLarge) {
 		return nil, model.MarkError(fmt.Errorf("python %s did not run: %w", what, err), model.ErrScriptFailed)

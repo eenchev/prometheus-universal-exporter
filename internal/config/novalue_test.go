@@ -393,6 +393,12 @@ func TestOnlyAValueThatIsNoneIsRefusedAnew(t *testing.T) {
 				how = "has nothing after its colon"
 			}
 			written := []byte(strings.Replace(string(out), noValueHere, value, 1))
+			// A place whose value held an anchor that an alias further on
+			// stands for leaves no document without it: nothing loads it,
+			// and it says nothing of a value that is none.
+			if yaml.Unmarshal(written, new(yaml.Node)) != nil {
+				return
+			}
 			want := "line " + strconv.Itoa(line) + ": " + site.said(how)
 			now, was := valueProblems(written, kind), valueProblemsBeforeNoValue(written, kind)
 			found := slices.Index(now, want)

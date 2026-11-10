@@ -76,6 +76,7 @@ const (
 	RequestTypeMQTT       = "mqtt"
 	RequestTypeWebSocket  = "websocket"
 	RequestTypeFTP        = "ftp"
+	RequestTypeIMAP       = "imap"
 )
 
 // UnixSocketPattern is what request.unix_socket may be, an http or tcp
@@ -88,7 +89,7 @@ const UnixSocketPattern = `^$|^/`
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers. A type that
@@ -96,7 +97,7 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestT
 // it only when asked, with its request_type_<name> tag, its file built
 // under that tag alone (make new-request-type OPT_IN=1). A test keeps the
 // list in step with the files' constraints.
-var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP}
+var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose

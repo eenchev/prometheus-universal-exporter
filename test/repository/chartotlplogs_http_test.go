@@ -19,7 +19,8 @@ import (
 // export of slow requests' traces, at /v1/traces, with the header every
 // export sends.
 func TestChartReadmeOTLPLogExportExampleRendersAndLoads(t *testing.T) {
-	helm := requireHelm(t)
+	// In its turn: it sets the environment, which a parallel test cannot.
+	helm := helmOnPath(t)
 	_, section, found := strings.Cut(readChartFile(t, "README.md"), "### OTLP export\n")
 	if !found {
 		t.Fatal("the chart README has no OTLP export section")

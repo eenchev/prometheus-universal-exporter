@@ -28,6 +28,11 @@ push to another branch runs nothing of its own, its pull request's run being
 the one that tests it. A release tag on a commit that is not on `main` is
 still tested, by the run its own push starts.
 
+A push to a pull request's branch ends the run of the push before it, and
+a pull request's race jobs run each test once. Neither touches what a
+release waits for: the run a push to `main` or of a tag starts is never
+ended by another, and runs the race suite twice.
+
 Pushing the tag starts a CI run of its own, and a tag is often pushed right
 after its commit, so while the commit's runs are queued or running, or none
 has started yet, the job waits, for up to an hour, looking every 30 seconds.

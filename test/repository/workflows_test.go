@@ -776,7 +776,9 @@ func TestMakeCIRunsTheGoCommandsOfTheCIWorkflow(t *testing.T) {
 	for _, step := range steps {
 		script, _ := step["run"].(string)
 		for line := range strings.SplitSeq(script, "\n") {
-			line = strings.TrimSpace(line)
+			// The race suite runs RACE_COUNT times, twice but on a pull
+			// request, and make ci twice.
+			line = strings.Replace(strings.TrimSpace(line), `"$RACE_COUNT"`, "2", 1)
 			switch {
 			case line == "go mod download":
 			case strings.HasPrefix(line, "go "), strings.HasPrefix(line, "for type in "), strings.HasPrefix(line, `tags="$(sh tools/request-type-tags.sh`):
@@ -863,7 +865,10 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 	}
 }
 
-// The suite runs twice and shuffled under the race detector, where a package
+// The suite runs twice and shuffled under the race detector, once on a pull
+// request, whose two race jobs were the longest of its run, and twice still
+// on a push to main or of a tag, which is the run a release waits for
+// (RACE_COUNT). Under the detector a package
 // takes several times what it takes without: go test's own limit of ten
 // minutes a package, meant for one plain run, was what a slow machine would
 // have failed on before any test did. So the command carries a limit of its
@@ -876,7 +881,10 @@ func TestMakeBuildKeepsTheExportersBinary(t *testing.T) {
 // test` runs that very command over every package, so that what passes here
 // is what passes there.
 func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
-	pattern := regexp.MustCompile(`^go test -race -count=2 -shuffle=on -timeout (\S+) \$packages$`)
+	pattern := regexp.MustCompile(`^go test -race -count="\$RACE_COUNT" -shuffle=on -timeout (\S+) \$packages$`)
+	if count, want := workflowEnv(t, ".github/workflows/ci.yml")["RACE_COUNT"], "${{ github.event_name == 'pull_request' && '1' || '2' }}"; count != want {
+		t.Errorf("ci.yml's RACE_COUNT is %q, not %q: once on a pull request, twice on a push", count, want)
+	}
 	side := regexp.MustCompile(`^packages="\$\(sh tools/ci-packages\.sh (\S+)\)"$`)
 	var steps []map[string]any
 	for _, job := range workflowSteps(t, ".github/workflows/ci.yml") {
@@ -929,7 +937,7 @@ func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 	}
 	match := pattern.FindStringSubmatch(command)
 	if match == nil {
-		t.Fatalf("ci.yml runs the race detector with %q, not twice, shuffled and with a limit of its own (%s)", command, pattern)
+		t.Fatalf("ci.yml runs the race detector with %q, not RACE_COUNT times, shuffled and with a limit of its own (%s)", command, pattern)
 	}
 	limit, err := time.ParseDuration(match[1])
 	if err != nil {
@@ -949,8 +957,51 @@ func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
 			raced = append(raced, line)
 		}
 	}
-	if len(raced) != 1 || raced[0] != everyPackage(command) {
-		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, everyPackage(command))
+	// make test runs it twice, as a push does.
+	twice := everyPackage(strings.Replace(command, `"$RACE_COUNT"`, "2", 1))
+	if len(raced) != 1 || raced[0] != twice {
+		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, twice)
+	}
+}
+
+// workflowEnv is the env block of a workflow, the variables every job has.
+func workflowEnv(t *testing.T, path string) map[string]string {
+	t.Helper()
+	var document struct {
+		Env map[string]string `yaml:"env"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, path)), &document); err != nil {
+		t.Fatal(err)
+	}
+	return document.Env
+}
+
+// A push to a pull request's branch ends the run of the push before it: the
+// runs of one pull request are one group, and a new one cancels the one in
+// progress. A run a push to main or of a tag started is a group of its own,
+// by its run id, and is not cancelled: the release workflows wait for those
+// (tools/ci-passed.py), and a group shared by a branch's pushes would cancel
+// the one waiting whenever a third came.
+func TestCIEndsAPullRequestsSupersededRunAndNoPushs(t *testing.T) {
+	var document struct {
+		Concurrency struct {
+			Group  string `yaml:"group"`
+			Cancel string `yaml:"cancel-in-progress"`
+		} `yaml:"concurrency"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, ".github/workflows/ci.yml")), &document); err != nil {
+		t.Fatal(err)
+	}
+	if want := "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}"; document.Concurrency.Group != want {
+		t.Errorf("ci.yml's concurrency group is %q, not %q", document.Concurrency.Group, want)
+	}
+	if want := "${{ github.event_name == 'pull_request' }}"; document.Concurrency.Cancel != want {
+		t.Errorf("ci.yml cancels a run in progress when %q, not when %q", document.Concurrency.Cancel, want)
+	}
+	for _, workflow := range []string{".github/workflows/release.yml", ".github/workflows/release-chart.yml"} {
+		if strings.Contains(read(t, workflow), "cancel-in-progress") {
+			t.Errorf("%s cancels runs in progress; a release is never ended by another", workflow)
+		}
 	}
 }
 

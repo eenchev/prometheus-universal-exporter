@@ -29,7 +29,9 @@ func TestGoModDoesNotNeedThePrometheusClientLibraries(t *testing.T) {
 
 // usePythonPool swaps the shared Python worker pool for the length of a test,
 // which is only safe while no test runs in parallel with another, in any
-// package.
+// package. The one exception is the tests of this package that render the
+// chart, which requireHelm makes parallel: they wait for helm, and this
+// package swaps no pool, which is checked here too.
 func TestNoTestRunsInParallel(t *testing.T) {
 	var files []string
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
@@ -47,8 +49,17 @@ func TestNoTestRunsInParallel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if file == filepath.Join("test", "repository", "chartrender_test.go") {
+			if n := strings.Count(string(raw), call); n != 1 {
+				t.Errorf("%s calls %s) %d times; requireHelm alone was meant to", file, call, n)
+			}
+			continue
+		}
 		if strings.Contains(string(raw), call) {
 			t.Errorf("%s calls %s), but usePythonPool swaps the shared worker pool per test", file, call)
+		}
+		if swap := "Isolate" + "PythonWorkers"; strings.HasPrefix(file, filepath.Join("test", "repository")+string(filepath.Separator)) && strings.Contains(string(raw), swap) {
+			t.Errorf("%s calls %s, which swaps the worker pool under the chart tests that run in parallel", file, swap)
 		}
 	}
 }

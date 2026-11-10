@@ -8883,7 +8883,9 @@ once in one process and in a random order, and `make test` and CI MUST run it
 with the race detector, twice, shuffled and with a limit for each package of at
 least twenty minutes (`go test -race -count=2 -shuffle=on -timeout 20m`), by
 one command that is the same in both, `make test` over every package and CI
-over each side's packages when that side's tests are to run (§ 34.33).
+over each side's packages when that side's tests are to run (§ 34.33). On a
+pull request CI MAY run it once: the run of the push to `main` that merges
+it, and of a tag, MUST run it twice.
 A test MUST NOT depend on state another test, or an earlier run of itself, left
 behind. Process-wide state a test reads counts from MUST be replaceable per
 test: the Python worker pool MUST be reached through one replaceable reference,

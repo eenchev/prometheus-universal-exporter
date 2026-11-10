@@ -23,7 +23,24 @@ import (
 // without it, these tests are skipped and the text tests in charts_test.go
 // still run.
 
+// requireHelm is helm's path, for a test that renders the chart.
+//
+// A test that renders the chart waits for helm, a process of its own, most
+// of its time, and writes nothing another test reads, so the tests that ask
+// for helm run beside each other, once the package's other tests are done:
+// they were most of what the package took. This is the one place a test of
+// the repository is made parallel (TestNoTestRunsInParallel); a test that
+// cannot be, since it sets the environment, asks helmOnPath instead.
 func requireHelm(t *testing.T) string {
+	t.Helper()
+	helm := helmOnPath(t)
+	t.Parallel()
+	return helm
+}
+
+// helmOnPath is helm's path, for a test that renders the chart and runs in
+// its turn; without helm the test is skipped.
+func helmOnPath(t *testing.T) string {
 	t.Helper()
 	helm, err := exec.LookPath("helm")
 	if err != nil {

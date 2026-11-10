@@ -616,7 +616,9 @@ covers what it covers.
 Every test must pass however many times it runs and in whatever order, which
 `make test` checks with
 `go test -race -count=2 -shuffle=on -timeout 20m ./...`, and CI with the same
-command over each side's packages (see the CI section below). A failure there names
+command over each side's packages (see the CI section below), twice on a
+push to `main` or of a tag and once on a pull request, where the two race
+jobs were the longest of a run. A failure there names
 the seed it used; run it again with `-shuffle=<seed>`. The limit is a
 package's, and the command names it because `go test`'s own ten minutes are
 meant for one run without the race detector; a test keeps the Makefile and
@@ -635,7 +637,11 @@ such thing: its counts — starts, runs, stops, idle workers — would carry ove
 from test to test. A test that runs Python calls `requirePython(t)`, which also
 gives it a pool of its own and stops that pool's workers when it ends; a test
 that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
-therefore must not use `t.Parallel`, which the swap assumes.
+therefore must not use `t.Parallel`, which the swap assumes. The one
+exception is in `test/repository`, which swaps no pool: its tests that
+render the chart, each of which waits for `helm` most of its time, are made
+parallel by `requireHelm(t)`, and run beside each other once the package's
+other tests are done.
 
 What the pool counts for a collector is the collector's only while the
 collector stays ([self-metrics](SELF-METRICS.md#python-workers)): a run

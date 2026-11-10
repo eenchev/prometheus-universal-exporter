@@ -16,6 +16,18 @@ on:
 permissions:
   contents: read
   pull-requests: read
+# A push to a pull request's branch ends the run of the push before it, whose
+# answer nobody waits for any more. A run a push to main or of a tag started
+# is a group of its own and is never ended: the release workflows read those
+# runs (tools/ci-passed.py), and one pushed over is still that commit's.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  # How many times the race jobs run each test: once on a pull request, where
+  # they were the longest jobs, and twice on a push to main or of a tag,
+  # which is what catches a test that passes only the first time.
+  RACE_COUNT: ${{ github.event_name == 'pull_request' && '1' || '2' }}
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -1536,18 +1548,19 @@ jobs:
             fi
           done
           exit 1
-      # Twice, in a random order, so a test that depends on the order tests
-      # run in, or on running only once, is caught. The limit is a package's:
-      # go test's own ten minutes are for one run without the race detector,
-      # and this is two with it, on whatever machine the job was given. The
-      # Makefile runs the same command over ./..., race-rest over the rest of
+      # In a random order, and twice but on a pull request (RACE_COUNT), so a
+      # test that depends on the order tests run in, or on running only once,
+      # is caught. The limit is a package's: go test's own ten minutes are for
+      # one run without the race detector, and this is two with it, on
+      # whatever machine the job was given. The Makefile runs the same
+      # command, twice, over ./..., race-rest over the rest of
       # the exporter's side, the allocator job over its side, and a test
       # keeps them in step. internal/exporter has by far the most tests of
       # the side, so it has this job to itself.
       - name: Test internal/exporter under the race detector
         run: |
           packages="$(sh tools/ci-packages.sh exporter-core)"
-          go test -race -count=2 -shuffle=on -timeout 20m $packages
+          go test -race -count="$RACE_COUNT" -shuffle=on -timeout 20m $packages
         if: steps.changes.outputs.exporter == 'true'
   # The race run of the exporter's other packages, beside race's of
   # internal/exporter: the two lists make up the exporter's side, which a
@@ -1755,7 +1768,7 @@ jobs:
       - name: Test the rest of the exporter under the race detector
         run: |
           packages="$(sh tools/ci-packages.sh exporter-rest)"
-          go test -race -count=2 -shuffle=on -timeout 20m $packages
+          go test -race -count="$RACE_COUNT" -shuffle=on -timeout 20m $packages
         if: steps.changes.outputs.exporter == 'true'
   # The scaffold test (TestANewRequestTypeIsWiredByTheScaffold) builds a
   # copy of the tree with two new request types, minutes of work that
@@ -2446,7 +2459,7 @@ jobs:
       - name: Test the target allocator under the race detector
         run: |
           packages="$(sh tools/ci-packages.sh allocator)"
-          go test -race -count=2 -shuffle=on -timeout 20m $packages
+          go test -race -count="$RACE_COUNT" -shuffle=on -timeout 20m $packages
         if: steps.changes.outputs.allocator == 'true'
   # The sql-live job is turned off for now: it would run the live tests
   # against PostgreSQL, MySQL and SQL Server service containers on every

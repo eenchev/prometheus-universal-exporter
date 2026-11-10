@@ -30,7 +30,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); and the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`) and files on FTP servers (`ftp`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
@@ -713,8 +713,8 @@ number and which the exporter MUST refuse.
 Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
-`icmp` and `snmp` are implemented;
-FTP is anticipated. The
+`icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
+`modbus`, `mqtt`, `websocket` and `ftp`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,8 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links; there are none now, every type
-of the tree being in the default build and the published image. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket` and `ftp`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -842,12 +841,12 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp` and `snmp` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` and `ftp` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
   and of `tcp`'s and `snmp`'s (`internal/testutil`) included — and the test MUST find none of the other
-  types' modules in a build of any of them, and in a build of `tcp` alone no
+  types' modules in a build of any of them, and in a build of `tcp`, `ntp`, `snmp` or an opt-in type alone no
   package a build of no request type lacks but the standard library's. The AWS SDK's modules, `github.com/aws/aws-sdk-go-v2` and
   `github.com/aws/smithy-go`, are `s3file`'s among the types: the test MUST
   find them in a build of `s3file` alone and its S3 client and
@@ -1254,21 +1253,26 @@ what it answers — and is held to the rules above, which every type shares,
 as it is to the rest of this specification:
 
 - [`dns`](SPECIFICATION-DNS.md)
+- [`ftp`](SPECIFICATION-FTP.md)
 - [`graphite`](SPECIFICATION-GRAPHITE.md)
 - [`grpc`](SPECIFICATION-GRPC.md)
 - [`icmp`](SPECIFICATION-ICMP.md)
 - [`kubernetes`](SPECIFICATION-KUBERNETES.md)
 - [`ldap`](SPECIFICATION-LDAP.md)
 - [`localfile`](SPECIFICATION-LOCALFILE.md)
+- [`modbus`](SPECIFICATION-MODBUS.md)
+- [`mqtt`](SPECIFICATION-MQTT.md)
 - [`ntp`](SPECIFICATION-NTP.md)
 - [`redis`](SPECIFICATION-REDIS.md)
 - [`s3file`](SPECIFICATION-S3FILE.md)
+- [`smtp`](SPECIFICATION-SMTP.md)
 - [`snmp`](SPECIFICATION-SNMP.md)
 - [`sql`](SPECIFICATION-SQL.md)
 - [`sshexec`](SPECIFICATION-SSHEXEC.md)
 - [`sshfile`](SPECIFICATION-SSHFILE.md)
 - [`tcp`](SPECIFICATION-TCP.md)
 - [`tlscert`](SPECIFICATION-TLSCERT.md)
+- [`websocket`](SPECIFICATION-WEBSOCKET.md)
 
 ---
 
@@ -5804,6 +5808,8 @@ http_exporter_sshexec_connections
 http_exporter_sshexec_connects_total
 http_exporter_sshexec_limit_waits_total
 http_exporter_sshexec_limit_failures_total
+http_exporter_mqtt_connections
+http_exporter_mqtt_connects_total
 http_exporter_sql_connections
 http_exporter_sql_idle_connections
 http_exporter_sql_targets
@@ -5868,6 +5874,11 @@ reload removes. `http_exporter_sshexec_connections`,
 `http_exporter_sshexec_limit_waits_total` and
 `http_exporter_sshexec_limit_failures_total` MUST be the same of `sshexec`
 collectors, and exist only for them.
+`http_exporter_mqtt_connections`, a gauge, and
+`http_exporter_mqtt_connects_total`, a counter, MUST exist only for `mqtt`
+collectors, in a build with the type, labelled `collector`, with no
+per-request series: the connections the collector keeps open with
+`keep_connection`, and those it has made to keep.
 `http_exporter_sql_connections`, `http_exporter_sql_idle_connections` and
 `http_exporter_sql_targets`, gauges, and `http_exporter_sql_connects_total`,
 `http_exporter_sql_keepalive_failures_total`,
@@ -8088,7 +8099,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec` or `snmp` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` or `ftp` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9400,7 +9411,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

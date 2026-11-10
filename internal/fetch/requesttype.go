@@ -28,7 +28,10 @@ import (
 // server, tcp sends a line to a text-protocol service over TCP and reads
 // its answer, ldap searches an LDAP directory, sshexec runs a command on
 // another host over SSH, icmp pings a host, snmp reads an SNMP agent's
-// objects and tables. The type is required rather than defaulted so that no configuration means
+// objects and tables; and of the opt-in types, smtp holds a mail server's
+// session without sending, modbus reads a device's registers, mqtt
+// subscribes to a broker's topics, websocket reads an endpoint's messages
+// and ftp reads a file from an FTP server. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common
@@ -68,6 +71,11 @@ const (
 	RequestTypeNTP        = "ntp"
 	RequestTypeICMP       = "icmp"
 	RequestTypeSNMP       = "snmp"
+	RequestTypeSMTP       = "smtp"
+	RequestTypeModbus     = "modbus"
+	RequestTypeMQTT       = "mqtt"
+	RequestTypeWebSocket  = "websocket"
+	RequestTypeFTP        = "ftp"
 )
 
 // UnixSocketPattern is what request.unix_socket may be, an http or tcp
@@ -80,16 +88,15 @@ const UnixSocketPattern = `^$|^/`
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
-// leaves out, as it leaves out the sql type's opt-in drivers: none now, every
-// type being in the default build and the published image. A type that
+// leaves out, as it leaves out the sql type's opt-in drivers. A type that
 // links what few deployments want in the binary may be one: a build carries
 // it only when asked, with its request_type_<name> tag, its file built
 // under that tag alone (make new-request-type OPT_IN=1). A test keeps the
 // list in step with the files' constraints.
-var optInRequestTypes = []string{}
+var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose
@@ -544,7 +551,7 @@ func ReadFiles(c *model.Collector) (paths []string, read string) {
 //	//go:build !select_request_types || request_type_<name>
 //
 // A default build carries every type but the opt-in ones (optInRequestTypes),
-// none now, whose files would be built under their own tag alone:
+// whose files are built under their own tag alone:
 //
 //	//go:build request_type_<name>
 //

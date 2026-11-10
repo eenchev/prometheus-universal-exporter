@@ -1,4 +1,4 @@
-//go:build ignore
+//go:build request_type_ftp || request_type_modbus || request_type_mqtt || request_type_smtp || request_type_websocket
 
 // The constraint names every opt-in type of the tree, so the file is built
 // with any of them; with none, it is ignore, built by no build (make

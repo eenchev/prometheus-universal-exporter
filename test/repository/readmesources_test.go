@@ -32,6 +32,11 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"ntp":        {"NTP server", "the clock of an NTP server"},
 	"icmp":       {"host answering a ping", "the echo replies of a host pinged over ICMP"},
 	"snmp":       {"SNMP agent", "SNMP agents"},
+	"smtp":       {"mail server", "mail servers over SMTP"},
+	"modbus":     {"Modbus device", "Modbus TCP devices"},
+	"mqtt":       {"MQTT broker", "the topics of an MQTT broker"},
+	"websocket":  {"WebSocket endpoint", "WebSocket endpoints"},
+	"ftp":        {"FTP server", "files on an FTP server"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

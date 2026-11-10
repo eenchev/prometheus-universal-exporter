@@ -15,7 +15,7 @@ import (
 )
 
 // Request types are chosen at build time. A default build carries every type
-// but the opt-in ones, of which there are none now; -tags select_request_types,request_type_<name>,...
+// but the opt-in ones; -tags select_request_types,request_type_<name>,...
 // carries only the named ones. Each type lives in requesttype_<name>.go
 // behind `//go:build !select_request_types || request_type_<name>`, an
 // opt-in type behind `//go:build request_type_<name>` alone, and

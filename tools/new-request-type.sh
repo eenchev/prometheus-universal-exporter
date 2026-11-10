@@ -583,8 +583,8 @@ rewrite internal/fetch/requesttype.go awk -v name="$name" -v Title="$Title" -v o
 	prev ~ /^\/\/ The request types in the source tree\.$/ && $0 == "const (" { inConst = 1 }
 	inConst && $0 == ")" { printf "\tRequestType%s = \"%s\"\n", Title, name; inConst = 0 }
 	/^var knownRequestTypes = \[\]string\{.*\}$/ { sub(/\}$/, ", RequestType" Title "}") }
-	optin != "" && /^var optInRequestTypes = \[\]string\{\}$/ { sub(/\{\}$/, "{RequestType" Title "}") }
-	optin != "" && /^var optInRequestTypes = \[\]string\{.+\}$/ { sub(/\}$/, ", RequestType" Title "}") }
+	optin != "" && /^var optInRequestTypes = \[\]string\{\}$/ { sub(/\{\}$/, "{RequestType" Title "}"); first = 1 }
+	optin != "" && !first && /^var optInRequestTypes = \[\]string\{.+\}$/ { sub(/\}$/, ", RequestType" Title "}") }
 	{ print; prev = $0 }
 '
 gofmt -w internal/fetch/requesttype.go
@@ -726,8 +726,8 @@ add_after_last docs/CONFIGURATION.md "$relatedGroup" "$relatedLine"
 # Spec § 35's list of the request types' pages: a type of the default build
 # before ", and the opt-in" in the lines before the end of the list, or last
 # when the list has no opt-in type, and an opt-in type last, the first after
-# ", and the opt-in"; when the list is written otherwise, at its end with a
-# TODO.
+# ", and the opt-in" and the others after it; when the list is written
+# otherwise, at its end with a TODO.
 rewrite docs/SPECIFICATION-EXPORTER.md awk -v name="$name" -v NAME="$NAME" -v optin="$optin" '
 	{ lines[NR] = $0 }
 	END {
@@ -744,6 +744,10 @@ rewrite docs/SPECIFICATION-EXPORTER.md awk -v name="$name" -v NAME="$NAME" -v op
 		} else if (n <= NR && optin != "" && !group) {
 			i = index(lines[n], end)
 			lines[n] = substr(lines[n], 1, i - 1) ", and the opt-in " item substr(lines[n], i)
+			placed = 1
+		} else if (n <= NR && optin != "") {
+			i = index(lines[n], end)
+			lines[n] = substr(lines[n], 1, i - 1) ", " item substr(lines[n], i)
 			placed = 1
 		} else if (n <= NR) {
 			i = index(lines[n], end)

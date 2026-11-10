@@ -6,7 +6,7 @@
 #
 #   sh tools/run-example.sh list                       # name and files, one example a line
 #   sh tools/run-example.sh files open-meteo           # its configuration, then its static target file, if it has one
-#   sh tools/run-example.sh opt-in-types tcp           # the example's opt-in types, none now, and those given
+#   sh tools/run-example.sh opt-in-types tcp           # the example's opt-in types, none, and those given
 #   sh tools/run-example.sh check-host ::1                # fails for an empty HOST, before make run builds
 #   sh tools/run-example.sh run open-meteo 127.0.0.1 9115 --log.level=debug
 #   sh tools/run-example.sh check-root-binaries prometheus-universal-exporter pue-allocator

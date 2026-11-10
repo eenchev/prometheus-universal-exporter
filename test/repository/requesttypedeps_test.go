@@ -93,8 +93,7 @@ var s3fileModules = []string{
 }
 
 // optInRequestTypes are the opt-in request types of the tree: each
-// internal/fetch/requesttype_<name>.go built under its own tag alone. There
-// are none now, every type being in the default build.
+// internal/fetch/requesttype_<name>.go built under its own tag alone.
 func optInRequestTypes(t *testing.T) []string {
 	t.Helper()
 	files, err := filepath.Glob("internal/fetch/requesttype_*.go")
@@ -174,7 +173,7 @@ const optInTypesNone = `{ [ -n "$tags" ] || { echo "no opt-in request types"; ex
 // CI and `make ci` vet, build, test and lint a build with every opt-in
 // request type beside the default build's types, which no other build
 // compiles together: each of their lists names every opt-in type of the
-// tree, none now, and each stops at once when the list is empty.
+// tree, and each stops at once when the list is empty.
 func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	want := optInRequestTypes(t)
 	for _, c := range []struct {
@@ -220,7 +219,8 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 	}
 }
 
-// The tcp, snmp and ntp request types link nothing
+// The tcp, snmp and ntp request types, and the opt-in smtp, modbus, mqtt,
+// websocket and ftp, link nothing
 // outside the standard library: every package a build of one alone links
 // beyond those of a build of no type at all is the standard library's or
 // the module's own, tcp's client being net and crypto/tls, ntp's net and
@@ -229,7 +229,7 @@ func TestCIBuildsEveryOptInRequestType(t *testing.T) {
 // internal/testutil, which tests alone import.
 func TestTheTCPAndNTPTypesLinkNothingOutsideTheStandardLibrary(t *testing.T) {
 	none := linkedPackagesTagged(t, "select_request_types")
-	for _, types := range []string{"tcp", "ntp", "snmp"} {
+	for _, types := range []string{"tcp", "ntp", "snmp", "smtp", "modbus", "mqtt", "websocket", "ftp"} {
 		for _, pkg := range linkedPackages(t, types) {
 			first, _, _ := strings.Cut(pkg, "/")
 			if !slices.Contains(none, pkg) && strings.Contains(first, ".") && !strings.HasPrefix(pkg, "github.com/eenchev/prometheus-universal-exporter/") {

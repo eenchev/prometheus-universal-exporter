@@ -168,6 +168,9 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_sshexec_connects_total", model.CounterMetricType, "SSH connections this sshexec collector's scrapes made: the first to a host, and each made again after one broke, was closed idle or by keepalives, or had a file change.", nil},
 	{"http_exporter_sshexec_limit_waits_total", model.CounterMetricType, "Scrapes of this sshexec collector that waited for room at its request.max_open_connections before they had a connection; 0 without the limit.", nil},
 	{"http_exporter_sshexec_limit_failures_total", model.CounterMetricType, "Scrapes of this sshexec collector that failed at its request.max_open_connections: every connection it may open was held by a command or being made when their deadline came.", nil},
+	// The connections an mqtt collector with keep_connection keeps.
+	{"http_exporter_mqtt_connections", model.GaugeMetricType, "Connections to brokers this mqtt collector keeps open now, with request.keep_connection; 0 without it.", nil},
+	{"http_exporter_mqtt_connects_total", model.CounterMetricType, "Connections this mqtt collector made to keep, with request.keep_connection: the first to a broker, and each made again after one ended or was closed idle.", nil},
 	// The pools of connections a sql collector keeps are the collector's,
 	// one to a target, so they have no per-request value either.
 	{"http_exporter_sql_connections", model.GaugeMetricType, "Database connections this sql collector's pools have open now, in use or idle, across its targets.", nil},
@@ -214,6 +217,8 @@ var requestTypeFamilies = map[string]func(rt *fetch.RequestType, family string) 
 	"http_exporter_sshexec_connects_total":             ownFamily,
 	"http_exporter_sshexec_limit_waits_total":          ownFamily,
 	"http_exporter_sshexec_limit_failures_total":       ownFamily,
+	"http_exporter_mqtt_connections":                   ownFamily,
+	"http_exporter_mqtt_connects_total":                ownFamily,
 	"http_exporter_sql_connections":                    ownFamily,
 	"http_exporter_sql_idle_connections":               ownFamily,
 	"http_exporter_sql_targets":                        ownFamily,
@@ -448,6 +453,14 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		"http_exporter_sshfile_limit_failures_total": func(name string) float64 {
 			_, failed := fetch.CollectorConnectionLimit(requestTypes[name], name)
 			return float64(failed)
+		},
+		"http_exporter_mqtt_connections": func(name string) float64 {
+			open, _ := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(open)
+		},
+		"http_exporter_mqtt_connects_total": func(name string) float64 {
+			_, made := fetch.CollectorConnections(requestTypes[name], name)
+			return float64(made)
 		},
 		"http_exporter_sshexec_connections": func(name string) float64 {
 			open, _ := fetch.CollectorConnections(requestTypes[name], name)

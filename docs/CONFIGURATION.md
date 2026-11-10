@@ -2768,7 +2768,13 @@ TLS handshake — see [TLS certificates](TLSCERT.md) — `ntp` asks an NTP
 server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
-[Kubernetes objects](KUBERNETES.md).
+[Kubernetes objects](KUBERNETES.md). A build that [asks for
+them](#choosing-request-types-at-build-time) has five more: `smtp` holds a
+mail server's session without sending — see [SMTP](SMTP.md) — `modbus`
+reads a device's registers — see [Modbus](MODBUS.md) — `mqtt` subscribes
+to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
+messages of an endpoint — see [WebSocket](WEBSOCKET.md) — and `ftp` reads
+a file from an FTP server — see [Files over FTP](FTP.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -2957,6 +2963,44 @@ with `auth_protocol`, `auth_password_file`, `priv_protocol` and
 `max_repetitions`, `walk_limit`, `hex`, `context_name`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`; its table is in [SNMP agents](SNMP.md#a-collector).
+
+For `smtp`, an opt-in type, no
+key is required: `starttls_mode` says whether TLS is begun, `username` with
+`password_file` or `xoauth2` logs in, by the mechanism `auth` names, and
+`mail_from` and `rcpt_to` ask the server about a sender and recipients,
+with nothing sent; `hello`, `tls`, `max_response_bytes`, `allowed_targets`
+and `denied_targets` apply too. The decoder is `json`; its table is in
+[SMTP](SMTP.md#a-collector).
+
+For `modbus`, an opt-in type,
+`read` is required, the registers and bits read, each with a `name`, its
+`table`, `address`, `type`, `count` and `order`; `unit` is the unit id
+asked, and `allowed_targets` and `denied_targets` apply too. The decoder is
+`json`; its table is in [Modbus](MODBUS.md#a-collector).
+
+For `mqtt`, an opt-in type,
+`topics` is required, the topic filters subscribed to at `qos`; `window`
+and `max_messages` bound what a scrape reads, `persistent_session` with
+`client_id` has the broker keep the session between scrapes, and
+`keep_connection` has the exporter keep the connection, for `idle_timeout`;
+`keep_alive`, `username`, `password_file`, `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
+its table is in [MQTT](MQTT.md#a-collector).
+
+For `websocket`, an opt-in type, no
+key is required: `send_text` is a message sent after the handshake,
+`read_messages` how many messages are read and `read_window` how long they
+are waited for; `subprotocols`, `headers`, `bearer_token_file`, `tls`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. One
+message is a body, read by any decoder, and several a JSON list; its table
+is in [WebSocket](WEBSOCKET.md#a-collector).
+
+For `ftp`, an opt-in type,
+`root` is required, the directory the collector may read under, and `path`
+names the file under it; `max_age`, `username`, `password_file`, `tls`,
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+file is read by the decoder its extension names; its table is in [Files
+over FTP](FTP.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3008,6 +3052,25 @@ host pinged, with no port.
 
 `snmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
 agent, `host:port`, port 161 when left out.
+
+`smtp`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the mail server, `host`, `host:port`, `smtp://` or
+`smtps://`.
+
+`modbus`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the device, `host`, `host:port` or
+`modbus://host:port/<unit>`.
+
+`mqtt`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the broker, `host`, `host:port`, `mqtt://` or
+`mqtts://`.
+
+`websocket`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the endpoint's `ws://` or `wss://` URL.
+
+`ftp`, an opt-in type, accepts `path`, `timeout` and `param_<name>`, and
+requires a `target`, the server, `host`, `host:port`, `ftp://`, `ftpes://`
+or `ftps://`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3078,13 +3141,21 @@ drivers](SQL.md#building-with-more-drivers)).
 A type may also be opt-in: one no build carries unless asked, the default
 build and the published image among them, made so with `make
 new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type))
-for a type whose libraries few deployments want in the binary. There are
-none now. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+for a type few deployments want in the binary. They are
+[`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
+[`websocket`](WEBSOCKET.md) and [`ftp`](FTP.md), each written with the
+standard library alone: about 0.1 MB of a stripped binary each, and 0.3 MB
+for the five. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is
 refused by a build without it with a message that says the type is opt-in
 and how to build with it.
+
+```sh
+make build OPT_IN_REQUEST_TYPES=mqtt,modbus
+docker build --build-arg OPT_IN_REQUEST_TYPES=mqtt,modbus -t exporter:plant .
+```
 
 ### When a metric cannot be extracted
 
@@ -7140,6 +7211,11 @@ nothing there.
 - [SSHEXEC.md](SSHEXEC.md) — the `sshexec` request type.
 - [ICMP.md](ICMP.md) — the `icmp` request type.
 - [SNMP.md](SNMP.md) — the `snmp` request type.
+- [SMTP.md](SMTP.md) — the opt-in `smtp` request type.
+- [MODBUS.md](MODBUS.md) — the opt-in `modbus` request type.
+- [MQTT.md](MQTT.md) — the opt-in `mqtt` request type.
+- [WEBSOCKET.md](WEBSOCKET.md) — the opt-in `websocket` request type.
+- [FTP.md](FTP.md) — the opt-in `ftp` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

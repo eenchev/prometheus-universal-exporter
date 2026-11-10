@@ -144,8 +144,8 @@ func TestMakeRunWithoutAnExampleListsThem(t *testing.T) {
 
 // An example of an opt-in request type runs without the user knowing the
 // type: the types its collectors name are added to OPT_IN_REQUEST_TYPES,
-// beside any the command line gives, for every example, none now, the tree
-// having no opt-in type; examples/tcp is built with those the command line
+// beside any the command line gives, for every example, none of which has one
+// now; examples/tcp is built with those the command line
 // gives, and an unknown example fails before anything is built.
 func TestMakeRunAddsTheOptInTypesAnExampleNeeds(t *testing.T) {
 	optIn := optInRequestTypes(t)

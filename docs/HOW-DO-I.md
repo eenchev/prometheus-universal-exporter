@@ -29,6 +29,10 @@ that does it, usually with an example to copy. New here? Start with
 | Read series from Graphite | [Graphite](GRAPHITE.md) |
 | Read Kubernetes objects | [Kubernetes objects](KUBERNETES.md) |
 | Read an SNMP agent | [SNMP agents](SNMP.md) |
+| Read registers of a PLC, an inverter or a meter | [Modbus](MODBUS.md), in a build with the opt-in type |
+| Read what devices publish to an MQTT broker | [MQTT](MQTT.md), in a build with the opt-in type |
+| Read a message from a WebSocket | [WebSocket](WEBSOCKET.md), in a build with the opt-in type |
+| Read a file from an FTP server | [Files over FTP](FTP.md), in a build with the opt-in type |
 
 ## Check that something works
 
@@ -40,6 +44,7 @@ that does it, usually with an example to copy. New here? Start with
 | Ping a host | [Ping over ICMP](ICMP.md) |
 | Check a DNS name | [DNS](DNS.md) |
 | Check a clock against an NTP server | [NTP](NTP.md) |
+| Check that a mail server takes a login, or a recipient, without sending | [SMTP](SMTP.md), in a build with the opt-in type |
 
 ## Ask the right way
 

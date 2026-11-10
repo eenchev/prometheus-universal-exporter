@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_http || request_type_graphite || request_type_localfile || request_type_s3file || request_type_sshfile
+//go:build !select_request_types || request_type_http || request_type_graphite || request_type_localfile || request_type_s3file || request_type_sshfile || request_type_ftp
 
 package fetch
 

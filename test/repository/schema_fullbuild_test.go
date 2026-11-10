@@ -1,4 +1,4 @@
-//go:build !select_request_types && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
+//go:build !select_request_types && !request_type_ftp && !request_type_modbus && !request_type_mqtt && !request_type_smtp && !request_type_websocket && !sql_driver_clickhouse && !sql_driver_oracle && !sql_driver_snowflake && !sql_driver_vertica
 
 package repository
 

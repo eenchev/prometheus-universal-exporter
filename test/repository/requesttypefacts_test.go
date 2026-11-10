@@ -214,7 +214,7 @@ func TestDecoderListsNameEveryDecoder(t *testing.T) {
 // chartSourceNames is, per request type, the words the chart README's
 // opening and Chart.yaml's description, which Artifact Hub shows, use for
 // it. The description is of the image the chart deploys, a default build,
-// so it leaves an opt-in type out, of which there are none now.
+// so it leaves the opt-in types out.
 var chartSourceNames = map[string]struct{ readme, description string }{
 	"http":       {"an HTTP API", "HTTP"},
 	"grpc":       {"a gRPC service", "gRPC"},
@@ -233,6 +233,11 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"ntp":        {"the clock of an NTP server", "NTP servers"},
 	"icmp":       {"the echo replies of a host pinged over ICMP", "pings"},
 	"snmp":       {"an SNMP agent", "SNMP agents"},
+	"smtp":       {"a mail server", ""},
+	"modbus":     {"a Modbus device", ""},
+	"mqtt":       {"an MQTT broker", ""},
+	"websocket":  {"a WebSocket endpoint", ""},
+	"ftp":        {"a file on an FTP server", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

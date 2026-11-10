@@ -32,6 +32,11 @@ var unusedRefusals = map[string]string{
 	RequestTypeNTP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeICMP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeSNMP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeSMTP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.mail_from, request.rcpt_to or label values names them`,
+	RequestTypeModbus:     `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeMQTT:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.topics or label values names them`,
+	RequestTypeWebSocket:  `probe parameters param_tenat are not used by collector "places": no placeholder in its request.send_text, header values or label values names them`,
+	RequestTypeFTP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

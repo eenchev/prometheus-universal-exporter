@@ -78,6 +78,30 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   member on the status page and in `/v1/status`, counts it in
   `pue_allocator_members_same_name`, and tells both exporters, which log it
   too ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
+- **Five opt-in request types**, each written with the standard library
+  alone, in no default build and not in the published image: build with
+  `make build OPT_IN_REQUEST_TYPES=smtp,modbus,mqtt,websocket,ftp`, or the
+  image's `OPT_IN_REQUEST_TYPES` build argument, naming those you want.
+  Together they add about 0.3 MB to the binary.
+- **[`smtp`](docs/SMTP.md)** holds a mail server's session up to, and never
+  including, the message: the greeting, the extensions `EHLO` lists,
+  `STARTTLS`, a login with `PLAIN`, `LOGIN` or `XOAUTH2` (Gmail with an app
+  password, or with a refresh token), and the server's answers to
+  `MAIL FROM` and `RCPT TO`, as a JSON document.
+- **[`modbus`](docs/MODBUS.md)** reads holding and input registers, coils
+  and discrete inputs over Modbus TCP, as numbers of the type and byte
+  order each read names: `u16` to `f64`, strings and bits.
+- **[`mqtt`](docs/MQTT.md)** subscribes to topics of an MQTT 3.1.1 broker
+  and reads the retained messages and those published within a window.
+  `persistent_session` has the broker queue what a scrape missed, and
+  `keep_connection` keeps the connection between scrapes and answers with
+  the last message of each topic.
+- **[`websocket`](docs/WEBSOCKET.md)** connects to a `ws://` or `wss://`
+  endpoint, optionally sends one message, and reads one message as a body
+  for any decoder, or several as a JSON list.
+- **[`ftp`](docs/FTP.md)** reads one file from an FTP server, over
+  plaintext, explicit TLS (`ftpes://`) or FTPS, as `localfile` and
+  `sshfile` read theirs.
 
 ### Fixed
 

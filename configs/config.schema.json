@@ -2763,6 +2763,16 @@
                 },
                 "type": "array"
               },
+              "auth": {
+                "description": "smtp: the mechanism AUTH logs in with: plain or login, with request.username and request.password_file, or xoauth2, with request.username and request.xoauth2. Left out, plain where the server offers it and login otherwise, or xoauth2 when request.xoauth2 is set. See docs/SMTP.md#logging-in.",
+                "enum": [
+                  "plain",
+                  "login",
+                  "xoauth2",
+                  ""
+                ],
+                "type": "string"
+              },
               "auth_password_file": {
                 "description": "snmp: with security_level authNoPriv or authPriv, the file of the user's authentication password, at least 8 characters, read at each scrape.",
                 "type": [
@@ -2909,6 +2919,14 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "client_id": {
+                "description": "mqtt: the client identifier, at most 256 bytes. Left out, one made for each connection. A broker takes one connection of an identifier at a time, so two exporters with the same one cut each other off.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               },
               "command": {
                 "description": "sshexec, required: the command run on the host, a list of its program, an absolute path or a bare name the account's PATH finds, and its arguments, such as [df, -P, /]; never a line a shell reads. Every word is sent in single quotes, so the host's shell makes each one word whatever it holds. An argument may contain {{param_name}} placeholders, whose values, and defaults, may hold only letters, digits and . _ - : / @ + = , %, may not begin an argument with - and may not have .. as a path component; the program takes none. See docs/SSHEXEC.md.",
@@ -3255,6 +3273,14 @@
                 },
                 "type": "object"
               },
+              "hello": {
+                "description": "smtp: the name given in EHLO. Left out, the exporter's address as an address literal, such as [192.0.2.7].",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "hex": {
                 "description": "snmp: names of get, and table.column of walk, whose values are written as hexadecimal bytes by colons even when they read as text, such as a MAC address of printable bytes.",
                 "items": {
@@ -3267,7 +3293,7 @@
                 "type": "array"
               },
               "idle_timeout": {
-                "description": "sshfile and sshexec: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
+                "description": "sshfile and sshexec, and mqtt with keep_connection: how long a connection nothing uses is kept. Defaults to 5m; 0 keeps it as long as the collector is configured.",
                 "maximum": 0,
                 "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
@@ -3312,6 +3338,20 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "keep_alive": {
+                "description": "mqtt: the keep alive told to the broker, 30s by default, in whole seconds as MQTT counts it: a part of a second is a second, and the most is 65535s. A kept connection is pinged twice in it, and is given up when the broker sent nothing for one and a half.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "keep_connection": {
+                "description": "mqtt: true keeps the connection between scrapes and remembers the last message of each topic that came on it, which a scrape answers with at once; closed after request.idle_timeout without a scrape, 5m by default, and with 0 kept as long as the collector is configured. See docs/MQTT.md#between-scrapes.",
+                "type": "boolean"
               },
               "keepalive_count_max": {
                 "description": "sshfile and sshexec: how many keepalives in a row may go unanswered before the connection is closed and the next scrape makes a new one. At least 1; defaults to 3.",
@@ -4933,6 +4973,14 @@
                 },
                 "type": "object"
               },
+              "mail_from": {
+                "description": "smtp: the sender MAIL FROM names, an address or \u003c\u003e for the null sender; may contain {{param_name}} placeholders. Left out, the session ends after EHLO, or AUTH. Nothing is sent: no DATA follows.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "max_age": {
                 "description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
                 "maximum": 0,
@@ -4945,6 +4993,12 @@
               },
               "max_files": {
                 "description": "localfile, sshfile and s3file with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_messages": {
+                "description": "mqtt: reading ends once this many messages have come, before the window has passed. With keep_connection, the most topics whose last message is kept. Defaults to 1000.",
+                "maximum": 100000,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -5298,7 +5352,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt and ftp, with username: the file of the account's password, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -5326,6 +5380,10 @@
                 "maximum": 1232,
                 "minimum": 8,
                 "type": "integer"
+              },
+              "persistent_session": {
+                "description": "mqtt: true asks the broker to keep the session of client_id between scrapes (clean session 0): what is published at QoS 1 while no scrape is connected is queued by the broker and delivered to the next. Needs client_id and qos: 1; not with keep_connection. See docs/MQTT.md#between-scrapes.",
+                "type": "boolean"
               },
               "ports": {
                 "description": "tcp: with connect_only, the ports of the target's host dialed at once, such as [22, 443, 5432], the target then being the host alone. The document has each port in ports, keyed by its number, as the document of one port is, open, whether every port was, and open_ports, how many were. At most 64, each once. See docs/TCP.md#several-ports-of-a-host.",
@@ -5432,6 +5490,12 @@
                 "pattern": "^$|^direct$|^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://[^/?#@{}]+/?$",
                 "type": "string"
               },
+              "qos": {
+                "description": "mqtt: the QoS the topics are subscribed at, 0, the default, or 1, which a persistent_session needs for the broker to queue what a scrape missed.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": "integer"
+              },
               "query": {
                 "additionalProperties": {
                   "type": [
@@ -5466,6 +5530,104 @@
                   "requests_per_second"
                 ],
                 "type": "object"
+              },
+              "rcpt_to": {
+                "description": "smtp: the recipients RCPT TO asks the server about, one command each, after request.mail_from; each may contain {{param_name}} placeholders. The server's answer to each is in the document, and a refusal fails nothing.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "read": {
+                "description": "modbus, required: the reads of a scrape, one request each, whose values the document holds under each read's name. See docs/MODBUS.md#reads.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "address": {
+                      "description": "The first address read, as the protocol numbers it, from 0: the register a manual calls 40001 is address 0 of the holding table, and 30001 address 0 of the input table.",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "count": {
+                      "description": "How many values are read, 1 when left out; more than 1 makes the value a list. Of a string, how many registers it takes. At most 125 registers or 2000 bits a read.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "name": {
+                      "description": "The name the value is put under in the document: letters, digits and _, not starting with a digit, unique among the collector's reads.",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "order": {
+                      "description": "Where the bytes of a value are in its registers: abcd, the default, big-endian; cdab, the registers swapped; badc, the bytes of each register swapped; dcba, both, little-endian.",
+                      "enum": [
+                        "abcd",
+                        "badc",
+                        "cdab",
+                        "dcba",
+                        ""
+                      ],
+                      "type": "string"
+                    },
+                    "table": {
+                      "description": "The table read: holding, the default (function 3), input (4), coil (1) or discrete (2).",
+                      "enum": [
+                        "holding",
+                        "input",
+                        "coil",
+                        "discrete",
+                        ""
+                      ],
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "What a value of a register table is: u16, the default, i16, u32, i32, u64, i64, f32, f64, or string, two characters a register. Not for coil and discrete, whose values are true or false.",
+                      "enum": [
+                        "u16",
+                        "i16",
+                        "u32",
+                        "i32",
+                        "u64",
+                        "i64",
+                        "f32",
+                        "f64",
+                        "string",
+                        "bool",
+                        ""
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "read_messages": {
+                "description": "websocket: how many messages are read. 1, the default, makes the answer the message itself, and none within read_window fails the scrape; more makes it a JSON list of those that came, each with payload, json when it is JSON, or payload_base64 when binary. See docs/WEBSOCKET.md#the-answer.",
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_window": {
+                "description": "websocket: how long the messages are waited for after the handshake, and send_text; 5s when left out, and ended within the scrape's deadline.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "record_type": {
                 "description": "dns: the record type asked for, in any case and with blanks around it or not: A, the default, AAAA, CNAME, MX, NS, TXT, SRV, SOA, CAA, DNSKEY, RRSIG, the name's DNSSEC signatures and when they expire, or PTR, whose target is an IP address. See docs/DNS.md.",
@@ -5723,6 +5885,14 @@
                   "boolean"
                 ]
               },
+              "send_text": {
+                "description": "websocket: a text message sent once the handshake is made, such as a subscription. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw, as an http body's are. Left out, nothing is sent. See docs/WEBSOCKET.md.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "sentinel": {
                 "additionalProperties": false,
                 "description": "redis: the target is a Sentinel, asked which server is the primary of master now (SENTINEL GET-MASTER-ADDR-BY-NAME); the scrape reads that server, held to the target lists as the target is, and the document's sentinel holds what the Sentinel knows of it (SENTINEL MASTER). See docs/REDIS.md#sentinel.",
@@ -5847,6 +6017,16 @@
                 ],
                 "type": "string"
               },
+              "starttls_mode": {
+                "description": "smtp: auto, the default, begins TLS with STARTTLS where the server offers it; required fails the scrape where it does not; never leaves the session in plaintext, and lets the account's credential be sent so. Not for an smtps:// target, which is TLS from the first byte. See docs/SMTP.md.",
+                "enum": [
+                  "auto",
+                  "required",
+                  "never",
+                  ""
+                ],
+                "type": "string"
+              },
               "statement": {
                 "description": "sql, required unless statement_file names the file of it: the one statement run, written with the driver's own placeholders for args ($1 for postgres, ? for mysql, clickhouse, snowflake and vertica, @p1 for sqlserver, :1 for oracle). Its rows are read by a csv transform by column name, and by jq, yq and python as a list of objects. See docs/SQL.md#the-statement.",
                 "not": {
@@ -5961,6 +6141,17 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "subprotocols": {
+                "description": "websocket: the subprotocols offered in Sec-WebSocket-Protocol, such as [graphql-transport-ws]; one the server chooses that is not among them fails the scrape.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
               "success_exit_codes": {
                 "description": "sshexec: the exit statuses that are a success, such as [0, 1] for grep, whose 1 says it found nothing; any other fails the scrape. Defaults to [0].",
                 "items": {
@@ -6029,6 +6220,19 @@
                 },
                 "type": "object"
               },
+              "topics": {
+                "description": "mqtt, required: the topic filters subscribed to, such as sensors/+/temperature or plant/#. Each may contain {{param_name}} placeholders, a value being one level of a topic: no /, + or #. See docs/MQTT.md.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
               "transport": {
                 "description": "dns: udp, the default, which asks again over TCP for an answer too long for UDP, tcp, which asks over TCP alone, or tls, DNS over TLS (RFC 7858), of request.server alone, port 853 when it names none, verified with request.tls. See docs/DNS.md#dns-over-tls.",
                 "enum": [
@@ -6066,6 +6270,12 @@
                 "description": "tcp: true sends send, or send_hex, as one UDP datagram to host:port and takes the first datagram that comes back as the answer, for a service that answers over UDP, such as a game server's query or memcached's UDP port. Not with tls, starttls, greeting, terminator, answer_bytes or unix_socket. A port no server listens on fails the scrape at once. See docs/TCP.md#over-udp.",
                 "type": "boolean"
               },
+              "unit": {
+                "description": "modbus: the unit id asked, 0 to 255, which tells the devices behind a gateway apart; 1 when left out. A target written modbus://host:502/\u003cunit\u003e names its own. See docs/MODBUS.md.",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
               "unix_socket": {
                 "description": "http and tcp: the absolute path of a Unix domain socket the requests are sent over in place of a connection to the target's host, such as /var/run/docker.sock. http: every request of the collector, its login's, redirects' and pages' included, as curl --unix-socket sends it; the URL's host still names the Host header and the TLS server name, and its path and query are sent as usual; not with proxy_url. tcp: the exchange, the target naming the service in labels alone. No probe parameter, static target or defaults block sets it. See docs/REQUESTS.md#over-a-unix-socket and docs/TCP.md#over-a-unix-socket.",
                 "pattern": "^$|^/",
@@ -6080,7 +6290,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt and ftp, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6115,6 +6325,82 @@
                 "maximum": 1000000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "window": {
+                "description": "mqtt: how long a scrape reads after subscribing: the retained messages come at once, and whatever is published within the window after them. Defaults to 1s, and ends within the scrape's deadline. With keep_connection, how long the scrape that makes the connection waits for the first messages.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "xoauth2": {
+                "additionalProperties": false,
+                "description": "smtp: where the OAuth 2.0 access token of AUTH XOAUTH2 comes from: token_file, a file that holds one, or the refresh token grant, token_url with refresh_token_file, client_id or client_id_file and, for a confidential client, client_secret_file. See docs/SMTP.md#gmail.",
+                "properties": {
+                  "client_id": {
+                    "description": "The OAuth client's id, written; or client_id_file.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_id_file": {
+                    "description": "A file holding the OAuth client's id.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_secret_file": {
+                    "description": "A file holding the OAuth client's secret; left out for a public client.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "refresh_token_file": {
+                    "description": "A file holding the refresh token the endpoint trades for an access token.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "scopes": {
+                    "description": "The scopes asked for, sent as scope; for Gmail, https://mail.google.com/.",
+                    "items": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "token_file": {
+                    "description": "A file holding an access token, read at every scrape; whatever wrote it keeps it current.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "token_url": {
+                    "description": "The token endpoint of the refresh token grant, an https:// URL, such as https://oauth2.googleapis.com/token.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
               }
             },
             "required": [

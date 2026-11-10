@@ -23,14 +23,15 @@ GOVULNCHECK_VERSION := v1.8.0
 .PHONY: test-quick build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-scaffold test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers new-request-type
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
-# but the opt-in ones, of which there are none now.
+# but the opt-in ones: smtp, modbus, mqtt, websocket and ftp.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 # OPT_IN_REQUEST_TYPES adds opt-in request types, comma-separated, which no
 # build carries unless asked: a type made with `make new-request-type
-# OPT_IN=1`. Every type of the tree is in the default build now, so there are
-# none to add. See "Choosing request types at build time" in
-# docs/CONFIGURATION.md.
+# OPT_IN=1`: smtp (docs/SMTP.md), modbus (docs/MODBUS.md), mqtt
+# (docs/MQTT.md), websocket (docs/WEBSOCKET.md) and ftp (docs/FTP.md), as in
+# `make build OPT_IN_REQUEST_TYPES=mqtt,modbus`. See
+# "Choosing request types at build time" in docs/CONFIGURATION.md.
 OPT_IN_REQUEST_TYPES ?=
 # SQL_DRIVERS adds the sql request type's opt-in database drivers,
 # comma-separated, for example `make build SQL_DRIVERS=oracle,snowflake`: any
@@ -80,7 +81,7 @@ run:
 # runs and `make ci` including it.
 build-request-types:
 	go build ./...
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns ftp graphite grpc http icmp kubernetes ldap localfile modbus mqtt ntp redis s3file smtp snmp sql sshexec sshfile tcp tlscert websocket; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go vet -tags $$tags ./... && go build -tags $$tags ./..."; \
 		go vet -tags "$$tags" ./...; \
@@ -113,13 +114,13 @@ test-sql-drivers:
 # the tree; with none, as now, there is nothing the default build does not
 # compile, and the targets say so and stop.
 build-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
+	tags="$$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go vet -tags "$$tags" ./... && go build -tags "$$tags" ./...
 
 # golangci-lint over the build with every opt-in request type, as ci.yml's
 # opt-in lint step runs it: no other lint run compiles them beside the
 # default build's types.
 lint-opt-in-types: lint-version
-	tags="$$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$$tags"
+	tags="$$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$$tags"
 
 # golangci-lint over each request type's build on its own, as ci.yml's
 # request-types matrix runs it, a job for each type: a helper a one-type
@@ -127,7 +128,7 @@ lint-opt-in-types: lint-version
 # tests call, is reported by no lint of a build with every type. A test
 # keeps the loop naming every type in the tree.
 lint-request-types: lint-version
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns ftp graphite grpc http icmp kubernetes ldap localfile modbus mqtt ntp redis s3file smtp snmp sql sshexec sshfile tcp tlscert websocket; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "golangci-lint run --build-tags $$tags"; \
 		golangci-lint run --build-tags "$$tags"; \
@@ -139,7 +140,7 @@ lint-request-types: lint-version
 # which a build of one type's tests reach only through make. Once and
 # without -race.
 test-opt-in-types:
-	tags="$$(sh tools/request-type-tags.sh '' '' )" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
+	tags="$$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && { [ -n "$$tags" ] || { echo "no opt-in request types"; exit 0; }; } && go test -count=1 -tags "$$tags" ./test/repository/ ./internal/fetch/
 
 # Opt-in: the sql request type against real databases, which the
 # PUE_TEST_POSTGRES, PUE_TEST_MYSQL and PUE_TEST_SQLSERVER variables name
@@ -179,7 +180,7 @@ test-scaffold:
 # covers with every type. A test keeps the loop naming every type in the tree
 # and running what ci.yml runs.
 test-request-types:
-	@set -e; for type in dns graphite grpc http icmp kubernetes ldap localfile ntp redis s3file snmp sql sshexec sshfile tcp tlscert; do \
+	@set -e; for type in dns ftp graphite grpc http icmp kubernetes ldap localfile modbus mqtt ntp redis s3file smtp snmp sql sshexec sshfile tcp tlscert websocket; do \
 		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
 		echo "go test -count=1 -tags $$tags ./..."; \
 		go test -count=1 -tags "$$tags" ./...; \
@@ -205,7 +206,7 @@ new-request-type:
 # of the types it leaves out from, is made first, from a build with every
 # request type.
 schemas:
-	tags="$$(sh tools/request-type-tags.sh '' '' )" && go test -count=1 -tags "$$tags" -run '^TestTheRequestKeyCatalogueIsCurrent$$' ./internal/config/ -args -update-request-keys
+	tags="$$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp)" && go test -count=1 -tags "$$tags" -run '^TestTheRequestKeyCatalogueIsCurrent$$' ./internal/config/ -args -update-request-keys
 	go run . --config.schema > configs/config.schema.json
 	go run . --config.collector-file-schema > configs/collector-file.schema.json
 	go run . --static-targets-file-schema > configs/static-targets.schema.json

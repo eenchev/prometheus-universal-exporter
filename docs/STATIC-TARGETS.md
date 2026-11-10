@@ -55,7 +55,7 @@ targets:
 know. A target's `target` is checked when the file loads as its collector's
 type reads it: an `http` or `graphite` target is an absolute URL, and one
 whose port is 0 or past 65535, which no connection can use, is refused
-naming the port, as a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp` or `snmp` target's is. Each target names a collector from the exporter configuration and takes
+naming the port, as a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` or `ftp` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
 `new_connection`, `ip_family` and the `retry` settings — overriding the collector's own request for that target only.
@@ -85,6 +85,11 @@ collector is looked at):
 | [`sshexec`](SSHEXEC.md#static-targets) | the host, required | `timeout`, and its own account and credential files: `username`, `private_key_file`, `passphrase_file` and `password_file`; nothing of the command |
 | [`icmp`](ICMP.md#static-targets) | the host, required | `timeout` |
 | [`snmp`](SNMP.md#static-targets) | the agent, required | `timeout`, `request_timeout` and `retries`, and its own account: `community_file`, or of v3 `username`, `auth_password_file` and `priv_password_file` |
+| [`smtp`](SMTP.md#static-targets), opt-in | the mail server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
+| [`modbus`](MODBUS.md#static-targets), opt-in | the device, with its unit when it is not the collector's, required | `timeout` |
+| [`mqtt`](MQTT.md#static-targets), opt-in | the broker, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
+| [`websocket`](WEBSOCKET.md#static-targets), opt-in | the endpoint's URL, required | `timeout`, and its own `tls` |
+| [`ftp`](FTP.md#static-targets), opt-in | the server, required | `path` and `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

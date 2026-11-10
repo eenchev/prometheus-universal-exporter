@@ -84,6 +84,14 @@ func NewStartTLSStub(t testing.TB, answer func(conn net.Conn, upgrade func() (ne
 	})
 }
 
+// StubTLS is the TLS configuration a TLS stub serves with and the file of
+// its certificate, for a stand-in server that begins TLS on more than one
+// connection, as an FTP server does on its data connections.
+func StubTLS(t testing.TB) (*tls.Config, string) {
+	t.Helper()
+	return stubTLS(t)
+}
+
 // stubTLS is the TLS configuration of a stub, with a certificate for
 // 127.0.0.1 and example.com, and the file of that certificate.
 func stubTLS(t testing.TB) (*tls.Config, string) {

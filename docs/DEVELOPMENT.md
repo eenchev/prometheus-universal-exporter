@@ -11,14 +11,14 @@ make test-quick # while writing a change: go test -short ./..., once, no race de
 make test       # go test ./..., then with -race, twice, in a random order; the scaffold test is left to test-scaffold
 make test-scaffold  # TestANewRequestTypeIsWiredByTheScaffold alone: make new-request-type on a copy of the tree
 make vet
-make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES adds opt-in types, none now
+make build      # bin/prometheus-universal-exporter and bin/pue-allocator, every request type; REQUEST_TYPES=http builds only those listed, OPT_IN_REQUEST_TYPES=mqtt adds opt-in types
 make run EXAMPLE=open-meteo  # make build, then bin/prometheus-universal-exporter with the example's
                 #   configuration and static targets on 127.0.0.1:8080; PORT=, HOST= and ARGS= change
                 #   that, any opt-in types the example needs are added, and EXAMPLE= alone lists the examples
 make build-request-types  # go build ./..., then go vet and go build for each request type on its own
 make test-request-types  # go test once for each request type built on its own
 make lint-request-types  # golangci-lint for each request type built on its own
-make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type; none now, so they say so
+make build-opt-in-types test-opt-in-types lint-opt-in-types  # vet, build, test and lint the build with every opt-in request type
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
 make new-request-type NAME=<name> [OPT_IN=1] [GO_NAME=<GoName>]  # a new request type's files and wiring; not part of make ci
@@ -38,7 +38,7 @@ directory, such as `open-meteo`, whose configuration is its `config.yaml`
 beside an optional static target file and any collector files its
 `collector_files` names, or `examples/config.<name>.<format>-test.yaml`,
 named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
-files and the opt-in request types an example needs, none now (a `type:
+files and the opt-in request types an example needs (a `type:
 <name>` line of an opt-in type's), from the tree. Before it runs the binary it prints the
 landing page's URL, the status page's, which every example has (its recent
 probes fill as soon as anything probes), and the first probe URL that the
@@ -113,7 +113,7 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, the rendezvous hash (`Score`) the allocator's weighted placement ranks the members by, and the bounds of a replica's capacity. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, each in its own build-tagged `requesttype_<name>.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket.go` and `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, and the opt-in `smtp`, `modbus`, `mqtt`, `websocket` and `ftp`, each in its own build-tagged `requesttype_<name>.go`, what the five opt-in types share in `nettypes.go`, `nettls.go` and `netpassword.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket.go` and `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
@@ -1228,7 +1228,7 @@ make schemas
 ```
 
 The committed files are the schemas of a build with every request type but
-the opt-in ones, of which there are none now, and the sql type's
+the opt-in ones and the sql type's
 default drivers alone, which is what `make schemas` runs, and
 the tests that compare them with what the code generates run in that build
 alone: the schema a single-type binary prints lists the types it carries, and

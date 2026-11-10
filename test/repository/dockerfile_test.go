@@ -181,7 +181,7 @@ func TestRequestTypeTagsScript(t *testing.T) {
 	// A third list adds the opt-in request types, which no build carries
 	// unless asked: to the default build's types, or to those REQUEST_TYPES
 	// lists, which may name one too. A type of every build, and one that
-	// does not exist, are refused. The tree has no opt-in type now, so the
+	// does not exist, are refused. The
 	// script runs in a tree of its own with two, zzopt and zzother, beside
 	// http and sql of every build and the snowflake and oracle drivers.
 	fixture := t.TempDir()

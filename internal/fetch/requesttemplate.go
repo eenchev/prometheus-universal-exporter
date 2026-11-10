@@ -272,6 +272,11 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 			return "", err
 		}
 	}
+	if rule := templateFilledRules[f.kind]; rule != nil {
+		if err := rule(f.where, f.text, placeholders, b.String()); err != nil {
+			return "", err
+		}
+	}
 	return b.String(), nil
 }
 
@@ -292,6 +297,12 @@ var templateLeadRules = map[string]func(where, name, written string) error{}
 // what they made of it given: a tcp collector's send may not come out
 // empty.
 var templateRenderedRules = map[string]func(where string, placeholders []pathPlaceholder, rendered string) error{}
+
+// templateFilledRules are the rules a request type registers, by kind, for
+// a field once filled in that are read against the field as it is written:
+// the values of an sshexec argument may not together make a .. the
+// configuration did not write.
+var templateFilledRules = map[string]func(where, text string, placeholders []pathPlaceholder, filled string) error{}
 
 // write encodes a value for its place.
 func (f templateField) write(p pathPlaceholder, value string) (string, error) {

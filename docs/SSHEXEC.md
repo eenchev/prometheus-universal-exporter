@@ -161,7 +161,9 @@ configuration loads:
   begins with `../`, ends with `/..` or holds `/../` — which would name a
   file outside the directory the argument is written under, as
   `/var/log/app/{{param_file}}` is. A `..` inside a name, `a..b`, is no
-  component.
+  component. Nor may the values of an argument make one together, or
+  with what the configuration wrote beside them: `.` and `.` in
+  `/srv/{{param_a}}{{param_b}}`, or `.` in `/srv/.{{param_a}}`.
 
 ```text
 request.command[2]: the value of param_file begins with -, and begins the argument, which the program would read as an option; a value that begins an argument of request.command may not begin with -
@@ -409,7 +411,9 @@ The command's stdout is read against `max_response_bytes`, or
 `limits.max_response_bytes`, 10 MiB when neither is set, as it arrives: a
 command that writes past it fails the scrape when it does, as a limit
 exceeded, which counts in `http_exporter_series_limit_exceeded_total`, and
-is sent `KILL` and its session closed rather than read to its end. Of
+is sent `KILL` and its session closed rather than read to its end; where
+the host does not end it, a forced command's below, its connection is
+retired as at a deadline. Of
 stderr the first 2 KiB are kept and the rest read and dropped, so a command
 that writes much there is not held up.
 

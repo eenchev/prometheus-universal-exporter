@@ -82,6 +82,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- `sshexec`: a probe could make `..` a path component of an argument out of
+  values that are none alone, `param_a=.` and `param_b=.` in
+  `/srv/{{param_a}}{{param_b}}`, or `.` beside a dot the configuration
+  wrote, and so name a file outside the directory the argument is written
+  under. Such a probe is answered `400`, as one whose value is `..` is
+  ([The command](docs/SSHEXEC.md#the-command)).
+- `sshexec`: a command that wrote past the response limit under a forced
+  command, which OpenSSH does not end, left its session open on the kept
+  connection, one more at every scrape, until the host refused another
+  session and every scrape of the host failed. Its connection is now
+  retired, as at a deadline ([Limits](docs/SSHEXEC.md#limits)).
+
 - A `json` or `steps` login a server refused by answering with what it was
   sent — a sign-in form with its fields filled in again, a body echoed —
   had the password in the exporter's log, and with `--web.debug=full` on

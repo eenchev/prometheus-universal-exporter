@@ -79,3 +79,43 @@ func TestLabelsFromThatIsNoObjectOfValuesFailsItsItem(t *testing.T) {
 		}
 	}
 }
+
+// Without items a rule's labels_from is read of the whole document, once,
+// and its keys are labels of every series of the rule, under the rule's
+// own labels, which are paired with the series as ever. What it reads that
+// is no object of single values fails the rule as a whole, under its
+// error_mode, before any series is made.
+func TestLabelsFromWithoutItemsLabelsEverySeriesOfTheRule(t *testing.T) {
+	const body = `{"meta":{"labels":{"app":"web","tier":"front","none":null,"name":"from the object"}},"values":[1,2],"names":["a","b"]}`
+	rule := model.MetricRule{Name: "v", Expression: ".values[]", LabelsFrom: ".meta.labels", Labels: []model.LabelRule{{Name: "name", Expression: ".names[]"}}}
+	c := model.Collector{Name: "c", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "yq"}, Metrics: []model.MetricRule{rule, {Name: "up", Expression: "1"}}}
+	set, failures, err := transformWith(context.Background(), t, c, "application/json", body)
+	if err != nil || len(failures) != 0 || len(set.Metrics) != 3 {
+		t.Fatalf("series %+v, failures %+v, err %v", set, failures, err)
+	}
+	for i, want := range []map[string]string{{"app": "web", "tier": "front", "name": "a"}, {"app": "web", "tier": "front", "name": "b"}, {}} {
+		if !reflect.DeepEqual(set.Metrics[i].Labels, want) {
+			t.Errorf("series %d has the labels %v, want %v", i, set.Metrics[i].Labels, want)
+		}
+	}
+	for name, tc := range map[string]struct{ from, want string }{
+		"no object":         {".values", `metric "v" labels_from gave an array, and labels are read from an object of names and values`},
+		"a value an object": {".", `metric "v" labels_from key "meta" is an object, not a single value; select one of its fields`},
+		"two objects":       {".meta.labels, .meta.labels", `metric "v" labels_from expression: expression ".meta.labels, .meta.labels" produced 2 values for one item; it must produce at most one`},
+	} {
+		c.Metrics[0].LabelsFrom, c.Metrics[0].ErrorMode = tc.from, model.ErrorModeLog
+		set, failures, err := transformWith(context.Background(), t, c, "application/json", body)
+		if err != nil || len(failures) != 1 || !strings.Contains(failures[0].First.Error(), tc.want) || len(set.Metrics) != 1 || set.Metrics[0].Name != "up" {
+			t.Errorf("%s under log: series %+v, failures %+v, err %v; want %q and the other rule's series", name, set, failures, err, tc.want)
+		}
+		c.Metrics[0].ErrorMode = model.ErrorModeFail
+		if _, _, err := transformWith(context.Background(), t, c, "application/json", body); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s under fail: %v, want %q", name, err, tc.want)
+		}
+	}
+	// Nothing to read is no label, as for an item.
+	c.Metrics[0].LabelsFrom, c.Metrics[0].ErrorMode = ".absent", ""
+	if set, _, err := transformWith(context.Background(), t, c, "application/json", body); err != nil || !reflect.DeepEqual(set.Metrics[0].Labels, map[string]string{"name": "a"}) {
+		t.Errorf("an object that is not there: %+v, %v", set, err)
+	}
+}

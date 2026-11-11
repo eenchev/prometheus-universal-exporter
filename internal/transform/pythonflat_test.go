@@ -411,7 +411,7 @@ func TestMetricNamesAnArgumentAsItDidUnlessItIsAListOrDict(t *testing.T) {
 		return "given = " + literal + "\nmade = {\"name\": \"m\", \"value\": 1}\nmade[\"" + argument + "\"] = given\nmetric(**made)\n"
 	}
 	for _, literal := range []string{
-		`5`, `-1.5`, `None`, `True`, `"text"`, `""`, `" 12 "`, `"caf" + chr(233)`, `"x" * 300`, `b"bytes"`, `object`, `float("nan")`, `float("inf")`, `10**30`, `1e19`, `range(3)`, `__import__("decimal").Decimal("1.5")`,
+		`5`, `-1.5`, `None`, `True`, `"text"`, `""`, `" 12 "`, `"caf" + chr(233)`, `"x" * 300`, `b"bytes"`, `object`, `float("nan")`, `float("inf")`, `10**30`, `1e19`, `range(3)`,
 		`type("Odd", (), {"__repr__": lambda self: "odd"})()`, `type("Text", (str,), {})("sub")`, `type("Count", (int,), {"__repr__": lambda self: "count"})(3)`, `bytearray(b"ab")`,
 	} {
 		for _, argument := range arguments {

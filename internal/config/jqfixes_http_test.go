@@ -60,15 +60,14 @@ func TestTheExpressionMemoryLimitHasADefaultAndALeast(t *testing.T) {
 	}
 }
 
-// labels_from is a key of a jq or yq rule that has items, and its
+// labels_from is a key of a jq or yq rule, with items or without, and its
 // expression is compiled when the configuration loads; two rules that
 // differ in it alone are two rules.
 func TestLabelsFromIsCheckedWhenTheConfigurationLoads(t *testing.T) {
-	if _, err := loadChecked(t, "", "", "        items: .list[]\n        labels_from: .labels\n      - name: m\n        expression: .x\n        items: .list[]\n        labels_from: .annotations\n"); err != nil {
-		t.Errorf("a rule with items and labels_from: %v", err)
+	if _, err := loadChecked(t, "", "", "        items: .list[]\n        labels_from: .labels\n      - name: m\n        expression: .x\n        items: .list[]\n        labels_from: .annotations\n      - name: m\n        expression: .x\n        labels_from: .labels\n"); err != nil {
+		t.Errorf("rules with labels_from, with items and without: %v", err)
 	}
 	for name, tc := range map[string]struct{ metric, want string }{
-		"without items":               {"        labels_from: .labels\n", `collector "a" metric "m" sets labels_from, which reads an object of each of the rule's items, and has no items; set items, to . for the whole document`},
 		"an expression that is none":  {"        items: .list[]\n        labels_from: '.labels |'\n", `collector "a" metric "m" labels_from ".labels |": `},
 		"a function there is none of": {"        items: .list[]\n        labels_from: nosuch\n", `collector "a" metric "m" labels_from "nosuch": function not defined: nosuch/0`},
 	} {

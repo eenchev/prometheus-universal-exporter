@@ -4,6 +4,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/itchyny/gojq"
@@ -16,15 +17,15 @@ var JQAdded = []string{"debug", "stderr", "input_line_number", "input_filename",
 
 // jqAddedFunctions registers JQAdded with a jq program, and the functions
 // the added formats are rewritten into. debug and stderr hand their input on
-// and write nothing: an exporter has no terminal to write a message to, and
-// what a target answered is not for its log. A program has one input, which
+// and, in a program every scrape runs, write nothing: an exporter has no
+// terminal to write a message to, and what a target answered is not for its
+// log. A debug probe's programs are compiled with functions that tell its
+// report (CompileJQTold). A program has one input, which
 // is of no file, so its line number is 0 and its file's name null, as jq's
 // are before anything was read. A whole number keeps every digit
 // (model.Normalize), which is what have_literal_numbers asks after, and
 // there are no decimal numbers.
 var jqAddedFunctions = []gojq.CompilerOption{
-	gojq.WithFunction("debug", 0, 0, func(v any, _ []any) any { return v }),
-	gojq.WithFunction("stderr", 0, 0, func(v any, _ []any) any { return v }),
 	gojq.WithFunction("input_line_number", 0, 0, func(any, []any) any { return 0 }),
 	gojq.WithFunction("input_filename", 0, 0, func(any, []any) any { return nil }),
 	gojq.WithFunction("have_literal_numbers", 0, 0, func(any, []any) any { return true }),
@@ -48,6 +49,31 @@ var jqAddedFunctions = []gojq.CompilerOption{
 		}
 		return strings.ToValidUTF8(string(decoded), "�")
 	}),
+}
+
+// jqQuiet are debug and stderr as every scrape's programs have them.
+var jqQuiet = jqTelling(func(string, any) {})
+
+// jqTelling are debug and stderr as functions that hand their input on and
+// tell it to told, with the function's name.
+func jqTelling(told func(function string, value any)) []gojq.CompilerOption {
+	return []gojq.CompilerOption{
+		gojq.WithFunction("debug", 0, 0, func(v any, _ []any) any { told("debug", v); return v }),
+		gojq.WithFunction("stderr", 0, 0, func(v any, _ []any) any { told("stderr", v); return v }),
+	}
+}
+
+// CompileJQTold compiles expression as CompileJQ does, but for its debug
+// and stderr, which tell told each value they are given: debug its input,
+// debug(message) the message, stderr its input. The program is not kept: it
+// is for a debug probe, whose report shows what was told.
+func CompileJQTold(expression string, told func(function string, value any)) (*gojq.Code, error) {
+	query, err := gojq.Parse(expression)
+	if err != nil {
+		return nil, err
+	}
+	addJQFormats(expression, query)
+	return gojq.Compile(query, slices.Concat(jqSharedOptions, jqTelling(told))...)
 }
 
 // jqFormats are the formats of jq that gojq does not know, each with the

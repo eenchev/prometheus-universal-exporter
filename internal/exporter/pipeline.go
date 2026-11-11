@@ -283,8 +283,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// a trip that succeeds is kept as the last success, when it is not a
 	// debug run, which keeps nothing.
 	var clock fetch.ScrapeClock
-	if j.lastSuccess != "" || requester.Clock.Any {
+	if j.lastSuccess != "" || requester.Clock.Any || c.TransformClock.Any {
 		clock = fetch.NewScrapeClock(s.lastSuccesses.get(j.lastSuccess))
+	}
+	// The transform reads the same clock, as $scrape_time and
+	// $last_success, or scrape_time and last_success in a script.
+	if c.TransformClock.Any {
+		ctx = transform.WithScrapeClock(ctx, clock.Now, clock.Since)
 	}
 	if j.pasted != nil {
 		response, err = pastedResponse(c, j.pasted)

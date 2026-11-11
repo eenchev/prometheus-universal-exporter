@@ -41,6 +41,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   thirty digits, now keeps every digit, as it does in JSON, where it was
   rounded to a float: a label made of one changes from
   `1.2345678901234568e+29` to the digits the target wrote.
+- `metric(...)` now fails the script for a `timestamp` that reads as
+  seconds, such as `time.time()`, saying to multiply it by 1000: it was
+  exported as a moment of January 1970. A timestamp is milliseconds, or a
+  `datetime` with a time zone.
 
 ### New
 
@@ -130,6 +134,32 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   loads as it is: `debug`, `stderr`, `input_line_number`, `input_filename`,
   `toarray`, `have_literal_numbers`, `have_decnum`, and the formats
   `@base32` and `@base32d`.
+- **[`imap`](docs/IMAP.md)**, an opt-in request type, logs in to a mail
+  account and counts the messages, unread messages and size of its
+  mailboxes, by name or by pattern, and its quota, with no mailbox opened:
+  a mailbox's numbers with a name and a password, and no API or OAuth
+  client.
+- A Python script reads the probe's parameters as
+  [`params`](docs/REQUESTS.md#in-expressions), in a `python` transform and
+  in a `pre_script`, as a jq expression reads `$params`.
+- A script and a jq expression read when the scrape began and when the
+  last one that succeeded did, as
+  [`scrape_time` and `last_success`](docs/PYTHON.md#what-a-script-has) and
+  `$scrape_time` and `$last_success`: the seconds since the last good
+  scrape, or the age of what the target reports, without a clock of the
+  script's own.
+- `metric(...)` takes a `Decimal`, a `Fraction` or a numpy number as a
+  value, a `datetime` with a time zone as a `timestamp`, and `bytes` as a
+  label value.
+- [`labels_from`](docs/CONFIGURATION.md#labels-from-an-object) works on a
+  rule without `items` too, where its object's keys are labels of every
+  series of the rule.
+- jq's `debug` and `stderr` show their values in a
+  [debug probe's report](docs/CONFIGURATION.md#programs-written-for-jq)
+  and on the debug page, with the rule and the expression, so what an
+  expression makes part of the way can be seen without rewriting the rule.
+- The configuration guide says which unquoted YAML scalars read as numbers
+  (`017` as 15, `1.10` as 1.1) and what to do about a label made of one.
 
 ### Fixed
 
@@ -228,6 +258,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   kernel ended the exporter, and every collector's scrapes with it: the
   probe's time bounded how long it ran, and nothing how much it held. It is
   now stopped at [`limits.max_expression_memory`](docs/CONFIGURATION.md#memory).
+- A help text a Python script gave only a later series of a metric was
+  left out, since a metric's help is written with its first series. Every
+  series of the name now has it.
+- A set, `bytes`, a date or a `Decimal` a script left in `data` or in
+  `metrics` failed the scrape with the frames of Python's `json` module,
+  which named nothing of the script's. It now fails in one line that names
+  the kind and what to make of it.
+- `metric(...)` given a whole number too large for a float failed with the
+  interpreter's `OverflowError`; it now names the metric.
 
 ## chart 2.1.0
 

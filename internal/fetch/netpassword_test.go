@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_mqtt || request_type_ftp
+//go:build request_type_smtp || request_type_mqtt || request_type_ftp || request_type_imap
 
 package fetch
 

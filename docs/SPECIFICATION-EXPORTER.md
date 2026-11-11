@@ -1257,6 +1257,7 @@ as it is to the rest of this specification:
 - [`graphite`](SPECIFICATION-GRAPHITE.md)
 - [`grpc`](SPECIFICATION-GRPC.md)
 - [`icmp`](SPECIFICATION-ICMP.md)
+- [`imap`](SPECIFICATION-IMAP.md)
 - [`kubernetes`](SPECIFICATION-KUBERNETES.md)
 - [`ldap`](SPECIFICATION-LDAP.md)
 - [`localfile`](SPECIFICATION-LOCALFILE.md)
@@ -3138,6 +3139,18 @@ collector
 
 Scripts can operate directly on the raw response or decoded structures.
 
+A script, a transform's and a pre-script, MUST also have `scrape_time`, the
+time its scrape began in seconds since the epoch, as a float, the moment
+the request's clock placeholders are filled from, and `last_success`, that
+of the last scrape of the same collector, target and parameters that
+succeeded, `None` while there is none; every jq program MUST have the two as
+`$scrape_time` and `$last_success`, `null` for `None`. The exporter MUST keep
+the last success for the targets of a collector whose scripts or rule
+expressions name it, as for a clock placeholder that reads it, and MUST NOT
+for any other; a scrape that fails, one answered from the cache and a debug
+probe MUST keep none. Without a clock, as in a transform run outside a
+scrape, both MUST be `None` and `null`.
+
 `target` MUST be the target as given, credentials included; the
 documentation MUST say so, and that a script printing it or labelling with it
 exposes them.
@@ -3197,9 +3210,20 @@ fail(...)
 
 The Python API MUST ultimately produce the same internal `MetricSet` as every other decoder.
 `metric(...)` MUST take a value as the other transforms do — a number, a
-numeric string, a boolean as 1 or 0 — and refuse anything else naming the
-metric; a timestamp MUST be milliseconds, a float cut to whole milliseconds,
-and a non-finite one, or one beyond an int64 of milliseconds, refused. A
+numeric string, a boolean as 1 or 0 — and a number of another kind that
+gives its float, as a `Decimal` or a `Fraction` does, and refuse anything
+else naming the metric, a whole number too large for a float among it, as a
+`ValueError` of the script's line; a timestamp MUST be milliseconds, a float
+cut to whole milliseconds, and a non-finite one, or one beyond an int64 of
+milliseconds, refused. A timestamp given to `metric(...)` as a `datetime`
+with a time zone MUST be its moment, one without a zone MUST be refused,
+and a number from 10^9 to under 10^11, which reads as seconds, MUST be
+refused saying so. A label value of `bytes` MUST be their text as UTF-8,
+what is not UTF-8 replaced. A series a script gave no help MUST have the
+first help the script gave a series of its name. What a script leaves in
+`data` or in `metrics` that JSON has no form for MUST fail the script in one
+line naming its kind, without the frames of the worker's own modules, and
+the worker MUST serve the next script. A
 metric a script appends to `metrics` itself MUST be read the same way: its
 value and timestamp as `metric(...)` reads them, `None` refused, its label
 values written as label text with `None` leaving the label off, and a missing
@@ -3947,8 +3971,14 @@ the error is gojq's.
 
 Every jq program MUST have the names of jq that gojq leaves to whoever embeds
 it or does not have, so that a program written for jq loads: `debug`,
-`debug(message)` and `stderr`, which MUST give their input and MUST NOT
-write it anywhere; `input_line_number`, 0; `input_filename`, `null`;
+`debug(message)` and `stderr`, which MUST give their input and, in a
+scrape, MUST NOT write it anywhere, while in a debug probe and a run of the
+debug page each value they are given — `debug(message)`'s being the message
+— MUST be a line of the report's log, with the function, the rule, the
+expression and the value as JSON, a value cut after 1024 bytes and a
+transform's lines after its first hundred, which one line MUST say; the
+series MUST be what they are without the lines, and a program that calls
+neither MUST be the one a scrape runs; `input_line_number`, 0; `input_filename`, `null`;
 `toarray`, an array as it is and anything else as an array of it;
 `have_literal_numbers`, `true`, and `have_decnum`, `false`; and the formats
 `@base32` and `@base32d`, alone and before a string, whose interpolated
@@ -4084,7 +4114,12 @@ MUST count as used by a collector (§ 42.10a) when an expression of its rules �
 name, as `$params.<name>`, `$params."<name>"` or `$params["<name>"]`, and
 every parameter MUST when one reads `$params` any other way; which, MUST be
 found when the configuration loads. A parameter read by name MUST be listed
-with those the collector takes, and never as required.
+with those the collector takes, and never as required. A Python script, of a
+`python` transform and of a `pre_script`, MUST have the same parameters as
+`params`, a dict of text by name, empty when there is none; a parameter MUST
+count as used when the script reads it as `params["<name>"]` or
+`params.get("<name>")`, in either quote, and every parameter when the script
+holds the word `params` any other way.
 
 Every jq program MUST also have `$http_version` and `$remote_ip` bound. For
 the request `$timings` describes, `$http_version` MUST be the version of
@@ -4716,8 +4751,11 @@ every series of that name, as a label's `value_map` maps it: those of the
 other rules of the name, and those a `prometheus` rule without a name keeps
 under it.
 
-A jq or yq rule with `items` MAY set `labels_from`, an expression evaluated
-once for each item, as a label's is, that gives an object: the item's series
+A jq or yq rule MAY set `labels_from`, an expression that gives an object.
+With `items` it MUST be evaluated once for each item, as a label's is, and
+without `items` once, against the whole document, its labels then being
+those of every series of the rule and its failure the rule's as a whole,
+before any series is made. The series
 MUST have a label for each key, named by the key, with the key's value
 written as a label expression's value is. A key whose value is `null` or
 empty text, and an expression that gives `null` or nothing, MUST leave no
@@ -7307,7 +7345,7 @@ checked:
   label that is one attribute read by its name (§ 11); and a prometheus
   transform's patterns, `include` and `exclude`.
 - `labels_from` MUST be refused on a rule of any transform but `jq` and
-  `yq`, and on one without `items`, and its expression MUST compile.
+  `yq`, and its expression MUST compile.
 - A rule MUST name each of its labels once, under every transform: a second
   label of a name, with a `value` or an `expression`, MUST be refused naming
   the rule and the label, since a series has one label of a name and the
@@ -8168,7 +8206,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` or `ftp` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp` or `imap` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9480,7 +9518,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

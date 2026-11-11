@@ -32,6 +32,13 @@ type pythonInput struct {
 	Response   pythonResponse `json:"response"`
 	Target     string         `json:"target"`
 	Collector  string         `json:"collector"`
+	// Params are the probe's parameters by name; left out when there is
+	// none.
+	Params map[string]string `json:"params,omitempty"`
+	// ScrapeTime and LastSuccess are the scrape's clock in seconds since
+	// the epoch, each left out when there is none.
+	ScrapeTime  any `json:"scrape_time,omitempty"`
+	LastSuccess any `json:"last_success,omitempty"`
 }
 
 type pythonResponse struct {
@@ -299,7 +306,11 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 	if err != nil {
 		return nil, err
 	}
-	return pythonSeries(ctx, out)
+	set, err := pythonSeries(ctx, out)
+	if err == nil {
+		shareHelp(set.Metrics)
+	}
+	return set, err
 }
 
 // pythonSeries is the metrics of a python transform's answer as series,
@@ -339,6 +350,36 @@ func pythonSeries(ctx context.Context, out *pythonOutput) (*model.MetricSet, err
 		set.Metrics = append(set.Metrics, metric)
 	}
 	return set, nil
+}
+
+// shareHelp gives each series a script made without a help text the first
+// one a series of its name was made with. A metric's help is its family's,
+// written once, with the first of its series: a script that said it for a
+// later series alone, as one does that makes the first in a branch of its
+// own, said it for the metric, and it was left out without a word.
+func shareHelp(series []model.Metric) {
+	missing, said := false, false
+	for i := range series {
+		if series[i].Help == "" {
+			missing = true
+		} else {
+			said = true
+		}
+	}
+	if !missing || !said {
+		return
+	}
+	helps := map[string]string{}
+	for i := range series {
+		if _, known := helps[series[i].Name]; !known && series[i].Help != "" {
+			helps[series[i].Name] = series[i].Help
+		}
+	}
+	for i := range series {
+		if series[i].Help == "" {
+			series[i].Help = helps[series[i].Name]
+		}
+	}
 }
 
 // prometheusFromPython reads back what a pre-script of a prometheus transform
@@ -570,7 +611,11 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	// The request is written into a buffer kept for the next one, which is
 	// free again once the worker has been handed it.
 	encoder := pythonEncoders.Get().(*pythonEncoder)
+	encoder.params = pythonParams(ctx)
+	encoder.clock, _ = ctx.Value(scrapeClockKey{}).(scrapeClock)
 	payload, err := encoder.request(mode, script, d, r, c)
+	// The encoder is kept for the next request, of another probe.
+	encoder.params = nil
 	if errors.Is(err, errPythonRequestTooLarge) {
 		return nil, model.MarkError(fmt.Errorf("python %s did not run: %w", what, err), model.ErrScriptFailed)
 	}

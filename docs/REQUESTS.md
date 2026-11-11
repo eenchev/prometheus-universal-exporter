@@ -459,13 +459,12 @@ One parameter may fill the request and the labels alike, as `param_tenant`
 does here, or a label alone, in a collector whose request has no placeholder
 at all. It works with every request type — `http`, `grpc`, `graphite`,
 `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`,
-`s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, and the opt-in `smtp`, `modbus`, `mqtt`, `websocket` and `ftp` — and under every transform: `transform.labels` are applied
+`s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, and the opt-in `smtp`, `modbus`, `mqtt`, `websocket`, `ftp` and `imap` — and under every transform: `transform.labels` are applied
 after every transform, a `python` one included, and a rule's `value` is
 filled wherever a rule's label has one, which is every transform but
 `python`, whose rules [set no label
-value](CONFIGURATION.md#long-label-values). A `python` script is not given
-the parameters; what it labels its series with is its own.
-
+value](CONFIGURATION.md#long-label-values). A `python` script reads the
+parameters itself, as [`params`](#in-expressions).
 <!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or
@@ -623,6 +622,22 @@ reads `$params` otherwise, as a whole or by a name it computes, takes any
 parameter. A [static target's `params`](STATIC-TARGETS.md) are read the same
 way, and probes that differ in a parameter are cached apart. `$params` is
 `null` in the expressions of pagination and logins.
+
+A Python script, a `python` transform's or a `pre_script`, reads the same
+parameters as `params`, a dict of each by its name:
+
+```yaml
+transform:
+  type: python
+  script: |
+    for queue in data["queues"]:
+        if params.get("queue") in (None, queue["name"]):
+            metric(name="queue_jobs", value=queue["jobs"], labels={"queue": queue["name"]})
+```
+
+A collector takes the parameters its script reads as `params["queue"]` or
+`params.get("queue")`, and any parameter when the script uses `params`
+another way, as a whole or with a name it computes.
 
 ### Dates and times
 
@@ -1023,7 +1038,7 @@ request:
     - "::1"
 ```
 
-Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `icmp`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` and `ftp` collector, and a
+Every `http`, `graphite`, `grpc`, `sshfile`, `sql`, `tlscert`, `ntp`, `icmp`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp` and `imap` collector, and a
 `dns` collector [asking for PTR records](DNS.md#target-lists) of an address,
 refuses the cloud metadata
 service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,

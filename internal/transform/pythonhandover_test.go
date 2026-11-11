@@ -177,11 +177,11 @@ var handoverScripts = []string{
 	`
 for i, item in enumerate([1, 2.5, True, False, "12", " 1.5 ", "1e3", float("nan"), float("inf"), float("-inf"), 10**30, -0.0, 5e-324, 1.7976931348623157e308]):
     metric("value", value=item, labels={"i": i})`,
-	`metric("big", value=10**400)`, `metric("text", value="abc")`, `metric("none", value=None)`,
-	`import decimal
-metric("decimal", value=decimal.Decimal("1.5"))`,
+	// A whole number too large for a float and a Decimal are no longer
+	// what they were: pythonhandy_test.go has them.
+	`metric("text", value="abc")`, `metric("none", value=None)`,
 	`
-for i, v in enumerate(["text", 5, 0.5, 1e21, 1e-7, 1234567.0, -0.0, float("nan"), float("inf"), float("-inf"), True, False, None, 10**30, b"bytes", object, 1e20, 0.1 + 0.2]):
+for i, v in enumerate(["text", 5, 0.5, 1e21, 1e-7, 1234567.0, -0.0, float("nan"), float("inf"), float("-inf"), True, False, None, 10**30, object, 1e20, 0.1 + 0.2]):
     metric("label", value=i, labels={"v": v, "i": str(i)})`,
 	`metric("label", value=1, labels={"l": [1, 2]})`, `metric("label", value=1, labels={"d": {"a": 1}})`, `metric("label", value=1, labels={"t": (1, 2)})`, `metric("label", value=1, labels={"s": {1}})`,
 	`metric("keys", value=1, labels={1: "int", None: "none", (1, 2): "tuple", 1.5: "float", True: "bool", "1": "text"})`, `metric("labels", value=1, labels=[("a", "b")])`, `metric("labels", value=1, labels="a=b")`,
@@ -207,11 +207,11 @@ for i, at in enumerate([None, 17, 17.9, "17", " 18 ", True, -5, 0, 1e15, 2**62])
 	`metrics.append({"name": 5, "value": 1})`, `metrics.append({"name": 5.0, "value": 1})`, `metrics.append({"name": ["a"], "value": 1})`, `metrics.append({"name": "a", "value": 1, "labels": [1]})`, `metrics.append({"name": "a", "value": 1, "labels": {"l": [1]}})`,
 	`metrics.append({"name": "a", "value": 1, "type": 5})`, `metrics.append({"name": "a", "value": 1, "help": {}})`, `metrics.append({"name": "a", "value": 1, "timestamp": "x"})`, `metrics.append({"name": "a", "value": 1, "timestamp": 10**30})`,
 	`metrics.append({"name": "a", "value": 1, "extra": {"deep": [1, (2, 3), {"x": None}], "nan": float("nan")}})`, `metrics.append({"name": "a", "value": 1, 1: "int key", None: "none key", True: "bool key", 1.5: "float key"})`,
-	`metrics.append({"name": "a", "value": 1, (1, 2): "tuple key"})`, `metrics.append({"name": "a", "value": 1, float("nan"): "nan key"})`, `metrics.append({"name": "a", "value": 1, "junk": {1, 2}})`, `metrics.append({"name": "a", "value": 1, "junk": b"bytes"})`,
-	`metrics.append({"name": "a", "value": 1, "junk": object()})`, `metrics.append(5)`, `metrics.append("text")`, `metrics.append(None)`, `metrics.append([1, 2])`, `metrics.append(("name", 1))`, `metrics.append(True)`, `metrics.append(1.5)`, `metrics.append(float("nan"))`,
+	`metrics.append({"name": "a", "value": 1, (1, 2): "tuple key"})`, `metrics.append({"name": "a", "value": 1, float("nan"): "nan key"})`,
+	`metrics.append(5)`, `metrics.append("text")`, `metrics.append(None)`, `metrics.append([1, 2])`, `metrics.append(("name", 1))`, `metrics.append(True)`, `metrics.append(1.5)`, `metrics.append(float("nan"))`,
 	`metrics.append({"name": "ok", "value": 1}); metrics.append(5); metrics.append({"name": 5})`, `metrics.extend([{"name": "a", "value": i} for i in range(5)])`,
 	// Changed after metric(...) made them.
-	`metric("a", value=1); metrics[0]["value"] = float("nan")`, `metric("a", value=1, labels={"k": "v"}); metrics[0]["labels"]["x"] = [1]`, `metric("a", value=1); metrics[0]["junk"] = {"s": {1}}`, `metric("a", value=1); del metrics[0]["name"]`,
+	`metric("a", value=1); metrics[0]["value"] = float("nan")`, `metric("a", value=1, labels={"k": "v"}); metrics[0]["labels"]["x"] = [1]`, `metric("a", value=1); del metrics[0]["name"]`,
 	`metric("a", value=1); metric("b", value=2); metrics.reverse()`, `metric("a", value=1); metrics.clear()`, `metric("a", value=1); metrics[0]["labels"] = None`, `metric("a", value=1); metrics[0]["value"] = "2.5"`, `metric("a", value=1); metrics[0] = metrics[0]["labels"]`,
 	`metric("a", value=1); metrics.append(metrics[0])`,
 	// Containers and numbers of a script's own types.
@@ -250,12 +250,6 @@ class Count(int):
     def __repr__(self): return "count"
     def __str__(self): return "count"
 metrics.append({"name": "count", "value": Count(3), "labels": {"n": Count(4)}})`,
-	`
-import enum, fractions
-class Level(enum.IntEnum):
-    LOW = 1
-metrics.append({"name": "level", "value": Level.LOW, "labels": {"l": Level.LOW}})
-metrics.append({"name": "fraction", "value": fractions.Fraction(1, 2)})`,
 	// Every way a script fails, and what it prints.
 	"metric('a', value=1)\nfor x in range(3):\n    y = x +\n", `raise RuntimeError("no")`, `fail("the target said no")`, `fail(5)`, `import sys; sys.exit(3)`, `sys.exit("bye")`, `raise SystemExit`, `raise KeyboardInterrupt`, `assert False, "asserted"`,
 	`
@@ -324,7 +318,9 @@ var handoverPreScripts = []string{
 	`pass`, `data = None`, `del data`, `data = "text"`, `data = 5`, `data = 1.5`, `data = True`, `data = response.text`, `data = {"was": data}`, `data = [data, data]`,
 	`data = [1, 2.0, "x", None, True, float("nan"), float("inf"), float("-inf"), 10**30, -(10**30), 2**63, 2**63 - 1, -(2**63), 2**53 + 1, 1.0, -0.0, 1e21, 1e-7, 5e-324, 0.1 + 0.2, 10**4000]`,
 	`data = {"b": 1, "a": {"z": [], "y": {}, "t": ()}, 1: "int key", None: "none key", True: "bool key", 1.5: "float key", "1": "text key"}`, `data = (1, 2, (3, [4, (5,)]))`,
-	`data = {"s": {1, 2}}`, `data = b"bytes"`, `data = {"k": object()}`, `data = {(1, 2): 3}`, `data = {float("nan"): 1}`, `data = 10**5000`, `import decimal; data = {"d": decimal.Decimal("1.5")}`,
+	// What JSON cannot carry, a set, bytes, an object or a Decimal, is said
+	// in a line now: pythonhandy_test.go has it.
+	`data = {(1, 2): 3}`, `data = {float("nan"): 1}`, `data = 10**5000`,
 	`data = {"text": "quote \" backslash \\ <tag> & " + chr(0) + chr(233) + chr(0x2028) + chr(0x1F600) + chr(0xD800), "marker": chr(0) + "pue-nonfinite:NaN" + chr(0)}`,
 	`
 import collections

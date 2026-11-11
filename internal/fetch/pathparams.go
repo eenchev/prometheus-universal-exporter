@@ -200,6 +200,9 @@ func unusedParamsIn(c *model.Collector, unused, places string) error {
 	expressions := ""
 	if c.ExpressionParams != nil {
 		expressions = ", and no expression of its rules reads them as $params.<name>"
+		if c.Transform.Type == "python" {
+			expressions = ", and its script reads none of them as params[\"<name>\"]"
+		}
 	}
 	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them%s", unused, c.Name, places, expressions)
 }

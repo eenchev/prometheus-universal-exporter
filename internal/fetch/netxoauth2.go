@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_imap
+//go:build request_type_smtp || request_type_imap || request_type_pop3
 
 package fetch
 
@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// How the types that log in to a mail server, smtp and imap, choose their
+// How the types that log in to a mail server, smtp, imap and pop3, choose their
 // login: request.auth names the mechanism, plain or login with
 // request.username and request.password_file, or xoauth2 with
 // request.username and request.xoauth2, which says where the OAuth 2.0
@@ -36,13 +37,19 @@ const (
 // checkNetLogin holds a collector's auth, xoauth2, username and
 // password_file to one another, and fills in auth: xoauth2 for a collector
 // that sets the block alone. sends says, in a refusal, why a password
-// goes with a name: "AUTH sends both".
-func checkNetLogin(x *model.Collector, sends string) error {
+// goes with a name: "AUTH sends both". more are the mechanisms the type
+// speaks beside plain, login and xoauth2, each with a password.
+func checkNetLogin(x *model.Collector, sends string, more ...string) error {
 	r := &x.Request
 	switch r.Auth {
 	case "", netAuthPlain, netAuthLogin, netAuthXOAuth2:
 	default:
-		return fmt.Errorf("collector %q request.auth %q is not plain, login or xoauth2", x.Name, r.Auth)
+		if !slices.Contains(more, r.Auth) {
+			if len(more) > 0 {
+				return fmt.Errorf("collector %q request.auth %q is not %s, plain, login or xoauth2", x.Name, r.Auth, strings.Join(more, ", "))
+			}
+			return fmt.Errorf("collector %q request.auth %q is not plain, login or xoauth2", x.Name, r.Auth)
+		}
 	}
 	if r.XOAuth2 != nil && r.Auth == "" {
 		r.Auth = netAuthXOAuth2

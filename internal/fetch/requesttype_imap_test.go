@@ -442,7 +442,7 @@ func TestAnIMAPScrapeHoldsTheSessionToTLS(t *testing.T) {
 	if sent := strings.Join(s.sent(), "|"); err == nil || !strings.Contains(err.Error(), "the account's password is not sent over a connection that is not TLS") || strings.Contains(sent, "AUTHENTICATE") || strings.Contains(sent, "LOGIN") {
 		t.Errorf("err=%v, sent %v; want no login in plaintext", err, sent)
 	}
-	if doc := imapDoc(t, imapCollector(t, s, IMAPConfig{AllowPlaintext: true}, withAccount("me@example.com", password)), s.Addr, RequestOverrides{}); !doc.Authenticated || doc.TLS || len(doc.Mailboxes) != 1 {
+	if doc := imapDoc(t, imapCollector(t, s, IMAPConfig{}, withAccount("me@example.com", password), func(r *model.RequestConfig) { r.AllowPlaintext = true }), s.Addr, RequestOverrides{}); !doc.Authenticated || doc.TLS || len(doc.Mailboxes) != 1 {
 		t.Errorf("allow_plaintext: %+v", doc)
 	}
 

@@ -358,12 +358,16 @@ type RequestConfig struct {
 	// none when empty (fetch/starttls.go).
 	StartTLS string `yaml:"starttls"`
 	// Auth and XOAuth2 belong to the types that log in to a mail server,
-	// smtp and imap: the mechanism the login is made with, plain, login or
-	// xoauth2, the type's own choice when empty, and where the OAuth 2.0
-	// access token of xoauth2 comes from (fetch/netxoauth2.go). Both are
-	// left out of a collector written as YAML when unset.
+	// smtp, imap and pop3: the mechanism the login is made with, plain,
+	// login or xoauth2, and for pop3 user, apop and cram-md5 too, the
+	// type's own choice when empty, and where the OAuth 2.0 access token
+	// of xoauth2 comes from (fetch/netxoauth2.go). Both are left out of a
+	// collector written as YAML when unset.
 	Auth    string         `yaml:"auth,omitempty"`
 	XOAuth2 *XOAuth2Config `yaml:"xoauth2,omitempty"`
+	// AllowPlaintext belongs to imap and pop3: log in over a connection
+	// that is not TLS, to a server that has none.
+	AllowPlaintext bool `yaml:"allow_plaintext,omitempty"`
 	// Login belongs to the http and graphite types: a login the exporter
 	// makes before it asks the target, whose token it sends on the
 	// request (fetch/login.go). Left out of a collector written as YAML

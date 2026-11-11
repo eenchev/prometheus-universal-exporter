@@ -239,6 +239,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"websocket":  {"a WebSocket endpoint", ""},
 	"ftp":        {"a file on an FTP server", ""},
 	"imap":       {"the mailboxes of a mail account", ""},
+	"pop3":       {"a mailbox over POP3", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

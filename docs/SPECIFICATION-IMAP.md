@@ -22,10 +22,9 @@ for it with `request_type_imap`.
 | `mailboxes` | `[INBOX]`, with an account | At most 50, none empty or with a control character; each MAY hold placeholders. One with `*` or `%` is a pattern. It MUST need `username`. |
 | `quota` | `false` | It MUST need `username`. |
 | `counts` | — | At most 20, each a `name` of letters, digits and underscores that no other has, a `mailbox`, `INBOX` when left out, that is no pattern, and a `search` of printable ASCII, not empty; `mailbox` and `search` MAY hold placeholders. It MUST need `username`. |
-| `allow_plaintext` | `false` | — |
 
 Of the common part it takes `username`, `password_file`, `auth`, `xoauth2`,
-`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`; `auth`
+`allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`; `auth`
 and `xoauth2` MUST be held to the rules of the
 [`smtp` type's](SPECIFICATION-SMTP.md), and a token got and kept as there;
 `username` MUST hold no placeholder. A static

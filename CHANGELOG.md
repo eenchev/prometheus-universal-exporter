@@ -144,6 +144,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   in a mailbox opened read-only; no message is fetched. A Workspace
   account that takes OAuth alone logs in with
   [`xoauth2`](docs/IMAP.md#gmail), the block an `smtp` collector takes.
+- **[`pop3`](docs/POP3.md)**, an opt-in request type, logs in to a mailbox
+  over POP3 and reads how many messages it holds and their size, with
+  nothing fetched. It logs in by `USER` and `PASS`, `APOP`, or SASL
+  `PLAIN`, `LOGIN`, `CRAM-MD5` or `XOAUTH2`, as
+  [`auth`](docs/POP3.md#logging-in) names or the server offers.
 - The clock format `{{date_imap}}` writes a date as an IMAP search takes
   it, `9-Nov-2026`.
 - A Python script reads the probe's parameters as

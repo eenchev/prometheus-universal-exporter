@@ -55,10 +55,9 @@ import (
 
 // IMAPConfig is an imap collector's own request keys.
 type IMAPConfig struct {
-	Mailboxes      []string    `yaml:"mailboxes,omitempty"`
-	Quota          bool        `yaml:"quota,omitempty"`
-	Counts         []IMAPCount `yaml:"counts,omitempty"`
-	AllowPlaintext bool        `yaml:"allow_plaintext,omitempty"`
+	Mailboxes []string    `yaml:"mailboxes,omitempty"`
+	Quota     bool        `yaml:"quota,omitempty"`
+	Counts    []IMAPCount `yaml:"counts,omitempty"`
 }
 
 // IMAPCount is an entry of request.counts: how many messages of a mailbox
@@ -106,7 +105,7 @@ var imapPorts = map[string]int{"": 143, "imap": 143, "imaps": 993}
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeIMAP,
-		Fields:       []string{"username", "password_file", "auth", "xoauth2", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"username", "password_file", "auth", "xoauth2", "allow_plaintext", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Config:       IMAPConfig{},
 		KeyRules:     imapKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
@@ -566,7 +565,7 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		}
 	}
 	if user := c.Request.Username; user != "" {
-		if !doc.TLS && !own.AllowPlaintext {
+		if !doc.TLS && !c.Request.AllowPlaintext {
 			return nil, fmt.Errorf("the server %s offers no STARTTLS, and the account's password is not sent over a connection that is not TLS; use imaps://, or request.allow_plaintext for a server that has none", address.hostPort)
 		}
 		if err := s.login(c, password, doc.Capabilities, address.hostPort); err != nil {
@@ -1101,12 +1100,11 @@ func imapDecodeName(name string) string {
 // own keys.
 func imapKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"mailboxes":       {"maxItems": imapMaxNamed, "description": "imap: the mailboxes STATUS asks about, each by its name, such as INBOX or Archive/2026, or by a pattern with * (any text) or % (any text within one level), such as *, which is listed and each mailbox of the list asked about; each may contain {{param_name}} placeholders. INBOX when left out. A mailbox the server refuses is in the document with what it said, and fails nothing. See docs/IMAP.md."},
-		"quota":           {"description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes."},
-		"counts":          {"maxItems": imapMaxCounts, "description": "imap: counts of the messages of a mailbox that match a search, as the server counts them: each a name, a mailbox, INBOX when left out, and a search, the criteria of an IMAP SEARCH. The mailbox is opened read-only to search it, which marks nothing read; no message is fetched. See docs/IMAP.md#counting-messages-by-a-search."},
-		"counts.name":     {"description": "What the count is read by in the document, .counts[] | select(.name == \"...\"): letters, digits and underscores."},
-		"counts.mailbox":  {"description": "The mailbox searched, by its name; INBOX when left out. May contain {{param_name}} placeholders."},
-		"counts.search":   {"description": "The criteria of the search, as IMAP writes them, in printable ASCII: UNSEEN, UNANSWERED, FLAGGED, FROM \"billing@example.com\", BEFORE {{date_imap:-1d}}, LARGER 1000000, or several, which all must match. May contain {{param_name}} and clock placeholders."},
-		"allow_plaintext": {"description": "imap: log in over a connection that is not TLS, to a server that offers no STARTTLS. The password is then sent as it is; left out, such a scrape fails before it logs in."},
+		"mailboxes":      {"maxItems": imapMaxNamed, "description": "imap: the mailboxes STATUS asks about, each by its name, such as INBOX or Archive/2026, or by a pattern with * (any text) or % (any text within one level), such as *, which is listed and each mailbox of the list asked about; each may contain {{param_name}} placeholders. INBOX when left out. A mailbox the server refuses is in the document with what it said, and fails nothing. See docs/IMAP.md."},
+		"quota":          {"description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes."},
+		"counts":         {"maxItems": imapMaxCounts, "description": "imap: counts of the messages of a mailbox that match a search, as the server counts them: each a name, a mailbox, INBOX when left out, and a search, the criteria of an IMAP SEARCH. The mailbox is opened read-only to search it, which marks nothing read; no message is fetched. See docs/IMAP.md#counting-messages-by-a-search."},
+		"counts.name":    {"description": "What the count is read by in the document, .counts[] | select(.name == \"...\"): letters, digits and underscores."},
+		"counts.mailbox": {"description": "The mailbox searched, by its name; INBOX when left out. May contain {{param_name}} placeholders."},
+		"counts.search":  {"description": "The criteria of the search, as IMAP writes them, in printable ASCII: UNSEEN, UNANSWERED, FLAGGED, FROM \"billing@example.com\", BEFORE {{date_imap:-1d}}, LARGER 1000000, or several, which all must match. May contain {{param_name}} and clock placeholders."},
 	}
 }

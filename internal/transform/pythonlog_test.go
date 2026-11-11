@@ -63,6 +63,35 @@ metric(name="queue_depth", value=data["depth"])
 	}
 }
 
+// What a script prints takes no room of what it logs: a line logged after
+// more was printed than is kept is written all the same. A run writes its
+// first twenty lines and says how many more there were, and a line by its
+// first 1,024 characters and how many more it had.
+func TestWhatAPythonScriptLogsHasBoundsOfItsOwn(t *testing.T) {
+	requirePython(t)
+	var out bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	script := `print("p" * 5000)
+log("x" * 1500, "error")
+for i in range(24):
+    log("line %d" % i)
+`
+	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(`{}`), Headers: http.Header{}}
+	if _, err := executePython(WithRuleLogger(context.Background(), logger), "python3", script, &decode.Decoded{Kind: "text", Data: "{}", Raw: r.Body}, r, workerCollector("queue", script)); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 21 {
+		t.Fatalf("%d lines at info and above, want the 20 and the one that says more were logged:\n%s", len(lines), out.String())
+	}
+	if !strings.Contains(lines[0], "level=ERROR") || !strings.Contains(lines[0], `message="`+strings.Repeat("x", 1024)+`... (476 more characters)"`) {
+		t.Errorf("the long line: %s", lines[0])
+	}
+	if !strings.HasSuffix(lines[19], `message="line 18"`) || !strings.Contains(lines[20], "level=WARN") || !strings.HasSuffix(lines[20], `message="5 more lines the script logged are not written; a run writes 20"`) {
+		t.Errorf("the last lines:\n%s\n%s", lines[19], lines[20])
+	}
+}
+
 // response.ok is whether the status is a success: an HTTP status of 2xx,
 // a grpc call's 0 and no other of its codes, and None for an answer that
 // has no status, which is neither.

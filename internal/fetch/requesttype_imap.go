@@ -121,7 +121,7 @@ func init() {
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.mailboxes, request.counts or label values")
 		},
-		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkNetTargetAccount(t) },
+		CheckTargetRequest: checkNetTargetLogin,
 		CheckFiles: func(c *model.Collector, t *model.StaticTarget) []string {
 			return append(accountFileWarnings(c, t), xoauth2FileWarnings(c, t)...)
 		},
@@ -202,12 +202,28 @@ func (imapRequester) Validate(x *model.Collector) error {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 		for _, p := range placeholders {
-			if field.kind == imapSearchKind && p.Clock == nil && strings.Count(strings.ReplaceAll(field.text[:p.start], `\"`, ""), `"`)%2 == 0 {
+			if field.kind == imapSearchKind && p.Clock == nil && !imapWithinQuotes(field.text[:p.start]) {
 				return fmt.Errorf("collector %q %s: {{%s}} is not within double quotes; a probe's value is one quoted string of a search, as in FROM \"{{%s}}\", so that it cannot add a criterion", x.Name, field.where, p.Name, p.Name)
 			}
 		}
 	}
 	return nil
+}
+
+// imapWithinQuotes says whether what follows before is within a quoted
+// string, as a server reads one: a backslash takes the character after it,
+// within quotes alone.
+func imapWithinQuotes(before string) bool {
+	within := false
+	for i := 0; i < len(before); i++ {
+		switch {
+		case within && before[i] == '\\':
+			i++
+		case before[i] == '"':
+			within = !within
+		}
+	}
+	return within
 }
 
 // imapTemplates are the mailboxes of an imap collector and the mailbox and
@@ -332,8 +348,10 @@ type imapSession struct {
 	left int64
 	tag  int
 	// lineLimit is the most a line of a response may be: imapLineLimit,
-	// but for the answer to a search a server lists every match of.
+	// but for the answer to a search a server lists every match of, whose
+	// line is listed.
 	lineLimit int
+	listed    bool
 }
 
 // imapAnswer is the server's answer to a command: its untagged lines, each
@@ -356,6 +374,11 @@ func (s *imapSession) line() (string, error) {
 			return "", imapTooLarge()
 		}
 		if errors.Is(err, errNetLineTooLong) {
+			if s.listed {
+				// The matches of a search, listed past what the responses
+				// may still be.
+				return "", imapTooLarge()
+			}
 			return "", fmt.Errorf("a line of the response is longer than %d bytes, which no answer to these commands is", s.lineLimit)
 		}
 		if err != nil {
@@ -399,7 +422,7 @@ func imapLiteralLength(braced string) (int, bool) {
 }
 
 func imapTooLarge() error {
-	return model.MarkError(model.Errorf("the server's responses are larger than the response limit; name fewer mailboxes, or raise request.max_response_bytes or limits.max_response_bytes"), model.ErrLimitExceeded)
+	return model.MarkError(model.Errorf("the server's responses are larger than the response limit; name fewer mailboxes, narrow a search, or raise request.max_response_bytes or limits.max_response_bytes"), model.ErrLimitExceeded)
 }
 
 // imapQuoted is text as a quoted string of a command.
@@ -817,7 +840,8 @@ func (s *imapSession) mailboxes(named, capabilities []string, hostPort string) (
 }
 
 // counts answers each of request.counts: its mailbox is opened read-only,
-// with EXAMINE, unless the count before it opened it, and searched. A
+// with EXAMINE, unless the count before it asked for the same, and
+// searched. A
 // server with ESEARCH answers the number of matches; any other lists them,
 // and they are counted, a line of that answer being as long as the
 // response limit leaves room for. A mailbox the server does not open, and
@@ -830,7 +854,7 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 	for i, count := range asked {
 		mailbox, search := filled[2*i], filled[2*i+1]
 		result := imapCounted{Name: count.Name, Mailbox: mailbox}
-		if mailbox != opened || refused.status != "" {
+		if mailbox != opened {
 			answer, err := s.command("EXAMINE "+imapQuoted(imapEncodeName(mailbox)), "")
 			if err != nil {
 				return nil, err
@@ -849,10 +873,10 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 		if counted {
 			command = "SEARCH RETURN (COUNT) " + search
 		} else {
-			s.lineLimit = int(min(max(s.left, imapLineLimit), 1<<30))
+			s.lineLimit, s.listed = int(min(max(s.left, imapLineLimit), 1<<30)), true
 		}
 		answer, err := s.command(command, "")
-		s.lineLimit = imapLineLimit
+		s.lineLimit, s.listed = imapLineLimit, false
 		if err != nil {
 			return nil, err
 		}

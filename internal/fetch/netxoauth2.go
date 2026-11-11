@@ -75,6 +75,17 @@ func checkNetLogin(x *model.Collector, sends string, more ...string) error {
 	return nil
 }
 
+// checkNetTargetLogin holds a static target's own account to how its
+// collector logs in: a collector that logs in with xoauth2 sends a token
+// and no password, so a target's password_file would be read and never
+// sent, and the account it names logged in to with the collector's token.
+func checkNetTargetLogin(c *model.Collector, t *model.StaticTarget) error {
+	if (c.Request.XOAuth2 != nil || c.Request.Auth == netAuthXOAuth2) && t.Request.PasswordFile != "" {
+		return fmt.Errorf("request.password_file is set, but collector %q logs in with xoauth2, which sends its access token and no password; a target with an account of its own needs a collector of its own", c.Name)
+	}
+	return checkNetTargetAccount(t)
+}
+
 // checkNetXOAuth2 holds request.xoauth2 to one source of the token: a
 // file, or the refresh token grant with its endpoint, client and refresh
 // token.

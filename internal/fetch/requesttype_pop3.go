@@ -97,7 +97,7 @@ func init() {
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its label values")
 		},
-		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkNetTargetAccount(t) },
+		CheckTargetRequest: checkNetTargetLogin,
 		CheckFiles: func(c *model.Collector, t *model.StaticTarget) []string {
 			return append(accountFileWarnings(c, t), xoauth2FileWarnings(c, t)...)
 		},

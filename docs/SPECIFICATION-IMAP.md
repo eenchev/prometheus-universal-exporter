@@ -62,7 +62,7 @@ target's request block takes `timeout`, `username`, `password_file` and
   MUST be answered with an empty line, and the refusal that follows MUST
   fail the scrape.
 - Each of `counts` MUST be answered in its order: its mailbox opened with
-  `EXAMINE`, unless the count before it opened the same, then `SEARCH
+  `EXAMINE`, unless the count before it asked for the same, then `SEARCH
   RETURN (COUNT)` with its criteria where the server names `ESEARCH` or
   `IMAP4rev2`, whose `COUNT` is the count, and `SEARCH` otherwise, whose
   listed messages MUST be counted, a line of that answer bounded by the

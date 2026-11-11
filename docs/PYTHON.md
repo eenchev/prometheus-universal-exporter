@@ -547,7 +547,9 @@ start once and then serves scrape after scrape.
   dropped, and counts against `limits.max_output_bytes` no further.
   `log("queue stalled", level="warning")` writes a line at a level of its
   own, as `python transform logged` with the collector and the message, for
-  what should be seen without debug logging. Its lines share the 4 KiB.
+  what should be seen without debug logging. A run writes at most 20
+  lines, each of at most 1,024 characters, whatever it prints; a script
+  that fails writes its failure and not what it logged before.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with

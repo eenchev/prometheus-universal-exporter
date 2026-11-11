@@ -217,7 +217,8 @@ server, written as a probe's target is. Its `request` may set `timeout`,
 and `username`, `password_file` and `tls` for a server with an account or a
 certificate authority of its own; a target that sets `username` logs in
 with its own `password_file`, and a `tls` block replaces the collector's
-whole.
+whole. A target of a collector that logs in with `xoauth2` sets no
+`password_file`: the token is one account's.
 
 ## Limits
 

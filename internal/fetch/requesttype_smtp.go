@@ -109,7 +109,7 @@ func init() {
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.mail_from, request.rcpt_to or label values")
 		},
-		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkNetTargetAccount(t) },
+		CheckTargetRequest: checkNetTargetLogin,
 		CheckFiles:         checkSMTPFiles,
 	})
 	templateEscapers[smtpAddressKind] = func(where, name, value string) (string, error) {

@@ -671,7 +671,7 @@ func TestAnIMAPScrapeCountsMessagesByASearch(t *testing.T) {
 		wantCommands := []string{
 			`EXAMINE "INBOX"`, search + "UNANSWERED BEFORE 8-Nov-2026", search + "FLAGGED", search + `FROM "billing (ops)@example.com"`,
 			`EXAMINE "Sent Mail"`, search + "ALL",
-			`EXAMINE "Gone"`, `EXAMINE "Gone"`,
+			`EXAMINE "Gone"`,
 			`EXAMINE "INBOX"`, search + "NOSUCHKEY",
 		}
 		if !slices.Equal(commands, wantCommands) {
@@ -708,6 +708,7 @@ func TestIMAPCountsTakeNothingThatAddsACriterion(t *testing.T) {
 	}
 	for want, counts := range map[string][]IMAPCount{
 		"{{param_sender}} is not within double quotes": {{Name: "a", Search: "FROM {{param_sender}}"}},
+		`{{param_tail}} is not within double quotes`:   {{Name: "a", Search: `SUBJECT "a\\\\" {{param_tail}}`}},
 		`{{param_word}} is not within double quotes`:   {{Name: "a", Search: `SUBJECT "a \"b" {{param_word}}`}},
 		`request.counts[0].name "per-day" is not`:      {{Name: "per-day", Search: "ALL"}},
 		`request.counts[0].name "" is not a name`:      {{Search: "ALL"}},
@@ -745,5 +746,11 @@ func TestAnIMAPSearchAnswerMayBeALongLine(t *testing.T) {
 	doc := imapDoc(t, c, "imap://"+s.Addr, RequestOverrides{})
 	if len(doc.Counts) != 1 || doc.Counts[0].Count == nil || *doc.Counts[0].Count != 60000 {
 		t.Errorf("counts: %+v", doc.Counts)
+	}
+	// Past what the responses may be, it is a limit exceeded, which says
+	// what to do, and no line that is not IMAP.
+	c.Request.MaxResponseBytes = 8 << 10
+	if _, err := FetchCollector(context.Background(), "imap://"+s.Addr, c, RequestOverrides{}, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "narrow a search") {
+		t.Errorf("a search's answer past the response limit: err=%v", err)
 	}
 }

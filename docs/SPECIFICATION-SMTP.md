@@ -33,7 +33,9 @@ need `password_file`, and `xoauth2` the `xoauth2` block and no
 `password_file`. `xoauth2` MUST be `token_file`, or `token_url` (https, no
 credentials) with `refresh_token_file` and one of `client_id` and
 `client_id_file`, and optionally `client_secret_file` and `scopes`; both
-sources together MUST be refused. It implies `auth: xoauth2`. A static
+sources together MUST be refused. It implies `auth: xoauth2`, and a static
+target of such a collector that sets `password_file` MUST be refused at
+load. A static
 target's request block takes `timeout`, `username`, `password_file` and
 `tls`.
 

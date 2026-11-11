@@ -215,8 +215,8 @@ func TestAnSMTPScrapeLogsInWithPlainLoginAndXOAuth2(t *testing.T) {
 	}{
 		"plain by default":      {SMTPConfig{}, "LOGIN PLAIN", withAccount("me@example.com", password), "PLAIN"},
 		"login where it is all": {SMTPConfig{}, "LOGIN", withAccount("me@example.com", password), "LOGIN"},
-		"login when named":      {SMTPConfig{Auth: "login"}, "LOGIN PLAIN", withAccount("me@example.com", password), "LOGIN"},
-		"xoauth2 from a file":   {SMTPConfig{XOAuth2: &SMTPXOAuth2{TokenFile: token}}, "PLAIN XOAUTH2", withAccount("me@example.com", ""), "XOAUTH2"},
+		"login when named":      {SMTPConfig{}, "LOGIN PLAIN", withLogin("login", nil, withAccount("me@example.com", password)), "LOGIN"},
+		"xoauth2 from a file":   {SMTPConfig{}, "PLAIN XOAUTH2", withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "XOAUTH2"},
 	} {
 		s := newSMTPStub(t, func(s *smtpStub) { s.mechanisms = tc.mechanisms })
 		doc := smtpDoc(t, smtpCollector(t, s, tc.own, tc.change), s.Addr, RequestOverrides{})
@@ -243,12 +243,12 @@ func TestAnSMTPScrapeTradesARefreshTokenForItsAccessToken(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"access_token":"ya29.token","expires_in":3599,"token_type":"Bearer"}`)
 	}))
 	defer endpoint.Close()
-	saved := smtpHTTPClient
-	smtpHTTPClient = endpoint.Client()
-	t.Cleanup(func() { smtpHTTPClient = saved })
-	grant := &SMTPXOAuth2{TokenURL: endpoint.URL + "/token", ClientID: "client", ClientSecretFile: testutil.WriteFile(t, "secret", "secret\n"), RefreshTokenFile: testutil.WriteFile(t, "refresh", "1//refresh\n"), Scopes: []string{"https://mail.google.com/"}}
-	c := smtpCollector(t, s, SMTPConfig{XOAuth2: grant}, withAccount("me@example.com", ""))
-	t.Cleanup(func() { smtpTokens.forget(c.Name, grant) })
+	saved := netOAuthClient
+	netOAuthClient = endpoint.Client()
+	t.Cleanup(func() { netOAuthClient = saved })
+	grant := &model.XOAuth2Config{TokenURL: endpoint.URL + "/token", ClientID: "client", ClientSecretFile: testutil.WriteFile(t, "secret", "secret\n"), RefreshTokenFile: testutil.WriteFile(t, "refresh", "1//refresh\n"), Scopes: []string{"https://mail.google.com/"}}
+	c := smtpCollector(t, s, SMTPConfig{}, withLogin("", grant, withAccount("me@example.com", "")))
+	t.Cleanup(func() { netTokens.forget(c.Name, grant) })
 	for range 2 {
 		if doc := smtpDoc(t, c, s.Addr, RequestOverrides{}); doc.Auth == nil || doc.Auth.Mechanism != "XOAUTH2" {
 			t.Fatalf("auth is %+v", doc.Auth)
@@ -261,7 +261,7 @@ func TestAnSMTPScrapeTradesARefreshTokenForItsAccessToken(t *testing.T) {
 	// nothing of the secrets.
 	bad := *grant
 	bad.RefreshTokenFile = testutil.WriteFile(t, "stale", "1//stale\n")
-	_, err := FetchCollector(context.Background(), s.Addr, smtpCollector(t, s, SMTPConfig{XOAuth2: &bad}, withAccount("me@example.com", "")), RequestOverrides{}, nil)
+	_, err := FetchCollector(context.Background(), s.Addr, smtpCollector(t, s, SMTPConfig{}, withLogin("", &bad, withAccount("me@example.com", ""))), RequestOverrides{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "answered HTTP status 400, invalid_grant: Bad Request") || strings.Contains(err.Error(), "1//stale") || strings.Contains(err.Error(), "secret") {
 		t.Errorf("err=%v, want the endpoint's refusal without the secrets", err)
 	}
@@ -376,14 +376,14 @@ func TestSMTPConfigurationRules(t *testing.T) {
 		want   string
 	}{
 		"starttls":           {SMTPConfig{StartTLS: "maybe"}, nil, `request.starttls_mode "maybe" is not auto, required or never`},
-		"auth":               {SMTPConfig{Auth: "cram-md5"}, nil, `request.auth "cram-md5" is not plain, login or xoauth2`},
-		"no username":        {SMTPConfig{Auth: "plain"}, nil, "logs in without request.username"},
+		"auth":               {SMTPConfig{}, withLogin("cram-md5", nil, nil), `request.auth "cram-md5" is not plain, login or xoauth2`},
+		"no username":        {SMTPConfig{}, withLogin("plain", nil, nil), "logs in without request.username"},
 		"no password":        {SMTPConfig{}, withAccount("me@example.com", ""), "sets request.username without request.password_file"},
-		"xoauth2 no source":  {SMTPConfig{Auth: "xoauth2"}, withAccount("me@example.com", ""), "request.auth is xoauth2 without request.xoauth2"},
-		"xoauth2 both":       {SMTPConfig{XOAuth2: &SMTPXOAuth2{TokenFile: "/t", TokenURL: "https://x/t"}}, withAccount("me@example.com", ""), "token_file beside the keys of the refresh token grant"},
-		"xoauth2 http":       {SMTPConfig{XOAuth2: &SMTPXOAuth2{TokenURL: "http://x/t", ClientID: "c", RefreshTokenFile: "/r"}}, withAccount("me@example.com", ""), "is not an https:// URL"},
-		"xoauth2 no refresh": {SMTPConfig{XOAuth2: &SMTPXOAuth2{TokenURL: "https://x/t", ClientID: "c"}}, withAccount("me@example.com", ""), "without refresh_token_file"},
-		"password beside":    {SMTPConfig{XOAuth2: &SMTPXOAuth2{TokenFile: "/t"}}, withAccount("me@example.com", "/p"), "request.password_file beside xoauth2"},
+		"xoauth2 no source":  {SMTPConfig{}, withLogin("xoauth2", nil, withAccount("me@example.com", "")), "request.auth is xoauth2 without request.xoauth2"},
+		"xoauth2 both":       {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t", TokenURL: "https://x/t"}, withAccount("me@example.com", "")), "token_file beside the keys of the refresh token grant"},
+		"xoauth2 http":       {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenURL: "http://x/t", ClientID: "c", RefreshTokenFile: "/r"}, withAccount("me@example.com", "")), "is not an https:// URL"},
+		"xoauth2 no refresh": {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenURL: "https://x/t", ClientID: "c"}, withAccount("me@example.com", "")), "without refresh_token_file"},
+		"password beside":    {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t"}, withAccount("me@example.com", "/p")), "request.password_file beside xoauth2"},
 		"rcpt alone":         {SMTPConfig{RcptTo: []string{"a@example.com"}}, nil, "request.rcpt_to without request.mail_from"},
 		"no address":         {SMTPConfig{MailFrom: "nobody"}, nil, `request.mail_from "nobody" is not an address`},
 		"null recipient":     {SMTPConfig{MailFrom: "<>", RcptTo: []string{"<>"}}, nil, "request.rcpt_to[0] is <>"},
@@ -411,14 +411,14 @@ func TestSMTPConfigurationRules(t *testing.T) {
 // A dry run reads the files a scrape would: it warns of the files of
 // request.xoauth2 that are not there or are empty, by their keys.
 func TestAnSMTPCollectorsFilesAreCheckedForADryRun(t *testing.T) {
-	grant := &SMTPXOAuth2{TokenURL: "https://oauth2.example/token", ClientID: "client", ClientSecretFile: testutil.WriteFile(t, "secret", "\n"), RefreshTokenFile: "/nonexistent/refresh"}
-	c := smtpCollector(t, nil, SMTPConfig{XOAuth2: grant}, withAccount("me@example.com", ""))
+	grant := &model.XOAuth2Config{TokenURL: "https://oauth2.example/token", ClientID: "client", ClientSecretFile: testutil.WriteFile(t, "secret", "\n"), RefreshTokenFile: "/nonexistent/refresh"}
+	c := smtpCollector(t, nil, SMTPConfig{}, withLogin("", grant, withAccount("me@example.com", "")))
 	warnings := strings.Join(RequestTypes[RequestTypeSMTP].CheckFiles(c, nil), "\n")
 	if !strings.Contains(warnings, `collector "mail": request.xoauth2.refresh_token_file:`) || !strings.Contains(warnings, "request.xoauth2.client_secret_file") || !strings.Contains(warnings, "is empty") {
 		t.Errorf("the warnings are %q", warnings)
 	}
 	grant.ClientSecretFile, grant.RefreshTokenFile = "", testutil.WriteFile(t, "refresh", "1//r\n")
-	if warnings := RequestTypes[RequestTypeSMTP].CheckFiles(smtpCollector(t, nil, SMTPConfig{XOAuth2: grant}, withAccount("me@example.com", "")), nil); len(warnings) != 0 {
+	if warnings := RequestTypes[RequestTypeSMTP].CheckFiles(smtpCollector(t, nil, SMTPConfig{}, withLogin("", grant, withAccount("me@example.com", ""))), nil); len(warnings) != 0 {
 		t.Errorf("files that are there are warned of: %q", warnings)
 	}
 }

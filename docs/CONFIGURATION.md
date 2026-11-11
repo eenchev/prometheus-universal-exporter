@@ -3103,9 +3103,11 @@ file is read by the decoder its extension names; its table is in [Files
 over FTP](FTP.md#a-collector).
 
 For `imap`, an opt-in type, no key is required: `username` with
-`password_file` logs in, `mailboxes` names the mailboxes `STATUS` asks
-about, by name or by a pattern, `INBOX` when left out, and `quota` asks for
-the account's quota, with no mailbox opened; `allow_plaintext`, `tls`,
+`password_file` or `xoauth2` logs in, by the mechanism `auth` names,
+`mailboxes` names the mailboxes `STATUS` asks about, by name or by a
+pattern, `INBOX` when left out, `quota` asks for the account's quota, and
+`counts` counts the messages of a mailbox that match a search, opened
+read-only; `allow_plaintext`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`; its table is in [IMAP](IMAP.md#a-collector).
 <!-- /request-types -->

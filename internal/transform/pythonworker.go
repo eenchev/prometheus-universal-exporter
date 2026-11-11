@@ -1738,6 +1738,12 @@ class Response:
         self.status_code=x['status_code']; self.headers=x['headers']; self.body=self.text=x['body']
         self.timings=x.get('timings'); self.tls=x.get('tls'); self.url=x.get('url'); self.redirects=x.get('redirects')
         self.http_version=x.get('http_version'); self.remote_ip=x.get('remote_ip')
+    @property
+    def ok(self):
+        # Whether the status is a success: an HTTP 2xx, or a grpc call's 0;
+        # None where there is no status to say.
+        s=self.status_code
+        return None if s is None else s==0 or 200<=s<300
     def header(self,name,default=None):
         # One header's values joined by ", ", as jq's $headers has them, the
         # name in any case; default when the response has none.
@@ -2628,8 +2634,14 @@ while True:
                 timestamp=int(timestamp)
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
+        def log(message,level='info'):
+            # A line of the exporter's log at a level, where print is at
+            # debug only: written among what the script prints, marked, for
+            # the exporter to take out (transform/pythonlog.go).
+            if level not in ('debug','info','warning','error'): raise ValueError('log level %s is not one of "debug", "info", "warning" and "error"'%shown(level))
+            sink.write('\x00pue-log:%s\x00%s\x00'%(level,str(message).replace('\x00','\ufffd')))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
-               'metric':metric,'fail':fail,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
+               'metric':metric,'fail':fail,'log':log,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
         sink=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')

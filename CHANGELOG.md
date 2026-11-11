@@ -136,9 +136,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `@base32` and `@base32d`.
 - **[`imap`](docs/IMAP.md)**, an opt-in request type, logs in to a mail
   account and counts the messages, unread messages and size of its
-  mailboxes, by name or by pattern, and its quota, with no mailbox opened:
-  a mailbox's numbers with a name and a password, and no API or OAuth
-  client.
+  mailboxes, by name or by pattern, and its quota: a mailbox's numbers
+  with a name and a password, and no API. Its
+  [`counts`](docs/IMAP.md#counting-messages-by-a-search) count the
+  messages that match a search, such as
+  `UNANSWERED BEFORE {{date_imap:-1d}}`, `FLAGGED` or `FROM "{{param_sender}}"`,
+  in a mailbox opened read-only; no message is fetched. A Workspace
+  account that takes OAuth alone logs in with
+  [`xoauth2`](docs/IMAP.md#gmail), the block an `smtp` collector takes.
+- The clock format `{{date_imap}}` writes a date as an IMAP search takes
+  it, `9-Nov-2026`.
 - A Python script reads the probe's parameters as
   [`params`](docs/REQUESTS.md#in-expressions), in a `python` transform and
   in a `pre_script`, as a jq expression reads `$params`.
@@ -160,6 +167,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   expression makes part of the way can be seen without rewriting the rule.
 - The configuration guide says which unquoted YAML scalars read as numbers
   (`017` as 15, `1.10` as 1.1) and what to do about a label made of one.
+- A Python script has `response.ok`, whether the status is a success, and
+  [`log(message, level="info")`](docs/PYTHON.md#what-a-script-has), which
+  writes a line of the exporter's log at `debug`, `info`, `warning` or
+  `error`, where `print` is seen at debug level only.
 
 ### Fixed
 

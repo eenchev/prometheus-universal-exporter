@@ -170,7 +170,8 @@ alone, use `XOAUTH2`.
 
 ### XOAUTH2
 
-`AUTH XOAUTH2` sends the account's name and an OAuth 2.0 access token.
+`AUTH XOAUTH2` sends the account's name and an OAuth 2.0 access token; the
+[`imap` type](IMAP.md#gmail) logs in with the same block.
 Gmail's last an hour, so the collector either reads one that something else
 keeps current, or gets its own with a refresh token:
 

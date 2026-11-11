@@ -12,9 +12,10 @@ import (
 )
 
 // checkOptInRequestKeys checks optInRequestKeys and optInTargetKeys of the
-// opt-in type name in a build with it: each key listed is the type's and no
-// other built type's, and, in a build with every type of the default build,
-// each key of the type's that no other built type accepts is listed.
+// opt-in type name in a build with it: each key listed is the type's and
+// of no built type of the default build, and, in a build with every type of
+// the default build, each key of the type's that none of those accepts is
+// listed. Another opt-in type may take the key too.
 func checkOptInRequestKeys(t *testing.T, name string) {
 	t.Helper()
 	checkOptInKeys(t, name, "optInRequestKeys", optInRequestKeys[name], func(rt *RequestType) []string { return rt.Fields })
@@ -35,7 +36,7 @@ func checkOptInKeys(t *testing.T, name, list string, listed []string, keys func(
 	for _, key := range keys(own) {
 		var others []string
 		for other, rt := range RequestTypes {
-			if other != name && slices.Contains(keys(rt), key) {
+			if other != name && !slices.Contains(optInRequestTypes, other) && slices.Contains(keys(rt), key) {
 				others = append(others, other)
 			}
 		}

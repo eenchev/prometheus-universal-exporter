@@ -638,10 +638,17 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	}
 	out, err := countedPythonResult(spec.stats, c, what, timeout, line, err)
 	if err == nil && out.Log != "" {
-		// What the script printed, its first 4 KiB, for whoever debugs it;
-		// it counts against max_output_bytes only as far as that. A debug
-		// probe's report shows it (WithRuleLogger).
-		ruleLogger(ctx).Debug("python "+what+" printed", "collector", c.Name, "output", out.Log)
+		// What the script printed and logged, its first 4 KiB, for whoever
+		// debugs it; it counts against max_output_bytes only as far as
+		// that. A debug probe's report shows it (WithRuleLogger).
+		printed, logged := pythonLogLines(out.Log)
+		logger := ruleLogger(ctx)
+		if printed != "" {
+			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
+		}
+		for _, line := range logged {
+			logger.Log(ctx, line.level, "python "+what+" logged", "collector", c.Name, "message", line.text)
+		}
 	}
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }

@@ -21,13 +21,19 @@ with `request_type_smtp`.
 | --- | --- | --- |
 | `starttls_mode` | `auto` | `auto`, `required` or `never`; anything else MUST be refused at load. |
 | `hello` | the connection's local address as an address literal | No blank, control character or placeholder. |
-| `auth` | `plain` where offered, else `login` | `plain`, `login` or `xoauth2`. It MUST need `username`; `plain` and `login` MUST need `password_file`, and `xoauth2` the `xoauth2` block and no `password_file`. |
-| `xoauth2` | — | `token_file`, or `token_url` (https, no credentials) with `refresh_token_file` and one of `client_id` and `client_id_file`, and optionally `client_secret_file` and `scopes`; both sources together MUST be refused. It implies `auth: xoauth2`. |
 | `mail_from` | — | An address, `local@domain`, or `<>`; MAY hold placeholders. |
 | `rcpt_to` | — | At most 20 addresses, never `<>`, only beside `mail_from`; each MAY hold placeholders. |
 
-Of the common part it takes `username`, `password_file`, `tls`,
-`max_response_bytes`, `allowed_targets` and `denied_targets`; a static
+Of the common part it takes `username`, `password_file`, `auth`, `xoauth2`,
+`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`, the
+login's keys as [`imap` does](SPECIFICATION-IMAP.md). `auth` MUST be
+`plain`, `login` or `xoauth2`, and left out is `plain` where the server
+offers it, else `login`. It MUST need `username`; `plain` and `login` MUST
+need `password_file`, and `xoauth2` the `xoauth2` block and no
+`password_file`. `xoauth2` MUST be `token_file`, or `token_url` (https, no
+credentials) with `refresh_token_file` and one of `client_id` and
+`client_id_file`, and optionally `client_secret_file` and `scopes`; both
+sources together MUST be refused. It implies `auth: xoauth2`. A static
 target's request block takes `timeout`, `username`, `password_file` and
 `tls`.
 

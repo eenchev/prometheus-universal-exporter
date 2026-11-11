@@ -3122,6 +3122,7 @@ Expose a clean response context, preferably:
 
 ```python
 response.status_code
+response.ok
 response.headers
 response.header(name, default=None)
 response.body
@@ -3288,7 +3289,16 @@ pre-script left in a CSV row MUST be written as
 label text, `None` leaving the label off.
 
 What a script prints MUST be kept to its first 4 KiB, logged at debug level,
-and counted against `limits.max_output_bytes` only as far as that.
+and counted against `limits.max_output_bytes` only as far as that. A script
+MUST have `log(message, level="info")`, which writes the message, as text,
+as a line of the exporter's log of its own at the level, `debug`, `info`,
+`warning` or `error`, with the collector, in the order of the calls and
+apart from what was printed; another level MUST fail the script. Its lines
+are within the same 4 KiB.
+
+`response.ok` MUST be whether the status is a success, an HTTP status of
+200 to 299 or a `grpc` call's `0`, and `None` for an answer without a
+status.
 
 A script and a pre-script MUST have the value-parsing helpers of § 17,
 `parse_bytes`, `parse_duration`, `parse_time`, `parse_percent` and
@@ -11348,7 +11358,7 @@ the name optional and in that order, and, where a filter may stand, MAY end
 with one (§ 42.10b).
 
 - **Formats.** `name` MUST be one of `date` (`2006-01-02`), `date_compact`
-  (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `month`
+  (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `date_imap` (`2-Jan-2006`), `month`
   (`2006-01`), `year` (`2006`), `time` (`15:04:05`), `datetime` (RFC 3339,
   seconds), `datetime_ms` (RFC 3339, milliseconds, always three digits),
   `unix` (seconds since the epoch) and `unix_ms` (milliseconds).

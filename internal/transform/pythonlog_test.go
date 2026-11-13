@@ -13,7 +13,8 @@ import (
 )
 
 // log(message, level) writes a line of the exporter's log at the level it
-// names, info when it names none, with the collector, in the order the
+// names, info when it names none, with the collector and the target, as
+// the logs show one, without its credentials, in the order the
 // script logged them and apart from what it printed, which stays the one
 // debug line it was. A message is whatever it is as text, on as many lines
 // as it has. A level that is none fails the script, naming the four.
@@ -28,7 +29,7 @@ func TestAPythonScriptLogsAtALevel(t *testing.T) {
 			}
 			return a
 		}}))
-		r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(`{"depth": 7}`), Headers: http.Header{}}
+		r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(`{"depth": 7}`), Headers: http.Header{}, Target: "https://monitor:hunter2@queue.example.com"}
 		_, err := executePython(WithRuleLogger(context.Background(), logger), "python3", script, &decode.Decoded{Kind: "json", Data: map[string]any{"depth": 7}, Raw: r.Body}, r, workerCollector("queue", script))
 		return out.String(), err
 	}
@@ -46,16 +47,19 @@ metric(name="queue_depth", value=data["depth"])
 	}
 	want := strings.Join([]string{
 		`level=DEBUG msg="python transform printed" collector=queue output="before\nafter\n"`,
-		`level=INFO msg="python transform logged" collector=queue message="depth is 7"`,
-		`level=WARN msg="python transform logged" collector=queue message="stalled\nfor a while"`,
-		`level=ERROR msg="python transform logged" collector=queue message="{'depth': 7}"`,
-		`level=DEBUG msg="python transform logged" collector=queue message=fine`,
+		`level=INFO msg="python transform logged" collector=queue target=https://redacted:redacted@queue.example.com message="depth is 7"`,
+		`level=WARN msg="python transform logged" collector=queue target=https://redacted:redacted@queue.example.com message="stalled\nfor a while"`,
+		`level=ERROR msg="python transform logged" collector=queue target=https://redacted:redacted@queue.example.com message="{'depth': 7}"`,
+		`level=DEBUG msg="python transform logged" collector=queue target=https://redacted:redacted@queue.example.com message=fine`,
 	}, "\n") + "\n"
+	if strings.Contains(got, "hunter2") {
+		t.Errorf("a logged line holds the target's password:\n%s", got)
+	}
 	if got != want {
 		t.Errorf("logged\n got %s\nwant %s", got, want)
 	}
 	// Only logged: no line of what was printed, since nothing was.
-	if got, err := run(t, `log("only")`); err != nil || got != `level=INFO msg="python transform logged" collector=queue message=only`+"\n" {
+	if got, err := run(t, `log("only")`); err != nil || got != `level=INFO msg="python transform logged" collector=queue target=https://redacted:redacted@queue.example.com message=only`+"\n" {
 		t.Errorf("only a log line: %q, %v", got, err)
 	}
 	if _, err := run(t, `log("x", level="fatal")`); err == nil || !strings.Contains(err.Error(), `log level 'fatal' is not one of "debug", "info", "warning" and "error"`) {

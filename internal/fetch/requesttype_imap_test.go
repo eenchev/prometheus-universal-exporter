@@ -178,6 +178,8 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 			switch {
 			case examined == "":
 				say(tag + " BAD no mailbox is selected")
+			case matches == "+":
+				say("+ Ready for additional command text")
 			case !known:
 				say(tag + " BAD Could not parse command")
 			case counted:
@@ -713,6 +715,8 @@ func TestIMAPCountsTakeNothingThatAddsACriterion(t *testing.T) {
 		`request.counts[0].name "per-day" is not`:      {{Name: "per-day", Search: "ALL"}},
 		`request.counts[0].name "" is not a name`:      {{Search: "ALL"}},
 		`request.counts[1].name "a" names two`:         {{Name: "a", Search: "ALL"}, {Name: "a", Search: "UNSEEN"}},
+		"request.counts[0].search ends in {n}":         {{Name: "a", Search: "SUBJECT {5}"}},
+		"request.counts[0].search ends in {n}, which":  {{Name: "a", Search: "SINCE {{date_imap:-1d}} BODY {12+} "}},
 		"request.counts[0] has no search":              {{Name: "a", Search: " "}},
 		"request.counts[0].search holds a character":   {{Name: "a", Search: "SUBJECT \"é\""}},
 		`request.counts[0].mailbox "Lists/*" is a`:     {{Name: "a", Mailbox: "Lists/*", Search: "ALL"}},
@@ -730,6 +734,19 @@ func TestIMAPCountsTakeNothingThatAddsACriterion(t *testing.T) {
 	ok := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypeIMAP, Username: "me", PasswordFile: "p", Own: IMAPConfig{Counts: []IMAPCount{{Name: "a", Search: `SINCE {{date_imap:-7d}} SUBJECT "{{param_word}}"`}}}}}
 	if err := ValidateRequest(ok); err != nil {
 		t.Error(err)
+	}
+}
+
+// A server that answers a search by asking for more of the command waits
+// for it, and would read the next command as that: the scrape fails
+// there, and sends nothing more.
+func TestAnIMAPScrapeEndsWhereTheServerAsksForMoreOfACommand(t *testing.T) {
+	s := newIMAPStub(t, func(s *imapStub) { s.searches["INBOX: UNSEEN"] = "+" })
+	c := imapCollector(t, s, IMAPConfig{Counts: []IMAPCount{{Name: "unseen", Search: "UNSEEN"}, {Name: "flagged", Search: "FLAGGED"}}}, withAccount("me@example.com", imapPassword(t)))
+	_, err := FetchCollector(context.Background(), "imap://"+s.Addr, c, RequestOverrides{}, nil)
+	sent := s.sent()
+	if err == nil || !strings.Contains(err.Error(), "the server asked for more of SEARCH") || !strings.HasSuffix(sent[len(sent)-1], "SEARCH UNSEEN") {
+		t.Errorf("err=%v, sent %q", err, sent)
 	}
 }
 

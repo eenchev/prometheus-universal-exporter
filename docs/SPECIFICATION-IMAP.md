@@ -21,7 +21,7 @@ for it with `request_type_imap`.
 | --- | --- | --- |
 | `mailboxes` | `[INBOX]`, with an account | At most 50, none empty or with a control character; each MAY hold placeholders. One with `*` or `%` is a pattern. It MUST need `username`. |
 | `quota` | `false` | It MUST need `username`. |
-| `counts` | — | At most 20, each a `name` of letters, digits and underscores that no other has, a `mailbox`, `INBOX` when left out, that is no pattern, and a `search` of printable ASCII, not empty; `mailbox` and `search` MAY hold placeholders. It MUST need `username`. |
+| `counts` | — | At most 20, each a `name` of letters, digits and underscores that no other has, a `mailbox`, `INBOX` when left out, that is no pattern, and a `search` of printable ASCII, not empty and not ending in a literal's `{n}`; `mailbox` and `search` MAY hold placeholders. It MUST need `username`. |
 
 Of the common part it takes `username`, `password_file`, `auth`, `xoauth2`,
 `allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`; `auth`
@@ -68,7 +68,8 @@ target's request block takes `timeout`, `username`, `password_file` and
   listed messages MUST be counted, a line of that answer bounded by the
   response limit alone. An `EXAMINE` or a `SEARCH` answered `NO` or `BAD`
   MUST be a count of the document with `ok` false, the answer's text and a
-  null `count`, and MUST NOT fail the scrape.
+  null `count`, and MUST NOT fail the scrape; one answered with a
+  continuation request MUST fail it, nothing more sent.
 - A placeholder of a `search` that is not a clock's MUST stand within
   double quotes, refused at load otherwise, and its value MUST hold no
   double quote, backslash or character outside printable ASCII, one that

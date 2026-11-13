@@ -647,6 +647,13 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}
 		for _, line := range logged {
+			// With the target, which says where among a collector's
+			// targets the line is of, as the logs show one: without
+			// what it carries of a credential.
+			if r != nil && r.Target != "" {
+				logger.Log(ctx, line.level, "python "+what+" logged", "collector", c.Name, "target", fetch.DisplayTarget(c, r.Target), "message", line.text)
+				continue
+			}
 			logger.Log(ctx, line.level, "python "+what+" logged", "collector", c.Name, "message", line.text)
 		}
 	}

@@ -3293,7 +3293,8 @@ What a script prints MUST be kept to its first 4 KiB, logged at debug level,
 and counted against `limits.max_output_bytes` only as far as that. A script
 MUST have `log(message, level="info")`, which writes the message, as text,
 as a line of the exporter's log of its own at the level, `debug`, `info`,
-`warning` or `error`, with the collector, in the order of the calls and
+`warning` or `error`, with the collector and the target as the logs show
+one, in the order of the calls and
 apart from what was printed; another level MUST fail the script. A run's
 first 20 lines MUST be written, each by its first 1,024 characters and how
 many more it had, whatever the script printed, and how many more lines

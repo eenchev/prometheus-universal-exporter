@@ -99,6 +99,10 @@ const (
 // is written as without quotes.
 var imapCountName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
+// imapEndsInLiteral is a command that ends in a literal's length, {n} or
+// {n+}: the server takes what follows the line as n bytes of the command.
+var imapEndsInLiteral = regexp.MustCompile(`\{[0-9]+\+?\}\s*$`)
+
 // imapPorts are the schemes of an imap target and their default ports.
 var imapPorts = map[string]int{"": 143, "imap": 143, "imaps": 993}
 
@@ -189,6 +193,8 @@ func (imapRequester) Validate(x *model.Collector) error {
 			return fmt.Errorf("collector %q %s has no search; write the criteria of an IMAP SEARCH, such as UNSEEN or UNANSWERED BEFORE {{date_imap:-1d}}", x.Name, at)
 		case strings.ContainsFunc(count.Search, func(r rune) bool { return r < ' ' || r >= 0x7f }):
 			return fmt.Errorf("collector %q %s.search holds a character that is not printable ASCII, which a search sent without a charset may not", x.Name, at)
+		case imapEndsInLiteral.MatchString(count.Search):
+			return fmt.Errorf("collector %q %s.search ends in {n}, which a server reads as the length of text sent after the command, and waits for; write the text within double quotes", x.Name, at)
 		case strings.ContainsAny(count.Mailbox, "*%"):
 			return fmt.Errorf("collector %q %s.mailbox %q is a pattern; a search is of one mailbox, so name it", x.Name, at, count.Mailbox)
 		case strings.ContainsFunc(count.Mailbox, func(r rune) bool { return r < ' ' || r == 0x7f }):
@@ -859,6 +865,9 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 			if err != nil {
 				return nil, err
 			}
+			if answer.status == "+" {
+				return nil, imapAskedForMore("EXAMINE")
+			}
 			opened, refused = mailbox, imapAnswer{}
 			if answer.status != "OK" {
 				refused = answer
@@ -880,6 +889,9 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 		if err != nil {
 			return nil, err
 		}
+		if answer.status == "+" {
+			return nil, imapAskedForMore("SEARCH")
+		}
 		result.OK, result.Text = answer.status == "OK", answer.text
 		if result.OK {
 			n := imapSearchCount(answer.untagged)
@@ -888,6 +900,13 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 		out = append(out, result)
 	}
 	return out, nil
+}
+
+// imapAskedForMore is the failure of a command the server answered with a
+// continuation request: it waits for more of the command, and would read
+// the next one as that, so the session ends there.
+func imapAskedForMore(command string) error {
+	return fmt.Errorf("the server asked for more of %s, as it does of a command that ends in a literal's length; the session cannot go on", command)
 }
 
 // imapSearchCount is how many messages a search matched: the COUNT of an

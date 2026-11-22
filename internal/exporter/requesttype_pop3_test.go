@@ -44,6 +44,8 @@ func TestAPOP3CollectorProbe(t *testing.T) {
 				_, _ = fmt.Fprint(conn, "+OK welcome\r\n")
 			case "STAT":
 				_, _ = fmt.Fprint(conn, "+OK 12 123456\r\n")
+			case "LIST":
+				_, _ = fmt.Fprint(conn, "+OK\r\n1 120\r\n2 98765\r\n.\r\n")
 			case "QUIT":
 				_, _ = fmt.Fprint(conn, "+OK bye\r\n")
 				return
@@ -64,6 +66,7 @@ collectors:
       password_file: `+password+`
       auth: plain
       allow_plaintext: true
+      list: true
     transform:
       type: jq
     metrics:
@@ -76,6 +79,8 @@ collectors:
             value: "{{param_box}}"
       - name: pop3_mailbox_size_bytes
         expression: .size_bytes
+      - name: pop3_mailbox_largest_bytes
+        expression: .largest_bytes
   - name: mailpy
     request:
       type: pop3
@@ -90,7 +95,7 @@ collectors:
     metrics: []
 `)
 	recorder := probeOnce(t, server, "/probe?collector=mail&param_box=orders&target="+stub.Addr, nil)
-	want := `pop3_mailbox_messages{asked="orders",auth="plain"} 12` + "\n" + `pop3_mailbox_size_bytes 123456`
+	want := `pop3_mailbox_largest_bytes 98765` + "\n" + `pop3_mailbox_messages{asked="orders",auth="plain"} 12` + "\n" + `pop3_mailbox_size_bytes 123456`
 	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != want {
 		t.Errorf("%d %v\n%s", recorder.Code, got, recorder.Body)
 	}

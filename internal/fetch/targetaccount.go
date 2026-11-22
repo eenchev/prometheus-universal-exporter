@@ -25,7 +25,10 @@ import (
 // password: servers that each keep their own password for one account are
 // what it is for. c itself is never written, being the configuration's.
 func withTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector {
-	if o.PasswordFile == "" && o.TLS == nil {
+	// A collector that logs in with a token logs in to the target's
+	// mailbox with it, which the target names with its username alone.
+	named := o.Username != "" && c.Request.XOAuth2 != nil
+	if o.PasswordFile == "" && o.TLS == nil && !named {
 		return c
 	}
 	x := *c

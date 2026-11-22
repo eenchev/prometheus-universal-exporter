@@ -44,6 +44,8 @@ func TestAnIMAPCollectorProbe(t *testing.T) {
 					matches = " 4"
 				}
 				_, _ = fmt.Fprintf(conn, "* SEARCH%s\r\n%s OK done\r\n", matches, tag)
+			case "FETCH":
+				_, _ = fmt.Fprintf(conn, "* 2 FETCH (INTERNALDATE \"07-Nov-2026 20:30:15 +0000\")\r\n%s OK done\r\n", tag)
 			case "LOGOUT":
 				_, _ = fmt.Fprintf(conn, "* BYE\r\n%s OK done\r\n", tag)
 				return
@@ -102,6 +104,7 @@ collectors:
       counts:
         - name: waiting
           search: UNANSWERED BEFORE {{date_imap:-1d}}
+          oldest: true
         - name: billing
           mailbox: Support
           search: FROM "{{param_sender}}" SINCE {{date_imap:-7d}}
@@ -116,6 +119,12 @@ collectors:
             expression: .name
           - name: mailbox
             expression: .mailbox
+      - name: imap_oldest_matching_timestamp_seconds
+        items: .counts[] | select(.oldest_timestamp != null)
+        expression: .oldest_timestamp
+        labels:
+          - name: search
+            expression: .name
 `)
 	recorder := probeOnce(t, server, "/probe?collector=mail&param_box=Gone&target="+stub.Addr, nil)
 	want := `imap_mailbox_found{mailbox="Gone"} 0` + "\n" + `imap_mailbox_found{mailbox="INBOX"} 1` + "\n" + `imap_mailbox_messages{asked="Gone",mailbox="INBOX"} 12`
@@ -135,7 +144,7 @@ collectors:
 	// request.counts, read from the configuration, are the matches of each
 	// search, a probe's value within its quotes.
 	recorder = probeOnce(t, server, "/probe?collector=mailcounts&param_sender=billing@example.com&target="+stub.Addr, nil)
-	want = `imap_messages_matching{mailbox="INBOX",search="waiting"} 3` + "\n" + `imap_messages_matching{mailbox="Support",search="billing"} 1`
+	want = `imap_messages_matching{mailbox="INBOX",search="waiting"} 3` + "\n" + `imap_messages_matching{mailbox="Support",search="billing"} 1` + "\n" + `imap_oldest_matching_timestamp_seconds{search="waiting"} 1.794083415e+09`
 	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != want {
 		t.Errorf("counts: %d %v\n%s", recorder.Code, got, recorder.Body)
 	}

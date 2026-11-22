@@ -94,15 +94,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   member on the status page and in `/v1/status`, counts it in
   `pue_allocator_members_same_name`, and tells both exporters, which log it
   too ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
-- **Five opt-in request types**, each written with the standard library
+- **Seven opt-in request types**, each written with the standard library
   alone, in no default build and not in the published image: build with
-  `make build OPT_IN_REQUEST_TYPES=smtp,modbus,mqtt,websocket,ftp`, or the
-  image's `OPT_IN_REQUEST_TYPES` build argument, naming those you want.
-  Together they add about 0.3 MB to the binary.
+  `make build OPT_IN_REQUEST_TYPES=smtp,modbus,mqtt,websocket,ftp,imap,pop3`,
+  or the image's `OPT_IN_REQUEST_TYPES` build argument, naming those you
+  want. Together they add about 0.5 MB to the binary.
 - **[`smtp`](docs/SMTP.md)** holds a mail server's session up to, and never
   including, the message: the greeting, the extensions `EHLO` lists,
-  `STARTTLS`, a login with `PLAIN`, `LOGIN` or `XOAUTH2` (Gmail with an app
-  password, or with a refresh token), and the server's answers to
+  `STARTTLS`, a login with `PLAIN`, `LOGIN`, `CRAM-MD5`, `XOAUTH2` or
+  `OAUTHBEARER` (Gmail with an app password or a refresh token, a
+  Microsoft 365 service account with
+  [its application's token](docs/SMTP.md#an-applications-own-token)), and
+  the server's answers to
   `MAIL FROM` and `RCPT TO`, as a JSON document.
 - **[`modbus`](docs/MODBUS.md)** reads holding and input registers, coils
   and discrete inputs over Modbus TCP, as numbers of the type and byte
@@ -141,14 +144,20 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   [`counts`](docs/IMAP.md#counting-messages-by-a-search) count the
   messages that match a search, such as
   `UNANSWERED BEFORE {{date_imap:-1d}}`, `FLAGGED` or `FROM "{{param_sender}}"`,
-  in a mailbox opened read-only; no message is fetched. A Workspace
-  account that takes OAuth alone logs in with
-  [`xoauth2`](docs/IMAP.md#gmail), the block an `smtp` collector takes.
+  in a mailbox opened read-only, and with `oldest` say when the oldest of
+  them arrived, for how long it has waited; no message's text is fetched.
+  It logs in as `smtp` does: a Workspace account that takes OAuth alone
+  with [`xoauth2`](docs/IMAP.md#gmail), the block an `smtp` collector
+  takes.
 - **[`pop3`](docs/POP3.md)**, an opt-in request type, logs in to a mailbox
-  over POP3 and reads how many messages it holds and their size, with
-  nothing fetched. It logs in by `USER` and `PASS`, `APOP`, or SASL
-  `PLAIN`, `LOGIN`, `CRAM-MD5` or `XOAUTH2`, as
-  [`auth`](docs/POP3.md#logging-in) names or the server offers.
+  over POP3 and reads how many messages it holds and their size, and with
+  `list` the size of the largest, with nothing fetched. It logs in by
+  `USER` and `PASS`, `APOP`, or SASL `PLAIN`, `LOGIN`, `CRAM-MD5`,
+  `XOAUTH2` or `OAUTHBEARER`, as [`auth`](docs/POP3.md#logging-in) names
+  or the server offers.
+- A static target of an `smtp`, `imap` or `pop3` collector that logs in
+  with a token names its own mailbox with `username` alone, so one
+  application's token watches many mailboxes.
 - The clock format `{{date_imap}}` writes a date as an IMAP search takes
   it, `9-Nov-2026`.
 - A Python script reads the probe's parameters as
@@ -175,7 +184,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A Python script has `response.ok`, whether the status is a success, and
   [`log(message, level="info")`](docs/PYTHON.md#what-a-script-has), which
   writes a line of the exporter's log at `debug`, `info`, `warning` or
-  `error`, where `print` is seen at debug level only.
+  `error`, where `print` is seen at debug level only. The lines a script
+  logged before it failed are written with its failure.
 
 ### Fixed
 

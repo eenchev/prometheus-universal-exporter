@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,18 @@ func (s *smtpStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 					say("334 " + b64(`{"status":"400"}`))
 					_, _ = read()
 				}
+			case "CRAM-MD5":
+				// The challenge of RFC 2195's own example.
+				say("334 " + b64("<1896.697170952@postoffice.reston.mci.net>"))
+				answer, _ := read()
+				accepted = answer == netTestCRAMMD5(s.user, s.pass, "<1896.697170952@postoffice.reston.mci.net>")
+			case "OAUTHBEARER":
+				host, port, _ := net.SplitHostPort(s.Addr)
+				accepted = initial == b64("n,a="+s.user+",\x01host="+host+"\x01port="+port+"\x01auth=Bearer "+s.token+"\x01\x01")
+				if !accepted {
+					say("334 " + b64(`{"status":"invalid_token"}`))
+					_, _ = read()
+				}
 			}
 			if accepted {
 				say("235 2.7.0 Accepted")
@@ -201,9 +214,12 @@ func TestAnSMTPScrapeReadsTheGreetingAndTheExtensions(t *testing.T) {
 	}
 }
 
-// AUTH logs in with PLAIN, LOGIN and XOAUTH2, each as its RFC writes it,
-// which the stub checks byte for byte: PLAIN where the collector names no
-// mechanism and the server offers it, LOGIN where it offers that alone.
+// AUTH logs in with PLAIN, LOGIN, CRAM-MD5, XOAUTH2 and OAUTHBEARER, each
+// as its RFC writes it, which the stub checks byte for byte: PLAIN where
+// the collector names no mechanism and the server offers it, LOGIN where
+// it offers that alone. A token the server refuses by OAUTHBEARER is
+// ended with the one byte its error asks for, and a secret of neither
+// mechanism is in the error or the trace.
 func TestAnSMTPScrapeLogsInWithPlainLoginAndXOAuth2(t *testing.T) {
 	password := testutil.WriteFile(t, "password", "app pass word\n")
 	token := testutil.WriteFile(t, "token", "ya29.token\n")
@@ -217,11 +233,33 @@ func TestAnSMTPScrapeLogsInWithPlainLoginAndXOAuth2(t *testing.T) {
 		"login where it is all": {SMTPConfig{}, "LOGIN", withAccount("me@example.com", password), "LOGIN"},
 		"login when named":      {SMTPConfig{}, "LOGIN PLAIN", withLogin("login", nil, withAccount("me@example.com", password)), "LOGIN"},
 		"xoauth2 from a file":   {SMTPConfig{}, "PLAIN XOAUTH2", withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "XOAUTH2"},
+		"cram-md5 when named":   {SMTPConfig{}, "CRAM-MD5 PLAIN", withLogin("cram-md5", nil, withAccount("me@example.com", password)), "CRAM-MD5"},
+		"oauthbearer":           {SMTPConfig{}, "OAUTHBEARER XOAUTH2", withLogin("oauthbearer", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "OAUTHBEARER"},
 	} {
 		s := newSMTPStub(t, func(s *smtpStub) { s.mechanisms = tc.mechanisms })
 		doc := smtpDoc(t, smtpCollector(t, s, tc.own, tc.change), s.Addr, RequestOverrides{})
 		if doc.Auth == nil || doc.Auth.Mechanism != tc.want || doc.Auth.Code != 235 {
 			t.Errorf("%s: auth is %+v, want %s accepted", name, doc.Auth, tc.want)
+		}
+	}
+	stale := testutil.WriteFile(t, "stale", "ya29.stale-token\n")
+	wrong := testutil.WriteFile(t, "wrong", "hunter2-wrong\n")
+	for how, change := range map[string]func(*model.RequestConfig){
+		"AUTH OAUTHBEARER": withLogin("oauthbearer", &model.XOAuth2Config{TokenFile: stale}, withAccount("me@example.com", "")),
+		"AUTH CRAM-MD5":    withLogin("cram-md5", nil, withAccount("me@example.com", wrong)),
+	} {
+		s := newSMTPStub(t, func(s *smtpStub) { s.mechanisms = "CRAM-MD5 OAUTHBEARER" })
+		ctx, trace := WithRequestTrace(context.Background())
+		_, err := FetchCollector(ctx, s.Addr, smtpCollector(t, s, SMTPConfig{}, change), RequestOverrides{}, nil)
+		sent := s.sent()
+		if err == nil || !strings.Contains(err.Error(), "refused "+how+" for me@example.com with 535") {
+			t.Errorf("%s: err=%v", how, err)
+		}
+		if how == "AUTH OAUTHBEARER" && !slices.Contains(sent, "AQ==") {
+			t.Errorf("a refused OAUTHBEARER was not ended with its one byte: %q", sent)
+		}
+		if shown := fmt.Sprint(err, trace.Requests()); strings.Contains(shown, "ya29.stale") || strings.Contains(shown, "hunter2") || strings.Contains(shown, netTestCRAMMD5("me@example.com", "hunter2-wrong", "<1896.697170952@postoffice.reston.mci.net>")) || !strings.Contains(shown, "***") {
+			t.Errorf("%s: the error or the trace holds a secret, or masks nothing: %s", how, shown)
 		}
 	}
 }
@@ -376,11 +414,11 @@ func TestSMTPConfigurationRules(t *testing.T) {
 		want   string
 	}{
 		"starttls":           {SMTPConfig{StartTLS: "maybe"}, nil, `request.starttls_mode "maybe" is not auto, required or never`},
-		"auth":               {SMTPConfig{}, withLogin("cram-md5", nil, nil), `request.auth "cram-md5" is not plain, login or xoauth2`},
+		"auth":               {SMTPConfig{}, withLogin("apop", nil, nil), `request.auth "apop" is not plain, login, cram-md5, xoauth2 or oauthbearer`},
 		"no username":        {SMTPConfig{}, withLogin("plain", nil, nil), "logs in without request.username"},
 		"no password":        {SMTPConfig{}, withAccount("me@example.com", ""), "sets request.username without request.password_file"},
 		"xoauth2 no source":  {SMTPConfig{}, withLogin("xoauth2", nil, withAccount("me@example.com", "")), "request.auth is xoauth2 without request.xoauth2"},
-		"xoauth2 both":       {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t", TokenURL: "https://x/t"}, withAccount("me@example.com", "")), "token_file beside the keys of the refresh token grant"},
+		"xoauth2 both":       {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t", TokenURL: "https://x/t"}, withAccount("me@example.com", "")), "token_file beside the keys of a grant"},
 		"xoauth2 http":       {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenURL: "http://x/t", ClientID: "c", RefreshTokenFile: "/r"}, withAccount("me@example.com", "")), "is not an https:// URL"},
 		"xoauth2 no refresh": {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenURL: "https://x/t", ClientID: "c"}, withAccount("me@example.com", "")), "without refresh_token_file"},
 		"password beside":    {SMTPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t"}, withAccount("me@example.com", "/p")), "request.password_file beside xoauth2"},

@@ -2,8 +2,7 @@
 
 The `pop3` request type logs in to a mail server as a client that fetches
 mail over POP3 does and asks how much mail the mailbox holds: the greeting,
-`CAPA`, `STLS`, a login, then `STAT`. No message is listed, fetched or
-deleted. What the server said is handed to the transforms as one JSON
+`CAPA`, `STLS`, a login, then `STAT`. No message is fetched or deleted. What the server said is handed to the transforms as one JSON
 document. Use it to watch:
 
 - how many messages wait in a mailbox and how large they are together,
@@ -65,8 +64,9 @@ collectors:
 | --- | --- | --- |
 | `type` | — | **Required.** `pop3`. |
 | `username`, `password_file` | — | The account the session logs in to. The file is read at each scrape. Left out, the session does not log in, and the document holds the greeting and the capabilities alone. |
-| `auth` | the server's (see [Logging in](#logging-in)) | The mechanism: `user`, `apop`, `plain`, `login`, `cram-md5` or `xoauth2`. |
-| `xoauth2` | — | Where the access token of `AUTH XOAUTH2` comes from, the block the [`smtp` type takes](SMTP.md#xoauth2); it implies `auth: xoauth2`, and takes the place of `password_file`. |
+| `auth` | the server's (see [Logging in](#logging-in)) | The mechanism: `user`, `apop`, `plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`. |
+| `xoauth2` | — | Where the access token of `xoauth2` and `oauthbearer` comes from, the block the [`smtp` type takes](SMTP.md#xoauth2); it implies `auth: xoauth2`, and takes the place of `password_file`. |
+| `list` | `false` | Also ask `LIST`, for the size of the largest message: `largest_bytes` in the document. The answer has a line for each message. |
 | `allow_plaintext` | `false` | Log in over a connection that is not TLS, to a server that has none. |
 | `tls` | — | How the server's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls). |
 | `max_response_bytes` | the collector's limit | The most the server's responses may be, together. |
@@ -88,6 +88,7 @@ collector's [label values](REQUESTS.md#in-label-values). The decoder is
 | `login` | `AUTH LOGIN` (SASL) | `password_file` |
 | `cram-md5` | `AUTH CRAM-MD5` (SASL), an HMAC of the server's challenge | `password_file` |
 | `xoauth2` | `AUTH XOAUTH2` (SASL), an OAuth 2.0 access token | `xoauth2` |
+| `oauthbearer` | `AUTH OAUTHBEARER` (SASL, RFC 7628), the same token | `xoauth2` |
 
 Left out, the login is `user` where the server's `CAPA` names `USER`, or
 answers nothing, as an old server's does; else `plain`, else `login`, of
@@ -138,7 +139,9 @@ For Microsoft 365 the target is `pop3s://outlook.office365.com`, the
 endpoint `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` and
 the scope `https://outlook.office.com/POP.AccessAsUser.All`. The block's
 keys, how long a token is kept and how the refresh token is made are those
-of the [`smtp` type's `xoauth2`](SMTP.md#xoauth2).
+of the [`smtp` type's `xoauth2`](SMTP.md#xoauth2), and so is
+[an application's own token](SMTP.md#an-applications-own-token), for a
+service account.
 
 Gmail hands a POP3 client the messages its POP setting covers, which is not
 what the inbox shows; its [`imap`](IMAP.md#gmail) counts are the inbox's.
@@ -165,7 +168,8 @@ before anything is sent. Logs and labels show the target as
   "authenticated": true,
   "auth": "user",
   "messages": 12,
-  "size_bytes": 123456
+  "size_bytes": 123456,
+  "largest_bytes": 98765
 }
 ```
 
@@ -175,7 +179,8 @@ for a server that knows no `CAPA`. `apop` says whether the greeting has the
 timestamp `APOP` needs. `auth` is the mechanism the login used. `messages`
 and `size_bytes` are what `STAT` answered, the messages in the mailbox and
 their bytes together; with `auth` they are `null` when the collector has no
-account.
+account. `largest_bytes` is the size of the largest message, `null` unless
+the collector sets `list`, and for a mailbox without a message.
 
 ## Static targets
 
@@ -184,22 +189,25 @@ server, written as a probe's target is. Its `request` may set `timeout`,
 and `username`, `password_file` and `tls` for a server with an account or a
 certificate authority of its own; a target that sets `username` logs in
 with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with `xoauth2` sets no
-`password_file`: the token is one account's.
+whole. A target of a collector that logs in with a token sets no
+`password_file`; its `username` alone names the mailbox the collector's
+token logs in to, which is how one
+[application's token](SMTP.md#an-applications-own-token) watches many.
 
 ## Limits
 
 A scrape ends at its deadline, the probe's `timeout` or the scrape
 timeout, and after 30 seconds when it has neither. One line of a response
 may be 4 KiB, a `CAPA` answer 200 lines, and the responses together
-`max_response_bytes`; more fails the scrape, the last as a limit exceeded.
+`max_response_bytes`, the lines of `LIST` among them, about 10 bytes a
+message; more fails the scrape, the last as a limit exceeded.
 One connection is made for each scrape; none is kept.
 
 ## Errors and self-metrics
 
 The scrape fails, naming the server and its answer, when the greeting is
 not `+OK`, `STLS` is refused, TLS cannot be begun, the certificate does not
-verify, the login is refused, or `STAT` is:
+verify, the login is refused, or `STAT` or `LIST` is:
 
 ```text
 the server mail.example.com:995 refused PASS for orders@example.com with -ERR [AUTH] Username and password not accepted.
@@ -223,10 +231,10 @@ or `STAT` with an account.
   it for a moment, and fails with the server's `-ERR [IN-USE]` while a mail
   client, or another scrape of the same account, is in it; that client
   fails the same way if it comes while a scrape is.
-- No message is listed or fetched: there is no size of the largest
-  message and no age of the oldest. The [`imap` type](IMAP.md) counts by a
-  search.
-- `OAUTHBEARER`, `NTLM`, `GSSAPI` and `SCRAM` logins are not spoken.
+- No message is fetched: there is no age of the oldest message. The
+  [`imap` type](IMAP.md) counts by a search and says when the oldest
+  match arrived.
+- `NTLM`, `GSSAPI` and `SCRAM` logins are not spoken.
 - A SASL credential is sent in answer to the server's challenge, one
   round trip more than the form that puts it in the `AUTH` command, which
   not every server takes.

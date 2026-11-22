@@ -2800,14 +2800,15 @@
                 "type": "array"
               },
               "auth": {
-                "description": "smtp, imap and pop3: the mechanism the session logs in with: plain or login, with username and password_file, or xoauth2, with username and xoauth2; pop3 also takes user (USER and PASS), apop and cram-md5, each with username and password_file. Left out, the type's choice of what the server offers, or xoauth2 when xoauth2 is set.",
+                "description": "smtp, imap and pop3: the mechanism the session logs in with: plain, login or cram-md5, with username and password_file, or xoauth2 or oauthbearer, with username and xoauth2; pop3 also takes user (USER and PASS) and apop, each with username and password_file. Left out, the type's choice of what the server offers, or xoauth2 when xoauth2 is set.",
                 "enum": [
                   "plain",
                   "login",
+                  "cram-md5",
                   "xoauth2",
+                  "oauthbearer",
                   "user",
                   "apop",
-                  "cram-md5",
                   ""
                 ],
                 "type": "string"
@@ -3147,6 +3148,9 @@
                         "boolean"
                       ]
                     },
+                    "oldest": {
+                      "type": "boolean"
+                    },
                     "search": {
                       "type": [
                         "string",
@@ -3485,6 +3489,10 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "list": {
+                "description": "pop3: also ask LIST, each message's size, for the size of the largest: largest_bytes in the document. The answer has a line for each message of the mailbox, held to the response limit; no message is fetched.",
+                "type": "boolean"
               },
               "login": {
                 "additionalProperties": false,
@@ -6425,7 +6433,7 @@
               },
               "xoauth2": {
                 "additionalProperties": false,
-                "description": "smtp, imap and pop3: where the OAuth 2.0 access token of an XOAUTH2 login comes from: token_file, a file that holds one, or the refresh token grant, token_url with refresh_token_file, client_id or client_id_file and, for a confidential client, client_secret_file. See docs/SMTP.md#xoauth2.",
+                "description": "smtp, imap and pop3: where the OAuth 2.0 access token of an XOAUTH2 or OAUTHBEARER login comes from: token_file, a file that holds one, or a grant at token_url, with client_id or client_id_file: the refresh token grant, with refresh_token_file and, for a confidential client, client_secret_file, or grant: client_credentials, an application's own token, with client_secret_file. See docs/SMTP.md#xoauth2.",
                 "properties": {
                   "client_id": {
                     "description": "The OAuth client's id, written; or client_id_file.",
@@ -6450,6 +6458,15 @@
                       "number",
                       "boolean"
                     ]
+                  },
+                  "grant": {
+                    "description": "How a token is asked of token_url: refresh_token, the default, trades refresh_token_file for one, an account's own consent; client_credentials asks with the client's id and secret alone, an application's token, which logs in to the mailboxes the application was given.",
+                    "enum": [
+                      "refresh_token",
+                      "client_credentials",
+                      ""
+                    ],
+                    "type": "string"
                   },
                   "refresh_token_file": {
                     "description": "A file holding the refresh token the endpoint trades for an access token.",
@@ -6479,7 +6496,7 @@
                     ]
                   },
                   "token_url": {
-                    "description": "The token endpoint of the refresh token grant, an https:// URL, such as https://oauth2.googleapis.com/token.",
+                    "description": "The token endpoint of the grant, an https:// URL, such as https://oauth2.googleapis.com/token.",
                     "type": [
                       "string",
                       "number",

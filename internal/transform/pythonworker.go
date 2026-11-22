@@ -2280,6 +2280,15 @@ def answer(document):
             if n>most: raise too_long('data')
         text=deep_dumps(document)
     answers.write(text+'\n'); answers.flush()
+# What a script logged with log(...), each line marked for the exporter to
+# take out (transform/pythonlog.go), and how many lines it asked for: of a
+# run, emptied when the next begins. The lines have bounds of their own,
+# twenty of a run and 1,024 characters each, so that what a script prints,
+# which is cut at 4 KiB, takes no room of theirs.
+logged=[]; asked=[0]
+def logged_lines():
+    if asked[0]>20: return ''.join(logged)+'\x00pue-log:warning\x00%d more lines the script logged are not written; a run writes 20\x00'%(asked[0]-20)
+    return ''.join(logged)
 def failed_check(most):
     # A script's error was written whole, however long: the traceback with
     # a message as long as the response, joined, written as JSON and sent,
@@ -2571,6 +2580,14 @@ def failed_check(most):
                 written=json.dumps({'ok': False, 'error': text[:n]})
                 if len(written)<=most or not n: break
                 n-=1
+        # What the script logged before it failed goes with the failure,
+        # which is often what explains it, where the line has the room:
+        # the failure is never cut for it.
+        if logged and written.endswith('}'):
+            try:
+                more=written[:-1]+', "log": '+json.dumps(logged_lines())+'}'
+                if len(more)<=most: written=more
+            except BaseException: pass
         answers.write(written+'\n'); answers.flush()
     return failed
 failed=failed_check(most)
@@ -2579,6 +2596,9 @@ answer({'ok': True, 'ready': True})
 while True:
     line=requests.readline()
     if not line: break
+    # A run starts with nothing logged: a request that fails before its
+    # script runs has no line of the run before it to carry.
+    del logged[:]; asked[0]=0
     try:
         # A request nested deeper than json reads one is read without it.
         try: p=json.loads(line)
@@ -2634,14 +2654,10 @@ while True:
                 timestamp=int(timestamp)
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
-        logged=[]; asked=[0]
         def log_line(message,level='info'):
             # A line of the exporter's log at a level, where print is at
-            # debug only: handed back after what the script printed, marked,
-            # for the exporter to take out (transform/pythonlog.go). The
-            # lines have bounds of their own, twenty of a run and 1,024
-            # characters each, so that what a script prints, which is cut
-            # at 4 KiB, takes no room of theirs.
+            # debug only: handed back after what the script printed, or
+            # with its failure (logged, above).
             if level not in ('debug','info','warning','error'): raise ValueError('log level %s is not one of "debug", "info", "warning" and "error"'%shown(level))
             asked[0]+=1
             if asked[0]>20: return
@@ -2657,8 +2673,7 @@ while True:
             exec(compile(p['script'],'<collector-python>','exec'),scope,scope)
         log=sink.getvalue()
         if len(log)>4096: log=log[:4096]+'... (%d more characters)'%(len(log)-4096)
-        if asked[0]>20: logged.append('\x00pue-log:warning\x00%d more lines the script logged are not written; a run writes 20\x00'%(asked[0]-20))
-        if logged: log+=''.join(logged)
+        if logged: log+=logged_lines()
         result={'ok':True,'log':log}
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics

@@ -83,8 +83,8 @@ collectors:
 | --- | --- | --- |
 | `type` | — | **Required.** `imap`. |
 | `username`, `password_file` | — | The account the session logs in to. The file is read at each scrape. Left out, the session does not log in, and the document holds the greeting and the capabilities alone. |
-| `auth` | `plain`, or `login` where the server offers no `AUTH=PLAIN` | The mechanism: `plain`, `login` or `xoauth2`. |
-| `xoauth2` | — | Where the access token of `AUTHENTICATE XOAUTH2` comes from, the block the [`smtp` type takes](SMTP.md#xoauth2); it implies `auth: xoauth2`, and takes the place of `password_file`. |
+| `auth` | `plain`, or `login` where the server offers no `AUTH=PLAIN` | The mechanism: `plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`. |
+| `xoauth2` | — | Where the access token of `xoauth2` and `oauthbearer` comes from, the block the [`smtp` type takes](SMTP.md#xoauth2); it implies `auth: xoauth2`, and takes the place of `password_file`. |
 | `mailboxes` | `[INBOX]` | Up to 50 mailboxes, each by its name, such as `Archive/2026`, or by a pattern: `*` is any text and `%` any text within one level, so `*` is every mailbox of the account. A pattern is listed with `LIST`, and each mailbox of the list is asked about. May contain `{{param_name}}` placeholders. |
 | `quota` | `false` | Also ask for the quota of the first mailbox, with `GETQUOTAROOT`, where the server has `QUOTA`. |
 | `counts` | — | Up to 20 [counts of the messages that match a search](#counting-messages-by-a-search). |
@@ -134,7 +134,8 @@ the server offers it. A path, a user or another scheme is refused with
      "usage_bytes": 1048576, "limit_bytes": 16106127360}
   ],
   "counts": [
-    {"name": "waiting_a_day", "mailbox": "INBOX", "ok": true, "text": "SEARCH completed (Success)", "count": 3}
+    {"name": "waiting_a_day", "mailbox": "INBOX", "ok": true, "text": "SEARCH completed (Success)", "count": 3,
+     "oldest_timestamp": null}
   ]
 }
 ```
@@ -167,6 +168,9 @@ request:
   counts:
     - name: waiting_a_day
       search: UNANSWERED BEFORE {{date_imap:-1d}}
+    - name: unanswered
+      search: UNANSWERED
+      oldest: true
     - name: flagged
       search: FLAGGED
     - name: from_billing
@@ -179,6 +183,12 @@ metrics:
     labels:
       - name: search
         expression: .name
+  - name: imap_oldest_matching_age_seconds
+    items: .counts[] | select(.oldest_timestamp != null)
+    expression: $scrape_time - .oldest_timestamp
+    labels:
+      - name: search
+        expression: .name
 ```
 
 | Key | Default | Notes |
@@ -186,6 +196,7 @@ metrics:
 | `name` | — | **Required.** What a rule reads the count by: letters, digits and underscores, each name once. |
 | `mailbox` | `INBOX` | The mailbox searched, by its name; no pattern. May contain `{{param_name}}` placeholders. |
 | `search` | — | **Required.** The criteria of an IMAP `SEARCH`, in printable ASCII; several must all match. |
+| `oldest` | `false` | Also ask when the first of the matching messages arrived: `oldest_timestamp` in the document. |
 
 Criteria most servers take: `ALL`, `UNSEEN`, `SEEN`, `UNANSWERED`,
 `FLAGGED`, `DELETED`, `FROM "text"`, `TO "text"`, `SUBJECT "text"`,
@@ -202,6 +213,14 @@ nothing read and changes no flag, and the exporter fetches no message. A
 as in `FROM "{{param_sender}}"`, and its value may hold no double quote or
 backslash, so a probe changes the text searched for and never the
 criteria.
+
+With `oldest`, the count also says how long its oldest message has waited,
+which is what an alert on an unanswered inbox wants. The first of the
+matching messages in the mailbox's own order, the order they arrived in
+it, is asked for its arrival date, `INTERNALDATE`, and nothing else of it:
+`oldest_timestamp` is that date in seconds since the epoch, `null` when
+nothing matches. A message moved into the mailbox later than others
+arrived keeps its place after them.
 
 A mailbox the server does not open and a search it refuses, as it does
 criteria it cannot read, are answers: the count is in the document with
@@ -257,8 +276,10 @@ server, written as a probe's target is. Its `request` may set `timeout`,
 and `username`, `password_file` and `tls` for a server with an account or a
 certificate authority of its own; a target that sets `username` logs in
 with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with `xoauth2` sets no
-`password_file`: the token is one account's.
+whole. A target of a collector that logs in with a token sets no
+`password_file`; its `username` alone names the mailbox the collector's
+token logs in to, which is how one
+[application's token](SMTP.md#an-applications-own-token) watches many.
 
 ## Limits
 
@@ -293,11 +314,12 @@ With `web.self_metrics.verbose`, a scrape is labelled with
 
 ## Limitations
 
-- No message is read: there is no metric of a message's subject, sender
-  or age, only how many match a search.
+- No message is read: there is no metric of a message's subject or
+  sender, only how many match a search and when the oldest of them
+  arrived.
 - A search is sent without a charset, so its text is ASCII.
-- The login is `PLAIN`, `LOGIN` or `XOAUTH2`. `OAUTHBEARER`, `CRAM-MD5`,
-  `NTLM` and `GSSAPI` are not spoken.
+- The login is `PLAIN`, `LOGIN`, `CRAM-MD5`, `XOAUTH2` or `OAUTHBEARER`.
+  `NTLM`, `GSSAPI` and `SCRAM` are not spoken.
 - `unseen` is what the server counts as not `\Seen`, for the whole mailbox;
   Gmail counts by message, not by conversation as its web page does.
 - The quota is that of the first mailbox's root. Many servers have no

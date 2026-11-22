@@ -359,10 +359,11 @@ type RequestConfig struct {
 	StartTLS string `yaml:"starttls"`
 	// Auth and XOAuth2 belong to the types that log in to a mail server,
 	// smtp, imap and pop3: the mechanism the login is made with, plain,
-	// login or xoauth2, and for pop3 user, apop and cram-md5 too, the
-	// type's own choice when empty, and where the OAuth 2.0 access token
-	// of xoauth2 comes from (fetch/netxoauth2.go). Both are left out of a
-	// collector written as YAML when unset.
+	// login, cram-md5, xoauth2 or oauthbearer, and for pop3 user and apop
+	// too, the type's own choice when empty, and where the OAuth 2.0
+	// access token of xoauth2 and oauthbearer comes from
+	// (fetch/netxoauth2.go). Both are left out of a collector written as
+	// YAML when unset.
 	Auth    string         `yaml:"auth,omitempty"`
 	XOAuth2 *XOAuth2Config `yaml:"xoauth2,omitempty"`
 	// AllowPlaintext belongs to imap and pop3: log in over a connection
@@ -406,12 +407,15 @@ type RequestConfig struct {
 	Order []string `yaml:"-"`
 }
 
-// XOAuth2Config is request.xoauth2: where the OAuth 2.0 access token of an
-// smtp or imap collector's XOAUTH2 login comes from, a file that holds
-// one, kept current by whatever wrote it, or the refresh token grant
-// (RFC 6749 § 6) at token_url.
+// XOAuth2Config is request.xoauth2: where the OAuth 2.0 access token of a
+// mail collector's XOAUTH2 or OAUTHBEARER login comes from, a file that
+// holds one, kept current by whatever wrote it, or a grant at token_url:
+// the refresh token grant (RFC 6749 § 6), which Grant names or leaves
+// out, or the client credentials grant (§ 4.4), an application's own
+// token, which a service account logs in to mailboxes with.
 type XOAuth2Config struct {
 	TokenFile        string   `yaml:"token_file,omitempty"`
+	Grant            string   `yaml:"grant,omitempty"`
 	TokenURL         string   `yaml:"token_url,omitempty"`
 	ClientID         string   `yaml:"client_id,omitempty"`
 	ClientIDFile     string   `yaml:"client_id_file,omitempty"`

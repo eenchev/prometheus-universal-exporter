@@ -549,8 +549,9 @@ start once and then serves scrape after scrape.
   own, as `python transform logged` with the collector, the target and the
   message, for
   what should be seen without debug logging. A run writes at most 20
-  lines, each of at most 1,024 characters, whatever it prints; a script
-  that fails writes its failure and not what it logged before.
+  lines, each of at most 1,024 characters, whatever it prints. A script
+  that fails has the lines it logged before written with its failure,
+  which they often explain.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with

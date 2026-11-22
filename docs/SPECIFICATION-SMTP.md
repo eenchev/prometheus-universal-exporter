@@ -27,17 +27,21 @@ with `request_type_smtp`.
 Of the common part it takes `username`, `password_file`, `auth`, `xoauth2`,
 `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`, the
 login's keys as [`imap` does](SPECIFICATION-IMAP.md). `auth` MUST be
-`plain`, `login` or `xoauth2`, and left out is `plain` where the server
-offers it, else `login`. It MUST need `username`; `plain` and `login` MUST
-need `password_file`, and `xoauth2` the `xoauth2` block and no
-`password_file`. `xoauth2` MUST be `token_file`, or `token_url` (https, no
-credentials) with `refresh_token_file` and one of `client_id` and
-`client_id_file`, and optionally `client_secret_file` and `scopes`; both
-sources together MUST be refused. It implies `auth: xoauth2`, and a static
-target of such a collector that sets `password_file` MUST be refused at
-load. A static
-target's request block takes `timeout`, `username`, `password_file` and
-`tls`.
+`plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`, which the schema
+MUST hold it to for the type, and left out is `plain` where the server
+offers it, else `login`. It MUST need `username`; `plain`, `login` and
+`cram-md5` MUST need `password_file`, and `xoauth2` and `oauthbearer` the
+`xoauth2` block and no `password_file`. `xoauth2` MUST be `token_file`, or
+`token_url` (https, no credentials) with one of `client_id` and
+`client_id_file` and, by its `grant`: for `refresh_token`, which it is
+left out, `refresh_token_file` and optionally `client_secret_file`; for
+`client_credentials`, `client_secret_file` and no `refresh_token_file`;
+optionally `scopes`. Both sources together, and another `grant`, MUST be
+refused. The block implies `auth: xoauth2`. A static target's request
+block takes `timeout`, `username`, `password_file` and `tls`; under a
+collector that logs in with a token its `password_file` MUST be refused at
+load, and its `username` alone MUST be the account a scrape of it logs in
+to with the collector's token.
 
 - A target MUST be `host`, `host:port`, `smtp://host:port` or
   `smtps://host:port`, port 25, and 465 for `smtps://`; anything else, a
@@ -57,12 +61,19 @@ target's request block takes `timeout`, `username`, `password_file` and
   the mode is `never`: the scrape MUST fail before `AUTH`.
 - `PLAIN` MUST be sent as RFC 4616 has it with an empty authorization
   identity, `LOGIN` as the username and the password each in answer to a
-  334, and `XOAUTH2` as `user=<username>^Aauth=Bearer <token>^A^A`; a 334
-  in answer to `XOAUTH2` MUST be answered with an empty line. A mechanism
+  334, `CRAM-MD5` as the username and the HMAC-MD5, in lower-case
+  hexadecimal, of the server's challenge keyed by the password (RFC 2195),
+  in answer to it, and `XOAUTH2` as
+  `user=<username>^Aauth=Bearer <token>^A^A`; a 334 in answer to `XOAUTH2`
+  MUST be answered with an empty line. `OAUTHBEARER` MUST be
+  `n,a=<username>,^Ahost=<host>^Aport=<port>^Aauth=Bearer <token>^A^A`
+  (RFC 7628), a `=` and a `,` of the username written `=3D` and `=2C`, and
+  a 334 in answer to it MUST be answered with the one byte `^A`. A mechanism
   the server does not offer, and any answer but 235, MUST fail the scrape,
   naming the mechanism, the account and the server's reply.
-- An access token of the refresh token grant MUST be asked of `token_url`
-  with `grant_type=refresh_token`, the files read then, and MUST be kept
+- An access token of a grant MUST be asked of `token_url` with
+  `grant_type=refresh_token` or `grant_type=client_credentials`, the
+  latter without a refresh token, the files read then, and MUST be kept
   until a minute before `expires_in` and forgotten when the server refuses
   it; one of `token_file` MUST be read at every scrape.
 - A placeholder's value written into an address MUST hold no blank, angle

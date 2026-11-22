@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // log(message, level) writes a line of the exporter's log at the level it
@@ -64,6 +65,65 @@ metric(name="queue_depth", value=data["depth"])
 	}
 	if _, err := run(t, `log("x", level="fatal")`); err == nil || !strings.Contains(err.Error(), `log level 'fatal' is not one of "debug", "info", "warning" and "error"`) {
 		t.Errorf("an unknown level: %v", err)
+	}
+}
+
+// What a script logged before it failed is written with its failure, in
+// the order it logged it, more than twenty lines said as for a run that
+// succeeds: they are often what explains the failure. What it printed is
+// not, as before. The failure itself is what it was without them, and a
+// failure whose line has no room for them under limits.max_output_bytes
+// is written without them and whole.
+func TestWhatAPythonScriptLoggedBeforeItFailedIsWritten(t *testing.T) {
+	requirePython(t)
+	run := func(script string, change func(*model.Collector)) (string, error) {
+		var out bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		}}))
+		c := workerCollector("queue", script)
+		if change != nil {
+			change(c)
+		}
+		r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(`{}`), Headers: http.Header{}}
+		_, err := executePython(WithRuleLogger(context.Background(), logger), "python3", script, &decode.Decoded{Kind: "text", Data: "{}", Raw: r.Body}, r, c)
+		return out.String(), err
+	}
+	failing := `print("printed first")
+log("the queue answered 3 of 5 shards", "warning")
+log("shard 4 timed out", level="error")
+fail("not every shard answered")
+`
+	got, err := run(failing, nil)
+	if err == nil || !strings.Contains(err.Error(), "RuntimeError: not every shard answered") {
+		t.Fatalf("err=%v", err)
+	}
+	want := `level=WARN msg="python transform logged" collector=queue message="the queue answered 3 of 5 shards"` + "\n" +
+		`level=ERROR msg="python transform logged" collector=queue message="shard 4 timed out"` + "\n"
+	if got != want {
+		t.Errorf("logged\n got %s\nwant %s", got, want)
+	}
+	// The failure is the same with the lines and without them.
+	_, plain := run(`fail("not every shard answered")`, nil)
+	if plain == nil || strings.ReplaceAll(err.Error(), "line 4", "line 1") != plain.Error() {
+		t.Errorf("the failure with lines logged before it\n%v\nis not the one without\n%v", err, plain)
+	}
+	// Another kind of failure, and more lines than a run writes.
+	got, err = run("for i in range(25):\n    log('line %d' % i)\n1/0\n", nil)
+	if err == nil || !strings.Contains(err.Error(), "ZeroDivisionError") || strings.Count(got, "\n") != 21 || !strings.Contains(got, `message="5 more lines the script logged are not written; a run writes 20"`) {
+		t.Errorf("err=%v, logged\n%s", err, got)
+	}
+	// A run after a failure starts with none of its lines.
+	if got, err := run(`metric(name="v", value=1)`, nil); err != nil || got != "" {
+		t.Errorf("the next run: %q, %v", got, err)
+	}
+	// Under an output limit the lines do not fit, the failure is whole.
+	got, err = run("log('x' * 900)\nfail('boom')\n", func(c *model.Collector) { c.Limits.MaxOutputBytes = 400 })
+	if err == nil || !strings.Contains(err.Error(), "RuntimeError: boom") || got != "" {
+		t.Errorf("under a small output limit: err=%v, logged %q", err, got)
 	}
 }
 

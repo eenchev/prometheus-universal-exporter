@@ -145,8 +145,8 @@ which no `RCPT TO` is sent.
 
 ## Gmail
 
-`smtp.gmail.com` takes all three mechanisms, on port 587 with `STARTTLS`
-and on 465 with TLS from the first byte.
+`smtp.gmail.com` takes `PLAIN`, `LOGIN`, `XOAUTH2` and `OAUTHBEARER`, on
+port 587 with `STARTTLS` and on 465 with TLS from the first byte.
 
 With an [app password](https://support.google.com/accounts/answer/185833),
 which an account with 2-Step Verification can make, `PLAIN` and `LOGIN`
@@ -167,6 +167,11 @@ request:
 
 Without one, as for a Workspace account whose administrator allows OAuth
 alone, use `XOAUTH2`.
+
+Gmail's submission servers answer `RCPT TO` with 250 for any address that
+is well formed, and report what cannot be delivered later, by mail: a
+recipient check says something about a mailbox only when asked of the
+servers that take the domain's mail, its MX hosts, on port 25.
 
 ### XOAUTH2
 
@@ -233,11 +238,6 @@ the mail protocol there and access to the mailbox, which Microsoft's
 documentation of app-only access describes. A
 [static target](#static-targets) of such a collector names another mailbox
 with its `username` alone.
-
-Gmail's submission servers answer `RCPT TO` with 250 for any address that
-is well formed, and report what cannot be delivered later, by mail: a
-recipient check says something about a mailbox only when asked of the
-servers that take the domain's mail, its MX hosts, on port 25.
 
 ## Static targets
 

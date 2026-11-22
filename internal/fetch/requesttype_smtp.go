@@ -593,7 +593,11 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		}
 	case netAuthCRAMMD5:
 		if reply, err = s.command("AUTH CRAM-MD5", ""); err == nil && reply.Code == 334 {
-			response, bad := netCRAMMD5Response(user, password, reply.Text)
+			// The challenge as the server wrote it, not as a failure
+			// would show it: a reply's text is cut where a failure's is
+			// and looked through for credentials, and base64 that ends
+			// in a word such as token== would come out masked.
+			response, bad := netCRAMMD5Response(user, password, strings.Join(reply.lines, ""))
 			if bad != nil {
 				_, _ = s.command("*", "* (to end the login)")
 				return nil, fmt.Errorf("the server %s answered AUTH CRAM-MD5 with a challenge that is not base64", hostPort)

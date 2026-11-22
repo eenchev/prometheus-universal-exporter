@@ -44,6 +44,9 @@ type smtpStub struct {
 	token      string
 	refuse     map[string]bool
 	greeting   string
+	// challenge is the CRAM-MD5 challenge it sends, in base64; RFC 2195's
+	// when empty.
+	challenge string
 }
 
 func (s *smtpStub) sent() []string {
@@ -110,10 +113,16 @@ func (s *smtpStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 					_, _ = read()
 				}
 			case "CRAM-MD5":
-				// The challenge of RFC 2195's own example.
-				say("334 " + b64("<1896.697170952@postoffice.reston.mci.net>"))
+				// The challenge of RFC 2195's own example, unless the
+				// stub has one of its own, written as it is sent.
+				challenge := s.challenge
+				if challenge == "" {
+					challenge = b64("<1896.697170952@postoffice.reston.mci.net>")
+				}
+				say("334 " + challenge)
 				answer, _ := read()
-				accepted = answer == netTestCRAMMD5(s.user, s.pass, "<1896.697170952@postoffice.reston.mci.net>")
+				raw, _ := base64.StdEncoding.DecodeString(challenge)
+				accepted = answer == netTestCRAMMD5(s.user, s.pass, string(raw))
 			case "OAUTHBEARER":
 				host, port, _ := net.SplitHostPort(s.Addr)
 				accepted = initial == b64("n,a="+s.user+",\x01host="+host+"\x01port="+port+"\x01auth=Bearer "+s.token+"\x01\x01")
@@ -260,6 +269,27 @@ func TestAnSMTPScrapeLogsInWithPlainLoginAndXOAuth2(t *testing.T) {
 		}
 		if shown := fmt.Sprint(err, trace.Requests()); strings.Contains(shown, "ya29.stale") || strings.Contains(shown, "hunter2") || strings.Contains(shown, netTestCRAMMD5("me@example.com", "hunter2-wrong", "<1896.697170952@postoffice.reston.mci.net>")) || !strings.Contains(shown, "***") {
 			t.Errorf("%s: the error or the trace holds a secret, or masks nothing: %s", how, shown)
+		}
+	}
+}
+
+// A CRAM-MD5 challenge is answered as the server wrote it, whatever its
+// base64 reads like and however long it is: one that ends as a credential
+// does, in password==, which a failure's text would show masked, and one
+// longer than a failure's text is cut to.
+func TestAnSMTPChallengeIsAnsweredAsItWasWritten(t *testing.T) {
+	password := testutil.WriteFile(t, "password", "app pass word\n")
+	for name, challenge := range map[string]string{
+		"reads as a credential": "xxpassword==",
+		"longer than a failure": base64.StdEncoding.EncodeToString([]byte("<" + strings.Repeat("9", 2400) + "@mail.test>")),
+	} {
+		if name == "reads as a credential" && netShown(challenge) == challenge {
+			t.Fatalf("%q is shown as it is, and tests nothing", challenge)
+		}
+		s := newSMTPStub(t, func(s *smtpStub) { s.mechanisms, s.challenge = "CRAM-MD5", challenge })
+		doc := smtpDoc(t, smtpCollector(t, s, SMTPConfig{}, withLogin("cram-md5", nil, withAccount("me@example.com", password))), s.Addr, RequestOverrides{})
+		if doc.Auth == nil || doc.Auth.Mechanism != "CRAM-MD5" || doc.Auth.Code != 235 {
+			t.Errorf("%s: auth is %+v, want CRAM-MD5 accepted", name, doc.Auth)
 		}
 	}
 }

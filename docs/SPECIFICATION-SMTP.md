@@ -63,7 +63,8 @@ to with the collector's token.
   identity, `LOGIN` as the username and the password each in answer to a
   334, `CRAM-MD5` as the username and the HMAC-MD5, in lower-case
   hexadecimal, of the server's challenge keyed by the password (RFC 2195),
-  in answer to it, and `XOAUTH2` as
+  in answer to it, the challenge taken as the server wrote it, whole, and
+  `XOAUTH2` as
   `user=<username>^Aauth=Bearer <token>^A^A`; a 334 in answer to `XOAUTH2`
   MUST be answered with an empty line. `OAUTHBEARER` MUST be
   `n,a=<username>,^Ahost=<host>^Aport=<port>^Aauth=Bearer <token>^A^A`

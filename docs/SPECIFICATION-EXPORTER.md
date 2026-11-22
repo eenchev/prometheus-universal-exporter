@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket` and `ftp`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 

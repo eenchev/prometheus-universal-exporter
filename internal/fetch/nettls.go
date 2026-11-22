@@ -10,7 +10,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, mqtt, websocket and ftp request types share beyond
+// What the smtp, mqtt, websocket, ftp, imap and pop3 request types share beyond
 // nettypes.go, which modbus, with neither TLS nor an account, has no use
 // for.
 

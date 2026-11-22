@@ -18,7 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, modbus, mqtt, websocket and ftp request types share: each
+// What the smtp, modbus, mqtt, websocket, ftp, imap and pop3 request types share: each
 // reaches one server at host:port over TCP, or over TLS on it, through the
 // collector's target policy, within the scrape's deadline, on a connection
 // of the scrape's own. The types are opt-in, so this file is in no build

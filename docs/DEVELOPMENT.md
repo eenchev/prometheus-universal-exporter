@@ -582,7 +582,12 @@ true of it by hand. Most have no test that fails when the type is left out
   the builds whose linked modules are checked, for a type that needs
   nothing outside the standard library.
 - For an opt-in type, the Makefile's comment on `OPT_IN_REQUEST_TYPES`,
-  which names the opt-in types and their pages.
+  which names the opt-in types and their pages; `docs/CONFIGURATION.md`'s
+  paragraph of the opt-in types under Choosing request types at build
+  time, with how many there are and what they add to a binary together;
+  § 5.1's sentence of the opt-in types in `docs/SPECIFICATION-EXPORTER.md`;
+  and, for a type that reaches a server over TCP, the comments opening
+  `internal/fetch/nettypes.go` and `nettls.go`.
 
 ## Running the tests
 

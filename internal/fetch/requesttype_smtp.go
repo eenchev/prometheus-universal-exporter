@@ -612,11 +612,13 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		// A refusal comes as a 334 whose text is the error, base64, which
 		// an empty line answers for XOAUTH2 and one byte for OAUTHBEARER;
 		// the 535 follows.
-		credential, end, ended := netXOAuth2Credential(user, token), "", "(an empty line, to end the refused XOAUTH2)"
+		sent := netXOAuth2Credential(user, token)
+		end, ended := "", "(an empty line, to end the refused XOAUTH2)"
 		if mechanism == netAuthOAuthBearer {
-			credential, end, ended = netOAuthBearerCredential(user, hostPort, token), netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
+			sent = netOAuthBearerCredential(user, hostPort, token)
+			end, ended = netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
 		}
-		reply, err = s.command("AUTH "+name+" "+b64(credential), "AUTH "+name+" ***")
+		reply, err = s.command("AUTH "+name+" "+b64(sent), "AUTH "+name+" ***")
 		if err == nil && reply.Code == 334 {
 			netTokens.forget(c.Name, c.Request.XOAuth2)
 			reply, err = s.command(end, ended)

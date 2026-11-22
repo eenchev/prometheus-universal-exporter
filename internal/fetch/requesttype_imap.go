@@ -767,16 +767,16 @@ func (s *imapSession) login(c *model.Collector, password string, offered []strin
 			}
 		}
 	case netAuthXOAuth2, netAuthOAuthBearer:
-		name, credential := "XOAUTH2", ""
 		var token string
 		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
 			return err
 		}
-		if credential = netXOAuth2Credential(user, token); mechanism == netAuthOAuthBearer {
-			name, credential = "OAUTHBEARER", netOAuthBearerCredential(user, hostPort, token)
+		name, sent := "XOAUTH2", netXOAuth2Credential(user, token)
+		if mechanism == netAuthOAuthBearer {
+			name, sent = "OAUTHBEARER", netOAuthBearerCredential(user, hostPort, token)
 		}
 		how = "AUTHENTICATE " + name
-		answer, err = sasl(name, b64(credential))
+		answer, err = sasl(name, b64(sent))
 		if err == nil && answer.status != "OK" {
 			netTokens.forget(c.Name, c.Request.XOAuth2)
 		}

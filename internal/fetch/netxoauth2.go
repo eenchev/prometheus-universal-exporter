@@ -55,13 +55,6 @@ func netAuthWithToken(mechanism string) bool {
 	return mechanism == netAuthXOAuth2 || mechanism == netAuthOAuthBearer
 }
 
-// netAuthSchemaRule is what the configuration schema holds request.auth to
-// for a type that speaks netAuthMechanisms and no other: the common key's
-// own rule allows every mechanism any type speaks.
-func netAuthSchemaRule() map[string]any {
-	return map[string]any{"properties": map[string]any{"auth": map[string]any{"enum": SchemaOptionalEnum(netAuthMechanisms)}}}
-}
-
 // checkNetLogin holds a collector's auth, xoauth2, username and
 // password_file to one another, and fills in auth: xoauth2 for a collector
 // that sets the block alone. sends says, in a refusal, why a password
@@ -154,11 +147,11 @@ func netOAuthBearerCredential(user, hostPort, token string) string {
 	if err != nil {
 		host, port = hostPort, ""
 	}
-	credential := "n,a=" + strings.NewReplacer("=", "=3D", ",", "=2C").Replace(user) + ",\x01host=" + host
+	message := "n,a=" + strings.NewReplacer("=", "=3D", ",", "=2C").Replace(user) + ",\x01host=" + host
 	if port != "" {
-		credential += "\x01port=" + port
+		message += "\x01port=" + port
 	}
-	return credential + "\x01auth=Bearer " + token + "\x01\x01"
+	return message + "\x01auth=Bearer " + token + "\x01\x01"
 }
 
 // netOAuthBearerEnd is what ends an OAUTHBEARER login the server refused:

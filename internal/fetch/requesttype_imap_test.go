@@ -211,11 +211,11 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 				say(tag + " BAD Could not parse command")
 			case counted:
 				// MIN is left out where nothing matches, as RFC 4731 has it.
-				min := ""
+				lowest := ""
 				if numbers := strings.Fields(matches); first && len(numbers) > 0 {
-					min = " MIN " + numbers[0]
+					lowest = " MIN " + numbers[0]
 				}
-				say(fmt.Sprintf(`* ESEARCH (TAG "%s") COUNT %d%s`, tag, len(strings.Fields(matches)), min))
+				say(fmt.Sprintf(`* ESEARCH (TAG "%s") COUNT %d%s`, tag, len(strings.Fields(matches)), lowest))
 				say(tag + " OK SEARCH completed (Success)")
 			default:
 				say(strings.TrimSpace("* SEARCH " + matches))

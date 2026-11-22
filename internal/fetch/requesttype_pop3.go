@@ -630,12 +630,14 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 		}
 		// A refusal comes as a challenge whose text is the error, which
 		// an empty line answers for XOAUTH2 and one byte for OAUTHBEARER.
-		name, credential, last, ended := "XOAUTH2", netXOAuth2Credential(user, token), "", "(an empty line, to end the refused XOAUTH2)"
+		sent := netXOAuth2Credential(user, token)
+		name, last, ended := "XOAUTH2", "", "(an empty line, to end the refused XOAUTH2)"
 		if mechanism == netAuthOAuthBearer {
-			name, credential, last, ended = "OAUTHBEARER", netOAuthBearerCredential(user, hostPort, token), netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
+			sent = netOAuthBearerCredential(user, hostPort, token)
+			name, last, ended = "OAUTHBEARER", netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
 		}
 		if answer, err = begin(name); err == nil && answer.continued {
-			if answer, err = s.answer(b64(credential), hidden); err == nil && answer.continued {
+			if answer, err = s.answer(b64(sent), hidden); err == nil && answer.continued {
 				answer, err = s.answer(last, ended)
 			}
 		}

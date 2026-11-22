@@ -167,13 +167,27 @@ func TestAScriptHasTheMemoryLimitLessTheInterpreter(t *testing.T) {
 // at the smallest limit there is, 32MiB, the worker was already past it
 // when it was ready, and a script that only called metric() ran out of
 // memory.
+//
+// What a script may allocate under 32MiB is what the interpreter leaves
+// of it, which differs by a megabyte or two from one build of Python to
+// another and from one start to the next: 9 or 10 MiB with a
+// distribution's Python 3.12 and 3.13, less with others. So the script
+// asked to fit there allocates 1 MiB, and the one of 8 MiB is asked of
+// 64MiB, where every interpreter has the room: at 32MiB it failed now and
+// then for an interpreter that had not changed.
 func TestASmallMemoryLimitRunsASmallScript(t *testing.T) {
 	requireProcStatus(t)
-	for _, limit := range []model.ByteSize{32 << 20, 64 << 20} {
-		for script, want := range map[string]float64{
+	for limit, scripts := range map[model.ByteSize]map[string]float64{
+		32 << 20: {
+			`metric(name="v", value=1)`:                       1,
+			`metric(name="v", value=len(bytearray(1 << 20)))`: 1 << 20,
+		},
+		64 << 20: {
 			`metric(name="v", value=1)`:                       1,
 			`metric(name="v", value=len(bytearray(8 << 20)))`: 8 << 20,
-		} {
+		},
+	} {
+		for script, want := range scripts {
 			set, err := runWorkerScript(t, limitedCollector("small", script, limit))
 			if err != nil {
 				t.Fatalf("limit %d, %s: %v", limit, script, err)

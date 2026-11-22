@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,11 +23,12 @@ import (
 )
 
 // The imap request type logs in to a mail server as a mail client does and
-// asks how much mail each mailbox holds, without opening one: the greeting,
-// CAPABILITY, STARTTLS, LOGIN or AUTHENTICATE PLAIN, then STATUS for each
-// mailbox the collector names, LIST for each it names by a pattern, and
-// GETQUOTAROOT when it asks for the quota. No mailbox is selected, so no
-// message is read, marked or moved.
+// asks how much mail each mailbox holds: the greeting, CAPABILITY,
+// STARTTLS, LOGIN or AUTHENTICATE, then STATUS for each mailbox the
+// collector names, LIST for each it names by a pattern, GETQUOTAROOT when
+// it asks for the quota, and for each of its counts EXAMINE and SEARCH. A
+// mailbox is opened only to be searched, read-only, so no message is
+// read, marked or moved.
 //
 //	request:
 //	  type: imap
@@ -53,9 +55,19 @@ import (
 
 // IMAPConfig is an imap collector's own request keys.
 type IMAPConfig struct {
-	Mailboxes      []string `yaml:"mailboxes,omitempty"`
-	Quota          bool     `yaml:"quota,omitempty"`
-	AllowPlaintext bool     `yaml:"allow_plaintext,omitempty"`
+	Mailboxes []string    `yaml:"mailboxes,omitempty"`
+	Quota     bool        `yaml:"quota,omitempty"`
+	Counts    []IMAPCount `yaml:"counts,omitempty"`
+}
+
+// IMAPCount is an entry of request.counts: how many messages of a mailbox
+// match a search, counted by the server. The mailbox is opened to search
+// it, read-only, with EXAMINE, which marks nothing read and changes no
+// flag; no message is fetched.
+type IMAPCount struct {
+	Name    string `yaml:"name,omitempty"`
+	Mailbox string `yaml:"mailbox,omitempty"`
+	Search  string `yaml:"search,omitempty"`
 }
 
 func imapRequest(c *model.Collector) IMAPConfig {
@@ -75,9 +87,21 @@ const (
 	// them: each is a command and an answer.
 	imapMaxNamed     = 50
 	imapMaxMailboxes = 500
-	// imapMailboxKind is the kind of templated field a mailbox's name is.
+	// imapMaxCounts bounds request.counts: each is a search of a mailbox.
+	imapMaxCounts = 20
+	// imapMailboxKind is the kind of templated field a mailbox's name is,
+	// and imapSearchKind that of a search's criteria.
 	imapMailboxKind = "imap_mailbox"
+	imapSearchKind  = "imap_search"
 )
+
+// imapCountName is what a count's name may be: what a label or a jq field
+// is written as without quotes.
+var imapCountName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// imapEndsInLiteral is a command that ends in a literal's length, {n} or
+// {n+}: the server takes what follows the line as n bytes of the command.
+var imapEndsInLiteral = regexp.MustCompile(`\{[0-9]+\+?\}\s*$`)
 
 // imapPorts are the schemes of an imap target and their default ports.
 var imapPorts = map[string]int{"": 143, "imap": 143, "imaps": 993}
@@ -85,7 +109,7 @@ var imapPorts = map[string]int{"": 143, "imap": 143, "imaps": 993}
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeIMAP,
-		Fields:       []string{"username", "password_file", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"username", "password_file", "auth", "xoauth2", "allow_plaintext", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Config:       IMAPConfig{},
 		KeyRules:     imapKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
@@ -99,14 +123,26 @@ func init() {
 		AnswerHint: "Paste the JSON document the exporter makes of the server's answers, as the Response of a run shows it",
 		Templates:  imapTemplates,
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
-			return unusedParamsIn(c, unused, "its request.mailboxes or label values")
+			return unusedParamsIn(c, unused, "its request.mailboxes, request.counts or label values")
 		},
-		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkNetTargetAccount(t) },
-		CheckFiles:         accountFileWarnings,
+		CheckTargetRequest: checkNetTargetLogin,
+		CheckFiles: func(c *model.Collector, t *model.StaticTarget) []string {
+			return append(accountFileWarnings(c, t), xoauth2FileWarnings(c, t)...)
+		},
 	})
 	templateEscapers[imapMailboxKind] = func(where, name, value string) (string, error) {
 		if strings.ContainsFunc(value, func(r rune) bool { return r < ' ' || r == 0x7f }) {
 			return "", fmt.Errorf("%s: the value of %s holds a control character, which a mailbox's name written into a command may not", where, name)
+		}
+		return value, nil
+	}
+	// A probe's value is written into a search within double quotes only
+	// (Validate), where it is one string whatever it holds, but for what
+	// ends the string, and what a search sent without a charset may not
+	// hold: so no probe adds a criterion to a search.
+	templateEscapers[imapSearchKind] = func(where, name, value string) (string, error) {
+		if strings.ContainsFunc(value, func(r rune) bool { return r < ' ' || r >= 0x7f || r == '"' || r == '\\' }) {
+			return "", fmt.Errorf("%s: the value of %s holds a double quote, a backslash or a character that is not printable ASCII, which a search's quoted text may not take from a probe", where, name)
 		}
 		return value, nil
 	}
@@ -122,12 +158,11 @@ func (imapRequester) Validate(x *model.Collector) error {
 	}
 	r := &x.Request
 	own := imapRequest(x)
+	if err := checkNetLogin(x, "a login sends both"); err != nil {
+		return err
+	}
 	switch {
-	case r.PasswordFile != "" && r.Username == "":
-		return fmt.Errorf("collector %q sets request.password_file without request.username; name the account, for most servers the mailbox's address", x.Name)
-	case r.Username != "" && r.PasswordFile == "" && !x.RequestNotMade:
-		return fmt.Errorf("collector %q sets request.username without request.password_file; a login sends both, so name the file of the password", x.Name)
-	case r.Username == "" && (len(own.Mailboxes) > 0 || own.Quota):
+	case r.Username == "" && (len(own.Mailboxes) > 0 || own.Quota || len(own.Counts) > 0):
 		return fmt.Errorf("collector %q asks about mailboxes without an account; a server answers STATUS after a login, so set request.username and request.password_file, or leave mailboxes and quota out to read the greeting and the capabilities alone", x.Name)
 	case len(own.Mailboxes) > imapMaxNamed:
 		return fmt.Errorf("collector %q request.mailboxes has %d entries, more than %d; name the rest by a pattern, such as \"Archive/*\"", x.Name, len(own.Mailboxes), imapMaxNamed)
@@ -143,15 +178,83 @@ func (imapRequester) Validate(x *model.Collector) error {
 			return fmt.Errorf("collector %q %w", x.Name, err)
 		}
 	}
+	if len(own.Counts) > imapMaxCounts {
+		return fmt.Errorf("collector %q request.counts has %d entries, more than %d; each is a search of a mailbox at every scrape", x.Name, len(own.Counts), imapMaxCounts)
+	}
+	names := map[string]bool{}
+	for i, count := range own.Counts {
+		at := fmt.Sprintf("request.counts[%d]", i)
+		switch {
+		case !imapCountName.MatchString(count.Name):
+			return fmt.Errorf("collector %q %s.name %q is not a name: letters, digits and underscores, not starting with a digit", x.Name, at, count.Name)
+		case names[count.Name]:
+			return fmt.Errorf("collector %q %s.name %q names two counts; a rule reads a count by its name", x.Name, at, count.Name)
+		case strings.TrimSpace(count.Search) == "":
+			return fmt.Errorf("collector %q %s has no search; write the criteria of an IMAP SEARCH, such as UNSEEN or UNANSWERED BEFORE {{date_imap:-1d}}", x.Name, at)
+		case strings.ContainsFunc(count.Search, func(r rune) bool { return r < ' ' || r >= 0x7f }):
+			return fmt.Errorf("collector %q %s.search holds a character that is not printable ASCII, which a search sent without a charset may not", x.Name, at)
+		case imapEndsInLiteral.MatchString(count.Search):
+			return fmt.Errorf("collector %q %s.search ends in {n}, which a server reads as the length of text sent after the command, and waits for; write the text within double quotes", x.Name, at)
+		case strings.ContainsAny(count.Mailbox, "*%"):
+			return fmt.Errorf("collector %q %s.mailbox %q is a pattern; a search is of one mailbox, so name it", x.Name, at, count.Mailbox)
+		case strings.ContainsFunc(count.Mailbox, func(r rune) bool { return r < ' ' || r == 0x7f }):
+			return fmt.Errorf("collector %q %s.mailbox holds a control character", x.Name, at)
+		}
+		names[count.Name] = true
+	}
+	for _, field := range imapCountTemplates(own) {
+		placeholders, err := field.parse()
+		if err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+		for _, p := range placeholders {
+			if field.kind == imapSearchKind && p.Clock == nil && !imapWithinQuotes(field.text[:p.start]) {
+				return fmt.Errorf("collector %q %s: {{%s}} is not within double quotes; a probe's value is one quoted string of a search, as in FROM \"{{%s}}\", so that it cannot add a criterion", x.Name, field.where, p.Name, p.Name)
+			}
+		}
+	}
 	return nil
 }
 
-// imapTemplates are the mailboxes of an imap collector, which take
-// placeholders.
+// imapWithinQuotes says whether what follows before is within a quoted
+// string, as a server reads one: a backslash takes the character after it,
+// within quotes alone.
+func imapWithinQuotes(before string) bool {
+	within := false
+	for i := 0; i < len(before); i++ {
+		switch {
+		case within && before[i] == '\\':
+			i++
+		case before[i] == '"':
+			within = !within
+		}
+	}
+	return within
+}
+
+// imapTemplates are the mailboxes of an imap collector and the mailbox and
+// the search of each of its counts, which take placeholders.
 func imapTemplates(c *model.Collector, _ RequestOverrides) []templateField {
+	own := imapRequest(c)
 	var out []templateField
-	for i, name := range imapRequest(c).Mailboxes {
+	for i, name := range own.Mailboxes {
 		out = append(out, templateField{fmt.Sprintf("request.mailboxes[%d]", i), name, imapMailboxKind})
+	}
+	return append(out, imapCountTemplates(own)...)
+}
+
+// imapCountTemplates are the templated fields of the counts: of each, its
+// mailbox, INBOX when it names none, and its search, in that order.
+func imapCountTemplates(own IMAPConfig) []templateField {
+	var out []templateField
+	for i, count := range own.Counts {
+		mailbox := count.Mailbox
+		if mailbox == "" {
+			mailbox = "INBOX"
+		}
+		out = append(out,
+			templateField{fmt.Sprintf("request.counts[%d].mailbox", i), mailbox, imapMailboxKind},
+			templateField{fmt.Sprintf("request.counts[%d].search", i), count.Search, imapSearchKind})
 	}
 	return out
 }
@@ -219,6 +322,17 @@ type imapQuota struct {
 	LimitBytes *int64 `json:"limit_bytes"`
 }
 
+// imapCounted is the answer to one of request.counts: how many messages of
+// the mailbox match, null when the server refused to open the mailbox or
+// to search it, whose answer is then in text.
+type imapCounted struct {
+	Name    string `json:"name"`
+	Mailbox string `json:"mailbox"`
+	OK      bool   `json:"ok"`
+	Text    string `json:"text"`
+	Count   *int64 `json:"count"`
+}
+
 // imapDocument is what a scrape hands the transforms.
 type imapDocument struct {
 	Greeting      string        `json:"greeting"`
@@ -228,6 +342,7 @@ type imapDocument struct {
 	Authenticated bool          `json:"authenticated"`
 	Mailboxes     []imapMailbox `json:"mailboxes"`
 	Quota         []imapQuota   `json:"quota"`
+	Counts        []imapCounted `json:"counts"`
 }
 
 // imapSession is one conversation with a server.
@@ -238,6 +353,11 @@ type imapSession struct {
 	// left is what the responses may still take of the response limit.
 	left int64
 	tag  int
+	// lineLimit is the most a line of a response may be: imapLineLimit,
+	// but for the answer to a search a server lists every match of, whose
+	// line is listed.
+	lineLimit int
+	listed    bool
 }
 
 // imapAnswer is the server's answer to a command: its untagged lines, each
@@ -255,12 +375,17 @@ type imapAnswer struct {
 func (s *imapSession) line() (string, error) {
 	var whole strings.Builder
 	for {
-		part, err := netLine(s.conn.r, imapLineLimit-whole.Len())
+		part, err := netLine(s.conn.r, s.lineLimit-whole.Len())
 		if s.left -= int64(len(part)); s.left < 0 {
 			return "", imapTooLarge()
 		}
 		if errors.Is(err, errNetLineTooLong) {
-			return "", fmt.Errorf("a line of the response is longer than %d bytes, which no answer to these commands is", imapLineLimit)
+			if s.listed {
+				// The matches of a search, listed past what the responses
+				// may still be.
+				return "", imapTooLarge()
+			}
+			return "", fmt.Errorf("a line of the response is longer than %d bytes, which no answer to these commands is", s.lineLimit)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -280,8 +405,8 @@ func (s *imapSession) line() (string, error) {
 			whole.WriteString(part)
 			return whole.String(), nil
 		}
-		if n > imapLineLimit-whole.Len()-open {
-			return "", fmt.Errorf("a line of the response is longer than %d bytes, which no answer to these commands is", imapLineLimit)
+		if n > s.lineLimit-whole.Len()-open {
+			return "", fmt.Errorf("a line of the response is longer than %d bytes, which no answer to these commands is", s.lineLimit)
 		}
 		if s.left -= int64(n); s.left < 0 {
 			return "", imapTooLarge()
@@ -303,7 +428,7 @@ func imapLiteralLength(braced string) (int, bool) {
 }
 
 func imapTooLarge() error {
-	return model.MarkError(model.Errorf("the server's responses are larger than the response limit; name fewer mailboxes, or raise request.max_response_bytes or limits.max_response_bytes"), model.ErrLimitExceeded)
+	return model.MarkError(model.Errorf("the server's responses are larger than the response limit; name fewer mailboxes, narrow a search, or raise request.max_response_bytes or limits.max_response_bytes"), model.ErrLimitExceeded)
 }
 
 // imapQuoted is text as a quoted string of a command.
@@ -382,17 +507,19 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		return nil, err
 	}
 	implicit := address.scheme == "imaps"
-	var named []string
+	var filled []string
 	for _, field := range imapTemplates(c, overrides) {
-		filled, err := field.render(overrides.Params)
+		text, err := field.render(overrides.Params)
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(filled) == "" {
+		if strings.TrimSpace(text) == "" {
 			return nil, fmt.Errorf("%s is empty once its placeholders are filled", field.where)
 		}
-		named = append(named, filled)
+		filled = append(filled, text)
 	}
+	// The mailboxes come first, then each count's mailbox and search.
+	named, counts := filled[:len(own.Mailboxes)], filled[len(own.Mailboxes):]
 	if len(named) == 0 && c.Request.Username != "" {
 		named = []string{"INBOX"}
 	}
@@ -421,8 +548,8 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		return nil, err
 	}
 	defer conn.close()
-	s := &imapSession{ctx: ctx, conn: conn, label: label, left: responseLimit(c)}
-	doc := imapDocument{TLS: implicit, Capabilities: []string{}, Mailboxes: []imapMailbox{}, Quota: []imapQuota{}}
+	s := &imapSession{ctx: ctx, conn: conn, label: label, left: responseLimit(c), lineLimit: imapLineLimit}
+	doc := imapDocument{TLS: implicit, Capabilities: []string{}, Mailboxes: []imapMailbox{}, Quota: []imapQuota{}, Counts: []imapCounted{}}
 	greeting, err := s.line()
 	if err != nil {
 		err = fmt.Errorf("reading the greeting of %s: %w", address.hostPort, err)
@@ -467,10 +594,10 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		}
 	}
 	if user := c.Request.Username; user != "" {
-		if !doc.TLS && !own.AllowPlaintext {
+		if !doc.TLS && !c.Request.AllowPlaintext {
 			return nil, fmt.Errorf("the server %s offers no STARTTLS, and the account's password is not sent over a connection that is not TLS; use imaps://, or request.allow_plaintext for a server that has none", address.hostPort)
 		}
-		if err := s.login(user, password, doc.Capabilities, address.hostPort); err != nil {
+		if err := s.login(c, password, doc.Capabilities, address.hostPort); err != nil {
 			return nil, err
 		}
 		doc.Authenticated = true
@@ -493,6 +620,9 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 			if answer.status == "OK" {
 				doc.Quota = imapQuotas(answer.untagged)
 			}
+		}
+		if doc.Counts, err = s.counts(own.Counts, counts, doc.Capabilities); err != nil {
+			return nil, err
 		}
 	}
 	_, _ = s.command("LOGOUT", "")
@@ -562,31 +692,68 @@ func imapCapabilities(untagged []string) []string {
 	return out
 }
 
-// login logs in: with AUTHENTICATE PLAIN where the server offers it, which
-// carries any name and password, and with LOGIN otherwise. A refusal fails
-// the scrape, saying what the server said, never what was sent.
-func (s *imapSession) login(user, password string, offered []string, hostPort string) error {
+// login logs in, with the mechanism request.auth names, or else with
+// AUTHENTICATE PLAIN where the server offers it, which carries any name and
+// password, and with LOGIN otherwise. A refusal fails the scrape, saying
+// what the server said, never what was sent.
+func (s *imapSession) login(c *model.Collector, password string, offered []string, hostPort string) error {
+	user, mechanism := c.Request.Username, c.Request.Auth
+	if mechanism == "" {
+		mechanism = netAuthLogin
+		if slices.Contains(offered, "AUTH=PLAIN") {
+			mechanism = netAuthPlain
+		}
+	}
+	// sasl sends a mechanism's credential: in the command where the server
+	// takes it there, and in answer to its continuation request otherwise.
+	sasl := func(name, credential string) (imapAnswer, error) {
+		if !slices.Contains(offered, "AUTH="+name) {
+			return imapAnswer{}, fmt.Errorf("the server %s does not offer AUTH=%s, which request.auth asks for", hostPort, name)
+		}
+		var answer imapAnswer
+		var err error
+		if slices.Contains(offered, "SASL-IR") {
+			answer, err = s.command("AUTHENTICATE "+name+" "+credential, "AUTHENTICATE "+name+" ***")
+		} else if answer, err = s.command("AUTHENTICATE "+name, ""); err == nil && answer.status == "+" {
+			answer, err = s.continued(credential, "*** (the credential)")
+		}
+		// A server that asks for more has refused what it was given: an
+		// XOAUTH2 refusal comes as a continuation whose text is the error,
+		// which an empty line answers, and any other is given up with *.
+		if err == nil && answer.status == "+" {
+			if name == "XOAUTH2" {
+				answer, err = s.continued("", "(an empty line, to end the refused XOAUTH2)")
+			} else {
+				answer, err = s.continued("*", "* (to end the login)")
+			}
+		}
+		return answer, err
+	}
+	b64 := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
 	var answer imapAnswer
 	var err error
 	how := "LOGIN"
-	switch {
-	case slices.Contains(offered, "AUTH=PLAIN"):
+	switch mechanism {
+	case netAuthPlain:
 		how = "AUTHENTICATE PLAIN"
-		credential := base64.StdEncoding.EncodeToString([]byte("\x00" + user + "\x00" + password))
-		if slices.Contains(offered, "SASL-IR") {
-			answer, err = s.command("AUTHENTICATE PLAIN "+credential, "AUTHENTICATE PLAIN ***")
-		} else if answer, err = s.command("AUTHENTICATE PLAIN", ""); err == nil && answer.status == "+" {
-			answer, err = s.continued(credential, "*** (the name and the password)")
+		answer, err = sasl("PLAIN", b64("\x00"+user+"\x00"+password))
+	case netAuthXOAuth2:
+		how = "AUTHENTICATE XOAUTH2"
+		var token string
+		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
+			return err
 		}
-		// A server that asks for more has refused what it was given.
-		if err == nil && answer.status == "+" {
-			answer, err = s.continued("*", "* (to end the login)")
+		answer, err = sasl("XOAUTH2", b64("user="+user+"\x01auth=Bearer "+token+"\x01\x01"))
+		if err == nil && answer.status != "OK" {
+			netTokens.forget(c.Name, c.Request.XOAuth2)
 		}
-	case slices.Contains(offered, "LOGINDISABLED"):
-		return fmt.Errorf("the server %s takes no LOGIN (LOGINDISABLED) and offers no AUTH=PLAIN; it wants a mechanism this type does not speak", hostPort)
-	case strings.ContainsFunc(user+password, func(r rune) bool { return r < ' ' || r >= 0x7f }):
-		return fmt.Errorf("the server %s offers no AUTH=PLAIN, and LOGIN carries no name or password with a character outside printable ASCII", hostPort)
 	default:
+		switch {
+		case slices.Contains(offered, "LOGINDISABLED"):
+			return fmt.Errorf("the server %s takes no LOGIN (LOGINDISABLED) and offers no AUTH=PLAIN; set request.auth to a mechanism it offers, such as xoauth2", hostPort)
+		case strings.ContainsFunc(user+password, func(r rune) bool { return r < ' ' || r >= 0x7f }):
+			return fmt.Errorf("the server %s offers no AUTH=PLAIN, and LOGIN carries no name or password with a character outside printable ASCII", hostPort)
+		}
 		answer, err = s.command("LOGIN "+imapQuoted(user)+" "+imapQuoted(password), "LOGIN "+imapQuoted(user)+" ***")
 	}
 	if err != nil {
@@ -676,6 +843,94 @@ func (s *imapSession) mailboxes(named, capabilities []string, hostPort string) (
 		}
 	}
 	return out, nil
+}
+
+// counts answers each of request.counts: its mailbox is opened read-only,
+// with EXAMINE, unless the count before it asked for the same, and
+// searched. A
+// server with ESEARCH answers the number of matches; any other lists them,
+// and they are counted, a line of that answer being as long as the
+// response limit leaves room for. A mailbox the server does not open, and
+// a search it refuses, as it does criteria it cannot read, is the count's
+// answer, and fails nothing.
+func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) ([]imapCounted, error) {
+	out := []imapCounted{}
+	counted := slices.Contains(capabilities, "ESEARCH") || slices.Contains(capabilities, "IMAP4REV2")
+	opened, refused := "", imapAnswer{}
+	for i, count := range asked {
+		mailbox, search := filled[2*i], filled[2*i+1]
+		result := imapCounted{Name: count.Name, Mailbox: mailbox}
+		if mailbox != opened {
+			answer, err := s.command("EXAMINE "+imapQuoted(imapEncodeName(mailbox)), "")
+			if err != nil {
+				return nil, err
+			}
+			if answer.status == "+" {
+				return nil, imapAskedForMore("EXAMINE")
+			}
+			opened, refused = mailbox, imapAnswer{}
+			if answer.status != "OK" {
+				refused = answer
+			}
+		}
+		if refused.status != "" {
+			result.Text = refused.text
+			out = append(out, result)
+			continue
+		}
+		command := "SEARCH " + search
+		if counted {
+			command = "SEARCH RETURN (COUNT) " + search
+		} else {
+			s.lineLimit, s.listed = int(min(max(s.left, imapLineLimit), 1<<30)), true
+		}
+		answer, err := s.command(command, "")
+		s.lineLimit, s.listed = imapLineLimit, false
+		if err != nil {
+			return nil, err
+		}
+		if answer.status == "+" {
+			return nil, imapAskedForMore("SEARCH")
+		}
+		result.OK, result.Text = answer.status == "OK", answer.text
+		if result.OK {
+			n := imapSearchCount(answer.untagged)
+			result.Count = &n
+		}
+		out = append(out, result)
+	}
+	return out, nil
+}
+
+// imapAskedForMore is the failure of a command the server answered with a
+// continuation request: it waits for more of the command, and would read
+// the next one as that, so the session ends there.
+func imapAskedForMore(command string) error {
+	return fmt.Errorf("the server asked for more of %s, as it does of a command that ends in a literal's length; the session cannot go on", command)
+}
+
+// imapSearchCount is how many messages a search matched: the COUNT of an
+// ESEARCH response, or the numbers of the SEARCH responses, none of either
+// being no match.
+func imapSearchCount(untagged []string) int64 {
+	var n int64
+	for _, line := range untagged {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 0:
+		case strings.EqualFold(fields[0], "ESEARCH"):
+			for i := 1; i+1 < len(fields); i++ {
+				if strings.EqualFold(fields[i], "COUNT") {
+					if count, err := strconv.ParseInt(fields[i+1], 10, 64); err == nil && count >= 0 {
+						return count
+					}
+				}
+			}
+		case strings.EqualFold(fields[0], "SEARCH"):
+			n += int64(len(fields) - 1)
+		}
+	}
+	return n
 }
 
 // imapTokens splits a line of a response into its atoms, quoted strings,
@@ -888,8 +1143,11 @@ func imapDecodeName(name string) string {
 // own keys.
 func imapKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"mailboxes":       {"maxItems": imapMaxNamed, "description": "imap: the mailboxes STATUS asks about, each by its name, such as INBOX or Archive/2026, or by a pattern with * (any text) or % (any text within one level), such as *, which is listed and each mailbox of the list asked about; each may contain {{param_name}} placeholders. INBOX when left out. A mailbox the server refuses is in the document with what it said, and fails nothing. See docs/IMAP.md."},
-		"quota":           {"description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes."},
-		"allow_plaintext": {"description": "imap: log in over a connection that is not TLS, to a server that offers no STARTTLS. The password is then sent as it is; left out, such a scrape fails before it logs in."},
+		"mailboxes":      {"maxItems": imapMaxNamed, "description": "imap: the mailboxes STATUS asks about, each by its name, such as INBOX or Archive/2026, or by a pattern with * (any text) or % (any text within one level), such as *, which is listed and each mailbox of the list asked about; each may contain {{param_name}} placeholders. INBOX when left out. A mailbox the server refuses is in the document with what it said, and fails nothing. See docs/IMAP.md."},
+		"quota":          {"description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes."},
+		"counts":         {"maxItems": imapMaxCounts, "description": "imap: counts of the messages of a mailbox that match a search, as the server counts them: each a name, a mailbox, INBOX when left out, and a search, the criteria of an IMAP SEARCH. The mailbox is opened read-only to search it, which marks nothing read; no message is fetched. See docs/IMAP.md#counting-messages-by-a-search."},
+		"counts.name":    {"description": "What the count is read by in the document, .counts[] | select(.name == \"...\"): letters, digits and underscores."},
+		"counts.mailbox": {"description": "The mailbox searched, by its name; INBOX when left out. May contain {{param_name}} placeholders."},
+		"counts.search":  {"description": "The criteria of the search, as IMAP writes them, in printable ASCII: UNSEEN, UNANSWERED, FLAGGED, FROM \"billing@example.com\", BEFORE {{date_imap:-1d}}, LARGER 1000000, or several, which all must match. May contain {{param_name}} and clock placeholders."},
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +43,11 @@ type imapStub struct {
 	offers      string
 	offersAfter string
 	user, pass  string
+	token       string
 	greeting    string
+	// searches are the message numbers each search's criteria match, in
+	// the mailbox EXAMINE opened; criteria it does not know are refused.
+	searches map[string]string
 	// boxes are its mailboxes in the order LIST gives them: the name as
 	// the server writes it, its flags, and the counts of its STATUS, ""
 	// for one STATUS is refused for.
@@ -69,7 +75,7 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 		}
 		return line, err == nil
 	}
-	secure, in := false, false
+	secure, in, examined := false, false, ""
 	say(s.greeting)
 	for {
 		line, ok := read()
@@ -107,11 +113,25 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 			login(args == `"`+s.user+`" "`+strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s.pass)+`"`)
 		case "AUTHENTICATE":
 			mechanism, initial, _ := strings.Cut(args, " ")
-			if mechanism == "PLAIN" && initial == "" {
+			if initial == "" {
 				say("+ ")
 				initial, _ = read()
 			}
-			login(mechanism == "PLAIN" && initial == base64.StdEncoding.EncodeToString([]byte("\x00"+s.user+"\x00"+s.pass)))
+			b64 := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
+			switch mechanism {
+			case "PLAIN":
+				login(initial == b64("\x00"+s.user+"\x00"+s.pass))
+			case "XOAUTH2":
+				accepted := initial == b64("user="+s.user+"\x01auth=Bearer "+s.token+"\x01\x01")
+				if !accepted {
+					// The error, which the client answers with an empty line.
+					say("+ " + b64(`{"status":"400","schemes":"Bearer"}`))
+					_, _ = read()
+				}
+				login(accepted)
+			default:
+				login(false)
+			}
 		case "STATUS":
 			name := args[:strings.LastIndex(args, " (")]
 			answered := false
@@ -138,6 +158,37 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 				say(`* LIST (` + box.flags + `) "/" "` + box.written + `"`)
 			}
 			say(tag + " OK LIST completed")
+		case "EXAMINE":
+			examined = ""
+			for _, box := range s.boxes {
+				if `"`+box.written+`"` == args && box.status != "" {
+					examined = box.written
+				}
+			}
+			if examined == "" {
+				say(tag + " NO [NONEXISTENT] Unknown Mailbox: " + args + " (Failure)")
+				break
+			}
+			say("* 12 EXISTS")
+			say("* OK [UIDVALIDITY 7] UIDs valid")
+			say(tag + " OK [READ-ONLY] " + examined + " selected. (Success)")
+		case "SEARCH":
+			criteria, counted := strings.CutPrefix(args, "RETURN (COUNT) ")
+			matches, known := s.searches[examined+": "+criteria]
+			switch {
+			case examined == "":
+				say(tag + " BAD no mailbox is selected")
+			case matches == "+":
+				say("+ Ready for additional command text")
+			case !known:
+				say(tag + " BAD Could not parse command")
+			case counted:
+				say(fmt.Sprintf(`* ESEARCH (TAG "%s") COUNT %d`, tag, len(strings.Fields(matches))))
+				say(tag + " OK SEARCH completed (Success)")
+			default:
+				say(strings.TrimSpace("* SEARCH " + matches))
+				say(tag + " OK SEARCH completed (Success)")
+			}
 		case "GETQUOTAROOT":
 			say(`* QUOTAROOT ` + args + ` ""`)
 			say(`* QUOTA "" (STORAGE 1024 15728640 MESSAGE 12 1000)`)
@@ -156,13 +207,19 @@ func (s *imapStub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 // connection.
 func newIMAPStub(t *testing.T, configure ...func(*imapStub)) *imapStub {
 	t.Helper()
-	s := &imapStub{startTLS: true, offers: "SASL-IR AUTH=PLAIN", offersAfter: "QUOTA STATUS=SIZE", user: "me@example.com", pass: `app "pass" word`, greeting: "* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] mail.test ready",
+	s := &imapStub{startTLS: true, offers: "SASL-IR AUTH=PLAIN", offersAfter: "QUOTA STATUS=SIZE", user: "me@example.com", pass: `app "pass" word`, token: "ya29.token", greeting: "* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] mail.test ready",
 		boxes: []imapStubBox{
 			{"INBOX", `\HasNoChildren`, "MESSAGES 12 UNSEEN 3 RECENT 1 UIDNEXT 44 UIDVALIDITY 7 SIZE 123456"},
 			{"Sent Mail", `\Sent \HasNoChildren`, "MESSAGES 5 UNSEEN 0 RECENT 0 UIDNEXT 6 UIDVALIDITY 8 SIZE 50"},
 			{"[Gmail]", `\Noselect \HasChildren`, ""},
 			{"Entw&APw-rfe", `\Drafts`, "MESSAGES 1 UNSEEN 1 RECENT 0 UIDNEXT 2 UIDVALIDITY 9"},
 			{"Gone", ``, ""},
+		},
+		searches: map[string]string{
+			"INBOX: UNANSWERED BEFORE 8-Nov-2026":     "2 5 9",
+			"INBOX: FLAGGED":                          "",
+			`INBOX: FROM "billing (ops)@example.com"`: "4",
+			"Sent Mail: ALL":                          "1 2 3 4 5",
 		}}
 	for _, fn := range configure {
 		fn(s)
@@ -256,6 +313,50 @@ func TestAnIMAPScrapeLogsInAndCountsTheInbox(t *testing.T) {
 	}
 }
 
+// request.auth names the login: xoauth2 sends the account and an OAuth 2.0
+// access token, here read from a file at each scrape, in the command where
+// the server takes it there and in a line of its own where it does not,
+// as the stub checks byte for byte; login and plain are each used when
+// named. A token the server refuses fails the scrape without the token,
+// after the empty line that ends the refusal, and a mechanism the server
+// does not offer fails it before anything of the account is sent.
+func TestAnIMAPScrapeLogsInWithTheMechanismItNames(t *testing.T) {
+	token := testutil.WriteFile(t, "token", "ya29.token\n")
+	password := imapPassword(t)
+	for name, tc := range map[string]struct {
+		offers string
+		change func(*model.RequestConfig)
+		sent   string
+	}{
+		"xoauth2 in the command": {"SASL-IR AUTH=PLAIN AUTH=XOAUTH2", withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "a4 AUTHENTICATE XOAUTH2 dXNlcj1tZUBleGFtcGxlLmNvbQFhdXRoPUJlYXJlciB5YTI5LnRva2VuAQE=|a5 CAPABILITY"},
+		"xoauth2 in a line":      {"AUTH=XOAUTH2", withLogin("xoauth2", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "a4 AUTHENTICATE XOAUTH2|dXNlcj1tZUBleGFtcGxlLmNvbQFhdXRoPUJlYXJlciB5YTI5LnRva2VuAQE=|a5 CAPABILITY"},
+		"login when named":       {"SASL-IR AUTH=PLAIN", withLogin("login", nil, withAccount("me@example.com", password)), `a4 LOGIN "me@example.com" "app \"pass\" word"|a5 CAPABILITY`},
+		"plain when named":       {"SASL-IR AUTH=PLAIN AUTH=XOAUTH2", withLogin("plain", nil, withAccount("me@example.com", password)), "a4 AUTHENTICATE PLAIN "},
+	} {
+		s := newIMAPStub(t, func(s *imapStub) { s.offers = tc.offers })
+		doc := imapDoc(t, imapCollector(t, s, IMAPConfig{}, tc.change), s.Addr, RequestOverrides{})
+		if sent := strings.Join(s.sent(), "|"); !doc.Authenticated || len(doc.Mailboxes) != 1 || !strings.Contains(sent, tc.sent) {
+			t.Errorf("%s: authenticated %v, sent %s", name, doc.Authenticated, sent)
+		}
+	}
+	stale := testutil.WriteFile(t, "stale", "ya29.stale\n")
+	s := newIMAPStub(t, func(s *imapStub) { s.offers = "SASL-IR AUTH=XOAUTH2" })
+	ctx, trace := WithRequestTrace(context.Background())
+	_, err := FetchCollector(ctx, s.Addr, imapCollector(t, s, IMAPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: stale}, withAccount("me@example.com", ""))), RequestOverrides{}, nil)
+	sent := strings.Join(s.sent(), "|")
+	if err == nil || !strings.Contains(err.Error(), "refused AUTHENTICATE XOAUTH2 for me@example.com with NO [AUTHENTICATIONFAILED]") || !strings.HasSuffix(sent, "|") {
+		t.Errorf("a refused token: err=%v, sent %s", err, sent)
+	}
+	if shown := fmt.Sprint(err, trace.Requests()); strings.Contains(shown, "ya29") || strings.Contains(shown, base64.StdEncoding.EncodeToString([]byte("user=me@example.com\x01auth=Bearer ya29.stale\x01\x01"))) || !strings.Contains(shown, "AUTHENTICATE XOAUTH2 ***") {
+		t.Errorf("the error or the trace holds the token, or does not mask it: %s", shown)
+	}
+	plain := newIMAPStub(t, func(s *imapStub) { s.offers = "AUTH=PLAIN" })
+	_, err = FetchCollector(context.Background(), plain.Addr, imapCollector(t, plain, IMAPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", ""))), RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not offer AUTH=XOAUTH2, which request.auth asks for") || strings.Contains(strings.Join(plain.sent(), "|"), "AUTHENTICATE") {
+		t.Errorf("a mechanism that is not offered: err=%v, sent %v", err, plain.sent())
+	}
+}
+
 // A mailbox named by a pattern is listed, and each mailbox of the list
 // that can be selected is asked about, with its flags: a name that came as
 // a literal, one in modified UTF-7, which is decoded for the document and
@@ -343,7 +444,7 @@ func TestAnIMAPScrapeHoldsTheSessionToTLS(t *testing.T) {
 	if sent := strings.Join(s.sent(), "|"); err == nil || !strings.Contains(err.Error(), "the account's password is not sent over a connection that is not TLS") || strings.Contains(sent, "AUTHENTICATE") || strings.Contains(sent, "LOGIN") {
 		t.Errorf("err=%v, sent %v; want no login in plaintext", err, sent)
 	}
-	if doc := imapDoc(t, imapCollector(t, s, IMAPConfig{AllowPlaintext: true}, withAccount("me@example.com", password)), s.Addr, RequestOverrides{}); !doc.Authenticated || doc.TLS || len(doc.Mailboxes) != 1 {
+	if doc := imapDoc(t, imapCollector(t, s, IMAPConfig{}, withAccount("me@example.com", password), func(r *model.RequestConfig) { r.AllowPlaintext = true }), s.Addr, RequestOverrides{}); !doc.Authenticated || doc.TLS || len(doc.Mailboxes) != 1 {
 		t.Errorf("allow_plaintext: %+v", doc)
 	}
 
@@ -385,7 +486,10 @@ func TestIMAPConfigurationRules(t *testing.T) {
 		want   string
 	}{
 		"a name without a password":    {IMAPConfig{}, withAccount("me", ""), "sets request.username without request.password_file"},
-		"a password without a name":    {IMAPConfig{}, withAccount("", "/password"), "sets request.password_file without request.username"},
+		"a password without a name":    {IMAPConfig{}, withAccount("", "/password"), "logs in without request.username"},
+		"a mechanism there is none of": {IMAPConfig{}, withLogin("cram-md5", nil, withAccount("me", "/password")), `request.auth "cram-md5" is not plain, login or xoauth2`},
+		"xoauth2 without its source":   {IMAPConfig{}, withLogin("xoauth2", nil, withAccount("me", "")), "request.auth is xoauth2 without request.xoauth2"},
+		"a password beside a token":    {IMAPConfig{}, withLogin("", &model.XOAuth2Config{TokenFile: "/t"}, withAccount("me", "/password")), "request.password_file beside xoauth2"},
 		"mailboxes without an account": {IMAPConfig{Mailboxes: []string{"INBOX"}}, nil, "asks about mailboxes without an account"},
 		"a quota without an account":   {IMAPConfig{Quota: true}, nil, "asks about mailboxes without an account"},
 		"an empty mailbox":             {IMAPConfig{Mailboxes: []string{"INBOX", " "}}, withAccount("me", "/password"), "request.mailboxes[1] is empty"},
@@ -504,4 +608,166 @@ func TestAnIMAPCollectorHoldsTheTargetPolicy(t *testing.T) {
 // are listed (optInRequestKeys, optInTargetKeys).
 func TestTheIMAPTypesOptInKeysAreListed(t *testing.T) {
 	checkOptInRequestKeys(t, RequestTypeIMAP)
+}
+
+// request.counts counts the messages of a mailbox that match a search: the
+// mailbox is opened with EXAMINE, never SELECT, once for the counts that
+// follow one another in it, and searched with the criteria as written,
+// their placeholders filled, a clock's as IMAP writes a date and a probe's
+// within the quotes it stands in. A server with ESEARCH answers the
+// number, another lists the matches, which are counted; no match is 0. A
+// mailbox the server does not open and a search it refuses are the
+// count's answer, with what the server said, and fail nothing. Nothing is
+// fetched and nothing stored.
+func TestAnIMAPScrapeCountsMessagesByASearch(t *testing.T) {
+	clockNow = func() time.Time { return time.Date(2026, 11, 9, 22, 30, 15, 0, time.UTC) }
+	t.Cleanup(func() { clockNow = time.Now })
+	own := IMAPConfig{Counts: []IMAPCount{
+		{Name: "waiting", Search: "UNANSWERED BEFORE {{date_imap:-1d}}"},
+		{Name: "flagged", Search: "FLAGGED"},
+		{Name: "billing", Mailbox: "{{param_box:INBOX}}", Search: `FROM "{{param_sender}}"`},
+		{Name: "sent", Mailbox: "Sent Mail", Search: "ALL"},
+		{Name: "unread_gone", Mailbox: "Gone", Search: "UNSEEN"},
+		{Name: "gone_again", Mailbox: "Gone", Search: "ALL"},
+		{Name: "odd", Search: "NOSUCHKEY"},
+	}}
+	for _, offersAfter := range []string{"ESEARCH", "IDLE"} {
+		s := newIMAPStub(t, func(s *imapStub) { s.offersAfter = offersAfter })
+		c := imapCollector(t, s, own, withLogin("", nil, func(r *model.RequestConfig) { r.Username, r.PasswordFile = "me@example.com", imapPassword(t) }))
+		doc := imapDoc(t, c, "imap://"+s.Addr, RequestOverrides{Params: map[string]string{"param_sender": "billing (ops)@example.com"}})
+		var got []string
+		for _, count := range doc.Counts {
+			n := "null"
+			if count.Count != nil {
+				n = strconv.FormatInt(*count.Count, 10)
+			}
+			got = append(got, fmt.Sprintf("%s %s %v %s %q", count.Name, count.Mailbox, count.OK, n, count.Text))
+		}
+		want := []string{
+			`waiting INBOX true 3 "SEARCH completed (Success)"`,
+			`flagged INBOX true 0 "SEARCH completed (Success)"`,
+			`billing INBOX true 1 "SEARCH completed (Success)"`,
+			`sent Sent Mail true 5 "SEARCH completed (Success)"`,
+			`unread_gone Gone false null "[NONEXISTENT] Unknown Mailbox: \"Gone\" (Failure)"`,
+			`gone_again Gone false null "[NONEXISTENT] Unknown Mailbox: \"Gone\" (Failure)"`,
+			`odd INBOX false null "Could not parse command"`,
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: counts\n got %s\nwant %s", offersAfter, strings.Join(got, "\n     "), strings.Join(want, "\n     "))
+		}
+		var commands []string
+		for _, line := range s.sent() {
+			_, command, _ := strings.Cut(line, " ")
+			verb, _, _ := strings.Cut(command, " ")
+			switch verb {
+			case "EXAMINE", "SEARCH":
+				commands = append(commands, command)
+			case "SELECT", "FETCH", "STORE", "UID", "EXPUNGE", "CLOSE":
+				t.Errorf("%s: sent %q, which a count never does", offersAfter, command)
+			}
+		}
+		search := "SEARCH "
+		if offersAfter == "ESEARCH" {
+			search = "SEARCH RETURN (COUNT) "
+		}
+		wantCommands := []string{
+			`EXAMINE "INBOX"`, search + "UNANSWERED BEFORE 8-Nov-2026", search + "FLAGGED", search + `FROM "billing (ops)@example.com"`,
+			`EXAMINE "Sent Mail"`, search + "ALL",
+			`EXAMINE "Gone"`,
+			`EXAMINE "INBOX"`, search + "NOSUCHKEY",
+		}
+		if !slices.Equal(commands, wantCommands) {
+			t.Errorf("%s: sent\n got %q\nwant %q", offersAfter, commands, wantCommands)
+		}
+	}
+}
+
+// A probe's value is one quoted string of a search: one that would end the
+// string fails the scrape before anything is sent of it, and a search
+// that takes a probe's value outside quotes, where it could add a
+// criterion, is refused when the configuration is read, as are a count
+// without a name a rule can read it by, two of one name, one without a
+// search, a mailbox that is a pattern, counts without an account, and
+// more of them than a scrape may ask.
+func TestIMAPCountsTakeNothingThatAddsACriterion(t *testing.T) {
+	s := newIMAPStub(t, func(s *imapStub) { s.offersAfter = "ESEARCH" })
+	account := func(r *model.RequestConfig) { r.Username, r.PasswordFile = "me@example.com", imapPassword(t) }
+	c := imapCollector(t, s, IMAPConfig{Counts: []IMAPCount{{Name: "from", Search: `FROM "{{param_sender}}"`}}}, account)
+	for _, value := range []string{`x" SUBJECT "secret`, `x\`, "x\r\nA9 DELETE INBOX", "é"} {
+		_, err := FetchCollector(context.Background(), "imap://"+s.Addr, c, RequestOverrides{Params: map[string]string{"param_sender": value}}, nil)
+		if err == nil || !strings.Contains(err.Error(), "request.counts[0].search: the value of param_sender holds") {
+			t.Errorf("sender %q: %v", value, err)
+		}
+	}
+	for _, line := range s.sent() {
+		if strings.Contains(line, "SEARCH") || strings.Contains(line, "LOGIN") || strings.Contains(line, "AUTHENTICATE") {
+			t.Errorf("sent %q for a value no search takes", line)
+		}
+	}
+	many := make([]IMAPCount, imapMaxCounts+1)
+	for i := range many {
+		many[i] = IMAPCount{Name: fmt.Sprintf("c%d", i), Search: "ALL"}
+	}
+	for want, counts := range map[string][]IMAPCount{
+		"{{param_sender}} is not within double quotes": {{Name: "a", Search: "FROM {{param_sender}}"}},
+		`{{param_tail}} is not within double quotes`:   {{Name: "a", Search: `SUBJECT "a\\\\" {{param_tail}}`}},
+		`{{param_word}} is not within double quotes`:   {{Name: "a", Search: `SUBJECT "a \"b" {{param_word}}`}},
+		`request.counts[0].name "per-day" is not`:      {{Name: "per-day", Search: "ALL"}},
+		`request.counts[0].name "" is not a name`:      {{Search: "ALL"}},
+		`request.counts[1].name "a" names two`:         {{Name: "a", Search: "ALL"}, {Name: "a", Search: "UNSEEN"}},
+		"request.counts[0].search ends in {n}":         {{Name: "a", Search: "SUBJECT {5}"}},
+		"request.counts[0].search ends in {n}, which":  {{Name: "a", Search: "SINCE {{date_imap:-1d}} BODY {12+} "}},
+		"request.counts[0] has no search":              {{Name: "a", Search: " "}},
+		"request.counts[0].search holds a character":   {{Name: "a", Search: "SUBJECT \"é\""}},
+		`request.counts[0].mailbox "Lists/*" is a`:     {{Name: "a", Mailbox: "Lists/*", Search: "ALL"}},
+		"request.counts has 21 entries":                many,
+	} {
+		x := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypeIMAP, Username: "me", PasswordFile: "p", Own: IMAPConfig{Counts: counts}}}
+		if err := ValidateRequest(x); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q, got %v", want, err)
+		}
+	}
+	x := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypeIMAP, Own: IMAPConfig{Counts: []IMAPCount{{Name: "a", Search: "ALL"}}}}}
+	if err := ValidateRequest(x); err == nil {
+		t.Error("counts without an account were accepted")
+	}
+	ok := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypeIMAP, Username: "me", PasswordFile: "p", Own: IMAPConfig{Counts: []IMAPCount{{Name: "a", Search: `SINCE {{date_imap:-7d}} SUBJECT "{{param_word}}"`}}}}}
+	if err := ValidateRequest(ok); err != nil {
+		t.Error(err)
+	}
+}
+
+// A server that answers a search by asking for more of the command waits
+// for it, and would read the next command as that: the scrape fails
+// there, and sends nothing more.
+func TestAnIMAPScrapeEndsWhereTheServerAsksForMoreOfACommand(t *testing.T) {
+	s := newIMAPStub(t, func(s *imapStub) { s.searches["INBOX: UNSEEN"] = "+" })
+	c := imapCollector(t, s, IMAPConfig{Counts: []IMAPCount{{Name: "unseen", Search: "UNSEEN"}, {Name: "flagged", Search: "FLAGGED"}}}, withAccount("me@example.com", imapPassword(t)))
+	_, err := FetchCollector(context.Background(), "imap://"+s.Addr, c, RequestOverrides{}, nil)
+	sent := s.sent()
+	if err == nil || !strings.Contains(err.Error(), "the server asked for more of SEARCH") || !strings.HasSuffix(sent[len(sent)-1], "SEARCH UNSEEN") {
+		t.Errorf("err=%v, sent %q", err, sent)
+	}
+}
+
+// A server without ESEARCH lists every match on one line, which for a
+// large mailbox is longer than any other answer: it is read as far as the
+// response limit allows, and counted.
+func TestAnIMAPSearchAnswerMayBeALongLine(t *testing.T) {
+	var matches strings.Builder
+	for i := 1; i <= 60000; i++ {
+		fmt.Fprintf(&matches, "%d ", i)
+	}
+	s := newIMAPStub(t, func(s *imapStub) { s.searches["INBOX: ALL"] = matches.String() })
+	c := imapCollector(t, s, IMAPConfig{Counts: []IMAPCount{{Name: "all", Search: "ALL"}}}, func(r *model.RequestConfig) { r.Username, r.PasswordFile = "me@example.com", imapPassword(t) })
+	doc := imapDoc(t, c, "imap://"+s.Addr, RequestOverrides{})
+	if len(doc.Counts) != 1 || doc.Counts[0].Count == nil || *doc.Counts[0].Count != 60000 {
+		t.Errorf("counts: %+v", doc.Counts)
+	}
+	// Past what the responses may be, it is a limit exceeded, which says
+	// what to do, and no line that is not IMAP.
+	c.Request.MaxResponseBytes = 8 << 10
+	if _, err := FetchCollector(context.Background(), "imap://"+s.Addr, c, RequestOverrides{}, nil); !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "narrow a search") {
+		t.Errorf("a search's answer past the response limit: err=%v", err)
+	}
 }

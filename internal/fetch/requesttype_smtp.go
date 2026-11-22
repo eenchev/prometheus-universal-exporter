@@ -12,12 +12,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -53,27 +51,13 @@ import (
 //
 // The type imports nothing outside the standard library.
 
-// SMTPConfig is an smtp collector's own request keys.
+// SMTPConfig is an smtp collector's own request keys. How it logs in, auth
+// and xoauth2, is of the common part, which imap takes too.
 type SMTPConfig struct {
-	StartTLS string       `yaml:"starttls_mode,omitempty"`
-	Hello    string       `yaml:"hello,omitempty"`
-	Auth     string       `yaml:"auth,omitempty"`
-	XOAuth2  *SMTPXOAuth2 `yaml:"xoauth2,omitempty"`
-	MailFrom string       `yaml:"mail_from,omitempty"`
-	RcptTo   []string     `yaml:"rcpt_to,omitempty"`
-}
-
-// SMTPXOAuth2 is where an smtp collector's OAuth 2.0 access token comes
-// from, for AUTH XOAUTH2: a file that holds one, kept current by whatever
-// wrote it, or the refresh token grant (RFC 6749 § 6) at token_url.
-type SMTPXOAuth2 struct {
-	TokenFile        string   `yaml:"token_file,omitempty"`
-	TokenURL         string   `yaml:"token_url,omitempty"`
-	ClientID         string   `yaml:"client_id,omitempty"`
-	ClientIDFile     string   `yaml:"client_id_file,omitempty"`
-	ClientSecretFile string   `yaml:"client_secret_file,omitempty"`
-	RefreshTokenFile string   `yaml:"refresh_token_file,omitempty"`
-	Scopes           []string `yaml:"scopes,omitempty"`
+	StartTLS string   `yaml:"starttls_mode,omitempty"`
+	Hello    string   `yaml:"hello,omitempty"`
+	MailFrom string   `yaml:"mail_from,omitempty"`
+	RcptTo   []string `yaml:"rcpt_to,omitempty"`
 }
 
 func smtpRequest(c *model.Collector) SMTPConfig {
@@ -85,10 +69,6 @@ const (
 	smtpStartTLSAuto     = "auto"
 	smtpStartTLSRequired = "required"
 	smtpStartTLSNever    = "never"
-
-	smtpAuthPlain   = "plain"
-	smtpAuthLogin   = "login"
-	smtpAuthXOAuth2 = "xoauth2"
 
 	// smtpTimeout bounds a scrape with no deadline of its own.
 	smtpTimeout = 30 * time.Second
@@ -113,7 +93,7 @@ var smtpAddress = regexp.MustCompile(`^[^\s<>@\x00-\x1f\x7f]+@[^\s<>@\x00-\x1f\x
 func init() {
 	registerRequestType(&RequestType{
 		Name:         RequestTypeSMTP,
-		Fields:       []string{"username", "password_file", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
+		Fields:       []string{"username", "password_file", "auth", "xoauth2", "tls", "max_response_bytes", "allowed_targets", "denied_targets"},
 		Config:       SMTPConfig{},
 		KeyRules:     smtpKeyRules,
 		Overrides:    []string{"timeout", PathParamPrefix},
@@ -129,7 +109,7 @@ func init() {
 		UnusedParams: func(c *model.Collector, _ RequestOverrides, unused string) error {
 			return unusedParamsIn(c, unused, "its request.mail_from, request.rcpt_to or label values")
 		},
-		CheckTargetRequest: func(_ *model.Collector, t *model.StaticTarget) error { return checkNetTargetAccount(t) },
+		CheckTargetRequest: checkNetTargetLogin,
 		CheckFiles:         checkSMTPFiles,
 	})
 	templateEscapers[smtpAddressKind] = func(where, name, value string) (string, error) {
@@ -160,31 +140,8 @@ func (smtpRequester) Validate(x *model.Collector) error {
 	if own.Hello != "" && (strings.ContainsFunc(own.Hello, func(c rune) bool { return c <= ' ' || c == 0x7f }) || HasPathParams(own.Hello)) {
 		return fmt.Errorf("collector %q request.hello %q is not a name a client gives in EHLO: a host name or an address literal such as [192.0.2.7], with no blank and no placeholder", x.Name, own.Hello)
 	}
-	switch own.Auth {
-	case "", smtpAuthPlain, smtpAuthLogin, smtpAuthXOAuth2:
-	default:
-		return fmt.Errorf("collector %q request.auth %q is not plain, login or xoauth2", x.Name, own.Auth)
-	}
-	if own.XOAuth2 != nil && own.Auth == "" {
-		own.Auth = smtpAuthXOAuth2
-	}
-	withToken := own.Auth == smtpAuthXOAuth2
-	switch {
-	case withToken && own.XOAuth2 == nil && !x.RequestNotMade:
-		return fmt.Errorf("collector %q request.auth is xoauth2 without request.xoauth2, which says where the access token comes from: token_file, or token_url with refresh_token_file", x.Name)
-	case !withToken && own.XOAuth2 != nil:
-		return fmt.Errorf("collector %q sets request.xoauth2, but request.auth is %s; leave auth out, or write xoauth2", x.Name, own.Auth)
-	case withToken && r.PasswordFile != "":
-		return fmt.Errorf("collector %q sets request.password_file beside xoauth2, which logs in with an access token and no password", x.Name)
-	case (withToken || r.PasswordFile != "" || own.Auth != "") && r.Username == "":
-		return fmt.Errorf("collector %q logs in without request.username; name the account, for Gmail the mailbox's address", x.Name)
-	case r.Username != "" && !withToken && r.PasswordFile == "" && !x.RequestNotMade:
-		return fmt.Errorf("collector %q sets request.username without request.password_file; AUTH sends both, so name the file of the password, or request.xoauth2 for a token", x.Name)
-	}
-	if o := own.XOAuth2; o != nil {
-		if err := checkSMTPXOAuth2(o); err != nil {
-			return fmt.Errorf("collector %q %w", x.Name, err)
-		}
+	if err := checkNetLogin(x, "AUTH sends both"); err != nil {
+		return err
 	}
 	if len(own.RcptTo) > 0 && own.MailFrom == "" {
 		return fmt.Errorf("collector %q sets request.rcpt_to without request.mail_from; a server takes a recipient after a sender, so name one, or <> for the null sender", x.Name)
@@ -205,30 +162,6 @@ func (smtpRequester) Validate(x *model.Collector) error {
 		}
 	}
 	r.Own = own
-	return nil
-}
-
-// checkSMTPXOAuth2 holds request.xoauth2 to one source of the token: a
-// file, or the refresh token grant with its endpoint, client and refresh
-// token.
-func checkSMTPXOAuth2(o *SMTPXOAuth2) error {
-	grant := o.TokenURL != "" || o.ClientID != "" || o.ClientIDFile != "" || o.ClientSecretFile != "" || o.RefreshTokenFile != "" || len(o.Scopes) > 0
-	switch {
-	case o.TokenFile != "" && grant:
-		return errors.New("request.xoauth2 sets token_file beside the keys of the refresh token grant; the token comes from the file or from token_url, not both")
-	case o.TokenFile != "":
-		return nil
-	case o.TokenURL == "":
-		return errors.New("request.xoauth2 names neither token_file nor token_url; say where the access token comes from")
-	case o.RefreshTokenFile == "":
-		return errors.New("request.xoauth2 sets token_url without refresh_token_file, the refresh token the endpoint trades for an access token")
-	case (o.ClientID == "") == (o.ClientIDFile == ""):
-		return errors.New("request.xoauth2 needs one of client_id and client_id_file")
-	}
-	u, err := url.Parse(o.TokenURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return fmt.Errorf("request.xoauth2.token_url %q is not an https:// URL of a token endpoint, without credentials or a fragment", RedactText(o.TokenURL))
-	}
 	return nil
 }
 
@@ -629,13 +562,13 @@ func smtpExtensions(lines []string) (map[string]any, []string, *int64) {
 // the server offers it and LOGIN where it offers that. A refusal fails the
 // scrape, saying the code and what the server said, never what was sent.
 func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, offered []string, hostPort string) (*smtpAuthDone, error) {
-	mechanism := own.Auth
+	mechanism := c.Request.Auth
 	if mechanism == "" {
 		switch {
 		case slices.Contains(offered, "PLAIN"):
-			mechanism = smtpAuthPlain
+			mechanism = netAuthPlain
 		case slices.Contains(offered, "LOGIN"):
-			mechanism = smtpAuthLogin
+			mechanism = netAuthLogin
 		default:
 			return nil, model.Errorf("the server %s offers AUTH %s, neither PLAIN nor LOGIN; name the mechanism in request.auth", hostPort, model.Bare(netShown(strings.Join(offered, " "))))
 		}
@@ -649,24 +582,24 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 	var reply smtpReply
 	var err error
 	switch mechanism {
-	case smtpAuthPlain:
+	case netAuthPlain:
 		reply, err = s.command("AUTH PLAIN "+b64("\x00"+user+"\x00"+password), "AUTH PLAIN ***")
-	case smtpAuthLogin:
+	case netAuthLogin:
 		if reply, err = s.command("AUTH LOGIN", ""); err == nil && reply.Code == 334 {
 			if reply, err = s.command(b64(user), "*** (the username)"); err == nil && reply.Code == 334 {
 				reply, err = s.command(b64(password), "*** (the password)")
 			}
 		}
-	case smtpAuthXOAuth2:
+	case netAuthXOAuth2:
 		var token string
-		if token, err = smtpAccessToken(s.ctx, c.Name, own.XOAuth2); err != nil {
+		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
 			return nil, err
 		}
 		reply, err = s.command("AUTH XOAUTH2 "+b64("user="+user+"\x01auth=Bearer "+token+"\x01\x01"), "AUTH XOAUTH2 ***")
 		// A refusal comes as a 334 whose text is the error, base64, which
 		// an empty line answers; the 535 follows.
 		if err == nil && reply.Code == 334 {
-			smtpTokens.forget(c.Name, own.XOAuth2)
+			netTokens.forget(c.Name, c.Request.XOAuth2)
 			reply, err = s.command("", "(an empty line, to end the refused XOAUTH2)")
 		}
 	}
@@ -674,176 +607,27 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		return nil, err
 	}
 	if reply.Code != 235 {
-		if mechanism == smtpAuthXOAuth2 {
-			smtpTokens.forget(c.Name, own.XOAuth2)
+		if mechanism == netAuthXOAuth2 {
+			netTokens.forget(c.Name, c.Request.XOAuth2)
 		}
 		return nil, model.Errorf("the server %s refused AUTH %s for %s with %d %s", hostPort, name, user, reply.Code, model.Bare(reply.Text))
 	}
 	return &smtpAuthDone{Mechanism: name, Code: reply.Code}, nil
 }
 
-// smtpTokenCache keeps the access token the refresh token grant gave each
-// collector until shortly before it expires.
-type smtpTokenCache struct {
-	mu     sync.Mutex
-	tokens map[string]smtpToken
-}
-
-type smtpToken struct {
-	value   string
-	expires time.Time
-}
-
-var smtpTokens = &smtpTokenCache{tokens: map[string]smtpToken{}}
-
-// smtpTokenMargin is how long before its expiry a token is fetched again.
-const smtpTokenMargin = time.Minute
-
-func smtpTokenKey(collector string, o *SMTPXOAuth2) string {
-	return strings.Join([]string{collector, o.TokenURL, o.ClientID, o.ClientIDFile, o.ClientSecretFile, o.RefreshTokenFile, strings.Join(o.Scopes, " ")}, "\x00")
-}
-
-func (c *smtpTokenCache) forget(collector string, o *SMTPXOAuth2) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.tokens, smtpTokenKey(collector, o))
-}
-
-// smtpHTTPClient makes the token request; tests replace it.
-var smtpHTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-
-// smtpAccessToken is the access token AUTH XOAUTH2 sends: what token_file
-// holds, read at every scrape, or what the refresh token grant answers,
-// kept until a minute before it expires.
-func smtpAccessToken(ctx context.Context, collector string, o *SMTPXOAuth2) (string, error) {
-	if o.TokenFile != "" {
-		token, err := ReadCredentialFile(o.TokenFile)
-		if err != nil {
-			return "", fmt.Errorf("reading request.xoauth2.token_file: %w", err)
-		}
-		if token == "" {
-			return "", fmt.Errorf("request.xoauth2.token_file %s is empty", o.TokenFile)
-		}
-		return token, nil
-	}
-	key := smtpTokenKey(collector, o)
-	smtpTokens.mu.Lock()
-	kept, ok := smtpTokens.tokens[key]
-	smtpTokens.mu.Unlock()
-	if ok && time.Until(kept.expires) > smtpTokenMargin {
-		return kept.value, nil
-	}
-	form := url.Values{"grant_type": {"refresh_token"}}
-	for _, file := range []struct{ key, name, path string }{
-		{"client_id", "client_id_file", o.ClientIDFile},
-		{"client_secret", "client_secret_file", o.ClientSecretFile},
-		{"refresh_token", "refresh_token_file", o.RefreshTokenFile},
-	} {
-		if file.path == "" {
-			continue
-		}
-		value, err := ReadCredentialFile(file.path)
-		if err != nil {
-			return "", fmt.Errorf("reading request.xoauth2.%s: %w", file.name, err)
-		}
-		if value == "" {
-			return "", fmt.Errorf("request.xoauth2.%s %s is empty", file.name, file.path)
-		}
-		form.Set(file.key, value)
-	}
-	if o.ClientID != "" {
-		form.Set("client_id", o.ClientID)
-	}
-	if len(o.Scopes) > 0 {
-		form.Set("scope", strings.Join(o.Scopes, " "))
-	}
-	shown := RedactText(o.TokenURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("request.xoauth2.token_url %s: %w", shown, RedactURLErrors(err))
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	traceRequest(ctx, http.MethodPost, shown, http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}, "", false)
-	resp, err := smtpHTTPClient.Do(req) // #nosec G704 -- the configuration's token endpoint
-	if err != nil {
-		err = fmt.Errorf("asking %s for an access token: %w", shown, netFailure(ctx, RedactURLErrors(err)))
-		traceFailedOutcome(ctx, "error: "+err.Error())
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, smtpReplyLimit))
-	if err != nil {
-		return "", fmt.Errorf("reading the answer of %s: %w", shown, netFailure(ctx, err))
-	}
-	traceOutcome(ctx, resp.Status)
-	var answer struct {
-		AccessToken string  `json:"access_token"`
-		ExpiresIn   float64 `json:"expires_in"`
-		Error       string  `json:"error"`
-		Description string  `json:"error_description"`
-	}
-	_ = json.Unmarshal(raw, &answer)
-	if resp.StatusCode != http.StatusOK || answer.AccessToken == "" {
-		why := answer.Error
-		if answer.Description != "" {
-			why += ": " + answer.Description
-		}
-		if why == "" {
-			why = "no access_token in its answer"
-		}
-		return "", model.Errorf("the token endpoint %s answered HTTP status %d, %s", shown, resp.StatusCode, model.Bare(netShown(why)))
-	}
-	lifetime := time.Duration(answer.ExpiresIn * float64(time.Second))
-	if lifetime > 0 {
-		smtpTokens.mu.Lock()
-		smtpTokens.tokens[key] = smtpToken{value: answer.AccessToken, expires: time.Now().Add(lifetime)}
-		smtpTokens.mu.Unlock()
-	}
-	return answer.AccessToken, nil
-}
-
 // checkSMTPFiles reads, for --dry-run, the files a scrape reads: the
 // password file and the tls block's, and those of request.xoauth2.
 func checkSMTPFiles(c *model.Collector, t *model.StaticTarget) []string {
-	warnings := accountFileWarnings(c, t)
-	o := smtpRequest(c).XOAuth2
-	if o == nil || t != nil {
-		return warnings
-	}
-	for _, file := range []struct{ name, path string }{
-		{"token_file", o.TokenFile}, {"client_id_file", o.ClientIDFile}, {"client_secret_file", o.ClientSecretFile}, {"refresh_token_file", o.RefreshTokenFile},
-	} {
-		if file.path == "" {
-			continue
-		}
-		value, err := ReadCredentialFile(file.path)
-		switch {
-		case err != nil:
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.xoauth2.%s: %v; a scrape would fail on it now (the file is read when a token is needed, so one put in place later is used then)", c.Name, file.name, err))
-		case value == "":
-			warnings = append(warnings, fmt.Sprintf("collector %q: request.xoauth2.%s %s is empty; a scrape would fail on it now", c.Name, file.name, file.path))
-		}
-	}
-	return warnings
+	return append(accountFileWarnings(c, t), xoauth2FileWarnings(c, t)...)
 }
 
 // smtpKeyRules is what the configuration schema says of an smtp collector's
 // own keys.
 func smtpKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
-		"starttls_mode":              {"enum": SchemaOptionalEnum([]string{smtpStartTLSAuto, smtpStartTLSRequired, smtpStartTLSNever}), "description": "smtp: auto, the default, begins TLS with STARTTLS where the server offers it; required fails the scrape where it does not; never leaves the session in plaintext, and lets the account's credential be sent so. Not for an smtps:// target, which is TLS from the first byte. See docs/SMTP.md."},
-		"hello":                      {"description": "smtp: the name given in EHLO. Left out, the exporter's address as an address literal, such as [192.0.2.7]."},
-		"auth":                       {"enum": SchemaOptionalEnum([]string{smtpAuthPlain, smtpAuthLogin, smtpAuthXOAuth2}), "description": "smtp: the mechanism AUTH logs in with: plain or login, with request.username and request.password_file, or xoauth2, with request.username and request.xoauth2. Left out, plain where the server offers it and login otherwise, or xoauth2 when request.xoauth2 is set. See docs/SMTP.md#logging-in."},
-		"xoauth2":                    {"description": "smtp: where the OAuth 2.0 access token of AUTH XOAUTH2 comes from: token_file, a file that holds one, or the refresh token grant, token_url with refresh_token_file, client_id or client_id_file and, for a confidential client, client_secret_file. See docs/SMTP.md#gmail."},
-		"xoauth2.token_file":         {"description": "A file holding an access token, read at every scrape; whatever wrote it keeps it current."},
-		"xoauth2.token_url":          {"description": "The token endpoint of the refresh token grant, an https:// URL, such as https://oauth2.googleapis.com/token."},
-		"xoauth2.client_id":          {"description": "The OAuth client's id, written; or client_id_file."},
-		"xoauth2.client_id_file":     {"description": "A file holding the OAuth client's id."},
-		"xoauth2.client_secret_file": {"description": "A file holding the OAuth client's secret; left out for a public client."},
-		"xoauth2.refresh_token_file": {"description": "A file holding the refresh token the endpoint trades for an access token."},
-		"xoauth2.scopes":             {"description": "The scopes asked for, sent as scope; for Gmail, https://mail.google.com/."},
-		"mail_from":                  {"description": "smtp: the sender MAIL FROM names, an address or <> for the null sender; may contain {{param_name}} placeholders. Left out, the session ends after EHLO, or AUTH. Nothing is sent: no DATA follows."},
-		"rcpt_to":                    {"maxItems": smtpMaxRecipients, "description": "smtp: the recipients RCPT TO asks the server about, one command each, after request.mail_from; each may contain {{param_name}} placeholders. The server's answer to each is in the document, and a refusal fails nothing."},
+		"starttls_mode": {"enum": SchemaOptionalEnum([]string{smtpStartTLSAuto, smtpStartTLSRequired, smtpStartTLSNever}), "description": "smtp: auto, the default, begins TLS with STARTTLS where the server offers it; required fails the scrape where it does not; never leaves the session in plaintext, and lets the account's credential be sent so. Not for an smtps:// target, which is TLS from the first byte. See docs/SMTP.md."},
+		"hello":         {"description": "smtp: the name given in EHLO. Left out, the exporter's address as an address literal, such as [192.0.2.7]."},
+		"mail_from":     {"description": "smtp: the sender MAIL FROM names, an address or <> for the null sender; may contain {{param_name}} placeholders. Left out, the session ends after EHLO, or AUTH. Nothing is sent: no DATA follows."},
+		"rcpt_to":       {"maxItems": smtpMaxRecipients, "description": "smtp: the recipients RCPT TO asks the server about, one command each, after request.mail_from; each may contain {{param_name}} placeholders. The server's answer to each is in the document, and a refusal fails nothing."},
 	}
 }

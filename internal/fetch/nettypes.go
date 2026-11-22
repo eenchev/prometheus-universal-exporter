@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap
+//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3
 
 package fetch
 
@@ -18,7 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, modbus, mqtt, websocket and ftp request types share: each
+// What the smtp, modbus, mqtt, websocket, ftp, imap and pop3 request types share: each
 // reaches one server at host:port over TCP, or over TLS on it, through the
 // collector's target policy, within the scrape's deadline, on a connection
 // of the scrape's own. The types are opt-in, so this file is in no build

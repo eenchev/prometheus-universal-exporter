@@ -21,12 +21,13 @@ names, and whatever it imports:
 | Name | What it is |
 | --- | --- |
 | `data` | The response as its decoder read it ([What `data` is](#what-data-is)). A `pre_script` changes it, or binds the name to another value, for the rules to read. |
-| `response` | The answer: `status_code`, `headers`, `header(name, default=None)`, `body` and `text`, `json()` and `yaml()`, and, of an `http` or `graphite` request, `timings`, `tls`, `url`, `redirects`, `http_version` and `remote_ip`. |
+| `response` | The answer: `status_code`, `ok` (whether the status is a success: an HTTP 2xx or a `grpc` call's `0`; `None` without a status), `headers`, `header(name, default=None)`, `body` and `text`, `json()` and `yaml()`, and, of an `http` or `graphite` request, `timings`, `tls`, `url`, `redirects`, `http_version` and `remote_ip`. |
 | `target`, `collector` | The target as the probe gave it, credentials included, and the collector's name. |
 | `params` | The [probe's parameters](REQUESTS.md#in-expressions), a dict of each `param_<name>` that was given, by its name, as text; empty when there is none. jq's `$params`. |
 | `scrape_time` | When the scrape began, in seconds since the epoch, a float as `time.time()` gives one; the same moment the request's [clock placeholders](REQUESTS.md#dates-and-times) were filled from. jq's `$scrape_time`. |
 | `last_success` | When the last scrape of the same collector, target and parameters that succeeded began, in the same seconds; `None` at the first scrape after a start, and for a new target. jq's `$last_success`. |
 | `metric(...)`, `fail(message)` | Make a series; fail the scrape with a message. |
+| `log(message, level="info")` | Write a line of the exporter's log, at `debug`, `info`, `warning` or `error`. |
 | `metrics` | The list `metric(...)` appends to, of a `python` transform. |
 | `parse_bytes`, `parse_duration`, `parse_time`, `parse_percent`, `parse_quantity` | The [value-parsing helpers](#value-parsing-helpers). |
 | `json`, `sys`, `os`, `io`, `contextlib`, `builtins` | The modules of those names, as if imported. |
@@ -544,6 +545,12 @@ start once and then serves scrape after scrape.
   transform printed` or `python pre-script printed` with the collector, so
   `--log.level=debug` shows it while a script is being written; the rest is
   dropped, and counts against `limits.max_output_bytes` no further.
+  `log("queue stalled", level="warning")` writes a line at a level of its
+  own, as `python transform logged` with the collector, the target and the
+  message, for
+  what should be seen without debug logging. A run writes at most 20
+  lines, each of at most 1,024 characters, whatever it prints; a script
+  that fails writes its failure and not what it logged before.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with

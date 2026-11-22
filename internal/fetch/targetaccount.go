@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_grpc || request_type_redis || request_type_ldap || request_type_tcp || request_type_smtp || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap
+//go:build !select_request_types || request_type_grpc || request_type_redis || request_type_ldap || request_type_tcp || request_type_smtp || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3
 
 package fetch
 

@@ -65,6 +65,7 @@ var clockFormats = map[string]string{
 	"date_compact": "20060102",
 	"date_eu":      "02.01.2006",
 	"date_us":      "01/02/2006",
+	"date_imap":    "2-Jan-2006",
 	"month":        "2006-01",
 	"year":         "2006",
 	"time":         "15:04:05",

@@ -25,6 +25,6 @@ func smtpSchemaKeys() []schemaKey {
 	request := "      # request\n"
 	return []schemaKey{
 		{key: "collectors[].request.starttls_mode", document: smtpCollector, at: request, setting: "      starttls_mode: %s\n", valid: "required", invalid: "always", absent: true, empty: true, emptyWas: refused, built: true},
-		{key: "collectors[].request.auth", document: smtpCollector, at: request, setting: "      auth: %s\n", valid: "login", invalid: "cram-md5", absent: true, empty: true, emptyWas: refused, built: true},
+		{key: "collectors[].request.auth", document: smtpCollector, at: request, setting: "      auth: %s\n", valid: "login", invalid: "ntlm", absent: true, empty: true, emptyWas: refused, built: true},
 	}
 }

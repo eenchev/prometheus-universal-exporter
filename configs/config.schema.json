@@ -2737,7 +2737,7 @@
                 "type": "boolean"
               },
               "allow_plaintext": {
-                "description": "imap: log in over a connection that is not TLS, to a server that offers no STARTTLS. The password is then sent as it is; left out, such a scrape fails before it logs in.",
+                "description": "imap and pop3: log in over a connection that is not TLS, to a server that offers none. The password is then sent as it is; left out, such a scrape fails before it logs in.",
                 "type": "boolean"
               },
               "allowed_schemes": {
@@ -2800,11 +2800,14 @@
                 "type": "array"
               },
               "auth": {
-                "description": "smtp: the mechanism AUTH logs in with: plain or login, with request.username and request.password_file, or xoauth2, with request.username and request.xoauth2. Left out, plain where the server offers it and login otherwise, or xoauth2 when request.xoauth2 is set. See docs/SMTP.md#logging-in.",
+                "description": "smtp, imap and pop3: the mechanism the session logs in with: plain or login, with username and password_file, or xoauth2, with username and xoauth2; pop3 also takes user (USER and PASS), apop and cram-md5, each with username and password_file. Left out, the type's choice of what the server offers, or xoauth2 when xoauth2 is set.",
                 "enum": [
                   "plain",
                   "login",
                   "xoauth2",
+                  "user",
+                  "apop",
+                  "cram-md5",
                   ""
                 ],
                 "type": "string"
@@ -3124,6 +3127,38 @@
                 "maximum": 100,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "counts": {
+                "description": "imap: counts of the messages of a mailbox that match a search, as the server counts them: each a name, a mailbox, INBOX when left out, and a search, the criteria of an IMAP SEARCH. The mailbox is opened read-only to search it, which marks nothing read; no message is fetched. See docs/IMAP.md#counting-messages-by-a-search.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "mailbox": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "name": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "search": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "type": "array"
               },
               "database": {
                 "description": "sql: the database the statement runs on; the account's default when left out. Not for oracle, which names it by service_name. May contain {{param_name}} placeholders, filled with letters, digits and _ - . $ only.",
@@ -5400,7 +5435,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp and imap, with username: the file of the account's password, read at every scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6342,7 +6377,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp and imap, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6390,7 +6425,7 @@
               },
               "xoauth2": {
                 "additionalProperties": false,
-                "description": "smtp: where the OAuth 2.0 access token of AUTH XOAUTH2 comes from: token_file, a file that holds one, or the refresh token grant, token_url with refresh_token_file, client_id or client_id_file and, for a confidential client, client_secret_file. See docs/SMTP.md#gmail.",
+                "description": "smtp, imap and pop3: where the OAuth 2.0 access token of an XOAUTH2 login comes from: token_file, a file that holds one, or the refresh token grant, token_url with refresh_token_file, client_id or client_id_file and, for a confidential client, client_secret_file. See docs/SMTP.md#xoauth2.",
                 "properties": {
                   "client_id": {
                     "description": "The OAuth client's id, written; or client_id_file.",

@@ -38,6 +38,12 @@ func TestAnIMAPCollectorProbe(t *testing.T) {
 				} else {
 					_, _ = fmt.Fprintf(conn, "%s NO no such mailbox\r\n", tag)
 				}
+			case "SEARCH":
+				matches := " 2 5 9"
+				if strings.HasPrefix(args, `FROM "billing@example.com"`) {
+					matches = " 4"
+				}
+				_, _ = fmt.Fprintf(conn, "* SEARCH%s\r\n%s OK done\r\n", matches, tag)
 			case "LOGOUT":
 				_, _ = fmt.Fprintf(conn, "* BYE\r\n%s OK done\r\n", tag)
 				return
@@ -87,6 +93,29 @@ collectors:
         for box in data["mailboxes"]:
             metric(name="imap_mailbox_unseen", type="gauge", value=box["unseen"], labels={"mailbox": box["name"]})
     metrics: []
+  - name: mailcounts
+    request:
+      type: imap
+      username: monitor@example.com
+      password_file: `+password+`
+      allow_plaintext: true
+      counts:
+        - name: waiting
+          search: UNANSWERED BEFORE {{date_imap:-1d}}
+        - name: billing
+          mailbox: Support
+          search: FROM "{{param_sender}}" SINCE {{date_imap:-7d}}
+    transform:
+      type: jq
+    metrics:
+      - name: imap_messages_matching
+        items: .counts[] | select(.ok)
+        expression: .count
+        labels:
+          - name: search
+            expression: .name
+          - name: mailbox
+            expression: .mailbox
 `)
 	recorder := probeOnce(t, server, "/probe?collector=mail&param_box=Gone&target="+stub.Addr, nil)
 	want := `imap_mailbox_found{mailbox="Gone"} 0` + "\n" + `imap_mailbox_found{mailbox="INBOX"} 1` + "\n" + `imap_mailbox_messages{asked="Gone",mailbox="INBOX"} 12`
@@ -102,6 +131,16 @@ collectors:
 	}
 	if page := probeOnce(t, server, "/collectors", nil).Body.String(); !strings.Contains(page, "imaps://host:993") {
 		t.Errorf("the collectors page hints no imap target:\n%s", page)
+	}
+	// request.counts, read from the configuration, are the matches of each
+	// search, a probe's value within its quotes.
+	recorder = probeOnce(t, server, "/probe?collector=mailcounts&param_sender=billing@example.com&target="+stub.Addr, nil)
+	want = `imap_messages_matching{mailbox="INBOX",search="waiting"} 3` + "\n" + `imap_messages_matching{mailbox="Support",search="billing"} 1`
+	if got := seriesLines(recorder.Body.String()); recorder.Code != http.StatusOK || strings.Join(got, "\n") != want {
+		t.Errorf("counts: %d %v\n%s", recorder.Code, got, recorder.Body)
+	}
+	if recorder := probeOnce(t, server, "/probe?collector=mailcounts&param_sender=a%22+ALL+%22&target="+stub.Addr, nil); recorder.Code == http.StatusOK {
+		t.Errorf("a value that ends the search's quotes: %d %s", recorder.Code, recorder.Body)
 	}
 	// A python transform reads the document as data.
 	requirePython(t)

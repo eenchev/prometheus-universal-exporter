@@ -30,7 +30,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`) and files on FTP servers (`ftp`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
 - Support jq transformations for JSON.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket` and `ftp`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket` and `ftp`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket` and `ftp` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -1264,6 +1264,7 @@ as it is to the rest of this specification:
 - [`modbus`](SPECIFICATION-MODBUS.md)
 - [`mqtt`](SPECIFICATION-MQTT.md)
 - [`ntp`](SPECIFICATION-NTP.md)
+- [`pop3`](SPECIFICATION-POP3.md)
 - [`redis`](SPECIFICATION-REDIS.md)
 - [`s3file`](SPECIFICATION-S3FILE.md)
 - [`smtp`](SPECIFICATION-SMTP.md)
@@ -3122,6 +3123,7 @@ Expose a clean response context, preferably:
 
 ```python
 response.status_code
+response.ok
 response.headers
 response.header(name, default=None)
 response.body
@@ -3288,7 +3290,19 @@ pre-script left in a CSV row MUST be written as
 label text, `None` leaving the label off.
 
 What a script prints MUST be kept to its first 4 KiB, logged at debug level,
-and counted against `limits.max_output_bytes` only as far as that.
+and counted against `limits.max_output_bytes` only as far as that. A script
+MUST have `log(message, level="info")`, which writes the message, as text,
+as a line of the exporter's log of its own at the level, `debug`, `info`,
+`warning` or `error`, with the collector and the target as the logs show
+one, in the order of the calls and
+apart from what was printed; another level MUST fail the script. A run's
+first 20 lines MUST be written, each by its first 1,024 characters and how
+many more it had, whatever the script printed, and how many more lines
+there were said in a line at `warning`.
+
+`response.ok` MUST be whether the status is a success, an HTTP status of
+200 to 299 or a `grpc` call's `0`, and `None` for an answer without a
+status.
 
 A script and a pre-script MUST have the value-parsing helpers of § 17,
 `parse_bytes`, `parse_duration`, `parse_time`, `parse_percent` and
@@ -8206,7 +8220,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp` or `imap` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` or `pop3` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9518,7 +9532,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -11348,7 +11362,7 @@ the name optional and in that order, and, where a filter may stand, MAY end
 with one (§ 42.10b).
 
 - **Formats.** `name` MUST be one of `date` (`2006-01-02`), `date_compact`
-  (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `month`
+  (`20060102`), `date_eu` (`02.01.2006`), `date_us` (`01/02/2006`), `date_imap` (`2-Jan-2006`), `month`
   (`2006-01`), `year` (`2006`), `time` (`15:04:05`), `datetime` (RFC 3339,
   seconds), `datetime_ms` (RFC 3339, milliseconds, always three digits),
   `unix` (seconds since the epoch) and `unix_ms` (milliseconds).

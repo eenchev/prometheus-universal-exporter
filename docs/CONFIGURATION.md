@@ -2868,9 +2868,10 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has six more: `smtp` holds a
+them](#choosing-request-types-at-build-time) has seven more: `smtp` holds a
 mail server's session without sending — see [SMTP](SMTP.md) — `imap`
-counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `modbus`
+counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
+counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
 reads a device's registers — see [Modbus](MODBUS.md) — `mqtt` subscribes
 to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
 messages of an endpoint — see [WebSocket](WEBSOCKET.md) — and `ftp` reads
@@ -3103,11 +3104,21 @@ file is read by the decoder its extension names; its table is in [Files
 over FTP](FTP.md#a-collector).
 
 For `imap`, an opt-in type, no key is required: `username` with
-`password_file` logs in, `mailboxes` names the mailboxes `STATUS` asks
-about, by name or by a pattern, `INBOX` when left out, and `quota` asks for
-the account's quota, with no mailbox opened; `allow_plaintext`, `tls`,
+`password_file` or `xoauth2` logs in, by the mechanism `auth` names,
+`mailboxes` names the mailboxes `STATUS` asks about, by name or by a
+pattern, `INBOX` when left out, `quota` asks for the account's quota, and
+`counts` counts the messages of a mailbox that match a search, opened
+read-only; `allow_plaintext`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`; its table is in [IMAP](IMAP.md#a-collector).
+
+For `pop3`, an opt-in type, no key is required: `username` with
+`password_file` or `xoauth2` logs in, by the mechanism `auth` names, `user`,
+`apop`, `plain`, `login`, `cram-md5` or `xoauth2`, and the mailbox's
+messages and their size are asked for with `STAT`, nothing fetched;
+`allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and
+`denied_targets` apply too. The decoder is `json`; its table is in
+[POP3](POP3.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3182,6 +3193,10 @@ or `ftps://`.
 `imap`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the mail server, `host`, `host:port`, `imap://` or
 `imaps://`.
+
+`pop3`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the mail server, `host`, `host:port`, `pop3://` or
+`pop3s://`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3254,9 +3269,9 @@ build and the published image among them, made so with `make
 new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type))
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
-[`websocket`](WEBSOCKET.md) and [`ftp`](FTP.md), each written with the
-standard library alone: about 0.1 MB of a stripped binary each, and 0.3 MB
-for the five. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md) and
+[`pop3`](POP3.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, and under 0.5 MB for the seven. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is
@@ -7362,6 +7377,7 @@ nothing there.
 - [WEBSOCKET.md](WEBSOCKET.md) — the opt-in `websocket` request type.
 - [FTP.md](FTP.md) — the opt-in `ftp` request type.
 - [IMAP.md](IMAP.md) — the opt-in `imap` request type.
+- [POP3.md](POP3.md) — the opt-in `pop3` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

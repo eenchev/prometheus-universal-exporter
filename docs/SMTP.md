@@ -170,7 +170,9 @@ alone, use `XOAUTH2`.
 
 ### XOAUTH2
 
-`AUTH XOAUTH2` sends the account's name and an OAuth 2.0 access token.
+`AUTH XOAUTH2` sends the account's name and an OAuth 2.0 access token; the
+[`imap`](IMAP.md#gmail) and [`pop3`](POP3.md#gmail-and-microsoft-365)
+types log in with the same block.
 Gmail's last an hour, so the collector either reads one that something else
 keeps current, or gets its own with a refresh token:
 
@@ -215,7 +217,8 @@ server, written as a probe's target is. Its `request` may set `timeout`,
 and `username`, `password_file` and `tls` for a server with an account or a
 certificate authority of its own; a target that sets `username` logs in
 with its own `password_file`, and a `tls` block replaces the collector's
-whole.
+whole. A target of a collector that logs in with `xoauth2` sets no
+`password_file`: the token is one account's.
 
 ## Limits
 

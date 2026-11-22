@@ -31,6 +31,7 @@ func TestAClockPlaceholderWritesTheMomentInItsFormat(t *testing.T) {
 		"date_compact":               "20261109",
 		"date_eu":                    "09.11.2026",
 		"date_us":                    "11/09/2026",
+		"date_imap":                  "9-Nov-2026",
 		"month":                      "2026-11",
 		"year":                       "2026",
 		"time":                       "22:30:15",

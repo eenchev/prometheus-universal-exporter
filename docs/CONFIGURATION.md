@@ -3120,6 +3120,10 @@ fetched, and `list` asks for the size of the largest;
 `allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The decoder is `json`; its table is in
 [POP3](POP3.md#a-collector).
+
+For `radius`, TODO(radius): say here what this list says of each other type, and move it to its place among them.
+
+For `whois`, TODO(whois): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3198,6 +3202,10 @@ requires a `target`, the mail server, `host`, `host:port`, `imap://` or
 `pop3`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the mail server, `host`, `host:port`, `pop3://` or
 `pop3s://`.
+
+`radius`, TODO(radius): say here what this list says of each other type, and move it to its place among them.
+
+`whois`, TODO(whois): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -7399,6 +7407,8 @@ nothing there.
 - [FTP.md](FTP.md) — the opt-in `ftp` request type.
 - [IMAP.md](IMAP.md) — the opt-in `imap` request type.
 - [POP3.md](POP3.md) — the opt-in `pop3` request type.
+- [RADIUS.md](RADIUS.md) — the opt-in `radius` request type.
+- [WHOIS.md](WHOIS.md) — the opt-in `whois` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

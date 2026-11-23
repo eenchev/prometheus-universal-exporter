@@ -240,6 +240,8 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"ftp":        {"a file on an FTP server", ""},
 	"imap":       {"the mailboxes of a mail account", ""},
 	"pop3":       {"a mailbox over POP3", ""},
+	"radius":     {"TODO(radius)", ""},
+	"whois":      {"TODO(whois)", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

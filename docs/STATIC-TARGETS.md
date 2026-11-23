@@ -92,6 +92,8 @@ collector is looked at):
 | [`ftp`](FTP.md#static-targets), opt-in | the server, required | `path` and `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 | [`imap`](IMAP.md#static-targets), opt-in | the mail server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 | [`pop3`](POP3.md#static-targets), opt-in | the mail server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
+| [`radius`](RADIUS.md#static-targets), opt-in | TODO(radius) | TODO(radius) |
+| [`whois`](WHOIS.md#static-targets), opt-in | TODO(whois) | TODO(whois) |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

@@ -1265,6 +1265,7 @@ as it is to the rest of this specification:
 - [`mqtt`](SPECIFICATION-MQTT.md)
 - [`ntp`](SPECIFICATION-NTP.md)
 - [`pop3`](SPECIFICATION-POP3.md)
+- [`radius`](SPECIFICATION-RADIUS.md)
 - [`redis`](SPECIFICATION-REDIS.md)
 - [`s3file`](SPECIFICATION-S3FILE.md)
 - [`smtp`](SPECIFICATION-SMTP.md)
@@ -1275,6 +1276,7 @@ as it is to the rest of this specification:
 - [`tcp`](SPECIFICATION-TCP.md)
 - [`tlscert`](SPECIFICATION-TLSCERT.md)
 - [`websocket`](SPECIFICATION-WEBSOCKET.md)
+- [`whois`](SPECIFICATION-WHOIS.md)
 
 ---
 
@@ -9574,7 +9576,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

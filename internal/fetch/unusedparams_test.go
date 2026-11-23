@@ -39,6 +39,8 @@ var unusedRefusals = map[string]string{
 	RequestTypeFTP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its request.path ("/p/{{param_path:x}}") or its label values names them`,
 	RequestTypeIMAP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its request.mailboxes, request.counts or label values names them`,
 	RequestTypePOP3:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeRADIUS:     `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeWhois:      `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

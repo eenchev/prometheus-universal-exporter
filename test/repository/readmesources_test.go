@@ -39,6 +39,8 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"ftp":        {"FTP server", "files on an FTP server"},
 	"imap":       {"mailbox of a mail account", "the mailboxes of a mail account over IMAP"},
 	"pop3":       {"POP3", "a mailbox over POP3"},
+	"radius":     {"TODO(radius)", "TODO(radius)"},
+	"whois":      {"TODO(whois)", "TODO(whois)"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

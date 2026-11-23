@@ -46,7 +46,11 @@ MUST be opt-in, built only under the tag `request_type_whois`.
 - The answer's lines MUST be read as fields: `key: value`, the key before
   the first colon that ends one, at most 64 bytes and starting with a
   letter; `[key] value`; and, under a key with no value, the lines further
-  in that are no field themselves as that key's values. Keys MUST be
+  in that are no field themselves as that key's values. A line of at most
+  three words and 40 bytes that is no field, starts with a letter and has
+  no punctuation MUST be read as such a key, written without its colon. A
+  field further in under either MUST be kept under its own key and under
+  the two together, the heading's and its own by a space. Keys MUST be
   lower-cased, their blanks single and trailing dots dropped. Lines that
   start with `%`, `#` or `;` MUST be passed over, and nothing MUST be read
   from a line that starts with `>>>` on. At most 256 keys and 32 values of

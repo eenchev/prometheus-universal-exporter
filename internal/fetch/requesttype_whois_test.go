@@ -214,6 +214,10 @@ func TestWhoisAnswersOfSeveralRegistriesAreRead(t *testing.T) {
 			answer:  "[ JPRS database provides information on network administration. ]\nDomain Information:\na. [Domain Name]                EXAMPLE.JP\np. [Name Server]                ns1.example.jp\n[Created on]                    2001/03/26\n[Expires on]                    2027/03/31\n[Status]                        Active\n[Last Updated]                  2026/04/01 01:05:08 (JST)\n",
 			expires: "2027-03-31T00:00:00Z", created: "2001-03-26T00:00:00Z", updated: "2026-04-01T01:05:08Z", nameServers: []string{"ns1.example.jp"}, status: []string{"Active"},
 		},
+		"headings without a colon": {
+			answer:  "Domain:             example.it\nStatus:             ok\nCreated:            2000-01-01 00:00:00\nLast Update:        2026-01-17 00:55:37\nExpire Date:        2027-01-01\n\nRegistrant\n  Organization:     Example Owner\n\nRegistrar\n  Organization:     Example s.r.l.\n  Name:             EXAMPLE-REG\n\nNameservers\n  ns1.example.it\n  ns2.example.it\n",
+			expires: "2027-01-01T00:00:00Z", created: "2000-01-01T00:00:00Z", updated: "2026-01-17T00:55:37Z", registrar: "Example s.r.l.", nameServers: []string{"ns1.example.it", "ns2.example.it"}, status: []string{"ok"},
+		},
 		"paid-till": {
 			answer:  "% TCI Whois Service.\n\ndomain:        EXAMPLE.RU\nnserver:       ns1.example.ru.\nstate:         REGISTERED, DELEGATED, VERIFIED\nregistrar:     EXAMPLE-RU\ncreated:       1997-09-23T09:45:07Z\npaid-till:     2027-09-30T21:00:00Z\n",
 			expires: "2027-09-30T21:00:00Z", created: "1997-09-23T09:45:07Z", registrar: "EXAMPLE-RU", nameServers: []string{"ns1.example.ru"}, status: []string{"REGISTERED, DELEGATED, VERIFIED"},

@@ -82,8 +82,13 @@ data = state["pre"]`
 	}
 	// Without the key, state is a name the script does not have.
 	plain := workerCollector("plain", `metric(name="runs", value=state.get("runs", 0))`)
-	if _, err := runWithState(context.Background(), t, plain, "a"); err == nil || !strings.Contains(err.Error(), "NameError: name 'state' is not defined") {
+	if _, err := runWithState(context.Background(), t, plain, "a"); err == nil || !strings.Contains(err.Error(), "NameError: name 'state' is not defined: a script has state, the dict kept between its runs, when its collector sets transform.state: true") || !strings.Contains(err.Error(), "line 1") {
 		t.Fatalf("without transform.state: %v", err)
+	}
+	// Another name that is not defined is said as it always was.
+	other := workerCollector("other", `metric(name="runs", value=stat)`)
+	if _, err := runWithState(context.Background(), t, other, "a"); err == nil || !strings.Contains(err.Error(), "NameError: name 'stat' is not defined") || strings.Contains(err.Error(), "transform.state") {
+		t.Fatalf("another undefined name: %v", err)
 	}
 }
 

@@ -142,7 +142,10 @@ The document is what could be read of the answer.
   and `name_servers` the name servers, in lower case.
 - `fields` is every `key: value` line of the answer by its key in lower
   case, a key written several times with each of its values, up to the
-  line that says when the database was last updated. A rule reads what the
+  line that says when the database was last updated. Lines written under a
+  heading, further in, are the heading's values, and a field under one is
+  under its own key and under the two together: the `Organization` under
+  a `Registrar` heading is `organization` and `registrar organization`. A rule reads what the
   document has no field for from it: `.fields["registrant country"][0]`.
 - `text` is the answer as it came, for a `python` transform or a `jq`
   `capture` to read what no line holds as a key and a value.

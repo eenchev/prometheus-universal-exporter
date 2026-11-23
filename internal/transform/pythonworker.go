@@ -2753,4 +2753,8 @@ while True:
         if no_room is not None: failed(e,(no_room,)); continue
         failed(e,('MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory,) if max_memory>0 else None)
     except BaseException as e:
+        # A script that reads state without transform.state has no such
+        # name: its error says what gives it one, on the script's own line.
+        if isinstance(e,NameError) and str(e)=="name 'state' is not defined" and 'state' not in p:
+            e.args=("name 'state' is not defined: a script has state, the dict kept between its runs, when its collector sets transform.state: true",)
         failed(e)`

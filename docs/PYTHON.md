@@ -413,7 +413,9 @@ transform:
 - Each target has its own state, each set of probe parameters of a target
   its own, and a `pre_script` and a `python` transform each their own.
 - It is kept as JSON: text, numbers, booleans, `None`, lists and dicts with
-  text keys, of at most 64 KiB written out. A script that leaves anything
+  text keys, of at most 64 KiB written out. What JSON has no form of comes
+  back as what it has: a tuple as a list, and a dict's key that is a
+  number as its text, so `state[1]` is `state["1"]` at the next run. A script that leaves anything
   else in it, more than that, or `state` bound to something that is no
   dict, fails.
 - What a script that failed left is not kept, and neither is what a

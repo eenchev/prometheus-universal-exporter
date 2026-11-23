@@ -408,7 +408,9 @@ var whoisBracketed = regexp.MustCompile(`^(?:[a-z]\. )?\[([^\]]{1,64})\]\s*(.*)$
 
 // whoisFields reads the `key: value` lines of an answer, by key in lower
 // case, and the keys in the order they came. A key whose value is on the
-// lines under it, further in, has those lines for values. Comment lines are
+// lines under it, further in, has those lines for values, and so has a
+// heading written without a colon; a field under either is under its own
+// key and under the two together, as "registrar organization". Comment lines are
 // passed over, and nothing is read past the line that says when the
 // database was last updated, under which registries write their terms.
 func whoisFields(text string) (fields map[string][]string, order []string) {
@@ -454,18 +456,35 @@ func whoisFields(text string) (fields map[string][]string, order []string) {
 		case isField && value == "":
 			add(key, "")
 			open, indent = key, in
+		case isField && open != "" && in > indent:
+			// A field under a heading is the heading's too, as the
+			// Organization under a Registrar is the registrar's.
+			add(key, value)
+			add(open+" "+key, value)
 		case isField:
 			add(key, value)
-			if in <= indent {
-				open = ""
-			}
+			open = ""
 		case open != "" && in > indent:
 			add(open, line)
+		case whoisHeading(line):
+			// A heading without a colon, as "Nameservers" over the lines
+			// that name them.
+			open, indent = whoisKey(line), in
 		default:
 			open = ""
 		}
 	}
 	return fields, order
+}
+
+// whoisHeading says whether a line that is no field may be a heading the
+// lines further in are under: a few words that start with a letter.
+func whoisHeading(line string) bool {
+	if len(line) > 40 || len(strings.Fields(line)) > 3 {
+		return false
+	}
+	c := line[0]
+	return (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') && !strings.ContainsAny(line, ".,;!?()")
 }
 
 // whoisCut cuts a line into its key and value at the first colon that ends
@@ -494,7 +513,7 @@ var (
 	whoisExpiresKeys     = []string{"registry expiry date", "registrar registration expiration date", "expiration date", "expiry date", "expires", "expires on", "expire date", "expire", "expiry", "expiration time", "paid-till", "renewal date", "valid until", "domain expiration date", "record expires on", "有効期限"}
 	whoisCreatedKeys     = []string{"creation date", "created", "created on", "created date", "registered on", "registered", "registered date", "registration date", "registration time", "domain registration date", "record created", "domain record activated", "登録年月日"}
 	whoisUpdatedKeys     = []string{"updated date", "last updated", "last updated on", "last updated date", "last modified", "last-update", "last update", "modified", "changed", "domain record last updated", "最終更新"}
-	whoisRegistrarKeys   = []string{"registrar", "sponsoring registrar", "registrar name"}
+	whoisRegistrarKeys   = []string{"registrar", "sponsoring registrar", "registrar organization", "registrar name"}
 	whoisStatusKeys      = []string{"domain status", "status", "state"}
 	whoisNameServerKeys  = []string{"name server", "name servers", "nameserver", "nameservers", "nserver"}
 	whoisNotFoundPhrases = []string{"no match", "not found", "no data found", "no entries found", "no object found", "nothing found", "no such domain", "is available", "is free", "status: free", "status: available", "not registered", "no information available"}

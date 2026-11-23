@@ -17,7 +17,7 @@ func freshStates(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		pythonStates.mu.Lock()
-		pythonStates.kept, pythonStates.clock = map[pythonStateKey]*pythonStateEntry{}, 0
+		pythonStates.kept, pythonStates.clock, pythonStates.bytes = map[pythonStateKey]*pythonStateEntry{}, 0, 0
 		pythonStates.mu.Unlock()
 	}
 	reset()
@@ -151,6 +151,27 @@ func TestTheStatesKeptAreBounded(t *testing.T) {
 	pythonStates.put(key(pythonStatesKept), `{"n":2}`)
 	if a, b, c := pythonStates.get(key(0)), pythonStates.get(key(1)), pythonStates.get(key(pythonStatesKept)); a != `{"n":1}` || b != "{}" || c != `{"n":2}` {
 		t.Fatalf("after one more than is kept: the state read last is %s, the one used longest ago %s, the new one %s", a, b, c)
+	}
+	// The states kept are bounded in bytes too: of large ones, fewer.
+	large := `{"v":"` + strings.Repeat("x", 60<<10) + `"}`
+	for i := range 1200 {
+		pythonStates.put(key(10000+i), large)
+	}
+	pythonStates.mu.Lock()
+	bytes, counted := pythonStates.bytes, 0
+	for _, entry := range pythonStates.kept {
+		counted += len(entry.json)
+	}
+	pythonStates.mu.Unlock()
+	if bytes != counted || bytes > pythonStateBytesKept || bytes < pythonStateBytesKept-len(large) {
+		t.Fatalf("%d bytes of states are kept, counted as %d, want just under %d", counted, bytes, pythonStateBytesKept)
+	}
+	if got := pythonStates.get(key(10000 + 1199)); got != large {
+		t.Fatal("the state kept last is gone")
+	}
+	freshStates(t)
+	for i := range pythonStatesKept {
+		pythonStates.put(key(i), `{"n":1}`)
 	}
 	pythonStates.put(key(5), "{}")
 	pythonStates.mu.Lock()

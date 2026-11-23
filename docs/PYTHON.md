@@ -420,8 +420,10 @@ transform:
   and changes nothing. A scrape answered from the
   [cache](CONFIGURATION.md#response-caching) runs no script.
 - **It is memory, not storage.** A restart empties it, each replica has
-  its own, and the exporter keeps the states of the 4,096 scripts and
-  targets used last. Write the script so that an empty state costs one
+  its own, so a target the [target allocator](ALLOCATOR.md) moves to
+  another exporter starts there from an empty state, and the exporter keeps
+  the states of the 4,096 scripts and targets used last, 64 MiB of them at
+  most. Write the script so that an empty state costs one
   scrape's answer and no more.
 - Two scrapes of one target at the same moment each read the state as it
   was, and the one that ends last is the one kept.

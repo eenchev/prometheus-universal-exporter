@@ -65,7 +65,8 @@ opt-in, built only under the tag `request_type_radius`.
 - The answer MUST be a JSON document of `host`, `port`, `address` (the
   address the request was sent to), `mode`, `code`, `reply`
   (`access-accept`, `access-reject`, `access-challenge` or
-  `accounting-response`), `accepted` (true of an Access-Accept alone),
+  `accounting-response`), `accepted` (true of an Access-Accept alone, and of a
+  Status-Server's Accounting-Response),
   `attempts` (how many times the request was sent), `response_seconds`
   (from the first request sent to the reply), `reply_messages` (each
   Reply-Message, in order), `message_authenticator` (whether the reply

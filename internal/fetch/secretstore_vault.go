@@ -73,8 +73,11 @@ func checkVaultStore(e *model.SecretStore) error {
 	if err := checkSecretStoreURL("address", e.Address); err != nil {
 		return err
 	}
-	if err := CheckClientTLS(e.TLS); err != nil {
-		return err
+	// The files of tls are not opened here: they are mounted where the
+	// exporter scrapes, and not on a target allocator that checks the
+	// configuration for it, and are read when the store is first asked.
+	if err := CheckClientTLSKeys(e.TLS); err != nil {
+		return fmt.Errorf("tls %w", err)
 	}
 	a := e.Auth
 	if a == nil || a.Method == "" {
@@ -116,19 +119,37 @@ type vaultBackend struct {
 	base      string
 	namespace string
 	auth      model.SecretStoreAuth
-	client    *http.Client
+	tls       model.TLSConfig
+	timeout   time.Duration
 
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+
+	clientMu sync.Mutex
+	client   *http.Client
 }
 
-func newVaultBackend(e model.SecretStore, timeout time.Duration) (SecretBackend, error) {
-	client, err := secretClient(e.TLS, timeout)
+// httpClient is the client Vault is asked with, made at the first request:
+// the files of the store's tls block are read then, so a store whose CA is
+// mounted after the exporter starts is reached once it is, and a file that
+// cannot be read fails the read that needed it, saying so, and no other.
+func (b *vaultBackend) httpClient() (*http.Client, error) {
+	b.clientMu.Lock()
+	defer b.clientMu.Unlock()
+	if b.client != nil {
+		return b.client, nil
+	}
+	client, err := secretClient(b.tls, b.timeout)
 	if err != nil {
 		return nil, err
 	}
-	b := &vaultBackend{base: strings.TrimRight(e.Address, "/"), namespace: e.Namespace, client: client}
+	b.client = client
+	return client, nil
+}
+
+func newVaultBackend(e model.SecretStore, timeout time.Duration) (SecretBackend, error) {
+	b := &vaultBackend{base: strings.TrimRight(e.Address, "/"), namespace: e.Namespace, tls: e.TLS, timeout: timeout}
 	if e.Auth != nil {
 		b.auth = *e.Auth
 	}
@@ -185,7 +206,11 @@ func (b *vaultBackend) get(ctx context.Context, token string, ref SecretReferenc
 	}
 	b.headers(req)
 	req.Header.Set("X-Vault-Token", token)
-	return secretHTTP(b.client, req)
+	client, err := b.httpClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	return secretHTTP(client, req)
 }
 
 func (b *vaultBackend) headers(req *http.Request) {
@@ -283,7 +308,11 @@ func (b *vaultBackend) login(ctx context.Context) (token string, kept bool, err 
 	}
 	b.headers(req)
 	req.Header.Set("Content-Type", "application/json")
-	status, body, err := secretHTTP(b.client, req)
+	client, err := b.httpClient()
+	if err != nil {
+		return "", false, err
+	}
+	status, body, err := secretHTTP(client, req)
 	if err != nil {
 		return "", false, fmt.Errorf("logging in to vault: %w", err)
 	}
@@ -317,6 +346,9 @@ func vaultCredential(key, file, variable string) (string, error) {
 	}
 	value, err := ReadCredentialFile(file)
 	if err != nil {
+		if file == vaultServiceAccountToken && errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("reading %s: %w; the pod mounts no service account token: mount one (automountServiceAccountToken, the chart's serviceAccount.automount), or name a projected token with auth.jwt_file", key, err)
+		}
 		return "", fmt.Errorf("reading %s: %w", key, err)
 	}
 	if value == "" {

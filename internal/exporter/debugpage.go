@@ -460,6 +460,11 @@ func refusedOnDebugPage(x *model.Collector) error {
 	if files := serverFileKeys(x.Request); len(files) > 0 {
 		return fmt.Errorf("collector %q sets request.%s, which names a file on the server; a collector written on the debug page reads no file of the server's. Leave it out: a pasted response needs no credential, and a target is fetched through a configured collector (request_from), with its credentials", x.Name, strings.Join(files, ", request."))
 	}
+	// The protobuf decoder reads the files that describe its message, and
+	// what is wrong with one is said with what it holds.
+	if p := x.Response.Protobuf; p.ProtosetFile != "" || len(p.ProtoFiles) > 0 || len(p.ProtoImportPaths) > 0 {
+		return fmt.Errorf("collector %q sets response.protobuf's files, which are files on the server; a collector written on the debug page reads no file of the server's. Put it in the configuration and run it here by name instead", x.Name)
+	}
 	return nil
 }
 

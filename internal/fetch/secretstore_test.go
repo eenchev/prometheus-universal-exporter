@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -416,6 +417,9 @@ func TestReferencesToSecretStoresAreChecked(t *testing.T) {
 		"password_file: \"secret://vault/a#\" ends in # and names no field":         collector(func(c *model.Collector) { c.Request.PasswordFile = "secret://vault/a#" }),
 		"password_file: \"secret://vault\" names no secret":                         collector(func(c *model.Collector) { c.Request.PasswordFile = "secret://vault" }),
 		"has a placeholder; a reference to a secret store is used as it is written": collector(func(c *model.Collector) { c.Request.PasswordFile = "secret://vault/{{param_team}}/db#password" }),
+		"basic_auth_file: it names the secret store \"other\"": collector(func(c *model.Collector) {
+			c.Request.BasicAuthFile = &model.BasicAuthFile{Username: "/u", Password: "secret://other/a#b"}
+		}),
 		"takes ?version= alone": collector(func(c *model.Collector) { c.Request.PasswordFile = "secret://gcp/a?v=1" }),
 		"ca_file is secret://vault/ca#pem, a reference to a secret store, and the key":  collector(func(c *model.Collector) { c.Request.TLS.CAFile = "secret://vault/ca#pem" }),
 		"private_key_file is secret://vault/k#key":                                      collector(func(c *model.Collector) { c.Request.PrivateKeyFile = "secret://vault/k#key" }),
@@ -426,6 +430,9 @@ func TestReferencesToSecretStoresAreChecked(t *testing.T) {
 		}
 	}
 	taken := collector(func(c *model.Collector) {
+		// The files of a block of credential files are that block's.
+		c.Request.BasicAuthFile = &model.BasicAuthFile{Username: "secret://vault/secret/data/api#user", Password: "secret://vault/secret/data/api#password"}
+		c.Request.ProxyBasicAuthFile = &model.ProxyBasicAuthFile{Username: "/run/proxy/user", Password: "secret://gcp/proxy-password"}
 		c.Request.PasswordFile = "secret://vault/secret/data/db#password"
 		c.Request.BearerTokenFile = " secret://gcp/api-token?version=3 "
 		c.Request.TLS.CAFile = "/etc/ssl/ca.pem"
@@ -575,5 +582,60 @@ func TestEverySecretStoreTypeIsWhole(t *testing.T) {
 		if !taken[key] {
 			t.Errorf("model.SecretStore has the key %s, which no type of store takes", key)
 		}
+	}
+}
+
+// The files of a vault store's tls block are not opened when the
+// configuration is checked, which a target allocator does without them:
+// they are read when the store is first asked, a read failing for one that
+// cannot be, and the store is reached once the file is there.
+func TestAVaultStoresTLSFilesAreReadWhenItIsAsked(t *testing.T) {
+	vault := startVault(t)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	t.Setenv("VAULT_TOKEN", "root")
+	storesInForce(t, model.SecretStore{Name: "vault", Type: "vault", Address: vault.URL, Auth: &model.SecretStoreAuth{Method: "token"}, TLS: model.TLSConfig{CAFile: ca}})
+	if _, err := ReadCredentialFile("secret://vault/secret/data/db#password"); err == nil || !strings.Contains(err.Error(), "tls: ") || !strings.Contains(err.Error(), "ca.pem") {
+		t.Fatalf("with the CA file missing: %v", err)
+	}
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: vaultTestCertificate(t)}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The failure is not asked about again for a few seconds.
+	now := secretNow().Add(10 * time.Second)
+	secretNow = func() time.Time { return now }
+	if got, err := ReadCredentialFile("secret://vault/secret/data/db#password"); err != nil || got != "s3cret" {
+		t.Fatalf("with the CA file in place: %q, %v", got, err)
+	}
+	if err := ValidateSecretStores([]model.SecretStore{{Name: "v", Type: "vault", Address: "https://vault.example.com", Auth: &model.SecretStoreAuth{Method: "token"}, TLS: model.TLSConfig{CertFile: "/c.pem"}}}); err == nil || !strings.Contains(err.Error(), "tls sets only one of cert_file and key_file") {
+		t.Errorf("a certificate without its key: %v", err)
+	}
+}
+
+// vaultTestCertificate is a certificate of a key made for the test, which
+// a CA file may hold.
+func vaultTestCertificate(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
+}
+
+// A pod that mounts no service account token is told so when a vault
+// store's kubernetes login looks for it.
+func TestAVaultKubernetesLoginWithoutATokenSaysWhatToMount(t *testing.T) {
+	if _, err := os.Stat(vaultServiceAccountToken); err == nil {
+		t.Skip("this machine has a service account token")
+	}
+	vault := startVault(t)
+	storesInForce(t, model.SecretStore{Name: "vault", Type: "vault", Address: vault.URL, Auth: &model.SecretStoreAuth{Method: "kubernetes", Role: "exporter"}})
+	if _, err := ReadCredentialFile("secret://vault/secret/data/db#password"); err == nil || !strings.Contains(err.Error(), "the pod mounts no service account token") {
+		t.Fatalf("err=%v", err)
 	}
 }

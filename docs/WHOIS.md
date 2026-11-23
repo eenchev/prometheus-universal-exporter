@@ -158,7 +158,7 @@ interval of hours, as the collector's cache has:
 ```yaml
 interval: 12h
 targets:
-  - name: example.com
+  - name: example_com
     collector: domain
     target: example.com
 ```

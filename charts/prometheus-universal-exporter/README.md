@@ -619,6 +619,41 @@ config:
 
 and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. The annotation is on the ServiceAccount the chart creates; with an existing account, `serviceAccount.create: false`, annotate that account instead (see [Service account](#service-account)). Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
 
+## Secret stores
+
+A credential the exporter reads from a [secret store](../../docs/AUTHENTICATION.md#secret-stores), HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets Manager, needs no Secret mounted: the store and the references to it are part of the configuration, and the chart gives the pods what the store's login needs.
+
+For Vault's Kubernetes auth, the pods must mount their service account token, which they do not by default:
+
+```yaml
+serviceAccount:
+  automount: true
+config:
+  data:
+    config.yaml: |
+      secret_stores:
+        - name: vault
+          type: vault
+          address: https://vault.vault.svc:8200
+          auth: {method: kubernetes, role: exporter}
+      collectors:
+        - name: api
+          request:
+            type: http
+            bearer_token_file: secret://vault/secret/data/api#token
+          transform:
+            type: jq
+          metrics:
+            - name: api_up
+              expression: .up
+```
+
+The Vault role is bound to the ServiceAccount the pods run as, `<fullname>` in the release's namespace unless `serviceAccount.name` names another. To leave the API token unmounted, project a token of Vault's audience through `extraVolumes` and `extraVolumeMounts` and name it with the store's `auth.jwt_file`. A Vault token or an AppRole's secret id comes from a Secret as `VAULT_TOKEN` or `VAULT_SECRET_ID`, through `env` or `envFrom`.
+
+For AWS Secrets Manager, annotate the ServiceAccount with the IAM role, as for [S3 object collectors](#s3-object-collectors); for Google Cloud Secret Manager, with the Workload Identity binding, `iam.gke.io/gcp-service-account`. Neither needs the token mounted.
+
+With `networkPolicy.egress` rules, allow the store too: Vault's address, or the cloud's API and its metadata endpoint. With `allocator.enabled`, the exporter pods read from the stores, each for itself, and the allocator reaches none.
+
 ## Redis collectors
 
 A `redis` collector reads a Redis or Valkey server's INFO, and the replies of read-only commands such as a queue's `LLEN`.

@@ -595,7 +595,7 @@ func SecretStoreCounts() []SecretStoreCount {
 // the TLS and SSH libraries read, descriptors and statements, which are no
 // credentials, and the file a login keeps its token in. A reference to a
 // secret store in one of them is refused.
-var secretFileKeys = []string{"ca_file", "cert_file", "key_file", "kubelet_ca_file", "private_key_file", "known_hosts_file", "protoset_file", "proto_files", "statement_file", "keep_file"}
+var secretFileKeys = []string{"ca_file", "cert_file", "key_file", "kubelet_ca_file", "private_key_file", "known_hosts_file", "protoset_file", "proto_files", "statement_file", "keep_file", "collector_files"}
 
 // SecretReferences checks the references to secret stores in a
 // configuration or a static target file against the stores it was made
@@ -677,11 +677,14 @@ func (names SecretReferences) walk(v reflect.Value, key string) (at, written str
 		}
 		return names.walk(v.Elem(), key)
 	case reflect.Struct:
+		// The keys of a block that names credential files, as
+		// basic_auth_file's username and password are, are that key's.
+		inFiles := strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_files")
 		for i, name := range secretFieldKeys(v.Type()) {
-			switch name {
-			case "-":
+			switch {
+			case name == "-":
 				continue
-			case "":
+			case name == "" || inFiles:
 				name = key
 			}
 			if at, written, err := names.walk(v.Field(i), name); err != nil {

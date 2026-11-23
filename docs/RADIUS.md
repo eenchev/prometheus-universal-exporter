@@ -129,7 +129,9 @@ and the request goes to its first address, over UDP.
 ```
 
 - `reply` is `access-accept`, `access-reject` or `access-challenge`, and
-  `code` its number; `accepted` is true of an Access-Accept alone.
+  `code` its number; `accepted` is true of an Access-Accept alone, and with
+  `mode: status-server` of an `accounting-response` too, which is how an
+  accounting port answers one.
 - **A reply is an answer, whatever it says.** An Access-Reject is a server
   that is up and refused the account: the scrape succeeds and `accepted` is
   false, so a rule decides what a refusal means, and an account that should
@@ -174,7 +176,7 @@ server, `host` or `host:port`, and may set `timeout` under its `request`:
 ```yaml
 interval: 1m
 targets:
-  - name: radius-1
+  - name: radius_1
     collector: radius_login
     target: radius1.example.com
 ```

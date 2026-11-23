@@ -116,8 +116,9 @@ own checks:
   dot and one, as `*/x.yaml` does — since on the replica it would match
   `..data/config.yaml` too. Begin such an entry with a directory's name.
 - Files the configuration names by path — a grpc collector's descriptor
-  files, a sql collector's `statement_file`, `otlp.tls` files,
-  `web.basic_auth` files, credential files — travel
+  files and a `protobuf` decoder's, a sql collector's `statement_file`,
+  `otlp.tls` files, `web.basic_auth` files, credential files, the files a
+  secret store logs in with and its `tls` files — travel
   as paths, never as content. They must be mounted on every replica at the
   same path, as without the allocator, and need not be mounted on the
   allocator: it checks the configuration without opening them. The checks
@@ -194,6 +195,18 @@ with `discovered_targets`. Start the file with
 
 and an editor with the YAML language server completes and checks it as it
 does the exporter's files ([Editor support](CONFIGURATION.md#editor-support)).
+
+A credential read from a [secret store](AUTHENTICATION.md#secret-stores)
+is read by the exporter a target is given to, each exporter keeping what it
+read for `cache_ttl`: the allocator reaches no store, and needs neither a
+store's login nor its CA file. Each exporter logs in to the store for
+itself, so every replica needs what the store's login needs: the service
+account, the role, the token.
+
+What a Python script keeps in
+[`state`](PYTHON.md#state-between-runs) is the exporter's that ran it, in
+its memory: a target that moves to another exporter starts there from an
+empty state, as after a restart.
 
 A target that logs in ([`request.login`](AUTHENTICATION.md#logging-in-to-a-target))
 is logged in to by the exporter it is given to, at its first scrape there;

@@ -28,11 +28,12 @@ func TestACollectorReadsItsTokenFromASecretStore(t *testing.T) {
 			return
 		}
 		reads.Add(1)
-		_, _ = io.WriteString(w, `{"data":{"data":{"token":"tok-123"},"metadata":{"version":1}}}`)
+		_, _ = io.WriteString(w, `{"data":{"data":{"token":"tok-123","user":"monitor","password":"p4ss"},"metadata":{"version":1}}}`)
 	}))
 	t.Cleanup(vault.Close)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok-123" {
+		user, password, basic := r.BasicAuth()
+		if r.Header.Get("Authorization") != "Bearer tok-123" && !(basic && user == "monitor" && password == "p4ss" && r.URL.Path == "/basic") {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
 		}
@@ -56,6 +57,18 @@ collectors:
     metrics:
       - name: api_up
         expression: .up
+  - name: basic
+    request:
+      type: http
+      path: /basic
+      basic_auth_file:
+        username: secret://vault-prod/secret/data/api#user
+        password: secret://vault-prod/secret/data/api#password
+    decoder: {type: json}
+    transform: {type: jq}
+    metrics:
+      - name: basic_up
+        expression: .up
 `
 	}
 	server := labelServer(t, document("vault-prod"))
@@ -65,8 +78,14 @@ collectors:
 			t.Fatalf("%d %q: %s", r.Code, got, r.Body)
 		}
 	}
+	// A block of credential files, basic_auth_file's username and password,
+	// takes references too, and they are fields of the secret read already.
+	r := probeOnce(t, server, "/probe?collector=basic&target="+url.QueryEscape(target.URL), nil)
+	if got := strings.Join(seriesLines(r.Body.String()), "\n"); r.Code != http.StatusOK || got != "basic_up 1" {
+		t.Fatalf("basic auth from the store: %d %q: %s", r.Code, got, r.Body)
+	}
 	if n := reads.Load(); n != 1 {
-		t.Errorf("the store was asked %d times for two probes within cache_ttl", n)
+		t.Errorf("the store was asked %d times for three probes of one secret within cache_ttl", n)
 	}
 	metrics := probeOnce(t, server, "/self-metrics", nil).Body.String()
 	for _, want := range []string{

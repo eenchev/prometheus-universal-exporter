@@ -34,6 +34,8 @@ type radiusStandIn struct {
 	// the reply with another secret; noise is sent before each reply.
 	// badSignature spoils the reply's Message-Authenticator and leaves its
 	// Response Authenticator right.
+	// accounting answers a Status-Server as an accounting port does.
+	accounting   bool
 	drop         int
 	unsigned     bool
 	badSignature bool
@@ -118,6 +120,9 @@ func (s *radiusStandIn) answer(request []byte) []byte {
 	}
 	if seen.code == radiusStatusServer {
 		code = radiusAccessAccept
+		if s.accounting {
+			code = radiusAccountingResponse
+		}
 	}
 	s.packets, s.seen = append(s.packets, request), append(s.seen, seen)
 	if len(s.packets) <= s.drop {
@@ -258,6 +263,11 @@ func TestARADIUSStatusServerScrapeSendsNoAccount(t *testing.T) {
 	}
 	if saw := s.saw(); !reflect.DeepEqual(saw, []radiusSeen{{code: radiusStatusServer, nas: "probe-1", signed: true}}) {
 		t.Errorf("the server saw %+v", saw)
+	}
+	// An accounting port answers one with an Accounting-Response.
+	accounting := startRADIUS(t, &radiusStandIn{secret: "shared", password: "p", accounting: true})
+	if doc, err := radiusDoc(t, c, accounting.addr, 5*time.Second); err != nil || !doc.Accepted || doc.Reply != "accounting-response" {
+		t.Errorf("%+v, %v", doc, err)
 	}
 	if method := (radiusRequester{}).Method(c, RequestOverrides{}); method != "STATUS-SERVER" {
 		t.Errorf("method %q", method)

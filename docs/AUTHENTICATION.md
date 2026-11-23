@@ -999,6 +999,10 @@ never read, the read fails and its scrape with it, as a credential file
 that cannot be read does. A store that failed is not asked for the same
 secret again for 5 seconds.
 
+With the [target allocator](ALLOCATOR.md), each exporter reads from the
+stores for itself and keeps its own secrets; the allocator checks the
+references and reaches no store.
+
 A request to a store is not part of a scrape's deadline: `timeout` bounds
 it. `--dry-run` reads the references a scrape would, and warns of one that
 cannot be read. [Self-metrics](SELF-METRICS.md) count each store's requests
@@ -1018,6 +1022,12 @@ and failures.
 | `auth.secret_id_file` | `VAULT_SECRET_ID` | `approle`: the file of the secret id. |
 | `auth.mount` | `kubernetes`, `approle` | Where the auth method is mounted. |
 | `tls` | — | How the server's certificate is verified, and a client certificate, as [`request.tls`](CONFIGURATION.md#collectors) is written. |
+
+In a pod, `kubernetes` reads the service account token the pod mounts, so
+the pod must mount one: `automountServiceAccountToken: true`, the chart's
+`serviceAccount.automount`, or a projected token of the audience the Vault
+role expects, named with `auth.jwt_file`. The files of `tls` are read when
+the store is first asked, not when the configuration loads.
 
 The path is the API's, the part after `/v1/`: for a KV version 2 mount it
 has `data/` after the mount, `secret/data/orders-db`, and for version 1 it

@@ -337,7 +337,8 @@ type radiusDocument struct {
 	Code  int    `json:"code"`
 	Reply string `json:"reply"`
 	// Accepted says the reply is an Access-Accept; to a status-server
-	// request, that the server answered as one that is alive does.
+	// request, that the server answered as one that is alive does, an
+	// Accounting-Response of an accounting port too.
 	Accepted bool `json:"accepted"`
 	// Attempts is how many times the request was sent, and
 	// ResponseSeconds how long after the first the reply came.
@@ -620,10 +621,13 @@ func radiusExchange(ctx context.Context, address radiusAddress, username, passwo
 // radiusDescribe makes the document of a verified reply.
 func radiusDescribe(reply radiusReply, r RADIUSConfig) radiusDocument {
 	doc := radiusDocument{
-		Mode:                 r.Mode,
-		Code:                 reply.code,
-		Reply:                radiusReplies[reply.code],
-		Accepted:             reply.code == radiusAccessAccept,
+		Mode:  r.Mode,
+		Code:  reply.code,
+		Reply: radiusReplies[reply.code],
+		// A Status-Server is answered as the port answers a request: an
+		// Access-Accept on the authentication port, an
+		// Accounting-Response on the accounting port.
+		Accepted:             reply.code == radiusAccessAccept || r.Mode == radiusModeStatus && reply.code == radiusAccountingResponse,
 		MessageAuthenticator: reply.signed,
 		ReplyMessages:        []string{},
 		AttributeTypes:       []int{},

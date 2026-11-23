@@ -31,13 +31,18 @@ import (
 // It is not kept across a restart, and in allocator mode each replica has
 // its own: a script has to make do with an empty one, as on its first run.
 // The exporter keeps the states of at most pythonStatesKept targets, the
-// ones used last, so targets that are gone do not stay.
+// ones used last, and at most pythonStateBytesKept bytes of them, so
+// targets that are gone do not stay and the states of many do not add up.
 
 // MaxPythonStateBytes is the most a script's state may be, as JSON.
 const MaxPythonStateBytes = 64 << 10
 
-// pythonStatesKept is how many states the exporter keeps.
-const pythonStatesKept = 4096
+// pythonStatesKept is how many states the exporter keeps, and
+// pythonStateBytesKept how many bytes of them, as JSON, all together.
+const (
+	pythonStatesKept     = 4096
+	pythonStateBytesKept = 64 << 20
+)
 
 // pythonStateKey says whose a state is: the collector's script, a
 // pre-script or a transform, for a target and the parameters of its probe,
@@ -67,6 +72,8 @@ type pythonStateStore struct {
 	mu    sync.Mutex
 	kept  map[pythonStateKey]*pythonStateEntry
 	clock uint64
+	// bytes is the length of the states kept, together.
+	bytes int
 }
 
 type pythonStateEntry struct {
@@ -91,27 +98,36 @@ func (s *pythonStateStore) get(key pythonStateKey) string {
 }
 
 // put keeps state, JSON, under key; an empty object is kept as none. When
-// more than pythonStatesKept are kept, the one used longest ago goes.
+// more than pythonStatesKept are kept, or more than pythonStateBytesKept
+// bytes of them, those used longest ago go until neither is.
 func (s *pythonStateStore) put(key pythonStateKey, state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if state == "{}" {
+	if was := s.kept[key]; was != nil {
+		s.bytes -= len(was.json)
 		delete(s.kept, key)
+	}
+	if state == "{}" {
 		return
 	}
 	s.clock++
 	s.kept[key] = &pythonStateEntry{json: state, used: s.clock}
-	if len(s.kept) <= pythonStatesKept {
-		return
-	}
-	var oldest pythonStateKey
-	least := s.clock
-	for k, entry := range s.kept {
-		if entry.used < least {
-			oldest, least = k, entry.used
+	s.bytes += len(state)
+	for len(s.kept) > pythonStatesKept || s.bytes > pythonStateBytesKept {
+		var oldest pythonStateKey
+		least := s.clock
+		for k, entry := range s.kept {
+			if entry.used < least {
+				oldest, least = k, entry.used
+			}
 		}
+		if least == s.clock {
+			// Only the state just kept is left.
+			return
+		}
+		s.bytes -= len(s.kept[oldest].json)
+		delete(s.kept, oldest)
 	}
-	delete(s.kept, oldest)
 }
 
 // checkPythonState says what is wrong with the state a script left, as the

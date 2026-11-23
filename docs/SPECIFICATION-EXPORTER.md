@@ -1470,6 +1470,9 @@ charset MUST be applied to the body it reads.
 - A build without the `grpc` request type MUST NOT link the libraries that
   read descriptors, and MUST refuse the decoder at load, saying it comes
   with that type.
+- A collector written on the debug page that names the decoder's files MUST
+  be refused before it is checked, as one that names a file in its request
+  is (§ 42.17).
 
 ### 6.0a NDJSON, logfmt, TOML and INI
 
@@ -3188,7 +3191,7 @@ alone. A script MUST fail when it ends with `state` bound to anything but
 a dict, holding what JSON cannot carry, or of more than 65,536 bytes
 written out, and what it left MUST NOT be kept. A debug probe MUST read
 the state and MUST NOT change it. The exporter MUST keep at most 4,096
-states, those used last. Without the key a script MUST have no such name,
+states and 64 MiB of them, those used last. Without the key a script MUST have no such name,
 and the key on a collector that runs no Python script MUST be refused at
 load.
 
@@ -11118,7 +11121,9 @@ types registered.
   `statement_file`, `keep_file`) or in a key that names no file; one not
   written as a reference is; one that names no store of the configuration;
   one to a `vault` store without a field; and one in `web.basic_auth` or in
-  a key a store itself is reached with. A static target file MUST be held
+  a key a store itself is reached with. The keys of a block that names
+  credential files, `basic_auth_file`'s `username` and `password`, MUST take
+  one as a key that names a file does. A static target file MUST be held
   to the stores of the configuration it is checked against.
 - A secret read MUST be kept in memory, by store, path and version, and
   MUST NOT be written to disk. A read within `cache_ttl` of it, 5m unless
@@ -11142,7 +11147,9 @@ types registered.
   `approle`, with `auth.role_id` and the secret id of
   `auth.secret_id_file` or of `VAULT_SECRET_ID`. A token a login gave MUST
   be kept until nine tenths of its lease have passed, and a `403` to it
-  MUST be answered by logging in again, once. A key of another method, and
+  MUST be answered by logging in again, once. The files of `tls` MUST NOT
+  be opened when the configuration loads, which a target allocator does
+  without them, but when the store is first asked. A key of another method, and
   of another type, MUST be refused at load.
 - `gcp` MUST read the version `latest`, or the reference's, of the secret
   in `project` over Secret Manager's REST API, and take its payload as the

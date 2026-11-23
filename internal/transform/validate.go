@@ -111,10 +111,31 @@ def produces_data(tree):
                 if isinstance(part,(ast.Subscript,ast.Attribute)) and isinstance(part.ctx,(ast.Store,ast.Del)) and names.intersection(roots(part)): return True
     return False
 
+# What this interpreter holds of address space, which is what
+# limits.max_script_memory bounds of a worker: a worker holds this and what
+# it loads, so a limit that is not more than this is one no script of the
+# collector can run under, and every scrape of it would fail saying so
+# (pythonworker.go). It is said here, before the first scrape. 0 where
+# there is no /proc to read it from, which is where the limit is not
+# enforced either.
+def held():
+    try:
+        with open('/proc/self/status') as status:
+            for line in status:
+                if line.startswith('VmSize:'): return int(line.split()[1])*1024
+    except Exception: pass
+    return 0
+held=held()
+
 payload=json.load(sys.stdin)
 problems=[]
+short=set()
 for item in payload['scripts']:
     label="collector %s %s" % (item['collector'], item['kind'])
+    most=item.get('max_memory') or 0
+    if 0<most<=held and item['collector'] not in short:
+        short.add(item['collector'])
+        problems.append({'collector':item['collector'],'message':"collector %s limits.max_script_memory (%d bytes) is less than the %d bytes this Python interpreter holds before a script runs, so no script of the collector can run under it; set at least %dMiB, or 0 for no limit" % (item['collector'], most, held, (held+(1<<20)-1>>20)+16)})
     try:
         tree=ast.parse(item['source'], mode='exec')
     except SyntaxError as e:
@@ -137,6 +158,9 @@ type pythonScript struct {
 	Kind         string `json:"kind"`
 	Source       string `json:"source"`
 	RequiresData bool   `json:"requires_data"`
+	// MaxMemory is the collector's limits.max_script_memory, 0 for none,
+	// which the check holds against what the interpreter itself takes.
+	MaxMemory int64 `json:"max_memory"`
 }
 
 // CollectorScripts lists every Python source in the configuration. Only
@@ -152,6 +176,7 @@ func CollectorScripts(c *model.Config) []pythonScript {
 				Kind:         "pre_script",
 				Source:       collector.Transform.PreScript,
 				RequiresData: true,
+				MaxMemory:    int64(collector.Limits.MaxScriptMemory),
 			})
 		}
 		if source := strings.TrimSpace(collector.Transform.Script); source != "" && collector.Transform.Type == "python" {
@@ -159,6 +184,7 @@ func CollectorScripts(c *model.Config) []pythonScript {
 				Collector: collector.Name,
 				Kind:      "python transform script",
 				Source:    collector.Transform.Script,
+				MaxMemory: int64(collector.Limits.MaxScriptMemory),
 			})
 		}
 	}

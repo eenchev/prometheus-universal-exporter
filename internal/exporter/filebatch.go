@@ -85,9 +85,10 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 		if failure != nil {
 			// Whatever stage the file failed at, its error is no longer
 			// than a trip's may be (boundedTripFailure).
+			printed := printedBefore(failure.err)
 			failure.err = boundedTripFailure(failure.err)
 			failed[file.Name] = true
-			s.tripFailed(ctx, rec.read, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
+			s.tripFailed(ctx, rec.read, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, append([]any{"collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage}, printed...)...)
 			continue
 		}
 		s.tripRecovered(ctx, rec.read, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)

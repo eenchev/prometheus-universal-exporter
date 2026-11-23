@@ -489,7 +489,9 @@ func TestLocalLintRunsOnlyWithThePinnedVersion(t *testing.T) {
 }
 
 // What an editor shows comes from gopls, and some of its analyzers exist
-// nowhere else, so CI runs gopls check at the Makefile's pinned version.
+// nowhere else, so CI runs gopls check at the Makefile's pinned version,
+// which it installs first: three times at most, since a download the
+// module proxy broke off failed the job for nothing the change did.
 func TestCIRunsGoplsCheck(t *testing.T) {
 	makefile, err := os.ReadFile("Makefile")
 	if err != nil {
@@ -502,8 +504,11 @@ func TestCIRunsGoplsCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(workflow), "run: make gopls-install gopls-check") {
-		t.Error("ci.yml no longer runs gopls check")
+	// The install is tried again when the module proxy breaks it off, and
+	// the check is run once, after it.
+	install, check := strings.Index(string(workflow), "if make gopls-install; then break; fi"), strings.Index(string(workflow), "\n          make gopls-check\n")
+	if install < 0 || check < install {
+		t.Error("ci.yml no longer installs gopls, trying again when the download fails, and then runs gopls check")
 	}
 }
 

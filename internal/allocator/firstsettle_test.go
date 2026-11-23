@@ -60,6 +60,7 @@ func (noReloads) CheckReplacement(string, string) error { return errors.New("no 
 func (noReloads) ReloadReplacing(string, string, func() (func() error, error)) error {
 	return errors.New("no reload expected")
 }
+func (noReloads) Generation() string { return "" }
 
 // The reviewer's scenario: a rollout shortens the heartbeat interval from
 // 3s to 1s. A replica that started after the new instance hears it, and

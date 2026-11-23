@@ -2,6 +2,7 @@ package gojq
 
 import (
 	"context"
+	"reflect"
 	"unsafe"
 )
 
@@ -19,9 +20,10 @@ type maxValue struct {
 type maxValueKey struct{}
 
 // WithMaxValueBytes returns a context with which a program is told, by a
-// call of exceeded, of each text or array a function of it makes that
-// takes more than bytes: an array by the sixteen bytes of each of its
-// items, whatever they are. The value is given all the same, and the
+// call of exceeded, of each text, array or object a function of it makes
+// that takes more than bytes: an array by the sixteen bytes of each of its
+// items and an object by the forty-eight of each of its keys, whatever
+// they are and however long the keys. The value is given all the same, and the
 // program runs on unless exceeded cancels the context, which stops it
 // before its next step as any cancelled context does.
 //
@@ -36,7 +38,8 @@ type maxValueKey struct{}
 // of: the value itself, as debug and tostring of a text give, a part of
 // it, as a slice and ltrimstr give, or one of the items or values of an
 // array or an object it was given, as an index, max and min_by give, and
-// what getpath finds at any depth. So a program is not told of a large
+// what getpath finds at any depth. An object is the one it was given or
+// another. So a program is not told of a large
 // value its input holds for reading it.
 func WithMaxValueBytes(ctx context.Context, bytes int, exceeded func()) context.Context {
 	return context.WithValue(ctx, maxValueKey{}, &maxValue{bytes: bytes, exceeded: exceeded})
@@ -56,6 +59,8 @@ func (m *maxValue) made(v, x any, args []any, name string) {
 		size = len(v)
 	case []any:
 		size = 16 * len(v)
+	case map[string]any:
+		size = 48 * len(v)
 	}
 	if size <= m.bytes || name == "getpath" || given(v, x) {
 		return
@@ -68,8 +73,8 @@ func (m *maxValue) made(v, x any, args []any, name string) {
 	m.exceeded()
 }
 
-// given says whether v is from, a text or an array the function was given,
-// or a part of it, or one of the items or values of from.
+// given says whether v is from, a text, an array or an object the function
+// was given, or a part of it, or one of the items or values of from.
 func given(v, from any) bool {
 	switch from := from.(type) {
 	case string:
@@ -84,6 +89,9 @@ func given(v, from any) bool {
 			}
 		}
 	case map[string]any:
+		if within(v, from) {
+			return true
+		}
 		for _, value := range from {
 			if within(v, value) {
 				return true
@@ -94,7 +102,8 @@ func given(v, from any) bool {
 }
 
 // within says whether the text or array v is in the memory of whole, which
-// is of its kind: the same value, or a part of it.
+// is of its kind: the same value, or a part of it; and whether the object
+// v is the object whole.
 func within(v, whole any) bool {
 	switch v := v.(type) {
 	case string:
@@ -112,6 +121,9 @@ func within(v, whole any) bool {
 		const item = unsafe.Sizeof(any(nil))
 		start, from := uintptr(unsafe.Pointer(unsafe.SliceData(v))), uintptr(unsafe.Pointer(unsafe.SliceData(w)))
 		return start >= from && start+uintptr(len(v))*item <= from+uintptr(cap(w))*item
+	case map[string]any:
+		w, ok := whole.(map[string]any)
+		return ok && reflect.ValueOf(v).UnsafePointer() == reflect.ValueOf(w).UnsafePointer()
 	}
 	return false
 }

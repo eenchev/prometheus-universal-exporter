@@ -1,0 +1,30 @@
+--- a/env.go
++++ b/env.go
+@@ -17,6 +17,7 @@
+ 	label     int
+ 	args      [32]any // len(env.args) > maxarity
+ 	ctx       context.Context
++	most      *maxValue // prometheus-universal-exporter: see maxvalue.go
+ }
+ 
+ func newEnv(ctx context.Context) *env {
+@@ -25,6 +26,7 @@
+ 		paths:  newStack[pathValue](),
+ 		scopes: newStack[scope](),
+ 		ctx:    ctx,
++		most:   maxValueOf(ctx),
+ 	}
+ }
+ 
+--- a/execute.go
++++ b/execute.go
+@@ -189,6 +189,9 @@
+ 					err = e
+ 					break loop
+ 				}
++				if env.most != nil {
++					env.most.made(w, x, args, v[2].(string)) // prometheus-universal-exporter: see maxvalue.go
++				}
+ 				env.push(w)
+ 				if !env.paths.empty() && env.expdepth == 0 {
+ 					switch v[2].(string) {

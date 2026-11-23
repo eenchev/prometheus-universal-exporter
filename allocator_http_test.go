@@ -414,6 +414,10 @@ type blockingReloader struct {
 
 func (r *blockingReloader) CheckReplacement(string, string) error { return nil }
 
+// Generation is none: the reload that would put one in force is the one
+// the test holds.
+func (r *blockingReloader) Generation() string { return "" }
+
 func (r *blockingReloader) ReloadReplacing(_, _ string, replace func() (func() error, error)) error {
 	r.once.Do(func() { close(r.entered) })
 	<-r.release

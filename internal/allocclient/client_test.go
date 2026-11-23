@@ -205,6 +205,17 @@ type fakeManager struct {
 	failRestore bool
 	inForce     string
 	reloads     []string
+	// generation is that of the bundle in force, and held, when it is
+	// set, is closed by a reload once it has put its configuration in
+	// force, which then waits for release before it returns.
+	generation    string
+	held, release chan struct{}
+}
+
+func (f *fakeManager) Generation() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.generation
 }
 
 func (f *fakeManager) CheckReplacement(configPath, _ string) error {
@@ -217,9 +228,18 @@ func (f *fakeManager) CheckReplacement(configPath, _ string) error {
 	return nil
 }
 
-func (f *fakeManager) ReloadReplacing(trigger, _ string, replace func() (func() error, error)) error {
+func (f *fakeManager) ReloadReplacing(trigger, generation string, replace func() (func() error, error)) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	// What a reload does after its configuration is in force, the lock
+	// let go of as the manager's readers need none.
+	defer func() {
+		held, release := f.held, f.release
+		f.mu.Unlock()
+		if held != nil && f.Generation() == generation {
+			close(held)
+			<-release
+		}
+	}()
 	restore, err := replace()
 	if err != nil {
 		return err
@@ -249,7 +269,7 @@ func (f *fakeManager) ReloadReplacing(trigger, _ string, replace func() (func() 
 		f.inForce = read()
 		return errors.New("the reload refused " + got)
 	}
-	f.inForce = got
+	f.inForce, f.generation = got, generation
 	return nil
 }
 
@@ -814,6 +834,39 @@ func TestShuttingDownHeartbeatsAtOnce(t *testing.T) {
 	c.heartbeat(context.Background())
 	if hb := a.nextHeartbeat(t); !hb.ShuttingDown {
 		t.Error("a heartbeat after ShuttingDown does not say so")
+	}
+}
+
+// A heartbeat names the generation in force from the moment its
+// configuration answers probes, which is before the reload that put it in
+// force has returned to the client: the heartbeat a shutdown sends at once
+// in that while said no generation, of an exporter that was answering with
+// the bundle's configuration.
+func TestAHeartbeatNamesTheGenerationInForceBeforeItsReloadHasReturned(t *testing.T) {
+	a := newFakeAllocator(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	c := startClient(t, a, nil)
+	c.manager.mu.Lock()
+	c.manager.held, c.manager.release = held, release
+	c.manager.mu.Unlock()
+	if hb := a.nextHeartbeat(t); hb.Generation != "" {
+		t.Fatalf("the first heartbeat: %+v", hb.Heartbeat)
+	}
+	generation := a.serveFiles(map[string]string{"config.yaml": "collectors: first\n"})
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the bundle was not put in force")
+	}
+	// The configuration is in force, and its reload has not returned.
+	c.ShuttingDown(context.Background())
+	hb := a.heartbeatWhere(t, "a heartbeat that says the exporter is shutting down", func(hb sentHeartbeat) bool { return hb.ShuttingDown })
+	close(release)
+	if hb.Generation != generation {
+		t.Errorf("the heartbeat of a shutdown while the reload was returning names generation %q, want %q, which was in force", hb.Generation, generation)
+	}
+	if e := c.waitFor(t, EventInstalled); e.Generation != generation {
+		t.Fatalf("installed %q, want %q", e.Generation, generation)
 	}
 }
 

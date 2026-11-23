@@ -18,6 +18,10 @@ import (
 var workflowWriteGrants = map[string]map[string][]string{
 	"ci.yml":          {},
 	"govulncheck.yml": {},
+	"gojq-release.yml": {
+		// The issue that says gojq has a newer release than the copy.
+		"compare": {"issues"},
+	},
 	"release.yml": {
 		// The GitHub Release, the image on GHCR, and cosign's keyless
 		// signatures of the image and the checksums.

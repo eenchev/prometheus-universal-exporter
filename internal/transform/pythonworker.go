@@ -627,6 +627,11 @@ func (p *PythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, t
 		}
 		line, ran, err := worker.call(ctx, payload, timeout)
 		if err == nil {
+			// For a caller that asked (WithMemoryMeasured): read while
+			// the worker is this run's, before another may be handed it.
+			if peak, asked := ctx.Value(workerPeakKey{}).(*int64); asked {
+				*peak = workerPeakBytes(worker.cmd.Process.Pid)
+			}
 			p.release(spec, worker)
 			return line, ran, nil
 		}
@@ -637,6 +642,10 @@ func (p *PythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, t
 		return nil, ran, err
 	}
 }
+
+// workerPeakKey is the key a context holds, for run, where to write the
+// most address space the worker that answered has had.
+type workerPeakKey struct{}
 
 func stopReason(err error) string {
 	switch {

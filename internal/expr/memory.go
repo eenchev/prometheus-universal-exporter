@@ -51,23 +51,84 @@ func (e *MemoryExceeded) Error() string {
 // looks at the heap every memoryLook and asks for collections. It may be
 // called more than once, and says each time what it said first.
 func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, func() *MemoryExceeded) {
+	measure, _ := ctx.Value(memoryMeasureKey{}).(*MemoryMeasure)
+	var before uint64
+	if measure != nil {
+		before = heapHeld().live
+	}
 	if limit <= 0 {
-		return ctx, func() *MemoryExceeded { return nil }
+		return ctx, func() *MemoryExceeded {
+			measure.grew(heapHeld, before)
+			return nil
+		}
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	// One value past the limit is past it whatever else is held, and is
 	// known when it is made, without a look at the heap (see below).
 	ctx = gojq.WithMaxValueBytes(ctx, int(min(limit, math.MaxInt)), func() { cancel(&MemoryExceeded{Limit: limit}) })
 	ended := make(chan struct{})
-	timer := time.AfterFunc(memoryLook, func() { watchMemory(ended, limit, cancel) })
+	timer := time.AfterFunc(memoryLook, func() { watchMemory(ended, limit, cancel, measure, before) })
 	return ctx, sync.OnceValue(func() *MemoryExceeded {
 		timer.Stop()
 		close(ended)
+		measure.grew(heapHeld, before)
 		var exceeded *MemoryExceeded
 		errors.As(context.Cause(ctx), &exceeded)
 		cancel(nil)
 		return exceeded
 	})
+}
+
+// MemoryMeasure is how much the programs run with a context held at their
+// most, for whoever asked (WithMemoryMeasure): a debug probe, which says it
+// to someone choosing limits.max_expression_memory.
+//
+// It is what the watch measures, the growth of the whole process's heap
+// while a program ran, so what other scrapes took meanwhile is in it; and
+// it is the most a collection counted live over what one counted live
+// before the program began. Both count what was made while they ran, so
+// the one is taken from the other, like from like: taken from what was
+// certainly held before, which on a busy exporter is far less than was
+// held, the program was said to hold what the exporter held before it. A
+// collection is run before the program, at
+// every look while it runs, 20 milliseconds apart, and after it: more than
+// a scrape is worth, and what a debug probe is for. What a program held
+// and let go of between two looks is not seen.
+type MemoryMeasure struct{ most atomic.Uint64 }
+
+type memoryMeasureKey struct{}
+
+// WithMemoryMeasure is ctx with the memory of the programs run with it
+// measured, and the measure.
+func WithMemoryMeasure(ctx context.Context) (context.Context, *MemoryMeasure) {
+	measure := &MemoryMeasure{}
+	return context.WithValue(ctx, memoryMeasureKey{}, measure), measure
+}
+
+// Most is the most the programs held, in bytes over what was held before
+// each began.
+func (m *MemoryMeasure) Most() uint64 { return m.most.Load() }
+
+// grew runs a collection and keeps what it counts live over before, where
+// that is more than was kept. A nil measure measures nothing.
+func (m *MemoryMeasure) grew(collect func() collection, before uint64) {
+	if m == nil {
+		return
+	}
+	m.saw(collect().live, before)
+}
+
+// saw keeps live over before where that is more than was kept.
+func (m *MemoryMeasure) saw(live, before uint64) {
+	if m == nil || live <= before {
+		return
+	}
+	for {
+		most := m.most.Load()
+		if live-before <= most || m.most.CompareAndSwap(most, live-before) {
+			return
+		}
+	}
 }
 
 // memoryLimitKey is the key a context holds its memory limit under.
@@ -125,7 +186,10 @@ func WatchMemoryOf(ctx context.Context) (context.Context, func() *MemoryExceeded
 // value larger than the whole limit is past it whatever else is held, and
 // the interpreter says so when a function gives one (WatchMemory), which
 // stops the program before its next step.
-func watchMemory(ended <-chan struct{}, bound model.ByteSize, cancel context.CancelCauseFunc) {
+//
+// With a measure, a collection is asked for at every look, and what it
+// counts live over before is kept (MemoryMeasure).
+func watchMemory(ended <-chan struct{}, bound model.ByteSize, cancel context.CancelCauseFunc, measure *MemoryMeasure, before uint64) {
 	limit := uint64(bound) // #nosec G115 -- a limit is a size, which is not negative
 	from := heapObjects()
 	most := from + limit
@@ -138,10 +202,11 @@ func watchMemory(ended <-chan struct{}, bound model.ByteSize, cancel context.Can
 			return
 		case <-ticker.C:
 		}
-		if heapObjects() <= collectAt {
+		if measure == nil && heapObjects() <= collectAt {
 			continue
 		}
 		found := heapHeld()
+		measure.saw(found.live, before)
 		if !collected && found.live < from {
 			from, most = found.live, found.live+limit
 		}

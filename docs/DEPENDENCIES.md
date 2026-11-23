@@ -149,7 +149,10 @@ built from the copy in `third_party/gojq` that `go.mod` replaces the module
 with, which is the upstream release with one change, so that a value past
 [`limits.max_expression_memory`](CONFIGURATION.md#memory) stops its program
 when it is made (`third_party/gojq/PATCH.md` says what, and how to move to
-a newer release, which Dependabot does not propose; `govulncheck` and an
+a newer release, which Dependabot does not propose and
+`tools/gojq-copy.sh` makes; a test holds the copy to the release's
+checksums with the patch taken out, and a weekly workflow opens an issue
+when gojq has a newer release; `govulncheck` and an
 image scanner match a module by its version, which a copy in the
 repository has none of, so an advisory for gojq is one to look for when a
 release of it comes out),

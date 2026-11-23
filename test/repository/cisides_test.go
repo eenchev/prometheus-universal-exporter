@@ -135,7 +135,8 @@ func (p *listedPackage) goSources() []string {
 // ciNeeded works out, once for each side, every file of the repository its
 // run needs: the files of each package of the module its packages and their
 // tests are built from — every Go file, whatever its build tags, the
-// embedded files and the package's testdata —, every existing path outside
+// embedded files and the package's testdata —, the Go files of a module
+// that go.mod replaces with a directory of the repository, every existing path outside
 // its own directory a string literal of one of the side's own packages names
 // (a test opening ../../examples/x.yaml, or the root package's tests opening
 // examples/x.yaml), and ciSideRuns.
@@ -170,12 +171,24 @@ var ciNeeded = sync.OnceValues(func() (map[string]map[string]bool, error) {
 			} else if err != nil {
 				return nil, err
 			}
-			if p.Module == nil || !p.Module.Main || p.ForTest != "" || strings.HasSuffix(p.ImportPath, ".test") {
+			if p.Module == nil || p.ForTest != "" || strings.HasSuffix(p.ImportPath, ".test") {
 				continue
 			}
 			dir, err := filepath.Rel(root, p.Dir)
 			if err != nil {
 				return nil, err
+			}
+			// A module go.mod replaces with a directory of the repository
+			// is built from the repository's files as the module's own
+			// packages are: third_party/gojq, with the two files that make
+			// it a module.
+			if !p.Module.Main {
+				if filepath.IsLocal(dir) {
+					for _, name := range slices.Concat(p.goSources(), []string{"go.mod", "go.sum"}) {
+						files[filepath.ToSlash(filepath.Join(dir, name))] = true
+					}
+				}
+				continue
 			}
 			for _, name := range slices.Concat(p.goSources(), p.OtherFiles, p.EmbedFiles, p.TestEmbedFiles, p.XTestEmbedFiles) {
 				files[filepath.ToSlash(filepath.Join(dir, name))] = true

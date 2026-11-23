@@ -118,6 +118,16 @@ func (s *Server) logTripFailure(ctx context.Context, read configRead, l collectL
 	s.tripFailed(ctx, read, slog.LevelError, l.key, l.failed, stage, err, attrs...)
 }
 
+// printedBefore is what a failed script printed before it failed with err
+// (transform.PrintedBeforeFailure), as the attributes its failure is logged
+// with, and none for a failure with nothing printed before it.
+func printedBefore(err error) []any {
+	if printed := transform.PrintedBeforeFailure(err); printed != "" {
+		return []any{"printed", printed}
+	}
+	return nil
+}
+
 // collected is how a trip ended.
 type collected struct {
 	// set is the validated result and answer the same with its freshness
@@ -487,7 +497,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 				stages.step("transform", "failed", mark, "metric "+failure.Metric+": "+err.Error())
 				return collected{stage: "metric", err: err, metric: failure.Metric}
 			}
-			return stageFailed("transform", err, c.ErrorHandling.OnTransformError)
+			return stageFailed("transform", err, c.ErrorHandling.OnTransformError, printedBefore(err)...)
 		}
 		stages.step("transform", "ok", mark, fmt.Sprintf("%d series", len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })

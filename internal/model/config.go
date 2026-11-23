@@ -767,6 +767,26 @@ type ResponseConfig struct {
 	Graphite   GraphiteConfig    `yaml:"graphite"`
 	Binary     BinaryConfig      `yaml:"binary"`
 	YAML       YAMLConfig        `yaml:"yaml"`
+	Protobuf   ProtobufConfig    `yaml:"protobuf"`
+}
+
+// ProtobufConfig is response.protobuf: the message the protobuf decoder
+// reads a body as, and the files that describe it, a descriptor set or
+// .proto files, as a grpc request names them (fetch/protobufdecoder.go).
+type ProtobufConfig struct {
+	// Message is the full name of the message, such as metrics.v1.Report.
+	Message string `yaml:"message"`
+	// ProtosetFile is a FileDescriptorSet, written with its imports.
+	ProtosetFile string `yaml:"protoset_file"`
+	// ProtoFiles are .proto files to compile, and ProtoImportPaths the
+	// directories their imports are resolved in.
+	ProtoFiles       []string `yaml:"proto_files"`
+	ProtoImportPaths []string `yaml:"proto_import_paths"`
+}
+
+// Set reports whether the block sets anything.
+func (p ProtobufConfig) Set() bool {
+	return p.Message != "" || p.ProtosetFile != "" || len(p.ProtoFiles) > 0 || len(p.ProtoImportPaths) > 0
 }
 
 // YAMLConfig is response.yaml: how the yaml decoder reads a body of more
@@ -853,7 +873,7 @@ type CSVConfig struct {
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
 // reads the response: json, ndjson, yaml, toml, ini, xml, csv, html,
-// logfmt, prometheus, text, graphite or binary, or none, which reads no body. Unset or auto, the transform's type
+// logfmt, prometheus, text, graphite, binary or protobuf, or none, which reads no body. Unset or auto, the transform's type
 // picks it when it implies one, and otherwise the response's content type or
 // its content.
 type DecoderConfig struct {
@@ -1263,7 +1283,7 @@ var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, L
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", DecoderNone}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", "protobuf", DecoderNone}
 
 // DecoderNone is the decoder.type that reads no body: jq and yq rules read
 // null, with $status and $headers, and a Python script's data is None, for
@@ -1280,11 +1300,15 @@ var TransformTypes = []string{"jq", "yq", "xpath", "css", "csv", "regex", "pytho
 // expressions are written in, the scripts, and the renaming and filtering
 // applied to the metrics produced.
 type TransformConfig struct {
-	Type         string            `yaml:"type"`
-	PreScript    string            `yaml:"pre_script"`
-	Script       string            `yaml:"script"`
-	Libraries    []string          `yaml:"libraries"`
-	RequiredLibs []string          `yaml:"required_libs"`
+	Type         string   `yaml:"type"`
+	PreScript    string   `yaml:"pre_script"`
+	Script       string   `yaml:"script"`
+	Libraries    []string `yaml:"libraries"`
+	RequiredLibs []string `yaml:"required_libs"`
+	// State gives the collector's Python scripts a dict named state that
+	// is kept from one run of a script to its next, for each target
+	// (transform/pythonstate.go).
+	State        bool              `yaml:"state"`
 	Include      []string          `yaml:"include"`
 	Exclude      []string          `yaml:"exclude"`
 	Rename       map[string]string `yaml:"rename"`

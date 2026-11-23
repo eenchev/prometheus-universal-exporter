@@ -212,6 +212,19 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		return &Decoded{Kind: "binary", Data: v, Raw: r.Body}, nil
 	}
+	// A protobuf answer is bytes too, read as the message response.protobuf
+	// names and handed on as the JSON of it (fetch/protobufdecoder.go).
+	if c.Decoder.Type == "protobuf" {
+		written, err := fetch.DecodeProtobuf(r.Body, c)
+		if err != nil {
+			return nil, fmt.Errorf("protobuf decode: %w", err)
+		}
+		v, err := decodeJSON(written)
+		if err != nil {
+			return nil, fmt.Errorf("protobuf decode: %w", err)
+		}
+		return &Decoded{Kind: "protobuf", Data: v, Raw: r.Body}, nil
+	}
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)
 	if err != nil {

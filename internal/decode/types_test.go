@@ -29,7 +29,9 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"none":       "anything at all",
 	}
 	for _, decoder := range model.DecoderTypes {
-		if decoder == "auto" {
+		// protobuf reads a body by the files of its message, in the builds
+		// that have it, and has a test of its own.
+		if decoder == "auto" || decoder == "protobuf" {
 			continue
 		}
 		t.Run(decoder, func(t *testing.T) {

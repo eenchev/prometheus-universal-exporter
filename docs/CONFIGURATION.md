@@ -36,6 +36,7 @@ start from. This page is the reference for what it may contain.
   - [No decoder](#no-decoder)
   - [NDJSON, logfmt, TOML and INI](#ndjson-logfmt-toml-and-ini)
   - [Binary answers](#binary-answers)
+  - [Protobuf responses](#protobuf-responses)
   - [Character encodings](#character-encodings)
   - [Reading CSV: what to expect](#reading-csv-what-to-expect)
   - [XML namespaces](#xml-namespaces)
@@ -198,10 +199,11 @@ decoder:
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
 `prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`,
-`none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)), and
+`protobuf`, `none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)),
 `binary` reads the answer of a binary protocol by the layout of
-`response.binary` (see [Binary answers](#binary-answers)), and is never
-chosen by `auto`. The `graphite` decoder reads
+`response.binary` (see [Binary answers](#binary-answers)), and `protobuf`
+reads a protobuf message by `response.protobuf` (see [Protobuf
+responses](#protobuf-responses)); `auto` chooses neither of the two. The `graphite` decoder reads
 Graphite series — a render API answer or carbon lines — for jq, yq and Python;
 see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
 Lines, key=value log lines, TOML and INI files into a document jq, yq and
@@ -499,6 +501,49 @@ past the end of the answer fails the scrape in the `decode` stage, naming it:
 and the answer is 11 bytes`. No charset is applied to a binary answer, and
 `response.binary` beside any other decoder is refused when the configuration
 loads, as a layout without the decoder and the decoder without a layout are.
+
+### Protobuf responses
+
+`decoder.type: protobuf` reads a body that is one protobuf message, as an
+API that answers `application/x-protobuf` sends, and hands it on as the
+JSON a [`grpc`](GRPC.md) answer is. The message's type comes from the
+files `response.protobuf` names, `.proto` files or a descriptor set:
+
+```yaml
+decoder:
+  type: protobuf
+response:
+  protobuf:
+    message: metrics.v1.Report
+    proto_files: [/etc/exporter/proto/report.proto]
+transform:
+  type: jq
+metrics:
+  - name: report_total
+    expression: .total | tonumber
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `message` | — | **Required.** The message the body is, by its full name, package and all. |
+| `proto_files` | — | The `.proto` files that define it, compiled when the configuration loads. |
+| `proto_import_paths` | each file's directory | The directories their imports are resolved in, as `protoc -I`. |
+| `protoset_file` | — | In place of `proto_files`: a descriptor set, written with its imports by `protoc --descriptor_set_out --include_imports` or `buf build -o`. |
+
+- The document names each field as the `.proto` file does, has the fields
+  the message left unset with their zero values, and writes a 64-bit
+  integer as text, as protobuf's JSON does: read one with `tonumber`, or
+  `int(...)` in a script.
+- `jq`, `yq` and `python` read it; `auto` never chooses the decoder.
+- The files are read when the configuration loads, so a file that does not
+  compile and a message that is not in it fail the configuration, and a
+  file that changes afterwards is read again.
+- A body that is not the message fails the decode. Protobuf does not say
+  what a body is, so a body of another message may read as this one with
+  other values: name the message the endpoint sends.
+- The decoder is in every build that has the `grpc` request type, the
+  default build among them, since it reads descriptors with the same
+  libraries; a build without `grpc` refuses it.
 
 ### Character encodings
 
@@ -2868,14 +2913,16 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has seven more: `smtp` holds a
+them](#choosing-request-types-at-build-time) has nine more: `smtp` holds a
 mail server's session without sending — see [SMTP](SMTP.md) — `imap`
 counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
 counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
 reads a device's registers — see [Modbus](MODBUS.md) — `mqtt` subscribes
 to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
-messages of an endpoint — see [WebSocket](WEBSOCKET.md) — and `ftp` reads
-a file from an FTP server — see [Files over FTP](FTP.md).
+messages of an endpoint — see [WebSocket](WEBSOCKET.md) — `ftp` reads
+a file from an FTP server — see [Files over FTP](FTP.md) — `radius`
+authenticates an account against a RADIUS server — see [RADIUS](RADIUS.md)
+— and `whois` reads a domain's registration — see [WHOIS](WHOIS.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -3121,9 +3168,22 @@ fetched, and `list` asks for the size of the largest;
 `denied_targets` apply too. The decoder is `json`; its table is in
 [POP3](POP3.md#a-collector).
 
-For `radius`, TODO(radius): say here what this list says of each other type, and move it to its place among them.
+For `radius`, an opt-in type, `secret_file` is required, the secret the
+server shares with the exporter, and `username` with `password_file`, the
+account the server is asked to authenticate, by `mode`, `pap` or `chap`;
+`mode: status-server` asks whether the server is alive and takes no
+account. `nas_identifier` names the sender, `resends` and
+`resend_interval` send the request again while no reply comes, and
+`require_message_authenticator` fails a reply without one;
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
+its table is in [RADIUS](RADIUS.md#a-collector).
 
-For `whois`, TODO(whois): say here what this list says of each other type, and move it to its place among them.
+For `whois`, an opt-in type, no key is required: the registry's WHOIS
+server is asked for the domain that is the target, the server IANA names
+for its top-level domain or the one `whois_server` names, with
+`query_prefix` before the domain; `max_response_bytes`, `allowed_targets`
+and `denied_targets` apply too. The decoder is `json`; its table is in
+[WHOIS](WHOIS.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3203,9 +3263,11 @@ requires a `target`, the mail server, `host`, `host:port`, `imap://` or
 requires a `target`, the mail server, `host`, `host:port`, `pop3://` or
 `pop3s://`.
 
-`radius`, TODO(radius): say here what this list says of each other type, and move it to its place among them.
+`radius`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the RADIUS server, `host` or `host:port`.
 
-`whois`, TODO(whois): say here what this list says of each other type, and move it to its place among them.
+`whois`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the domain.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3278,9 +3340,9 @@ build and the published image among them, made so with `make
 new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type))
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
-[`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md) and
-[`pop3`](POP3.md), each written with the standard library alone: about
-0.1 MB of a stripped binary each, and about 0.5 MB for the seven. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
+[`pop3`](POP3.md), [`radius`](RADIUS.md) and [`whois`](WHOIS.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, and about 0.6 MB for the nine. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is

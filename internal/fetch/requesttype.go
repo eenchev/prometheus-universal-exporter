@@ -32,7 +32,9 @@ import (
 // session without sending, modbus reads a device's registers, mqtt
 // subscribes to a broker's topics, websocket reads an endpoint's messages,
 // ftp reads a file from an FTP server, imap counts the mail of an
-// account's mailboxes and pop3 that of a mailbox over POP3. The type is required rather than defaulted so that no configuration means
+// account's mailboxes, pop3 that of a mailbox over POP3, radius
+// authenticates an account against a RADIUS server and whois reads a
+// domain's registration. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common
@@ -516,11 +518,15 @@ func CollectorConnectionLimit(requestType, collector string) (waited, failed uin
 // collector, its request.protoset_file and request.proto_files, which its
 // method and message are checked against. The collector need not have been
 // validated, its request.type being taken as ReadFiles takes it.
+//
+// The files of a protobuf decoder, its response.protobuf.protoset_file and
+// proto_files, are named as well: its message is looked up in them.
 func NamedFiles(c *model.Collector) []string {
+	var files []string
 	if rt := RequestTypes[c.Request.Type]; rt != nil && rt.NamedFiles != nil {
-		return rt.NamedFiles(c)
+		files = rt.NamedFiles(c)
 	}
-	return nil
+	return append(files, protobufDecoderNamedFiles(c)...)
 }
 
 // ReadFiles returns the paths that checking a collector's request looked at
@@ -542,11 +548,18 @@ func NamedFiles(c *model.Collector) []string {
 // configuration is, to stamp the files before the validation reads them. Its
 // request.type is taken as written, as ValidateRequest takes it, so a
 // collector written `type: GRPC`, which the validation refuses, has none.
+//
+// The .proto files of a protobuf decoder are read the same way, and what
+// compiling them looked at is returned with the request's.
 func ReadFiles(c *model.Collector) (paths []string, read string) {
 	if rt := RequestTypes[c.Request.Type]; rt != nil && rt.ReadFiles != nil {
-		return rt.ReadFiles(c)
+		paths, read = rt.ReadFiles(c)
 	}
-	return nil, ""
+	decoderPaths, decoderRead := protobufDecoderReadFiles(c)
+	if len(decoderPaths) == 0 && decoderRead == "" {
+		return paths, read
+	}
+	return append(paths, decoderPaths...), read + "\x00" + decoderRead
 }
 
 // RequestTypes is the registry of the types built into this binary. Each type

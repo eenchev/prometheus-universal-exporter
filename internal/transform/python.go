@@ -66,6 +66,9 @@ type pythonOutput struct {
 	Metrics []any  `json:"metrics"`
 	Data    any    `json:"data"`
 	Log     string `json:"log"`
+	// State is the state the script left, as JSON, for a collector with
+	// transform.state (pythonstate.go); "" when the worker wrote none.
+	State string `json:"state"`
 	// Shown is the error of a script that failed as the worker cut it, in
 	// place of Error: one of more than 16,384 characters, or whose line
 	// limits.max_output_bytes does not hold, as the exporter would have
@@ -629,6 +632,14 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	timer := scriptTimerFrom(ctx)
 	spec := pythonWorkerSpec(pythonPath, c)
 	spec.stats = pool.statsOf(timer.carried(), c.Name)
+	// The state the script is given, which is no part of the request as
+	// the encoder writes it: it is put before the brace that ends it.
+	stateKey := pythonStateKey{collector: c.Name, what: what, target: r.Target, params: pythonStateParams(pythonParams(ctx))}
+	if c.Transform.State {
+		payload = append(payload[:len(payload)-1], `,"state":`...)
+		payload = append(payload, pythonStates.get(stateKey)...)
+		payload = append(payload, '}')
+	}
 	var peak int64
 	runCtx := ctx
 	if memoryMeasured(ctx) {
@@ -647,6 +658,14 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		timer.add(ran)
 	}
 	out, err := countedPythonResult(spec.stats, c, what, timeout, line, err)
+	// What a script that ran to its end left in state is kept for its
+	// next run, unless the run is a debug probe's (WithMemoryMeasured is
+	// what marks one), which changes nothing of what a scrape finds.
+	if err == nil && out != nil && c.Transform.State && out.State != "" {
+		if err = checkPythonState(c, what, out.State); err == nil && !memoryMeasured(ctx) {
+			pythonStates.put(stateKey, out.State)
+		}
+	}
 	if out != nil && out.Log != "" {
 		// What the script printed and logged, its first 4 KiB of the one
 		// and twenty lines of the other, for whoever debugs it; it counts

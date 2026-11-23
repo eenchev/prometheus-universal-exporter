@@ -666,6 +666,7 @@
                   "toml",
                   "ini",
                   "binary",
+                  "protobuf",
                   "none",
                   ""
                 ],
@@ -5192,6 +5193,16 @@
                 ],
                 "type": "string"
               },
+              "mode": {
+                "description": "radius: how the request authenticates: pap, the default, which sends the password hidden with the shared secret; chap, which sends a digest of it; or status-server, which asks whether the server is alive and sends no account. See docs/RADIUS.md#the-mode.",
+                "enum": [
+                  "pap",
+                  "chap",
+                  "status-server",
+                  ""
+                ],
+                "type": "string"
+              },
               "namespaces": {
                 "description": "kubernetes: the namespaces listed, each at its own path, in this order. Left out, with all_namespaces false, the exporter's own namespace, from its service account.",
                 "items": {
@@ -5200,6 +5211,12 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "nas_identifier": {
+                "description": "radius: the NAS-Identifier the request names its sender by, which a server may choose its policy by; prometheus-universal-exporter when left out.",
+                "maxLength": 253,
+                "pattern": "^[^\\x00-\\x1f\\x7f]*$",
+                "type": "string"
               },
               "new_connection": {
                 "description": "http and graphite: send every request — each attempt, and each redirect followed — on a new connection, closed after its answer, rather than on one kept from an earlier request, so each probe looks the name up, connects and makes the TLS handshake again, and sees the certificate the site serves now. For uptime checks. Defaults to false. See docs/REQUESTS.md#connections.",
@@ -5443,7 +5460,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -5601,6 +5618,12 @@
                   "pattern": "^[^\\x00-\\x1F\\x7F]*$"
                 },
                 "type": "object"
+              },
+              "query_prefix": {
+                "description": "whois: text written before the domain in the question, for a server that wants more than the name, such as \"-T dn,ace \" for DENIC; at most 64 characters, none of them a control character.",
+                "maxLength": 64,
+                "pattern": "^[^\\x00-\\x1f\\x7f]*$",
+                "type": "string"
               },
               "quota": {
                 "description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes.",
@@ -5776,6 +5799,33 @@
                   "integer"
                 ]
               },
+              "require_message_authenticator": {
+                "description": "radius: fail the scrape when the reply carries no Message-Authenticator, as a server patched against CVE-2024-3596 always sends one; false when left out. One that is there is verified either way.",
+                "type": "boolean"
+              },
+              "resend_interval": {
+                "description": "radius: how long a reply is waited for before the request is sent again, at least 100ms; 2s when left out.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,7})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,4})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,1})?(\\.[0-9]*)?))ms|(0*((\\.((0[0-9]*)?))?))s|(0*((\\.(|0|00(0[0-9]*)?|001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000([0-1][0-9]*)?|00002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "resends": {
+                "description": "radius: how many more times the request is sent while no reply comes, from 0 to 5; 2 when left out.",
+                "maximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
               "resource": {
                 "description": "kubernetes, required: the plural name of the resource listed, as kubectl api-resources lists it, such as pods, deployments or certificates. The core group's secrets are refused. See docs/KUBERNETES.md.",
                 "maxLength": 63,
@@ -5948,6 +5998,14 @@
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
                 },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "secret_file": {
+                "description": "radius: the file that holds the secret the server shares with this client, read at each scrape. Required.",
                 "type": [
                   "string",
                   "number",
@@ -6385,7 +6443,7 @@
                 ]
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6420,6 +6478,14 @@
                 "maximum": 1000000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "whois_server": {
+                "description": "whois: the WHOIS server asked, host or host:port, port 43 when it names none. Left out, IANA's server is asked which server answers for the domain's top-level domain, and that one is asked. See docs/WHOIS.md#the-server-asked.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               },
               "window": {
                 "description": "mqtt: how long a scrape reads after subscribing: the retained messages come at once, and whatever is published within the window after them. Defaults to 1s, and ends within the scrape's deadline. With keep_connection, how long the scrape that makes the connection waits for the first messages.",
@@ -6678,6 +6744,51 @@
                 },
                 "type": "object"
               },
+              "protobuf": {
+                "additionalProperties": false,
+                "description": "protobuf decoder: the message a body is read as and the files that describe it, .proto files or a descriptor set, as a grpc request names them. In the builds that have the grpc request type. See docs/CONFIGURATION.md#protobuf-responses.",
+                "properties": {
+                  "message": {
+                    "description": "protobuf decoder: the message the body is, by its full name, package and all, such as metrics.v1.Report. Required.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "proto_files": {
+                    "description": "protobuf decoder: the .proto files that define the message, compiled when the configuration loads.",
+                    "items": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "proto_import_paths": {
+                    "description": "protobuf decoder: the directories the imports of proto_files are resolved in, as protoc -I; each file's own directory when left out.",
+                    "items": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "protoset_file": {
+                    "description": "protobuf decoder: in place of proto_files, a descriptor set written with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
               "yaml": {
                 "additionalProperties": false,
                 "properties": {
@@ -6815,6 +6926,10 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "state": {
+                "description": "python: true gives the collector's scripts a dict named state that the exporter keeps from one run of a script to its next for the same target, in memory: what a run leaves in it, JSON of at most 64KiB, is what the next finds. For a script that counts what is new since it last ran. See docs/PYTHON.md#state-between-runs.",
+                "type": "boolean"
               },
               "type": {
                 "description": "How metrics are extracted from the decoded response. Required.",

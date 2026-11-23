@@ -26,6 +26,7 @@ names, and whatever it imports:
 | `params` | The [probe's parameters](REQUESTS.md#in-expressions), a dict of each `param_<name>` that was given, by its name, as text; empty when there is none. jq's `$params`. |
 | `scrape_time` | When the scrape began, in seconds since the epoch, a float as `time.time()` gives one; the same moment the request's [clock placeholders](REQUESTS.md#dates-and-times) were filled from. jq's `$scrape_time`. |
 | `last_success` | When the last scrape of the same collector, target and parameters that succeeded began, in the same seconds; `None` at the first scrape after a start, and for a new target. jq's `$last_success`. |
+| `state` | With `transform.state: true`, a dict kept between the script's runs ([State between runs](#state-between-runs)). |
 | `metric(...)`, `fail(message)` | Make a series; fail the scrape with a message. |
 | `log(message, level="info")` | Write a line of the exporter's log, at `debug`, `info`, `warning` or `error`. |
 | `metrics` | The list `metric(...)` appends to, of a `python` transform. |
@@ -388,6 +389,44 @@ script's own in an entry, one no metric has, is not read, whatever it holds.
 `response.text`, `response.body` and, where the decoder gives a script the
 body as text, `data` are one string, not three copies: a large response costs
 its size once to hand to a script.
+
+## State between runs
+
+A script's names are gone when it ends. `transform.state: true` gives the
+collector's scripts one that stays: `state`, a dict, which holds at each
+run what the run before left in it.
+
+```yaml
+transform:
+  type: python
+  state: true
+  script: |
+    total = data["requests_total"]
+    before = state.get("requests_total")
+    if before is not None and total >= before:
+        metric(name="app_requests_since_last_scrape", value=total - before)
+    state["requests_total"] = total
+```
+
+- The first run finds `state` empty, so read it with `state.get(...)`.
+- Each target has its own state, each set of probe parameters of a target
+  its own, and a `pre_script` and a `python` transform each their own.
+- It is kept as JSON: text, numbers, booleans, `None`, lists and dicts with
+  text keys, of at most 64 KiB written out. A script that leaves anything
+  else in it, more than that, or `state` bound to something that is no
+  dict, fails.
+- What a script that failed left is not kept, and neither is what a
+  [debug probe](CONFIGURATION.md#debug-probes) left, which reads the state
+  and changes nothing. A scrape answered from the
+  [cache](CONFIGURATION.md#response-caching) runs no script.
+- **It is memory, not storage.** A restart empties it, each replica has
+  its own, and the exporter keeps the states of the 4,096 scripts and
+  targets used last. Write the script so that an empty state costs one
+  scrape's answer and no more.
+- Two scrapes of one target at the same moment each read the state as it
+  was, and the one that ends last is the one kept.
+
+The key is refused on a collector with no Python script.
 
 ## How scripts run
 

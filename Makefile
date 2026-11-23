@@ -23,7 +23,7 @@ GOVULNCHECK_VERSION := v1.8.0
 .PHONY: test-quick build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-scaffold test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers new-request-type
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
-# but the opt-in ones: smtp, modbus, mqtt, websocket, ftp, imap and pop3.
+# but the opt-in ones: smtp, modbus, mqtt, websocket, ftp, imap, pop3, radius and whois.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 # OPT_IN_REQUEST_TYPES adds opt-in request types, comma-separated, which no

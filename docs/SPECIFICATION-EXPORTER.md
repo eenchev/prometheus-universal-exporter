@@ -30,9 +30,9 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`) and the registration of a domain (`whois`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, protobuf messages, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -1446,6 +1446,30 @@ to the body it reads.
   negative `offset`, `count` or `length`, a `count` above 65,536 or on a
   `string`, `cstring` or `skip`, a `string` or `skip` without `length`, and a
   number with one.
+
+### 6.0c The protobuf decoder
+
+`decoder.type: protobuf` MUST read a body as one message of the type
+`response.protobuf.message` names, described by `proto_files`, with
+`proto_import_paths`, or by `protoset_file`, each read as a `grpc` request's
+are, and MUST hand on the JSON a `grpc` answer is written as: fields by
+their names in the `.proto` file, unset fields with their zero values. It
+is for `jq`, `yq` and `python` alone; `auto` MUST never choose it, and no
+charset MUST be applied to the body it reads.
+
+- A body that is not the message MUST fail the decode, naming the message.
+- At load MUST be refused: `response.protobuf` beside another decoder, or
+  with the decoder left to the response; the decoder without `message`,
+  without a file, with both `protoset_file` and `proto_files` or
+  `proto_import_paths`, with an empty entry of either list, or with a
+  transform other than `jq`, `yq` and `python`; files that cannot be read
+  or compiled; and a `message` that is not a message of them. The files
+  MUST NOT be read by a load that reads no descriptor file.
+- The files MUST be watched as a `grpc` collector's descriptor files are,
+  and read again when one changed.
+- A build without the `grpc` request type MUST NOT link the libraries that
+  read descriptors, and MUST refuse the decoder at load, saying it comes
+  with that type.
 
 ### 6.0a NDJSON, logfmt, TOML and INI
 
@@ -3154,6 +3178,19 @@ expressions name it, as for a clock placeholder that reads it, and MUST NOT
 for any other; a scrape that fails, one answered from the cache and a debug
 probe MUST keep none. Without a clock, as in a transform run outside a
 scrape, both MUST be `None` and `null`.
+
+With `transform.state: true` a script, a transform's and a pre-script,
+MUST also have `state`, a dict that holds what the last run of the same
+script that ended without failing left in it, for the same collector,
+target and parameters, and is empty when there was none; a pre-script and
+a transform MUST each have their own. It MUST be kept as JSON, in memory
+alone. A script MUST fail when it ends with `state` bound to anything but
+a dict, holding what JSON cannot carry, or of more than 65,536 bytes
+written out, and what it left MUST NOT be kept. A debug probe MUST read
+the state and MUST NOT change it. The exporter MUST keep at most 4,096
+states, those used last. Without the key a script MUST have no such name,
+and the key on a collector that runs no Python script MUST be refused at
+load.
 
 `target` MUST be the target as given, credentials included; the
 documentation MUST say so, and that a script printing it or labelling with it
@@ -8264,7 +8301,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` or `pop3` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` or `whois` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An

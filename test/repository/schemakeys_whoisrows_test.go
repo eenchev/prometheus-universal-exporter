@@ -2,10 +2,24 @@
 
 package repository
 
+// whoisCollector is a configuration of one whois collector, with a comment
+// where a row writes a key of its request.
+const whoisCollector = `collectors:
+  - name: demo
+    request:
+      type: whois
+      # request
+    transform:
+      type: jq
+    metrics:
+      - name: v
+        expression: .expires_timestamp_seconds
+`
+
 // whoisSchemaKeys are the keys of a whois collector that a schema holds to
-// a rule: allowed values, a pattern or a length. TODO(whois): a row for
-// each, as schemakeys_tcprows_test.go has, built: true for a key of an
-// opt-in type, which the committed schemas, the default build's, leave out.
+// a rule: query_prefix, a line of at most 64 characters.
 func whoisSchemaKeys() []schemaKey {
-	return nil
+	return []schemaKey{
+		{key: "collectors[].request.query_prefix", of: "whois", document: whoisCollector, at: "      # request\n", setting: "      query_prefix: %s\n", valid: `"-T dn,ace "`, invalid: `"a\nb"`, absent: true, empty: true, built: true},
+	}
 }

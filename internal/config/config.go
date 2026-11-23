@@ -413,6 +413,9 @@ func normalizeFormats(x *model.Collector) error {
 	if err := checkBinaryResponse(x); err != nil {
 		return err
 	}
+	if err := checkProtobufResponse(x); err != nil {
+		return err
+	}
 	// A decoder the transform can never read would fail every scrape.
 	if err := transform.CheckDecoder(x); err != nil {
 		return err
@@ -438,6 +441,54 @@ func checkSQLFormats(x *model.Collector) error {
 	}
 	if r := x.Response; r.Charset != "" || r.CSV != (model.CSVConfig{}) || len(r.Namespaces) > 0 || r.Graphite != (model.GraphiteConfig{}) || r.Binary.Set() || r.YAML != (model.YAMLConfig{}) {
 		return fmt.Errorf("collector %q sets response settings, which apply to the body of a response, and a sql collector's rows have none; leave the response block out", x.Name)
+	}
+	return nil
+}
+
+// checkProtobufResponse checks response.protobuf and the protobuf decoder,
+// which reads a body as the message it names (fetch/protobufdecoder.go):
+// the decoder needs a message and the files that describe it, a descriptor
+// set or .proto files and not both, the block is for the decoder, chosen by
+// decoder.type, and a build without the grpc request type has neither. The
+// files are read now, so a message that is not in them fails the
+// configuration, unless it was loaded without them
+// (model.Collector.DescriptorFilesUnread).
+func checkProtobufResponse(x *model.Collector) error {
+	p := x.Response.Protobuf
+	switch {
+	case p.Set() && x.Decoder.Type != "protobuf":
+		return fmt.Errorf("collector %q sets response.protobuf, the message of the protobuf decoder, but its decoder is %s; set decoder.type to protobuf", x.Name, cmp.Or(x.Decoder.Type, "chosen by the transform or the answer"))
+	case x.Decoder.Type != "protobuf":
+		return nil
+	case !fetch.ProtobufDecoder:
+		return fmt.Errorf("collector %q decodes with protobuf: %w", x.Name, fetch.CheckProtobufDecoder(x))
+	case strings.TrimSpace(p.Message) == "":
+		return fmt.Errorf("collector %q decodes with protobuf and has no response.protobuf.message; name the message the body is, by its full name, such as metrics.v1.Report", x.Name)
+	case p.ProtosetFile != "" && (len(p.ProtoFiles) > 0 || len(p.ProtoImportPaths) > 0):
+		return fmt.Errorf("collector %q sets response.protobuf.protoset_file and proto_files or proto_import_paths; the message is read from a descriptor set or from .proto files, so keep one", x.Name)
+	case p.ProtosetFile == "" && len(p.ProtoFiles) == 0:
+		return fmt.Errorf("collector %q decodes with protobuf and names no file that describes %s; set response.protobuf.proto_files to the .proto files, or protoset_file to a descriptor set that protoc --descriptor_set_out --include_imports or buf build -o writes", x.Name, p.Message)
+	}
+	for i, file := range p.ProtoFiles {
+		if strings.TrimSpace(file) == "" {
+			return fmt.Errorf("collector %q response.protobuf.proto_files[%d] is empty", x.Name, i)
+		}
+	}
+	for i, dir := range p.ProtoImportPaths {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("collector %q response.protobuf.proto_import_paths[%d] is empty", x.Name, i)
+		}
+	}
+	switch x.Transform.Type {
+	case "jq", "yq", "python":
+	default:
+		return fmt.Errorf("collector %q decodes with protobuf, whose document is JSON-like, and its transform is %s; use jq, yq or python", x.Name, cmp.Or(x.Transform.Type, "unset"))
+	}
+	if x.DescriptorFilesUnread {
+		return nil
+	}
+	if err := fetch.CheckProtobufDecoder(x); err != nil {
+		return fmt.Errorf("collector %q response.protobuf: %w", x.Name, err)
 	}
 	return nil
 }

@@ -80,6 +80,7 @@ func validate(c *model.Config, options loadOptions) error {
 		}
 	}
 	errs = append(errs, fetch.ValidateHostRateLimits(c.RateLimits), validateWebAuthSettings(c, namedFilesUnread), validateOTLP(&c.OTLP, options))
+	errs = append(errs, validateSecretStores(c))
 	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}

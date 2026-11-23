@@ -931,3 +931,165 @@ starts with the rest, and refuse every scrape. A password may hold a colon.
 ```text
 collector "api" request.basic_auth.username holds a colon (":"), which ends the username of a Basic credential (RFC 7617): the server reads the username up to it and the rest as the start of the password, so a Basic username cannot hold one
 ```
+
+## Secret stores
+
+Where a secret may not be written to disk, a credential is read from a
+secret store instead of a file: HashiCorp Vault, Google Cloud Secret
+Manager or AWS Secrets Manager. The stores are named once, in
+`secret_stores`, and any key that names a credential file takes a reference
+to one in place of a path:
+
+```yaml
+secret_stores:
+  - name: vault-prod
+    type: vault
+    address: https://vault.example.com:8200
+    auth: {method: kubernetes, role: exporter}
+
+collectors:
+  - name: orders_db
+    request:
+      type: sql
+      driver: postgres
+      database: orders
+      username: monitor
+      password_file: secret://vault-prod/secret/data/orders-db#password
+      statement: SELECT count(*) AS orders FROM orders
+    transform:
+      type: csv
+    metrics:
+      - name: orders_total
+        expression: orders
+```
+
+A reference is `secret://<store>/<path>#<field>`: the store's `name`, the
+secret's path in it, and the field to read of a secret that holds several.
+`?version=` before the `#` reads a version other than the current one.
+
+It works wherever a credential is read from a file at a scrape:
+`password_file`, `bearer_token_file`, `basic_auth_file`'s username and
+password, a login's `field_files` and client secret, `community_file`,
+`secret_file` and the like, of a collector and of a static target. What was
+read is trimmed as a file's content is. It does not work for the files that
+are opened as files: `tls`'s `ca_file`, `cert_file` and `key_file`,
+`private_key_file`, `known_hosts_file`, descriptor and statement files. A
+reference there, one that names no store of `secret_stores`, and one in a
+key that names no file are refused when the configuration loads. The
+exporter's own `web.basic_auth` takes none.
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `name` | — | **Required.** What a reference names the store by, and the `store` label of its self-metrics: letters, digits, hyphens and underscores. |
+| `type` | — | **Required.** `vault`, `gcp` or `aws`. |
+| `cache_ttl` | `5m` | How long a secret read is used before the store is asked again; `0s` asks at every read. |
+| `max_stale` | `1h` | How long past `cache_ttl` a secret read before is still used while the store cannot be asked; `0s` for never. |
+| `timeout` | `5s` | The most one request to the store takes, at most `1m`. |
+
+**Secrets are kept in memory, never on disk.** A secret is read when a
+scrape first needs it and kept for `cache_ttl`, by secret, so the fields of
+one secret cost one request and a scrape within that time costs none. A
+rotated secret is picked up when `cache_ttl` has passed.
+
+**A store that is down does not stop the scrapes at once.** When the store
+cannot be asked after `cache_ttl`, the secret read before is used for
+`max_stale` more, with one warning in the log and each such read counted in
+`http_exporter_secret_store_stale_reads_total`. Past that, and for a secret
+never read, the read fails and its scrape with it, as a credential file
+that cannot be read does. A store that failed is not asked for the same
+secret again for 5 seconds.
+
+A request to a store is not part of a scrape's deadline: `timeout` bounds
+it. `--dry-run` reads the references a scrape would, and warns of one that
+cannot be read. [Self-metrics](SELF-METRICS.md) count each store's requests
+and failures.
+
+### HashiCorp Vault
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `address` | — | **Required.** The server's URL. |
+| `namespace` | — | The Vault Enterprise namespace. |
+| `auth.method` | — | **Required.** `kubernetes`, `token` or `approle`. |
+| `auth.role` | — | `kubernetes`, required: the Vault role the service account logs in as. |
+| `auth.jwt_file` | the pod's service account token | `kubernetes`: the token exchanged for a Vault token. |
+| `auth.token_file` | `VAULT_TOKEN` | `token`: the file of the Vault token, read at each request, so one a Vault Agent renews is used as renewed. |
+| `auth.role_id` | — | `approle`, required. |
+| `auth.secret_id_file` | `VAULT_SECRET_ID` | `approle`: the file of the secret id. |
+| `auth.mount` | `kubernetes`, `approle` | Where the auth method is mounted. |
+| `tls` | — | How the server's certificate is verified, and a client certificate, as [`request.tls`](CONFIGURATION.md#collectors) is written. |
+
+The path is the API's, the part after `/v1/`: for a KV version 2 mount it
+has `data/` after the mount, `secret/data/orders-db`, and for version 1 it
+has not, `secret/orders-db`. A Vault secret is fields, so the reference
+names one, `#password`. The token a `kubernetes` or `approle` login gives
+is kept in memory for its lease, and asked for again when Vault refuses it.
+The token's policy needs `read` on the paths.
+
+### Google Cloud Secret Manager
+
+```yaml
+secret_stores:
+  - name: gcp
+    type: gcp
+    project: my-project
+collectors:
+  - name: api
+    request:
+      type: http
+      bearer_token_file: secret://gcp/api-token
+    transform:
+      type: jq
+    metrics:
+      - name: api_up
+        expression: .up
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `project` | — | **Required.** The project whose secrets are read. |
+| `credentials_file` | `GOOGLE_APPLICATION_CREDENTIALS` | A service account's key file. Left out, the metadata server gives the token: Workload Identity on GKE, or the machine's service account. |
+| `endpoint` | the public API | The API's URL, for a private endpoint. |
+
+The reference names the secret; its `latest` version is read, or the one
+`?version=` names. The payload is the credential, and with `#field` a member
+of the JSON object the payload is. The account needs
+`roles/secretmanager.secretAccessor` on the secrets.
+
+### AWS Secrets Manager
+
+```yaml
+secret_stores:
+  - name: aws
+    type: aws
+    region: eu-west-1
+collectors:
+  - name: orders_db
+    request:
+      type: sql
+      driver: postgres
+      database: orders
+      username: monitor
+      password_file: secret://aws/prod/orders-db#password
+      statement: SELECT count(*) AS orders FROM orders
+    transform:
+      type: csv
+    metrics:
+      - name: orders_total
+        expression: orders
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `region` | the SDK's, such as `AWS_REGION` | The region of the secrets. |
+| `endpoint` | the public API | The API's URL, for a VPC endpoint. |
+
+The reference names the secret by its name or its ARN. Its `SecretString`
+is the credential, and with `#field` a member of the JSON object it is, as
+the console writes a secret of keys and values; `?version=` names a stage,
+such as `AWSPREVIOUS`, or a version id. The credentials are those the AWS
+SDK's default chain finds, as for an [`s3file`](S3FILE.md) collector: a
+role for the service account (IRSA), EKS Pod Identity, the instance's role
+or the environment. The role needs `secretsmanager:GetSecretValue` on the
+secrets. The store is in the builds that have the `s3file` request type,
+the default build among them.

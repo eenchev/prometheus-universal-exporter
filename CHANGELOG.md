@@ -178,6 +178,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   or a descriptor set as a `grpc` request's are, and hands it to `jq`, `yq`
   or `python` as the JSON a `grpc` answer is. It is in every build that
   has the `grpc` request type.
+- **[Secret stores](docs/AUTHENTICATION.md#secret-stores)**: a credential
+  is read from HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets
+  Manager instead of a file, where a secret may not be written to disk.
+  The stores are named in `secret_stores`, and any key that names a
+  credential file takes a reference to one,
+  `password_file: secret://vault-prod/secret/data/db#password`. A secret is
+  kept in memory for `cache_ttl`, 5m, and used for `max_stale` more, 1h,
+  while its store is down. Vault logs in with Kubernetes auth, a token or
+  an AppRole; Google and AWS use the workload's own identity. No
+  dependency is added.
 - **[`transform.state: true`](docs/PYTHON.md#state-between-runs)** gives a
   Python script a dict, `state`, that is kept between its runs for a
   target, so a script can tell what changed since the last scrape: a

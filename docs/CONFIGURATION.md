@@ -4,8 +4,10 @@ The exporter reads one YAML document, named by `--config.file`, and any
 [collector files](#collector-files) it lists. It declares the
 collectors — how to call a target, how to read what comes back, and which
 metrics to publish — and, optionally, the exporter's own settings under `web`
-and `otlp`, and [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
-limits per host that every collector's requests share. Target URLs are
+and `otlp`, [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
+limits per host that every collector's requests share, and
+[`secret_stores`](AUTHENTICATION.md#secret-stores), the stores a credential
+is read from in place of a file. Target URLs are
 deliberately not part of it: Prometheus supplies each one per scrape.
 `otlp` exports probe results, the exporter's own metrics and, with
 `otlp.logs`, its own log over [OTLP](OTLP.md), with
@@ -22,8 +24,8 @@ the log records and the self-metrics' exemplars of the same probe, and with
 that sends them on every resource.
 
 The top-level keys are `collectors`, `collector_files`,
-[`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`, `otlp`
-and `web`. `rate_limits` is a key of its own rather than part of a
+[`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`,
+`secret_stores`, `otlp` and `web`. `rate_limits` is a key of its own rather than part of a
 collector's `limits`, which bound one collector's scrape: its entries belong
 to no collector, and bound the requests of all of them together.
 

@@ -8200,6 +8200,271 @@
       },
       "type": "array"
     },
+    "secret_stores": {
+      "description": "Secret stores a credential is read from in place of a file, where a secret may not be written to disk. A key that names a credential file, such as password_file or bearer_token_file, takes a reference to one: secret://\u003cname\u003e/\u003cpath\u003e#\u003cfield\u003e. What a store answered is kept in memory for cache_ttl. See docs/AUTHENTICATION.md#secret-stores.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "description": "vault, required: the server's URL, such as https://vault.example.com:8200.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "auth": {
+            "additionalProperties": false,
+            "description": "vault, required: how the exporter logs in.",
+            "properties": {
+              "jwt_file": {
+                "description": "kubernetes: the file of the service account's token; /var/run/secrets/kubernetes.io/serviceaccount/token when left out.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "method": {
+                "description": "Required. token: the token of token_file, or of the VAULT_TOKEN environment variable. kubernetes: the pod's service account token is exchanged for a Vault token, as role. approle: role_id and the secret id of secret_id_file, or of VAULT_SECRET_ID.",
+                "enum": [
+                  "token",
+                  "kubernetes",
+                  "approle"
+                ],
+                "type": "string"
+              },
+              "mount": {
+                "description": "kubernetes and approle: where the auth method is mounted; kubernetes or approle when left out.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "role": {
+                "description": "kubernetes, required: the Vault role the service account logs in as.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "role_id": {
+                "description": "approle, required: the AppRole's role id.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "secret_id_file": {
+                "description": "approle: the file that holds the AppRole's secret id; VAULT_SECRET_ID when left out.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "token_file": {
+                "description": "token: the file that holds the Vault token, read at each request, so one a Vault Agent renews is used as renewed; VAULT_TOKEN when left out.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "required": [
+              "method"
+            ],
+            "type": "object"
+          },
+          "cache_ttl": {
+            "description": "How long a secret read is used before the store is asked again; 5m when left out, 0s to ask at every read.",
+            "maximum": 0,
+            "minimum": 0,
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "credentials_file": {
+            "description": "gcp: a service account's key file, used in place of the metadata server's token; the GOOGLE_APPLICATION_CREDENTIALS environment variable names one when left out.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "endpoint": {
+            "description": "gcp and aws: the URL of the API in place of the public one, such as a private endpoint.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "max_stale": {
+            "description": "How long past cache_ttl a secret read before is still used while the store cannot be asked; 1h when left out, 0s for never.",
+            "maximum": 0,
+            "minimum": 0,
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "name": {
+            "description": "Required. Unique name of the store, which a reference names it by and its self-metrics are labelled with: letters, digits, hyphens and underscores.",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "vault: the Vault Enterprise namespace the requests are made in.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "project": {
+            "description": "gcp, required: the Google Cloud project whose secrets are read.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "region": {
+            "description": "aws: the region of the secrets; the AWS SDK's own configuration, such as AWS_REGION, says it when left out.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "timeout": {
+            "description": "The most one request to the store takes, at most 1m; 5s when left out.",
+            "maximum": 0,
+            "minimum": 0,
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "tls": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "cert_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "cert_file"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "key_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "key_file"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "key_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "key_file"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "cert_file": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
+                  "required": [
+                    "cert_file"
+                  ]
+                }
+              }
+            ],
+            "description": "vault: how the server's certificate is verified, and a client certificate, as request.tls is written.",
+            "properties": {
+              "ca_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "cert_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "insecure_skip_verify": {
+                "type": "boolean"
+              },
+              "key_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "server_name": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": {
+            "description": "Required. vault: HashiCorp Vault. gcp: Google Cloud Secret Manager. aws: AWS Secrets Manager, in the builds that have the s3file request type.",
+            "enum": [
+              "vault",
+              "gcp",
+              "aws"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "web": {
       "additionalProperties": false,
       "properties": {

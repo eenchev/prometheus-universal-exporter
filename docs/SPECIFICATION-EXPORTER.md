@@ -5982,6 +5982,9 @@ http_exporter_rate_limit_waits_total
 http_exporter_rate_limit_refused_total
 http_exporter_host_rate_limit_waits_total
 http_exporter_host_rate_limit_refused_total
+http_exporter_secret_store_requests_total
+http_exporter_secret_store_failures_total
+http_exporter_secret_store_stale_reads_total
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -6125,6 +6128,15 @@ reload that keeps an entry of its name, changed or not, forgotten with an
 entry a reload removes, and start at 0 at the exporter's shutdown; their
 created time MUST be the exporter's start for an entry it started with, and
 when the reload put it in force for one a reload added.
+`http_exporter_secret_store_requests_total`,
+`http_exporter_secret_store_failures_total` and
+`http_exporter_secret_store_stale_reads_total`, counters, MUST be
+exporter-wide, labelled `store` with the name of an entry of
+`secret_stores` and no `collector` label, a series of each for every entry
+in force from 0, kept and created as those of an entry of `rate_limits`
+are: the requests made to the store for a secret, those that failed, and
+the credentials read from a secret past its `cache_ttl` because the store
+could not be asked (§ 42.6c).
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,
@@ -11080,6 +11092,66 @@ values from its answer, and send the value `token` names as the token.
   login's `fields` are, and an OAuth 1.0a secret written in them withheld.
   The states of a login MUST be dropped as its tokens are (§ 42.6a), and at
   most 1000 kept.
+
+## 42.6c Secret stores
+
+`secret_stores` lists stores a credential MAY be read from in place of a
+file. An entry MUST have a `name`, unique, of letters, digits, hyphens and
+underscores, and a `type`: `vault`, `gcp` or `aws`.
+
+- A key that names a credential file, of a collector and of a static
+  target, MUST take a reference, `secret://<store>/<path>[?version=<v>][#<field>]`,
+  wherever the file is read as a credential at a scrape, and the credential
+  MUST then be read from the store, trimmed as a file's content is. At
+  load MUST be refused, naming the key: a reference in a key whose file is
+  opened as a file (`ca_file`, `cert_file`, `key_file`, `kubelet_ca_file`,
+  `private_key_file`, `known_hosts_file`, `protoset_file`, `proto_files`,
+  `statement_file`, `keep_file`) or in a key that names no file; one not
+  written as a reference is; one that names no store of the configuration;
+  one to a `vault` store without a field; and one in `web.basic_auth` or in
+  a key a store itself is reached with. A static target file MUST be held
+  to the stores of the configuration it is checked against.
+- A secret read MUST be kept in memory, by store, path and version, and
+  MUST NOT be written to disk. A read within `cache_ttl` of it, 5m unless
+  set, MUST NOT ask the store, whatever field it reads. Past it the store
+  MUST be asked; when that fails, the secret kept MUST be used until it is
+  `max_stale`, 1h unless set, past its `cache_ttl`, the first such failure
+  logged at warn and each such read counted, and otherwise the read MUST
+  fail, naming the reference and what the store said, never a secret. A
+  store that failed for a secret MUST NOT be asked for it again within 5
+  seconds. A request to a store MUST be bounded by `timeout`, 5s unless
+  set and at most 1m. At most 1,024 secrets MUST be kept for a store.
+- A reload MUST keep a store whose entry it left as it was, with what it
+  has read, and start one it changed anew.
+- `vault` MUST read `GET <address>/v1/<path>`, with `?version=` when the
+  reference has one, sending the token and `namespace` when set, and take
+  the fields under `data.data` when `data.metadata` is beside them (KV
+  version 2) and under `data` otherwise. `auth.method` MUST be `token`, the
+  token of `auth.token_file` read at each request or of `VAULT_TOKEN`;
+  `kubernetes`, a login at `auth/<mount>/login` with `auth.role` and the
+  token of `auth.jwt_file`, the pod's service account token unless set; or
+  `approle`, with `auth.role_id` and the secret id of
+  `auth.secret_id_file` or of `VAULT_SECRET_ID`. A token a login gave MUST
+  be kept until nine tenths of its lease have passed, and a `403` to it
+  MUST be answered by logging in again, once. A key of another method, and
+  of another type, MUST be refused at load.
+- `gcp` MUST read the version `latest`, or the reference's, of the secret
+  in `project` over Secret Manager's REST API, and take its payload as the
+  secret's text. The access token MUST be the metadata server's, or, with
+  `credentials_file` or `GOOGLE_APPLICATION_CREDENTIALS`, the one a JWT
+  signed with the service account's key is exchanged for, kept until a
+  minute before it expires.
+- `aws` MUST call Secrets Manager's `GetSecretValue` for the secret the
+  reference names, its version a stage when it starts with `AWS` and a
+  version id otherwise, signed with the credentials the AWS SDK's default
+  chain finds, and take its `SecretString`, or the bytes of its
+  `SecretBinary`, as the secret's text. It MUST add no module to the
+  binary, MUST be in the builds that have the `s3file` request type, and
+  MUST be refused at load by any other.
+- A field of a secret of text MUST be a member of the JSON object the text
+  is; text, a number and a boolean MUST be read as their text, and a field
+  the secret has not, or that is none of those, MUST fail the read.
+- `--dry-run` MUST read the references as it reads credential files.
 
 ## 42.9 OTLP TLS configuration
 

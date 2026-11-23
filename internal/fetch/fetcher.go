@@ -1354,10 +1354,16 @@ func waitRetry(ctx context.Context, backoff time.Duration) error {
 }
 
 // ReadCredentialFile reads a credential from the file at path, without the
-// surrounding whitespace an editor or a Secret mount may leave.
+// surrounding whitespace an editor or a Secret mount may leave. A path
+// that is a reference to a secret store, secret://store/path#field, is
+// read from the store instead, or from what the store answered a while ago
+// (secretstore.go).
 func ReadCredentialFile(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is empty")
+	}
+	if IsSecretReference(path) {
+		return readSecret(path)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {

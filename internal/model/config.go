@@ -58,6 +58,10 @@ type Config struct {
 	// collector together ask a host, for an API whose quota is the host's
 	// rather than one collector's (fetch/hostratelimit.go).
 	RateLimits []HostRateLimit `yaml:"rate_limits"`
+	// SecretStores are the stores a credential may be read from in place
+	// of a file: a key that names a credential file may hold a reference,
+	// secret://<store>/<path>#<field>, to one (fetch/secretstore.go).
+	SecretStores []SecretStore `yaml:"secret_stores"`
 	// CollectorSources records the file each collector was defined in, and
 	// LoadedCollectorFiles the collector files read, in order. Neither is read
 	// from the document.
@@ -442,6 +446,66 @@ type HostRateLimit struct {
 	Hosts     []string        `yaml:"hosts"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
+
+// SecretStore is an entry of secret_stores: a store of secrets the
+// exporter reads credentials from, kept in its memory for CacheTTL and
+// never written to disk. Type says which: vault, HashiCorp Vault's HTTP
+// API at Address, logged in to as Auth says; gcp, Google Cloud Secret
+// Manager for Project; aws, AWS Secrets Manager in Region.
+type SecretStore struct {
+	// Name is what a reference names the store by, and the store label of
+	// its self-metrics.
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
+	// Address, Namespace, Auth and TLS are vault's: the server's URL, the
+	// Vault Enterprise namespace, how the exporter logs in and how the
+	// server's certificate is verified.
+	Address   string           `yaml:"address"`
+	Namespace string           `yaml:"namespace"`
+	Auth      *SecretStoreAuth `yaml:"auth"`
+	TLS       TLSConfig        `yaml:"tls"`
+	// Project and CredentialsFile are gcp's: the project whose secrets are
+	// read, and a service account's key file, in place of the metadata
+	// server's token.
+	Project         string `yaml:"project"`
+	CredentialsFile string `yaml:"credentials_file"`
+	// Region is aws's; the SDK's own configuration says it when left out.
+	Region string `yaml:"region"`
+	// Endpoint is the API's URL in place of the public one, of gcp and
+	// aws: a private endpoint.
+	Endpoint string `yaml:"endpoint"`
+	// CacheTTL is how long a secret read is used before the store is
+	// asked again, 5m when unset, and MaxStale how long past that the
+	// secret is still used while the store cannot be asked, 1h when unset
+	// and never when 0. Timeout bounds one request to the store, 5s when
+	// unset.
+	CacheTTL *Duration `yaml:"cache_ttl"`
+	MaxStale *Duration `yaml:"max_stale"`
+	Timeout  Duration  `yaml:"timeout"`
+}
+
+// SecretStoreAuth is a vault store's auth block: Method is token, with the
+// token of TokenFile or of the VAULT_TOKEN environment variable;
+// kubernetes, which logs in as Role with the service account token of
+// JWTFile; or approle, which logs in with RoleID and the secret id of
+// SecretIDFile or of VAULT_SECRET_ID. Mount is where the auth method is
+// mounted, kubernetes or approle when unset.
+type SecretStoreAuth struct {
+	Method       string `yaml:"method"`
+	TokenFile    string `yaml:"token_file"`
+	Role         string `yaml:"role"`
+	Mount        string `yaml:"mount"`
+	JWTFile      string `yaml:"jwt_file"`
+	RoleID       string `yaml:"role_id"`
+	SecretIDFile string `yaml:"secret_id_file"`
+}
+
+// SecretStoreTypes are the values of secret_stores[].type, and
+// SecretStoreAuthMethods those of a vault store's auth.method.
+var (
+	SecretStoreTypes       = []string{"vault", "gcp", "aws"}
+	SecretStoreAuthMethods = []string{"token", "kubernetes", "approle"}
+)
 
 // LoginConfig is request.login: how the exporter logs in to get the token
 // it sends to an http or graphite target. Type json posts a JSON object of

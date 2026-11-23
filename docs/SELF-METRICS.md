@@ -188,6 +188,9 @@ not here.
 | --- | --- | --- |
 | `http_exporter_host_rate_limit_waits_total` | counter | Labelled `rule`, the `name` of an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host): the `http` and `graphite` requests of every collector together — each attempt, page, redirect and login request counted — that waited for their turn under the entry before they were sent, but not those of a debug run's. |
 | `http_exporter_host_rate_limit_refused_total` | counter | Labelled `rule`: the requests the entry refused before they were sent, their turn coming at or past their deadline; each failed its scrape. |
+| `http_exporter_secret_store_requests_total` | counter | Labelled `store`, the `name` of an entry of [`secret_stores`](AUTHENTICATION.md#secret-stores): the requests made to the store for a secret, which are the reads its cache did not answer. |
+| `http_exporter_secret_store_failures_total` | counter | Labelled `store`: the requests that failed, the store unreachable, refusing the exporter, or without the secret. |
+| `http_exporter_secret_store_stale_reads_total` | counter | Labelled `store`: the credentials read from a secret older than `cache_ttl` because the store could not be asked again. An increase says the store is down and scrapes run on what was read before, for `max_stale` at most. |
 
 An entry's bucket is the exporter's, shared by every collector, so the
 families have no `collector` label: which collectors used the turns up shows

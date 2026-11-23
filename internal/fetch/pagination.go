@@ -176,7 +176,7 @@ func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 		return nil, fmt.Errorf("%q does not compile: %w", items, err)
 	}
 	ctx, ended := expr.WatchMemoryOf(ctx)
-	defer ended()
+	defer func() { _ = ended() }()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{}.Values(page)...)
 	var found []any
 	count := 0
@@ -490,7 +490,7 @@ func nextValue(ctx context.Context, next string, response *HTTPResponse, page an
 		return "", err
 	}
 	ctx, ended := expr.WatchMemoryOf(ctx)
-	defer ended()
+	defer func() { _ = ended() }()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
 	var first any
 	count := 0

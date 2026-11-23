@@ -233,6 +233,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `error`, where `print` is seen at debug level only. What a script
   logged before it failed is written with its failure, and the last 1,024
   characters of what it printed, in the failure's own line.
+- **The last reload as a table.** The home page shows what the last reload
+  changed as a table, a row for the collectors or static targets added,
+  removed or changed, with how many and their names, where it wrote them
+  all in one sentence.
 
 ### Fixed
 

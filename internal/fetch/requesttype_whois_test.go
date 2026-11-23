@@ -18,7 +18,7 @@ import (
 )
 
 // whoisStandIn is a WHOIS server: it reads one line, answers what answers
-// holds for it, or what any holds for every other question, and closes.
+// holds for it, or what fallback holds for every other question, and closes.
 type whoisStandIn struct {
 	addr string
 	mu   sync.Mutex
@@ -26,7 +26,7 @@ type whoisStandIn struct {
 	asked []string
 }
 
-func startWhois(t *testing.T, answers map[string]string, any string) *whoisStandIn {
+func startWhois(t *testing.T, answers map[string]string, fallback string) *whoisStandIn {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -52,7 +52,7 @@ func startWhois(t *testing.T, answers map[string]string, any string) *whoisStand
 				s.mu.Unlock()
 				answer, known := answers[question]
 				if !known {
-					answer = any
+					answer = fallback
 				}
 				_, _ = conn.Write([]byte(answer))
 			}()

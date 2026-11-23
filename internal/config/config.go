@@ -2397,11 +2397,16 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	// it, and before it is in force, with the fingerprints just prepared
 	// (reloadchanges.go).
 	var collectorsChanged, targetsChanged string
+	var changed []ReloadChangeList
 	if c != nil {
-		collectorsChanged = reloadChanges("collectors", collectorChanges(before.config, c, m.fingerprint))
+		lists := collectorChanges(before.config, c, m.fingerprint)
+		collectorsChanged = reloadChanges("collectors", lists)
+		changed = append(changed, reloadChangeLists("collectors", lists)...)
 	}
 	if f != nil {
-		targetsChanged = reloadChanges("static targets", targetChanges(before.targets, f))
+		lists := targetChanges(before.targets, f)
+		targetsChanged = reloadChanges("static targets", lists)
+		changed = append(changed, reloadChangeLists("static targets", lists)...)
 	}
 	m.current.Store(&pair)
 	if c != nil {
@@ -2411,7 +2416,7 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	if f != nil {
 		m.installedTargets(trigger, f, targetsChanged)
 	}
-	m.lastReload.Store(&ReloadSummary{At: time.Now(), Changes: joinReloadChanges(collectorsChanged, targetsChanged)})
+	m.lastReload.Store(&ReloadSummary{At: time.Now(), Changes: joinReloadChanges(collectorsChanged, targetsChanged), Lists: changed})
 	for _, told := range m.installed {
 		told()
 	}

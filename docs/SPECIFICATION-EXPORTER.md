@@ -7186,7 +7186,11 @@ file's `defaults` (§ 5.0b) as much as one it writes, and a static target when
 anything in its entry differs. Each list MUST name at most 10 and count the
 rest (`and 3 more`). A refused reload MUST NOT change what the last said.
 The landing page (§ 23) MUST show the time of the last reload that put
-something in force, and what it changed, both files' changes together.
+something in force, and what it changed, both files' changes together, as
+a table: a row for each list that is not empty, the collectors' before the
+static targets', each with what changed, how (added, removed or changed),
+how many did, and the names, at most 10 with a count of the rest. A reload
+that changed nothing MUST be shown as `no changes`, without a table.
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before

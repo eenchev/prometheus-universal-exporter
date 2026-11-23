@@ -24,6 +24,28 @@ const landingDocs = "https://github.com/eenchev/prometheus-universal-exporter"
 // style of a cell's long text (longtext.go).
 const pageStyle = pagekit.Style + longStyle
 
+// landingChanges is a row of the landing page's table of what the last
+// reload changed: what of, how, how many, the names it gives and how many
+// more it only counts.
+type landingChanges struct {
+	What, How   string
+	Count, More int
+	Names       []string
+}
+
+// landingStyle is the landing page's own: the table of what the last reload
+// changed, a list a row, laid out as the status page's tables are.
+const landingStyle = `
+.scroll { overflow-x: auto; }
+table.changes { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.changes th, table.changes td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+table.changes th { background: var(--panel); white-space: nowrap; }
+table.changes td.num, table.changes th.num { text-align: right; }
+table.changes td.what { white-space: nowrap; }
+table.changes td.names code { display: inline-block; margin: 0 4px 4px 0; }
+table.changes .more { color: var(--muted); white-space: nowrap; }
+`
+
 // pagePolicy is the pages' Content-Security-Policy (pagekit.Policy).
 const pagePolicy = pagekit.Policy
 
@@ -87,7 +109,10 @@ type landingPage struct {
 	// changed (config.ReloadSummary).
 	Reloaded                  bool
 	ReloadedAt, ReloadChanges string
-	Docs                      string
+	// ReloadLists are those changes a list a row, and none when the reload
+	// changed nothing.
+	ReloadLists []landingChanges
+	Docs        string
 }
 
 var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
@@ -97,7 +122,7 @@ var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prometheus Universal Exporter</title>
 `+pageIcon+"\n"+themeHead+`
-<style>`+pageStyle+`</style>
+<style>`+pageStyle+landingStyle+`</style>
 </head>
 <body>
 <main>
@@ -115,7 +140,19 @@ var landingTemplate = pageTemplate("landing", `<!DOCTYPE html>
 
 <h2>Configuration</h2>
 {{- if .Reloaded}}
+{{- if .ReloadLists}}
+<p>Last reloaded at {{.ReloadedAt}}. It changed:</p>
+<div class="scroll"><table class="changes">
+<thead><tr><th scope="col">What</th><th scope="col">Change</th><th scope="col" class="num">Count</th><th scope="col">Names</th></tr></thead>
+<tbody>
+{{- range .ReloadLists}}
+<tr><td class="what">{{.What}}</td><td>{{.How}}</td><td class="num">{{.Count}}</td><td class="names">{{range .Names}}<code>{{.}}</code> {{end}}{{if .More}}<span class="more">and {{.More}} more</span>{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table></div>
+{{- else}}
 <p>Last reloaded at {{.ReloadedAt}}: {{.ReloadChanges}}.</p>
+{{- end}}
 {{- else}}
 <p>Not reloaded since the exporter started.</p>
 {{- end}}
@@ -164,6 +201,12 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 		page.Reloaded = true
 		page.ReloadedAt = last.At.UTC().Format(time.RFC3339)
 		page.ReloadChanges = last.Changes
+		for _, list := range last.Lists {
+			page.ReloadLists = append(page.ReloadLists, landingChanges{
+				What: strings.ToUpper(list.What[:1]) + list.What[1:], How: list.How,
+				Count: list.Count, Names: list.Names, More: list.More(),
+			})
+		}
 	}
 	for _, target := range staticTargetsOf(file) {
 		page.StaticTargets++

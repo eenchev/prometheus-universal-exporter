@@ -5936,8 +5936,11 @@ bundle from the [target allocator](ALLOCATOR.md), a reload says the same, and
 a rejected reload puts nothing in force and changes nothing.
 
 The landing page at `/` shows when the last reload put something in force,
-and what it changed, both files' changes together; before the first it says
-the exporter has not been reloaded since it started. How long ago that was
+and what it changed as a table, both files' changes together: a row for each
+list, with what changed (collectors or static targets), how (added, removed
+or changed), how many, and the names, the first 10 and a count of the rest.
+A reload that changed nothing says so in a sentence, and before the first
+the page says the exporter has not been reloaded since it started. How long ago that was
 is `http_exporter_config_last_reload_success_timestamp_seconds`
 ([Configuration reloads](SELF-METRICS.md#configuration-reloads)).
 

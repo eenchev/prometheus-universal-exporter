@@ -77,7 +77,9 @@ func startVault(t *testing.T) *vaultStandIn {
 		case "/v1/auth/kubernetes/login", "/v1/auth/approle/login":
 			var login map[string]string
 			_ = json.Unmarshal(body, &login)
-			if !(login["role"] == "exporter" && login["jwt"] == "service-account-jwt") && !(login["role_id"] == "role-1" && login["secret_id"] == "secret-id-1") {
+			kubernetes := login["role"] == "exporter" && login["jwt"] == "service-account-jwt"
+			approle := login["role_id"] == "role-1" && login["secret_id"] == "secret-id-1"
+			if !kubernetes && !approle {
 				http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
 				return
 			}

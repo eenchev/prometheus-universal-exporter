@@ -33,7 +33,9 @@ func TestACollectorReadsItsTokenFromASecretStore(t *testing.T) {
 	t.Cleanup(vault.Close)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, basic := r.BasicAuth()
-		if r.Header.Get("Authorization") != "Bearer tok-123" && !(basic && user == "monitor" && password == "p4ss" && r.URL.Path == "/basic") {
+		byToken := r.Header.Get("Authorization") == "Bearer tok-123"
+		byPassword := basic && user == "monitor" && password == "p4ss" && r.URL.Path == "/basic"
+		if !byToken && !byPassword {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
 		}

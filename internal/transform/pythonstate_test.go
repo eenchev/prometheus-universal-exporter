@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ data = state["pre"]`
 	for run := 1; run <= 2; run++ {
 		r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(`{}`), Headers: http.Header{}, Target: "a"}
 		data, err := executePythonPreScript(context.Background(), "python3", pre.Transform.PreScript, &decode.Decoded{Kind: "text", Data: "{}", Raw: r.Body}, r, pre)
-		if err != nil || fmt.Sprint(data) != fmt.Sprint(run) {
+		if err != nil || fmt.Sprint(data) != strconv.Itoa(run) {
 			t.Fatalf("the pre-script's run %d left %v, %v", run, data, err)
 		}
 	}

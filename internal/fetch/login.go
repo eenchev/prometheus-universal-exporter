@@ -683,6 +683,9 @@ type loginToken struct {
 // logIn makes one login of l at u for a request of c, sent with the Host
 // host when it is not "".
 func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url.URL, target, host, key string) (loginToken, error) {
+	// What a login's expressions may take on its answers is what a
+	// transform's may.
+	ctx = expr.WithMemoryLimit(ctx, c.Limits.MaxExpressionMemory)
 	tlsSettings := loginTLS(c, l)
 	// No redirect is followed: the login's secrets go where the
 	// configuration says and nowhere a redirect would take them. The
@@ -1027,6 +1030,7 @@ func jqOne(ctx context.Context, expression string, page any, resp *http.Response
 	// Within the login's deadline, and no further than a second value,
 	// which is enough to refuse it: an expression that never ends, or gives
 	// values without end, holds no scrape for ever.
+	ctx, ended := expr.WatchMemoryOf(ctx)
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: resp.StatusCode, Headers: jqHeaders(resp.Header)}.Values(page)...)
 	count := 0
 	for count < 2 {
@@ -1035,6 +1039,9 @@ func jqOne(ctx context.Context, expression string, page any, resp *http.Response
 			break
 		}
 		if _, failed := v.(error); failed {
+			if exceeded := ended(); exceeded != nil {
+				return nil, "", model.MarkError(fmt.Errorf("was stopped: %w", exceeded), model.ErrLimitExceeded)
+			}
 			return nil, "", errors.New("failed on the login's answer")
 		}
 		if count == 0 {
@@ -1042,6 +1049,7 @@ func jqOne(ctx context.Context, expression string, page any, resp *http.Response
 		}
 		count++
 	}
+	ended()
 	if count != 1 {
 		if count == 0 {
 			return nil, "", errors.New("gave no value; it must give one")

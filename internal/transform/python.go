@@ -641,11 +641,11 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		// What the script printed and logged, its first 4 KiB of the one
 		// and twenty lines of the other, for whoever debugs it; it counts
 		// against max_output_bytes only as far as that. A debug probe's
-		// report shows it (WithRuleLogger). A script that failed has its
-		// logged lines with its failure, and nothing of what it printed.
+		// report shows it (WithRuleLogger). A script that failed has both
+		// with its failure, where the failure's line had the room.
 		printed, logged := pythonLogLines(out.Log)
 		logger := ruleLogger(ctx)
-		if printed != "" && err == nil {
+		if printed != "" {
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}
 		for _, line := range logged {

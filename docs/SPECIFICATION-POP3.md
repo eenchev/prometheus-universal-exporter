@@ -76,6 +76,9 @@ target's request block takes `timeout`, `username`, `password_file` and
 - Any answer to the login but `+OK` MUST fail the scrape, naming the
   command, the account and the server's answer; so MUST a `STAT` answered
   `-ERR`, or with anything but two whole numbers, none negative.
+- The text of an `-ERR` MUST be shown, in an error, the log and a debug
+  report, with what reads as a credential masked, as the text of any
+  server's refusal is: a server may say back the command it refuses.
 - The document MUST hold `greeting`, the greeting's text; `tls` and
   `starttls`; `capabilities`, the first word of each line of the last
   `CAPA`, in upper case, sorted, each once, at most 100 bytes each; `sasl`,

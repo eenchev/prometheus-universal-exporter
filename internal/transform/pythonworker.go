@@ -2286,6 +2286,15 @@ def answer(document):
 # twenty of a run and 1,024 characters each, so that what a script prints,
 # which is cut at 4 KiB, takes no room of theirs.
 logged=[]; asked=[0]
+# What the script of the run under way prints goes here, so that a failure
+# can carry it (printed_text): of a run, emptied when the next begins.
+printing=[None]
+def printed_text():
+    sink=printing[0]
+    if sink is None: return ''
+    text=sink.getvalue()
+    if len(text)>4096: text=text[:4096]+'... (%d more characters)'%(len(text)-4096)
+    return text
 def logged_lines():
     if asked[0]>20: return ''.join(logged)+'\x00pue-log:warning\x00%d more lines the script logged are not written; a run writes 20\x00'%(asked[0]-20)
     return ''.join(logged)
@@ -2580,14 +2589,18 @@ def failed_check(most):
                 written=json.dumps({'ok': False, 'error': text[:n]})
                 if len(written)<=most or not n: break
                 n-=1
-        # What the script logged before it failed goes with the failure,
-        # which is often what explains it, where the line has the room:
-        # the failure is never cut for it.
-        if logged and written.endswith('}'):
-            try:
-                more=written[:-1]+', "log": '+json.dumps(logged_lines())+'}'
-                if len(more)<=most: written=more
-            except BaseException: pass
+        # What the script printed and logged before it failed goes with
+        # the failure, which is often what explains it, where the line has
+        # the room: the failure is never cut for it, and what was logged
+        # goes alone where both do not fit.
+        if written.endswith('}'):
+            for carried in (printed_text,lambda: ''),(lambda: '',lambda: ''):
+                try:
+                    said=carried[0]()+(logged_lines() if logged else '')
+                    if not said: continue
+                    more=written[:-1]+', "log": '+json.dumps(said)+'}'
+                    if len(more)<=most: written=more; break
+                except BaseException: pass
         answers.write(written+'\n'); answers.flush()
     return failed
 failed=failed_check(most)
@@ -2598,7 +2611,7 @@ while True:
     if not line: break
     # A run starts with nothing logged: a request that fails before its
     # script runs has no line of the run before it to carry.
-    del logged[:]; asked[0]=0
+    del logged[:]; asked[0]=0; printing[0]=None
     try:
         # A request nested deeper than json reads one is read without it.
         try: p=json.loads(line)
@@ -2666,13 +2679,12 @@ while True:
             logged.append('\x00pue-log:%s\x00%s\x00'%(level,text))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
                'metric':metric,'fail':fail,'log':log_line,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
-        sink=io.StringIO()
+        sink=printing[0]=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             exec(compile(p['script'],'<collector-python>','exec'),scope,scope)
-        log=sink.getvalue()
-        if len(log)>4096: log=log[:4096]+'... (%d more characters)'%(len(log)-4096)
+        log=printed_text()
         if logged: log+=logged_lines()
         result={'ok':True,'log':log}
         if p.get('mode')=='data': result['data']=scope.get('data')

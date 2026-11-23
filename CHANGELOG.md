@@ -35,7 +35,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Remove one of them, or give it another name.
 - A `jq` or `yq` transform is now stopped when the exporter's memory has
   grown by more than `limits.max_expression_memory` while it ran, 256 MiB
-  unless set, and its scrape fails as a limit exceeded. A collector whose
+  unless set, and its scrape fails as a limit exceeded. So are the jq
+  expressions of a pagination and of a login. A collector whose
   expressions build more than that at once sets the limit higher.
 - A whole number beyond 64 bits in a YAML answer, such as an identifier of
   thirty digits, now keeps every digit, as it does in JSON, where it was
@@ -184,8 +185,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A Python script has `response.ok`, whether the status is a success, and
   [`log(message, level="info")`](docs/PYTHON.md#what-a-script-has), which
   writes a line of the exporter's log at `debug`, `info`, `warning` or
-  `error`, where `print` is seen at debug level only. The lines a script
-  logged before it failed are written with its failure.
+  `error`, where `print` is seen at debug level only. What a script
+  printed and logged before it failed is written with its failure.
 
 ### Fixed
 

@@ -219,7 +219,8 @@ That is the exporter's log; whoever called `/probe` is answered `-ERR` and
 password, a digest and a token are in no error, log line or debug report: a
 [debug probe](CONFIGURATION.md#debug-probes) shows each command and its
 answer, with `PASS ***`, `APOP name ***` and `***` for the lines that carry
-them.
+them. A server that says back in its `-ERR` the command it refuses has
+what reads as a credential there masked, as `password=<redacted>`.
 
 With `web.self_metrics.verbose`, a scrape is labelled with
 `pop3://host:port` and, as `http_method`, how far the session goes: `CAPA`,

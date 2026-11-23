@@ -3299,9 +3299,11 @@ apart from what was printed; another level MUST fail the script. A run's
 first 20 lines MUST be written, each by its first 1,024 characters and how
 many more it had, whatever the script printed, and how many more lines
 there were said in a line at `warning`. What a script logged before it
-failed MUST be written so too, with its failure, where the failure's line
-has the room for it under `limits.max_output_bytes`; the failure MUST be
-what it is without them, and never cut for them.
+failed MUST be written so too, with its failure, and what it printed
+before it as what a script that did not fail printed is, where the
+failure's line has the room for it under `limits.max_output_bytes`, and
+what it logged alone where the line has the room for that only; the
+failure MUST be what it is without them, and never cut for them.
 
 `response.ok` MUST be whether the status is a success, an HTTP status of
 200 to 299 or a `grpc` call's `0`, and `None` for an answer without a
@@ -5482,7 +5484,15 @@ transform MAY be stopped for what other scrapes hold beside it, and MAY hold
 up to twice the limit before it is stopped; it MUST NOT be stopped for
 holding less than the limit when nothing else grows. A transform that ends
 within 20 milliseconds MUST cost no measurement. A transform stopped for its
-time MUST still fail as one, with the deadline's error.
+time MUST still fail as one, with the deadline's error. A transform MUST
+also be stopped when a single value larger than the limit was made while
+it was measured and the heap is counted past the limit, as of a text
+doubled at every step, of which nothing is certainly held. The
+expressions that run outside a transform, `request.pagination.items` and
+`request.pagination.next` on each page and a login's `token`,
+`expires_in` and a step's `extract.json` on its answers, MUST be held to
+the same limit in the same way: one past it MUST fail the scrape as a
+limit exceeded, naming its key and the limit.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting

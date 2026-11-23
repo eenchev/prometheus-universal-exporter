@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"runtime"
 	"slices"
@@ -163,26 +164,50 @@ func TestAScriptHasTheMemoryLimitLessTheInterpreter(t *testing.T) {
 	}
 }
 
+// leastScriptMemory is the least limits.max_script_memory a small script
+// runs under with the interpreter the tests found: the 32MiB that is the
+// least there is, or what a ready worker of that interpreter holds and
+// 10 MiB more, in whole megabytes, where that is more.
+//
+// The limit is on the worker's address space, the interpreter's own
+// included, and that differs with how the interpreter was built: a
+// distribution's Python 3.12 or 3.13, which shares its library, is ready
+// at about 21 MiB, and one built from source with the library inside it at
+// about 42 MiB, which is past 32MiB before any script has run. A test that
+// asked 32MiB of every interpreter failed on a machine whose first python3
+// was the other kind, for nothing the exporter did.
+func leastScriptMemory(t *testing.T) model.ByteSize {
+	t.Helper()
+	worker, err := startPythonWorker(context.Background(), pythonWorkerSpec("python3", workerCollector("least", `metric(name="v", value=1)`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := int64(workerStatus(t, worker.cmd.Process.Pid, "VmSize")) << 10
+	worker.stop()
+	const mib = 1 << 20
+	return model.ByteSize(max(32*mib, (ready+10*mib+mib-1)/mib*mib))
+}
+
 // Under a small limit a script that needs next to nothing runs, as on main:
 // at the smallest limit there is, 32MiB, the worker was already past it
 // when it was ready, and a script that only called metric() ran out of
 // memory.
 //
-// What a script may allocate under 32MiB is what the interpreter leaves
-// of it, which differs by a megabyte or two from one build of Python to
-// another and from one start to the next: 9 or 10 MiB with a
-// distribution's Python 3.12 and 3.13, less with others. So the script
-// asked to fit there allocates 1 MiB, and the one of 8 MiB is asked of
-// 64MiB, where every interpreter has the room: at 32MiB it failed now and
-// then for an interpreter that had not changed.
+// What a script may allocate under the least limit is what the interpreter
+// leaves of it (leastScriptMemory), which differs by a megabyte or two
+// from one start to the next: 9 or 10 MiB. So the script asked to fit
+// there allocates 1 MiB, and the one of 8 MiB is asked of 32 MiB more,
+// where it has the room: at the least limit it failed now and then for an
+// interpreter that had not changed.
 func TestASmallMemoryLimitRunsASmallScript(t *testing.T) {
 	requireProcStatus(t)
+	least := leastScriptMemory(t)
 	for limit, scripts := range map[model.ByteSize]map[string]float64{
-		32 << 20: {
+		least: {
 			`metric(name="v", value=1)`:                       1,
 			`metric(name="v", value=len(bytearray(1 << 20)))`: 1 << 20,
 		},
-		64 << 20: {
+		least + 32<<20: {
 			`metric(name="v", value=1)`:                       1,
 			`metric(name="v", value=len(bytearray(8 << 20)))`: 8 << 20,
 		},
@@ -196,7 +221,7 @@ func TestASmallMemoryLimitRunsASmallScript(t *testing.T) {
 				t.Fatalf("limit %d, %s: v=%v", limit, script, v)
 			}
 		}
-		if _, err := runWorkerScript(t, limitedCollector("small", `metric(name="v", value=len(bytearray(200 << 20)))`, limit)); err == nil || !strings.Contains(err.Error(), "limits.max_script_memory") {
+		if _, err := runWorkerScript(t, limitedCollector("small", `metric(name="v", value=len(bytearray(200 << 20)))`, limit)); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("limits.max_script_memory (%d bytes)", limit)) {
 			t.Fatalf("limit %d, 200 MiB: err=%v", limit, err)
 		}
 	}

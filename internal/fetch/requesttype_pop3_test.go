@@ -39,6 +39,8 @@ type pop3Stub struct {
 	stat       string
 	// list are the lines of its LIST, nil for a server that refuses it.
 	list []string
+	// refusal is what it refuses a login with, its own words when "".
+	refusal string
 }
 
 const pop3StubTimestamp = "<1896.697170952@mail.test>"
@@ -67,6 +69,8 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 	login := func(accepted bool) {
 		if in = accepted; accepted {
 			say("+OK Welcome.")
+		} else if s.refusal != "" {
+			say(s.refusal)
 		} else {
 			say("-ERR [AUTH] Username and password not accepted.")
 		}
@@ -322,6 +326,19 @@ func TestAPOP3ScrapeChoosesTheLoginTheServerTakes(t *testing.T) {
 // either; whoever called the probe is not told the server's words, and the
 // session does not go on to STAT. A refused XOAUTH2 is ended with the
 // empty line its error asks for.
+// A server that says back the command it refuses, password and all, has
+// that masked in the failure and in the trace, as any server's text is.
+func TestAPOP3RefusalThatSaysThePasswordBackIsMasked(t *testing.T) {
+	wrong := testutil.WriteFile(t, "password", "hunter2-wrong\n")
+	s := newPOP3Stub(t, func(s *pop3Stub) { s.refusal = "-ERR [AUTH] no login with password=hunter2-wrong for me@example.com" })
+	ctx, trace := WithRequestTrace(context.Background())
+	_, err := FetchCollector(ctx, s.Addr, pop3Collector(t, s, withLogin("user", nil, withAccount("me@example.com", wrong))), RequestOverrides{}, nil)
+	shown := fmt.Sprint(err, trace.Requests())
+	if err == nil || strings.Contains(shown, "hunter2") || !strings.Contains(err.Error(), "refused PASS for me@example.com with -ERR [AUTH] no login with password="+Redacted) {
+		t.Fatalf("err=%v\ntrace %v", err, trace.Requests())
+	}
+}
+
 func TestAPOP3ScrapeFailsOnARefusedLoginWithoutItsSecrets(t *testing.T) {
 	wrong := testutil.WriteFile(t, "password", "hunter2-wrong\n")
 	stale := testutil.WriteFile(t, "stale", "ya29.stale-token\n")

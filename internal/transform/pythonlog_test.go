@@ -101,7 +101,8 @@ fail("not every shard answered")
 	if err == nil || !strings.Contains(err.Error(), "RuntimeError: not every shard answered") {
 		t.Fatalf("err=%v", err)
 	}
-	want := `level=WARN msg="python transform logged" collector=queue message="the queue answered 3 of 5 shards"` + "\n" +
+	want := `level=DEBUG msg="python transform printed" collector=queue output="printed first\n"` + "\n" +
+		`level=WARN msg="python transform logged" collector=queue message="the queue answered 3 of 5 shards"` + "\n" +
 		`level=ERROR msg="python transform logged" collector=queue message="shard 4 timed out"` + "\n"
 	if got != want {
 		t.Errorf("logged\n got %s\nwant %s", got, want)
@@ -116,9 +117,26 @@ fail("not every shard answered")
 	if err == nil || !strings.Contains(err.Error(), "ZeroDivisionError") || strings.Count(got, "\n") != 21 || !strings.Contains(got, `message="5 more lines the script logged are not written; a run writes 20"`) {
 		t.Errorf("err=%v, logged\n%s", err, got)
 	}
-	// A run after a failure starts with none of its lines.
+	// A run after a failure starts with none of its lines, and none of
+	// what it printed.
 	if got, err := run(`metric(name="v", value=1)`, nil); err != nil || got != "" {
 		t.Errorf("the next run: %q, %v", got, err)
+	}
+	// What was printed alone, to both of the script's streams, and its
+	// first 4 KiB of more.
+	got, err = run("import sys\nprint('shard 4 answered', 503)\nprint('to stderr', file=sys.stderr)\n1/0\n", nil)
+	if want := `level=DEBUG msg="python transform printed" collector=queue output="shard 4 answered 503\nto stderr\n"` + "\n"; err == nil || !strings.Contains(err.Error(), "ZeroDivisionError") || got != want {
+		t.Errorf("err=%v, logged\n got %s\nwant %s", err, got, want)
+	}
+	got, err = run("print('x' * 5000)\nlog('after it')\n1/0\n", nil)
+	if err == nil || !strings.Contains(got, strings.Repeat("x", 4096)+"... (905 more characters)") || strings.Contains(got, strings.Repeat("x", 4097)) || !strings.Contains(got, `message="after it"`) {
+		t.Errorf("err=%v, logged\n%s", err, got)
+	}
+	// Where what was printed does not fit beside the failure, what was
+	// logged still goes with it.
+	got, err = run("print('x' * 3000)\nlog('the line')\nfail('boom')\n", func(c *model.Collector) { c.Limits.MaxOutputBytes = 1200 })
+	if want := `level=INFO msg="python transform logged" collector=queue message="the line"` + "\n"; err == nil || !strings.Contains(err.Error(), "RuntimeError: boom") || got != want {
+		t.Errorf("under an output limit with room for the lines alone: err=%v, logged\n got %s\nwant %s", err, got, want)
 	}
 	// Under an output limit the lines do not fit, the failure is whole.
 	got, err = run("log('x' * 900)\nfail('boom')\n", func(c *model.Collector) { c.Limits.MaxOutputBytes = 400 })

@@ -181,6 +181,7 @@ for row in data:
 | `logfmt` | The list of the records, a dict per line of its keys and their values as strings, `None` for a key written alone. |
 | `toml` | The document, as for `json`, with each date and time a string ([NDJSON, logfmt, TOML and INI](CONFIGURATION.md#ndjson-logfmt-toml-and-ini)). |
 | `ini` | A dict of each section's dict of strings, and of each key before the first section to its string. |
+| `protobuf` | A dict of the message's fields by their `.proto` names, as a `grpc` answer is, a 64-bit integer a string ([Protobuf responses](CONFIGURATION.md#protobuf-responses)); `response.body` is the bytes as they came. |
 | `binary` | A dict of each field's name to its int, float, str or list of numbers, as `response.binary` lays them out ([Binary answers](CONFIGURATION.md#binary-answers)); `response.body` is the bytes. |
 | `graphite` | The [series document](GRAPHITE.md#the-series-document), `{"series": [...]}`. |
 | `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
@@ -429,6 +430,12 @@ transform:
   was, and the one that ends last is the one kept.
 
 The key is refused on a collector with no Python script.
+
+The [self-metrics](SELF-METRICS.md#collector-metrics) of a collector with
+the key say what is kept of it: `http_exporter_python_states`, how many
+states, `http_exporter_python_state_bytes`, their size, and
+`http_exporter_python_states_dropped_total`, the states the exporter
+dropped to stay within its bounds, each of which cost a script its memory.
 
 ## How scripts run
 

@@ -13,7 +13,7 @@ configured:
 | `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. A probe that `error_handling` carried on past a failed stage is one, unless its collector sets [`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics), which answers and counts it as a failure. |
 | `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
 | `http_exporter_probe_duration_seconds` | histogram | Labelled `collector` and `kind`: how long each probe (`kind="probe"`) and each static target scrape (`kind="static"`) took, to its answer being ready. See [Probe durations](#probe-durations). |
-| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, or a gRPC call answered `OK` or with a code of its `accept_codes`; `304` when the target answered a [revalidation](CONFIGURATION.md#revalidating-expired-responses) with Not Modified. |
+| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read, an answer of a type that has no status of its own, such as `ntp`, `radius` or `whois`, or a gRPC call answered `OK` or with a code of its `accept_codes`; `304` when the target answered a [revalidation](CONFIGURATION.md#revalidating-expired-responses) with Not Modified. |
 | `http_exporter_scrape_grpc_status_code` | gauge | [`grpc`](GRPC.md#self-metrics) collectors only: the gRPC status code of the most recent call, `0` for `OK`, `14` for `UNAVAILABLE`; `-1` before the first call, or when a scrape made none, as when the message did not fit. An exporter without `grpc` collectors has no such series. |
 | `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body; `0` after a `304`, whose kept body was not downloaded again. |
 | `http_exporter_decode_success_total` | counter | Responses decoded. |
@@ -22,6 +22,8 @@ configured:
 | `http_exporter_missing_keys_total` | counter | Values the response did not contain: a jq or yq value, a CSV column, a regex that matched no text, an XPath or CSS selector that matched no nodes, `items` that selected nothing, a required label. Counted when a transform fails for it, and for each series a metric rule carried on without under `error_mode` `log` or `ignore`. |
 | `http_exporter_script_errors_total` | counter | Python script failures. |
 | `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, as `limits.script_timeout` measures each: the script's own run, not counting starting an interpreter or handing it the response. |
+| `http_exporter_python_states`, `http_exporter_python_state_bytes` | gauge | Collectors with [`transform.state`](PYTHON.md#state-between-runs) only: the states the exporter keeps of the collector's scripts, one for each script, target and set of probe parameters that left one, and their bytes as JSON together. |
+| `http_exporter_python_states_dropped_total` | counter | Collectors with `transform.state` only: the states of the collector's scripts dropped to keep the states of every collector within 4,096 and 64 MiB, those used longest ago first, since the exporter started. Each cost a script what it remembered; one that rises says the collector keeps state for more targets, or more in each, than fits. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
@@ -188,9 +190,6 @@ not here.
 | --- | --- | --- |
 | `http_exporter_host_rate_limit_waits_total` | counter | Labelled `rule`, the `name` of an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host): the `http` and `graphite` requests of every collector together — each attempt, page, redirect and login request counted — that waited for their turn under the entry before they were sent, but not those of a debug run's. |
 | `http_exporter_host_rate_limit_refused_total` | counter | Labelled `rule`: the requests the entry refused before they were sent, their turn coming at or past their deadline; each failed its scrape. |
-| `http_exporter_secret_store_requests_total` | counter | Labelled `store`, the `name` of an entry of [`secret_stores`](AUTHENTICATION.md#secret-stores): the requests made to the store for a secret, which are the reads its cache did not answer. |
-| `http_exporter_secret_store_failures_total` | counter | Labelled `store`: the requests that failed, the store unreachable, refusing the exporter, or without the secret. |
-| `http_exporter_secret_store_stale_reads_total` | counter | Labelled `store`: the credentials read from a secret older than `cache_ttl` because the store could not be asked again. An increase says the store is down and scrapes run on what was read before, for `max_stale` at most. |
 
 An entry's bucket is the exporter's, shared by every collector, so the
 families have no `collector` label: which collectors used the turns up shows
@@ -200,6 +199,28 @@ removes has none, and one a reload changes keeps its counts. A request that
 waited under its collector's own `request.rate_limit` as well is counted in
 both its collector's `http_exporter_rate_limit_waits_total` and here. They
 are exported over [OTLP](OTLP.md) as every other self-metric.
+
+## Secret stores
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_secret_store_requests_total` | counter | Labelled `store`, the `name` of an entry of [`secret_stores`](AUTHENTICATION.md#secret-stores): the requests made to the store for a secret, which are the reads its cache did not answer. |
+| `http_exporter_secret_store_failures_total` | counter | Labelled `store`: the requests that failed, the store unreachable, refusing the exporter, or without the secret. |
+| `http_exporter_secret_store_stale_reads_total` | counter | Labelled `store`: the credentials read from a secret older than `cache_ttl` because the store could not be asked again. An increase says the store is down and scrapes run on what was read before, for `max_stale` at most. |
+| `http_exporter_secret_store_secrets` | gauge | Labelled `store`: the secrets the store keeps in memory now, those it has read and a credential may still be read from, within `cache_ttl` and `max_stale` of the reading. |
+
+A store is the exporter's, read by any collector, so the families have no
+`collector` label: a scrape that failed for a credential it could not read
+shows in its own collector's failures. Every entry of `secret_stores` in
+force has its series from zero; one a reload removes has none, and one it
+changes keeps its counts and reads its secrets again. A rate of
+`http_exporter_secret_store_failures_total` says a store is failing now,
+and of `http_exporter_secret_store_stale_reads_total` that scrapes are
+running on what was read before, which `max_stale` ends:
+
+```promql
+rate(http_exporter_secret_store_stale_reads_total[5m]) > 0
+```
 
 ## Configuration reloads
 
@@ -1120,7 +1141,7 @@ The time is when the series began to count:
 | Series | Created |
 | --- | --- |
 | The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total`, the [scrape-time histogram](#scrape-time-histograms) and the [Python worker](#python-workers) counters of a collector the exporter started with | The exporter's start. |
-| The [rate limits per host](#rate-limits-per-host) of an entry the exporter started with | The exporter's start. |
+| The [rate limits per host](#rate-limits-per-host) and the [secret stores](#secret-stores) of an entry the exporter started with, and `http_exporter_python_states_dropped_total` | The exporter's start. |
 | The same, of an entry a reload added, or removed and brought back | When the reload put it in force. |
 | The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |

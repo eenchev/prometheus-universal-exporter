@@ -186,14 +186,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `password_file: secret://vault-prod/secret/data/db#password`. A secret is
   kept in memory for `cache_ttl`, 5m, and used for `max_stale` more, 1h,
   while its store is down. Vault logs in with Kubernetes auth, a token or
-  an AppRole; Google and AWS use the workload's own identity. No
-  dependency is added.
+  an AppRole; Google and AWS use the workload's own identity. Each store's
+  requests, failures, stale reads and secrets kept are
+  [self-metrics](docs/SELF-METRICS.md#secret-stores). No dependency is
+  added.
 - **[`transform.state: true`](docs/PYTHON.md#state-between-runs)** gives a
   Python script a dict, `state`, that is kept between its runs for a
   target, so a script can tell what changed since the last scrape: a
   counter's increase, a value seen before, when something was first seen.
   It is kept in memory, at most 64 KiB a script and target, and lost at a
-  restart.
+  restart; `http_exporter_python_states` and its two companions say what
+  is kept of a collector's states, and how many were dropped.
 - A static target of an `smtp`, `imap` or `pop3` collector that logs in
   with a token names its own mailbox with `username` alone, so one
   application's token watches many mailboxes.

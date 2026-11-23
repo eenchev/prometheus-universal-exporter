@@ -89,6 +89,7 @@ collectors:
 	}
 	metrics := probeOnce(t, server, "/self-metrics", nil).Body.String()
 	for _, want := range []string{
+		`http_exporter_secret_store_secrets{store="vault-prod"} 1`,
 		`http_exporter_secret_store_requests_total{store="vault-prod"} 1`,
 		`http_exporter_secret_store_failures_total{store="vault-prod"} 0`,
 		`http_exporter_secret_store_stale_reads_total{store="vault-prod"} 0`,

@@ -74,6 +74,9 @@ type pythonStateStore struct {
 	clock uint64
 	// bytes is the length of the states kept, together.
 	bytes int
+	// dropped is how many states of each collector went to keep the
+	// states within their bounds.
+	dropped map[string]uint64
 }
 
 type pythonStateEntry struct {
@@ -127,7 +130,42 @@ func (s *pythonStateStore) put(key pythonStateKey, state string) {
 		}
 		s.bytes -= len(s.kept[oldest].json)
 		delete(s.kept, oldest)
+		if s.dropped == nil {
+			s.dropped = map[string]uint64{}
+		}
+		s.dropped[oldest.collector]++
 	}
+}
+
+// PythonStateCount is what the exporter keeps of the states of a
+// collector's scripts (transform.state): how many, of each script, target
+// and parameters, their bytes as JSON together, and how many it has dropped
+// to stay within the bounds of all the states, each of which left a script
+// to start from an empty state.
+type PythonStateCount struct {
+	States, Bytes int
+	Dropped       uint64
+}
+
+// PythonStateCounts are the counts of the collectors that have states
+// kept, or had one dropped, by name.
+func PythonStateCounts() map[string]PythonStateCount {
+	s := pythonStates
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := make(map[string]PythonStateCount, len(s.dropped))
+	for key, entry := range s.kept {
+		count := counts[key.collector]
+		count.States++
+		count.Bytes += len(entry.json)
+		counts[key.collector] = count
+	}
+	for collector, dropped := range s.dropped {
+		count := counts[collector]
+		count.Dropped = dropped
+		counts[collector] = count
+	}
+	return counts
 }
 
 // checkPythonState says what is wrong with the state a script left, as the

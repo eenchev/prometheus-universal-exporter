@@ -1362,7 +1362,7 @@ ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
 by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
-`graphite`, `ndjson`, `logfmt`, `toml`, `ini` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+`graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `protobuf` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -5968,6 +5968,9 @@ http_exporter_missing_keys_total
 
 http_exporter_script_errors_total
 http_exporter_script_duration_seconds
+http_exporter_python_states
+http_exporter_python_state_bytes
+http_exporter_python_states_dropped_total
 
 http_exporter_metrics_emitted_total
 http_exporter_invalid_utf8_total
@@ -5988,6 +5991,7 @@ http_exporter_host_rate_limit_refused_total
 http_exporter_secret_store_requests_total
 http_exporter_secret_store_failures_total
 http_exporter_secret_store_stale_reads_total
+http_exporter_secret_store_secrets
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -6139,7 +6143,15 @@ exporter-wide, labelled `store` with the name of an entry of
 in force from 0, kept and created as those of an entry of `rate_limits`
 are: the requests made to the store for a secret, those that failed, and
 the credentials read from a secret past its `cache_ttl` because the store
-could not be asked (§ 42.6c).
+could not be asked (§ 42.6c). `http_exporter_secret_store_secrets`, a gauge
+labelled likewise, MUST be the secrets the store keeps that a credential
+may still be read from.
+`http_exporter_python_states` and `http_exporter_python_state_bytes`,
+gauges, and `http_exporter_python_states_dropped_total`, a counter, MUST
+exist for every collector that sets `transform.state` and for no other,
+labelled `collector`, from 0: the states kept of its scripts, their bytes
+as JSON together, and the states of its scripts dropped to keep all states
+within their bounds, since the exporter started (§ 16).
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,

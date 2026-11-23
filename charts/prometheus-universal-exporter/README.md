@@ -12,7 +12,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
 * `grpc`, `graphite`, `dns`, `tlscert`, `ntp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` collectors, and, in an image built with them, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois` ones
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
-* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
+* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, protobuf messages and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
 * Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
 * Declared metrics with types, descriptions, explicit labels and per-metric error policy
@@ -20,6 +20,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
 * `Probe` resources for uptime checks of URLs and Ingresses, as blackbox_exporter is declared
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
+* Target credentials read from HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets Manager, with nothing mounted
 * SSH keys, passwords and known hosts for `sshfile` and `sshexec` collectors, from a Secret and the values
 * Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
 * `list` permissions on the resources `kubernetes` collectors read, for the exporter's own ServiceAccount

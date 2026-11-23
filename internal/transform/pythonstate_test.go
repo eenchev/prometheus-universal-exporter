@@ -17,7 +17,7 @@ func freshStates(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		pythonStates.mu.Lock()
-		pythonStates.kept, pythonStates.clock, pythonStates.bytes = map[pythonStateKey]*pythonStateEntry{}, 0, 0
+		pythonStates.kept, pythonStates.clock, pythonStates.bytes, pythonStates.dropped = map[pythonStateKey]*pythonStateEntry{}, 0, 0, nil
 		pythonStates.mu.Unlock()
 	}
 	reset()
@@ -165,6 +165,9 @@ func TestTheStatesKeptAreBounded(t *testing.T) {
 	pythonStates.mu.Unlock()
 	if bytes != counted || bytes > pythonStateBytesKept || bytes < pythonStateBytesKept-len(large) {
 		t.Fatalf("%d bytes of states are kept, counted as %d, want just under %d", counted, bytes, pythonStateBytesKept)
+	}
+	if c := PythonStateCounts()["c"]; c.Bytes != bytes || c.States*len(large) > pythonStateBytesKept || c.Dropped != uint64(1+pythonStatesKept+1200-c.States) {
+		t.Fatalf("the collector's states are counted as %+v, of %d bytes kept", c, bytes)
 	}
 	if got := pythonStates.get(key(10000 + 1199)); got != large {
 		t.Fatal("the state kept last is gone")

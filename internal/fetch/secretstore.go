@@ -429,6 +429,31 @@ func (s *secretStore) document(ref SecretReference) (SecretDocument, error) {
 	return kept.document, nil
 }
 
+// secrets is how many secrets the store keeps that a read would use: read,
+// and within cache_ttl and max_stale of it.
+func (s *secretStore) secrets() int {
+	now := secretNow()
+	s.mu.Lock()
+	kept := make([]*secretKept, 0, len(s.kept))
+	for _, k := range s.kept {
+		kept = append(kept, k)
+	}
+	s.mu.Unlock()
+	n := 0
+	for _, k := range kept {
+		// A secret being read now is counted as it was before the read.
+		if !k.mu.TryLock() {
+			n++
+			continue
+		}
+		if !k.read.IsZero() && now.Sub(k.read) < s.cacheTTL+s.maxStale {
+			n++
+		}
+		k.mu.Unlock()
+	}
+	return n
+}
+
 // ValidateSecretStores checks secret_stores: each entry a name of its own
 // that a reference can write, a type, the keys its type needs and none of
 // another's, and durations that bound something. Every mistake is reported.
@@ -573,7 +598,10 @@ func (b failedBackend) Read(context.Context, SecretReference) (SecretDocument, e
 type SecretStoreCount struct {
 	Name                    string
 	Requests, Failed, Stale uint64
-	Since                   time.Time
+	// Secrets is how many secrets the store keeps now, read and not yet
+	// past the time one may be used.
+	Secrets int
+	Since   time.Time
 }
 
 // SecretStoreCounts are the counts of the stores in force, by name.
@@ -584,7 +612,7 @@ func SecretStoreCounts() []SecretStoreCount {
 	}
 	counts := make([]SecretStoreCount, 0, len(*p))
 	for name, s := range *p {
-		counts = append(counts, SecretStoreCount{Name: name, Requests: s.requests.Load(), Failed: s.failures.Load(), Stale: s.stale.Load(), Since: s.since})
+		counts = append(counts, SecretStoreCount{Name: name, Requests: s.requests.Load(), Failed: s.failures.Load(), Stale: s.stale.Load(), Secrets: s.secrets(), Since: s.since})
 	}
 	slices.SortFunc(counts, func(a, b SecretStoreCount) int { return strings.Compare(a.Name, b.Name) })
 	return counts

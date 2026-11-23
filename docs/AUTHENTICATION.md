@@ -1005,8 +1005,8 @@ references and reaches no store.
 
 A request to a store is not part of a scrape's deadline: `timeout` bounds
 it. `--dry-run` reads the references a scrape would, and warns of one that
-cannot be read. [Self-metrics](SELF-METRICS.md) count each store's requests
-and failures.
+cannot be read. [Self-metrics](SELF-METRICS.md#secret-stores) count each
+store's requests, failures and stale reads, and the secrets it keeps.
 
 ### HashiCorp Vault
 

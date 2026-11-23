@@ -176,6 +176,9 @@ func TestAProbeThatLeftAJoinedTripSaysItWaitedForIt(t *testing.T) {
 	defer leaveB()
 	doneB := probeAsync(ctxB, server, path, nil)
 	waitForWaiters(t, server, 2)
+	// B's probe is exported for being slow, so it lasts past the
+	// threshold, a millisecond, which a caller that leaves at once may not.
+	time.Sleep(5 * time.Millisecond)
 	leaveB()
 	waitOutcome(t, doneB, "the probe whose caller left")
 	release()

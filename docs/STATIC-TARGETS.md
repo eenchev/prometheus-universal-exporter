@@ -341,7 +341,13 @@ block, in place of the collector's. This is what each type takes:
 | `websocket` | none | yes |
 | `modbus` | none | no; Modbus TCP has no TLS |
 | `snmp` | `community_file` of v1 and v2c; `username`, `auth_password_file` and `priv_password_file` of v3, each replacing the collector's as its security level uses it | no; SNMP has no TLS |
-| `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes` | none | no |
+| `radius` | none: the account and the shared secret are the collector's | no; RADIUS is spoken over UDP |
+| `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes`, `whois` | none | no |
+
+A target's credential file may be a reference to a
+[secret store](AUTHENTICATION.md#secret-stores) of the configuration,
+`password_file: secret://vault-prod/secret/data/db#password`, as a
+collector's may.
 
 A target's `tls` replaces the collector's whole block, a key it leaves out
 not being taken from the collector's, so a target with a client certificate

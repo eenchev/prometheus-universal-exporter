@@ -160,7 +160,7 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `none` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `protobuf`, `none` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
@@ -3304,6 +3304,13 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `make build` writes the binary to `bin/prometheus-universal-exporter`; plain
 `go build .` writes it to the current directory.
 
+Two things that are no request types come with one, for the libraries they
+share with it: the [`protobuf` decoder](#protobuf-responses) is in the
+builds that have `grpc`, and the `aws`
+[secret store](AUTHENTICATION.md#secret-stores) in those that have
+`s3file`. A build without the type refuses a configuration that uses them,
+saying which type to build with.
+
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
 means every type. A name that is not a request type fails the build, and so does
 a selection that names none. The script turns the list into Go build tags —
@@ -6261,7 +6268,10 @@ mode](#dangerous-debug-mode) a `login` is kept, but the paths, which the
 page withholds, are dropped all the same, each comment saying to write the
 path in its place. Python is left in: the note says that a run of the copy
 is refused until the script is taken out, as for any playground, but in
-dangerous debug mode. Any other value shown `<redacted>` has to be left out
+dangerous debug mode. The files of a [`protobuf`
+decoder](#protobuf-responses), `response.protobuf`'s, are files of the
+server's too: a playground that names them is refused likewise, so a
+collector of that decoder is run by its name. Any other value shown `<redacted>` has to be left out
 or written again. A copy of a collector of any request type
 runs: a `tlscert` collector's copy reads a pasted handshake, or what
 `tls_cert` answers when a target is probed or a static target scraped

@@ -607,8 +607,8 @@ start once and then serves scrape after scrape.
   when the configuration loads and by `--dry-run`, in the same words. A
   [debug probe](CONFIGURATION.md#debug-probes) says the most address
   space the script's worker has had, beside the limit, as `python transform
-  memory` with `worker_peak_bytes` and `limit_bytes`, which is what to set
-  the limit from. A
+  memory` with `worker_peak_bytes` and `limit_bytes`, 0 for no limit, which
+  is what to set the limit from. A
   library written in C, such as lxml, that cannot allocate may end the
   interpreter instead; the error then says the worker died and that it ran
   under the limit, so raise it if the script needs more. It is at

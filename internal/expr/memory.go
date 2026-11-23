@@ -54,7 +54,7 @@ func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, fu
 	measure, _ := ctx.Value(memoryMeasureKey{}).(*MemoryMeasure)
 	var before uint64
 	if measure != nil {
-		before = heapHeld().held
+		before = heapHeld().live
 	}
 	if limit <= 0 {
 		return ctx, func() *MemoryExceeded {
@@ -85,9 +85,12 @@ func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, fu
 //
 // It is what the watch measures, the growth of the whole process's heap
 // while a program ran, so what other scrapes took meanwhile is in it; and
-// it is the most a collection counted live over what was certainly held
-// before the program began, which is no less than what the program held
-// when the collection ran. A collection is run before the program, at
+// it is the most a collection counted live over what one counted live
+// before the program began. Both count what was made while they ran, so
+// the one is taken from the other, like from like: taken from what was
+// certainly held before, which on a busy exporter is far less than was
+// held, the program was said to hold what the exporter held before it. A
+// collection is run before the program, at
 // every look while it runs, 20 milliseconds apart, and after it: more than
 // a scrape is worth, and what a debug probe is for. What a program held
 // and let go of between two looks is not seen.

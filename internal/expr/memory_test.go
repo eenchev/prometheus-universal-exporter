@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -296,6 +297,57 @@ func TestWatchesThatAskAtOnceShareACollection(t *testing.T) {
 	collectHeap()
 	if ran := forced() - before; ran != 3 {
 		t.Errorf("%d collections were run in all, want one more for each watch that asked alone", ran)
+	}
+}
+
+// A measure keeps the most a collection counted live over what the one
+// before the program counted live, like from like, and with a measure a
+// collection is asked for at every look, whatever the heap is: what the
+// collections showed certainly held, far less on a busy exporter, is no
+// part of it. A program that ended under what was live before it held 0.
+func TestAMemoryMeasureKeepsTheMostCountedLiveOverWhatWasBefore(t *testing.T) {
+	objects, collect := heapObjects, heapHeld
+	t.Cleanup(func() { heapObjects, heapHeld = objects, collect })
+	const mib = 1 << 20
+	// What the collections find is said once, for every watch of the
+	// test: one that has ended may still be at its last look.
+	var shows atomic.Pointer[[]collection]
+	var collections atomic.Int64
+	heapObjects = func() uint64 { return 0 }
+	heapHeld = func() collection {
+		found := *shows.Load()
+		return found[min(int(collections.Add(1))-1, len(found)-1)]
+	}
+	for name, tc := range map[string]struct {
+		// shows is what each collection finds, the last repeated: the
+		// first is the one before the program.
+		shows []collection
+		most  uint64
+	}{
+		"grew and shrank":              {[]collection{{live: 500 * mib, held: 380 * mib}, {live: 540 * mib, held: 400 * mib}, {live: 590 * mib, held: 10 * mib}, {live: 505 * mib, held: 500 * mib}}, 90 * mib},
+		"never over what was before":   {[]collection{{live: 500 * mib, held: 500 * mib}, {live: 480 * mib, held: 480 * mib}}, 0},
+		"a program that ended at once": {[]collection{{live: 100 * mib, held: 100 * mib}, {live: 103 * mib, held: 103 * mib}}, 3 * mib},
+		// With no limit there is no watch, and the measure is of the end.
+		"no limit": {[]collection{{live: 10 * mib}, {live: 30 * mib}}, 20 * mib},
+	} {
+		shows.Store(&tc.shows)
+		collections.Store(0)
+		limit := model.ByteSize(1 << 40)
+		if name == "no limit" {
+			limit = 0
+		}
+		ctx, measure := WithMemoryMeasure(context.Background())
+		_, ended := WatchMemory(ctx, limit)
+		looked := name == "grew and shrank" || name == "never over what was before"
+		if looked {
+			time.Sleep(5 * memoryLook)
+		}
+		exceeded := ended()
+		// The watch that has ended takes its last look, if it is at one.
+		time.Sleep(2 * memoryLook)
+		if asked := collections.Load(); exceeded != nil || measure.Most() != tc.most || looked && asked < 4 || !looked && asked != 2 {
+			t.Errorf("%s: the measure is %d bytes after %d collections, want %d; stopped for %v", name, measure.Most(), asked, tc.most, exceeded)
+		}
 	}
 }
 

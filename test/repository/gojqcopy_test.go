@@ -38,14 +38,25 @@ func gojqUnpatched(t *testing.T, name, text, patch string) string {
 		at, body, _ := strings.Cut(hunk, "\n")
 		var before, after strings.Builder
 		for line := range strings.SplitSeq(strings.TrimSuffix(body, "\n"), "\n") {
+			was, is := true, true
 			switch {
 			case strings.HasPrefix(line, "+"):
-				after.WriteString(line[1:] + "\n")
+				was = false
 			case strings.HasPrefix(line, "-"):
-				before.WriteString(line[1:] + "\n")
-			default:
-				before.WriteString(strings.TrimPrefix(line, " ") + "\n")
-				after.WriteString(strings.TrimPrefix(line, " ") + "\n")
+				is = false
+			}
+			// The first character says which a line is; a line of
+			// neither that is empty is one whose blank was trimmed.
+			if line != "" {
+				line = line[1:]
+			}
+			if was {
+				before.WriteString(line)
+				before.WriteByte('\n')
+			}
+			if is {
+				after.WriteString(line)
+				after.WriteByte('\n')
 			}
 		}
 		if n := strings.Count(text, after.String()); n != 1 {

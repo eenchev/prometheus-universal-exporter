@@ -5380,8 +5380,10 @@ milliseconds, which nearly all end within, and one that runs longer may be
 stopped anywhere between the limit and twice it. Set the limit well above
 what the collector's answers need, and lower it only on an exporter whose
 memory is short. A [debug probe](#debug-probes) says what a transform's
-expressions held at their most, as `jq transform memory` with `held_bytes`
-and `limit_bytes` among its logs, which is what to set the limit from. One
+expressions held at their most, as `jq transform memory`, or `yq transform
+memory`, with `held_bytes` and `limit_bytes` among its logs, which is what
+to set the limit from: it is the exporter's memory that is measured, so
+probe when little else is being scraped. One
 text, list or object larger than the whole limit stops its
 expression the moment an operator or a function makes it, with no look at
 the heap, so an expression that doubles a text at every step is stopped

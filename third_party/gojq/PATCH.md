@@ -1,7 +1,8 @@
 # gojq, with one change
 
-This directory is [gojq](https://github.com/itchyny/gojq) v0.12.20, the
-version `go.mod` requires, which `go.mod` replaces the module with. It is
+This directory is [gojq](https://github.com/itchyny/gojq) at the release
+`go.mod` requires and `UPSTREAM.sha256` names, which `go.mod` replaces the
+module with. It is
 the library's Go sources alone, under its own licence (`LICENSE`): no tests,
 no command-line tool, no generator.
 

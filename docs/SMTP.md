@@ -233,9 +233,15 @@ request:
     scopes: [https://outlook.office365.com/.default]
 ```
 
-That is Microsoft 365's form of it; the application must have been granted
-the mail protocol there and access to the mailbox, which Microsoft's
-documentation of app-only access describes. A
+That is Microsoft 365's form of it, which takes `xoauth2` and no
+`oauthbearer`. The application must have the application permission of
+the protocol (`SMTP.SendAsApp`, `IMAP.AccessAsApp` or `POP.AccessAsApp`)
+with an administrator's consent, be registered in Exchange Online as a
+service principal, and be given the mailbox, as
+[Microsoft describes](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth);
+the scope is `https://outlook.office365.com/.default` for all three
+protocols. Gmail has no such grant: a mailbox there takes a refresh token
+or an app password. A
 [static target](#static-targets) of such a collector names another mailbox
 with its `username` alone.
 

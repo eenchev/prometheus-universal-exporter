@@ -90,6 +90,11 @@ collector's [label values](REQUESTS.md#in-label-values). The decoder is
 | `xoauth2` | `AUTH XOAUTH2` (SASL), an OAuth 2.0 access token | `xoauth2` |
 | `oauthbearer` | `AUTH OAUTHBEARER` (SASL, RFC 7628), the same token | `xoauth2` |
 
+The token of `xoauth2` and `oauthbearer` is sent in answer to the server's
+`+`, as Microsoft 365 takes it; a server that refuses the mechanism's name
+alone is asked once more with the token in the `AUTH` command, as Google
+writes Gmail's exchange.
+
 Left out, the login is `user` where the server's `CAPA` names `USER`, or
 answers nothing, as an old server's does; else `plain`, else `login`, of
 the mechanisms it names. A collector with an `xoauth2` block logs in with
@@ -219,7 +224,8 @@ That is the exporter's log; whoever called `/probe` is answered `-ERR` and
 password, a digest and a token are in no error, log line or debug report: a
 [debug probe](CONFIGURATION.md#debug-probes) shows each command and its
 answer, with `PASS ***`, `APOP name ***` and `***` for the lines that carry
-them.
+them. A server that says back in its `-ERR` the command it refuses has
+what reads as a credential there masked, as `password=<redacted>`.
 
 With `web.self_metrics.verbose`, a scrape is labelled with
 `pop3://host:port` and, as `http_method`, how far the session goes: `CAPA`,

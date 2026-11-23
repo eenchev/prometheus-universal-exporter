@@ -497,7 +497,7 @@ func (v *statsValues) absorb(o statsValues) {
 		{&v.coalesced, &o.coalesced}, {&v.rejected, &o.rejected}, {&v.rejectedByExporter, &o.rejectedByExporter},
 		{&v.refused, &o.refused}, {&v.staleServed, &o.staleServed}, {&v.backoffSkipped, &o.backoffSkipped}, {&v.invalidUTF8, &o.invalidUTF8},
 		{&v.seriesLeftOut, &o.seriesLeftOut}, {&v.linesSkipped, &o.linesSkipped},
-		{&v.pagesFetched, &o.pagesFetched}, {&v.pagesStopped, &o.pagesStopped},
+		{&v.pagesFetched, &o.pagesFetched}, {&v.pagesStopped, &o.pagesStopped}, {&v.memoryStops, &o.memoryStops},
 		{&v.revalidatedNotModified, &o.revalidatedNotModified}, {&v.revalidatedModified, &o.revalidatedModified},
 	} {
 		*pair[0] += *pair[1]

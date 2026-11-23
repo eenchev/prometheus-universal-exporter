@@ -175,6 +175,8 @@ func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%q does not compile: %w", items, err)
 	}
+	ctx, ended := expr.WatchMemoryOf(ctx)
+	defer func() { _ = ended() }()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{}.Values(page)...)
 	var found []any
 	count := 0
@@ -186,6 +188,9 @@ func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 			break
 		}
 		if err, ok := value.(error); ok {
+			if exceeded := ended(); exceeded != nil {
+				return nil, model.MarkError(fmt.Errorf("%q was stopped: %w", items, exceeded), model.ErrLimitExceeded)
+			}
 			return nil, fmt.Errorf("%q is not a path to the array of a page's items, such as .items, .data.results, or . for a page that is an array: %w", items, expr.JQRunError(err))
 		}
 		count++
@@ -281,6 +286,9 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 		defer cancel()
 		overrides.Timeout = 0
 	}
+	// What request.pagination.items and request.pagination.next may take on
+	// a page is what a transform's expressions may.
+	ctx = expr.WithMemoryLimit(ctx, c.Limits.MaxExpressionMemory)
 	first, err := resolveRequestURL(target, c, overrides)
 	if err != nil {
 		return nil, err
@@ -481,6 +489,8 @@ func nextValue(ctx context.Context, next string, response *HTTPResponse, page an
 	if err != nil {
 		return "", err
 	}
+	ctx, ended := expr.WatchMemoryOf(ctx)
+	defer func() { _ = ended() }()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
 	var first any
 	count := 0
@@ -490,6 +500,9 @@ func nextValue(ctx context.Context, next string, response *HTTPResponse, page an
 			break
 		}
 		if err, ok := value.(error); ok {
+			if exceeded := ended(); exceeded != nil {
+				return "", model.MarkError(fmt.Errorf("request.pagination.next %q was stopped: %w", next, exceeded), model.ErrLimitExceeded)
+			}
 			return "", fmt.Errorf("request.pagination.next %q failed: %w", next, expr.JQRunError(err))
 		}
 		if count == 0 {

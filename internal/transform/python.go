@@ -641,11 +641,22 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		// What the script printed and logged, its first 4 KiB of the one
 		// and twenty lines of the other, for whoever debugs it; it counts
 		// against max_output_bytes only as far as that. A debug probe's
-		// report shows it (WithRuleLogger). A script that failed has its
-		// logged lines with its failure, and nothing of what it printed.
+		// report shows it (WithRuleLogger). A script that failed has both
+		// with its failure, where the failure's line had the room: of
+		// what it printed its last 1,024 characters, written at warn,
+		// since they are what was printed just before it failed and are
+		// wanted without a second run at debug.
 		printed, logged := pythonLogLines(out.Log)
 		logger := ruleLogger(ctx)
-		if printed != "" && err == nil {
+		switch {
+		case printed != "" && err != nil:
+			// At warn it is in the log of an exporter that was not asked
+			// for a script's output, and a script that prints what it
+			// was sent while it is being written prints a token: what
+			// reads as a credential is masked, as in any text a failure
+			// carries.
+			logger.Warn("python "+what+" printed before it failed", "collector", c.Name, "output", fetch.RedactText(printed))
+		case printed != "":
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}
 		for _, line := range logged {

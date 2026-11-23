@@ -145,6 +145,14 @@ fix, which `apt-get upgrade` then applies.
 ## Go modules
 
 The exporter's direct dependencies are `gojq` (jq and yq expressions),
+built from the copy in `third_party/gojq` that `go.mod` replaces the module
+with, which is the upstream release with one change, so that a value past
+[`limits.max_expression_memory`](CONFIGURATION.md#memory) stops its program
+when it is made (`third_party/gojq/PATCH.md` says what, and how to move to
+a newer release, which Dependabot does not propose; `govulncheck` and an
+image scanner match a module by its version, which a copy in the
+repository has none of, so an advisory for gojq is one to look for when a
+release of it comes out),
 `antchfx/xmlquery`, `antchfx/htmlquery` and `antchfx/xpath` (XPath), `goquery`
 (CSS selectors) and `andybalholm/cascadia`, the selector compiler goquery uses
 underneath, which the exporter calls itself to compile each CSS selector once

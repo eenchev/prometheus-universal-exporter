@@ -8,7 +8,10 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
 WORKDIR /src
 
+# go.mod replaces gojq with the copy in third_party (third_party/gojq/PATCH.md),
+# which the download reads the requirements of.
 COPY go.mod go.sum ./
+COPY third_party/gojq/go.mod third_party/gojq/go.mod
 RUN go mod download
 
 COPY . .

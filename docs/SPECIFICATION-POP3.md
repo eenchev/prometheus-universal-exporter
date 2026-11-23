@@ -67,7 +67,10 @@ target's request block takes `timeout`, `username`, `password_file` and
   `XOAUTH2` as `user=<username>^Aauth=Bearer <token>^A^A`, a challenge in
   answer to which MUST be answered with an empty line; `OAUTHBEARER` as
   the message of RFC 7628, as `smtp` writes it, a challenge in answer to
-  which MUST be answered with the one byte `^A`. A challenge once
+  which MUST be answered with the one byte `^A`. A server that answers
+  `AUTH XOAUTH2` or `AUTH OAUTHBEARER` with `-ERR`, having been sent no
+  credential, MUST be asked once more with the credential in the command,
+  which a debug report MUST show as `***`. A challenge once
   the exchange is over MUST be answered with `*`. One of these that the
   server answered `CAPA` without naming MUST fail the scrape before
   anything of the account is sent, saying what the server names.
@@ -76,6 +79,9 @@ target's request block takes `timeout`, `username`, `password_file` and
 - Any answer to the login but `+OK` MUST fail the scrape, naming the
   command, the account and the server's answer; so MUST a `STAT` answered
   `-ERR`, or with anything but two whole numbers, none negative.
+- The text of an `-ERR` MUST be shown, in an error, the log and a debug
+  report, with what reads as a credential masked, as the text of any
+  server's refusal is: a server may say back the command it refuses.
 - The document MUST hold `greeting`, the greeting's text; `tls` and
   `starttls`; `capabilities`, the first word of each line of the last
   `CAPA`, in upper case, sorted, each once, at most 100 bytes each; `sasl`,

@@ -550,8 +550,10 @@ start once and then serves scrape after scrape.
   message, for
   what should be seen without debug logging. A run writes at most 20
   lines, each of at most 1,024 characters, whatever it prints. A script
-  that fails has the lines it logged before written with its failure,
-  which they often explain.
+  that fails has the lines it logged before written with its failure, and
+  the last 1,024 characters of what it printed, at warn level as `python
+  transform printed before it failed`, with what reads as a credential
+  masked: they often explain it, and need no second run at debug level.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with
@@ -593,7 +595,14 @@ start once and then serves scrape after scrape.
   though nothing uses it. An exporter started with `MALLOC_ARENA_MAX` set
   passes its own value on instead. A script
   that needs more fails the scrape with `MemoryError: the script ran out of
-  memory under limits.max_script_memory`, and the worker carries on. A
+  memory under limits.max_script_memory`, and the worker carries on. An
+  interpreter built with its library inside it, as one compiled from source
+  often is, holds some 40 MiB before any script runs, where a
+  distribution's holds 20; under a limit it is already past, every scrape
+  fails saying so, as `limits.max_script_memory (33554432 bytes) is less
+  than the 44371968 bytes this Python interpreter holds before a script
+  runs, so no script can run under it; set at least 59MiB, or 0 for no
+  limit`. A
   library written in C, such as lxml, that cannot allocate may end the
   interpreter instead; the error then says the worker died and that it ran
   under the limit, so raise it if the script needs more. It is at

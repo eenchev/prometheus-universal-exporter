@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -49,6 +51,10 @@ type statsValues struct {
 	// pagesStopped the trips that stopped at its max_pages with another
 	// page to come (paginationreport.go).
 	pagesFetched, pagesStopped uint64
+	// memoryStops counts the scrapes whose jq or yq expressions were
+	// stopped at limits.max_expression_memory, each of them one of
+	// limitErrors too.
+	memoryStops uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -140,6 +146,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_pages_fetched_total", model.CounterMetricType, "Pages this http collector's request.pagination fetched, the first of each trip included, in trips that ended with an answer; 0 without request.pagination.", func(v statsValues) float64 { return float64(v.pagesFetched) }},
 	{"http_exporter_pagination_max_pages_reached_total", model.CounterMetricType, "Trips of this http collector that stopped at request.pagination.max_pages with another page to come; their series are of the pages fetched.", func(v statsValues) float64 { return float64(v.pagesStopped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
+	{"http_exporter_expression_memory_exceeded_total", model.CounterMetricType, "Scrapes of this collector stopped at limits.max_expression_memory, for what a jq or yq expression of its transform, its pagination or its login held; each is counted in http_exporter_series_limit_exceeded_total too.", func(v statsValues) float64 { return float64(v.memoryStops) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead, and one a concurrency limit turned away only as rejected.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
 	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and static target scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
@@ -680,4 +687,14 @@ func (s *Server) ruleFailureMetrics() []model.Metric {
 		}
 	}
 	return out
+}
+
+// limitExceeded counts a scrape that err rejected for a limit, and, where
+// the limit is limits.max_expression_memory, that too.
+func (v *statsValues) limitExceeded(err error) {
+	v.limitErrors++
+	var memory *expr.MemoryExceeded
+	if errors.As(err, &memory) {
+		v.memoryStops++
+	}
 }

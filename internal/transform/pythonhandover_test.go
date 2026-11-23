@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -113,12 +114,20 @@ func (h *handover) run(mode, script string, input handoverInput, state string, m
 	if (wasErr == nil) != (err == nil) || wasErr != nil && (wasErr.Error() != err.Error() || errors.Is(wasErr, errPythonTimeout) != errors.Is(err, errPythonTimeout) || errors.Is(wasErr, errPythonOutputTooLarge) != errors.Is(err, errPythonOutputTooLarge)) {
 		h.t.Fatalf("%s, script %q: the run ended with %v, and with %v as it was", input.name, script, err, wasErr)
 	}
-	if string(line) != string(wasLine) {
+	// A failure carries what its script printed and logged before it,
+	// which it did not: the failure is what it was without that
+	// (TestWhatAPythonScriptLoggedBeforeItFailedIsWritten says what is
+	// carried).
+	answer := line
+	if before, _, carries := bytes.Cut(line, []byte(`, "log": `)); carries && bytes.HasPrefix(line, []byte(`{"ok": false`)) {
+		answer = append(bytes.Clone(before), '}')
+	}
+	if string(answer) != string(wasLine) {
 		at := 0
-		for at < len(line) && at < len(wasLine) && line[at] == wasLine[at] {
+		for at < len(answer) && at < len(wasLine) && answer[at] == wasLine[at] {
 			at++
 		}
-		h.t.Fatalf("%s, script %q: the answers of %d and %d bytes differ at byte %d:\n     %.400q\nwas  %.400q", input.name, script, len(line), len(wasLine), at, line[max(0, at-60):], wasLine[max(0, at-60):])
+		h.t.Fatalf("%s, script %q: the answers of %d and %d bytes differ at byte %d:\n     %.400q\nwas  %.400q", input.name, script, len(answer), len(wasLine), at, answer[max(0, at-60):], wasLine[max(0, at-60):])
 	}
 	if err == nil {
 		for _, limit := range []int{0, 2} {

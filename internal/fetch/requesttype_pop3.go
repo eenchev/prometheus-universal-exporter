@@ -246,7 +246,10 @@ func (s *pop3Session) read() (pop3Answer, error) {
 	case strings.EqualFold(indicator, "+OK"):
 		return pop3Answer{ok: true, text: pop3Text(text)}, nil
 	case strings.EqualFold(indicator, "-ERR"):
-		return pop3Answer{text: pop3Text(text)}, nil
+		// A refusal may say back what it refuses, a command with the
+		// password in it, and goes to an error and the log: it is shown
+		// as any server's text is, with what reads as a credential masked.
+		return pop3Answer{text: netShown(text)}, nil
 	case indicator == "+":
 		// A challenge is base64, read as it came; it is shown nowhere.
 		return pop3Answer{continued: true, text: strings.TrimSpace(text)}, nil
@@ -297,7 +300,8 @@ func (s *pop3Session) exchange(verb, line, shown string) (pop3Answer, error) {
 // pop3Text is a server's text as the document, an error and a debug report
 // have it: its control characters written as ?, and cut where any
 // failure's text is. It is not looked through for credentials as netShown
-// looks: an answer holds nothing the scrape sent.
+// looks, which is how a refusal is shown (read): a greeting and a +OK hold
+// nothing the scrape sent, and the numbers of a STAT are read from one.
 func pop3Text(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -636,10 +640,19 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 			sent = netOAuthBearerCredential(user, hostPort, token)
 			name, last, ended = "OAUTHBEARER", netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
 		}
-		if answer, err = begin(name); err == nil && answer.continued {
-			if answer, err = s.answer(b64(sent), hidden); err == nil && answer.continued {
-				answer, err = s.answer(last, ended)
-			}
+		// The credential is sent in answer to the server's +, as Microsoft
+		// 365 takes it. A server that refuses the mechanism's name alone
+		// has seen no credential, and may be one that takes it in the
+		// command, as Google writes Gmail's: it is asked once more so.
+		answer, err = begin(name)
+		switch {
+		case err == nil && answer.continued:
+			answer, err = s.answer(b64(sent), hidden)
+		case err == nil && !answer.ok:
+			answer, err = s.send("AUTH "+name+" "+b64(sent), "AUTH "+name+" "+hidden)
+		}
+		if err == nil && answer.continued {
+			answer, err = s.answer(last, ended)
 		}
 		if err == nil && !answer.ok {
 			netTokens.forget(c.Name, c.Request.XOAuth2)

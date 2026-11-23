@@ -5379,15 +5379,23 @@ moments counts too: a transform is not looked at in its first 20
 milliseconds, which nearly all end within, and one that runs longer may be
 stopped anywhere between the limit and twice it. Set the limit well above
 what the collector's answers need, and lower it only on an exporter whose
-memory is short. One step that makes a very large value at once is not
-interrupted part of the way, so an expression that doubles a text at every
-step can pass the limit several times over before it is stopped. The
+memory is short. One text or list larger than the whole limit stops its
+expression the moment an operator or a function makes it, with no look at
+the heap, so an expression that doubles a text at every step is stopped
+when the text first passes the limit: holding that text, at most twice the
+limit, and the ones it was made of. A text or a list the answer holds is
+none the expression made, however large, and reading it stops nothing; a
+copy of it is one, as `sort` and `tojson` make. The
 failure is the probe's `validation` stage, counted in
 `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
 says. The jq
 expressions of [pagination](REQUESTS.md#pagination) and
 [logins](AUTHENTICATION.md#logging-in-to-a-target) run outside the
-transform, and are bounded by the probe's time alone.
+transform and are held to the same limit, on each page and on each of a
+login's answers: one past it fails the scrape as a limit exceeded, where
+a failed request does (`error_handling.on_fetch_error`) and counted in the
+same metric, naming its key, as `request.pagination.next ".." was stopped:
+the exporter's memory grew by more than limits.max_expression_memory, …`.
 
 A decoded document is larger than the response it was read from, the more
 so the more of the response is structure: a response of nothing but empty

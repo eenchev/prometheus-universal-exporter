@@ -5,8 +5,7 @@ package fetch
 import (
 	"bufio"
 	"context"
-	"crypto/hmac"
-	"crypto/md5" //nolint:gosec // G501: the digests APOP and CRAM-MD5 are
+	"crypto/md5" //nolint:gosec // G501: the digest APOP is
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +37,8 @@ type pop3Stub struct {
 	user, pass string
 	token      string
 	stat       string
+	// list are the lines of its LIST, nil for a server that refuses it.
+	list []string
 }
 
 const pop3StubTimestamp = "<1896.697170952@mail.test>"
@@ -122,9 +123,18 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 				challenge := "<17.42@mail.test>"
 				say("+ " + b64(challenge))
 				answer, _ := read()
-				mac := hmac.New(md5.New, []byte(s.pass))
-				_, _ = mac.Write([]byte(challenge))
-				login(answer == b64(s.user+" "+hex.EncodeToString(mac.Sum(nil))))
+				login(answer == netTestCRAMMD5(s.user, s.pass, challenge))
+			case "OAUTHBEARER":
+				say("+ ")
+				answer, _ := read()
+				host, port, _ := net.SplitHostPort(s.Addr)
+				accepted := answer == b64("n,a="+s.user+",\x01host="+host+"\x01port="+port+"\x01auth=Bearer "+s.token+"\x01\x01")
+				if !accepted {
+					// The error, which the client answers with one byte.
+					say("+ " + b64(`{"status":"invalid_token"}`))
+					_, _ = read()
+				}
+				login(accepted)
 			case "XOAUTH2":
 				say("+ ")
 				answer, _ := read()
@@ -146,6 +156,16 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 			} else {
 				say("-ERR not logged in")
 			}
+		case "LIST":
+			if !in || s.list == nil {
+				say("-ERR no list for you")
+				break
+			}
+			say(fmt.Sprintf("+OK %d messages", len(s.list)))
+			for _, line := range s.list {
+				say(line)
+			}
+			say(".")
 		case "QUIT":
 			say("+OK bye")
 			return
@@ -160,7 +180,7 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 func newPOP3Stub(t *testing.T, configure ...func(*pop3Stub)) *pop3Stub {
 	t.Helper()
 	s := &pop3Stub{greeting: "+OK POP3 mail.test ready " + pop3StubTimestamp, stls: true, user: "me@example.com", pass: "app pass word", token: "ya29.token", stat: "+OK 12 123456",
-		capa: []string{"USER", "TOP", "UIDL", "Sasl plain LOGIN CRAM-MD5 XOAUTH2", "EXPIRE 31 USER", "IMPLEMENTATION stub 1.0"}}
+		capa: []string{"USER", "TOP", "UIDL", "Sasl plain LOGIN CRAM-MD5 XOAUTH2 OAUTHBEARER", "EXPIRE 31 USER", "IMPLEMENTATION stub 1.0"}}
 	for _, fn := range configure {
 		fn(s)
 	}
@@ -216,8 +236,8 @@ func TestAPOP3ScrapeReadsTheGreetingAndTheCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"greeting":"POP3 mail.test ready \u003c1896.697170952@mail.test\u003e","tls":true,"starttls":true,` +
-		`"capabilities":["EXPIRE","IMPLEMENTATION","SASL","TOP","UIDL","USER"],"sasl":["CRAM-MD5","LOGIN","PLAIN","XOAUTH2"],"apop":true,` +
-		`"authenticated":false,"auth":null,"messages":null,"size_bytes":null}`
+		`"capabilities":["EXPIRE","IMPLEMENTATION","SASL","TOP","UIDL","USER"],"sasl":["CRAM-MD5","LOGIN","OAUTHBEARER","PLAIN","XOAUTH2"],"apop":true,` +
+		`"authenticated":false,"auth":null,"messages":null,"size_bytes":null,"largest_bytes":null}`
 	if string(resp.Body) != want || resp.Trip == nil || resp.Trip.TLSConnection == nil {
 		t.Errorf("the document is\n%s\nwant\n%s\ntrip %+v", resp.Body, want, resp.Trip)
 	}
@@ -247,12 +267,13 @@ func TestAPOP3ScrapeLogsInWithEachMechanismAndCountsTheMailbox(t *testing.T) {
 		change func(*model.RequestConfig)
 		sent   string
 	}{
-		"user":     {withLogin("user", nil, withAccount("me@example.com", password)), "USER me@example.com|PASS app pass word|STAT"},
-		"apop":     {withLogin("apop", nil, withAccount("me@example.com", password)), "APOP me@example.com " + hex.EncodeToString(digest[:]) + "|STAT"},
-		"plain":    {withLogin("plain", nil, withAccount("me@example.com", password)), "AUTH PLAIN|" + b64("\x00me@example.com\x00app pass word") + "|STAT"},
-		"login":    {withLogin("login", nil, withAccount("me@example.com", password)), "AUTH LOGIN|" + b64("me@example.com") + "|" + b64("app pass word") + "|STAT"},
-		"cram-md5": {withLogin("cram-md5", nil, withAccount("me@example.com", password)), "AUTH CRAM-MD5|"},
-		"xoauth2":  {withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "AUTH XOAUTH2|" + b64("user=me@example.com\x01auth=Bearer ya29.token\x01\x01") + "|STAT"},
+		"user":        {withLogin("user", nil, withAccount("me@example.com", password)), "USER me@example.com|PASS app pass word|STAT"},
+		"apop":        {withLogin("apop", nil, withAccount("me@example.com", password)), "APOP me@example.com " + hex.EncodeToString(digest[:]) + "|STAT"},
+		"plain":       {withLogin("plain", nil, withAccount("me@example.com", password)), "AUTH PLAIN|" + b64("\x00me@example.com\x00app pass word") + "|STAT"},
+		"login":       {withLogin("login", nil, withAccount("me@example.com", password)), "AUTH LOGIN|" + b64("me@example.com") + "|" + b64("app pass word") + "|STAT"},
+		"cram-md5":    {withLogin("cram-md5", nil, withAccount("me@example.com", password)), "AUTH CRAM-MD5|"},
+		"xoauth2":     {withLogin("", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "AUTH XOAUTH2|" + b64("user=me@example.com\x01auth=Bearer ya29.token\x01\x01") + "|STAT"},
+		"oauthbearer": {withLogin("oauthbearer", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", "")), "AUTH OAUTHBEARER|bixh"},
 	} {
 		s := newPOP3Stub(t)
 		doc := pop3Doc(t, pop3Collector(t, s, tc.change), s.Addr)
@@ -306,12 +327,13 @@ func TestAPOP3ScrapeFailsOnARefusedLoginWithoutItsSecrets(t *testing.T) {
 	stale := testutil.WriteFile(t, "stale", "ya29.stale-token\n")
 	b64 := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
 	for how, change := range map[string]func(*model.RequestConfig){
-		"PASS":          withLogin("user", nil, withAccount("me@example.com", wrong)),
-		"APOP":          withLogin("apop", nil, withAccount("me@example.com", wrong)),
-		"AUTH PLAIN":    withLogin("plain", nil, withAccount("me@example.com", wrong)),
-		"AUTH LOGIN":    withLogin("login", nil, withAccount("me@example.com", wrong)),
-		"AUTH CRAM-MD5": withLogin("cram-md5", nil, withAccount("me@example.com", wrong)),
-		"AUTH XOAUTH2":  withLogin("xoauth2", &model.XOAuth2Config{TokenFile: stale}, withAccount("me@example.com", "")),
+		"PASS":             withLogin("user", nil, withAccount("me@example.com", wrong)),
+		"APOP":             withLogin("apop", nil, withAccount("me@example.com", wrong)),
+		"AUTH PLAIN":       withLogin("plain", nil, withAccount("me@example.com", wrong)),
+		"AUTH LOGIN":       withLogin("login", nil, withAccount("me@example.com", wrong)),
+		"AUTH CRAM-MD5":    withLogin("cram-md5", nil, withAccount("me@example.com", wrong)),
+		"AUTH XOAUTH2":     withLogin("xoauth2", &model.XOAuth2Config{TokenFile: stale}, withAccount("me@example.com", "")),
+		"AUTH OAUTHBEARER": withLogin("oauthbearer", &model.XOAuth2Config{TokenFile: stale}, withAccount("me@example.com", "")),
 	} {
 		s := newPOP3Stub(t)
 		ctx, trace := WithRequestTrace(context.Background())
@@ -337,6 +359,9 @@ func TestAPOP3ScrapeFailsOnARefusedLoginWithoutItsSecrets(t *testing.T) {
 		}
 		if how == "AUTH XOAUTH2" && sent[len(sent)-1] != "" {
 			t.Errorf("a refused XOAUTH2 was not ended with an empty line: %q", sent)
+		}
+		if how == "AUTH OAUTHBEARER" && sent[len(sent)-1] != "AQ==" {
+			t.Errorf("a refused OAUTHBEARER was not ended with its one byte: %q", sent)
 		}
 	}
 }
@@ -425,7 +450,7 @@ func TestPOP3ConfigurationRules(t *testing.T) {
 		change func(*model.RequestConfig)
 		want   string
 	}{
-		"a mechanism it does not speak": {withLogin("ntlm", nil, withAccount("me", "/password")), `request.auth "ntlm" is not user, apop, cram-md5, plain, login or xoauth2`},
+		"a mechanism it does not speak": {withLogin("ntlm", nil, withAccount("me", "/password")), `request.auth "ntlm" is not user, apop, plain, login, cram-md5, xoauth2 or oauthbearer`},
 		"apop without a password":       {withLogin("apop", nil, withAccount("me", "")), "sets request.username without request.password_file"},
 		"apop without an account":       {withLogin("apop", nil, nil), "logs in without request.username"},
 		"a blank in an APOP name":       {withLogin("apop", nil, withAccount("first last", "/password")), "request.username holds a blank, which the name of an APOP command may not"},
@@ -440,12 +465,65 @@ func TestPOP3ConfigurationRules(t *testing.T) {
 			t.Errorf("%s: err=%v, want %q", name, err, tc.want)
 		}
 	}
+	list := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypePOP3, Own: POP3Config{List: true}}}
+	if err := ValidateRequest(list); err == nil || !strings.Contains(err.Error(), "sets request.list without an account") {
+		t.Errorf("list without an account: %v", err)
+	}
 	for _, auth := range []string{"", "user", "apop", "plain", "login", "cram-md5"} {
 		c := &model.Collector{Name: "mail", Request: model.RequestConfig{Type: RequestTypePOP3, Own: POP3Config{}}}
 		withLogin(auth, nil, withAccount("me@example.com", "/password"))(&c.Request)
 		if err := ValidateRequest(c); err != nil {
 			t.Errorf("auth %q: %v", auth, err)
 		}
+	}
+}
+
+// With request.list a scrape also asks LIST and gives the size of the
+// largest message, of a line for each message read to the dot; a mailbox
+// without a message has none, and a collector that does not ask sends no
+// LIST. A LIST refused, and a line that is no number and size, fail the
+// scrape, the server's words kept from the probe's caller.
+func TestAPOP3ScrapeListsTheMailboxForItsLargestMessage(t *testing.T) {
+	account := withAccount("me@example.com", pop3Password(t))
+	listing := func(r *model.RequestConfig) { r.Own = POP3Config{List: true} }
+	s := newPOP3Stub(t, func(s *pop3Stub) { s.list = []string{"1 120", "2 98765 extra", "3 4000"} })
+	doc := pop3Doc(t, pop3Collector(t, s, account, listing), s.Addr)
+	if doc.LargestBytes == nil || *doc.LargestBytes != 98765 || *doc.Messages != 12 {
+		t.Errorf("the largest message: %+v", doc)
+	}
+	if sent := strings.Join(s.sent(), "|"); !strings.HasSuffix(sent, "|STAT|LIST|QUIT") {
+		t.Errorf("sent %s", sent)
+	}
+	if doc := pop3Doc(t, pop3Collector(t, s, account), s.Addr); doc.LargestBytes != nil || strings.Contains(strings.Join(s.sent()[8:], "|"), "LIST") {
+		t.Errorf("a collector that does not ask: %+v, sent %v", doc, s.sent())
+	}
+	empty := newPOP3Stub(t, func(s *pop3Stub) { s.list, s.stat = []string{}, "+OK 0 0" })
+	if doc := pop3Doc(t, pop3Collector(t, empty, account, listing), empty.Addr); doc.LargestBytes != nil || *doc.Messages != 0 {
+		t.Errorf("an empty mailbox: %+v", doc)
+	}
+	for name, tc := range map[string]struct {
+		list []string
+		want string
+	}{
+		"refused":        {nil, "answered LIST with -ERR no list for you"},
+		"no size":        {[]string{"1 120", "garbage here"}, `answered LIST with the line "garbage here", which is no message's number and size`},
+		"a negative one": {[]string{"1 -5"}, "which is no message's number and size"},
+	} {
+		bad := newPOP3Stub(t, func(s *pop3Stub) { s.list = tc.list })
+		_, err := FetchCollector(context.Background(), bad.Addr, pop3Collector(t, bad, account, listing), RequestOverrides{}, nil)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(model.CallerText(err), "garbage") || strings.Contains(model.CallerText(err), "no list for you") {
+			t.Errorf("%s: err=%v, the caller is told %q", name, err, model.CallerText(err))
+		}
+	}
+	// The lines count against the response limit, as every answer does.
+	var many []string
+	for i := 1; i <= 2000; i++ {
+		many = append(many, fmt.Sprintf("%d 1000", i))
+	}
+	large := newPOP3Stub(t, func(s *pop3Stub) { s.list = many })
+	_, err := FetchCollector(context.Background(), large.Addr, pop3Collector(t, large, account, listing, func(r *model.RequestConfig) { r.MaxResponseBytes = 4096 }), RequestOverrides{}, nil)
+	if !errors.Is(err, model.ErrLimitExceeded) {
+		t.Errorf("a list past the response limit: err=%v", err)
 	}
 }
 

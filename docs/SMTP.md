@@ -88,8 +88,8 @@ collectors:
 | `starttls_mode` | `auto` | `auto` begins TLS with `STARTTLS` where the server offers it; `required` fails the scrape where it does not; `never` leaves the session in plaintext. Not for an `smtps://` target. |
 | `hello` | the exporter's address, as `[192.0.2.7]` | The name given in `EHLO`. |
 | `username`, `password_file` | — | The account `AUTH` logs in with. The file is read at each scrape. Left out, the session does not log in. |
-| `auth` | `plain`, or `login` where the server offers that alone | The mechanism: `plain`, `login` or `xoauth2`. |
-| `xoauth2` | — | Where the access token of `AUTH XOAUTH2` comes from (see [XOAUTH2](#xoauth2)); it implies `auth: xoauth2`. |
+| `auth` | `plain`, or `login` where the server offers that alone | The mechanism: `plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`. |
+| `xoauth2` | — | Where the access token of `xoauth2` and `oauthbearer` comes from (see [XOAUTH2](#xoauth2)); it implies `auth: xoauth2`. |
 | `mail_from` | — | The sender `MAIL FROM` names, or `<>` for the null sender. May contain `{{param_name}}` placeholders. |
 | `rcpt_to` | — | Up to 20 recipients, each asked with a `RCPT TO` of its own, after `mail_from`. May contain placeholders. |
 | `tls` | — | How the server's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls). |
@@ -145,8 +145,8 @@ which no `RCPT TO` is sent.
 
 ## Gmail
 
-`smtp.gmail.com` takes all three mechanisms, on port 587 with `STARTTLS`
-and on 465 with TLS from the first byte.
+`smtp.gmail.com` takes `PLAIN`, `LOGIN`, `XOAUTH2` and `OAUTHBEARER`, on
+port 587 with `STARTTLS` and on 465 with TLS from the first byte.
 
 With an [app password](https://support.google.com/accounts/answer/185833),
 which an account with 2-Step Verification can make, `PLAIN` and `LOGIN`
@@ -167,6 +167,11 @@ request:
 
 Without one, as for a Workspace account whose administrator allows OAuth
 alone, use `XOAUTH2`.
+
+Gmail's submission servers answer `RCPT TO` with 250 for any address that
+is well formed, and report what cannot be delivered later, by mail: a
+recipient check says something about a mailbox only when asked of the
+servers that take the domain's mail, its MX hosts, on port 25.
 
 ### XOAUTH2
 
@@ -191,10 +196,11 @@ request:
 | Key | Notes |
 | --- | --- |
 | `token_file` | A file holding an access token, read at each scrape. Not beside the keys below. |
-| `token_url` | The token endpoint of the refresh token grant, `https://`. |
+| `grant` | `refresh_token`, the default, or `client_credentials` ([An application's own token](#an-applications-own-token)). |
+| `token_url` | The token endpoint of the grant, `https://`. |
 | `client_id`, `client_id_file` | The OAuth client's id, written or in a file. One of them. |
-| `client_secret_file` | The client's secret; left out for a public client. |
-| `refresh_token_file` | The refresh token, read when a token is asked for. |
+| `client_secret_file` | The client's secret; left out for a public client, required with `client_credentials`. |
+| `refresh_token_file` | The refresh token, read when a token is asked for. Not with `client_credentials`. |
 | `scopes` | Sent as `scope`. For Gmail, `https://mail.google.com/`. |
 
 The token the endpoint answers with is kept until a minute before it
@@ -205,10 +211,33 @@ with the system's certificates and the proxy the environment names;
 consent for the scope with a client of your Google Cloud project; a client
 left in "Testing" has its refresh tokens expire after seven days.
 
-Gmail's submission servers answer `RCPT TO` with 250 for any address that
-is well formed, and report what cannot be delivered later, by mail: a
-recipient check says something about a mailbox only when asked of the
-servers that take the domain's mail, its MX hosts, on port 25.
+`auth: oauthbearer` sends the same token as `OAUTHBEARER` (RFC 7628), the
+standard form of the login, for a server that offers that and no
+`XOAUTH2`.
+
+#### An application's own token
+
+A refresh token is one person's consent to one mailbox. A service account
+has none: its application asks for a token of its own with the client
+credentials grant, and logs in with it to each mailbox it was given:
+
+```yaml
+request:
+  type: smtp
+  username: alerts@example.com
+  xoauth2:
+    grant: client_credentials
+    token_url: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+    client_id: 00000000-0000-0000-0000-000000000000
+    client_secret_file: /etc/exporter/app-secret
+    scopes: [https://outlook.office365.com/.default]
+```
+
+That is Microsoft 365's form of it; the application must have been granted
+the mail protocol there and access to the mailbox, which Microsoft's
+documentation of app-only access describes. A
+[static target](#static-targets) of such a collector names another mailbox
+with its `username` alone.
 
 ## Static targets
 
@@ -217,8 +246,10 @@ server, written as a probe's target is. Its `request` may set `timeout`,
 and `username`, `password_file` and `tls` for a server with an account or a
 certificate authority of its own; a target that sets `username` logs in
 with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with `xoauth2` sets no
-`password_file`: the token is one account's.
+whole. A target of a collector that logs in with a token sets no
+`password_file`; its `username` alone names the mailbox the collector's
+token logs in to, which is how one
+[application's token](#an-applications-own-token) watches many.
 
 ## Limits
 
@@ -252,8 +283,8 @@ With `web.self_metrics.verbose`, a scrape is labelled with
 
 - Nothing is sent: there is no `DATA`, and so no check that a message is
   delivered. Watch delivery from the receiving side.
-- `AUTH` is `PLAIN`, `LOGIN` or `XOAUTH2`. `CRAM-MD5`, `OAUTHBEARER`,
-  `NTLM` and `GSSAPI` are not spoken.
+- `AUTH` is `PLAIN`, `LOGIN`, `CRAM-MD5`, `XOAUTH2` or `OAUTHBEARER`.
+  `NTLM`, `GSSAPI` and `SCRAM` are not spoken.
 - A recipient check is what the server answers at `RCPT TO`, which many
   servers answer with 250 for every address, so as not to tell which
   exist.

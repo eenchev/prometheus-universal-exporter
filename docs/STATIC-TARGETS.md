@@ -334,6 +334,10 @@ block, in place of the collector's. This is what each type takes:
 | `redis` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file` | yes |
 | `ldap` | `password_file`, replacing the collector's, and `bind_dn`, which needs the target's own `password_file` | yes |
 | `tcp` | none: a tcp service is asked no password | yes |
+| `smtp`, `imap`, `pop3` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file`; under a collector that logs in with a token, `username` alone, the mailbox the collector's token logs in to, and no `password_file` | yes |
+| `mqtt`, `ftp` | `password_file`, replacing the collector's, and `username`, which needs the target's own `password_file` | yes |
+| `websocket` | none | yes |
+| `modbus` | none | no; Modbus TCP has no TLS |
 | `snmp` | `community_file` of v1 and v2c; `username`, `auth_password_file` and `priv_password_file` of v3, each replacing the collector's as its security level uses it | no; SNMP has no TLS |
 | `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes` | none | no |
 

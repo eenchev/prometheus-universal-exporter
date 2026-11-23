@@ -19,13 +19,17 @@ import (
 // withTargetAccount is c as a scrape with overrides makes it: a static
 // target's tls block in place of the collector's whole, its password_file
 // in place of the collector's, and its username, which comes only with its
-// own password_file, in place of the collector's; an ldap target's bind_dn,
-// which comes so too, is ldap's own (withLDAPTargetAccount). A target that
+// own password_file, or alone under a collector that logs in with a token,
+// in place of the collector's; an ldap target's bind_dn, which comes with
+// its own password_file too, is ldap's own (withLDAPTargetAccount). A target that
 // names a password file alone logs in as the collector's account with that
 // password: servers that each keep their own password for one account are
 // what it is for. c itself is never written, being the configuration's.
 func withTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector {
-	if o.PasswordFile == "" && o.TLS == nil {
+	// A collector that logs in with a token logs in to the target's
+	// mailbox with it, which the target names with its username alone.
+	named := o.Username != "" && c.Request.XOAuth2 != nil
+	if o.PasswordFile == "" && o.TLS == nil && !named {
 		return c
 	}
 	x := *c

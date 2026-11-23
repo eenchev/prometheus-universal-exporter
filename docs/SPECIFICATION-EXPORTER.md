@@ -3298,7 +3298,10 @@ one, in the order of the calls and
 apart from what was printed; another level MUST fail the script. A run's
 first 20 lines MUST be written, each by its first 1,024 characters and how
 many more it had, whatever the script printed, and how many more lines
-there were said in a line at `warning`.
+there were said in a line at `warning`. What a script logged before it
+failed MUST be written so too, with its failure, where the failure's line
+has the room for it under `limits.max_output_bytes`; the failure MUST be
+what it is without them, and never cut for them.
 
 `response.ok` MUST be whether the status is a success, an HTTP status of
 200 to 299 or a `grpc` call's `0`, and `None` for an answer without a

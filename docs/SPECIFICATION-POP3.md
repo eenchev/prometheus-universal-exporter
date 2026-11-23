@@ -18,11 +18,16 @@ transforms as a JSON document. It MUST need nothing outside Go's standard
 library, and MUST be opt-in: in no build that does not ask for it with
 `request_type_pop3`.
 
-The type has no key of its own. Of the common part it takes `username`,
+| Key | Default | Rule |
+| --- | --- | --- |
+| `list` | `false` | It MUST need `username`. |
+
+Of the common part it takes `username`,
 `password_file`, `auth`, `xoauth2`, `allow_plaintext`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets`. `auth` MUST
-be `user`, `apop`, `plain`, `login`, `cram-md5` or `xoauth2`; it MUST need
-`username`, each but `xoauth2` MUST need `password_file`, and `xoauth2` the
+be `user`, `apop`, `plain`, `login`, `cram-md5`, `xoauth2` or
+`oauthbearer`; it MUST need `username`, each but `xoauth2` and
+`oauthbearer` MUST need `password_file`, and those two the
 `xoauth2` block and no `password_file`, the block held to the rules of the
 [`smtp` type's](SPECIFICATION-SMTP.md) and a token got and kept as there.
 `username` MUST hold no placeholder, and no blank with `apop`. A static
@@ -35,9 +40,9 @@ target's request block takes `timeout`, `username`, `password_file` and
   sent. `pop3s://` MUST be TLS from the first byte.
 - The session MUST be: the greeting, which MUST be `+OK`; `CAPA`; on
   `pop3://`, where the server names `STLS`, `STLS`, the handshake with the
-  `tls` block's settings, and `CAPA` again; with a `username`, the login
-  and `STAT`; `QUIT`. `LIST`, `UIDL`, `RETR`, `TOP`, `DELE` and every other
-  command MUST never be sent. A `CAPA` answered `-ERR` MUST NOT fail the
+  `tls` block's settings, and `CAPA` again; with a `username`, the login,
+  `STAT` and, with `list`, `LIST`; `QUIT`. `UIDL`, `RETR`, `TOP`, `DELE`
+  and every other command MUST never be sent. A `CAPA` answered `-ERR` MUST NOT fail the
   scrape: the server names no capability.
 - Bytes the server sent after its answer to `STLS` and before the
   handshake MUST fail the scrape, and MUST NOT be read as the server's.
@@ -53,14 +58,16 @@ target's request block takes `timeout`, `username`, `password_file` and
   lower-case hexadecimal, of the greeting's last `<...>` followed by the
   password, and MUST fail the scrape, before anything is sent of the
   account, where the greeting has none.
-- `plain`, `login`, `cram-md5` and `xoauth2` MUST be `AUTH` with the
+- `plain`, `login`, `cram-md5`, `xoauth2` and `oauthbearer` MUST be `AUTH` with the
   mechanism's name alone, the credential sent in answer to the server's
   challenge: `PLAIN` as RFC 4616 has it with an empty authorization
   identity; `LOGIN` as the name and the password, each in answer to a
   challenge; `CRAM-MD5` as the name and the HMAC-MD5, in lower-case
   hexadecimal, of the challenge keyed by the password (RFC 2195);
   `XOAUTH2` as `user=<username>^Aauth=Bearer <token>^A^A`, a challenge in
-  answer to which MUST be answered with an empty line. A challenge once
+  answer to which MUST be answered with an empty line; `OAUTHBEARER` as
+  the message of RFC 7628, as `smtp` writes it, a challenge in answer to
+  which MUST be answered with the one byte `^A`. A challenge once
   the exchange is over MUST be answered with `*`. One of these that the
   server answered `CAPA` without naming MUST fail the scrape before
   anything of the account is sent, saying what the server names.
@@ -74,8 +81,14 @@ target's request block takes `timeout`, `username`, `password_file` and
   `CAPA`, in upper case, sorted, each once, at most 100 bytes each; `sasl`,
   the mechanisms of its `SASL` line, likewise; `apop`, whether the greeting
   has a timestamp; `authenticated`; `auth`, the mechanism the login used;
-  and `messages` and `size_bytes`, the two numbers of `STAT`. The last
-  three MUST be null without a login.
+  `messages` and `size_bytes`, the two numbers of `STAT`; and
+  `largest_bytes`. `auth`, `messages` and `size_bytes` MUST be null
+  without a login.
+- With `list`, `LIST` MUST be sent after `STAT` and its lines read to the
+  one that is a dot: `largest_bytes` MUST be the greatest of their sizes,
+  and null of a mailbox without a message, as it MUST be without `list`. A
+  `LIST` answered `-ERR`, and a line that is no message's number and a
+  size that is none or negative, MUST fail the scrape.
 - One line of a response MUST be at most 4,096 bytes, the answer to `CAPA`
   at most 200 lines, and the responses together the response limit (§ 20);
   more MUST fail the scrape, the last as a limit exceeded. A response that

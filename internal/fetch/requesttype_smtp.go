@@ -111,6 +111,7 @@ func init() {
 		},
 		CheckTargetRequest: checkNetTargetLogin,
 		CheckFiles:         checkSMTPFiles,
+		SchemaRule:         netAuthSchemaRule,
 	})
 	templateEscapers[smtpAddressKind] = func(where, name, value string) (string, error) {
 		if strings.ContainsFunc(value, func(r rune) bool { return r <= ' ' || r == '<' || r == '>' || r == 0x7f }) {
@@ -590,24 +591,44 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 				reply, err = s.command(b64(password), "*** (the password)")
 			}
 		}
-	case netAuthXOAuth2:
+	case netAuthCRAMMD5:
+		if reply, err = s.command("AUTH CRAM-MD5", ""); err == nil && reply.Code == 334 {
+			// The challenge as the server wrote it, not as a failure
+			// would show it: a reply's text is cut where a failure's is
+			// and looked through for credentials, and base64 that ends
+			// in a word such as token== would come out masked.
+			response, bad := netCRAMMD5Response(user, password, strings.Join(reply.lines, ""))
+			if bad != nil {
+				_, _ = s.command("*", "* (to end the login)")
+				return nil, fmt.Errorf("the server %s answered AUTH CRAM-MD5 with a challenge that is not base64", hostPort)
+			}
+			reply, err = s.command(response, "*** (the answer to the challenge)")
+		}
+	case netAuthXOAuth2, netAuthOAuthBearer:
 		var token string
 		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
 			return nil, err
 		}
-		reply, err = s.command("AUTH XOAUTH2 "+b64("user="+user+"\x01auth=Bearer "+token+"\x01\x01"), "AUTH XOAUTH2 ***")
 		// A refusal comes as a 334 whose text is the error, base64, which
-		// an empty line answers; the 535 follows.
+		// an empty line answers for XOAUTH2 and one byte for OAUTHBEARER;
+		// the 535 follows.
+		sent := netXOAuth2Credential(user, token)
+		end, ended := "", "(an empty line, to end the refused XOAUTH2)"
+		if mechanism == netAuthOAuthBearer {
+			sent = netOAuthBearerCredential(user, hostPort, token)
+			end, ended = netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
+		}
+		reply, err = s.command("AUTH "+name+" "+b64(sent), "AUTH "+name+" ***")
 		if err == nil && reply.Code == 334 {
 			netTokens.forget(c.Name, c.Request.XOAuth2)
-			reply, err = s.command("", "(an empty line, to end the refused XOAUTH2)")
+			reply, err = s.command(end, ended)
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	if reply.Code != 235 {
-		if mechanism == netAuthXOAuth2 {
+		if netAuthWithToken(mechanism) {
 			netTokens.forget(c.Name, c.Request.XOAuth2)
 		}
 		return nil, model.Errorf("the server %s refused AUTH %s for %s with %d %s", hostPort, name, user, reply.Code, model.Bare(reply.Text))

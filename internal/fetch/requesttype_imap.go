@@ -63,11 +63,14 @@ type IMAPConfig struct {
 // IMAPCount is an entry of request.counts: how many messages of a mailbox
 // match a search, counted by the server. The mailbox is opened to search
 // it, read-only, with EXAMINE, which marks nothing read and changes no
-// flag; no message is fetched.
+// flag. With oldest, the first of the matching messages is asked when it
+// arrived, its INTERNALDATE and nothing else of it; no message's text is
+// fetched.
 type IMAPCount struct {
 	Name    string `yaml:"name,omitempty"`
 	Mailbox string `yaml:"mailbox,omitempty"`
 	Search  string `yaml:"search,omitempty"`
+	Oldest  bool   `yaml:"oldest,omitempty"`
 }
 
 func imapRequest(c *model.Collector) IMAPConfig {
@@ -126,6 +129,7 @@ func init() {
 			return unusedParamsIn(c, unused, "its request.mailboxes, request.counts or label values")
 		},
 		CheckTargetRequest: checkNetTargetLogin,
+		SchemaRule:         netAuthSchemaRule,
 		CheckFiles: func(c *model.Collector, t *model.StaticTarget) []string {
 			return append(accountFileWarnings(c, t), xoauth2FileWarnings(c, t)...)
 		},
@@ -325,12 +329,17 @@ type imapQuota struct {
 // imapCounted is the answer to one of request.counts: how many messages of
 // the mailbox match, null when the server refused to open the mailbox or
 // to search it, whose answer is then in text.
+//
+// oldest_timestamp is when the first of the matching messages arrived, in
+// seconds since the epoch: null unless the count asks for it, when nothing
+// matches, and when the server did not say.
 type imapCounted struct {
-	Name    string `json:"name"`
-	Mailbox string `json:"mailbox"`
-	OK      bool   `json:"ok"`
-	Text    string `json:"text"`
-	Count   *int64 `json:"count"`
+	Name            string `json:"name"`
+	Mailbox         string `json:"mailbox"`
+	OK              bool   `json:"ok"`
+	Text            string `json:"text"`
+	Count           *int64 `json:"count"`
+	OldestTimestamp *int64 `json:"oldest_timestamp"`
 }
 
 // imapDocument is what a scrape hands the transforms.
@@ -717,13 +726,17 @@ func (s *imapSession) login(c *model.Collector, password string, offered []strin
 		} else if answer, err = s.command("AUTHENTICATE "+name, ""); err == nil && answer.status == "+" {
 			answer, err = s.continued(credential, "*** (the credential)")
 		}
-		// A server that asks for more has refused what it was given: an
-		// XOAUTH2 refusal comes as a continuation whose text is the error,
-		// which an empty line answers, and any other is given up with *.
+		// A server that asks for more has refused what it was given: a
+		// token's refusal comes as a continuation whose text is the error,
+		// which an empty line answers for XOAUTH2 and one byte for
+		// OAUTHBEARER, and any other is given up with *.
 		if err == nil && answer.status == "+" {
-			if name == "XOAUTH2" {
+			switch name {
+			case "XOAUTH2":
 				answer, err = s.continued("", "(an empty line, to end the refused XOAUTH2)")
-			} else {
+			case "OAUTHBEARER":
+				answer, err = s.continued(netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)")
+			default:
 				answer, err = s.continued("*", "* (to end the login)")
 			}
 		}
@@ -737,13 +750,33 @@ func (s *imapSession) login(c *model.Collector, password string, offered []strin
 	case netAuthPlain:
 		how = "AUTHENTICATE PLAIN"
 		answer, err = sasl("PLAIN", b64("\x00"+user+"\x00"+password))
-	case netAuthXOAuth2:
-		how = "AUTHENTICATE XOAUTH2"
+	case netAuthCRAMMD5:
+		// The server speaks first, so nothing goes in the command.
+		how = "AUTHENTICATE CRAM-MD5"
+		if !slices.Contains(offered, "AUTH=CRAM-MD5") {
+			return fmt.Errorf("the server %s does not offer AUTH=CRAM-MD5, which request.auth asks for", hostPort)
+		}
+		if answer, err = s.command(how, ""); err == nil && answer.status == "+" {
+			response, bad := netCRAMMD5Response(user, password, answer.text)
+			if bad != nil {
+				_, _ = s.continued("*", "* (to end the login)")
+				return fmt.Errorf("the server %s answered AUTHENTICATE CRAM-MD5 with a challenge that is not base64", hostPort)
+			}
+			if answer, err = s.continued(response, "*** (the answer to the challenge)"); err == nil && answer.status == "+" {
+				answer, err = s.continued("*", "* (to end the login)")
+			}
+		}
+	case netAuthXOAuth2, netAuthOAuthBearer:
 		var token string
 		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
 			return err
 		}
-		answer, err = sasl("XOAUTH2", b64("user="+user+"\x01auth=Bearer "+token+"\x01\x01"))
+		name, sent := "XOAUTH2", netXOAuth2Credential(user, token)
+		if mechanism == netAuthOAuthBearer {
+			name, sent = "OAUTHBEARER", netOAuthBearerCredential(user, hostPort, token)
+		}
+		how = "AUTHENTICATE " + name
+		answer, err = sasl(name, b64(sent))
 		if err == nil && answer.status != "OK" {
 			netTokens.forget(c.Name, c.Request.XOAuth2)
 		}
@@ -881,6 +914,9 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 		command := "SEARCH " + search
 		if counted {
 			command = "SEARCH RETURN (COUNT) " + search
+			if count.Oldest {
+				command = "SEARCH RETURN (COUNT MIN) " + search
+			}
 		} else {
 			s.lineLimit, s.listed = int(min(max(s.left, imapLineLimit), 1<<30)), true
 		}
@@ -894,8 +930,13 @@ func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) (
 		}
 		result.OK, result.Text = answer.status == "OK", answer.text
 		if result.OK {
-			n := imapSearchCount(answer.untagged)
+			n, first := imapSearchCount(answer.untagged)
 			result.Count = &n
+			if count.Oldest && first > 0 {
+				if result.OldestTimestamp, err = s.arrived(first); err != nil {
+					return nil, err
+				}
+			}
 		}
 		out = append(out, result)
 	}
@@ -909,28 +950,72 @@ func imapAskedForMore(command string) error {
 	return fmt.Errorf("the server asked for more of %s, as it does of a command that ends in a literal's length; the session cannot go on", command)
 }
 
-// imapSearchCount is how many messages a search matched: the COUNT of an
-// ESEARCH response, or the numbers of the SEARCH responses, none of either
-// being no match.
-func imapSearchCount(untagged []string) int64 {
-	var n int64
+// imapInternalDate finds a message's INTERNALDATE in a FETCH response.
+var imapInternalDate = regexp.MustCompile(`(?i)\bINTERNALDATE "([^"]*)"`)
+
+// arrived asks when the message of a sequence number arrived in its
+// mailbox, its INTERNALDATE, and nothing else of it. A message that is
+// gone since the search, and a date the server writes otherwise than IMAP
+// does, are no date, and fail nothing.
+func (s *imapSession) arrived(message int64) (*int64, error) {
+	answer, err := s.command("FETCH "+strconv.FormatInt(message, 10)+" (INTERNALDATE)", "")
+	if err != nil {
+		return nil, err
+	}
+	if answer.status == "+" {
+		return nil, imapAskedForMore("FETCH")
+	}
+	if answer.status != "OK" {
+		return nil, nil
+	}
+	for _, line := range answer.untagged {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != strconv.FormatInt(message, 10) || !strings.EqualFold(fields[1], "FETCH") {
+			continue
+		}
+		if m := imapInternalDate.FindStringSubmatch(line); m != nil {
+			if at, err := time.Parse("_2-Jan-2006 15:04:05 -0700", m[1]); err == nil {
+				seconds := at.Unix()
+				return &seconds, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// imapSearchCount is how many messages a search matched and the first of
+// them, the lowest sequence number, 0 when nothing matched or the server
+// did not say: the COUNT and the MIN of an ESEARCH response, or the
+// numbers of the SEARCH responses, none of either being no match.
+func imapSearchCount(untagged []string) (count, first int64) {
 	for _, line := range untagged {
 		fields := strings.Fields(line)
 		switch {
 		case len(fields) == 0:
 		case strings.EqualFold(fields[0], "ESEARCH"):
 			for i := 1; i+1 < len(fields); i++ {
-				if strings.EqualFold(fields[i], "COUNT") {
-					if count, err := strconv.ParseInt(fields[i+1], 10, 64); err == nil && count >= 0 {
-						return count
-					}
+				n, err := strconv.ParseInt(fields[i+1], 10, 64)
+				if err != nil || n < 0 {
+					continue
+				}
+				switch {
+				case strings.EqualFold(fields[i], "COUNT"):
+					count = n
+				case strings.EqualFold(fields[i], "MIN"):
+					first = n
 				}
 			}
+			return count, first
 		case strings.EqualFold(fields[0], "SEARCH"):
-			n += int64(len(fields) - 1)
+			for _, field := range fields[1:] {
+				count++
+				if n, err := strconv.ParseInt(field, 10, 64); err == nil && n > 0 && (first == 0 || n < first) {
+					first = n
+				}
+			}
 		}
 	}
-	return n
+	return count, first
 }
 
 // imapTokens splits a line of a response into its atoms, quoted strings,
@@ -1148,6 +1233,7 @@ func imapKeyRules() map[string]map[string]any {
 		"counts":         {"maxItems": imapMaxCounts, "description": "imap: counts of the messages of a mailbox that match a search, as the server counts them: each a name, a mailbox, INBOX when left out, and a search, the criteria of an IMAP SEARCH. The mailbox is opened read-only to search it, which marks nothing read; no message is fetched. See docs/IMAP.md#counting-messages-by-a-search."},
 		"counts.name":    {"description": "What the count is read by in the document, .counts[] | select(.name == \"...\"): letters, digits and underscores."},
 		"counts.mailbox": {"description": "The mailbox searched, by its name; INBOX when left out. May contain {{param_name}} placeholders."},
+		"counts.oldest":  {"description": "Also ask when the first of the matching messages arrived in the mailbox, for how long the oldest of them has waited: oldest_timestamp in the document, seconds since the epoch. One more command, which reads the message's arrival date and nothing else of it."},
 		"counts.search":  {"description": "The criteria of the search, as IMAP writes them, in printable ASCII: UNSEEN, UNANSWERED, FLAGGED, FROM \"billing@example.com\", BEFORE {{date_imap:-1d}}, LARGER 1000000, or several, which all must match. May contain {{param_name}} and clock placeholders."},
 	}
 }

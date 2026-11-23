@@ -21,7 +21,7 @@ for it with `request_type_imap`.
 | --- | --- | --- |
 | `mailboxes` | `[INBOX]`, with an account | At most 50, none empty or with a control character; each MAY hold placeholders. One with `*` or `%` is a pattern. It MUST need `username`. |
 | `quota` | `false` | It MUST need `username`. |
-| `counts` | — | At most 20, each a `name` of letters, digits and underscores that no other has, a `mailbox`, `INBOX` when left out, that is no pattern, and a `search` of printable ASCII, not empty and not ending in a literal's `{n}`; `mailbox` and `search` MAY hold placeholders. It MUST need `username`. |
+| `counts` | — | At most 20, each a `name` of letters, digits and underscores that no other has, a `mailbox`, `INBOX` when left out, that is no pattern, and a `search` of printable ASCII, not empty and not ending in a literal's `{n}`; `mailbox` and `search` MAY hold placeholders; optionally `oldest`. It MUST need `username`. |
 
 Of the common part it takes `username`, `password_file`, `auth`, `xoauth2`,
 `allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`; `auth`
@@ -40,9 +40,10 @@ target's request block takes `timeout`, `username`, `password_file` and
   handshake with the `tls` block's settings, and `CAPABILITY` again; with a
   `username`, the login, `CAPABILITY` again, a `STATUS` for each mailbox,
   with `quota` where the server names `QUOTA`, `GETQUOTAROOT` of the
-  first mailbox, and for `counts` `EXAMINE` and `SEARCH`; `LOGOUT`.
-  `SELECT` and every command that fetches or changes a message MUST never
-  be sent.
+  first mailbox, and for `counts` `EXAMINE`, `SEARCH` and, for a count
+  with `oldest`, `FETCH` of a message's `INTERNALDATE`; `LOGOUT`. `SELECT`
+  and every command that fetches anything else of a message, or changes
+  one, MUST never be sent.
 - Bytes the server sent after its answer to `STARTTLS` and before the
   handshake MUST fail the scrape, and MUST NOT be read as the server's.
 - A password and a token MUST NOT be sent over a connection that is not TLS unless
@@ -60,7 +61,12 @@ target's request block takes `timeout`, `username`, `password_file` and
   `AUTHENTICATE XOAUTH2` with `user=<username>^Aauth=Bearer <token>^A^A`,
   sent as `PLAIN`'s credential is; a continuation request in answer to it
   MUST be answered with an empty line, and the refusal that follows MUST
-  fail the scrape.
+  fail the scrape. `oauthbearer` MUST be `AUTHENTICATE OAUTHBEARER` with
+  the message of RFC 7628, as `smtp` writes it, a continuation request in
+  answer to it answered with the one byte `^A`; and `cram-md5`
+  `AUTHENTICATE CRAM-MD5` with nothing in the command, the server's
+  challenge answered as `smtp` answers it. `auth` MUST be one of these
+  five, which the schema MUST hold it to for the type.
 - Each of `counts` MUST be answered in its order: its mailbox opened with
   `EXAMINE`, unless the count before it asked for the same, then `SEARCH
   RETURN (COUNT)` with its criteria where the server names `ESEARCH` or
@@ -70,6 +76,14 @@ target's request block takes `timeout`, `username`, `password_file` and
   MUST be a count of the document with `ok` false, the answer's text and a
   null `count`, and MUST NOT fail the scrape; one answered with a
   continuation request MUST fail it, nothing more sent.
+- A count with `oldest` MUST also be given `oldest_timestamp`: the lowest
+  of the messages the search matched, by `MIN` of `SEARCH RETURN (COUNT
+  MIN)` where the server counts and the least of the listed numbers
+  otherwise, asked `FETCH <n> (INTERNALDATE)`, and that date in seconds
+  since the epoch. It MUST be null, and nothing fetched, where nothing
+  matched; null where the `FETCH` is refused or gives no date that is
+  one, which MUST NOT fail the scrape. No other item of a message MUST
+  ever be fetched.
 - A placeholder of a `search` that is not a clock's MUST stand within
   double quotes, refused at load otherwise, and its value MUST hold no
   double quote, backslash or character outside printable ASCII, one that
@@ -99,7 +113,8 @@ target's request block takes `timeout`, `username`, `password_file` and
   and `size`, null where the server gave none, and `flags`; and `quota`,
   each resource of each root with `root`, `resource`, `usage` and `limit`,
   and for `STORAGE` `usage_bytes` and `limit_bytes`, 1024 times those; and
-  `counts`, each with `name`, `mailbox`, `ok`, `text` and `count`.
+  `counts`, each with `name`, `mailbox`, `ok`, `text`, `count` and
+  `oldest_timestamp`.
 - One line of a response, its literals counted, MUST be at most 64 KiB, and
   the responses together the response limit (§ 20); more MUST fail the
   scrape, the latter as a limit exceeded. A response that is no IMAP MUST

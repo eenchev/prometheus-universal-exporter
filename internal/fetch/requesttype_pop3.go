@@ -4,8 +4,7 @@ package fetch
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/md5" //nolint:gosec // G501: APOP (RFC 1939) and CRAM-MD5 (RFC 2195) are MD5, which a server may speak alone
+	"crypto/md5" //nolint:gosec // G501: APOP (RFC 1939) is MD5, which a server may speak alone
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
@@ -24,8 +23,9 @@ import (
 
 // The pop3 request type logs in to a mail server as a mail client that
 // fetches over POP3 does and asks how much mail the mailbox holds: the
-// greeting, CAPA, STLS, a login, then STAT. No message is listed, fetched
-// or deleted, and QUIT ends the session with the mailbox as it was.
+// greeting, CAPA, STLS, a login, then STAT, and LIST when the collector
+// asks for the largest message. No message is fetched or deleted, and
+// QUIT ends the session with the mailbox as it was.
 //
 //	request:
 //	  type: pop3
@@ -41,8 +41,8 @@ import (
 // scrape.
 //
 // The login is the mechanism request.auth names: user (USER and PASS),
-// apop, or one of the SASL mechanisms of AUTH, plain, login, cram-md5 and
-// xoauth2. Left out, it is user where the server takes it, else plain,
+// apop, or one of the SASL mechanisms of AUTH, plain, login, cram-md5,
+// xoauth2 and oauthbearer. Left out, it is user where the server takes it, else plain,
 // else login, and xoauth2 where the collector has the block.
 //
 // The target is host, host:port, pop3://host:port or pop3s://host:port:
@@ -53,9 +53,17 @@ import (
 //
 // The type imports nothing outside the standard library.
 
-// POP3Config is a pop3 collector's own request keys: none. What it takes
-// is of the common part, as the other mail types take it.
-type POP3Config struct{}
+// POP3Config is a pop3 collector's own request keys; its account and its
+// login are of the common part, as the other mail types take them.
+type POP3Config struct {
+	// List also asks LIST, each message's size, for the largest of them.
+	List bool `yaml:"list,omitempty"`
+}
+
+func pop3Request(c *model.Collector) POP3Config {
+	own, _ := c.Request.Own.(POP3Config)
+	return own
+}
 
 const (
 	// pop3Timeout bounds a scrape with no deadline of its own.
@@ -71,9 +79,8 @@ const (
 
 	// The mechanisms a pop3 login may be made with beside those every
 	// mail type speaks (netxoauth2.go).
-	pop3AuthUser    = "user"
-	pop3AuthAPOP    = "apop"
-	pop3AuthCRAMMD5 = "cram-md5"
+	pop3AuthUser = "user"
+	pop3AuthAPOP = "apop"
 )
 
 // pop3Ports are the schemes of a pop3 target and their default ports.
@@ -112,8 +119,11 @@ func (pop3Requester) Validate(x *model.Collector) error {
 	if err := checkNetAccount(x); err != nil {
 		return err
 	}
-	if err := checkNetLogin(x, "a login sends both", pop3AuthUser, pop3AuthAPOP, pop3AuthCRAMMD5); err != nil {
+	if err := checkNetLogin(x, "a login sends both", pop3AuthUser, pop3AuthAPOP); err != nil {
 		return err
+	}
+	if pop3Request(x).List && x.Request.Username == "" {
+		return fmt.Errorf("collector %q sets request.list without an account; a server lists a mailbox after a login, so set request.username and request.password_file", x.Name)
 	}
 	if r := &x.Request; r.Auth == pop3AuthAPOP && strings.ContainsFunc(r.Username, func(r rune) bool { return r == ' ' }) {
 		return fmt.Errorf("collector %q request.username holds a blank, which the name of an APOP command may not; use another request.auth", x.Name)
@@ -158,7 +168,9 @@ func (pop3Requester) Display(target string) string {
 }
 
 // pop3Document is what a scrape hands the transforms. auth, messages and
-// size_bytes are null of a session that did not log in.
+// size_bytes are null of a session that did not log in, and largest_bytes
+// unless the collector asks for the list, and of a mailbox without a
+// message.
 type pop3Document struct {
 	Greeting      string   `json:"greeting"`
 	TLS           bool     `json:"tls"`
@@ -170,6 +182,7 @@ type pop3Document struct {
 	Auth          *string  `json:"auth"`
 	Messages      *int64   `json:"messages"`
 	SizeBytes     *int64   `json:"size_bytes"`
+	LargestBytes  *int64   `json:"largest_bytes"`
 }
 
 // pop3Session is one conversation with a server.
@@ -350,6 +363,43 @@ func (s *pop3Session) capabilities() (names, sasl []string, known bool, err erro
 	return names, sasl, true, nil
 }
 
+// largest asks LIST and reads its lines to the one that is a dot, each a
+// message's number and its size: the size of the largest message, nil of
+// a mailbox without one. The lines are as many as the mailbox has
+// messages, and are held to the response limit as every answer is.
+func (s *pop3Session) largest(hostPort string) (*int64, error) {
+	answer, err := s.send("LIST", "")
+	if err != nil {
+		return nil, err
+	}
+	if !answer.ok {
+		return nil, pop3Refused("LIST", hostPort, answer)
+	}
+	var largest *int64
+	for {
+		line, err := s.line()
+		if err != nil {
+			return nil, fmt.Errorf("LIST: %w", err)
+		}
+		if line == "." {
+			return largest, nil
+		}
+		fields := strings.Fields(line)
+		var size int64 = -1
+		if len(fields) >= 2 {
+			if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+				size = n
+			}
+		}
+		if size < 0 {
+			return nil, model.Errorf("the server %s answered LIST with the line %s, which is no message's number and size", hostPort, model.Quoted(pop3Text(line)))
+		}
+		if largest == nil || size > *largest {
+			largest = &size
+		}
+	}
+}
+
 // pop3Timestamp is the timestamp of a greeting, which a server that takes
 // APOP ends its greeting's text with or holds within it: the last
 // <...> of it, as RFC 1939 has it, or "".
@@ -462,6 +512,11 @@ func (pop3Requester) Fetch(ctx context.Context, target string, c *model.Collecto
 			return nil, model.Errorf("the server %s answered STAT with %s, which is no count of messages and their size", address.hostPort, model.Quoted(answer.text))
 		}
 		doc.Messages, doc.SizeBytes = &messages, &size
+		if pop3Request(c).List {
+			if doc.LargestBytes, err = s.largest(address.hostPort); err != nil {
+				return nil, err
+			}
+		}
 	}
 	_, _ = s.send("QUIT", "")
 	body, err := json.Marshal(doc)
@@ -559,28 +614,31 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 				answer, err = end(s.answer(b64(password), hidden))
 			}
 		}
-	case pop3AuthCRAMMD5:
+	case netAuthCRAMMD5:
 		if answer, err = begin("CRAM-MD5"); err == nil && answer.continued {
-			challenge, decodeErr := base64.StdEncoding.DecodeString(answer.text)
-			if decodeErr != nil {
+			response, bad := netCRAMMD5Response(user, password, answer.text)
+			if bad != nil {
 				_, _ = s.answer("*", "* (to end the login)")
 				return "", fmt.Errorf("the server %s answered AUTH CRAM-MD5 with a challenge that is not base64", hostPort)
 			}
-			mac := hmac.New(md5.New, []byte(password))
-			_, _ = mac.Write(challenge)
-			answer, err = end(s.answer(b64(user+" "+hex.EncodeToString(mac.Sum(nil))), hidden))
+			answer, err = end(s.answer(response, hidden))
 		}
-	case netAuthXOAuth2:
+	case netAuthXOAuth2, netAuthOAuthBearer:
 		var token string
 		if token, err = netAccessToken(s.ctx, c.Name, c.Request.XOAuth2); err != nil {
 			return "", err
 		}
-		if answer, err = begin("XOAUTH2"); err == nil && answer.continued {
-			answer, err = s.answer(b64("user="+user+"\x01auth=Bearer "+token+"\x01\x01"), hidden)
-			// A refusal comes as a challenge whose text is the error,
-			// which an empty line answers.
-			if err == nil && answer.continued {
-				answer, err = s.answer("", "(an empty line, to end the refused XOAUTH2)")
+		// A refusal comes as a challenge whose text is the error, which
+		// an empty line answers for XOAUTH2 and one byte for OAUTHBEARER.
+		sent := netXOAuth2Credential(user, token)
+		name, last, ended := "XOAUTH2", "", "(an empty line, to end the refused XOAUTH2)"
+		if mechanism == netAuthOAuthBearer {
+			sent = netOAuthBearerCredential(user, hostPort, token)
+			name, last, ended = "OAUTHBEARER", netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
+		}
+		if answer, err = begin(name); err == nil && answer.continued {
+			if answer, err = s.answer(b64(sent), hidden); err == nil && answer.continued {
+				answer, err = s.answer(last, ended)
 			}
 		}
 		if err == nil && !answer.ok {
@@ -597,7 +655,9 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 }
 
 // pop3KeyRules is what the configuration schema says of a pop3 collector's
-// own keys: it has none.
+// own keys.
 func pop3KeyRules() map[string]map[string]any {
-	return map[string]map[string]any{}
+	return map[string]map[string]any{
+		"list": {"description": "pop3: also ask LIST, each message's size, for the size of the largest: largest_bytes in the document. The answer has a line for each message of the mailbox, held to the response limit; no message is fetched."},
+	}
 }

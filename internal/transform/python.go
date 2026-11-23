@@ -637,13 +637,15 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		timer.add(ran)
 	}
 	out, err := countedPythonResult(spec.stats, c, what, timeout, line, err)
-	if err == nil && out.Log != "" {
-		// What the script printed and logged, its first 4 KiB, for whoever
-		// debugs it; it counts against max_output_bytes only as far as
-		// that. A debug probe's report shows it (WithRuleLogger).
+	if out != nil && out.Log != "" {
+		// What the script printed and logged, its first 4 KiB of the one
+		// and twenty lines of the other, for whoever debugs it; it counts
+		// against max_output_bytes only as far as that. A debug probe's
+		// report shows it (WithRuleLogger). A script that failed has its
+		// logged lines with its failure, and nothing of what it printed.
 		printed, logged := pythonLogLines(out.Log)
 		logger := ruleLogger(ctx)
-		if printed != "" {
+		if printed != "" && err == nil {
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}
 		for _, line := range logged {
@@ -656,6 +658,9 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 			}
 			logger.Log(ctx, line.level, "python "+what+" logged", "collector", c.Name, "message", line.text)
 		}
+	}
+	if err != nil {
+		out = nil
 	}
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }
@@ -733,10 +738,12 @@ func countedPythonResult(st *PythonStats, c *model.Collector, what string, timeo
 		// exception's own line and the frames before it (scripterror.go):
 		// by the worker already where it might not have fitted the output
 		// limit whole.
+		// The answer goes back with the failure for what the script
+		// logged before it failed (runPython).
 		if out.Shown != nil {
-			return nil, model.Errorf("python %s failed: %s", what, shownByWorker(out.Shown))
+			return out, model.Errorf("python %s failed: %s", what, shownByWorker(out.Shown))
 		}
-		return nil, model.Errorf("python %s failed: %s", what, shownScriptError(strings.TrimSpace(out.Error)))
+		return out, model.Errorf("python %s failed: %s", what, shownScriptError(strings.TrimSpace(out.Error)))
 	}
 	pool.recordRun(st, pythonRunOK)
 	return out, nil

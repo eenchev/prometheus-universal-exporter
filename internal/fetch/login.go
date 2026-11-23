@@ -1031,6 +1031,7 @@ func jqOne(ctx context.Context, expression string, page any, resp *http.Response
 	// which is enough to refuse it: an expression that never ends, or gives
 	// values without end, holds no scrape for ever.
 	ctx, ended := expr.WatchMemoryOf(ctx)
+	defer ended()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: resp.StatusCode, Headers: jqHeaders(resp.Header)}.Values(page)...)
 	count := 0
 	for count < 2 {
@@ -1049,7 +1050,6 @@ func jqOne(ctx context.Context, expression string, page any, resp *http.Response
 		}
 		count++
 	}
-	ended()
 	if count != 1 {
 		if count == 0 {
 			return nil, "", errors.New("gave no value; it must give one")

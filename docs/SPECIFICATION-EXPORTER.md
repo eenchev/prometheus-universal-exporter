@@ -5484,15 +5484,19 @@ transform MAY be stopped for what other scrapes hold beside it, and MAY hold
 up to twice the limit before it is stopped; it MUST NOT be stopped for
 holding less than the limit when nothing else grows. A transform that ends
 within 20 milliseconds MUST cost no measurement. A transform stopped for its
-time MUST still fail as one, with the deadline's error. A transform MUST
+time MUST still fail as one, with the deadline's error. A transform MAY
 also be stopped when a single value larger than the limit was made while
 it was measured and the heap is counted past the limit, as of a text
-doubled at every step, of which nothing is certainly held. The
+doubled at every step, of which nothing is certainly held; one such step
+is not interrupted, so such a transform MAY hold several times the limit
+before it is stopped. The
 expressions that run outside a transform, `request.pagination.items` and
 `request.pagination.next` on each page and a login's `token`,
 `expires_in` and a step's `extract.json` on its answers, MUST be held to
 the same limit in the same way: one past it MUST fail the scrape as a
-limit exceeded, naming its key and the limit.
+limit exceeded, where a failed request does, counted in
+`http_exporter_series_limit_exceeded_total`, naming its key and the
+limit. The watch of an expression MUST end with it, however it ended.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting

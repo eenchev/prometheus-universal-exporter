@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"context"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
@@ -184,3 +186,21 @@ func TestACollectionShowsTheLargestValueMadeWhileItRan(t *testing.T) {
 // sink keeps the last large value a test made, so that making it is not
 // compiled away.
 var sink atomic.Pointer[[]byte]
+
+// What ends a watch may be called on every way out of the code that began
+// it, and so more than once: it says each time what it said first, and a
+// watch with no limit is none.
+func TestAMemoryWatchIsEndedOnceHoweverOftenItIsAskedTo(t *testing.T) {
+	for _, limit := range []model.ByteSize{0, 1 << 30} {
+		ctx, ended := WatchMemory(context.Background(), limit)
+		if first, again := ended(), ended(); first != nil || again != nil || limit == 0 && ctx != context.Background() {
+			t.Errorf("limit %d: ended with %v, then %v", limit, first, again)
+		}
+		if limit > 0 && context.Cause(ctx) == nil {
+			t.Errorf("limit %d: the context of a watch that ended is not done", limit)
+		}
+	}
+	if _, ended := WatchMemoryOf(WithMemoryLimit(context.Background(), 0)); ended() != nil {
+		t.Error("a context given no limit is watched")
+	}
+}

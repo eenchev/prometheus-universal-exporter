@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
@@ -73,5 +75,41 @@ func TestTheExpressionsOfAPaginationAndALoginAreHeldToTheMemoryLimit(t *testing.
 		if _, err := FetchCollector(context.Background(), server.URL+"/data", tc.collector(held/100), RequestOverrides{}, nil); err != nil {
 			t.Errorf("%s with no limit: %v", name, err)
 		}
+	}
+}
+
+// The watch of an expression's memory ends with the expression, on every
+// way out of it: one that gave two values, or failed, left its watch
+// looking at the heap every 20 milliseconds, and asking for collections,
+// for as long as the exporter ran.
+func TestTheMemoryWatchOfAnExpressionEndsWithIt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"items":[1],"more":[2],"access_token":"tok"}`)
+	}))
+	t.Cleanup(server.Close)
+	for name, c := range map[string]*model.Collector{
+		"items that name two places":   pagedCollector(t, model.PaginationConfig{Type: "link", Items: "if . == null then .items else (.items, .more) end"}),
+		"items that fail":              pagedCollector(t, model.PaginationConfig{Type: "link", Items: `if . == null then .items else error("no") end`}),
+		"a next that gives two values": pagedCollector(t, model.PaginationConfig{Type: "cursor", Next: "1, 2", Param: "after", Items: ".items"}),
+		"a next that fails":            pagedCollector(t, model.PaginationConfig{Type: "cursor", Next: `error("no")`, Param: "after", Items: ".items"}),
+		"a token that gives two values": loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: ".access_token, 2",
+			FieldFiles: secretFiles(t, map[string]string{"password": "s3cret"})}),
+		"a token that fails": loginCollector(t, model.LoginConfig{Type: "json", URL: "/login", Token: `error("no")`,
+			FieldFiles: secretFiles(t, map[string]string{"password": "s3cret"})}),
+		"expressions that give their one value": pagedCollector(t, model.PaginationConfig{Type: "cursor", Next: "null", Param: "after", Items: ".items"}),
+	} {
+		freshLogins(t)
+		c.Limits.MaxExpressionMemory = 256 << 20
+		_, err := FetchCollector(context.Background(), server.URL+"/data", c, RequestOverrides{}, nil)
+		if (err == nil) != (name == "expressions that give their one value") {
+			t.Errorf("%s: err %v", name, err)
+		}
+	}
+	// A watch begins 20 milliseconds after its expression did.
+	time.Sleep(100 * time.Millisecond)
+	stacks := make([]byte, 1<<20)
+	stacks = stacks[:runtime.Stack(stacks, true)]
+	if n := strings.Count(string(stacks), "expr.watchMemory("); n != 0 {
+		t.Errorf("%d watches of an expression's memory are still running after their expressions ended", n)
 	}
 }

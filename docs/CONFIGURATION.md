@@ -5390,9 +5390,10 @@ says. The jq
 expressions of [pagination](REQUESTS.md#pagination) and
 [logins](AUTHENTICATION.md#logging-in-to-a-target) run outside the
 transform and are held to the same limit, on each page and on each of a
-login's answers: one past it fails the scrape as a limit exceeded, naming
-its key, as `request.pagination.next ".." was stopped: the exporter's
-memory grew by more than limits.max_expression_memory, …`.
+login's answers: one past it fails the scrape as a limit exceeded, where
+a failed request does (`error_handling.on_fetch_error`) and counted in the
+same metric, naming its key, as `request.pagination.next ".." was stopped:
+the exporter's memory grew by more than limits.max_expression_memory, …`.
 
 A decoded document is larger than the response it was read from, the more
 so the more of the response is structure: a response of nothing but empty

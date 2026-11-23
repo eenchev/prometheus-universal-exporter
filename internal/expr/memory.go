@@ -43,6 +43,10 @@ func (e *MemoryExceeded) Error() string {
 // stopped when it takes more memory than limit, as a deadline stops it, and
 // the function to call when the program has ended, which says whether it
 // was stopped so and for what. A limit of 0 or less is no limit.
+//
+// The function must be called, on every way out: until it is, the watch
+// looks at the heap every memoryLook and asks for collections. It may be
+// called more than once, and says each time what it said first.
 func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, func() *MemoryExceeded) {
 	if limit <= 0 {
 		return ctx, func() *MemoryExceeded { return nil }
@@ -50,14 +54,14 @@ func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, fu
 	ctx, cancel := context.WithCancelCause(ctx)
 	ended := make(chan struct{})
 	timer := time.AfterFunc(memoryLook, func() { watchMemory(ended, limit, cancel) })
-	return ctx, func() *MemoryExceeded {
+	return ctx, sync.OnceValue(func() *MemoryExceeded {
 		timer.Stop()
 		close(ended)
 		var exceeded *MemoryExceeded
 		errors.As(context.Cause(ctx), &exceeded)
 		cancel(nil)
 		return exceeded
-	}
+	})
 }
 
 // memoryLimitKey is the key a context holds its memory limit under.

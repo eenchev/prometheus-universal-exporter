@@ -2594,9 +2594,9 @@ def failed_check(most):
         # the room: the failure is never cut for it, and what was logged
         # goes alone where both do not fit.
         if written.endswith('}'):
-            for carried in (printed_text,lambda: ''),(lambda: '',lambda: ''):
+            for with_printed in (True,False):
                 try:
-                    said=carried[0]()+(logged_lines() if logged else '')
+                    said=(printed_text() if with_printed else '')+(logged_lines() if logged else '')
                     if not said: continue
                     more=written[:-1]+', "log": '+json.dumps(said)+'}'
                     if len(more)<=most: written=more; break

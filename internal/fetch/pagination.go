@@ -176,6 +176,7 @@ func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 		return nil, fmt.Errorf("%q does not compile: %w", items, err)
 	}
 	ctx, ended := expr.WatchMemoryOf(ctx)
+	defer ended()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{}.Values(page)...)
 	var found []any
 	count := 0
@@ -202,7 +203,6 @@ func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 		}
 		return nil, fmt.Errorf("%q names %s; it must name one, the array of a page's items, such as .items, .data.results, or . for a page that is an array", items, places)
 	}
-	ended()
 	for _, step := range found {
 		switch step.(type) {
 		case string, int:
@@ -490,6 +490,7 @@ func nextValue(ctx context.Context, next string, response *HTTPResponse, page an
 		return "", err
 	}
 	ctx, ended := expr.WatchMemoryOf(ctx)
+	defer ended()
 	iterator := code.RunWithContext(ctx, page, expr.JQBindings{Status: response.Status(), Headers: jqHeaders(response.Headers)}.Values(page)...)
 	var first any
 	count := 0
@@ -509,7 +510,6 @@ func nextValue(ctx context.Context, next string, response *HTTPResponse, page an
 		}
 		count++
 	}
-	ended()
 	if count > 1 {
 		return "", fmt.Errorf("request.pagination.next %q gave more than one value; it must give one", next)
 	}

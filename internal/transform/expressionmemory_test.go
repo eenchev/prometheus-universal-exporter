@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,5 +118,26 @@ func TestATransformPastItsExpressionMemoryIsStoppedOnOneProcessor(t *testing.T) 
 	defer cancel()
 	if set, _, err := transformWith(ctx, t, c, "application/json", `{"a":1}`); set != nil || !errors.Is(err, model.ErrLimitExceeded) {
 		t.Fatalf("series %+v, err %v; want a limit exceeded and no series", set, err)
+	}
+}
+
+// A transform that reads a text of its answer larger than the limit, by a
+// key, by a key in a variable, through to_entries, holds no more for it,
+// and is not stopped: the limit is on what the transform makes. One that
+// copies it is.
+func TestATransformThatReadsALargeValueOfItsAnswerIsNotStopped(t *testing.T) {
+	body := `{"key":"text","text":"` + strings.Repeat("x", 2<<20) + `"}`
+	c := model.Collector{Name: "c", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
+		Limits: model.Limits{MaxExpressionMemory: 1 << 20}}
+	for _, reads := range []string{`.text | length`, `.[.key] | length`, `to_entries | map(.value | length) | max`, `.text | tostring | ltrimstr("y") | length`} {
+		c.Metrics = []model.MetricRule{{Name: "n", Expression: reads}}
+		set, failures, err := transformWith(context.Background(), t, c, "application/json", body)
+		if err != nil || len(failures) != 0 || set == nil || len(set.Metrics) != 1 || set.Metrics[0].Value != 2<<20 {
+			t.Errorf("%s: series %+v, failures %+v, err %v; want the length of the text", reads, set, failures, err)
+		}
+	}
+	c.Metrics = []model.MetricRule{{Name: "n", Expression: `.text + "y" | length`}}
+	if set, _, err := transformWith(context.Background(), t, c, "application/json", body); set != nil || !errors.Is(err, model.ErrLimitExceeded) {
+		t.Errorf("a copy of the text: series %+v, err %v; want a limit exceeded", set, err)
 	}
 }

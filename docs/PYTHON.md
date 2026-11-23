@@ -552,8 +552,8 @@ start once and then serves scrape after scrape.
   lines, each of at most 1,024 characters, whatever it prints. A script
   that fails has the lines it logged before written with its failure, and
   the last 1,024 characters of what it printed, at warn level as `python
-  transform printed before it failed`: they often explain it, and need no
-  second run at debug level.
+  transform printed before it failed`, with what reads as a credential
+  masked: they often explain it, and need no second run at debug level.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with

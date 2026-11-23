@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -203,6 +204,49 @@ func TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade(t *testing.T)
 	}
 	if value, exceeded := run(`reduce range(22) as $i ("x"; . + .) | length`, 0); value != 1<<22 || exceeded != nil {
 		t.Errorf("with no limit: gave %.60v, stopped for %v", value, exceeded)
+	}
+}
+
+// A value a function was given is none it made, however large: a program
+// that reads a text or a list of megabytes out of its input, by a key, a
+// path, a slice, max, a function that gives its input back, is not told of
+// it, where reading a field of a large answer by a key in a variable
+// stopped the transform. A copy of it is a value made, as large as it is.
+func TestAValueLargerThanTheMemoryLimitThatWasGivenIsNoneMade(t *testing.T) {
+	const limit = 1 << 20
+	text := strings.Repeat("x", 2*limit)
+	items := make([]any, limit/8)
+	for i := range items {
+		items[i] = i
+	}
+	input := map[string]any{"text": text, "items": items, "nested": map[string]any{"text": text}, "texts": []any{"a", text}, "key": "text"}
+	told := func(program string) (times int, value any) {
+		t.Helper()
+		code, err := CompileJQ(program)
+		if err != nil {
+			t.Fatalf("%s: %v", program, err)
+		}
+		ctx := gojq.WithMaxValueBytes(context.Background(), limit, func() { times++ })
+		value, _ = code.RunWithContext(ctx, input, JQBindings{}.Values(input)...).Next()
+		return times, value
+	}
+	for _, given := range []string{
+		`.text`, `.items`, `.nested.text`, `.[.key]`, `.nested[.key]`, `.texts[1]`, `.texts[-1:][0]`, `.text[10:]`, `.items[5:]`,
+		`getpath(["nested", "text"])`, `.texts | max`, `.texts | max_by(length)`, `.texts | last`, `[.text] | first`,
+		`.text | debug`, `.text | tostring`, `.text | @text`, `.text | ltrimstr("y")`, `.text | rtrimstr("y")`, `.text | sub("^y"; "")`,
+		`.items | toarray`, `.text as $t | $t`, `.text | values`, `to_entries | map(.value) | .[] | strings | select(length > 100)`,
+		`{a: .text}.a`, `[.items][0]`, `.text | ascii_downcase`,
+	} {
+		if times, value := told(given + ` | length`); times != 0 || asError(value) != nil {
+			t.Errorf("%s: told of a value made %d times, and the program gave %.60v", given, times, value)
+		}
+	}
+	for _, made := range []string{
+		`.texts | add`, `.text + "y"`, `.text | tojson`, `.text | ascii_upcase`, `.items | sort`, `.items | reverse`, `.items | .[0] = 5`, `.items + [1]`, `.text | explode`,
+	} {
+		if times, value := told(made + ` | length`); times == 0 || asError(value) != nil {
+			t.Errorf("%s: told of no value made, and the program gave %.60v", made, value)
+		}
 	}
 }
 

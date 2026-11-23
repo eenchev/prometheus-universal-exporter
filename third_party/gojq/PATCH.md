@@ -18,8 +18,9 @@ operator made, so the exporter is told from inside the interpreter:
   it keeps in the context.
 - `env.go` and `execute.go` have the lines below: after a function gave a
   value, a text or an array larger than `bytes` is told by a call of
-  `exceeded`. Nothing else of a program's run changes, and a context
-  without the limit costs one comparison a call.
+  `exceeded`, unless it is a value the function was given, or a part or an
+  item of one, which it did not make. Nothing else of a program's run
+  changes, and a context without the limit costs one comparison a call.
 - `builtin.go` is as `gofmt` writes it, which the repository's formatting
   check asks of every Go file; upstream generates it unformatted.
 
@@ -49,16 +50,21 @@ operator made, so the exporter is told from inside the interpreter:
  					break loop
  				}
 +				if env.most != nil {
-+					env.most.made(w) // prometheus-universal-exporter: see maxvalue.go
++					env.most.made(w, x, args, v[2].(string)) // prometheus-universal-exporter: see maxvalue.go
 +				}
  				env.push(w)
  				if !env.paths.empty() && env.expdepth == 0 {
  					switch v[2].(string) {
 ```
 
-The exporter uses it in `internal/expr/memory.go`, and
-`TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade` there fails
-without it.
+The exporter uses it in `internal/expr/memory.go`, and the tests named
+`TestAValueLargerThanTheMemoryLimit…` there fail without it.
+
+`govulncheck` and image scanners match a module by its version, and this
+copy has none: an advisory for gojq has to be looked for by hand. A module
+with a `replace` in its `go.mod` is also not one `go install
+<module>@<version>` builds; the exporter is built from a checkout, as the
+image and the release are.
 
 ## Moving to a newer gojq
 

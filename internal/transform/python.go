@@ -650,7 +650,12 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		logger := ruleLogger(ctx)
 		switch {
 		case printed != "" && err != nil:
-			logger.Warn("python "+what+" printed before it failed", "collector", c.Name, "output", printed)
+			// At warn it is in the log of an exporter that was not asked
+			// for a script's output, and a script that prints what it
+			// was sent while it is being written prints a token: what
+			// reads as a credential is masked, as in any text a failure
+			// carries.
+			logger.Warn("python "+what+" printed before it failed", "collector", c.Name, "output", fetch.RedactText(printed))
 		case printed != "":
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}

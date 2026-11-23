@@ -132,6 +132,12 @@ fail("not every shard answered")
 	if err == nil || !strings.Contains(got, `output="(3990 more characters before) ...`+strings.Repeat("x", 1010)+`the last line\n"`) || !strings.Contains(got, `message="after it"`) {
 		t.Errorf("err=%v, logged\n%s", err, got)
 	}
+	// What reads as a credential in it is masked: at warn it is in a log
+	// nobody asked a script's output of.
+	got, err = run("print('asking with token=s3cr3t-token and', 5, 'items')\n1/0\n", nil)
+	if want := `level=WARN msg="python transform printed before it failed" collector=queue output="asking with token=<redacted> and 5 items\n"` + "\n"; err == nil || got != want {
+		t.Errorf("err=%v, logged\n got %s\nwant %s", err, got, want)
+	}
 	// Where what was printed does not fit beside the failure, what was
 	// logged still goes with it.
 	got, err = run("print('x' * 3000)\nlog('the line')\nfail('boom')\n", func(c *model.Collector) { c.Limits.MaxOutputBytes = 1200 })

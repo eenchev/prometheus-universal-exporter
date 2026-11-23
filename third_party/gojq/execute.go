@@ -190,7 +190,7 @@ loop:
 					break loop
 				}
 				if env.most != nil {
-					env.most.made(w) // prometheus-universal-exporter: see maxvalue.go
+					env.most.made(w, x, args, v[2].(string)) // prometheus-universal-exporter: see maxvalue.go
 				}
 				env.push(w)
 				if !env.paths.empty() && env.expdepth == 0 {

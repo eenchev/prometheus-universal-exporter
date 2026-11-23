@@ -5383,7 +5383,9 @@ memory is short. One text or list larger than the whole limit stops its
 expression the moment an operator or a function makes it, with no look at
 the heap, so an expression that doubles a text at every step is stopped
 when the text first passes the limit: holding that text, at most twice the
-limit, and the ones it was made of. The
+limit, and the ones it was made of. A text or a list the answer holds is
+none the expression made, however large, and reading it stops nothing; a
+copy of it is one, as `sort` and `tojson` make. The
 failure is the probe's `validation` stage, counted in
 `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
 says. The jq

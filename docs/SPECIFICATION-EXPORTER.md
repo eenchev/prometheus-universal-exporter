@@ -3301,7 +3301,8 @@ many more it had, whatever the script printed, and how many more lines
 there were said in a line at `warning`. What a script logged before it
 failed MUST be written so too, with its failure, and the last 1,024
 characters of what it printed before it, with how many more came before
-them, in one line at `warn`, where the
+them and with what reads as a credential masked, in one line at `warn`,
+where the
 failure's line has the room for it under `limits.max_output_bytes`, and
 what it logged alone where the line has the room for that only; the
 failure MUST be what it is without them, and never cut for them.
@@ -5494,7 +5495,11 @@ of more bytes than the limit, or an array of more items than a sixteenth
 of it, that an operator or a builtin function gives MUST stop the
 transform when it is made, whatever the heap holds and however long the
 transform has run: so MUST a text doubled at every step be stopped when it
-first passes the limit. A value of the limit exactly MUST NOT. The
+first passes the limit. A value of the limit exactly MUST NOT, and
+neither MUST a value the function was given, the value itself, a part of
+it, or an item or a value of an array or an object it was given, as an
+index, a slice, `getpath`, `max` and `tostring` of a text give: a
+transform MUST NOT be stopped for reading a large value of its input. The
 expressions that run outside a transform, `request.pagination.items` and
 `request.pagination.next` on each page and a login's `token`,
 `expires_in` and a step's `extract.json` on its answers, MUST be held to

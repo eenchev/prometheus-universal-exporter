@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,7 +54,7 @@ func TestTheMemoryWatchBelievesOnlyWhatACollectionShowsHeld(t *testing.T) {
 		ended, done := make(chan struct{}), make(chan struct{})
 		var cause error
 		go func() {
-			watchMemory(ended, 16*mib, func(err error) { cause = err })
+			watchMemory(ended, 16*mib, func(err error) { cause = err }, nil, 0)
 			close(done)
 		}()
 		select {
@@ -172,6 +173,7 @@ func TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade(t *testing.T)
 		`reduce range(40) as $i ([1]; [., .] | flatten)`,
 		fmt.Sprintf(`"x" * %d`, limit+1),
 		fmt.Sprintf(`[range(%d)] | . + [1]`, limit/16),
+		fmt.Sprintf(`[range(%d) | {key: tostring, value: .}] | from_entries`, limit/48+1),
 	} {
 		if times, value := told(grows); times != 1 || !errors.Is(asError(value), context.Canceled) {
 			t.Errorf("%s: a value past %d bytes was told of %d times, and the program gave %.60v", grows, limit, times, value)
@@ -180,6 +182,7 @@ func TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade(t *testing.T)
 	for _, within := range []string{
 		fmt.Sprintf(`"x" * %d | length`, limit),
 		fmt.Sprintf(`[range(%d)] | . + [] | length`, limit/16),
+		fmt.Sprintf(`[range(%d) | {key: tostring, value: .}] | from_entries | length`, limit/48),
 		`[range(100000) | tostring] | map(. + .) | length`,
 	} {
 		if times, value := told(within); times != 0 || asError(value) != nil || value == nil {
@@ -208,7 +211,7 @@ func TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade(t *testing.T)
 }
 
 // A value a function was given is none it made, however large: a program
-// that reads a text or a list of megabytes out of its input, by a key, a
+// that reads a text, a list or an object of megabytes out of its input, by a key, a
 // path, a slice, max, a function that gives its input back, is not told of
 // it, where reading a field of a large answer by a key in a variable
 // stopped the transform. A copy of it is a value made, as large as it is.
@@ -219,7 +222,12 @@ func TestAValueLargerThanTheMemoryLimitThatWasGivenIsNoneMade(t *testing.T) {
 	for i := range items {
 		items[i] = i
 	}
-	input := map[string]any{"text": text, "items": items, "nested": map[string]any{"text": text}, "texts": []any{"a", text}, "key": "text"}
+	object := map[string]any{}
+	for i := range limit / 24 {
+		object["k"+strconv.Itoa(i)] = i
+	}
+	input := map[string]any{"text": text, "items": items, "nested": map[string]any{"text": text}, "texts": []any{"a", text}, "key": "text",
+		"object": object, "objects": []any{object}, "name": "object"}
 	told := func(program string) (times int, value any) {
 		t.Helper()
 		code, err := CompileJQ(program)
@@ -236,6 +244,7 @@ func TestAValueLargerThanTheMemoryLimitThatWasGivenIsNoneMade(t *testing.T) {
 		`.text | debug`, `.text | tostring`, `.text | @text`, `.text | ltrimstr("y")`, `.text | rtrimstr("y")`, `.text | sub("^y"; "")`,
 		`.items | toarray`, `.text as $t | $t`, `.text | values`, `to_entries | map(.value) | .[] | strings | select(length > 100)`,
 		`{a: .text}.a`, `[.items][0]`, `.text | ascii_downcase`,
+		`.object`, `.[.name]`, `.object | debug`, `getpath(["object"])`, `.objects | first`, `.objects | max`, `.object | select(true)`, `{a: .object} | .a`,
 	} {
 		if times, value := told(given + ` | length`); times != 0 || asError(value) != nil {
 			t.Errorf("%s: told of a value made %d times, and the program gave %.60v", given, times, value)
@@ -243,6 +252,8 @@ func TestAValueLargerThanTheMemoryLimitThatWasGivenIsNoneMade(t *testing.T) {
 	}
 	for _, made := range []string{
 		`.texts | add`, `.text + "y"`, `.text | tojson`, `.text | ascii_upcase`, `.items | sort`, `.items | reverse`, `.items | .[0] = 5`, `.items + [1]`, `.text | explode`,
+		`.object + {a: 1}`, `.object | .a = 1`, `.object | del(.k1)`, `.object | map_values(.)`, `.object | with_entries(.)`,
+		fmt.Sprintf(`[range(%d) | {key: tostring, value: .}] | from_entries`, limit/24),
 	} {
 		if times, value := told(made + ` | length`); times == 0 || asError(value) != nil {
 			t.Errorf("%s: told of no value made, and the program gave %.60v", made, value)

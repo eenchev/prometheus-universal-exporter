@@ -477,13 +477,20 @@ func TestTheOTLPTabShowsTheRunsLogRecords(t *testing.T) {
 			t.Errorf("the log export got %q", text(r.Body))
 		}
 	}
-	// A warning under otlp.logs.level error is shown, and not exported.
+	// A warning under otlp.logs.level error is shown, and not exported;
+	// nor is the line of a debug run that says what the transform took of
+	// memory, at debug.
 	quiet, _, _ := logExportServer(t, receiver, func(c *model.OTLPConfig) { c.Logs.Level = "error" })
 	quiet.SetDebug(DebugEdit)
 	warning := strings.Replace(failing, "error_mode: fail", "error_mode: log", 1)
 	records := postRun(t, quiet, pasted(warning, `{"state": "broken"}`), http.StatusOK).OTLP.Logs.Records
-	if len(records) != 1 || records[0].SeverityText != "WARN" || records[0].Exported || records[0].Note != "not exported: below otlp.logs.level error" {
-		t.Errorf("records at error %+v", records)
+	if len(records) != 2 || records[0].Body != "jq transform memory" || records[0].SeverityText != "DEBUG" || records[1].SeverityText != "WARN" {
+		t.Fatalf("records at error %+v", records)
+	}
+	for _, record := range records {
+		if record.Exported || record.Note != "not exported: below otlp.logs.level error" {
+			t.Errorf("records at error %+v", records)
+		}
 	}
 }
 

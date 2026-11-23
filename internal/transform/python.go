@@ -629,7 +629,17 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	timer := scriptTimerFrom(ctx)
 	spec := pythonWorkerSpec(pythonPath, c)
 	spec.stats = pool.statsOf(timer.carried(), c.Name)
-	line, ran, err := pool.run(ctx, spec, payload, timeout)
+	var peak int64
+	runCtx := ctx
+	if memoryMeasured(ctx) {
+		runCtx = context.WithValue(ctx, workerPeakKey{}, &peak)
+	}
+	line, ran, err := pool.run(runCtx, spec, payload, timeout)
+	if peak > 0 {
+		// The worker's whole life is in it, the runs before this one too:
+		// a worker is kept between scrapes.
+		ruleLogger(ctx).Debug("python "+what+" memory", "collector", c.Name, "worker_peak_bytes", peak, "limit_bytes", int64(c.Limits.MaxScriptMemory))
+	}
 	if cap(encoder.buf) <= pythonEncoderKept {
 		pythonEncoders.Put(encoder)
 	}
@@ -650,12 +660,15 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		logger := ruleLogger(ctx)
 		switch {
 		case printed != "" && err != nil:
-			// At warn it is in the log of an exporter that was not asked
-			// for a script's output, and a script that prints what it
-			// was sent while it is being written prints a token: what
-			// reads as a credential is masked, as in any text a failure
-			// carries.
-			logger.Warn("python "+what+" printed before it failed", "collector", c.Name, "output", fetch.RedactText(printed))
+			// It goes with the failure (PrintedBeforeFailure), which is
+			// logged once and then sparingly while it repeats: a line of
+			// its own was written at every scrape of a script that fails
+			// at every one. A script that prints what it was sent while
+			// it is being written prints a token, and this is in the log
+			// of an exporter that was not asked for a script's output:
+			// what reads as a credential is masked, as in any text a
+			// failure carries.
+			err = &failedAfterPrinting{error: err, printed: fetch.RedactText(printed)}
 		case printed != "":
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
 		}
@@ -674,6 +687,30 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		out = nil
 	}
 	return out, model.MarkError(err, model.ErrScriptFailed)
+}
+
+// failedAfterPrinting is a script's failure with the last of what the
+// script printed before it, which is no part of the failure's text: a
+// failure is told apart from another by its text, and what was printed
+// differs from one scrape to the next.
+type failedAfterPrinting struct {
+	error
+	printed string
+}
+
+func (e *failedAfterPrinting) Unwrap() error { return e.error }
+
+// PrintedBeforeFailure is the last 1,024 characters of what a Python
+// script printed before it failed with err, what reads as a credential in
+// them masked, and "" for a script that printed nothing and for an error
+// that is no script's failure. Whoever logs the failure writes it beside
+// it.
+func PrintedBeforeFailure(err error) string {
+	var failed *failedAfterPrinting
+	if errors.As(err, &failed) {
+		return failed.printed
+	}
+	return ""
 }
 
 // pythonRequest is the request line that has a worker run script: the

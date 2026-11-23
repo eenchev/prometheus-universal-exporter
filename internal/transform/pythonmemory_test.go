@@ -276,6 +276,32 @@ func TestALimitTheInterpreterAloneIsPastSaysSo(t *testing.T) {
 	}
 }
 
+// A limit the interpreter alone is past is said when the configuration
+// is checked, before any scrape: once for a collector, though it has a
+// pre-script and a script, with what the interpreter holds and what to
+// set. A limit over that, and no limit, are nothing to say.
+func TestALimitTheInterpreterAloneIsPastIsSaidWhenTheConfigurationIsChecked(t *testing.T) {
+	requireProcStatus(t)
+	collector := func(name string, limit model.ByteSize) model.Collector {
+		c := *workerCollector(name, `metric(name="v", value=1)`)
+		c.Transform.PreScript = "data = 1"
+		c.Limits.MaxScriptMemory = limit
+		return c
+	}
+	cfg := &model.Config{Collectors: []model.Collector{collector("too small", 8<<20), collector("roomy", 1<<30), collector("unlimited", 0)}}
+	problems, err := CheckPythonScripts("python3", cfg)
+	if err != nil || len(problems) != 1 || problems[0].Collector != "too small" {
+		t.Fatalf("problems %+v, err %v; want one, of the collector whose limit is 8 MiB", problems, err)
+	}
+	var held, least int
+	if _, scanned := fmt.Sscanf(problems[0].Message, "collector too small limits.max_script_memory (8388608 bytes) is less than the %d bytes this Python interpreter holds before a script runs, so no script of the collector can run under it; set at least %dMiB, or 0 for no limit", &held, &least); scanned != nil {
+		t.Fatalf("the problem is said as %q", problems[0].Message)
+	}
+	if bare := bareInterpreterSize(t) << 10; held < bare/2 || held > 2*bare+(16<<20) || least != (held+(1<<20)-1)>>20+16 {
+		t.Fatalf("the interpreter is said to hold %d bytes, and holds about %d bare; the least to set is said to be %d MiB", held, bare, least)
+	}
+}
+
 // usesAllTheMemory is a script that leaves its worker no memory at all for
 // longer than two turns of the parent watch, then gives it back. It fills
 // the limit with ever smaller blocks down to the 32 bytes of a number,

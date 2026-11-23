@@ -219,6 +219,9 @@ func newProbeTraceOf(ctx context.Context, records *debugLogRecords) (context.Con
 	t.logger = slog.New(handler)
 	ctx, t.requests = fetch.WithRequestTrace(ctx)
 	ctx = transform.WithRuleLogger(ctx, t.logger)
+	// A debug probe says what its transform took of memory, beside the
+	// limits, which is how a limit is chosen.
+	ctx = transform.WithMemoryMeasured(ctx)
 	return context.WithValue(ctx, probeTraceKey{}, t), t
 }
 

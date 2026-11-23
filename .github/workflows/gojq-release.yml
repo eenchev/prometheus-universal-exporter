@@ -1,0 +1,47 @@
+# Says when gojq has a newer release than the copy in third_party/gojq, by
+# opening an issue. go.mod replaces the module with that copy
+# (third_party/gojq/PATCH.md), so Dependabot proposes no update of it and
+# govulncheck matches no advisory to it: without this nothing would say that
+# a release is out, and a release is where a fix of gojq's arrives.
+#
+# The schedule is in UTC: Mondays at 07:30. One issue is opened for a
+# release, and none while one for it is open.
+name: gojq-release
+on:
+  schedule:
+    - cron: '30 7 * * 1'
+  workflow_dispatch:
+# Read-only unless a job says otherwise; a test holds the grants to a list.
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    # The issue that says a release is out.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare the copy with gojq's latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          copied=$(sed -n 's/^# gojq \(v[^:]*\):.*/\1/p' third_party/gojq/UPSTREAM.sha256)
+          latest=$(gh api repos/itchyny/gojq/releases/latest --jq .tag_name)
+          if [ -z "$copied" ] || [ -z "$latest" ]; then
+            echo "::error title=gojq-release::could not read the copy's release ($copied) or gojq's latest ($latest)"
+            exit 1
+          fi
+          echo "third_party/gojq is gojq $copied; the latest release is $latest" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$copied" = "$latest" ]; then
+            exit 0
+          fi
+          title="gojq $latest is out; third_party/gojq is $copied"
+          if [ -n "$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+            echo "an issue for $latest is open already" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "gojq $latest has been released: https://github.com/itchyny/gojq/releases/tag/$latest
+
+          The exporter is built from a copy of gojq $copied in \`third_party/gojq\`, with one change, so Dependabot does not propose this update and \`govulncheck\` matches no advisory to the copy. Read the release's notes for fixes that matter here, and move the copy as \`third_party/gojq/PATCH.md\` says: \`sh tools/gojq-copy.sh $latest\`."

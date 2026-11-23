@@ -5379,13 +5379,17 @@ moments counts too: a transform is not looked at in its first 20
 milliseconds, which nearly all end within, and one that runs longer may be
 stopped anywhere between the limit and twice it. Set the limit well above
 what the collector's answers need, and lower it only on an exporter whose
-memory is short. One text or list larger than the whole limit stops its
+memory is short. A [debug probe](#debug-probes) says what a transform's
+expressions held at their most, as `jq transform memory` with `held_bytes`
+and `limit_bytes` among its logs, which is what to set the limit from. One
+text, list or object larger than the whole limit stops its
 expression the moment an operator or a function makes it, with no look at
 the heap, so an expression that doubles a text at every step is stopped
 when the text first passes the limit: holding that text, at most twice the
-limit, and the ones it was made of. A text or a list the answer holds is
-none the expression made, however large, and reading it stops nothing; a
-copy of it is one, as `sort` and `tojson` make. The
+limit, and the ones it was made of. A list counts sixteen bytes an item
+and an object forty-eight a key. A text, a list or an object the answer
+holds is none the expression made, however large, and reading it stops
+nothing; a copy of it is one, as `sort` and `tojson` make. The
 failure is the probe's `validation` stage, counted in
 `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
 says. The jq
@@ -6747,7 +6751,13 @@ The report lists:
   `rule without a name`, and a metric's name longer than 200 bytes by its
   first 200.
 - **Logs:** everything the trip logged at any level, whatever `--log.level`
-  is, including what a Python script printed.
+  is, including what a Python script printed, and what the transform took
+  of memory beside the limit it is held to: what a `jq` or `yq`
+  transform's expressions held at their most
+  ([`limits.max_expression_memory`](#memory)), measured with garbage
+  collections a scrape is not worth, and the most address space a Python
+  script's worker has had
+  ([`limits.max_script_memory`](PYTHON.md#how-scripts-run)).
 - **Lint:** the [metric lint](#metric-lint)'s advice on the collector and on
   the series the run made, one finding a line, or `none`, and the rules the
   collector's `lint.ignore` silences. It changes nothing of what a probe

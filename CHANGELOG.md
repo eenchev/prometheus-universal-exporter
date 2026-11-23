@@ -37,7 +37,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   grown by more than `limits.max_expression_memory` while it ran, 256 MiB
   unless set, and its scrape fails as a limit exceeded. So are the jq
   expressions of a pagination and of a login, and so is an expression
-  that makes one text or list larger than the limit, the moment it does. A
+  that makes one text, list or object larger than the limit, the moment it
+  does. A
   collector whose expressions build more than that at once sets the limit
   higher; `http_exporter_expression_memory_exceeded_total` counts the
   scrapes it stopped.
@@ -185,19 +186,24 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   expression makes part of the way can be seen without rewriting the rule.
 - The configuration guide says which unquoted YAML scalars read as numbers
   (`017` as 15, `1.10` as 1.1) and what to do about a label made of one.
+- A [debug probe's report](docs/CONFIGURATION.md#debug-probes) says what
+  the transform took of memory beside its limit: what a `jq` or `yq`
+  transform's expressions held at their most, and the most address space a
+  Python script's worker has had. A limit is set from that.
 - A Python script has `response.ok`, whether the status is a success, and
   [`log(message, level="info")`](docs/PYTHON.md#what-a-script-has), which
   writes a line of the exporter's log at `debug`, `info`, `warning` or
   `error`, where `print` is seen at debug level only. What a script
   logged before it failed is written with its failure, and the last 1,024
-  characters of what it printed, at warn level.
+  characters of what it printed, in the failure's own line.
 
 ### Fixed
 
 - A `limits.max_script_memory` smaller than the Python interpreter itself
   holds, which one built from source can be at 40 MiB, failed every script
   with a `MemoryError` that named the limit alone. Each scrape now says
-  what the interpreter holds and what to set.
+  what the interpreter holds and what to set, and a limit under what the
+  bare interpreter holds is refused when the configuration loads.
 - Target Allocator: an allocator run without `--web.token-file` took a
   heartbeat from any page open in a browser on its network, since a form
   posted from another site's page is a request like any other: such a page

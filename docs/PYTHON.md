@@ -551,9 +551,10 @@ start once and then serves scrape after scrape.
   what should be seen without debug logging. A run writes at most 20
   lines, each of at most 1,024 characters, whatever it prints. A script
   that fails has the lines it logged before written with its failure, and
-  the last 1,024 characters of what it printed, at warn level as `python
-  transform printed before it failed`, with what reads as a credential
-  masked: they often explain it, and need no second run at debug level.
+  the last 1,024 characters of what it printed as `printed` in the line
+  its failure is logged in, with what reads as a credential masked: they
+  often explain it, need no second run at debug level, and are written as
+  sparingly as a failure that repeats is.
 - **The size of an answer.** `limits.max_output_bytes`, a
   [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
   run — the metrics a script emitted or the data a pre-script left, with
@@ -602,7 +603,12 @@ start once and then serves scrape after scrape.
   fails saying so, as `limits.max_script_memory (33554432 bytes) is less
   than the 44371968 bytes this Python interpreter holds before a script
   runs, so no script can run under it; set at least 59MiB, or 0 for no
-  limit`. A
+  limit`. A limit under what the bare interpreter holds is refused sooner,
+  when the configuration loads and by `--dry-run`, in the same words. A
+  [debug probe](CONFIGURATION.md#debug-probes) says the most address
+  space the script's worker has had, beside the limit, as `python transform
+  memory` with `worker_peak_bytes` and `limit_bytes`, which is what to set
+  the limit from. A
   library written in C, such as lxml, that cannot allocate may end the
   interpreter instead; the error then says the worker died and that it ran
   under the limit, so raise it if the script needs more. It is at

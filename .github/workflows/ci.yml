@@ -64,6 +64,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -108,6 +111,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -145,6 +149,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -720,6 +725,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -764,6 +772,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -801,6 +810,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -968,6 +978,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -1012,6 +1025,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -1049,6 +1063,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -1211,6 +1226,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -1255,6 +1273,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -1292,6 +1311,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -1381,6 +1401,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -1425,6 +1448,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -1462,6 +1486,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -1598,6 +1623,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -1642,6 +1670,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -1679,6 +1708,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -1809,6 +1839,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -1853,6 +1886,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -1890,6 +1924,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -2047,6 +2082,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -2091,6 +2129,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -2128,6 +2167,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'
@@ -2291,6 +2331,9 @@ jobs:
               - '.dockerignore'
               - 'Makefile'
               - 'tools/**'
+              # The copy of gojq the exporter is built from, which a test holds
+              # to upstream's checksums (third_party/gojq/PATCH.md).
+              - 'third_party/**'
               - '.golangci.yml'
               # The Python modules the tests use: a new version of the
               # reference parser has to be run against the suite.
@@ -2335,6 +2378,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/grpctest/**'
               - 'internal/kubeapi/**'
@@ -2372,6 +2416,7 @@ jobs:
               - 'internal/decode/**'
               - 'internal/exporter/**'
               - 'internal/expr/**'
+              - 'third_party/gojq/**'
               - 'internal/fetch/**'
               - 'internal/kubeapi/**'
               - 'internal/kubetest/**'

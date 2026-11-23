@@ -3301,8 +3301,9 @@ many more it had, whatever the script printed, and how many more lines
 there were said in a line at `warning`. What a script logged before it
 failed MUST be written so too, with its failure, and the last 1,024
 characters of what it printed before it, with how many more came before
-them and with what reads as a credential masked, in one line at `warn`,
-where the
+them and with what reads as a credential masked, as `printed` in the line
+the failure is logged in and no line of its own, so that it is written
+once and then as sparingly as the failure is while it repeats, where the
 failure's line has the room for it under `limits.max_output_bytes`, and
 what it logged alone where the line has the room for that only; the
 failure MUST be what it is without them, and never cut for them.
@@ -3866,7 +3867,11 @@ typical script.
   interpreter's address space is already past when the limit would be set,
   the limit MUST NOT be set and every run MUST fail saying that the limit
   is less than what the interpreter holds, how much that is, and a limit
-  to set, with the worker left in service. It MUST be at least 32MiB
+  to set, with the worker left in service. A limit that is not more than
+  the interpreter that checks the scripts holds itself MUST be refused when
+  the configuration loads, once for a collector, saying the same. A debug
+  probe's report MUST say, among its logs, the most address space the
+  worker that ran a script has had, and the limit. It MUST be at least 32MiB
   or `0`, the default, for none; a smaller one MUST be refused at load. A
   different limit MUST mean a different pool of workers. What counts against
   the limit is the interpreter, the preloaded libraries and what the script
@@ -5491,8 +5496,9 @@ up to twice the limit before it is stopped; it MUST NOT be stopped for
 holding less than the limit when nothing else grows. A transform that ends
 within 20 milliseconds MUST cost no measurement. A transform stopped for its
 time MUST still fail as one, with the deadline's error. A text
-of more bytes than the limit, or an array of more items than a sixteenth
-of it, that an operator or a builtin function gives MUST stop the
+of more bytes than the limit, an array of more items than a sixteenth of
+it, or an object of more keys than a forty-eighth of it, that an operator
+or a builtin function gives MUST stop the
 transform when it is made, whatever the heap holds and however long the
 transform has run: so MUST a text doubled at every step be stopped when it
 first passes the limit. A value of the limit exactly MUST NOT, and
@@ -5506,7 +5512,10 @@ expressions that run outside a transform, `request.pagination.items` and
 the same limit in the same way: one past it MUST fail the scrape as a
 limit exceeded, where a failed request does, counted in
 `http_exporter_series_limit_exceeded_total`, naming its key and the
-limit. The watch of an expression MUST end with it, however it ended.
+limit. The watch of an expression MUST end with it, however it ended. A
+debug probe's report MUST say, among its logs, what a `jq` or `yq`
+transform held at its most over what was held before it, and the limit; a
+probe that is no debug probe MUST ask for no measurement to say it.
 Each scrape stopped at this limit, a transform's or another expression's,
 MUST also be counted in `http_exporter_expression_memory_exceeded_total`,
 and a scrape another limit rejected MUST NOT. Watches that ask for a

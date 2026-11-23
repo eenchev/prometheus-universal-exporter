@@ -85,6 +85,11 @@ type Reloader interface {
 	// is that of the files replace puts in place, which the configuration
 	// put in force from them carries.
 	ReloadReplacing(trigger, generation string, replace func() (restore func() error, err error)) error
+	// Generation is the generation of the bundle whose configuration is in
+	// force, "" before the first: the one ReloadReplacing was given, from
+	// the moment the configuration it put in force answers probes, and
+	// never one of a bundle refused.
+	Generation() string
 }
 
 // Options are what a Client is made with. URL, CacheDir, Member, Advertise
@@ -628,10 +633,20 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 		return false
 	}
 	defer func() { <-slot }()
+	// The generation is the one the manager has in force, which it has
+	// from the moment the bundle's configuration answers probes. The
+	// client's own note of it is made when the reload has returned, a
+	// while after on a busy machine: a heartbeat built between the two,
+	// as the one a shutdown sends at once may be, said no generation, or
+	// the one before, for an exporter that was answering with the new one.
+	generation := c.o.Manager.Generation()
 	c.mu.Lock()
+	if generation == "" {
+		generation = c.inForce
+	}
 	c.sequence++
 	hb := allocapi.Heartbeat{Member: c.o.Member, Advertise: c.o.Advertise, Instance: c.instance, Sequence: c.sequence,
-		ShuttingDown: c.shuttingDown, Generation: c.inForce, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity, StaticTargetsPath: c.o.StaticTargetsPath}
+		ShuttingDown: c.shuttingDown, Generation: generation, Refused: c.refused, IntervalSeconds: c.reported.Seconds(), Capacity: c.o.Capacity, StaticTargetsPath: c.o.StaticTargetsPath}
 	c.mu.Unlock()
 	var reply allocapi.HeartbeatReply
 	body, err := json.Marshal(hb)

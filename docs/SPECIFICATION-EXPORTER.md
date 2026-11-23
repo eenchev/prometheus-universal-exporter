@@ -13635,9 +13635,12 @@ stored with the configuration, in the same step that puts it in force, so
 from the moment a bundle's configuration answers probes and makes the
 exporter ready the series names its generation, a refused bundle's never,
 and a bundle put in force at startup from the cache directory names its
-generation from the start. A heartbeat names the generation the client
-knows to be in force, which it learns once the reload has returned; the
-heartbeat sent at once after it names the new one. The timestamp MUST be the last answer to a bundle request, 0 before
+generation from the start. A heartbeat MUST name that generation too, the
+one whose configuration answers probes when the heartbeat is made, and not
+the one the client last finished putting in force: a reload returns to the
+client a while after its configuration is in force, and a heartbeat made
+in that while, as the one a shutdown sends at once, MUST NOT name the
+generation before it, or none. The timestamp MUST be the last answer to a bundle request, 0 before
 one; `stage` MUST be `heartbeat` (one per address a heartbeat failed for),
 `fetch` or `write`, each from zero. An exporter outside allocator mode MUST
 have none of them.

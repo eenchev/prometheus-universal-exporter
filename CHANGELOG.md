@@ -199,6 +199,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- Allocator mode: a heartbeat made just after a bundle went in force, as
+  the one a replica sends at once when it shuts down, named the generation
+  before it, or none, so the Target Allocator's status could show a
+  replica shutting down on a bundle it had left. A heartbeat now names the
+  generation that answers probes.
 - A `limits.max_script_memory` smaller than the Python interpreter itself
   holds, which one built from source can be at 40 MiB, failed every script
   with a `MemoryError` that named the limit alone. Each scrape now says

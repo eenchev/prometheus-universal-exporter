@@ -248,10 +248,13 @@ lint-version:
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
-# Every Go file, as an editor would check it; gopls check exits 0 even when it
-# reports, so any output fails the target.
+# Every Go file of the exporter's own, as an editor would check it; gopls
+# check exits 0 even when it reports, so any output fails the target. The
+# copy of gojq in third_party is a module of its own and upstream's code
+# (third_party/gojq/PATCH.md): checked as files of this one it imports
+# nothing, and what an editor would say of it is not the exporter's to fix.
 gopls-check: gopls-version
-	@out=$$(gopls check $$(git ls-files '*.go') 2>&1); \
+	@out=$$(gopls check $$(git ls-files '*.go' ':!third_party') 2>&1); \
 	if [ -n "$$out" ]; then \
 		echo "$$out"; \
 		echo "gopls reports the findings above, as an editor shows them" >&2; \

@@ -2387,7 +2387,8 @@ the release binary from GitHub work as well, as long as the version matches.
 What VS Code and other editors underline comes from gopls, the Go language
 server, not from golangci-lint, and some of its analyzers exist only in gopls
 (`writestring`, which flags `b.WriteString(a + b)`, for one). `make
-gopls-check` runs `gopls check` over every Go file and fails on any finding,
+gopls-check` runs `gopls check` over every Go file of the exporter's own,
+which the copy of gojq in `third_party` is not, and fails on any finding,
 and CI runs it too. Like the linter it is pinned (`GOPLS_VERSION`) and refuses
 another installed version; `make gopls-install` installs it, into the same
 `GOPATH/bin` the VS Code Go extension uses, so the editor then shows exactly

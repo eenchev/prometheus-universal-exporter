@@ -75,7 +75,8 @@ version in `go.mod` only names what is copied here.
    `replace` line out for the moment: `go mod download
    github.com/itchyny/gojq@<version>`.
 2. Copy the module's `*.go` files, without `*_test.go`, and its `LICENSE`
-   over this directory, keeping `maxvalue.go`, `PATCH.md` and `go.mod`
+   over this directory, keeping `maxvalue.go`, `PATCH.md`, `go.mod` and
+   `go.sum`, the two of a module that builds by itself
    (whose `require` is what the new sources import outside the standard
    library).
 3. Apply the diff above again, run `gofmt -w builtin.go`, and put the

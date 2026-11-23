@@ -39,6 +39,32 @@ const (
 	vaultServiceAccountToken = "/var/run/secrets/kubernetes.io/serviceaccount/token" //nolint:gosec // G101: a path, not a credential
 )
 
+func init() {
+	registerSecretStoreType(&SecretStoreType{
+		Name:  "vault",
+		Keys:  []string{"address", "namespace", "auth", "tls"},
+		Check: checkVaultStore,
+		New:   newVaultBackend,
+		// A Vault secret is a mapping of fields.
+		FieldRequired: true,
+		KeyRules: func() map[string]map[string]any {
+			return map[string]map[string]any{
+				"address":             {"description": "vault, required: the server's URL, such as https://vault.example.com:8200."},
+				"namespace":           {"description": "vault: the Vault Enterprise namespace the requests are made in."},
+				"auth":                {"required": []string{"method"}, "description": "vault, required: how the exporter logs in."},
+				"auth.method":         {"enum": model.SecretStoreAuthMethods, "description": "Required. token: the token of token_file, or of the VAULT_TOKEN environment variable. kubernetes: the pod's service account token is exchanged for a Vault token, as role. approle: role_id and the secret id of secret_id_file, or of VAULT_SECRET_ID."},
+				"auth.token_file":     {"description": "token: the file that holds the Vault token, read at each request, so one a Vault Agent renews is used as renewed; VAULT_TOKEN when left out."},
+				"auth.role":           {"description": "kubernetes, required: the Vault role the service account logs in as."},
+				"auth.mount":          {"description": "kubernetes and approle: where the auth method is mounted; kubernetes or approle when left out."},
+				"auth.jwt_file":       {"description": "kubernetes: the file of the service account's token; /var/run/secrets/kubernetes.io/serviceaccount/token when left out."},
+				"auth.role_id":        {"description": "approle, required: the AppRole's role id."},
+				"auth.secret_id_file": {"description": "approle: the file that holds the AppRole's secret id; VAULT_SECRET_ID when left out."},
+				"tls":                 {"description": "vault: how the server's certificate is verified, and a client certificate, as request.tls is written."},
+			}
+		},
+	})
+}
+
 // checkVaultStore holds a vault entry to its keys.
 func checkVaultStore(e *model.SecretStore) error {
 	if e.Address == "" {
@@ -97,7 +123,7 @@ type vaultBackend struct {
 	expires time.Time
 }
 
-func newVaultBackend(e model.SecretStore, timeout time.Duration) (secretBackend, error) {
+func newVaultBackend(e model.SecretStore, timeout time.Duration) (SecretBackend, error) {
 	client, err := secretClient(e.TLS, timeout)
 	if err != nil {
 		return nil, err
@@ -118,15 +144,15 @@ func newVaultBackend(e model.SecretStore, timeout time.Duration) (secretBackend,
 
 // read asks Vault for the secret, logging in first when there is no token,
 // and once more when Vault refuses the one kept.
-func (b *vaultBackend) read(ctx context.Context, ref secretRef) (secretDocument, error) {
+func (b *vaultBackend) Read(ctx context.Context, ref SecretReference) (SecretDocument, error) {
 	for attempt := 0; ; attempt++ {
 		token, kept, err := b.login(ctx)
 		if err != nil {
-			return secretDocument{}, err
+			return SecretDocument{}, err
 		}
 		status, body, err := b.get(ctx, token, ref)
 		if err != nil {
-			return secretDocument{}, err
+			return SecretDocument{}, err
 		}
 		switch {
 		case status == http.StatusOK:
@@ -136,22 +162,22 @@ func (b *vaultBackend) read(ctx context.Context, ref secretRef) (secretDocument,
 			b.forget(token)
 			continue
 		case status == http.StatusForbidden:
-			return secretDocument{}, fmt.Errorf("vault refused the read (403): %s; the token's policy must allow read on the path", vaultSaid(body))
+			return SecretDocument{}, fmt.Errorf("vault refused the read (403): %s; the token's policy must allow read on the path", vaultSaid(body))
 		case status == http.StatusNotFound:
-			return secretDocument{}, fmt.Errorf("vault has no secret at %s (404); for a KV version 2 mount the path has data/ after the mount, as secret/data/name", ref.path)
+			return SecretDocument{}, fmt.Errorf("vault has no secret at %s (404); for a KV version 2 mount the path has data/ after the mount, as secret/data/name", ref.Path)
 		}
-		return secretDocument{}, fmt.Errorf("vault answered %d: %s", status, vaultSaid(body))
+		return SecretDocument{}, fmt.Errorf("vault answered %d: %s", status, vaultSaid(body))
 	}
 }
 
-func (b *vaultBackend) get(ctx context.Context, token string, ref secretRef) (int, []byte, error) {
-	parts := strings.Split(ref.path, "/")
+func (b *vaultBackend) get(ctx context.Context, token string, ref SecretReference) (int, []byte, error) {
+	parts := strings.Split(ref.Path, "/")
 	for i, part := range parts {
 		parts[i] = url.PathEscape(part)
 	}
 	address := b.base + "/v1/" + strings.Join(parts, "/")
-	if ref.version != "" {
-		address += "?version=" + url.QueryEscape(ref.version)
+	if ref.Version != "" {
+		address += "?version=" + url.QueryEscape(ref.Version)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, http.NoBody)
 	if err != nil {
@@ -181,14 +207,14 @@ func vaultSaid(body []byte) string {
 }
 
 // vaultDocument reads the fields of a secret from Vault's answer.
-func vaultDocument(body []byte) (secretDocument, error) {
+func vaultDocument(body []byte) (SecretDocument, error) {
 	var answer struct {
 		Data map[string]any `json:"data"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&answer); err != nil {
-		return secretDocument{}, errors.New("vault's answer is not the JSON of a secret")
+		return SecretDocument{}, errors.New("vault's answer is not the JSON of a secret")
 	}
 	fields := answer.Data
 	// KV version 2 wraps the secret's fields with its metadata.
@@ -199,14 +225,14 @@ func vaultDocument(body []byte) (secretDocument, error) {
 			fields = inner
 		case nil:
 			if present {
-				return secretDocument{}, errors.New("the version of the secret asked for is deleted")
+				return SecretDocument{}, errors.New("the version of the secret asked for is deleted")
 			}
 		}
 	}
 	if fields == nil {
-		return secretDocument{}, errors.New("vault's answer has no data: the path is not a secret's")
+		return SecretDocument{}, errors.New("vault's answer has no data: the path is not a secret's")
 	}
-	return secretDocument{fields: fields, isField: true}, nil
+	return SecretDocument{Fields: fields}, nil
 }
 
 // forget drops the token kept, when it is still the one refused.

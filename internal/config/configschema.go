@@ -558,7 +558,13 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
-	return withDefaultsRules(collectorSchemaRules())
+	rules := withDefaultsRules(collectorSchemaRules())
+	// The keys of an entry of secret_stores that are of a type of store
+	// are described by that type (fetch.SecretStoreType.KeyRules).
+	for key, rule := range fetch.SecretStoreKeyRules() {
+		rules["secret_stores[]."+key] = rule
+	}
+	return rules
 }
 
 // withDefaultsRules adds to rules those of a defaults block, the same, key
@@ -606,22 +612,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"secret_stores":                                {"description": "Secret stores a credential is read from in place of a file, where a secret may not be written to disk. A key that names a credential file, such as password_file or bearer_token_file, takes a reference to one: secret://<name>/<path>#<field>. What a store answered is kept in memory for cache_ttl. See docs/AUTHENTICATION.md#secret-stores."},
 		"secret_stores[]":                              {"required": []string{"name", "type"}},
 		"secret_stores[].name":                         {"pattern": `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`, "description": "Required. Unique name of the store, which a reference names it by and its self-metrics are labelled with: letters, digits, hyphens and underscores."},
-		"secret_stores[].type":                         {"enum": model.SecretStoreTypes, "description": "Required. vault: HashiCorp Vault. gcp: Google Cloud Secret Manager. aws: AWS Secrets Manager, in the builds that have the s3file request type."},
-		"secret_stores[].address":                      {"description": "vault, required: the server's URL, such as https://vault.example.com:8200."},
-		"secret_stores[].namespace":                    {"description": "vault: the Vault Enterprise namespace the requests are made in."},
-		"secret_stores[].auth":                         {"required": []string{"method"}, "description": "vault, required: how the exporter logs in."},
-		"secret_stores[].auth.method":                  {"enum": model.SecretStoreAuthMethods, "description": "Required. token: the token of token_file, or of the VAULT_TOKEN environment variable. kubernetes: the pod's service account token is exchanged for a Vault token, as role. approle: role_id and the secret id of secret_id_file, or of VAULT_SECRET_ID."},
-		"secret_stores[].auth.token_file":              {"description": "token: the file that holds the Vault token, read at each request, so one a Vault Agent renews is used as renewed; VAULT_TOKEN when left out."},
-		"secret_stores[].auth.role":                    {"description": "kubernetes, required: the Vault role the service account logs in as."},
-		"secret_stores[].auth.mount":                   {"description": "kubernetes and approle: where the auth method is mounted; kubernetes or approle when left out."},
-		"secret_stores[].auth.jwt_file":                {"description": "kubernetes: the file of the service account's token; /var/run/secrets/kubernetes.io/serviceaccount/token when left out."},
-		"secret_stores[].auth.role_id":                 {"description": "approle, required: the AppRole's role id."},
-		"secret_stores[].auth.secret_id_file":          {"description": "approle: the file that holds the AppRole's secret id; VAULT_SECRET_ID when left out."},
-		"secret_stores[].tls":                          {"description": "vault: how the server's certificate is verified, and a client certificate, as request.tls is written."},
-		"secret_stores[].project":                      {"description": "gcp, required: the Google Cloud project whose secrets are read."},
-		"secret_stores[].credentials_file":             {"description": "gcp: a service account's key file, used in place of the metadata server's token; the GOOGLE_APPLICATION_CREDENTIALS environment variable names one when left out."},
-		"secret_stores[].region":                       {"description": "aws: the region of the secrets; the AWS SDK's own configuration, such as AWS_REGION, says it when left out."},
-		"secret_stores[].endpoint":                     {"description": "gcp and aws: the URL of the API in place of the public one, such as a private endpoint."},
+		"secret_stores[].type":                         {"enum": fetch.SecretStoreTypeNames(), "description": "Required. The kind of store: vault, HashiCorp Vault; gcp, Google Cloud Secret Manager; aws, AWS Secrets Manager, in the builds that have the s3file request type. Each takes the keys described with its name."},
 		"secret_stores[].cache_ttl":                    {"description": "How long a secret read is used before the store is asked again; 5m when left out, 0s to ask at every read."},
 		"secret_stores[].max_stale":                    {"description": "How long past cache_ttl a secret read before is still used while the store cannot be asked; 1h when left out, 0s for never."},
 		"secret_stores[].timeout":                      {"description": "The most one request to the store takes, at most 1m; 5s when left out."},

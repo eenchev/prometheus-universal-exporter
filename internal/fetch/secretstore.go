@@ -36,9 +36,11 @@ import (
 // reference in one of their keys is refused when the configuration loads
 // (SecretReferences.Check).
 //
-// A store is HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets
-// Manager, each asked over its HTTP API (secretstore_vault.go,
-// secretstore_gcp.go, secretstore_aws.go). What a store answered is kept in
+// A store is of a type, HashiCorp Vault, Google Cloud Secret Manager or AWS
+// Secrets Manager, each in a file of its own that registers it
+// (SecretStoreType: secretstore_vault.go, secretstore_gcp.go,
+// secretstore_aws.go); a further one is another such file. Everything here
+// is the same for every type. What a store answered is kept in
 // memory, by secret, for cache_ttl, so a scrape costs the store nothing
 // while it is fresh, and the fields of one secret cost one request. When
 // the store cannot be asked once that has passed, the secret kept is used
@@ -53,10 +55,6 @@ const (
 	// SecretReferencePrefix is what a reference to a secret store starts
 	// with, in a key that names a credential file.
 	SecretReferencePrefix = "secret://"
-
-	secretStoreVault = "vault"
-	secretStoreGCP   = "gcp"
-	secretStoreAWS   = "aws"
 
 	secretDefaultCacheTTL = 5 * time.Minute
 	secretDefaultMaxStale = time.Hour
@@ -78,11 +76,11 @@ func IsSecretReference(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), SecretReferencePrefix)
 }
 
-// secretRef is a reference: the store it names, the secret's path there,
-// the version asked for, "" for the current one, and the field, "" for the
-// secret whole.
-type secretRef struct {
-	store, path, version, field string
+// SecretReference is a reference as a store is asked for it: the store it
+// names, the secret's path there, the version asked for, "" for the
+// current one, and the field, "" for the secret whole.
+type SecretReference struct {
+	Store, Path, Version, Field string
 }
 
 // secretStoreNamePattern is the name an entry of secret_stores may have,
@@ -90,70 +88,70 @@ type secretRef struct {
 var secretStoreNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
 // parseSecretRef reads secret://store/path[?version=v][#field].
-func parseSecretRef(value string) (secretRef, error) {
+func parseSecretRef(value string) (SecretReference, error) {
 	written := strings.TrimSpace(value)
 	rest, ok := strings.CutPrefix(written, SecretReferencePrefix)
 	if !ok {
-		return secretRef{}, fmt.Errorf("%q is not a reference to a secret store; one is written %sstore/path#field", value, SecretReferencePrefix)
+		return SecretReference{}, fmt.Errorf("%q is not a reference to a secret store; one is written %sstore/path#field", value, SecretReferencePrefix)
 	}
 	// Which secret is read is the configuration's to say: a placeholder
 	// would let a probe choose one, and the target it is sent to.
 	if strings.Contains(rest, "{{") {
-		return secretRef{}, fmt.Errorf("%q has a placeholder; a reference to a secret store is used as it is written", written)
+		return SecretReference{}, fmt.Errorf("%q has a placeholder; a reference to a secret store is used as it is written", written)
 	}
-	var ref secretRef
+	var ref SecretReference
 	if i := strings.LastIndexByte(rest, '#'); i >= 0 {
-		rest, ref.field = rest[:i], rest[i+1:]
-		if ref.field == "" {
-			return secretRef{}, fmt.Errorf("%q ends in # and names no field after it", written)
+		rest, ref.Field = rest[:i], rest[i+1:]
+		if ref.Field == "" {
+			return SecretReference{}, fmt.Errorf("%q ends in # and names no field after it", written)
 		}
 	}
 	if i := strings.IndexByte(rest, '?'); i >= 0 {
 		query, err := url.ParseQuery(rest[i+1:])
 		if err != nil || len(query) != 1 || len(query["version"]) != 1 || query.Get("version") == "" {
-			return secretRef{}, fmt.Errorf("%q has the query %q; a reference takes ?version= alone, the version of the secret to read", written, rest[i+1:])
+			return SecretReference{}, fmt.Errorf("%q has the query %q; a reference takes ?version= alone, the version of the secret to read", written, rest[i+1:])
 		}
-		rest, ref.version = rest[:i], query.Get("version")
+		rest, ref.Version = rest[:i], query.Get("version")
 	}
-	ref.store, ref.path, _ = strings.Cut(rest, "/")
+	ref.Store, ref.Path, _ = strings.Cut(rest, "/")
 	switch {
-	case !secretStoreNamePattern.MatchString(ref.store):
-		return secretRef{}, fmt.Errorf("%q names no secret store; a reference is written %sstore/path#field, the store by its name in secret_stores", written, SecretReferencePrefix)
-	case strings.Trim(ref.path, "/") == "":
-		return secretRef{}, fmt.Errorf("%q names no secret; after the store comes the secret's path in it", written)
-	case strings.ContainsFunc(ref.path+ref.version+ref.field, func(r rune) bool { return r < 0x20 || r == 0x7f }):
-		return secretRef{}, fmt.Errorf("%q has a control character", written)
+	case !secretStoreNamePattern.MatchString(ref.Store):
+		return SecretReference{}, fmt.Errorf("%q names no secret store; a reference is written %sstore/path#field, the store by its name in secret_stores", written, SecretReferencePrefix)
+	case strings.Trim(ref.Path, "/") == "":
+		return SecretReference{}, fmt.Errorf("%q names no secret; after the store comes the secret's path in it", written)
+	case strings.ContainsFunc(ref.Path+ref.Version+ref.Field, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return SecretReference{}, fmt.Errorf("%q has a control character", written)
 	}
-	ref.path = strings.Trim(ref.path, "/")
+	ref.Path = strings.Trim(ref.Path, "/")
 	return ref, nil
 }
 
-// secretDocument is a secret as its store answered it: text, the whole of
-// a secret that is one value, or fields, those of a secret that is several.
-// A secret of text that is a JSON object has its members for fields too.
-type secretDocument struct {
-	text    string
-	fields  map[string]any
-	isField bool
+// SecretDocument is a secret as its store answered it: Text, the whole of
+// a secret that is one value, or Fields, those of a secret that is several,
+// as a Vault secret is. A store gives one of the two. A secret of text that
+// is a JSON object has its members for fields too.
+type SecretDocument struct {
+	Text   string
+	Fields map[string]any
 }
 
 // value is the field asked for, or the secret whole.
-func (d secretDocument) value(ref secretRef, written string) (string, error) {
-	if ref.field == "" {
-		if d.isField {
+func (d SecretDocument) value(ref SecretReference, written string) (string, error) {
+	if ref.Field == "" {
+		if d.Fields != nil {
 			return "", fmt.Errorf("%s names no field, and the secret has several: write the one to read after a #, as %s#password", written, written)
 		}
-		return strings.TrimSpace(d.text), nil
+		return strings.TrimSpace(d.Text), nil
 	}
-	fields := d.fields
-	if !d.isField {
-		if err := json.Unmarshal([]byte(d.text), &fields); err != nil || fields == nil {
-			return "", fmt.Errorf("%s names the field %q, and the secret is not a JSON object of fields", written, ref.field)
+	fields := d.Fields
+	if fields == nil {
+		if err := json.Unmarshal([]byte(d.Text), &fields); err != nil || fields == nil {
+			return "", fmt.Errorf("%s names the field %q, and the secret is not a JSON object of fields", written, ref.Field)
 		}
 	}
-	found, ok := fields[ref.field]
+	found, ok := fields[ref.Field]
 	if !ok {
-		return "", fmt.Errorf("%s names the field %q, which the secret does not have", written, ref.field)
+		return "", fmt.Errorf("%s names the field %q, which the secret does not have", written, ref.Field)
 	}
 	switch v := found.(type) {
 	case string:
@@ -165,19 +163,152 @@ func (d secretDocument) value(ref secretRef, written string) (string, error) {
 	case bool:
 		return strconv.FormatBool(v), nil
 	}
-	return "", fmt.Errorf("%s names the field %q, which is not text, a number or a boolean", written, ref.field)
+	return "", fmt.Errorf("%s names the field %q, which is not text, a number or a boolean", written, ref.Field)
 }
 
-// secretBackend asks one kind of store for a secret.
-type secretBackend interface {
-	read(ctx context.Context, ref secretRef) (secretDocument, error)
+// SecretBackend is one store of a type, made of its entry: it asks the
+// store for a secret, within ctx, which carries the entry's timeout. It
+// answers the secret whole, every field of it, whatever field the
+// reference names, since the answer is kept for the other fields too; and
+// it is asked by several scrapes at once. What it keeps of its own, a login
+// or a token, it keeps in memory.
+type SecretBackend interface {
+	Read(ctx context.Context, ref SecretReference) (SecretDocument, error)
+}
+
+// SecretStoreType is a kind of secret store: a value of secret_stores[].type.
+// Each registers itself from its own secretstore_<name>.go file
+// (registerSecretStoreType), and everything else, the references, the
+// cache, the use of a secret past its time, the counts, the checks of a
+// configuration and the schema, is the same for every type and asks the
+// type only what follows.
+//
+// To add one: write secretstore_<name>.go with the type's SecretBackend
+// and its registration; give model.SecretStore a field for each key the
+// type takes that no type takes yet, and list the keys in Keys; describe
+// them in KeyRules; test it against a stand-in of the store; and write its
+// section of docs/AUTHENTICATION.md and its rule of the specification's
+// § 42.6c. docs/DEVELOPMENT.md has the steps.
+type SecretStoreType struct {
+	// Name is the value of type.
+	Name string
+	// Keys are the keys of an entry the type takes, beside those every
+	// type takes (secretCommonKeys), each by its yaml name, a block such
+	// as auth or tls by its own. An entry that sets another type's key is
+	// refused, naming it.
+	Keys []string
+	// Check holds an entry to the type's rules when the configuration
+	// loads: the keys it requires and what each may be. Its error follows
+	// the entry's name, as "has no address; ...". Unset, every entry is
+	// taken. A type this build is without returns why, for every entry.
+	Check func(e *model.SecretStore) error
+	// New makes the store of a checked entry. timeout is the most one
+	// request to the store may take, for the type's HTTP client
+	// (secretClient). It reaches nothing: the first read does.
+	New func(e model.SecretStore, timeout time.Duration) (SecretBackend, error)
+	// FieldRequired says a secret of the type is fields and never one
+	// value, so a reference without a #field is refused at load.
+	FieldRequired bool
+	// KeyRules is what the configuration schema says of the type's keys:
+	// each key's description, which starts with the type's name, and its
+	// allowed values, pattern or required keys, by the key's path under
+	// an entry (auth.method). A key two types take is described by both.
+	KeyRules func() map[string]map[string]any
+}
+
+// secretStoreTypes are the types registered, by name.
+var secretStoreTypes = map[string]*SecretStoreType{}
+
+// secretCommonKeys are the keys of an entry that every type takes.
+var secretCommonKeys = []string{"name", "type", "cache_ttl", "max_stale", "timeout"}
+
+// registerSecretStoreType adds a type; its file's init calls it.
+func registerSecretStoreType(t *SecretStoreType) {
+	if t.Name == "" || t.New == nil || secretStoreTypes[t.Name] != nil {
+		panic("fetch: a secret store type without a name or a constructor, or registered twice: " + t.Name)
+	}
+	secretStoreTypes[t.Name] = t
+}
+
+// SecretStoreTypeNames are the values of secret_stores[].type, in order.
+func SecretStoreTypeNames() []string {
+	names := make([]string, 0, len(secretStoreTypes))
+	for name := range secretStoreTypes {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// SecretStoreKeyRules is what the configuration schema says of the keys of
+// the registered types (SecretStoreType.KeyRules), by each key's path under
+// an entry. The descriptions of a key that several types take are joined,
+// in the order of the types' names.
+func SecretStoreKeyRules() map[string]map[string]any {
+	rules := map[string]map[string]any{}
+	for _, name := range SecretStoreTypeNames() {
+		t := secretStoreTypes[name]
+		if t.KeyRules == nil {
+			continue
+		}
+		for key, rule := range t.KeyRules() {
+			had, shared := rules[key]
+			if !shared {
+				rules[key] = rule
+				continue
+			}
+			first, _ := had["description"].(string)
+			second, _ := rule["description"].(string)
+			had["description"] = strings.TrimSpace(first + " " + second)
+		}
+	}
+	return rules
+}
+
+// secretTypesWanted is the types an error says an entry may be of: "aws,
+// gcp or vault".
+func secretTypesWanted() string {
+	names := SecretStoreTypeNames()
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// secretTypeKeys are the keys of an entry that are of a type of store, by
+// their yaml names: the fields of model.SecretStore but those every type
+// takes.
+func secretTypeKeys() []string {
+	var keys []string
+	t := reflect.TypeOf(model.SecretStore{})
+	for i := range t.NumField() {
+		key, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if key != "" && key != "-" && !slices.Contains(secretCommonKeys, key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// secretEntryKeys are those of them that e sets.
+func secretEntryKeys(e *model.SecretStore) []string {
+	var set []string
+	v := reflect.ValueOf(e).Elem()
+	t := v.Type()
+	for i := range t.NumField() {
+		key, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if key != "" && key != "-" && !slices.Contains(secretCommonKeys, key) && !v.Field(i).IsZero() {
+			set = append(set, key)
+		}
+	}
+	return set
 }
 
 // secretStore is an entry of secret_stores in force: its backend, the
 // secrets it has read, and what it has counted.
 type secretStore struct {
 	entry    model.SecretStore
-	backend  secretBackend
+	backend  SecretBackend
 	cacheTTL time.Duration
 	maxStale time.Duration
 	timeout  time.Duration
@@ -194,7 +325,7 @@ type secretStore struct {
 // request for it at a time holds.
 type secretKept struct {
 	mu       sync.Mutex
-	document secretDocument
+	document SecretDocument
 	read     time.Time
 	err      error
 	failed   time.Time
@@ -217,10 +348,10 @@ func readSecret(value string) (string, error) {
 	written := strings.TrimSpace(value)
 	var store *secretStore
 	if stores := secretStoresInForce.Load(); stores != nil {
-		store = (*stores)[ref.store]
+		store = (*stores)[ref.Store]
 	}
 	if store == nil {
-		return "", fmt.Errorf("%s names the secret store %q, and secret_stores has none of that name", written, ref.store)
+		return "", fmt.Errorf("%s names the secret store %q, and secret_stores has none of that name", written, ref.Store)
 	}
 	document, err := store.document(ref)
 	if err != nil {
@@ -235,10 +366,10 @@ func readSecret(value string) (string, error) {
 
 // secretShown is a reference as a failure names it: without its field's
 // value, which it never had, and whole, since nothing of it is secret.
-func secretShown(ref secretRef) string {
-	shown := SecretReferencePrefix + ref.store + "/" + ref.path
-	if ref.version != "" {
-		shown += "?version=" + ref.version
+func secretShown(ref SecretReference) string {
+	shown := SecretReferencePrefix + ref.Store + "/" + ref.Path
+	if ref.Version != "" {
+		shown += "?version=" + ref.Version
 	}
 	return shown
 }
@@ -246,8 +377,8 @@ func secretShown(ref secretRef) string {
 // document is the secret of ref: the one kept while it is fresh, and
 // otherwise the store's answer, or, when the store fails, the one kept for
 // as long as max_stale lets it be used.
-func (s *secretStore) document(ref secretRef) (secretDocument, error) {
-	key := ref.path + "\x00" + ref.version
+func (s *secretStore) document(ref SecretReference) (SecretDocument, error) {
+	key := ref.Path + "\x00" + ref.Version
 	s.mu.Lock()
 	kept := s.kept[key]
 	if kept == nil {
@@ -272,10 +403,10 @@ func (s *secretStore) document(ref secretRef) (secretDocument, error) {
 			s.stale.Add(1)
 			return kept.document, nil
 		}
-		return secretDocument{}, kept.err
+		return SecretDocument{}, kept.err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	document, err := s.backend.read(ctx, ref)
+	document, err := s.backend.Read(ctx, ref)
 	cancel()
 	s.requests.Add(1)
 	if err == nil {
@@ -289,7 +420,7 @@ func (s *secretStore) document(ref secretRef) (secretDocument, error) {
 	first := kept.err == nil
 	kept.err, kept.failed = err, secretNow()
 	if !usable {
-		return secretDocument{}, err
+		return SecretDocument{}, err
 	}
 	s.stale.Add(1)
 	if first {
@@ -324,20 +455,10 @@ func ValidateSecretStores(entries []model.SecretStore) error {
 	return model.JoinProblems(errs...)
 }
 
-// checkSecretStore holds an entry to its type.
+// checkSecretStore holds an entry to what every type is held to, and to
+// its type: the type is one this build knows, the entry sets no key of
+// another type, and the type's own rules take it.
 func checkSecretStore(e *model.SecretStore) error {
-	other := func(keys ...string) error {
-		set := map[string]bool{
-			"address": e.Address != "", "namespace": e.Namespace != "", "auth": e.Auth != nil, "tls": e.TLS != (model.TLSConfig{}),
-			"project": e.Project != "", "credentials_file": e.CredentialsFile != "", "region": e.Region != "", "endpoint": e.Endpoint != "",
-		}
-		for _, key := range keys {
-			if set[key] {
-				return fmt.Errorf("sets %s, which a store of type %s does not take", key, e.Type)
-			}
-		}
-		return nil
-	}
 	switch {
 	case e.CacheTTL != nil && *e.CacheTTL < 0:
 		return fmt.Errorf("has a cache_ttl of %s; it is how long a secret read is used before the store is asked again, 0 to ask at every read", time.Duration(*e.CacheTTL))
@@ -345,39 +466,22 @@ func checkSecretStore(e *model.SecretStore) error {
 		return fmt.Errorf("has a max_stale of %s; it is how long past cache_ttl a secret is used while the store cannot be asked, 0 for never", time.Duration(*e.MaxStale))
 	case e.Timeout < 0 || time.Duration(e.Timeout) > secretMaxTimeout:
 		return fmt.Errorf("has a timeout of %s; it bounds one request to the store, at most %s, 5s when left out", time.Duration(e.Timeout), secretMaxTimeout)
+	case e.Type == "":
+		return fmt.Errorf("has no type; want %s", secretTypesWanted())
 	}
-	switch e.Type {
-	case "":
-		return errors.New("has no type; want vault, gcp or aws")
-	case secretStoreVault:
-		if err := other("project", "credentials_file", "region", "endpoint"); err != nil {
-			return err
+	t := secretStoreTypes[e.Type]
+	if t == nil {
+		return fmt.Errorf("has the type %q; want %s, in lower case", e.Type, secretTypesWanted())
+	}
+	for _, key := range secretEntryKeys(e) {
+		if !slices.Contains(t.Keys, key) {
+			return fmt.Errorf("sets %s, which a store of type %s does not take", key, e.Type)
 		}
-		return checkVaultStore(e)
-	case secretStoreGCP:
-		if err := other("address", "namespace", "auth", "tls", "region"); err != nil {
-			return err
-		}
-		if err := checkSecretStoreURL("endpoint", e.Endpoint); err != nil {
-			return err
-		}
-		if strings.TrimSpace(e.Project) == "" {
-			return errors.New("has no project; name the Google Cloud project whose secrets are read")
-		}
-		if IsSecretReference(e.CredentialsFile) {
-			return errors.New("has a credentials_file that is a reference to a secret store; the key a store is reached with is a file")
-		}
+	}
+	if t.Check == nil {
 		return nil
-	case secretStoreAWS:
-		if err := other("address", "namespace", "auth", "tls", "project", "credentials_file"); err != nil {
-			return err
-		}
-		if err := checkSecretStoreURL("endpoint", e.Endpoint); err != nil {
-			return err
-		}
-		return checkAWSStore(e)
 	}
-	return fmt.Errorf("has the type %q; want vault, gcp or aws, in lower case", e.Type)
+	return t.Check(e)
 }
 
 // checkSecretStoreURL holds a store's address or endpoint to an http or
@@ -405,16 +509,14 @@ func newSecretStore(e model.SecretStore) (*secretStore, error) {
 	if e.Timeout > 0 {
 		s.timeout = time.Duration(e.Timeout)
 	}
+	t := secretStoreTypes[e.Type]
+	if t == nil {
+		return s, fmt.Errorf("secret_stores has no type %q in this build", e.Type)
+	}
 	var err error
-	switch e.Type {
-	case secretStoreVault:
-		s.backend, err = newVaultBackend(e, s.timeout)
-	case secretStoreGCP:
-		s.backend, err = newGCPBackend(e, s.timeout)
-	case secretStoreAWS:
-		s.backend, err = newAWSBackend(e, s.timeout)
-	default:
-		err = fmt.Errorf("type %q", e.Type)
+	s.backend, err = t.New(e, s.timeout)
+	if err == nil && s.backend == nil {
+		err = fmt.Errorf("the %s secret store made no store of its entry", e.Type)
 	}
 	return s, err
 }
@@ -460,8 +562,8 @@ func FollowSecretStores(entries []model.SecretStore) {
 // failedBackend is the backend of a store that could not be made.
 type failedBackend struct{ err error }
 
-func (b failedBackend) read(context.Context, secretRef) (secretDocument, error) {
-	return secretDocument{}, b.err
+func (b failedBackend) Read(context.Context, SecretReference) (SecretDocument, error) {
+	return SecretDocument{}, b.err
 }
 
 // SecretStoreCount is what a store of secret_stores has counted: the
@@ -535,7 +637,7 @@ func (names SecretReferences) Check(what, name string, v any) error {
 var (
 	errSecretFileKey  = errors.New("a reference to a secret store, and the key names a file that is opened as one: a secret store holds the passwords and tokens the exporter reads at a scrape, not certificates, keys or descriptors")
 	errSecretOtherKey = errors.New("a reference to a secret store, which only a key that names a credential file takes, such as password_file")
-	errSecretNoField  = errors.New("which names no field; a Vault secret is fields, so write the one to read after a #, as secret://store/path#password")
+	errSecretNoField  = errors.New("which names no field; a secret of its store is fields, so write the one to read after a #, as secret://store/path#password")
 )
 
 // secretFieldKeysOf keeps, by struct type, the yaml key of each field, "-"
@@ -625,9 +727,9 @@ func (names SecretReferences) walk(v reflect.Value, key string) (at, written str
 			return key, value, errSecretOtherKey
 		case err != nil:
 			return key, "", err
-		case names[ref.store] == "":
-			return key, "", fmt.Errorf("it names the secret store %q, and secret_stores has none of that name", ref.store)
-		case names[ref.store] == secretStoreVault && ref.field == "":
+		case names[ref.Store] == "":
+			return key, "", fmt.Errorf("it names the secret store %q, and secret_stores has none of that name", ref.Store)
+		case ref.Field == "" && secretStoreTypes[names[ref.Store]] != nil && secretStoreTypes[names[ref.Store]].FieldRequired:
 			return key, value, errSecretNoField
 		}
 	}

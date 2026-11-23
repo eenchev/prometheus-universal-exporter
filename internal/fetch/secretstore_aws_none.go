@@ -14,8 +14,14 @@ import (
 // links (secretstore_aws.go).
 var errNoAWSStore = errors.New("is of type aws, and this build has no aws secret store, which comes with the s3file request type; build with s3file among REQUEST_TYPES")
 
-func checkAWSStore(*model.SecretStore) error { return errNoAWSStore }
-
-func newAWSBackend(model.SecretStore, time.Duration) (secretBackend, error) {
-	return nil, errNoAWSStore
+// The type is registered all the same, so that its name and keys are the
+// schema's in every build, and refuses every entry.
+func init() {
+	registerSecretStoreType(&SecretStoreType{
+		Name:     "aws",
+		Keys:     awsStoreKeys,
+		Check:    func(*model.SecretStore) error { return errNoAWSStore },
+		New:      func(model.SecretStore, time.Duration) (SecretBackend, error) { return nil, errNoAWSStore },
+		KeyRules: awsStoreKeyRules,
+	})
 }

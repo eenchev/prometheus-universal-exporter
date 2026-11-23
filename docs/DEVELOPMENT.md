@@ -589,6 +589,47 @@ true of it by hand. Most have no test that fails when the type is left out
   and, for a type that reaches a server over TCP, the comments opening
   `internal/fetch/nettypes.go` and `nettls.go`.
 
+### Adding a secret store
+
+A [secret store](AUTHENTICATION.md#secret-stores) is of a type, a value of
+`secret_stores[].type`, and each type is one file,
+`internal/fetch/secretstore_<name>.go`, that registers a
+`fetch.SecretStoreType` from its `init`. Everything else is the same for
+every type and lives in `secretstore.go`: the references, the cache, the use
+of a secret past `cache_ttl`, the counts and self-metrics, the checks of a
+configuration, and the schema. To add a type:
+
+1. **The store.** Write a `SecretBackend`: `Read(ctx, ref)` asks the store
+   for the secret at `ref.Path`, of `ref.Version` when it is set, within
+   `ctx`, and answers a `SecretDocument`: `Text` for a secret that is one
+   value, `Fields` for one that is several. It answers the secret whole,
+   whatever field the reference names, and is asked by several scrapes at
+   once. `secretClient` makes its HTTP client, `secretHTTP` a request held
+   to the answer's bound, and `secretStoreSaid` what a refusal says, masked.
+2. **The registration.** `Name`; `Keys`, the keys of an entry the type
+   takes beside the five every type takes; `Check`, its rules at load;
+   `New`, its constructor; `FieldRequired` when its secrets are always
+   fields; and `KeyRules`, each key's description for the schema, starting
+   with the type's name.
+3. **The keys.** A key no type takes yet is a new field of
+   `model.SecretStore`; a key another type has is shared, each type
+   describing it.
+4. **A type some builds are without** registers in every build, as `aws`
+   does, with a `Check` that says how to build with it, so its name and
+   keys are in every build's schema.
+5. **Tests**, against a stand-in of the store, as `secretstore_test.go` has
+   for the others; `make schemas`; and a row in
+   `test/repository/schemakeys_http_test.go` for a key the schema holds to
+   values or a pattern.
+6. **Documentation.** Its section of
+   [AUTHENTICATION.md](AUTHENTICATION.md#secret-stores), with an example
+   that loads, its rule in § 42.6c of the specification, and a line of the
+   changelog.
+
+A test fails for a type without a constructor, with a key
+`model.SecretStore` has no field for, or with a key it does not describe,
+and for a page that leaves a type out.
+
 ## Running the tests
 
 There are two tiers. While you write a change, run the quick one:

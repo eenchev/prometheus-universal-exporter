@@ -11099,6 +11099,15 @@ values from its answer, and send the value `token` names as the token.
 file. An entry MUST have a `name`, unique, of letters, digits, hyphens and
 underscores, and a `type`: `vault`, `gcp` or `aws`.
 
+Each type MUST be one registration in the source: its name, the keys of an
+entry it takes, its rules, its constructor and the schema's description of
+its keys. The references, the cache, the use of a secret past its time, the
+counts and the checks of a configuration MUST be the same for every type,
+and a further type MUST need none of them changed. An entry that sets a key
+its type does not take MUST be refused at load, naming the key and the
+type, and the values of `type` in the schema and in a refusal MUST be the
+types registered.
+
 - A key that names a credential file, of a collector and of a static
   target, MUST take a reference, `secret://<store>/<path>[?version=<v>][#<field>]`,
   wherever the file is read as a credential at a scrape, and the credential

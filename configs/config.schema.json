@@ -8299,7 +8299,7 @@
             ]
           },
           "endpoint": {
-            "description": "gcp and aws: the URL of the API in place of the public one, such as a private endpoint.",
+            "description": "aws: the URL of the API in place of the public one, such as a VPC endpoint. gcp: the URL of the API in place of the public one, such as a private endpoint.",
             "type": [
               "string",
               "number",
@@ -8448,11 +8448,11 @@
             "type": "object"
           },
           "type": {
-            "description": "Required. vault: HashiCorp Vault. gcp: Google Cloud Secret Manager. aws: AWS Secrets Manager, in the builds that have the s3file request type.",
+            "description": "Required. The kind of store: vault, HashiCorp Vault; gcp, Google Cloud Secret Manager; aws, AWS Secrets Manager, in the builds that have the s3file request type. Each takes the keys described with its name.",
             "enum": [
-              "vault",
+              "aws",
               "gcp",
-              "aws"
+              "vault"
             ],
             "type": "string"
           }

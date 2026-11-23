@@ -449,9 +449,13 @@ type HostRateLimit struct {
 
 // SecretStore is an entry of secret_stores: a store of secrets the
 // exporter reads credentials from, kept in its memory for CacheTTL and
-// never written to disk. Type says which: vault, HashiCorp Vault's HTTP
+// never written to disk. Type says which kind it is, one the fetch package
+// has registered (fetch.SecretStoreType): vault, HashiCorp Vault's HTTP
 // API at Address, logged in to as Auth says; gcp, Google Cloud Secret
-// Manager for Project; aws, AWS Secrets Manager in Region.
+// Manager for Project; aws, AWS Secrets Manager in Region. Name, Type,
+// CacheTTL, MaxStale and Timeout are every type's; each other key is of
+// the types that list it (SecretStoreType.Keys), and a new type's keys are
+// further fields here.
 type SecretStore struct {
 	// Name is what a reference names the store by, and the store label of
 	// its self-metrics.
@@ -500,12 +504,8 @@ type SecretStoreAuth struct {
 	SecretIDFile string `yaml:"secret_id_file"`
 }
 
-// SecretStoreTypes are the values of secret_stores[].type, and
-// SecretStoreAuthMethods those of a vault store's auth.method.
-var (
-	SecretStoreTypes       = []string{"vault", "gcp", "aws"}
-	SecretStoreAuthMethods = []string{"token", "kubernetes", "approle"}
-)
+// SecretStoreAuthMethods are the values of a vault store's auth.method.
+var SecretStoreAuthMethods = []string{"token", "kubernetes", "approle"}
 
 // LoginConfig is request.login: how the exporter logs in to get the token
 // it sends to an http or graphite target. Type json posts a JSON object of

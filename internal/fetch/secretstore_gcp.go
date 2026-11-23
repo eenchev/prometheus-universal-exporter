@@ -42,6 +42,36 @@ const (
 	gcpJWTGrant        = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 )
 
+func init() {
+	registerSecretStoreType(&SecretStoreType{
+		Name:  "gcp",
+		Keys:  []string{"project", "credentials_file", "endpoint"},
+		Check: checkGCPStore,
+		New:   newGCPBackend,
+		KeyRules: func() map[string]map[string]any {
+			return map[string]map[string]any{
+				"project":          {"description": "gcp, required: the Google Cloud project whose secrets are read."},
+				"credentials_file": {"description": "gcp: a service account's key file, used in place of the metadata server's token; the GOOGLE_APPLICATION_CREDENTIALS environment variable names one when left out."},
+				"endpoint":         {"description": "gcp: the URL of the API in place of the public one, such as a private endpoint."},
+			}
+		},
+	})
+}
+
+// checkGCPStore holds a gcp entry to its keys.
+func checkGCPStore(e *model.SecretStore) error {
+	if err := checkSecretStoreURL("endpoint", e.Endpoint); err != nil {
+		return err
+	}
+	if strings.TrimSpace(e.Project) == "" {
+		return errors.New("has no project; name the Google Cloud project whose secrets are read")
+	}
+	if IsSecretReference(e.CredentialsFile) {
+		return errors.New("has a credentials_file that is a reference to a secret store; the key a store is reached with is a file")
+	}
+	return nil
+}
+
 type gcpBackend struct {
 	endpoint, project string
 	credentialsFile   string
@@ -52,7 +82,7 @@ type gcpBackend struct {
 	expires time.Time
 }
 
-func newGCPBackend(e model.SecretStore, timeout time.Duration) (secretBackend, error) {
+func newGCPBackend(e model.SecretStore, timeout time.Duration) (SecretBackend, error) {
 	client, err := secretClient(model.TLSConfig{}, timeout)
 	if err != nil {
 		return nil, err
@@ -64,28 +94,28 @@ func newGCPBackend(e model.SecretStore, timeout time.Duration) (secretBackend, e
 	return b, nil
 }
 
-func (b *gcpBackend) read(ctx context.Context, ref secretRef) (secretDocument, error) {
-	if strings.Contains(ref.path, "/") {
-		return secretDocument{}, fmt.Errorf("%q is not the name of a secret; a gcp reference names the secret alone, in the store's project", ref.path)
+func (b *gcpBackend) Read(ctx context.Context, ref SecretReference) (SecretDocument, error) {
+	if strings.Contains(ref.Path, "/") {
+		return SecretDocument{}, fmt.Errorf("%q is not the name of a secret; a gcp reference names the secret alone, in the store's project", ref.Path)
 	}
-	version := ref.version
+	version := ref.Version
 	if version == "" {
 		version = "latest"
 	}
-	address := b.endpoint + "/v1/projects/" + url.PathEscape(b.project) + "/secrets/" + url.PathEscape(ref.path) + "/versions/" + url.PathEscape(version) + ":access"
+	address := b.endpoint + "/v1/projects/" + url.PathEscape(b.project) + "/secrets/" + url.PathEscape(ref.Path) + "/versions/" + url.PathEscape(version) + ":access"
 	for attempt := 0; ; attempt++ {
 		token, kept, err := b.accessToken(ctx)
 		if err != nil {
-			return secretDocument{}, err
+			return SecretDocument{}, err
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, http.NoBody)
 		if err != nil {
-			return secretDocument{}, err
+			return SecretDocument{}, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		status, body, err := secretHTTP(b.client, req)
 		if err != nil {
-			return secretDocument{}, err
+			return SecretDocument{}, err
 		}
 		switch {
 		case status == http.StatusOK:
@@ -95,20 +125,20 @@ func (b *gcpBackend) read(ctx context.Context, ref secretRef) (secretDocument, e
 				} `json:"payload"`
 			}
 			if err := json.Unmarshal(body, &answer); err != nil {
-				return secretDocument{}, errors.New("secret manager's answer is not the JSON of a secret version")
+				return SecretDocument{}, errors.New("secret manager's answer is not the JSON of a secret version")
 			}
 			data, err := base64.StdEncoding.DecodeString(answer.Payload.Data)
 			if err != nil {
-				return secretDocument{}, errors.New("secret manager's answer has a payload that is not base64")
+				return SecretDocument{}, errors.New("secret manager's answer has a payload that is not base64")
 			}
-			return secretDocument{text: string(data)}, nil
+			return SecretDocument{Text: string(data)}, nil
 		case status == http.StatusUnauthorized && kept && attempt == 0:
 			b.mu.Lock()
 			b.token = ""
 			b.mu.Unlock()
 			continue
 		}
-		return secretDocument{}, fmt.Errorf("secret manager answered %d: %s", status, gcpSaid(body))
+		return SecretDocument{}, fmt.Errorf("secret manager answered %d: %s", status, gcpSaid(body))
 	}
 }
 

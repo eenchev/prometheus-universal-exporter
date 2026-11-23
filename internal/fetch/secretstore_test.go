@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,12 +10,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -364,7 +368,7 @@ func TestSecretStoresAreCheckedAtLoad(t *testing.T) {
 		"has no name":                              vault(func(e *model.SecretStore) { e.Name = "" }),
 		"has an invalid name":                      vault(func(e *model.SecretStore) { e.Name = "my store" }),
 		"is named twice":                           append(vault(func(*model.SecretStore) {}), vault(func(*model.SecretStore) {})...),
-		"has no type; want vault, gcp or aws":      vault(func(e *model.SecretStore) { e.Type = "" }),
+		"has no type; want aws, gcp or vault":      vault(func(e *model.SecretStore) { e.Type = "" }),
 		`has the type "azure"`:                     vault(func(e *model.SecretStore) { e.Type = "azure" }),
 		"has no address":                           vault(func(e *model.SecretStore) { e.Address = "" }),
 		`has the address "vault.example.com:8200"`: vault(func(e *model.SecretStore) { e.Address = "vault.example.com:8200" }),
@@ -428,5 +432,148 @@ func TestReferencesToSecretStoresAreChecked(t *testing.T) {
 	})
 	if err := NewSecretReferences(stores).Check("collector", "c", taken); err != nil {
 		t.Error(err)
+	}
+}
+
+// memoryStore is a secret store of a type a test registers: its secrets
+// are those of its map, by path, and it counts how often it is asked.
+type memoryStore struct {
+	secrets map[string]SecretDocument
+	asked   int
+}
+
+func (m *memoryStore) Read(_ context.Context, ref SecretReference) (SecretDocument, error) {
+	m.asked++
+	document, ok := m.secrets[ref.Path+ref.Version]
+	if !ok {
+		return SecretDocument{}, errors.New("no such secret")
+	}
+	return document, nil
+}
+
+// A further kind of store is a type registered with its keys, its check
+// and its constructor, and nothing else: its entries are checked, a
+// reference to one is read through it, with the cache, the fields and the
+// counts every store has, an entry with a key that is not its type's is
+// refused, and one whose secrets are fields requires a field of a
+// reference.
+func TestAFurtherSecretStoreTypeIsARegistration(t *testing.T) {
+	store := &memoryStore{secrets: map[string]SecretDocument{
+		"db":     {Fields: map[string]any{"password": "p4ss", "port": 5432.0}},
+		"token":  {Text: " tok-1\n"},
+		"token2": {Text: "tok-2"},
+		"json":   {Text: `{"key":"abc","on":true}`},
+	}}
+	registerSecretStoreType(&SecretStoreType{
+		Name: "memory",
+		Keys: []string{"endpoint"},
+		Check: func(e *model.SecretStore) error {
+			if e.Endpoint == "" {
+				return errors.New("has no endpoint")
+			}
+			return nil
+		},
+		New: func(model.SecretStore, time.Duration) (SecretBackend, error) { return store, nil },
+	})
+	registerSecretStoreType(&SecretStoreType{
+		Name:          "fields",
+		New:           func(model.SecretStore, time.Duration) (SecretBackend, error) { return store, nil },
+		FieldRequired: true,
+	})
+	t.Cleanup(func() {
+		delete(secretStoreTypes, "memory")
+		delete(secretStoreTypes, "fields")
+	})
+	if names := SecretStoreTypeNames(); !reflect.DeepEqual(names, []string{"aws", "fields", "gcp", "memory", "vault"}) {
+		t.Errorf("types %v", names)
+	}
+	for want, entry := range map[string]model.SecretStore{
+		`secret_stores entry "m" has no endpoint`:                                       {Name: "m", Type: "memory"},
+		`secret_stores entry "m" sets project, which a store of type memory does not t`: {Name: "m", Type: "memory", Endpoint: "x", Project: "p"},
+		`secret_stores entry "f" sets endpoint, which a store of type fields does not`:  {Name: "f", Type: "fields", Endpoint: "x"},
+		`has the type "other"; want aws, fields, gcp, memory or vault`:                  {Name: "o", Type: "other"},
+	} {
+		if err := ValidateSecretStores([]model.SecretStore{entry}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err=%v, want %q", err, want)
+		}
+	}
+	entries := []model.SecretStore{{Name: "m", Type: "memory", Endpoint: "x"}, {Name: "f", Type: "fields"}}
+	storesInForce(t, entries...)
+	for ref, want := range map[string]string{
+		"secret://m/db#password":     "p4ss",
+		"secret://m/db#port":         "5432",
+		"secret://m/token":           "tok-1",
+		"secret://m/token?version=2": "tok-2",
+		"secret://m/json#key":        "abc",
+		"secret://m/json#on":         "true",
+	} {
+		for range 2 {
+			if got, err := ReadCredentialFile(ref); err != nil || got != want {
+				t.Errorf("%s: %q, %v; want %q", ref, got, err, want)
+			}
+		}
+	}
+	if store.asked != 4 {
+		t.Errorf("the store was asked %d times for four secrets", store.asked)
+	}
+	if _, err := ReadCredentialFile("secret://m/db"); err == nil || !strings.Contains(err.Error(), "names no field, and the secret has several") {
+		t.Errorf("a secret of fields read whole: %v", err)
+	}
+	if _, err := ReadCredentialFile("secret://m/missing"); err == nil || !strings.Contains(err.Error(), "reading secret://m/missing: no such secret") {
+		t.Errorf("err=%v", err)
+	}
+	if c := SecretStoreCounts(); len(c) != 2 || c[1].Name != "m" || c[1].Requests != 5 || c[1].Failed != 1 {
+		t.Errorf("counts %+v", c)
+	}
+	references := NewSecretReferences(entries)
+	c := &model.Collector{Name: "c"}
+	c.Request.PasswordFile = "secret://f/db"
+	if err := references.Check("collector", "c", c); err == nil || !strings.Contains(err.Error(), "which names no field; a secret of its store is fields") {
+		t.Errorf("err=%v", err)
+	}
+	c.Request.PasswordFile = "secret://m/token"
+	if err := references.Check("collector", "c", c); err != nil {
+		t.Error(err)
+	}
+}
+
+// Every type of store registered says what the rest asks of it: a
+// constructor, keys that are keys of an entry, and a description of each
+// for the schema that names the type; and every key of an entry that is
+// not every type's is some type's.
+func TestEverySecretStoreTypeIsWhole(t *testing.T) {
+	entryKeys := secretTypeKeys()
+	taken := map[string]bool{}
+	rules := SecretStoreKeyRules()
+	for _, name := range SecretStoreTypeNames() {
+		st := secretStoreTypes[name]
+		if st.New == nil || st.KeyRules == nil {
+			t.Errorf("%s: no constructor or no key rules", name)
+			continue
+		}
+		own := st.KeyRules()
+		for _, key := range st.Keys {
+			taken[key] = true
+			if !slices.Contains(entryKeys, key) {
+				t.Errorf("%s takes the key %s, which model.SecretStore has no field for", name, key)
+			}
+			description, _ := own[key]["description"].(string)
+			if !strings.HasPrefix(description, name) {
+				t.Errorf("%s describes its key %s as %q; want a description that starts with the type's name", name, key, description)
+			}
+			if shared, _ := rules[key]["description"].(string); !strings.Contains(shared, description) {
+				t.Errorf("the schema's description of %s, %q, has not %s's", key, shared, name)
+			}
+		}
+		for key := range own {
+			if top, _, _ := strings.Cut(key, "."); !slices.Contains(st.Keys, top) {
+				t.Errorf("%s describes the key %s, which it does not take", name, key)
+			}
+		}
+	}
+	for _, key := range entryKeys {
+		if !taken[key] {
+			t.Errorf("model.SecretStore has the key %s, which no type of store takes", key)
+		}
 	}
 }

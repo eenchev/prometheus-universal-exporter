@@ -42,10 +42,17 @@ type awsBackend struct {
 	cfg *aws.Config
 }
 
-// checkAWSStore holds an aws entry to its keys; this build has the store.
-func checkAWSStore(*model.SecretStore) error { return nil }
+func init() {
+	registerSecretStoreType(&SecretStoreType{
+		Name:     "aws",
+		Keys:     awsStoreKeys,
+		Check:    func(e *model.SecretStore) error { return checkSecretStoreURL("endpoint", e.Endpoint) },
+		New:      newAWSBackend,
+		KeyRules: awsStoreKeyRules,
+	})
+}
 
-func newAWSBackend(e model.SecretStore, timeout time.Duration) (secretBackend, error) {
+func newAWSBackend(e model.SecretStore, timeout time.Duration) (SecretBackend, error) {
 	client, err := secretClient(model.TLSConfig{}, timeout)
 	if err != nil {
 		return nil, err
@@ -76,25 +83,25 @@ func (b *awsBackend) configuration(ctx context.Context) (*aws.Config, error) {
 	return b.cfg, nil
 }
 
-func (b *awsBackend) read(ctx context.Context, ref secretRef) (secretDocument, error) {
+func (b *awsBackend) Read(ctx context.Context, ref SecretReference) (SecretDocument, error) {
 	cfg, err := b.configuration(ctx)
 	if err != nil {
-		return secretDocument{}, err
+		return SecretDocument{}, err
 	}
 	credentials, err := cfg.Credentials.Retrieve(ctx)
 	if err != nil {
-		return secretDocument{}, fmt.Errorf("finding AWS credentials: %w", err)
+		return SecretDocument{}, fmt.Errorf("finding AWS credentials: %w", err)
 	}
-	ask := map[string]string{"SecretId": ref.path}
+	ask := map[string]string{"SecretId": ref.Path}
 	switch {
-	case strings.HasPrefix(ref.version, "AWS"):
-		ask["VersionStage"] = ref.version
-	case ref.version != "":
-		ask["VersionId"] = ref.version
+	case strings.HasPrefix(ref.Version, "AWS"):
+		ask["VersionStage"] = ref.Version
+	case ref.Version != "":
+		ask["VersionId"] = ref.Version
 	}
 	payload, err := json.Marshal(ask)
 	if err != nil {
-		return secretDocument{}, err
+		return SecretDocument{}, err
 	}
 	endpoint := b.endpoint
 	if endpoint == "" {
@@ -106,17 +113,17 @@ func (b *awsBackend) read(ctx context.Context, ref secretRef) (secretDocument, e
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/", bytes.NewReader(payload))
 	if err != nil {
-		return secretDocument{}, err
+		return SecretDocument{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
 	hash := sha256.Sum256(payload)
 	if err := v4.NewSigner().SignHTTP(ctx, credentials, req, hex.EncodeToString(hash[:]), "secretsmanager", cfg.Region, time.Now()); err != nil {
-		return secretDocument{}, fmt.Errorf("signing the request: %w", err)
+		return SecretDocument{}, fmt.Errorf("signing the request: %w", err)
 	}
 	status, body, err := secretHTTP(b.client, req)
 	if err != nil {
-		return secretDocument{}, err
+		return SecretDocument{}, err
 	}
 	if status != http.StatusOK {
 		var refusal struct {
@@ -125,23 +132,23 @@ func (b *awsBackend) read(ctx context.Context, ref secretRef) (secretDocument, e
 			Upper   string `json:"Message"`
 		}
 		if json.Unmarshal(body, &refusal) == nil && refusal.Type != "" {
-			return secretDocument{}, fmt.Errorf("secrets manager answered %d: %s", status, secretStoreSaid([]byte(strings.TrimSpace(refusal.Type+" "+refusal.Message+refusal.Upper))))
+			return SecretDocument{}, fmt.Errorf("secrets manager answered %d: %s", status, secretStoreSaid([]byte(strings.TrimSpace(refusal.Type+" "+refusal.Message+refusal.Upper))))
 		}
-		return secretDocument{}, fmt.Errorf("secrets manager answered %d: %s", status, secretStoreSaid(body))
+		return SecretDocument{}, fmt.Errorf("secrets manager answered %d: %s", status, secretStoreSaid(body))
 	}
 	var answer struct {
 		SecretString *string `json:"SecretString"`
 		SecretBinary string  `json:"SecretBinary"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil {
-		return secretDocument{}, errors.New("secrets manager's answer is not the JSON of a secret")
+		return SecretDocument{}, errors.New("secrets manager's answer is not the JSON of a secret")
 	}
 	if answer.SecretString != nil {
-		return secretDocument{text: *answer.SecretString}, nil
+		return SecretDocument{Text: *answer.SecretString}, nil
 	}
 	binary, err := base64.StdEncoding.DecodeString(answer.SecretBinary)
 	if err != nil || len(binary) == 0 {
-		return secretDocument{}, errors.New("secrets manager's answer has neither a SecretString nor a SecretBinary")
+		return SecretDocument{}, errors.New("secrets manager's answer has neither a SecretString nor a SecretBinary")
 	}
-	return secretDocument{text: string(binary)}, nil
+	return SecretDocument{Text: string(binary)}, nil
 }

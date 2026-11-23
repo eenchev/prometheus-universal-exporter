@@ -3299,8 +3299,9 @@ apart from what was printed; another level MUST fail the script. A run's
 first 20 lines MUST be written, each by its first 1,024 characters and how
 many more it had, whatever the script printed, and how many more lines
 there were said in a line at `warning`. What a script logged before it
-failed MUST be written so too, with its failure, and what it printed
-before it as what a script that did not fail printed is, where the
+failed MUST be written so too, with its failure, and the last 1,024
+characters of what it printed before it, with how many more came before
+them, in one line at `warn`, where the
 failure's line has the room for it under `limits.max_output_bytes`, and
 what it logged alone where the line has the room for that only; the
 failure MUST be what it is without them, and never cut for them.
@@ -3860,7 +3861,11 @@ typical script.
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
-  naming the limit and leave the worker in service. It MUST be at least 32MiB
+  naming the limit and leave the worker in service. Under a limit that the
+  interpreter's address space is already past when the limit would be set,
+  the limit MUST NOT be set and every run MUST fail saying that the limit
+  is less than what the interpreter holds, how much that is, and a limit
+  to set, with the worker left in service. It MUST be at least 32MiB
   or `0`, the default, for none; a smaller one MUST be refused at load. A
   different limit MUST mean a different pool of workers. What counts against
   the limit is the interpreter, the preloaded libraries and what the script
@@ -5484,12 +5489,12 @@ transform MAY be stopped for what other scrapes hold beside it, and MAY hold
 up to twice the limit before it is stopped; it MUST NOT be stopped for
 holding less than the limit when nothing else grows. A transform that ends
 within 20 milliseconds MUST cost no measurement. A transform stopped for its
-time MUST still fail as one, with the deadline's error. A transform MAY
-also be stopped when a single value larger than the limit was made while
-it was measured and the heap is counted past the limit, as of a text
-doubled at every step, of which nothing is certainly held; one such step
-is not interrupted, so such a transform MAY hold several times the limit
-before it is stopped. The
+time MUST still fail as one, with the deadline's error. A text
+of more bytes than the limit, or an array of more items than a sixteenth
+of it, that an operator or a builtin function gives MUST stop the
+transform when it is made, whatever the heap holds and however long the
+transform has run: so MUST a text doubled at every step be stopped when it
+first passes the limit. A value of the limit exactly MUST NOT. The
 expressions that run outside a transform, `request.pagination.items` and
 `request.pagination.next` on each page and a login's `token`,
 `expires_in` and a step's `extract.json` on its answers, MUST be held to
@@ -5497,6 +5502,11 @@ the same limit in the same way: one past it MUST fail the scrape as a
 limit exceeded, where a failed request does, counted in
 `http_exporter_series_limit_exceeded_total`, naming its key and the
 limit. The watch of an expression MUST end with it, however it ended.
+Each scrape stopped at this limit, a transform's or another expression's,
+MUST also be counted in `http_exporter_expression_memory_exceeded_total`,
+and a scrape another limit rejected MUST NOT. Watches that ask for a
+measurement while one is being taken MUST be given the next one's, and
+MUST NOT be given one that began before they asked.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting
@@ -5910,6 +5920,7 @@ http_exporter_decoder_lines_skipped_total
 http_exporter_pages_fetched_total
 http_exporter_pagination_max_pages_reached_total
 http_exporter_series_limit_exceeded_total
+http_exporter_expression_memory_exceeded_total
 
 http_exporter_logins_total
 http_exporter_login_failures_total

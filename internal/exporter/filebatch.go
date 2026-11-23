@@ -150,7 +150,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	ruleLog := collectLog{key: failureKey(c.Name, keyTarget, file.Name), attrs: []any{"collector", c.Name, "target", logTarget, "file", file.Name}}
 	set, repaired, err := s.transformRecorded(ctx, d, file.Response, c, rec, ruleLog)
 	if errors.Is(err, model.ErrLimitExceeded) {
-		rec.update(func(x *serverStats) { x.limitErrors++ })
+		rec.update(func(x *serverStats) { x.limitExceeded(err) })
 		return nil, &fileFailure{"validation", err}
 	}
 	if err != nil {

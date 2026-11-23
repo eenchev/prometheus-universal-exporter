@@ -36,8 +36,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - A `jq` or `yq` transform is now stopped when the exporter's memory has
   grown by more than `limits.max_expression_memory` while it ran, 256 MiB
   unless set, and its scrape fails as a limit exceeded. So are the jq
-  expressions of a pagination and of a login. A collector whose
-  expressions build more than that at once sets the limit higher.
+  expressions of a pagination and of a login, and so is an expression
+  that makes one text or list larger than the limit, the moment it does. A
+  collector whose expressions build more than that at once sets the limit
+  higher; `http_exporter_expression_memory_exceeded_total` counts the
+  scrapes it stopped.
 - A whole number beyond 64 bits in a YAML answer, such as an identifier of
   thirty digits, now keeps every digit, as it does in JSON, where it was
   rounded to a float: a label made of one changes from
@@ -186,10 +189,15 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   [`log(message, level="info")`](docs/PYTHON.md#what-a-script-has), which
   writes a line of the exporter's log at `debug`, `info`, `warning` or
   `error`, where `print` is seen at debug level only. What a script
-  printed and logged before it failed is written with its failure.
+  logged before it failed is written with its failure, and the last 1,024
+  characters of what it printed, at warn level.
 
 ### Fixed
 
+- A `limits.max_script_memory` smaller than the Python interpreter itself
+  holds, which one built from source can be at 40 MiB, failed every script
+  with a `MemoryError` that named the limit alone. Each scrape now says
+  what the interpreter holds and what to set.
 - Target Allocator: an allocator run without `--web.token-file` took a
   heartbeat from any page open in a browser on its network, since a form
   posted from another site's page is a request like any other: such a page

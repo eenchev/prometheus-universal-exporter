@@ -41,6 +41,9 @@ type pop3Stub struct {
 	list []string
 	// refusal is what it refuses a login with, its own words when "".
 	refusal string
+	// oneLine is a server that takes XOAUTH2 only with the credential in
+	// the AUTH command.
+	oneLine bool
 }
 
 const pop3StubTimestamp = "<1896.697170952@mail.test>"
@@ -140,6 +143,10 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 				}
 				login(accepted)
 			case "XOAUTH2":
+				if s.oneLine {
+					say("-ERR Unrecognized authentication type")
+					break
+				}
 				say("+ ")
 				answer, _ := read()
 				accepted := answer == b64("user="+s.user+"\x01auth=Bearer "+s.token+"\x01\x01")
@@ -150,6 +157,12 @@ func (s *pop3Stub) serve(conn net.Conn, upgrade func() (net.Conn, error)) {
 				}
 				login(accepted)
 			default:
+				// A server that takes XOAUTH2 with its credential in the
+				// command and not after its name alone, as oneLine says.
+				if credential, given := strings.CutPrefix(args, "XOAUTH2 "); given && s.oneLine {
+					login(credential == b64("user="+s.user+"\x01auth=Bearer "+s.token+"\x01\x01"))
+					break
+				}
 				// A mechanism given with its credential in the command, or
 				// one the server does not speak.
 				say("-ERR Unrecognized authentication type")
@@ -326,6 +339,38 @@ func TestAPOP3ScrapeChoosesTheLoginTheServerTakes(t *testing.T) {
 // either; whoever called the probe is not told the server's words, and the
 // session does not go on to STAT. A refused XOAUTH2 is ended with the
 // empty line its error asks for.
+// XOAUTH2 is sent as Microsoft 365 takes it, the credential in answer to
+// the server's +. A server that refuses the mechanism's name alone, having
+// seen no credential, is asked once more with the credential in the
+// command, as Google writes Gmail's exchange: the login is made, the token
+// is in no trace, and a token such a server refuses fails as any does.
+func TestAPOP3ServerThatTakesXOAUTH2InOneLineIsLoggedInTo(t *testing.T) {
+	token := testutil.WriteFile(t, "token", "ya29.fresh-token\n")
+	change := withLogin("xoauth2", &model.XOAuth2Config{TokenFile: token}, withAccount("me@example.com", ""))
+	b64 := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
+	credential := b64("user=me@example.com\x01auth=Bearer ya29.fresh-token\x01\x01")
+	s := newPOP3Stub(t, func(s *pop3Stub) { s.oneLine, s.token = true, "ya29.fresh-token" })
+	ctx, trace := WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, s.Addr, pop3Collector(t, s, change), RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	sent := strings.Join(s.sent(), "|")
+	if !strings.Contains(sent, "|AUTH XOAUTH2|AUTH XOAUTH2 "+credential+"|STAT") {
+		t.Errorf("sent %s", sent)
+	}
+	if shown := fmt.Sprint(trace.Requests()); strings.Contains(shown, credential) || strings.Contains(shown, "ya29") || !strings.Contains(shown, "AUTH XOAUTH2 *** (the credential)") {
+		t.Errorf("the trace shows %s", shown)
+	}
+	refusing := newPOP3Stub(t, func(s *pop3Stub) { s.oneLine, s.token = true, "another" })
+	_, err := FetchCollector(context.Background(), refusing.Addr, pop3Collector(t, refusing, change), RequestOverrides{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "refused AUTH XOAUTH2 for me@example.com with -ERR [AUTH] Username and password not accepted.") || strings.Contains(err.Error(), "ya29") {
+		t.Errorf("a refused token: err=%v", err)
+	}
+	if sent := strings.Join(refusing.sent(), "|"); strings.Count(sent, "AUTH XOAUTH2") != 2 {
+		t.Errorf("a refused token: sent %s", sent)
+	}
+}
+
 // A server that says back the command it refuses, password and all, has
 // that masked in the failure and in the trace, as any server's text is.
 func TestAPOP3RefusalThatSaysThePasswordBackIsMasked(t *testing.T) {

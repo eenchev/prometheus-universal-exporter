@@ -2,15 +2,17 @@ package expr
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
+	"github.com/itchyny/gojq"
 )
 
 // The watch believes only a collection it asked for, and of that only what
@@ -21,10 +23,7 @@ import (
 // program that holds nothing is left to run, whatever the collections
 // count live, however large the heap grows and however often it is looked
 // at: it is stopped when a collection shows certainly held more than the
-// limit over what the first counted live, or counts that much live and
-// shows that one value larger than the limit was made while it ran, as of
-// a text that is doubled at every step, which is each time as much as
-// all the collection counts live.
+// limit over what the first counted live.
 func TestTheMemoryWatchBelievesOnlyWhatACollectionShowsHeld(t *testing.T) {
 	objects, collect := heapObjects, heapHeld
 	t.Cleanup(func() { heapObjects, heapHeld = objects, collect })
@@ -41,9 +40,6 @@ func TestTheMemoryWatchBelievesOnlyWhatACollectionShowsHeld(t *testing.T) {
 		"held a little under the limit":               {[]uint64{100 * mib, 200 * mib, 300 * mib}, []collection{{live: 10 * mib, held: 9 * mib}, {live: 40 * mib, held: 25 * mib}}, false},
 		"held past the limit":                         {[]uint64{100 * mib, 200 * mib, 300 * mib}, []collection{{live: 10 * mib, held: 9 * mib}, {live: 40 * mib, held: 27 * mib}}, true},
 		"held past the limit at the first collection": {[]uint64{100 * mib, 200 * mib}, []collection{{live: 150 * mib, held: 117 * mib}}, true},
-		"a text doubled: nothing certainly held, one value larger than the limit made":  {[]uint64{100 * mib, 400 * mib, 800 * mib}, []collection{{live: 10 * mib, held: 9 * mib}, {live: 193 * mib, held: 1 * mib, largest: 96 * mib}}, true},
-		"garbage in values under the limit each, counted live past it":                  {[]uint64{100 * mib, 400 * mib, 800 * mib}, []collection{{live: 10 * mib, held: 9 * mib}, {live: 193 * mib, held: 1 * mib, largest: 16 * mib}}, false},
-		"one value larger than the limit made and let go: counted live under the limit": {[]uint64{100 * mib, 400 * mib, 800 * mib}, []collection{{live: 10 * mib, held: 9 * mib}, {live: 26 * mib, held: 0, largest: 96 * mib}}, false},
 	} {
 		looks, collections := 0, 0
 		heapObjects = func() uint64 { looks++; return tc.heap[min(looks-1, len(tc.heap)-1)] }
@@ -120,8 +116,8 @@ func TestWhatACollectionShowsHeldLeavesOutWhatWasMadeMeanwhile(t *testing.T) {
 		for range 3 {
 			collecting.Go(func() {
 				for range 2 {
-					if found := collectHeap(); found.held > before+(1<<20) || found.live < found.held || found.largest > 1<<20 {
-						t.Errorf("on %d processors a collection counts %d bytes live and shows %d held and a value of %d made, of a test that held %d before it made garbage in small values", processors, found.live, found.held, found.largest, before)
+					if found := collectHeap(); found.held > before+(1<<20) || found.live < found.held {
+						t.Errorf("on %d processors a collection counts %d bytes live and shows %d held, of a test that held %d before it made garbage", processors, found.live, found.held, before)
 					}
 				}
 			})
@@ -137,55 +133,116 @@ func TestWhatACollectionShowsHeldLeavesOutWhatWasMadeMeanwhile(t *testing.T) {
 	runtime.KeepAlive(kept)
 }
 
-// A collection shows the least that the largest value made while it ran
-// was: beside goroutines that make garbage in small values, one that makes
-// texts of 24 MiB and lets each go is shown to have made a value of more
-// than 16 MiB, in most collections that it made one in at all, and none is
-// shown to have made a larger one than it did.
-func TestACollectionShowsTheLargestValueMadeWhileItRan(t *testing.T) {
-	const large = 24 << 20
-	stop := make(chan struct{})
-	var making sync.WaitGroup
-	for i := range 3 {
-		making.Go(func() {
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				if i == 0 {
-					sink.Store(new(make([]byte, large)))
-					continue
-				}
-				garbage := make([]*int, 0, 64)
-				for i := range 64 {
-					garbage = append(garbage, &i)
-				}
-				_ = garbage
-			}
-		})
-	}
-	shown := 0
-	for range 12 {
-		found := collectHeap()
-		if found.largest > large+(1<<20) {
-			t.Errorf("a collection shows a value of %d bytes made, and none was larger than %d", found.largest, large)
+// One value larger than the limit is past it whatever else is held, and
+// stops its program when it is made, without a look at the heap: a text
+// or an array a function gives, by whichever operator or builtin, as a
+// program that doubles one at every step makes within milliseconds. A
+// value of the limit exactly is within it, and with no limit nothing is
+// measured.
+func TestAValueLargerThanTheMemoryLimitStopsItsProgramWhenItIsMade(t *testing.T) {
+	const limit = 1 << 20
+	// told runs a program with the interpreter told to say when a value
+	// passes limit bytes, and no watch of the heap, which may stop a
+	// program too: it says how often the interpreter said so, and what
+	// the program gave.
+	told := func(program string) (times int, value any) {
+		t.Helper()
+		code, err := CompileJQ(program)
+		if err != nil {
+			t.Fatalf("%s: %v", program, err)
 		}
-		if found.largest > 16<<20 {
-			shown++
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ctx = gojq.WithMaxValueBytes(ctx, limit, func() { times++; cancel() })
+		value, _ = code.RunWithContext(ctx, nil, JQBindings{}.Values(nil)...).Next()
+		return times, value
+	}
+	for _, grows := range []string{
+		`reduce range(40) as $i ("x"; . + .)`,
+		`reduce range(40) as $i ("x"; . * 2)`,
+		`reduce range(40) as $i ("x"; "\(.)\(.)")`,
+		`reduce range(40) as $i ("x"; [., .] | join(""))`,
+		`reduce range(40) as $i ("x"; [., .] | add)`,
+		`reduce range(40) as $i ("x"; [., .] | tojson)`,
+		`reduce range(40) as $i ("x"; [., .] | @text)`,
+		`reduce range(40) as $i ("x"; ascii_downcase + ascii_upcase)`,
+		`reduce range(40) as $i ({a: "x"}; .a += .a)`,
+		`reduce range(40) as $i ([1]; . + .)`,
+		`reduce range(40) as $i ([1]; [., .] | flatten)`,
+		fmt.Sprintf(`"x" * %d`, limit+1),
+		fmt.Sprintf(`[range(%d)] | . + [1]`, limit/16),
+	} {
+		if times, value := told(grows); times != 1 || !errors.Is(asError(value), context.Canceled) {
+			t.Errorf("%s: a value past %d bytes was told of %d times, and the program gave %.60v", grows, limit, times, value)
 		}
 	}
-	close(stop)
-	making.Wait()
-	if shown < 4 {
-		t.Errorf("%d of 12 collections showed a value of more than 16 MiB made, beside a goroutine that makes them of 24 MiB without pause", shown)
+	for _, within := range []string{
+		fmt.Sprintf(`"x" * %d | length`, limit),
+		fmt.Sprintf(`[range(%d)] | . + [] | length`, limit/16),
+		`[range(100000) | tostring] | map(. + .) | length`,
+	} {
+		if times, value := told(within); times != 0 || asError(value) != nil || value == nil {
+			t.Errorf("%s: told of a value past %d bytes %d times, and the program gave %.60v", within, limit, times, value)
+		}
+	}
+
+	// A watch of a program's memory tells the interpreter its limit, and
+	// one with no limit does not.
+	run := func(program string, limit model.ByteSize) (value any, exceeded *MemoryExceeded) {
+		t.Helper()
+		code, err := CompileJQ(program)
+		if err != nil {
+			t.Fatalf("%s: %v", program, err)
+		}
+		ctx, ended := WatchMemory(context.Background(), limit)
+		value, _ = code.RunWithContext(ctx, nil, JQBindings{}.Values(nil)...).Next()
+		return value, ended()
+	}
+	if value, exceeded := run(fmt.Sprintf(`"x" * %d | length`, limit+1), limit); asError(value) == nil || exceeded == nil || exceeded.Limit != limit {
+		t.Errorf("a text of a byte more than a watch's limit: gave %.60v, stopped for %v", value, exceeded)
+	}
+	if value, exceeded := run(`reduce range(22) as $i ("x"; . + .) | length`, 0); value != 1<<22 || exceeded != nil {
+		t.Errorf("with no limit: gave %.60v, stopped for %v", value, exceeded)
 	}
 }
 
-// sink keeps the last large value a test made, so that making it is not
-// compiled away.
-var sink atomic.Pointer[[]byte]
+// asError is a value a program gave as the error it is, nil when it is
+// none.
+func asError(value any) error {
+	err, _ := value.(error)
+	return err
+}
+
+// Watches that ask for a collection while one is being run are given what
+// the next one finds, all of them: eight that waited have one collection
+// run for them, where each ran its own, of the whole heap, one after
+// another. A watch that asks when none is being run has its own.
+func TestWatchesThatAskAtOnceShareACollection(t *testing.T) {
+	forced := func() uint64 { return readHeap("/gc/cycles/forced:gc-cycles") }
+	before := forced()
+	collecting.Lock()
+	found := make(chan collection, 8)
+	for range 8 {
+		go func() { found <- collectHeap() }()
+	}
+	// Each has asked, and waits.
+	time.Sleep(50 * time.Millisecond)
+	collecting.Unlock()
+	first := <-found
+	for range 7 {
+		if next := <-found; next != first {
+			t.Errorf("a watch that waited was given %+v, and another %+v", next, first)
+		}
+	}
+	if ran := forced() - before; ran != 1 {
+		t.Errorf("%d collections were run for eight watches that asked at once, want 1", ran)
+	}
+	collectHeap()
+	collectHeap()
+	if ran := forced() - before; ran != 3 {
+		t.Errorf("%d collections were run in all, want one more for each watch that asked alone", ran)
+	}
+}
 
 // What ends a watch may be called on every way out of the code that began
 // it, and so more than once: it says each time what it said first, and a

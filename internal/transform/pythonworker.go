@@ -1453,12 +1453,35 @@ for _module in json.loads(sys.argv[1]) or []:
     try: __import__(_module)
     except Exception: pass
 max_memory=int(sys.argv[2]) if len(sys.argv)>2 else 0
+# What every run fails with under a limit the interpreter alone is past,
+# None under any other.
+no_room=None
 if max_memory>0:
     # limits.max_script_memory: the worker's whole address space, the
     # interpreter and its preloaded libraries included, set after they have
     # loaded so a limit too small for them fails a run, not the start.
-    import resource
-    resource.setrlimit(resource.RLIMIT_AS,(max_memory,max_memory))
+    #
+    # An interpreter already holds more than a small limit when it gets
+    # here, one built with its library inside it some 40 MiB where a
+    # distribution's holds 20: under such a limit nothing more can be
+    # allocated, and a script that only called metric() failed with a
+    # MemoryError that named the limit and not the reason, or the worker
+    # did not start at all, as it happened to go. So the limit is not set
+    # then, and every run fails saying what the interpreter holds and what
+    # to set (where /proc says what it holds, which is where the limit is
+    # enforced).
+    held=0
+    try:
+        with open('/proc/self/status') as status:
+            for line in status:
+                if line.startswith('VmSize:'): held=int(line.split()[1])*1024
+    except Exception: pass
+    if held>=max_memory:
+        no_room='MemoryError: limits.max_script_memory (%d bytes) is less than the %d bytes this Python interpreter holds before a script runs, so no script can run under it; set at least %dMiB, or 0 for no limit'%(max_memory,held,(held+(1<<20)-1>>20)+16)
+    else:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS,(max_memory,max_memory))
+    del held
 # zoneinfo reads its search path through sysconfig, which imports threading
 # from Python 3.12 on. threading is blocked, so a script's import zoneinfo
 # would fail; it is imported here, before the sandbox, and sysconfig's
@@ -2289,11 +2312,15 @@ logged=[]; asked=[0]
 # What the script of the run under way prints goes here, so that a failure
 # can carry it (printed_text): of a run, emptied when the next begins.
 printing=[None]
-def printed_text():
+def printed_text(last=0):
+    # The first 4 KiB of it, or, with last, its last characters that many:
+    # what a script printed just before it failed is what explains that.
     sink=printing[0]
     if sink is None: return ''
     text=sink.getvalue()
-    if len(text)>4096: text=text[:4096]+'... (%d more characters)'%(len(text)-4096)
+    if last:
+        if len(text)>last: text='(%d more characters before) ...'%(len(text)-last)+text[-last:]
+    elif len(text)>4096: text=text[:4096]+'... (%d more characters)'%(len(text)-4096)
     return text
 def logged_lines():
     if asked[0]>20: return ''.join(logged)+'\x00pue-log:warning\x00%d more lines the script logged are not written; a run writes 20\x00'%(asked[0]-20)
@@ -2589,14 +2616,15 @@ def failed_check(most):
                 written=json.dumps({'ok': False, 'error': text[:n]})
                 if len(written)<=most or not n: break
                 n-=1
-        # What the script printed and logged before it failed goes with
-        # the failure, which is often what explains it, where the line has
-        # the room: the failure is never cut for it, and what was logged
-        # goes alone where both do not fit.
+        # What the script logged before it failed, and the last 1,024
+        # characters of what it printed, go with the failure, which is
+        # often what explains it, where the line has the room: the failure
+        # is never cut for it, and what was logged goes alone where both
+        # do not fit.
         if written.endswith('}'):
             for with_printed in (True,False):
                 try:
-                    said=(printed_text() if with_printed else '')+(logged_lines() if logged else '')
+                    said=(printed_text(1024) if with_printed else '')+(logged_lines() if logged else '')
                     if not said: continue
                     more=written[:-1]+', "log": '+json.dumps(said)+'}'
                     if len(more)<=most: written=more; break
@@ -2613,6 +2641,7 @@ while True:
     # script runs has no line of the run before it to carry.
     del logged[:]; asked[0]=0; printing[0]=None
     try:
+        if no_room is not None: raise MemoryError()
         # A request nested deeper than json reads one is read without it.
         try: p=json.loads(line)
         except RecursionError: p=None
@@ -2698,6 +2727,7 @@ while True:
             left='data' if p.get('mode')=='data' else 'metrics'
             failed(e,('TypeError: what the script left in %s holds a %s, which cannot be handed back to the exporter: a str, an int, a float, a bool, None, a list, a tuple and a dict can; make it one of those, as list(a_set), str(a_date) or float(a_decimal) do'%(left,m[len('Object of type '):-len(' is not JSON serializable')][:80]),))
     except MemoryError as e:
+        if no_room is not None: failed(e,(no_room,)); continue
         failed(e,('MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory,) if max_memory>0 else None)
     except BaseException as e:
         failed(e)`

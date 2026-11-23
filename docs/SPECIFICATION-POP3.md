@@ -67,7 +67,10 @@ target's request block takes `timeout`, `username`, `password_file` and
   `XOAUTH2` as `user=<username>^Aauth=Bearer <token>^A^A`, a challenge in
   answer to which MUST be answered with an empty line; `OAUTHBEARER` as
   the message of RFC 7628, as `smtp` writes it, a challenge in answer to
-  which MUST be answered with the one byte `^A`. A challenge once
+  which MUST be answered with the one byte `^A`. A server that answers
+  `AUTH XOAUTH2` or `AUTH OAUTHBEARER` with `-ERR`, having been sent no
+  credential, MUST be asked once more with the credential in the command,
+  which a debug report MUST show as `***`. A challenge once
   the exchange is over MUST be answered with `*`. One of these that the
   server answered `CAPA` without naming MUST fail the scrape before
   anything of the account is sent, saying what the server names.

@@ -38,6 +38,10 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+      # gojq is built from the copy in third_party/gojq, which go.mod
+      # replaces the module with: the version there names what was copied,
+      # and moving it is the steps of third_party/gojq/PATCH.md.
+      - dependency-name: "github.com/itchyny/gojq"
 
   # The Python modules only the tests use (test/python/requirements.txt):
   # prometheus_client, whose strict OpenMetrics parser the suite runs the

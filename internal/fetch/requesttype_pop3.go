@@ -640,10 +640,19 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 			sent = netOAuthBearerCredential(user, hostPort, token)
 			name, last, ended = "OAUTHBEARER", netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
 		}
-		if answer, err = begin(name); err == nil && answer.continued {
-			if answer, err = s.answer(b64(sent), hidden); err == nil && answer.continued {
-				answer, err = s.answer(last, ended)
-			}
+		// The credential is sent in answer to the server's +, as Microsoft
+		// 365 takes it. A server that refuses the mechanism's name alone
+		// has seen no credential, and may be one that takes it in the
+		// command, as Google writes Gmail's: it is asked once more so.
+		answer, err = begin(name)
+		switch {
+		case err == nil && answer.continued:
+			answer, err = s.answer(b64(sent), hidden)
+		case err == nil && !answer.ok:
+			answer, err = s.send("AUTH "+name+" "+b64(sent), "AUTH "+name+" "+hidden)
+		}
+		if err == nil && answer.continued {
+			answer, err = s.answer(last, ended)
 		}
 		if err == nil && !answer.ok {
 			netTokens.forget(c.Name, c.Request.XOAuth2)

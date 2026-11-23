@@ -5379,11 +5379,11 @@ moments counts too: a transform is not looked at in its first 20
 milliseconds, which nearly all end within, and one that runs longer may be
 stopped anywhere between the limit and twice it. Set the limit well above
 what the collector's answers need, and lower it only on an exporter whose
-memory is short. One step that makes a very large value at once is not
-interrupted part of the way, so an expression that doubles a text at every
-step can pass the limit several times over before it is stopped; it is
-stopped at the first look that finds one value larger than the whole limit
-made and the heap past the limit. The
+memory is short. One text or list larger than the whole limit stops its
+expression the moment an operator or a function makes it, with no look at
+the heap, so an expression that doubles a text at every step is stopped
+when the text first passes the limit: holding that text, at most twice the
+limit, and the ones it was made of. The
 failure is the probe's `validation` stage, counted in
 `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
 says. The jq

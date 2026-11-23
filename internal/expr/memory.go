@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/itchyny/gojq"
 )
 
 // A jq or yq program is stopped when its probe's time is spent, and time
@@ -52,6 +55,9 @@ func WatchMemory(ctx context.Context, limit model.ByteSize) (context.Context, fu
 		return ctx, func() *MemoryExceeded { return nil }
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
+	// One value past the limit is past it whatever else is held, and is
+	// known when it is made, without a look at the heap (see below).
+	ctx = gojq.WithMaxValueBytes(ctx, int(min(limit, math.MaxInt)), func() { cancel(&MemoryExceeded{Limit: limit}) })
 	ended := make(chan struct{})
 	timer := time.AfterFunc(memoryLook, func() { watchMemory(ended, limit, cancel) })
 	return ctx, sync.OnceValue(func() *MemoryExceeded {
@@ -113,12 +119,12 @@ func WatchMemoryOf(ctx context.Context) (context.Context, func() *MemoryExceeded
 //
 // A program that doubles a text at every step is the one that shows
 // nothing certainly held: each text is as large as all before it, so what
-// is made while a collection runs is as much as it counts live. It is
-// known by another sign, that the collection counts live more than the
-// limit over what was held and that a single value larger than the whole
-// limit was made while it ran (largest), and is stopped for that: at the
-// first collection, where it otherwise ran on until its steps took longer
-// than a collection does, holding a hundred times a small limit by then.
+// is made while a collection runs is as much as it counts live, and it ran
+// on until its steps took longer than a collection does, holding a hundred
+// times a small limit by then. It is not left to the collections: one
+// value larger than the whole limit is past it whatever else is held, and
+// the interpreter says so when a function gives one (WatchMemory), which
+// stops the program before its next step.
 func watchMemory(ended <-chan struct{}, bound model.ByteSize, cancel context.CancelCauseFunc) {
 	limit := uint64(bound) // #nosec G115 -- a limit is a size, which is not negative
 	from := heapObjects()
@@ -140,7 +146,7 @@ func watchMemory(ended <-chan struct{}, bound model.ByteSize, cancel context.Can
 			from, most = found.live, found.live+limit
 		}
 		collected = true
-		if found.held > most || found.live > most && found.largest > limit {
+		if found.held > most {
 			cancel(&MemoryExceeded{Limit: bound})
 			return
 		}
@@ -157,10 +163,9 @@ var (
 )
 
 // collection is what a garbage collection asked for found: how large the
-// heap is after it, how much it counts live, how much of that is certainly
-// held, and the least that the largest single value made while it ran can
-// have been, 0 when no large one was made.
-type collection struct{ heap, live, held, largest uint64 }
+// heap is after it, how much it counts live, and how much of that is
+// certainly held.
+type collection struct{ heap, live, held uint64 }
 
 // collectHeap runs a garbage collection and says what it found.
 //
@@ -181,46 +186,37 @@ type collection struct{ heap, live, held, largest uint64 }
 // time, and each puts back what it found, after it has read what is live:
 // a collection of the runtime's own that ended first would be read instead.
 //
-// The largest value made is not told, but the runtime counts the values
-// made by size (allocatedBySize): what was made, less the most that the
-// small ones can have come to, is the least the large ones came to, and
-// that over their number is the least the largest of them was.
+// Many transforms that run long ask at once, and each collection is of the
+// whole heap: a watch that waited its turn while a collection began and
+// ended is given what that one found, which is of after it asked, where it
+// ran another. One that was already running when the watch asked is not
+// given: it may count what has died since, before the watch began.
 func collectHeap() collection {
+	asked := collections.Load()
 	collecting.Lock()
 	defer collecting.Unlock()
+	if collections.Load() > asked {
+		return collected
+	}
+	collections.Add(1)
 	percent := debug.SetGCPercent(0)
-	small, large := allocatedBySize()
 	before := readHeap("/gc/heap/allocs:bytes")
 	runtime.GC()
 	live := readHeap("/gc/heap/live:bytes")
 	made := readHeap("/gc/heap/allocs:bytes") - before
-	smallNow, largeNow := allocatedBySize()
 	debug.SetGCPercent(percent)
-	found := collection{heap: readHeap("/memory/classes/heap/objects:bytes"), live: live, held: live - min(made, live)}
-	if count := largeNow - large; count > 0 && made > smallNow-small {
-		found.largest = (made - (smallNow - small)) / count
-	}
-	return found
+	collected = collection{heap: readHeap("/memory/classes/heap/objects:bytes"), live: live, held: live - min(made, live)}
+	return collected
 }
 
-// allocatedBySize says, of every value the process has made, the most
-// that those of the runtime's size classes can have come to in bytes, and
-// how many were larger than any class. It is read before the bytes made
-// are and after them, so that the small ones are counted over a longer
-// while than the bytes, and never for less than they were.
-func allocatedBySize() (small, large uint64) {
-	sample := [...]metrics.Sample{{Name: "/gc/heap/allocs-by-size:bytes"}}
-	metrics.Read(sample[:])
-	sizes := sample[0].Value.Float64Histogram()
-	last := len(sizes.Counts) - 1
-	for i, count := range sizes.Counts[:last] {
-		small += count * uint64(sizes.Buckets[i+1])
-	}
-	return small, sizes.Counts[last]
-}
-
-// collecting is held by the one collection that is being run.
-var collecting sync.Mutex
+// collecting is held by the one collection that is being run, collections
+// is how many have begun, and collected is what the last of them found,
+// read and written with collecting held.
+var (
+	collecting  sync.Mutex
+	collections atomic.Uint64
+	collected   collection
+)
 
 // readHeap reads one of the runtime's metrics of the heap, in bytes.
 // Reading it does not stop the program.

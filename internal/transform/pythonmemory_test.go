@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strconv"
@@ -104,13 +105,33 @@ func TestPythonWorkersAreStartedWithOneMallocArena(t *testing.T) {
 	}
 }
 
+// bareInterpreterSize is the address space, in kB, of the interpreter the
+// tests found with nothing loaded and one thread: what a worker's is held
+// against, since it differs by tens of megabytes with how the interpreter
+// was built, a distribution's being about 14 MiB and one with its library
+// inside it about 35.
+func bareInterpreterSize(t *testing.T) int {
+	t.Helper()
+	out, err := exec.Command("python3", "-c", `print([line.split()[1] for line in open("/proc/self/status") if line.startswith("VmSize:")][0])`).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return size
+}
+
 // The thread that watches a worker's parent made glibc reserve a second
 // malloc arena, 64 MiB of address space: a ready worker held about 82 MiB
 // where main's held 17, all of it counted against limits.max_script_memory.
 // With one arena a ready worker with its two threads holds what the
-// interpreter needs.
+// interpreter needs: what the interpreter alone does and less than half an
+// arena more, whichever interpreter it is.
 func TestAReadyPythonWorkerReservesNoSecondArena(t *testing.T) {
 	requireProcStatus(t)
+	bare := bareInterpreterSize(t)
 	for _, limit := range []int64{0, 64 << 20, 256 << 20} {
 		c := workerCollector("ready", `metric(name="v", value=1)`)
 		c.Limits.MaxScriptMemory = model.ByteSize(limit)
@@ -121,9 +142,10 @@ func TestAReadyPythonWorkerReservesNoSecondArena(t *testing.T) {
 		pid := worker.cmd.Process.Pid
 		size, threads := workerStatus(t, pid, "VmSize"), workerStatus(t, pid, "Threads")
 		worker.stop()
-		// An arena alone is 65,536 kB.
-		if size >= 48<<10 {
-			t.Fatalf("under a limit of %d bytes a ready worker's address space is %d kB", limit, size)
+		// An arena alone is 65,536 kB, and what the worker loads beside
+		// the interpreter a few thousand.
+		if size >= bare+(32<<10) {
+			t.Fatalf("under a limit of %d bytes a ready worker's address space is %d kB, and the interpreter's alone %d kB", limit, size, bare)
 		}
 		if threads != 2 {
 			t.Fatalf("under a limit of %d bytes a ready worker has %d threads, want the interpreter's and the watch's", limit, threads)
@@ -224,6 +246,33 @@ func TestASmallMemoryLimitRunsASmallScript(t *testing.T) {
 		if _, err := runWorkerScript(t, limitedCollector("small", `metric(name="v", value=len(bytearray(200 << 20)))`, limit)); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("limits.max_script_memory (%d bytes)", limit)) {
 			t.Fatalf("limit %d, 200 MiB: err=%v", limit, err)
 		}
+	}
+}
+
+// Under a limit that the interpreter alone is past, every run fails
+// saying so, what the interpreter holds and what to set, where a script
+// that only called metric() failed with a MemoryError that named the limit
+// alone, or the worker did not start. The worker is not started again for
+// each run, and the limit a little over what it holds is a limit as any.
+func TestALimitTheInterpreterAloneIsPastSaysSo(t *testing.T) {
+	requireProcStatus(t)
+	const tooSmall = 8 << 20
+	c := limitedCollector("no room", `metric(name="v", value=1)`, tooSmall)
+	for range 3 {
+		_, err := runWorkerScript(t, c)
+		if err == nil {
+			t.Fatal("a script ran under a limit of 8 MiB, which no interpreter fits")
+		}
+		var held, least int
+		if _, scanned := fmt.Sscanf(err.Error(), "python transform failed: MemoryError: limits.max_script_memory (8388608 bytes) is less than the %d bytes this Python interpreter holds before a script runs, so no script can run under it; set at least %dMiB, or 0 for no limit", &held, &least); scanned != nil {
+			t.Fatalf("err=%v", err)
+		}
+		if held <= tooSmall || held > 256<<20 || least != (held+(1<<20)-1)>>20+16 {
+			t.Fatalf("the interpreter is said to hold %d bytes, and the least to set %d MiB", held, least)
+		}
+	}
+	if snap := PythonWorkers().Snapshot("no room"); snap.Starts != 1 {
+		t.Fatalf("%d workers started for three runs, stops %v", snap.Starts, snap.Stops)
 	}
 }
 

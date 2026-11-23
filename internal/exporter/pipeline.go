@@ -315,7 +315,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// No response arrived.
 			x.lastStatus = 0
 			if errors.Is(err, model.ErrLimitExceeded) {
-				x.limitErrors++
+				x.limitExceeded(err)
 			}
 			if grpc {
 				x.grpcCode, x.grpcCalled = grpcCode, true
@@ -452,7 +452,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// limits.max_metrics, which is the validation's failure,
 			// found sooner (transform/serieslimit.go), and so is a jq
 			// transform stopped for its memory (expressionmemory.go).
-			rec.update(func(x *serverStats) { x.limitErrors++ })
+			rec.update(func(x *serverStats) { x.limitExceeded(err) })
 			return stageFailed("validation", err, model.ErrorPolicyFail)
 		}
 		if err != nil {

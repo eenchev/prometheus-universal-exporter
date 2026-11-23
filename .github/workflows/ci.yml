@@ -937,9 +937,19 @@ jobs:
           tags="$(sh tools/request-type-tags.sh '' '' smtp,modbus,mqtt,websocket,ftp,imap,pop3)" && { [ -n "$tags" ] || { echo "no opt-in request types"; exit 0; }; } && golangci-lint run --build-tags "$tags"
         if: steps.changes.outputs.go == 'true'
       # What an editor shows comes from gopls, some of whose analyzers
-      # golangci-lint does not have. The Makefile pins its version.
+      # golangci-lint does not have. The Makefile pins its version. The
+      # install downloads gopls and what it is built from, which
+      # proxy.golang.org now and then breaks off as it does a module
+      # download: three tries, 10 s and 20 s apart, and the check once.
       - name: gopls check
-        run: make gopls-install gopls-check
+        run: |
+          for attempt in 1 2 3; do
+            if make gopls-install; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "make gopls-install failed (attempt $attempt of 3); trying again in $((attempt * 10))s" >&2
+            sleep $((attempt * 10))
+          done
+          make gopls-check
         if: steps.changes.outputs.go == 'true'
   # The builds: vet, the default build, macOS, the image, and the builds with
   # the opt-in sql drivers and request types (whose tests run here too), in a

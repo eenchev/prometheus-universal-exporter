@@ -3186,6 +3186,8 @@ for its top-level domain or the one `whois_server` names, with
 `query_prefix` before the domain; `max_response_bytes`, `allowed_targets`
 and `denied_targets` apply too. The decoder is `json`; its table is in
 [WHOIS](WHOIS.md#a-collector).
+
+For `sip`, TODO(sip): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3270,6 +3272,8 @@ requires a `target`, the RADIUS server, `host` or `host:port`.
 
 `whois`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the domain.
+
+`sip`, TODO(sip): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -7486,6 +7490,7 @@ nothing there.
 - [POP3.md](POP3.md) — the opt-in `pop3` request type.
 - [RADIUS.md](RADIUS.md) — the opt-in `radius` request type.
 - [WHOIS.md](WHOIS.md) — the opt-in `whois` request type.
+- [SIP.md](SIP.md) — the opt-in `sip` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

@@ -94,6 +94,7 @@ collector is looked at):
 | [`pop3`](POP3.md#static-targets), opt-in | the mail server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 | [`radius`](RADIUS.md#static-targets), opt-in | the RADIUS server, required | `timeout` |
 | [`whois`](WHOIS.md#static-targets), opt-in | the domain, required | `timeout` |
+| [`sip`](SIP.md#static-targets), opt-in | TODO(sip) | TODO(sip) |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

@@ -41,6 +41,7 @@ var unusedRefusals = map[string]string{
 	RequestTypePOP3:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeRADIUS:     `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeWhois:      `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeSIP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

@@ -5876,9 +5876,6 @@ A stale answer must never be mistaken for a fresh one. While
 `stale_if_error` is set, every answer of the collector therefore carries two
 series of the exporter's own:
 
-A stale answer must never pass for a fresh one, so while `stale_if_error` is
-set every answer of the collector carries two series of the exporter's own:
-
 ```text
 http_exporter_result_stale 0
 http_exporter_result_age_seconds 0
@@ -6017,35 +6014,39 @@ it refreshes nothing, so the entry stays as it was.
 
 ## Identical probes share one request
 
-Several Prometheus replicas scraping the same targets on the same interval tend
-to probe at the same moment. When a probe arrives while an identical one is
-already waiting on the target, it does not send a request of its own: it waits
-for the one in flight and gets an exact copy of its answer — the metrics, or
-the same error. A slow endpoint is then asked once instead of once per replica,
-and a rate-limited one is not pushed over its limit.
+Several Prometheus replicas that scrape the same targets on the same
+interval tend to probe at the same moment. When a probe arrives while an
+identical one is already waiting on the target, it does not send its own
+request. It waits for the request in flight and gets an exact copy of its
+answer: the metrics, or the same error. A slow endpoint is then asked once
+instead of once per replica, and a rate-limited one is not pushed over its
+limit.
 
-Identical means the same thing it does for the response cache: the same
-collector definition, target, probe parameters and forwarded headers,
-credentials included, so two probes that could get different answers never
-share one, and probes differing only in parameters that change nothing sent
-still do. A `param_<name>` that fills a [label
-value](REQUESTS.md#in-label-values) is a parameter of the probe like the
-others: two probes that differ in it get different series, and never share.
-It needs no cache: the cache helps the probes that come after one
-has finished, and this helps the ones that arrive while it is still running.
+"Identical" means the same as for the response cache: the same collector
+definition, target, probe parameters and forwarded headers, including
+credentials. Two probes that could get different answers therefore never
+share a request, and probes that differ only in parameters that change
+nothing in what is sent still do. A `param_<name>` that fills a
+[label value](REQUESTS.md#in-label-values) is a probe parameter like the
+others: two probes that differ in it get different series and never share.
+
+Sharing needs no cache. The cache helps the probes that arrive after one has
+finished, and sharing helps the ones that arrive while it is still running.
 With a cache, the probes that share a request fill the cache once.
 
 The shared request belongs to no single probe. If the probe that started it
-goes away — its Prometheus timed out, say — the others still get their answer;
-the request is cancelled only when every probe waiting on it has gone.
+goes away, for example because its Prometheus timed out, the others still
+get their answer. The request is cancelled only when every probe waiting on
+it has gone.
 
-The trip to the target is counted once in the self-metrics, whatever number of
-probes shared it: every probe still counts in `http_exporter_scrapes_total` and
-`http_exporter_scrape_success_total`, and each one that shared another's request also
-counts in `http_exporter_probes_coalesced_total`. A failure is logged once.
+The trip to the target is counted once in the self-metrics, however many
+probes shared it. Every probe still counts in `http_exporter_scrapes_total`
+and `http_exporter_scrape_success_total`, and each one that shared another's
+request also counts in `http_exporter_probes_coalesced_total`. A failure is
+logged once.
 
-It is on by default. A collector whose target must see every probe as its own
-request can turn it off:
+Sharing is on by default. A collector whose target must see every probe as a
+separate request can turn it off:
 
 ```yaml
 collectors:
@@ -6056,8 +6057,8 @@ collectors:
 ## Limiting concurrent probes
 
 Identical probes share one request, but probes of different targets, or with
-different parameters, each make their own — and all of a collector's targets
-are often one backend. `max_concurrent_probes` bounds how many trips to its
+different parameters, each make their own, and all of a collector's targets
+are often one backend. `max_concurrent_probes` limits how many trips to its
 targets a collector makes at once:
 
 ```yaml
@@ -6066,60 +6067,62 @@ collectors:
     max_concurrent_probes: 8   # optional; 32 when omitted or 0
 ```
 
-A trip is the request or file read, with the decoding and transforms after it.
-A probe that would exceed the limit is not queued: it is answered at once with
-`503 Service Unavailable` — `collector inventory_api already has 8 trips to
-its targets in progress, its max_concurrent_probes; this probe was not sent` —
-and counted in `http_exporter_probes_rejected_total`, while
-`http_exporter_probes_in_flight` shows how close to the limit a collector runs.
-Prometheus records the rejected scrape as `up` 0 with that reason, rather than
+A trip is the request or file read, with the decoding and transforms that
+follow it. A probe that would exceed the limit is not queued. It is answered
+immediately with `503 Service Unavailable` (`collector inventory_api already
+has 8 trips to its targets in progress, its max_concurrent_probes; this
+probe was not sent`) and counted in `http_exporter_probes_rejected_total`.
+`http_exporter_probes_in_flight` shows how close to the limit a collector
+runs. Prometheus records the rejected scrape as `up` 0 with that reason, not
 as a timeout.
 
-Probes that make no trip take no slot: one answered from the
-[response cache](#response-caching), one that
-[shares a request](#identical-probes-share-one-request) already in flight,
-and one [kept from a failing target](#backing-off-from-failing-targets). A
-[static target](STATIC-TARGETS.md) shares its collector's limit, but
-waits for a free slot within its scrape budget instead of failing at once,
-since nothing is waiting on its answer; if none frees up in time, the scrape
-fails in the `concurrency` stage. The default, 32, is well above what one
-Prometheus usually sends a single backend at once; lower it for a backend that
-cannot take many requests at a time, raise it for a collector with many slow
-targets. A negative value is a configuration error.
+- Probes that make no trip take no slot: one answered from the
+  [response cache](#response-caching), one that
+  [shares a request](#identical-probes-share-one-request) already in flight,
+  and one [kept from a failing target](#backing-off-from-failing-targets).
+- A [static target](STATIC-TARGETS.md) shares its collector's limit, but
+  waits for a free slot within its scrape budget instead of failing
+  immediately, because nothing is waiting on its answer. If no slot frees up
+  in time, the scrape fails in the `concurrency` stage.
+- The default, 32, is well above what one Prometheus usually sends a single
+  backend at once. Lower it for a backend that cannot take many requests at
+  a time, and raise it for a collector with many slow targets. A negative
+  value is a configuration error.
 
-Each collector's limit leaves the process as a whole unbounded: twenty
-collectors of 32 could hold 640 responses, and their series, in memory at
-once. `--probe.max-concurrent` bounds the trips of every collector together,
-on top of each collector's own limit:
+Per-collector limits leave the process as a whole unbounded: twenty
+collectors with a limit of 32 could hold 640 responses, and their series, in
+memory at once. `--probe.max-concurrent` limits the trips of all collectors
+together, on top of each collector's own limit:
 
 ```sh
 prometheus-universal-exporter --probe.max-concurrent=64
 ```
 
-A probe over it is answered `503` in the same way, naming the flag — `the
-exporter already has 64 trips to targets in progress, its
---probe.max-concurrent; this probe was not sent` — and counted in
-`http_exporter_probes_rejected_exporter_limit_total`, apart from those its
-collector's own limit turned away; a static target scrape waits for a slot.
-`http_exporter_trips_in_flight` shows how close to the limit the exporter
-runs.
+A probe over that limit is answered `503` in the same way, with a message
+that names the flag (`the exporter already has 64 trips to targets in
+progress, its --probe.max-concurrent; this probe was not sent`). It is
+counted in `http_exporter_probes_rejected_exporter_limit_total`, separately
+from the probes that its collector's own limit turned away. A static target
+scrape waits for a slot. `http_exporter_trips_in_flight` shows how close to
+the limit the exporter runs.
 
-Static target scrapes waiting for a slot wait in line: a slot that frees goes
-to the first of them it can serve — its collector under its own limit and the
-exporter under `--probe.max-concurrent` — so one waiting behind its own full
-collector never holds up another collector's. `0`, the default, leaves only the
-per-collector limits; a negative value is a command-line error. Size it to the
-memory the exporter has, together with `--python.max-workers` (see
-[Python](PYTHON.md#how-scripts-run)).
+Static target scrapes that wait for a slot wait in line. A slot that frees
+up goes to the first scrape in line that it can serve, that is, one whose
+collector is under its own limit while the exporter is under
+`--probe.max-concurrent`. A scrape waiting behind its own full collector
+therefore never holds up another collector's. `0`, the default, leaves only
+the per-collector limits, and a negative value is a command-line error. Size
+the limit to the memory the exporter has, together with
+`--python.max-workers` (see [Python](PYTHON.md#how-scripts-run)).
 
 ## Backing off from failing targets
 
 A target that is down fails every scrape, and every scrape still goes to it.
-One that does not answer at all holds a trip slot — of
-`max_concurrent_probes` and of `--probe.max-concurrent` — until its timeout,
-on every scrape, so a few dead endpoints can keep the slots full and turn
-away the probes of targets that answer. `failure_backoff` stops contacting a
-target that keeps failing, for a while:
+A target that does not answer at all holds a trip slot (of
+`max_concurrent_probes` and of `--probe.max-concurrent`) until its timeout,
+on every scrape. A few dead endpoints can therefore keep the slots full and
+turn away the probes of targets that do answer. `failure_backoff` stops
+contacting a target that keeps failing, for a while:
 
 ```yaml
 collectors:
@@ -6132,50 +6135,60 @@ collectors:
 ```
 
 After `after` consecutive failed scrapes of a target, its probes and
-[static target](STATIC-TARGETS.md) scrapes fail at once, without contacting
-it, for `initial`. When the wait has passed, the next scrape goes to the
-target: if it fails, the next wait is twice the last, up to `max`; if it
-succeeds, the target is forgotten and every scrape goes to it again. Only
-that one scrape goes: while it is in progress, a probe identical to it
-[shares it](#identical-probes-share-one-request), and any other scrape of the
-target, such as a probe of a collector with `coalesce: false`, fails at once
-as during the wait. Without `failure_backoff` every scrape contacts the
-target. `after` below 1, an `initial` or `min_budget` that is not a positive
-duration and a `max` shorter than `initial` are refused at load.
+[static target](STATIC-TARGETS.md) scrapes fail immediately, without
+contacting it, for `initial`. When the wait has passed, the next scrape goes
+to the target. If it fails, the next wait is twice the last, up to `max`. If
+it succeeds, the target is forgotten and every scrape goes to it again.
+
+Only that one scrape goes to the target. While it is in progress, a probe
+identical to it [shares it](#identical-probes-share-one-request), and any
+other scrape of the target, such as a probe of a collector with
+`coalesce: false`, fails immediately, as during the wait. Without
+`failure_backoff`, every scrape contacts the target. These are refused at
+load: `after` below 1, an `initial` or `min_budget` that is not a positive
+duration, and a `max` shorter than `initial`.
 
 `failure_backoff: {enabled: false}` turns the backoff off: every scrape
-contacts the target, as without the block. It is how a collector turns off
-the backoff its file's [defaults](#defaults-for-the-collectors-of-a-file)
-give it, and in a collector without defaults it is the block left out,
-which a reload and the response cache take it as. Keys written beside it are
-checked all the same. `enabled` defaults to true.
+contacts the target, as without the block. This is how a collector turns off
+the backoff that its file's
+[defaults](#defaults-for-the-collectors-of-a-file) give it. In a collector
+without defaults it is equivalent to omitting the block, and a reload and
+the response cache treat it as such. Keys written beside it are still
+checked. `enabled` defaults to true.
 
-A failed scrape is one whose fetch failed: the connection was refused or
-reset, it timed out, TLS failed, the target answered a status the collector
-does not [accept](REQUESTS.md#accepting-other-statuses), or the request type's own
-fetch failed — a file that is not there, a query a database refused. A target
-that answered something the decoder or the transform could not read is up,
-and counts as a success. Neither counts the scrape that
-[`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
-refused, one `max_concurrent_probes` or `--probe.max-concurrent` turned away
-before it started, or one cancelled because every probe waiting for it went
-away: nothing is known of the target from them.
+**What counts as a failed scrape.** A failed scrape is one whose fetch
+failed: the connection was refused or reset, it timed out, TLS failed, the
+target answered a status the collector does not
+[accept](REQUESTS.md#accepting-other-statuses), or the request type's own
+fetch failed, such as a file that is not there or a query a database
+refused. A target that answered something the decoder or the transform could
+not read is up, and counts as a success.
 
-Nor does a scrape that timed out — ran out of its budget — when that budget
-was below `min_budget`. A probe's budget comes from its caller: Prometheus's
-scrape timeout, less `--probe.timeout-offset`
-([Probe deadlines](#probe-deadlines)), which is not part of what a target is
-told apart by. Without the floor, anyone who can reach `/probe` could send a
-few probes asking for less time than the target needs to answer and back it
-off for every probe and static target scrape that shares its state. The
-budgets Prometheus gives are above the floor, so a target that does not
-answer at all still backs off; raise `min_budget` towards the scrape timeout
-to be stricter about what counts. Such a scrape neither counts as a failure
-nor forgets the failures before it. A static target's scrape has its interval
-for a budget, and the floor applies to it the same way. A failure that is not
-the deadline's — a refused connection, TLS, a status the collector does not
-accept, the target's own error — counts whatever the budget, and so does a
-timeout of the probe's `timeout` parameter, which is part of the key.
+These scrapes count as neither, because they say nothing about the target:
+one that [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
+refused, one that `max_concurrent_probes` or `--probe.max-concurrent` turned
+away before it started, and one cancelled because every probe waiting for it
+went away.
+
+**The budget floor.** A scrape that timed out (ran out of its budget) does
+not count either when that budget was below `min_budget`. Such a scrape
+neither counts as a failure nor resets the failures before it.
+
+- A probe's budget comes from its caller: Prometheus's scrape timeout, less
+  `--probe.timeout-offset` ([Probe deadlines](#probe-deadlines)). The budget
+  is not part of what identifies a target. Without the floor, anyone who can
+  reach `/probe` could send a few probes that ask for less time than the
+  target needs to answer, and make it back off for every probe and static
+  target scrape that shares its state.
+- The budgets Prometheus gives are above the floor, so a target that does
+  not answer at all still backs off. Raise `min_budget` towards the scrape
+  timeout to be stricter about what counts.
+- A static target's scrape has its interval as its budget, and the floor
+  applies to it in the same way.
+- A failure that is not caused by the deadline (a refused connection, TLS, a
+  status the collector does not accept, the target's own error) counts
+  whatever the budget. So does a timeout of the probe's `timeout` parameter,
+  which is part of the key.
 
 A scrape kept from the target fails as its fetch would have, in the fetch
 stage, with:
@@ -6184,225 +6197,257 @@ stage, with:
 http://10.0.0.7:8080/stats is backing off after 3 consecutive failed scrapes; next try after 2026-10-23T09:14:05Z
 ```
 
-so everything that applies to a failed fetch applies to it: a probe is
-answered `502` under `error_handling.on_fetch_error: fail`, or carries on
-under `log` and `ignore` ([When a stage of the probe
-fails](#when-a-stage-of-the-probe-fails)), and
-[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
-answers it with the last good result. A static target's scrape is `up` 0, or
-serves its last good result marked stale. Such a scrape takes no trip slot,
-sends nothing, and leaves `http_exporter_scrape_http_status_code` and
-`http_exporter_scrape_response_bytes` describing the last real request. Its
-failure is logged as any failure is, and its repeats are one failure to the
-[log](LOGGING.md#repeated-failures), however its count and time move; a
-target that starts to back off is logged once at warning level, with its
-failures and the time of its next try.
+Everything that applies to a failed fetch therefore applies to it:
 
-A target is told apart as the [response cache](#response-caching) tells
-probes apart: the collector's definition, the target, the probe parameters
-and the forwarded headers. Probes with different `param_<name>` values back
-off apart, and a static target and the identical probe share one state. A
-collector remembers at most 10,000 targets that have failed, the one that
-failed longest ago forgotten first, since probe targets come from the query
-string; a target is forgotten as soon as a scrape of it succeeds, and a
-reload that removes or changes the collector forgets all of them. The state
-is in memory, per exporter process.
+- A probe is answered `502` under `error_handling.on_fetch_error: fail`, or
+  carries on under `log` and `ignore`
+  ([When a stage of the probe fails](#when-a-stage-of-the-probe-fails)), and
+  [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+  answers it with the last good result.
+- A static target's scrape is `up` 0, or serves its last good result marked
+  stale.
+- Such a scrape takes no trip slot, sends nothing, and leaves
+  `http_exporter_scrape_http_status_code` and
+  `http_exporter_scrape_response_bytes` describing the last real request.
+- Its failure is logged like any failure, and its repeats are one failure
+  to the [log](LOGGING.md#repeated-failures), however its count and time
+  change. A target that starts to back off is logged once at warning level,
+  with its failures and the time of its next try.
 
-A [debug probe](#debug-probes) or run always contacts the target, and changes
-nothing of the backoff; its report says when the target is backing off, and
+**How a target is identified.** A target is identified in the same way that
+the [response cache](#response-caching) identifies probes: by the
+collector's definition, the target, the probe parameters and the forwarded
+headers. Probes with different `param_<name>` values back off separately,
+and a static target and the identical probe share one state.
+
+A collector remembers at most 10,000 targets that have failed, and forgets
+the one that failed longest ago first, because probe targets come from the
+query string. A target is forgotten as soon as a scrape of it succeeds, and
+a reload that removes or changes the collector forgets all of them. The
+state is in memory, per exporter process.
+
+A [debug probe](#debug-probes) or run always contacts the target and does
+not change the backoff. Its report says when the target is backing off, and
 until when.
 
 `http_exporter_backoff_skipped_total` counts the scrapes answered without
-contacting their target, and `http_exporter_targets_backing_off` the targets
-the collector is keeping its scrapes from now
-([self-metrics](SELF-METRICS.md#collector-metrics)); both are `0` without
+contacting their target, and `http_exporter_targets_backing_off` counts the
+targets from which the collector is currently withholding scrapes
+([self-metrics](SELF-METRICS.md#collector-metrics)). Both are `0` without
 `failure_backoff`.
 
 ## Memory
 
-The exporter's memory is the Go heap — responses, decoded documents and
-series while trips are in progress, and the response cache — and the Python
-workers, each a process of its own. `--probe.max-concurrent` bounds the
-first, `--python.max-workers` and
-[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second, and
-`--python.max-idle-workers` and `--python.idle-timeout` how many workers are
-kept between scrapes, and for how long.
+The exporter's memory consists of the Go heap and the Python workers. The Go
+heap holds responses, decoded documents and series while trips are in
+progress, and the response cache. Each Python worker is a separate process.
+`--probe.max-concurrent` bounds the first.
+`--python.max-workers` and
+[`limits.max_script_memory`](PYTHON.md#how-scripts-run) bound the second,
+and `--python.max-idle-workers` and `--python.idle-timeout` set how many
+workers are kept between scrapes, and for how long.
 
-A jq or yq expression can build far more than the response it reads —
-`[range(40000000)]` holds gigabytes, and a definition that calls itself
-never stops building — and the probe's time does not bound that. So a `jq`
-or `yq` transform is stopped when the exporter's memory has grown by more
-than `limits.max_expression_memory` while it ran, 256 MiB unless set, and
-the scrape fails as a limit exceeded, naming the rule:
+**Expression memory.** A jq or yq expression can build far more than the
+response it reads: `[range(40000000)]` holds gigabytes, and a definition
+that calls itself never stops building. The probe's time limit does not
+bound that. A `jq` or `yq` transform is therefore stopped when the
+exporter's memory has grown by more than `limits.max_expression_memory`
+while it ran (256 MiB unless set), and the scrape fails as a limit exceeded,
+with an error that names the rule:
 
 ```text
 the transform was stopped at metric "queue_jobs": the exporter's memory grew by more than limits.max_expression_memory, 268435456 bytes, while it ran; make the expression keep less at once, or raise the limit
 ```
 
-The limit is a [size](#sizes) of at least 1 MiB. It is on what the transform
-holds, not on what it makes and lets go of. Go measures memory for the
-process and not for one scrape, so what other scrapes hold in the same
-moments counts too: a transform is not looked at in its first 20
-milliseconds, which nearly all end within, and one that runs longer may be
-stopped anywhere between the limit and twice it. Set the limit well above
-what the collector's answers need, and lower it only on an exporter whose
-memory is short. A [debug probe](#debug-probes) says what a transform's
-expressions held at their most, as `jq transform memory`, or `yq transform
-memory`, with `held_bytes` and `limit_bytes` among its logs, which is what
-to set the limit from: it is the exporter's memory that is measured, so
-probe when little else is being scraped. One
-text, list or object larger than the whole limit stops its
-expression the moment an operator or a function makes it, with no look at
-the heap, so an expression that doubles a text at every step is stopped
-when the text first passes the limit: holding that text, at most twice the
-limit, and the ones it was made of. A list counts sixteen bytes an item
-and an object forty-eight a key. A text, a list or an object the answer
-holds is none the expression made, however large, and reading it stops
-nothing; a copy of it is one, as `sort` and `tojson` make. The
-failure is the probe's `validation` stage, counted in
-`http_exporter_series_limit_exceeded_total`, whatever `error_handling`
-says. The jq
-expressions of [pagination](REQUESTS.md#pagination) and
-[logins](AUTHENTICATION.md#logging-in-to-a-target) run outside the
-transform and are held to the same limit, on each page and on each of a
-login's answers: one past it fails the scrape as a limit exceeded, where
-a failed request does (`error_handling.on_fetch_error`) and counted in the
-same metric, naming its key, as `request.pagination.next ".." was stopped:
-the exporter's memory grew by more than limits.max_expression_memory, …`.
+The limit is a [size](#sizes) of at least 1 MiB. It applies to what the
+transform holds, not to what it creates and releases.
 
-A decoded document is larger than the response it was read from, the more
-so the more of the response is structure: a response of nothing but empty
-fields, list items or elements, which a faulty or hostile target can send,
-takes tens of times its bytes while its scrape lasts. The bound on that is
-[`max_response_bytes`](REQUESTS.md#compression-and-the-response-size), 10 MiB unless set, times the
-scrapes in progress: for targets you do not run, set it to what their
-answers need, and `--probe.max-concurrent` to what the memory allows.
+- Go measures memory for the process, not for one scrape, so what other
+  scrapes hold at the same time counts too. A transform is not checked in
+  its first 20 milliseconds, within which nearly all finish, and one that
+  runs longer may be stopped anywhere between the limit and twice the limit.
+  Set the limit well above what the collector's answers need, and lower it
+  only on an exporter that is short of memory.
+- A [debug probe](#debug-probes) reports the most that a transform's
+  expressions held, as `jq transform memory` or `yq transform memory`, with
+  `held_bytes` and `limit_bytes` among its logs. Use that to set the limit.
+  Because it is the exporter's memory that is measured, probe when little
+  else is being scraped.
+- A single text, list or object larger than the whole limit stops its
+  expression the moment an operator or a function creates it, without
+  looking at the heap. An expression that doubles a text at every step is
+  therefore stopped when the text first exceeds the limit, while holding
+  that text, at most twice the limit, and the ones it was built from. A list
+  counts as sixteen bytes per item and an object as forty-eight per key.
+- A text, a list or an object that the answer itself holds was not created
+  by the expression, however large it is, and reading it stops nothing. A
+  copy of it, as `sort` and `tojson` make, does count.
+- The failure is in the probe's `validation` stage and is counted in
+  `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
+  says.
+- The jq expressions of [pagination](REQUESTS.md#pagination) and
+  [logins](AUTHENTICATION.md#logging-in-to-a-target) run outside the
+  transform and are subject to the same limit, on each page and on each of a
+  login's answers. One that exceeds it fails the scrape as a limit exceeded,
+  in the place where a failed request fails
+  (`error_handling.on_fetch_error`), and is counted in the same metric. The
+  error names its key, as `request.pagination.next ".." was stopped: the
+  exporter's memory grew by more than limits.max_expression_memory, …`.
 
-`limits.max_metrics` (10000 by default) bounds a scrape's series as they are
-made, not after: every transform stops at the first series past it, and the
-scrape fails with `metric count 10001 exceeds limit 10000` — one past the
-limit, since counting further would cost the memory the limit is there to
-save. A response of a million lines read with the regex `(\d+)` is refused
-after ten thousand and one series, not after a million; a jq rule makes a
-series, and its labels, as its expression gives each value, with `items` and
-without. The prometheus
-decoder keeps only the series its transform passes on — those its rules match,
-or `include` and `exclude` pick — and stops the same way, so a large exposition
-of which a collector keeps a few costs what the few cost. With a `pre_script`,
-which is given every series, the decoder keeps them all and the transform
-counts. A python transform's answer is bounded by `limits.max_output_bytes`,
-and its metrics are counted before they are read. The failure is the probe's
-`validation` stage, counted in `http_exporter_series_limit_exceeded_total`,
-whatever `error_handling` says.
+**Decoded documents.** A decoded document is larger than the response it was
+read from, and the more of the response is structure, the larger the factor.
+A response of only empty fields, list items or elements, which a faulty or
+hostile target can send, takes tens of times its size in memory while its
+scrape lasts. The bound on that is
+[`max_response_bytes`](REQUESTS.md#compression-and-the-response-size)
+(10 MiB unless set) times the scrapes in progress. For targets you do not
+run, set it to what their answers need, and set `--probe.max-concurrent` to
+what the memory allows.
 
-What counts is the series the scrape keeps. An item a rule carries on
-without, under `error_mode: log` or `ignore` — a value that is no number, a
-required label that is missing — makes no series and takes no room, and a
-rule that fails as a whole after it made series, a jq program that fails part
-of the way or an XPath expression the engine fails on, gives their room back
-with them: the rules after it have all the limit leaves. A prometheus rule
-that carries on without a series it cannot make — its `type` or its `scale`
-on a histogram or a summary, a required label the series lacks — is counted
-the same way, by the series it makes: the decoder stops only for the series
-a rule is sure to pass on, keeps the others that a rule matches, and the
-transform counts those it makes of them. So of twenty series a rule matches
-and keeps five, the scrape passes under `max_metrics: 5`. One thing counts
-that is not kept: a rule that makes more series than the limit has room for
-ends the scrape there, also when it would have failed as a whole further on
-and given them all up, since finding that out would mean making every series
-the response describes. A rule with a
-[`histogram` block](#histograms-from-a-list-of-values) makes a series of each
-histogram, taken when its first value comes, and none of the values it
-counts.
+**Series.** `limits.max_metrics` (10000 by default) bounds a scrape's series
+as they are produced, not afterwards. Every transform stops at the first
+series over the limit, and the scrape fails with `metric count 10001 exceeds
+limit 10000`: one over the limit, because counting further would cost the
+memory the limit is meant to save.
 
-In a container with a memory limit, `--runtime.memory-limit-ratio` sets the Go
-memory limit to a share of it, read at startup from the container's own
-cgroup, as `/proc/self/cgroup` names it — under cgroup v2 or v1, with or
-without a cgroup namespace, and the smallest limit on the way up to the root,
-so a pod-level limit counts too:
+- A response of a million lines read with the regex `(\d+)` is refused after
+  ten thousand and one series, not after a million. A jq rule produces a
+  series, and its labels, as its expression gives each value, with or
+  without `items`.
+- The prometheus decoder keeps only the series its transform passes on
+  (those its rules match, or that `include` and `exclude` select) and stops
+  in the same way, so a large exposition of which a collector keeps a few
+  series costs only what those few cost. With a `pre_script`, which receives
+  every series, the decoder keeps them all, and the transform does the
+  counting.
+- A python transform's answer is bounded by `limits.max_output_bytes`, and
+  its metrics are counted before they are read.
+- The failure is in the probe's `validation` stage and is counted in
+  `http_exporter_series_limit_exceeded_total`, whatever `error_handling`
+  says.
+
+What counts is the series the scrape keeps:
+
+- An item that a rule carries on without, under `error_mode: log` or
+  `ignore` (a value that is not a number, a required label that is
+  missing), produces no series and uses none of the limit.
+- A rule that fails as a whole after it has produced series (a jq program
+  that fails part of the way, or an XPath expression the engine fails on)
+  gives their share of the limit back. The rules after it have everything
+  the limit leaves.
+- A prometheus rule that carries on without a series it cannot produce (its
+  `type` or its `scale` on a histogram or a summary, or a required label
+  the series lacks) is counted the same way, by the series it produces. The
+  decoder stops only for the series that a rule is certain to pass on, keeps
+  the others that a rule matches, and the transform counts those it actually
+  produces from them. If a rule matches twenty series and keeps five, the
+  scrape passes under `max_metrics: 5`.
+- One thing counts although it is not kept: a rule that produces more series
+  than the limit has room for ends the scrape there, even if it would have
+  failed as a whole later and released them all, because finding that out
+  would mean producing every series the response describes.
+- A rule with a [`histogram` block](#histograms-from-a-list-of-values)
+  produces one series per histogram, counted when its first value arrives,
+  and none for the values it counts.
+
+**Go memory limit.** In a container with a memory limit,
+`--runtime.memory-limit-ratio` sets the Go memory limit to a share of it.
+The container's limit is read at startup from the container's own cgroup, as
+`/proc/self/cgroup` names it, under cgroup v2 or v1, with or without a
+cgroup namespace. The smallest limit on the way up to the root is used, so a
+pod-level limit counts too:
 
 ```sh
 prometheus-universal-exporter --runtime.memory-limit-ratio=0.8
 ```
 
-The Go runtime then collects harder as its heap nears 80% of the container's
-limit, instead of growing past it into an OOM kill, and the rest is left to
-the Python workers and the runtime's own overhead. The startup log says what
-was set. Without a container limit the Go default stays, and `GOMEMLIMIT` in
-the environment wins over the ratio. `0`, the default, leaves it off; the Helm
-chart sets `0.8`. Any other ratio is at least `0.1`, and one below it is
-refused at startup and by `--dry-run`: it would leave the Go heap almost
-nothing, so the runtime would spend its time collecting garbage. Leaving
-room for the Python workers takes `0.5` to `0.95`.
+The Go runtime then collects garbage more aggressively as its heap
+approaches 80% of the container's limit, instead of growing past it into an
+OOM kill. The remainder is left for the Python workers and the runtime's own
+overhead. The startup log says what was set.
 
-`GOGC` in the environment is honoured as by any Go program: it is the
-garbage collector's target, how far the heap may grow over the live data
+- Without a container limit, the Go default stays, and `GOMEMLIMIT` in the
+  environment takes precedence over the ratio.
+- `0`, the default, leaves the limit off. The Helm chart sets `0.8`.
+- Any other ratio must be at least `0.1`. A lower one is refused at startup
+  and by `--dry-run`, because it would leave the Go heap almost nothing and
+  the runtime would spend its time collecting garbage. Leaving room for the
+  Python workers takes `0.5` to `0.95`.
+
+`GOGC` in the environment is honoured as by any Go program. It is the
+garbage collector's target: how far the heap may grow over the live data
 before the next collection, 100 by default. Garbage collection is 13% to 22%
-of the exporter's CPU, and with `GOGC=400` a probe of 5,000 series took 15%
-to 30% less time when measured, for a heap that may grow to about five times
-the live data between collections instead of two; with a memory limit set as
-above, Go collects sooner as the heap nears it, so the higher target cannot
-push the process past the limit. The Helm chart sets it from `goGC.percent`
-(see [the chart README](../charts/prometheus-universal-exporter/README.md#garbage-collector)).
+of the exporter's CPU. In measurements with `GOGC=400`, a probe of 5,000
+series took 15% to 30% less time, in exchange for a heap that may grow to
+about five times the live data between collections instead of two. With a
+memory limit set as above, Go collects sooner as the heap approaches it, so
+the higher target cannot push the process past the limit. The Helm chart
+sets `GOGC` from `goGC.percent` (see
+[the chart README](../charts/prometheus-universal-exporter/README.md#garbage-collector)).
 
 ## Probe deadlines
 
-Prometheus says how long it will wait for each scrape, in the
-`X-Prometheus-Scrape-Timeout-Seconds` header — the job's `scrape_timeout`, or a
-monitor's `scrapeTimeout`. A probe that takes longer is abandoned, and all
-Prometheus records is `up` 0 and a generic timeout; why the probe was slow never
-reaches it.
+Prometheus states how long it will wait for each scrape in the
+`X-Prometheus-Scrape-Timeout-Seconds` header: the job's `scrape_timeout`, or
+a monitor's `scrapeTimeout`. A probe that takes longer is abandoned, and all
+that Prometheus records is `up` 0 and a generic timeout. The reason the
+probe was slow never reaches it.
 
-So a probe gives itself that long, less `--probe.timeout-offset` (500ms by
-default, as blackbox_exporter uses), and when the time runs out it stops and
-answers with the reason while Prometheus is still waiting:
+A probe therefore gives itself that long, less `--probe.timeout-offset`
+(500ms by default, as blackbox_exporter uses). When the time runs out, it
+stops and answers with the reason while Prometheus is still waiting:
 
 ```text
 collector legacy_text http failed: HTTP request failed: ... context deadline exceeded (the probe ran out of its 9.5s budget: Prometheus's scrape timeout less --probe.timeout-offset)
 ```
 
-- A scrape timeout above an hour counts as an hour: whoever reaches `/probe`
-  sends the header, and a timeout of years would hold a slot of
+- A scrape timeout above an hour counts as an hour. Whoever can reach
+  `/probe` sends the header, and a timeout of years would hold a slot of
   `max_concurrent_probes` for as long as a target hangs.
-- A header that is not a positive, finite number — `0`, `-1`, `NaN`, `Inf`,
-  text — is no scrape timeout, and the probe is bounded as one without the
-  header is. A positive one is a budget however small: `1e-10` ends the probe
-  at once.
+- A header that is not a positive, finite number (`0`, `-1`, `NaN`, `Inf`,
+  text) is not a scrape timeout, and the probe is bounded like one without
+  the header. A positive value is a budget however small: `1e-10` ends the
+  probe immediately.
 - The budget bounds the whole trip: the request or file read, decoding,
-  transforms and Python scripts. The `timeout` probe parameter still bounds the
-  request alone; whichever ends first stops the probe.
-- A budget that runs out while a metric rule is being evaluated — a jq
-  expression that takes too long, a response of more nodes or rows than there
-  is time to read — fails the probe in the `transform` stage, naming the rule
-  it was at (`the transform was stopped at metric "queue_depth"`). It is not
-  that rule's failure: its [`error_mode`](#when-a-metric-cannot-be-extracted)
-  does not apply, `ignore` and `log` included, nothing is counted against it,
-  and the series the other rules made are not answered or cached as if they
+  transforms and Python scripts. The `timeout` probe parameter still bounds
+  the request alone. Whichever ends first stops the probe.
+- A budget that runs out while a metric rule is being evaluated (a jq
+  expression that takes too long, or a response with more nodes or rows
+  than there is time to read) fails the probe in the `transform` stage, with
+  an error that names the rule it was at (`the transform was stopped at
+  metric "queue_depth"`). It is not that rule's failure. Its
+  [`error_mode`](#when-a-metric-cannot-be-extracted) does not apply,
+  including `ignore` and `log`, nothing is counted against it, and the
+  series the other rules produced are not answered or cached as if they
   were the whole response.
-- An offset of half the scrape timeout or more would leave too little, so a
-  probe always keeps at least half.
-- Without the header — a probe from `curl`, a script, or anything other than
-  Prometheus — the probe gets `--probe.default-timeout`, 30s by default, so a
-  target that accepts the connection and never answers cannot hold it, and
-  its collector's `max_concurrent_probes` slot, for ever. Its error names
-  that flag instead. A `timeout` parameter bounds the request within that
-  budget and cannot lift it: `timeout=1h` still ends after 30s, and the error says the parameter was capped. `0` leaves
-  such a probe unbounded; a negative value is a command-line error.
-- A probe answered from the [response cache](#response-caching) needs no budget.
-  Identical probes that [share one request](#identical-probes-share-one-request)
-  share the budget of the probe that started it.
+- An offset of half the scrape timeout or more would leave too little time,
+  so a probe always keeps at least half.
+- Without the header (a probe from `curl`, a script, or anything other than
+  Prometheus), the probe gets `--probe.default-timeout`, 30s by default.
+  This keeps a target that accepts the connection and never answers from
+  holding the probe, and its collector's `max_concurrent_probes` slot,
+  indefinitely. Its error names that flag instead. A `timeout` parameter
+  bounds the request within that budget and cannot raise it: `timeout=1h`
+  still ends after 30s, and the error says the parameter was capped. `0`
+  leaves such a probe unbounded, and a negative value is a command-line
+  error.
+- A probe answered from the [response cache](#response-caching) needs no
+  budget. Identical probes that
+  [share one request](#identical-probes-share-one-request) share the budget
+  of the probe that started it.
 - The offset covers writing the answer and the network between the exporter
-  and Prometheus. Raise it if Prometheus still times out first; `0` uses the
-  whole scrape timeout. A negative value is a command-line error.
+  and Prometheus. Raise it if Prometheus still times out first. `0` uses the
+  whole scrape timeout, and a negative value is a command-line error.
 
-Once the exporter starts writing an answer, the client has 30 seconds to read
-it, on every endpoint. An answer can be megabytes — a passed-through
-exposition, the static targets, the verbose self-metrics, a
-[debug report](#debug-probes) — and a client that asked for one and
-stopped reading would otherwise hold the request, and the answer in memory,
-for as long as it kept the connection open. After 30 seconds its connection is
-closed, which the log notes at `debug` level only. The time a probe takes to
-make its answer does not count: that is the probe's budget above.
+Once the exporter starts writing an answer, the client has 30 seconds to
+read it, on every endpoint. An answer can be megabytes in size (a
+passed-through exposition, the static targets, the verbose self-metrics, a
+[debug report](#debug-probes)), and a client that asked for one and stopped
+reading would otherwise hold the request, and the answer in memory, for as
+long as it kept the connection open. After 30 seconds its connection is
+closed, which is logged at `debug` level only. The time a probe takes to
+produce its answer does not count; that is the probe's budget, described
+above.
 
 Static targets are unaffected: their scrapes are bounded by their own
 `interval` (see [Static targets](STATIC-TARGETS.md#scraping)).

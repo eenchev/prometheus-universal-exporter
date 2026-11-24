@@ -12,54 +12,48 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Static targets are scraped on their own intervals, set in the static targets
-// file, as Prometheus scrapes a probe on its scrape_interval. Neither
-// Prometheus's scrapes of the static targets endpoint nor the OTLP export,
-// which delivers on otlp.interval what the scrapes queued, decides when a
-// target is scraped. Each target runs on a fixed
-// cadence measured from its first scrape, so a slow scrape does not push the
-// next one later. Its cadence is offset within its interval by a hash of its
-// name, so targets sharing an interval are spread over it rather than all
-// scraped at once. A target new to the schedule is first scraped sooner, within
-// firstScrapeWindow, again by the hash: otherwise a target with a long interval
-// would be missing from the static targets endpoint for up to that interval
-// after a start or a reload, which looks the same as a target nobody
-// configured. Its cadence then starts at the next point of it at least one
-// whole interval after that first scrape was due. The first scrape has its
-// interval to end in, as every scrape has, so it has ended when the cadence
-// starts, and the first turn of the cadence starts on time with an interval
-// of its own. Started sooner, half an interval on, the cadence's first turn
-// found the first scrape of a slow target still running, waited for it, and
-// was left what remained of its turn: less than the scrape takes, so a
-// healthy target whose scrapes take most of their interval was cut short and
-// reported down once after every start and every reload that changed it.
+// Static targets are scraped on their own intervals, set in the static
+// targets file, as Prometheus scrapes a probe on its scrape_interval. Neither
+// Prometheus's scrapes of the static targets endpoint nor the OTLP export
+// (which delivers on otlp.interval what the scrapes queued) decides when a
+// target is scraped.
 //
-// The interval is measured from when the first scrape was due, and not from
-// when the loop came to start it, a moment later. With an interval of
-// firstScrapeWindow or less the first scrape is due at a point of the
-// cadence itself, so the second scrape comes one interval after it. Measured
-// from the moment the loop woke, always a little past that point, the next
-// point was a hair less than an interval away and was passed over: every
-// such target was scraped a second time only two intervals after the first,
-// after every start and every reload that changed it. Only a first scrape
-// that was put off, because a scrape begun on the target's old definition
-// still ran, has the interval measured from when it began: that can be the
-// old scrape's whole interval after it was due.
+// Each target runs on a fixed cadence measured from its first scrape, so a
+// slow scrape does not delay the next one. The cadence is offset within the
+// interval by a hash of the target's name, so targets that share an interval
+// are spread over it instead of all being scraped at once. A target new to
+// the schedule is first scraped sooner, within firstScrapeWindow, again by
+// the hash; otherwise a target with a long interval would be missing from
+// the static targets endpoint for up to that interval after a start or a
+// reload, which looks like a target nobody configured. The cadence then
+// starts at its next point at least one whole interval after the first
+// scrape was due. The first scrape, like every scrape, has its interval to
+// end in, so it has ended when the cadence starts, and the cadence's first
+// turn starts on time with a full interval; a slow target's first scrape is
+// not cut short.
+//
+// The interval is measured from when the first scrape was due, not from when
+// the loop actually started it, a moment later. With an interval of
+// firstScrapeWindow or less, the first scrape is due at a point of the
+// cadence itself, so the second scrape comes one interval after it (measured
+// from when the loop woke, the next point would be just under an interval
+// away and would be skipped). Only a first scrape that was delayed because a
+// scrape on the target's old definition was still running has the interval
+// measured from when it began.
 //
 // A scrape is bounded by its interval, and two scrapes of a target never run
-// at once. A turn that comes while the target's last scrape still runs —
-// one that used its whole interval, as a target that never answers makes
-// every scrape do, ends just after the next turn has come — is not given up:
-// it waits for that scrape, starts as soon as it has ended, and must itself
-// end by the turn after it, so the cadence stays at one scrape per interval
-// and a target that answers again is seen within one. Giving the turn up
-// instead scraped such a target every second interval, and logged a skipped
-// scrape beside every failed one. A turn is skipped, and logged, only when it
-// is really lost: the scrape it waited for had not ended when the turn after
-// it came, or no scrape slot came free within the interval. That budget, less
-// than an interval by the little the scrape before it ran over, is one of the
-// steady cadence: the first scrape runs into the cadence only by the moment
-// the loop was late in starting it.
+// at once. A turn that comes while the target's last scrape is still running
+// (one that used its whole interval, as every scrape of a target that never
+// answers does, ends just after the next turn has come) is not given up: it
+// waits for that scrape, starts as soon as it ends, and must itself end by
+// the following turn. The cadence therefore stays at one scrape per interval,
+// and a target that answers again is seen within one interval. A turn is
+// skipped, and
+// logged, only when it is really lost: the scrape it waited for had not
+// ended when the following turn came, or no scrape slot became free within
+// the interval. That budget, an interval minus the small overrun of the
+// previous scrape, belongs to the steady cadence: the first scrape overruns
+// into the cadence only by how late the loop was in starting it.
 
 // scheduleCheckInterval is the longest the scheduler sleeps, so a reloaded
 // target file takes effect within it.
@@ -91,18 +85,17 @@ type targetSchedule struct {
 // staticTargetState is one target's place in the schedule.
 type staticTargetState struct {
 	// target is the definition the state was made for, and collector the
-	// fingerprint of its collector's definition (collectorFingerprint); a
-	// reload that changes either starts the target again (plan). The
-	// fingerprint is only compared, with the one the collector has in the
-	// configuration planned with, and is read where the reload made it for
-	// that configuration, the one the following of the reload told the
-	// changed collectors by (planFollowed, followedConfig.fingerprintOf):
-	// the schedule encodes no definition a second time. since is
-	// the generation the target's stay had begun at when the state was made
+	// fingerprint of its collector's definition (collectorFingerprint). A
+	// reload that changes either restarts the target (plan). The fingerprint
+	// is only compared with the collector's fingerprint in the configuration
+	// planned with, read where the reload computed it for that configuration
+	// (planFollowed, followedConfig.fingerprintOf), so the schedule never
+	// encodes a definition a second time. since is the generation at which
+	// the target's stay had begun when the state was made
 	// (followedConfig.stay): reloads that changed either and changed it
-	// back, or removed either and brought it back, between two looks of the
-	// schedule leave both as the state has them, and have begun another
-	// stay, which starts the target again too.
+	// back, or removed either and restored it, between two examinations of
+	// the schedule leave both unchanged, but begin another stay, which also
+	// restarts the target.
 	target    model.StaticTarget
 	collector string
 	since     uint64
@@ -115,14 +108,14 @@ type staticTargetState struct {
 	cadence time.Time
 	putOff  bool
 	// running is set while a scrape of the target is in flight. A target
-	// a reload changed starts a new state that shares it, so
-	// a scrape begun on the old definition still keeps the next one from
-	// starting beside it, and so does a target that began another stay
-	// with its definition as it was (since). A target a reload removed and
-	// another brought back, the schedule having looked between the two,
-	// has a state that shares nothing with the one forgotten: what keeps a
-	// scrape of the old one from publishing after the new one's is that it
-	// publishes nothing (configRead.targetStands).
+	// that a reload changed starts a new state that shares it, so a scrape
+	// begun on the old definition still prevents the next one from starting
+	// beside it, and so does a target that began another stay with an
+	// unchanged definition (since). A target that a reload removed and
+	// another restored, with the schedule examined in between, gets a state
+	// that shares nothing with the forgotten one; a scrape of the old one
+	// cannot publish after the new one's because it publishes nothing
+	// (configRead.targetStands).
 	running *atomic.Bool
 	// awaited, shared as running is, is set when the schedule waits for
 	// the scrape in flight to end, so the loop is woken when it does.
@@ -166,45 +159,44 @@ func newTargetSchedule() *targetSchedule {
 	return &targetSchedule{states: map[string]*staticTargetState{}}
 }
 
-// plan brings the schedule in step with targets, the ones in force together
-// with cfg, and returns those to scrape at now, those whose turn was lost
-// because their last scrape still runs, and when the next one is due. A
-// target new to the schedule, or one a reload changed — its interval, its
-// address, its request, its params, or anything in the definition of its
-// collector — starts again: first scraped soon, within firstScrapeWindow,
-// then on a cadence of its own. A fixed address, credential or metric rule
-// therefore shows within seconds rather than after the old definition's next
-// turn, which for a long interval could be an hour away, with the endpoint
-// serving what the old definition made until then. A target whose collector
-// did not change keeps its cadence through a reload of the configuration.
-// One no longer in targets is forgotten.
+// plan brings the schedule in line with targets, the ones in force with cfg,
+// and returns the targets to scrape at now, those whose turn was lost
+// because their last scrape is still running, and when the next one is due.
+// A target new to the schedule, or one that a reload changed (its interval,
+// address, request, params, or anything in its collector's definition),
+// restarts: first scraped soon, within firstScrapeWindow, then on its own
+// cadence. A fixed address, credential or metric rule therefore takes effect
+// within seconds, not at the old definition's next turn, which for a long
+// interval could be an hour away, with the endpoint serving the old
+// definition's results until then. A target whose collector did not change
+// keeps its cadence through a configuration reload. A target no longer in
+// targets is forgotten.
 func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
 	return s.planFollowed(cfg, targets, nil, now)
 }
 
 // planFollowed is plan for the scrape loop, which reads cfg and targets as
-// followed has them (Server.reconcile), and so knows from which generation
-// each target has been as it is, with its collector as it is (stay). A
-// target whose stay began after its state was made starts again as one a
-// reload changed does, though it is defined as its state has it: reloads
-// changed it, or its collector, and changed it back, or removed it and
-// brought it back, since the schedule last looked. A scrape of it still in
-// flight read the stay that ended and publishes nothing (targetStands), so
-// without a first scrape of its own the target would be missing from the
-// static targets endpoint, its http_exporter_target_up too, until its next
-// turn: for a long interval, an hour. That scrape waits for the one in
-// flight to end, as that of a changed target does. A reload that left the
-// target and its collector as they were began no stay, and starts nothing.
+// followed holds them (Server.reconcile), and so knows the generation since
+// which each target and its collector have been unchanged (stay). A target
+// whose stay began after its state was made restarts like a changed one,
+// even though its definition matches its state: since the schedule last
+// looked, reloads changed it or its collector and changed it back, or
+// removed it and restored it. A scrape of it still in flight read the ended
+// stay and publishes nothing (targetStands), so without its own first scrape
+// the target, including its http_exporter_target_up, would be missing from
+// the static targets endpoint until its next turn, an hour for a long
+// interval. That scrape waits for the one in flight to end, as a changed
+// target's does. A reload that left the target and its collector unchanged
+// began no stay and restarts nothing.
 func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticTarget, followed *followedConfig, now time.Time) (due, skipped []dueTarget, next time.Time) {
-	// A reload puts another configuration or another list in force; until
-	// one does, every state is that of its target as it is, and no stay
-	// began. The collectors' fingerprints are asked for only for another
-	// configuration, or for a target that starts, and then once per
-	// collector, however many targets share it. They are read where the
-	// reload that put cfg in force made them, with followed
-	// (followedConfig.fingerprintOf): the schedule encodes a definition
-	// itself only when it plans with a configuration that is not the one
-	// followed gives it, as a caller that follows none does (plan).
+	// Only a reload puts another configuration or list in force; until then,
+	// every state matches its target and no stay began. The collectors'
+	// fingerprints are requested only for another configuration or for a
+	// target that restarts, and then once per collector, however many targets
+	// share it. They are read where the reload that put cfg in force computed
+	// them, through followed (followedConfig.fingerprintOf). The schedule
+	// encodes a definition itself only when it plans with a configuration
+	// other than followed's, as a caller that follows none does (plan).
 	reloaded := cfg != s.config
 	changed := reloaded || len(targets) != len(s.targets) || len(targets) > 0 && &targets[0] != &s.targets[0]
 	s.config, s.targets = cfg, targets
@@ -259,18 +251,17 @@ func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticT
 			// plans again when it does, and at every check.
 			look, state.putOff = now.Add(scheduleCheckInterval), true
 		case !state.cadence.IsZero():
-			// The first scrape, with the whole interval to end in: the
-			// cadence takes over a whole interval on or later, when this
-			// scrape has ended, so its first turn waits for nothing and has
-			// a whole interval too. The interval is counted from when the
-			// scrape was due, which now is always a little past: counted
-			// from now, the point of the cadence one interval after a first
-			// scrape made at such a point was never far enough. A scrape
-			// that was put off began when it is made, and so did one the
-			// loop came to more than a tenth of the interval late, as
-			// after a stall of the process: counted from a time that far
-			// back, the cadence would start while this scrape still ran,
-			// or in the past.
+			// The first scrape, with the whole interval to end in. The
+			// cadence takes over at least a whole interval later, when this
+			// scrape has ended, so its first turn waits for nothing and also
+			// gets a whole interval. The interval is counted from when the
+			// scrape was due, which is always slightly before now: counted
+			// from now, the cadence point one interval after a first scrape
+			// made at such a point was never far enough. A scrape that was
+			// delayed begins when it is made, and so does one that the loop
+			// reached more than a tenth of the interval late, as after a
+			// process stall: counted from a time that far back, the cadence
+			// would start while this scrape still ran, or in the past.
 			began := state.next
 			if state.putOff || now.Sub(state.next) > interval/lateFirstScrapeShare {
 				began = now
@@ -295,13 +286,13 @@ func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticT
 			state.waiting, state.until = true, state.next
 		}
 		if state.waiting && !state.awaitScrape() {
-			// The turn's scrape starts. It has the whole interval when it
-			// starts as its turn comes, as it nearly always does; one that
-			// had to wait for the last scrape to end has what is left of
-			// its turn, so it ends before the turn after it and the
-			// cadence holds. The scrape waited for ran over its turn by
-			// little: one of the cadence, or the first scrape, by as much
-			// as the loop was late in starting it.
+			// The turn's scrape starts. Starting when its turn comes, as it
+			// nearly always does, it has the whole interval. One that had to
+			// wait for the last scrape to end has the rest of its turn, so it
+			// ends before the following turn and the cadence holds. The
+			// scrape it waited for overran its turn only slightly: one of the
+			// cadence, or the first scrape, by how late the loop was in
+			// starting it.
 			deadline := state.until
 			if came {
 				deadline = now.Add(interval)
@@ -337,17 +328,15 @@ var (
 )
 
 // A shutdown stops the static targets in two steps. When the loop's context
-// ends, no scrape starts, and a scrape still waiting for a slot gives up,
-// without a word of advice about the file's concurrency; the scrapes in
-// flight go on, under their own context, and the loop waits for them.
-// AbortStaticScrapes cancels them, which the exporter's shutdown does at
-// once (main.go): what a scrape would publish is served by this process
-// alone, which is stopping, so a target that does not answer would only
-// hold the shutdown for --web.shutdown-timeout. A scrape cut short that way
+// ends, no scrape starts, and a scrape still waiting for a slot gives up
+// without logging advice about the file's concurrency. The scrapes in flight
+// continue under their own context, and the loop waits for them.
+// AbortStaticScrapes cancels them, which the exporter's shutdown does
+// immediately (main.go): what a scrape would publish is served only by this
+// process, which is stopping, so a target that does not answer would only
+// delay the shutdown for --web.shutdown-timeout. A scrape cut short this way
 // publishes nothing and logs no failure: the target did not fail, the
-// exporter stopped, and its last result stands. Without this every restart
-// published each target in flight as down, and sent that over OTLP on the
-// way out.
+// exporter stopped, and the target's last result stands.
 
 // staticTargetsOf is the targets of a static target file, none without one.
 func staticTargetsOf(file *model.StaticTargetFile) []model.StaticTarget {
@@ -384,13 +373,13 @@ func shuttingDown(ctx context.Context) bool {
 // begins to wait for a slot, so a test can stop the loop while one waits.
 var slotWaitHook atomic.Pointer[func(string)]
 
-// turnSkipped logs the turn the schedule gave up for d, a target read in
-// force with its collector at generation. Repeats are logged sparingly, as
-// failed scrapes are, and the turn is held to what was read, as the scrape
-// that finds no slot is (logStands). The loop reports the turn in the look
-// that read generation, where only a reload made in that very instant has
-// retired the target: what the turn leaves once one has is shown by a call
-// with a generation read before a reload.
+// turnSkipped logs the turn that the schedule gave up for d, a target read
+// in force with its collector at generation. Repeats are logged sparingly,
+// like failed scrapes, and the turn is held to what was read, like a scrape
+// that finds no slot (logStands). The loop reports the turn in the
+// examination that read generation, where only a reload made at that very
+// instant can have retired the target; what the turn leaves after such a
+// reload is shown by a call with a generation read before the reload.
 func (s *Server) turnSkipped(generation uint64, d dueTarget) {
 	s.failures.failedFor(context.Background(), s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 		"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
@@ -406,12 +395,13 @@ func staticCollectors(targets []model.StaticTarget) int {
 }
 
 // StaticScrapeLoop scrapes every static target on its interval until ctx
-// ends, and then waits for the scrapes in flight, which run until they end or
-// AbortStaticScrapes cancels them. The results are published for the static
-// targets endpoint, and queued for the OTLP export loop for a target with
-// export_via_otlp. At most the file's concurrency are scraped at once, the
-// slots shared between the collectors (staticslots.go); a reload that
-// changes it applies to the scrapes waiting and those that start after it.
+// ends, and then waits for the scrapes in flight, which run until they end
+// or AbortStaticScrapes cancels them. The results are published for the
+// static targets endpoint, and queued for the OTLP export loop for a target
+// with export_via_otlp. At most the file's concurrency are scraped at once,
+// with the slots shared between the collectors (staticslots.go); a reload
+// that changes it applies to the waiting scrapes and to those that start
+// after it.
 func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
 	slots := newStaticSlots()
@@ -422,12 +412,12 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	ended := make(chan struct{}, 1)
 	for {
 		// The configuration and the targets are read once, as one reload
-		// left them, and each scrape uses the configuration its target was
-		// read with: read apart, a reload between the two could give a
-		// scrape a collector its target was not checked against. generation
-		// says when: a scrape that begins after a reload removed its
-		// collector does not count in a collector brought back under the name
-		// (statsSince).
+		// left them, and each scrape uses the configuration that its target
+		// was read with: read separately, a reload in between could give a
+		// scrape a collector that its target was not checked against.
+		// generation records when: a scrape that begins after a reload
+		// removed its collector does not count in a collector restored under
+		// the name (statsSince).
 		followed := s.followedInForce()
 		cfg, file, generation := followed.config, followed.targets, followed.generation
 		targets := staticTargetsOf(file)

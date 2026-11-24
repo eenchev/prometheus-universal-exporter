@@ -9,85 +9,74 @@ import (
 )
 
 // The exporter keeps state per collector: its self-metric counters, the
-// verbose per-request series and scrape-time histogram, cached results and
-// what the failure log remembers, the recent probes the status page shows
-// (recentprobes.go), the targets failure_backoff is backing off
-// from, and the worker pool the statistics of its
-// Python workers (pythonstats.go). A reload can remove a collector, or change
-// its definition, and that state has to follow:
+// verbose per-request series and scrape-time histogram, cached results,
+// what the failure log remembers, the recent probes on the status page
+// (recentprobes.go), the targets that failure_backoff is backing off from,
+// and the statistics of its Python workers (pythonstats.go). A reload can
+// remove a collector or change its definition, and that state follows:
 //
-//   - A removed collector's self-metric series stop being exposed and exported,
-//     so Prometheus marks them stale instead of showing a collector that no
-//     longer exists with frozen values; everything kept about it is dropped,
-//     and a collector later added again under the name starts from zero.
-//   - A changed collector keeps its counters, which describe the collector by
-//     name, but its cached results are dropped: their keys carry the old
-//     definition, so they could never be served again, and would only hold
-//     memory and count in http_exporter_cache_entries until they expired.
-//     What the failure log remembers of it is forgotten too: a failure of the
-//     old definition is none of the new one's, whose first failure is logged
-//     as a first. So are the targets it was backing off from: the new
-//     definition may well reach them. A probe's failures are told apart by the definition already
-//     (probeCacheKey); a static target's are not.
+//   - A removed collector's self-metric series stop being exposed and
+//     exported, so Prometheus marks them stale instead of showing frozen
+//     values. Everything kept about it is dropped, and a collector added again
+//     under the name starts from zero.
+//   - A changed collector keeps its counters, which describe it by name. Its
+//     cached results are dropped: their keys carry the old definition, so they
+//     could never be served again. What the failure log remembers of it is
+//     forgotten, so the new definition's first failure is logged as a first,
+//     and so are the targets it was backing off from. A probe's failures are
+//     already told apart by the definition (probeCacheKey); a static target's
+//     are not.
 //
-// The state follows a reload when the reload is made: the configuration
-// manager tells the server when it has put something in force
-// (config.Manager's OnInstall, followReload), on the goroutine that reloads
-// and never on a probe's. What following a configuration takes long to work
-// out, the fingerprints of its collectors, the reload works out before it
-// puts the configuration in force (config.Manager's OnPrepare,
-// prepareReload), so that nothing that uses the configuration waits for it.
+// The configuration manager tells the server when it has put something in
+// force (config.Manager's OnInstall, followReload), on the reloading
+// goroutine. The slow part, the collectors' fingerprints, is computed before
+// the configuration is in force (OnPrepare, prepareReload), so nothing that
+// uses the configuration waits for it.
 //
-// The state does not depend on having been told: the server also compares
-// the configuration it last saw with the current one whenever it is about
-// to use its per-collector state, which costs a pointer comparison while
-// nothing has changed, and follows then what it was not told of. Followed
-// only so, two reloads with no use of the state between
-// them are followed as one: a collector the first removed and the second
-// brought back as it was is then one that stayed.
+// The state does not depend on that notification: before using its
+// per-collector state, the server compares the configuration it last saw with
+// the current one (a pointer comparison while nothing has changed) and
+// follows what it was not told about. Two reloads followed only this way are
+// followed as one: a collector the first removed and the second restored
+// unchanged is one that stayed.
 //
 // A probe or a static target scrape reads its collector in one configuration
-// and counts some time later, when a reload may have removed the collector,
-// and another brought one back under the name. So the configurations followed
-// are numbered, and a probe or scrape says which one it read (statsSince): it
-// counts in the collector's statistics only while the collector has been in
-// every configuration followed since.
+// and counts some time later, when a reload may have removed the collector
+// and another restored one under the name. The followed configurations are
+// therefore numbered, and a probe or scrape carries the one it read
+// (statsSince): it counts in the collector's statistics only while the
+// collector has been in every configuration followed since.
 //
-// What it writes under the collector's name when it ends is held to the same
-// test, and to a finer one: its result in the cache, and what the failure log
-// remembers of it, are the collector's only while the collector has been in
-// every configuration followed since with the definition the probe or scrape
-// read (configRead). A result made by a definition that is gone would be
-// served to a collector brought back under the name with that definition,
-// and one of a definition a reload changed could never be served and would
-// only count in the collector's max_cache_entries; a failure of either would
-// pass for the first of the collector's own.
+// What it writes under the collector's name when it ends (its cached result,
+// and what the failure log remembers) meets a stricter test: it belongs to
+// the collector only while the collector has been in every configuration
+// followed since with the definition the probe or scrape read (configRead).
+// Otherwise a result of a removed definition would be served to a collector
+// restored under the name, and one of a changed definition would only count
+// in max_cache_entries; a failure of either would pass for the collector's
+// own first.
 //
 // A static target's scrape reads its target with its collector, and the
-// result it publishes for the static targets endpoint is held to both: it is
-// the target's only while the collector stands as above and the target has
-// been in every static target file followed since as the scrape read it
-// (targetStands). So the static target file in force is followed with the
-// configuration: a reload of either makes a generation. What the failure
-// log remembers of the scrape is held to both as well (logStands), and the
-// remembered failures of a target a reload removed or changed are forgotten
-// as those of a changed collector are: the failure log tells a static
-// target's failures apart by the target's name, not by its definition.
+// result it publishes is held to both: the collector stands as above, and the
+// target has been in every static target file followed since as the scrape
+// read it (targetStands). The static target file in force is therefore
+// followed with the configuration, and a reload of either makes a
+// generation. The failure log's memory of the scrape is held to both as well
+// (logStands), and the remembered failures of a target that a reload removed
+// or changed are forgotten, because the failure log tells a static target's
+// failures apart by its name, not its definition.
 
-// followedConfig is a configuration the per-collector state has followed,
-// with the static target file in force with it, nil without one, and its
-// generation: one more than that of the configuration followed before it,
-// from firstGeneration. defined says, for each collector of the
-// configuration, the generation it has been there from with the definition
-// it has, and targetsDefined the same for each static target of the file;
-// neither is changed once the configuration is followed. fingerprints are
-// those of the configuration's collectors, by which the next reload tells
-// the ones it changed, and the schedule of the static targets the targets
-// whose collector changed (fingerprintOf): each is worked out once, when
-// this configuration is followed or when the next is, and not again for
-// every reload. With them is kept where each collector of the configuration
-// is, by its name, which is how a probe and the scrape of a static target
-// find theirs (collectorOf).
+// followedConfig is a configuration that the per-collector state has
+// followed, with the static target file in force with it (nil without one)
+// and its generation, one more than the previous one's, from
+// firstGeneration. defined gives, for each collector, the generation since
+// which it has had its definition, and targetsDefined the same for each
+// static target; neither changes once followed. fingerprints are those of
+// the configuration's collectors, computed once, by which the next reload
+// finds the collectors it changed and the static target schedule the
+// targets whose collector changed (fingerprintOf). They also hold each
+// collector's position by name, which is how a probe and a static target
+// scrape find theirs (collectorOf).
 type followedConfig struct {
 	config         *model.Config
 	targets        *model.StaticTargetFile
@@ -106,30 +95,25 @@ func (f *followedConfig) fingerprint(index int) string {
 	return f.fingerprints.at(index)
 }
 
-// fingerprintOf is the fingerprint of the collector of cfg named name, and
-// empty when cfg has none of that name: collectorFingerprint of the first
-// collector so named. It is for a caller that was given cfg and f together,
-// as the schedule of the static targets is (planFollowed), and is told
-// whether a collector changed by the very fingerprints the following of the
-// reload was: when cfg is the configuration f followed, the fingerprint is
-// the one kept for it, which the reload made before it put cfg in force
-// (prepareReload) and which is made here, once, and kept when nothing had
-// asked for it, as for the configuration the exporter started with. Only
-// the fingerprints of cfg itself are read: for any other configuration, and
-// for a caller that follows none, f nil, the definition is encoded afresh,
-// as it was for every call. f never changes once followed, so no reload that
-// comes meanwhile makes them those of another configuration. It takes no
-// lock, and waits only where a probe or a reload is making that same
-// fingerprint, for that one (fingerprintGeneration.at).
+// fingerprintOf is the fingerprint of cfg's collector named name, or empty
+// when cfg has none: collectorFingerprint of the first collector so named.
+// It is for a caller given cfg and f together, as the static target schedule
+// is (planFollowed). When cfg is the configuration f followed, the kept
+// fingerprint is returned, which the reload computed before putting cfg in
+// force (prepareReload); one that nothing had requested yet, as for the
+// configuration the exporter started with, is computed here once and kept.
+// For any other configuration, and for a caller that follows none (f nil),
+// the definition is encoded afresh. f never changes once followed, so a
+// concurrent reload cannot swap the fingerprints. It takes no lock, and waits
+// only where a probe or a reload is computing the same fingerprint
+// (fingerprintGeneration.at).
 //
-// The collector is found by its name where the fingerprints are kept
-// (fingerprintGeneration.place), without going through the collectors of
-// cfg, which the schedule would otherwise do once for every collector with a
-// static target at every look after a reload. For another configuration
-// than the one followed, and for a caller that follows none, they are gone
-// through as they were (placeByScan): the scrape loop is never such a
-// caller, and encoding the definition, which such a caller then does at
-// every ask, costs far more than finding it.
+// The collector is found by name where the fingerprints are kept
+// (fingerprintGeneration.place), instead of scanning cfg's collectors, which
+// the schedule would otherwise do for every collector with a static target
+// after every reload. For another configuration, or a caller that follows
+// none, they are scanned (placeByScan): the scrape loop is never such a
+// caller, and encoding the definition costs far more than the scan.
 func (f *followedConfig) fingerprintOf(cfg *model.Config, name string) string {
 	if kept := f.keptFor(cfg); kept != nil {
 		if index, found := kept.place(name); found {
@@ -154,15 +138,13 @@ func (f *followedConfig) keptFor(cfg *model.Config) *fingerprintGeneration {
 	return nil
 }
 
-// collectorOf is the collector of cfg named name, and nil when cfg has none
-// of that name: model.CollectorByName(cfg, name), the first collector so
-// named. A probe and the scrape of a static target ask it for the one
-// collector they are of, and when cfg is the configuration f followed the
-// collector is found by its name where the fingerprints are kept, as
-// fingerprintOf finds it, and the collectors are not gone through, which
-// took every probe and every scrape as long as the configuration is large.
-// For any other configuration, such as the one a scrape read before a reload
-// that came while it waited for a slot, they are gone through as they were.
+// collectorOf is cfg's collector named name, or nil when cfg has none:
+// model.CollectorByName(cfg, name), the first collector so named. A probe and
+// a static target scrape use it to find their collector. When cfg is the
+// configuration f followed, the collector is found by name where the
+// fingerprints are kept, as in fingerprintOf, so a probe or scrape does not
+// scan the whole configuration. For any other configuration, such as the one a scrape read before
+// a reload that came while it waited for a slot, they are scanned.
 func (f *followedConfig) collectorOf(cfg *model.Config, name string) *model.Collector {
 	if kept := f.keptFor(cfg); kept != nil {
 		if index, found := kept.place(name); found {
@@ -178,22 +160,19 @@ func (f *followedConfig) collectorOf(cfg *model.Config, name string) *model.Coll
 
 // A static target's scrape asks, when it ends, whether a target of its name
 // is in force (staticTargetInForce), and a read of the static targets
-// endpoint that names targets asks it of every name it gives
-// (requestedStaticTargets). Going through the targets of the file for it
-// costs as much as the file is large, at every scrape and every such read:
-// for 10,000 targets more than all the rest of a scrape answered from the
-// cache. The following of a file already notes the name of every target it
-// has, once for the file, with the generation the target has been there
-// from (targetsDefinedFrom), and keeps the names for as long as the file is
-// followed: a name is looked up there, and nothing more is kept or worked
-// out for it.
+// endpoint that names targets asks it for each name (requestedStaticTargets).
+// Scanning the file's targets for this costs as much as the file is large,
+// at every scrape and read: for 10,000 targets, more than the rest of a
+// scrape answered from the cache. Following a file already records each
+// target's name once, with the generation since which it has been there
+// (targetsDefinedFrom), and keeps the names while the file is followed, so a
+// name is looked up there and nothing more is kept or computed.
 
 // targetsScannedHook, set by tests, is called whenever the targets of a
-// static target file are gone through, to tell whether one of them has a
-// name (staticTargetNamedByScan, staticTargetNamesByScan) or to note the
-// names they have (targetsDefinedFrom): once for each time, not for each
-// target, so a test can count the times and see that it is once for a file,
-// not once for each scrape or each read.
+// static target file are scanned, to find a name (staticTargetNamedByScan,
+// staticTargetNamesByScan) or to record the names (targetsDefinedFrom): once
+// per scan, not per target, so a test can check that it happens once per
+// file, not once per scrape or read.
 var targetsScannedHook atomic.Pointer[func()]
 
 // targetsScanned tells a test that the targets of a static target file are
@@ -204,14 +183,13 @@ func targetsScanned() {
 	}
 }
 
-// targetNames is the names of the static targets of file, as f noted them
-// when it was followed, and whether f noted them: it did those of the very
-// file it follows and of no other, each name a target of that file has,
-// whatever it is noted with (targetsDefined), so a name is there exactly
-// when going through the targets of file finds a target so named. For any
-// other file, as one a reload has put in force and nothing has followed
-// yet, and for a caller that follows none, f nil, nothing is noted, and the
-// caller goes through the targets as it did. f never changes once followed,
+// targetNames is the names of file's static targets as f recorded them when
+// it was followed, and whether it recorded them. It did so only for the file
+// it follows: every name that a target of that file has (targetsDefined), so
+// a name is present exactly when scanning file finds a target so named. For
+// any other file, such as one a reload has put in force that nothing has
+// followed yet, and for a caller that follows none (f nil), nothing is
+// recorded and the caller scans the targets. f never changes once followed,
 // so the names are read without a lock.
 func (f *followedConfig) targetNames(file *model.StaticTargetFile) (names map[string]uint64, noted bool) {
 	if f == nil || f.targets != file {
@@ -246,13 +224,13 @@ func (s *Server) readTargetAt(generation uint64, target string) configRead {
 
 // stands reports whether the collector name is still the one r read: in the
 // configuration followed now, and in every one followed since r's, with the
-// definition it had there. It is the test the statistics make by generation
-// (statsSince), which a changed definition fails as a removed collector
-// does. What a trip writes under the collector's name asks it under the lock
-// of what it writes to, which followLocked holds while it drops what the
-// reload retires and replaces the followed configuration: so nothing is
-// written after the drop that the drop was to remove, and it costs a
-// writer one atomic load and a map lookup, under a lock it holds anyway.
+// same definition. It is the test that the statistics make by generation
+// (statsSince), which a changed definition fails like a removed collector.
+// A trip asks it under the lock of what it writes to, which followLocked
+// holds while it drops what the reload retires and replaces the followed
+// configuration, so nothing that the drop was meant to remove is written
+// after it. It costs a writer one atomic load and a map lookup, under a lock
+// it holds anyway.
 func (r configRead) stands(name string) bool {
 	if r.followed == nil {
 		return true
@@ -267,11 +245,11 @@ func (r configRead) stands(name string) bool {
 
 // targetStands is stands for a static target's scrape and the result it
 // publishes: the collector stands, and the static target name is still the
-// one r read, in every static target file followed since r's as it was
-// there. A target a reload removed, changed or brought back since is another
-// target under the name, whose own scrape publishes its result. The scrape
-// asks under the lock of the targets' results, which the followed
-// configuration is replaced under (storeFollowed).
+// one r read, unchanged in every static target file followed since. A target
+// that a reload removed, changed or restored since is another target under
+// the name, whose own scrape publishes its result. The scrape asks under the
+// lock of the targets' results, under which the followed configuration is
+// replaced (storeFollowed).
 func (r configRead) targetStands(collector, name string) bool {
 	if r.followed == nil {
 		return true
@@ -313,21 +291,20 @@ const (
 // to use together: the collectors it reads there are the ones whose
 // statistics the generation names.
 //
-// What the following is to do is worked out before the statistics lock is
-// taken (planFollowing), and only done under it (followLocked): telling the
-// collectors a reload changed from those it left encodes every one of them,
-// which takes as long as the configuration is large, and every probe takes
-// that lock to find its collector's statistics. The lock is then taken to
-// make a following that is still the one to make: of the configuration and
-// file in force then, from the configuration followed then. A reload, or
-// another caller's following, may have come between the two; the following
-// is then worked out again, from what is followed now, or found made. So
-// any number of callers may work out the same following at once, a reload
-// and the probes that come while it does: they share the fingerprints, one
-// makes the following, and the others find it made. The fingerprints of a
-// configuration a reload put in force were made before it was in force
-// (prepareReload), so none of them waits for one; only a configuration put
-// in force without the manager's reload has them made here.
+// The work is planned before the statistics lock is taken (planFollowing) and
+// only carried out under it (followLocked): finding the collectors that a
+// reload changed encodes all of them, which takes as long as the
+// configuration is large, and every probe takes that lock to find its
+// collector's statistics. The lock is then taken to carry out a plan that is
+// still current, that is, for the configuration and file in force and from
+// the configuration followed. If a reload, or another caller's following,
+// came in between, the plan is made again from what is followed now, or found
+// done. Several callers (a reload, and the probes that arrive meanwhile) may
+// therefore plan the same following at once: they share the fingerprints,
+// one carries it out, and the others find it done. The fingerprints of a
+// configuration that a reload put in force were computed before
+// (prepareReload), so none of them waits; only a configuration put in force
+// without the manager's reload has them computed here.
 func (s *Server) reconcile() *followedConfig {
 	cfg, targets := s.manager.InForce()
 	previous := s.followed.Load()
@@ -361,17 +338,15 @@ func (s *Server) reconcile() *followedConfig {
 	}
 }
 
-// applyFollowed tells the request types what followed holds: those that
-// keep connections across scrapes close the ones no collector in force uses
-// any more, and the entries of rate_limits are followed with them, their
-// buckets kept where a reload left an entry as it was. It is done after
-// statsMu is released, which every probe takes, so two callers that each
-// made a following may get here in either order: one that followed an older
-// generation and comes last would put that generation's connections and
-// rate limits back in force, and they would stay until the next reload,
-// every later following finding the configuration followed already. So
-// only a generation later than the last applied is applied, under a lock of
-// its own that nothing else takes.
+// applyFollowed tells the request types what followed holds: those that keep
+// connections across scrapes close the ones that no collector in force still
+// uses, and the entries of rate_limits are followed, keeping the buckets of
+// entries that a reload left unchanged. It runs after statsMu, which every
+// probe takes, is released, so two callers that each made a following may
+// arrive in either order. One that followed an older generation and arrives
+// last would restore that generation's connections and rate limits until the
+// next reload. Only a generation later than the last applied one is
+// therefore applied, under a dedicated lock.
 func (s *Server) applyFollowed(followed *followedConfig) {
 	if hook := followAppliesHook.Load(); hook != nil {
 		(*hook)(followed.generation)
@@ -407,29 +382,27 @@ var followPlannedHook atomic.Pointer[func()]
 // meanwhile.
 var followAppliesHook atomic.Pointer[func(generation uint64)]
 
-// prepareReload works out, for a configuration a reload is about to put in
-// force, what following it needs that takes as long as the configuration is
-// large: the fingerprint of every collector of cfg, and of those collectors
-// of the configuration followed that cfg still names and that nothing has
-// asked for yet, which the following compares them with. The configuration
-// manager calls it once the reload has read and checked cfg and before it is
-// in force (config.Manager's OnPrepare), on the goroutine that reloads: the
-// probes of the configuration still in force go on meanwhile, and from when
-// cfg is in force whoever follows it first, the reload (followReload) or a
-// probe that came before that was done (reconcile), finds every fingerprint
-// made, and waits for none.
+// prepareReload computes, for a configuration that a reload is about to put
+// in force, the part of following it that takes as long as the configuration
+// is large: the fingerprint of every collector of cfg, and of those
+// collectors of the followed configuration that cfg still names and that
+// nothing has requested yet, which the following compares them with. The
+// configuration manager calls it once the reload has read and checked cfg and
+// before cfg is in force (config.Manager's OnPrepare), on the reloading
+// goroutine. Probes of the configuration still in force continue meanwhile,
+// and once cfg is in force, whoever follows it first (the reload via
+// followReload, or a probe via reconcile) finds every fingerprint computed.
 //
-// Only the fingerprints are prepared, which are of a configuration and of
-// nothing else: a configuration never changes once loaded, so they cannot be
-// out of date whatever is followed when they are used. The plan of the
-// following is not: it is from the configuration followed, which is another
-// by then when something other than a reload put one in force meanwhile, and
-// with the fingerprints made it costs no more than its maps (planFollowing).
-// A static target file reloaded alone leaves the configuration the one
-// followed, whose fingerprints are kept with it: nothing is prepared.
+// Only the fingerprints are prepared: they belong to a configuration alone,
+// which never changes once loaded, so they cannot be stale. The plan is not
+// prepared, because it depends on the followed configuration, which may have
+// changed if something other than a reload put one in force; with the
+// fingerprints computed, the plan costs no more than its maps
+// (planFollowing). A static target file reloaded alone leaves the followed
+// configuration, with its kept fingerprints, unchanged: nothing is prepared.
 //
-// It takes no lock, and waits only for a probe that is working out one of
-// the same fingerprints, for that one.
+// It takes no lock, and waits only for a probe that is computing one of the
+// same fingerprints.
 func (s *Server) prepareReload(cfg *model.Config, _ *model.StaticTargetFile) {
 	followed := s.followed.Load()
 	if cfg == nil || followed != nil && followed.config == cfg {
@@ -455,15 +428,13 @@ func (s *Server) prepareReload(cfg *model.Config, _ *model.StaticTargetFile) {
 
 // followReload follows a reload as it is made: the configuration manager
 // calls it when it has put a configuration or a static target file in force
-// (config.Manager's OnInstall), so the per-collector state is in line with
-// what is in force from then on, whether or not anything asks for it, and
-// what a probe or scrape of a collector the reload retired writes from then
-// on goes nowhere. The reload waits for it. A probe does not, unless it asks
-// for the state meanwhile: it then follows the reload itself, as it would
-// have without being told, and neither holds a lock the other needs while
-// it works out what the following is to do (reconcile), nor waits for a
-// fingerprint, all made before the configuration was in force
-// (prepareReload).
+// (config.Manager's OnInstall), so the per-collector state matches what is in
+// force from then on, and whatever a probe or scrape of a retired collector
+// writes afterwards is discarded. The reload waits for it; a probe does not,
+// unless it requests the state meanwhile, in which case it follows the reload
+// itself. Neither holds a lock that the other needs while planning
+// (reconcile), and neither waits for a fingerprint, all of which were
+// computed before the configuration was in force (prepareReload).
 func (s *Server) followReload() { s.reconcile() }
 
 // generationOf is the generation of cfg when it is the configuration in
@@ -489,13 +460,13 @@ func (s *Server) followedInForce() *followedConfig {
 	}
 }
 
-// stay is the generation the stay of the static target named target, of the
-// collector named collector, began at: the one the target has been in the
-// followed files from as it is, or the one the collector has had its
-// definition from, whichever is later. It is the first a scrape of the
-// target can have read and still publish (targetStands), so the schedule
-// gives a target a first scrape whenever it moves (planFollowed). A caller
-// that follows no configuration, f nil, knows of no stay.
+// stay is the generation at which the stay of the static target named
+// target, of the collector named collector, began: the generation since which
+// the target has been unchanged in the followed files, or since which the
+// collector has had its definition, whichever is later. It is the earliest a
+// scrape of the target can have read and still publish (targetStands), so the
+// schedule gives a target a first scrape whenever it moves (planFollowed). A
+// caller that follows no configuration (f nil) knows of no stay.
 func (f *followedConfig) stay(target, collector string) uint64 {
 	if f == nil {
 		return noGeneration
@@ -503,13 +474,13 @@ func (f *followedConfig) stay(target, collector string) uint64 {
 	return max(f.targetsDefined[target], f.defined[collector])
 }
 
-// following is what following a reload is to do, worked out before the
-// statistics lock is taken (planFollowing): next is the configuration to
-// follow, from previous, the one followed when it was worked out. moved
-// names the static targets that left their stay (targetsMoved). collectors
-// says that next has another configuration than previous, whose collectors
-// are then gone through; removed names those of previous it no longer has,
-// and stale those and the ones whose definition changed, neither set when
+// following is the plan for following a reload, made before the statistics
+// lock is taken (planFollowing): next is the configuration to follow, and
+// previous the one followed when the plan was made. moved names the static
+// targets that left their stay (targetsMoved). collectors reports that next
+// has a different configuration from previous, whose collectors are then
+// scanned; removed names the collectors of previous that it no longer has,
+// and stale those plus the ones whose definition changed. Neither is set when
 // previous followed no configuration.
 type following struct {
 	previous, next *followedConfig
@@ -518,17 +489,15 @@ type following struct {
 	removed, stale map[string]bool
 }
 
-// planFollowing works out the following of cfg, with the static target file
-// targets in force with it, from previous, the configuration followed, which
-// is another. It takes no lock and changes nothing the server keeps: it reads
-// the two configurations, which never change once loaded, and what previous
-// says, which does not either; the fingerprints it has worked out are
-// remembered in memo for the probes of cfg, which key their results by them,
-// and in next for the reload after this one. So it is here that the time of
-// a following goes, and several callers may be at it at once: they share the
-// fingerprints, each worked out once, and for a reload before its
-// configuration was in force (prepareReload), which leaves the maps to make
-// here.
+// planFollowing plans the following of cfg, with the static target file
+// targets in force with it, from previous, the followed configuration, which
+// differs. It takes no lock and changes nothing that the server keeps: it
+// reads the two configurations and previous, none of which change. The
+// fingerprints it computes are remembered in memo for the probes of cfg,
+// which key their results by them, and in next for the next reload. This is
+// where the time of a following goes, and several callers may be here at
+// once: they share the fingerprints, each computed once, and before cfg was in
+// force for a reload (prepareReload), which leaves only the maps to build.
 func planFollowing(previous *followedConfig, cfg *model.Config, targets *model.StaticTargetFile, memo *fingerprintMemo) *following {
 	next := &followedConfig{config: cfg, targets: targets, generation: firstGeneration}
 	if previous != nil {
@@ -585,24 +554,26 @@ func planFollowing(previous *followedConfig, cfg *model.Config, targets *model.S
 	return plan
 }
 
-// followLocked makes the following plan, under statsMu, which the caller
-// took once plan was worked out and found plan.previous still followed and
-// plan.next still in force: it makes plan.next the configuration the
-// per-collector state follows, and returns it with its generation. All that
-// a following changes is changed under the lock, and the followed
-// configuration is replaced last: a caller that finds the configuration
-// followed finds the state of the collectors a reload removed dropped, and
-// one that takes statistics meanwhile waits, for no longer than dropping and
-// replacing takes: nothing is compared or encoded here. When there are
-// cached results or remembered failures to drop, it is replaced under the
-// locks of the cache and of the failure log, with the drop: a trip that
-// asks under either lock whether its collector stands (configRead) is
-// answered by the configuration followed before the drop, and what it wrote
-// is dropped, or by this one, and it writes nothing. So it is when only
-// static targets left their stay (targetsMoved): their remembered failures
-// are forgotten, and the followed configuration replaced, under the lock of
-// the failure log. report, when it is set, is given what there is to log
-// once the lock is released.
+// followLocked carries out plan under statsMu, which the caller took after
+// making plan and finding plan.previous still followed and plan.next still
+// in force. It makes plan.next the configuration that the per-collector state
+// follows, and returns it with its generation.
+//
+// Everything that a following changes is changed under the lock, and the
+// followed configuration is replaced last. A caller that finds the
+// configuration followed therefore finds the state of removed collectors
+// dropped, and one that takes statistics meanwhile waits only for the drop
+// and the replacement: nothing is compared or encoded here.
+//
+// When there are cached results or remembered failures to drop, the
+// configuration is replaced, together with the drop, under the locks of the
+// cache and of the failure log. A trip that asks under either lock whether
+// its collector stands (configRead) is answered either by the previous
+// configuration, and what it wrote is dropped, or by this one, and it writes
+// nothing. The same applies when only static targets left their stay
+// (targetsMoved): their remembered failures are forgotten, and the followed
+// configuration replaced, under the failure log's lock. report, when set,
+// receives what there is to log once the lock is released.
 func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 	next, moved := plan.next, plan.moved
 	if !plan.collectors {
@@ -686,22 +657,22 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 }
 
 // storeFollowed makes next the followed configuration, under the lock of the
-// static targets' results: a scrape that asks under it whether its target
-// stands (targetStands) is answered by the configuration followed before, and
+// static targets' results. A scrape that asks under it whether its target
+// stands (targetStands) is answered by the previous configuration, and
 // publishes before any scrape that read this one has begun, or by this one.
-// statsMu is held, and the locks of the failure log and of the cache when
-// there is something of theirs to drop; the lock taken here is the innermost,
-// and nothing is locked under it.
+// statsMu is held, and so are the locks of the failure log and the cache
+// when there is something of theirs to drop. The lock taken here is the
+// innermost, and nothing is locked under it.
 //
-// When next follows another static target file, what is kept of each target
-// it no longer has is forgotten with it, under the same lock: its result,
-// its last success and its status page record. Nothing else forgets them
-// but a read of the static targets endpoint, which an exporter whose
-// targets are exported over OTLP alone, or that the allocator gives targets
-// that move between replicas, may never have, and a target brought back
-// under its name would show the last scrape, error and failures of the one
-// removed. A scrape of a removed target that ends after this does not stand
-// (targetStands), so it records nothing, and the target brought back starts
+// When next follows a different static target file, what is kept of each
+// target that it no longer has (its result, its last success and its status
+// page record) is forgotten under the same lock. Nothing else forgets them
+// except a read of the static targets endpoint, which may never happen for
+// an exporter whose targets are exported only over OTLP, or that the
+// allocator gives targets that move between replicas; a target restored
+// under its name would then show the removed one's last scrape, error and
+// failures. A scrape of a removed target that ends after this does not stand
+// (targetStands), so it records nothing, and the restored target starts
 // with none.
 func (s *Server) storeFollowed(next *followedConfig) {
 	s.staticMu.Lock()
@@ -737,12 +708,12 @@ func (s *Server) forgetStaticTargetsGoneLocked(defined map[string]uint64) {
 }
 
 // storeFollowedForgetting is storeFollowed for a reload that retires no
-// collector: when static targets left their stay, moved, their remembered
-// failures are forgotten and next is made the followed configuration under
-// the lock of the failure log, so that a scrape that asks under it whether
-// its target stands (logStands) wrote before the failures were forgotten, or
-// writes nothing. statsMu is held; the failure log's lock is taken before
-// that of the targets' results, as where there are collectors to drop.
+// collector. When static targets left their stay (moved), their remembered
+// failures are forgotten and next becomes the followed configuration under
+// the failure log's lock, so that a scrape that asks under it whether its
+// target stands (logStands) either wrote before the failures were forgotten
+// or writes nothing. statsMu is held; the failure log's lock is taken before
+// that of the targets' results, as when there are collectors to drop.
 func (s *Server) storeFollowedForgetting(next *followedConfig, moved map[string]bool) {
 	if len(moved) == 0 {
 		s.storeFollowed(next)
@@ -775,15 +746,14 @@ func targetsMoved(previous *followedConfig, defined map[string]uint64) map[strin
 	return moved
 }
 
-// targetsDefinedFrom says, for each static target of file, the generation it
-// has been in the followed files from as it is: that of the file followed
-// before, previous, for a target that was there with the same definition,
-// and generation for one that is new, changed or back. What makes a target
-// another is what starts it again in the schedule (targetSchedule.plan),
-// but for its collector's definition, which a scrape asks about apart
-// (targetStands). The names it notes are also how a target of the file is
-// told to be one of it (targetNames): every target of file is noted, and
-// nothing else.
+// targetsDefinedFrom gives, for each static target of file, the generation
+// since which it has been unchanged in the followed files: previous's for a
+// target that was there with the same definition, and generation for one
+// that is new, changed or back. What counts as a different target is what
+// restarts it in the schedule (targetSchedule.plan), except for its
+// collector's definition, which a scrape checks separately (targetStands).
+// The names recorded here are also how a target is recognised as one of the
+// file (targetNames): every target of file is recorded, and nothing else.
 func targetsDefinedFrom(previous *followedConfig, file *model.StaticTargetFile, generation uint64) map[string]uint64 {
 	if previous != nil && previous.targets == file {
 		return previous.targetsDefined

@@ -178,7 +178,7 @@ var decoderNames = map[string]string{
 func TestDecoderListsNameEveryDecoder(t *testing.T) {
 	spec := read(t, "docs/SPECIFICATION-EXPORTER.md")
 	purpose := regexp.MustCompile(`(?m)^- Support JSON, .*$`).FindString(spec)
-	chart := regexp.MustCompile(`Answers in [^;]*;`).FindString(read(t, "charts/prometheus-universal-exporter/README.md"))
+	chart := regexp.MustCompile(`It reads answers in [^.]*\.`).FindString(read(t, "charts/prometheus-universal-exporter/README.md"))
 	comment := flat(regexp.MustCompile(`(?s)// DecoderConfig is .*?\ntype DecoderConfig`).FindString(read(t, "internal/model/config.go")))
 	for _, list := range []struct{ where, text string }{
 		{"spec § 1's list of formats", purpose},

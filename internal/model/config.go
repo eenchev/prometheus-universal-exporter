@@ -18,13 +18,11 @@ type Duration time.Duration
 // UnmarshalYAML reads a duration, reporting a bad one with its line like any
 // other decoding error, so every problem in the file is reported at once.
 //
-// A duration written as a negative amount is negative however small. Go
-// reads -0.4ns as zero, there being no part of a nanosecond, and a key that
-// takes zero then took it, while the schemas refuse it for its minus sign.
-// So a text with a minus sign and a digit other than zero that comes to
-// zero is read as the negative duration nearest to it, -1ns, and each key
-// refuses it as it refuses -5s. A zero written with a sign, -0s, has no such
-// digit and stays the zero it is.
+// A negative amount stays negative however small. Go reads -0.4ns as zero,
+// which a key that takes zero would accept while the schemas refuse the minus
+// sign. A text with a minus sign and a nonzero digit that comes to zero is
+// therefore read as -1ns, which each key refuses like -5s. A signed zero,
+// -0s, has no such digit and stays zero.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
 		return lineError(n, "expected a duration such as 30s, not %s", describeNode(n))
@@ -67,11 +65,9 @@ type Config struct {
 	// from the document.
 	CollectorSources     map[string]string `yaml:"-"`
 	LoadedCollectorFiles []string          `yaml:"-"`
-	// Deprecations lists the deprecated spellings Validate accepted and
-	// normalised, one message each, for startup, reload and --dry-run to
-	// report. None is accepted at present; a spelling kept for a while after
-	// it is replaced appends its message here. It is not read from the
-	// document.
+	// Deprecations lists the deprecated spellings that Validate accepted
+	// and normalised, one message each, for startup, reload and --dry-run to
+	// report. None exists at present. Not read from the document.
 	Deprecations []string `yaml:"-"`
 	// Warnings lists what Validate accepted but the operator should know
 	// about, such as a collector that leaves its decoder to each response, one
@@ -91,23 +87,22 @@ type SelfMetricsConfig struct {
 	// warns against unbounded self-metric labels, so it is opt-in and the
 	// number of tracked requests is capped.
 	Verbose bool `yaml:"verbose"`
-	// ResourceMetrics publishes the familiar go_ and process_ series
-	// describing the exporter's own CPU and memory. Unset means true: they
-	// are read from runtime/metrics, runtime/debug and /proc, none of which
-	// stops the world, so they cost a scrape little; false leaves them out.
-	// See ResourceMetricsEnabled.
+	// ResourceMetrics publishes the go_ and process_ series for the
+	// exporter's own CPU and memory. Unset means true: they are read from
+	// runtime/metrics, runtime/debug and /proc without stopping the world,
+	// so they are cheap; false leaves them out. See ResourceMetricsEnabled.
 	ResourceMetrics *bool `yaml:"resource_metrics_enabled"`
-	// CreatedTimestamps writes, in an OpenMetrics answer, a _created sample
-	// after each of the exporter's own counters, histograms and summaries:
-	// when the series began to count. Opt-in, as in Prometheus' Go client: a
-	// Prometheus without its created-timestamp feature stores every _created
-	// line as one more series.
+	// CreatedTimestamps writes a _created sample, the time the series began
+	// counting, after each of the exporter's own counters, histograms and
+	// summaries in an OpenMetrics answer. Opt-in, as in Prometheus' Go
+	// client: a Prometheus without the created-timestamp feature stores
+	// every _created line as another series.
 	CreatedTimestamps bool `yaml:"created_timestamps"`
 	// NativeHistograms answers a scraper that asks for Prometheus's protobuf
-	// format with it, the exporter's own duration histograms carrying native
-	// buckets beside their classic ones. Unset means true: only a scraper
-	// that asks for protobuf gets it, and the text formats are as they are
-	// without; false answers every scraper in text. See
+	// format in that format, with native buckets on the exporter's own
+	// duration histograms beside the classic ones. Unset means true (only a
+	// scraper that asks for protobuf gets it; the text formats are
+	// unchanged); false answers every scraper in text. See
 	// NativeHistogramsEnabled.
 	NativeHistograms *bool `yaml:"native_histograms"`
 }
@@ -176,40 +171,37 @@ type Collector struct {
 	// the target. See exporter/backoff.go.
 	FailureBackoff *FailureBackoffConfig `yaml:"failure_backoff,omitempty"`
 	// ReportFailures answers every probe of the collector with an
-	// exposition, 200 and never 502 for a failed one: the series of
-	// ProbeSeriesNames say whether it succeeded, how long it took and
-	// which stage failed, for an uptime check that alerts on them rather
-	// than on the scrape failing. Static targets are not changed by it.
-	// See exporter/probereport.go.
+	// exposition and 200, never 502: the ProbeSeriesNames series report
+	// success, duration and the failed stage, for an uptime check that
+	// alerts on them instead of on the scrape failing. Static targets are
+	// unaffected. See exporter/probereport.go.
 	ReportFailures bool `yaml:"report_failures"`
 	// NameEscaping says what to do with a metric or label name that is not a
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
-	// MetricNameValidationScheme is Prometheus's setting of the name: legacy,
-	// the default, holds the names of what the collector exports to the
-	// classic characters, a name outside them being handled by
-	// NameEscaping; utf8 takes any UTF-8 name, as Prometheus 3 does, and
-	// each answer escapes it as its scraper asks (exporter/nameescaping.go).
+	// MetricNameValidationScheme is Prometheus's name setting: legacy, the
+	// default, restricts exported names to the classic characters, with
+	// NameEscaping handling others; utf8 accepts any UTF-8 name, as
+	// Prometheus 3 does, escaped per scraper (exporter/nameescaping.go).
 	MetricNameValidationScheme string `yaml:"metric_name_validation_scheme"`
 	// Lint says which rules of the metric lint (transform/lint.go) are not
 	// applied to the collector's series: advice --dry-run and the debug
 	// report give, which never fails anything.
 	Lint LintConfig `yaml:"lint"`
-	// LabelParams is what the collector's label values hold of
-	// {{param_...}} placeholders, read once when the configuration loads
-	// (labelparams.go); nil when they hold none, as nearly every
-	// collector's do. It is no key of the configuration: it is made of
-	// transform.labels and the rules' labels, which are.
+	// LabelParams is the {{param_...}} placeholders of the collector's label
+	// values, parsed once at load (labelparams.go); nil when there are none,
+	// as for nearly every collector. Derived from transform.labels and the
+	// rules' labels; not a configuration key.
 	LabelParams *LabelParams `yaml:"-"`
 	// ExpressionParams is what the collector's jq or yq expressions read of
 	// the probe's parameters as $params, nil when they read nothing of it.
 	ExpressionParams *ExpressionParams `yaml:"-"`
 	// TransformClock is what the collector's expressions and scripts read
-	// of the scrape's clock, as $scrape_time and $last_success or
-	// scrape_time and last_success (fetch.TransformClockUseOf): Since when
-	// one reads the last success, which the exporter then keeps for each
-	// of the collector's targets.
+	// of the scrape's clock ($scrape_time and $last_success, or
+	// scrape_time and last_success; fetch.TransformClockUseOf). Since is
+	// set when one reads the last success, which the exporter then keeps
+	// for each of the collector's targets.
 	TransformClock ClockUse `yaml:"-"`
 	// Clock says what the collector's request holds of clock placeholders
 	// ({{date}} and the rest), found once when the configuration loads
@@ -219,42 +211,37 @@ type Collector struct {
 	// DescriptorFilesUnread says the configuration was loaded without
 	// opening the files it names (config.WithoutNamedFiles), as the target
 	// allocator loads it: a grpc collector's protoset_file and proto_files
-	// are then not read, so its method and messages, and those of the
-	// static targets that use it, are not checked against them. It is no
-	// key of the configuration.
+	// are not read, so its method and messages, and those of its static
+	// targets, are not checked against them. Not a configuration key.
 	DescriptorFilesUnread bool `yaml:"-"`
-	// RequestNotMade says the collector's request block is never made: the
+	// RequestNotMade says the collector's request block is never sent: the
 	// debug page's playground (config.ParseCollector), which reads only a
-	// pasted response or what a configured collector fetched. The keys
-	// naming the files a request would read, which the playground may not
-	// set, are then not required of it, as a key a request needs is
-	// required of every other collector. It is no key of the configuration.
+	// pasted response or what a configured collector fetched. The file keys
+	// that a request would read, which the playground may not set, are then
+	// not required. Not a configuration key.
 	RequestNotMade bool `yaml:"-"`
-	// TimingsUnread says no rule or script of the collector reads
-	// $timings or $remote_ip (transform.ReadsTimings), so its requests are
-	// not traced, but in a debug run (fetch). It is set when the configuration loads;
-	// a collector made otherwise has it false, and is timed. It is no key
-	// of the configuration.
+	// TimingsUnread says no rule or script of the collector reads $timings
+	// or $remote_ip (transform.ReadsTimings), so its requests are traced only
+	// in a debug run (fetch). It is set at load; a collector built otherwise
+	// has it false and is timed. Not a configuration key.
 	TimingsUnread bool `yaml:"-"`
-	// FromDefaults are the keys the collector took from the defaults block
-	// of its file (CollectorDefaults.ApplyTo), by their paths, for the
-	// errors about them and the dry run to say so. It is no key of the
-	// configuration, and no part of what the collector is: one that writes
-	// a value itself is the same collector as one that takes it from
+	// FromDefaults are the paths of the keys that the collector took from
+	// its file's defaults block (CollectorDefaults.ApplyTo), for errors and
+	// the dry run to mention. Not a configuration key, and not part of the
+	// collector's identity: writing a value is the same as taking it from
 	// defaults.
 	FromDefaults []string `yaml:"-"`
-	// Written is the mapping the collector's file writes it as, its
-	// references unexpanded, its aliases and merge keys resolved and the
-	// keys it took from defaults added (config.recordWritten), for the
-	// debug page to show; nil for a collector not read from a file. It is
-	// no key of the configuration, and no part of what the collector is.
+	// Written is the mapping that the collector's file writes, with its
+	// references unexpanded, aliases and merge keys resolved and the keys
+	// from defaults added (config.recordWritten), for the debug page; nil
+	// for a collector not read from a file. Not a configuration key, and
+	// not part of the collector's identity.
 	Written *yaml.Node `yaml:"-" json:"-"`
 	// WrittenBlocks are the folded block scalars (>, >-) of Written as the
-	// file writes them, in the order Written holds them, depth first: the
-	// header and the lines, which the scalar's value, folded into one line,
-	// no longer has, for the debug page to show the statement over the
-	// lines it was written on. One whose lines could not be told is empty.
-	// Nil when Written has none.
+	// file writes them, in Written's order, depth first: the header and the
+	// lines, which the folded value no longer has, so the debug page can
+	// show a statement on its original lines. Empty for one whose lines
+	// could not be determined; nil when Written has none.
 	WrittenBlocks []WrittenBlock `yaml:"-" json:"-"`
 }
 
@@ -305,10 +292,10 @@ type RequestConfig struct {
 	// ip6 alone, prefer_ip4 or prefer_ip6 first, and "" for Go's own
 	// choice, both families raced (fetch/ipfamily.go).
 	IPFamily string `yaml:"ip_family"`
-	// UnixSocket is the absolute path of the Unix domain socket the
-	// requests are sent over in place of a connection to the target's
-	// host: an http collector's every request (fetch/unixsocket.go), and a
-	// tcp collector's exchange. The configuration's alone: no probe
+	// UnixSocket is the absolute path of the Unix domain socket that
+	// requests use instead of connecting to the target's host: every
+	// request of an http collector (fetch/unixsocket.go) and a tcp
+	// collector's exchange. Set only in the configuration: no probe
 	// parameter, static target or defaults block sets it.
 	UnixSocket string `yaml:"unix_socket"`
 	// RedirectTrustedHosts are the hosts, besides the origin the request is
@@ -334,22 +321,19 @@ type RequestConfig struct {
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
-	// Username and the credential files belong to the types that log in
-	// as an account: sshfile and sshexec, the account a file is read or a
-	// command runs as on the remote host, with its private key or
-	// password; sql, redis and ldap, with theirs
+	// Username and the credential files belong to the types that log in as
+	// an account: sshfile and sshexec (the remote account, with its private
+	// key or password), and sql, redis and ldap
 	// (fetch/requesttype_<name>.go).
 	Username       string `yaml:"username"`
 	PrivateKeyFile string `yaml:"private_key_file"`
 	PasswordFile   string `yaml:"password_file"`
-	// The rest of the SSH connection's keys belong to the types that reach
-	// a host over SSH, sshfile and sshexec, which share how they connect
-	// (fetch/sshconn.go): the file of the passphrase the private key is
-	// decrypted with and the known_hosts file the host's key is verified
-	// against; the keepalive settings and the idle timeout of the
-	// connection kept to a host, nil for the default and 0 to switch each
-	// off; and the most connections the collector holds open at once, 0
-	// for no limit.
+	// The other SSH keys belong to sshfile and sshexec, which share how they
+	// connect (fetch/sshconn.go): the file of the private key's passphrase;
+	// the known_hosts file for the host key; the keepalive settings and idle
+	// timeout of the connection kept to a host (nil for the default, 0 to
+	// switch each off); and the maximum number of connections the collector
+	// holds open at once (0 for no limit).
 	PassphraseFile     string    `yaml:"passphrase_file"`
 	KnownHostsFile     string    `yaml:"known_hosts_file"`
 	KeepaliveInterval  *Duration `yaml:"keepalive_interval"`
@@ -361,13 +345,11 @@ type RequestConfig struct {
 	// whose own request for TLS is spoken after the server's greeting,
 	// none when empty (fetch/starttls.go).
 	StartTLS string `yaml:"starttls"`
-	// Auth and XOAuth2 belong to the types that log in to a mail server,
-	// smtp, imap and pop3: the mechanism the login is made with, plain,
-	// login, cram-md5, xoauth2 or oauthbearer, and for pop3 user and apop
-	// too, the type's own choice when empty, and where the OAuth 2.0
-	// access token of xoauth2 and oauthbearer comes from
-	// (fetch/netxoauth2.go). Both are left out of a collector written as
-	// YAML when unset.
+	// Auth and XOAuth2 belong to smtp, imap and pop3: the login mechanism
+	// (plain, login, cram-md5, xoauth2 or oauthbearer, plus user and apop
+	// for pop3; empty for the type's own choice), and the source of the
+	// OAuth 2.0 access token for xoauth2 and oauthbearer
+	// (fetch/netxoauth2.go). Both are omitted from YAML when unset.
 	Auth    string         `yaml:"auth,omitempty"`
 	XOAuth2 *XOAuth2Config `yaml:"xoauth2,omitempty"`
 	// AllowPlaintext belongs to imap and pop3: log in over a connection
@@ -378,27 +360,25 @@ type RequestConfig struct {
 	// request (fetch/login.go). Left out of a collector written as YAML
 	// when unset.
 	Login *LoginConfig `yaml:"login,omitempty"`
-	// RateLimit belongs to the http and graphite types: how many requests
-	// a second the collector sends to one origin of a target, so a target
-	// that many probes, static targets, retries or pages ask at once is
-	// not asked faster than it can answer (fetch/ratelimit.go). Left out
-	// of a collector written as YAML when unset.
+	// RateLimit belongs to http and graphite: how many requests per second
+	// the collector sends to one origin of a target, however many probes,
+	// static targets, retries or pages ask at once (fetch/ratelimit.go).
+	// Omitted from YAML when unset.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
-	// ProxyURL belongs to the http and graphite types: the proxy every
-	// request of the collector, its login's included, goes through in
-	// place of the one the environment names, or ProxyDirect for none;
-	// "" leaves the environment's in force (fetch/proxy.go).
-	// ProxyBasicAuthFile is the files of the credentials sent to that
-	// proxy, which its URL may not carry. Both are left out of a collector
-	// written as YAML when unset.
+	// ProxyURL belongs to http and graphite: the proxy that every request
+	// of the collector, including its login, goes through instead of the
+	// environment's, or ProxyDirect for none; "" keeps the environment's
+	// (fetch/proxy.go). ProxyBasicAuthFile is the files of the credentials
+	// sent to that proxy, which its URL may not carry. Both are omitted
+	// from YAML when unset.
 	ProxyURL           string              `yaml:"proxy_url,omitempty"`
 	ProxyBasicAuthFile *ProxyBasicAuthFile `yaml:"proxy_basic_auth_file,omitempty"`
 
-	// Own holds the keys only the collector's request type takes, read
-	// into the struct its registration declares (fetch.RequestType.Config;
-	// requestkeys.go), as a value of that struct: nil for a type that
-	// takes none, or that the build left out. A key of the struct is
-	// written flat beside the ones above, as a key of the request block.
+	// Own holds the keys that only the collector's request type takes, in
+	// a value of the struct that its registration declares
+	// (fetch.RequestType.Config; requestkeys.go); nil for a type that takes
+	// none or that the build left out. Its keys are written flat beside the
+	// ones above.
 	Own any `yaml:"-"`
 	// Foreign are the keys of other request types' own that the request
 	// block sets, which the validation refuses: a collector it accepts has
@@ -411,12 +391,12 @@ type RequestConfig struct {
 	Order []string `yaml:"-"`
 }
 
-// XOAuth2Config is request.xoauth2: where the OAuth 2.0 access token of a
-// mail collector's XOAUTH2 or OAUTHBEARER login comes from, a file that
-// holds one, kept current by whatever wrote it, or a grant at token_url:
-// the refresh token grant (RFC 6749 § 6), which Grant names or leaves
-// out, or the client credentials grant (§ 4.4), an application's own
-// token, which a service account logs in to mailboxes with.
+// XOAuth2Config is request.xoauth2: the source of the OAuth 2.0 access token
+// of a mail collector's XOAUTH2 or OAUTHBEARER login. It is either a file
+// holding a token that something else keeps current, or a grant at
+// token_url: the refresh token grant (RFC 6749 § 6), named by Grant or the
+// default, or the client credentials grant (§ 4.4), with which a service
+// account logs in to mailboxes.
 type XOAuth2Config struct {
 	TokenFile        string   `yaml:"token_file,omitempty"`
 	Grant            string   `yaml:"grant,omitempty"`
@@ -447,15 +427,14 @@ type HostRateLimit struct {
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
-// SecretStore is an entry of secret_stores: a store of secrets the
-// exporter reads credentials from, kept in its memory for CacheTTL and
-// never written to disk. Type says which kind it is, one the fetch package
-// has registered (fetch.SecretStoreType): vault, HashiCorp Vault's HTTP
-// API at Address, logged in to as Auth says; gcp, Google Cloud Secret
-// Manager for Project; aws, AWS Secrets Manager in Region. Name, Type,
-// CacheTTL, MaxStale and Timeout are every type's; each other key is of
-// the types that list it (SecretStoreType.Keys), and a new type's keys are
-// further fields here.
+// SecretStore is an entry of secret_stores: a store that the exporter reads
+// credentials from, kept in memory for CacheTTL and never written to disk.
+// Type is a kind registered by the fetch package (fetch.SecretStoreType):
+// vault, HashiCorp Vault's HTTP API at Address, logged in to as Auth says;
+// gcp, Google Cloud Secret Manager for Project; or aws, AWS Secrets Manager
+// in Region. Name, Type, CacheTTL, MaxStale and Timeout apply to every type;
+// each other key belongs to the types that list it (SecretStoreType.Keys),
+// and a new type adds its keys here.
 type SecretStore struct {
 	// Name is what a reference names the store by, and the store label of
 	// its self-metrics.
@@ -478,22 +457,20 @@ type SecretStore struct {
 	// Endpoint is the API's URL in place of the public one, of gcp and
 	// aws: a private endpoint.
 	Endpoint string `yaml:"endpoint"`
-	// CacheTTL is how long a secret read is used before the store is
-	// asked again, 5m when unset, and MaxStale how long past that the
-	// secret is still used while the store cannot be asked, 1h when unset
-	// and never when 0. Timeout bounds one request to the store, 5s when
-	// unset.
+	// CacheTTL is how long a secret is used before the store is asked
+	// again (5m when unset). MaxStale is how long beyond that it is still
+	// used while the store cannot be reached (1h when unset, never when 0).
+	// Timeout bounds one request to the store (5s when unset).
 	CacheTTL *Duration `yaml:"cache_ttl"`
 	MaxStale *Duration `yaml:"max_stale"`
 	Timeout  Duration  `yaml:"timeout"`
 }
 
-// SecretStoreAuth is a vault store's auth block: Method is token, with the
-// token of TokenFile or of the VAULT_TOKEN environment variable;
-// kubernetes, which logs in as Role with the service account token of
-// JWTFile; or approle, which logs in with RoleID and the secret id of
-// SecretIDFile or of VAULT_SECRET_ID. Mount is where the auth method is
-// mounted, kubernetes or approle when unset.
+// SecretStoreAuth is a vault store's auth block. Method is token (the token
+// of TokenFile or of VAULT_TOKEN), kubernetes (logs in as Role with the
+// service account token of JWTFile), or approle (logs in with RoleID and the
+// secret id of SecretIDFile or of VAULT_SECRET_ID). Mount is where the auth
+// method is mounted, kubernetes or approle when unset.
 type SecretStoreAuth struct {
 	Method       string `yaml:"method"`
 	TokenFile    string `yaml:"token_file"`
@@ -507,15 +484,18 @@ type SecretStoreAuth struct {
 // SecretStoreAuthMethods are the values of a vault store's auth.method.
 var SecretStoreAuthMethods = []string{"token", "kubernetes", "approle"}
 
-// LoginConfig is request.login: how the exporter logs in to get the token
-// it sends to an http or graphite target. Type json posts a JSON object of
-// Fields and FieldFiles to URL and reads the token from the answer's body
-// (Token, a jq expression), a header of it (TokenHeader) or a cookie it sets
-// (TokenCookie); type steps makes a list of requests, each reading values
-// from its answer, one of which is the token; type oauth2 asks the token endpoint URL for a token with
-// the client credentials grant (RFC 6749 § 4.4), or, with GrantType
-// refresh_token, with the refresh token of RefreshTokenFile (§ 6). A
-// secret is read from a file at each login, never written in the
+// LoginConfig is request.login: how the exporter obtains the token that it
+// sends to an http or graphite target.
+//   - json posts a JSON object of Fields and FieldFiles to URL and reads the
+//     token from the answer's body (Token, a jq expression), a header
+//     (TokenHeader) or a cookie (TokenCookie).
+//   - steps makes a list of requests, each reading values from its answer,
+//     one of which is the token.
+//   - oauth2 requests a token from URL with the client credentials grant
+//     (RFC 6749 § 4.4) or, with GrantType refresh_token, with the refresh
+//     token of RefreshTokenFile (§ 6).
+//
+// A secret is read from a file at each login, never written in the
 // configuration.
 type LoginConfig struct {
 	Type string `yaml:"type" json:"type"`
@@ -547,11 +527,10 @@ type LoginConfig struct {
 	EndpointParams   map[string]string `yaml:"endpoint_params" json:"endpoint_params,omitempty"`
 	AuthStyle        string            `yaml:"auth_style" json:"auth_style,omitempty"`
 	// SigningKeyFile, Issuer, Subject, Audience, KeyID, Claims, Lifetime
-	// and Exchange are a jwt login's (fetch/loginjwt.go): the private key
-	// a JWT is signed with, its iss, sub and aud claims, the kid of its
-	// header, further claims, how long it is valid, and how it is handed
-	// in for a token, form, as the assertion of RFC 7523, or bearer, as
-	// the request's own credential.
+	// and Exchange belong to a jwt login (fetch/loginjwt.go): the JWT's
+	// signing key, its iss, sub and aud claims, its header's kid, further
+	// claims, its validity, and how it is exchanged for a token (form, as
+	// the RFC 7523 assertion, or bearer, as the request's credential).
 	SigningKeyFile string            `yaml:"signing_key_file" json:"signing_key_file,omitempty"`
 	Issuer         string            `yaml:"issuer" json:"issuer,omitempty"`
 	Subject        string            `yaml:"subject" json:"subject,omitempty"`
@@ -575,16 +554,20 @@ type LoginConfig struct {
 	// unset. Any type of login.
 	ReloginOn []int `yaml:"relogin_on" json:"relogin_on,omitempty"`
 	// Steps, RefreshSteps, Values, SecretFiles, ExpiresAt, Keep and
-	// KeepFile are a steps login's (fetch/loginsteps.go): the requests of a
-	// whole login, in order, each reading values from its answer that the
-	// steps after it, and the token, are made of; the requests that make a
-	// new token of the values kept from a whole login; the values written
-	// in the configuration and those read from files; the value that is
-	// the token's expiry, beside ExpiresIn, its lifetime; the values kept
-	// for RefreshSteps, each for how long; and the file the token and the
-	// kept values are written to, to be read after a restart. Token and
-	// ExpiresIn, a json login's jq expressions, name values in a steps
-	// login.
+	// KeepFile belong to a steps login (fetch/loginsteps.go):
+	//   - Steps: the requests of a full login, in order, each reading values
+	//     from its answer for the following steps and the token;
+	//   - RefreshSteps: the requests that make a new token from the values
+	//     kept from a full login;
+	//   - Values and SecretFiles: values written in the configuration and
+	//     values read from files;
+	//   - ExpiresAt: the value holding the token's expiry (ExpiresIn holds
+	//     its lifetime);
+	//   - Keep: the values kept for RefreshSteps, each with a duration;
+	//   - KeepFile: where the token and kept values are written, to be read
+	//     after a restart.
+	// Token and ExpiresIn, a json login's jq expressions, name values in a
+	// steps login.
 	Steps        []LoginStep         `yaml:"steps" json:"steps,omitempty"`
 	RefreshSteps []LoginStep         `yaml:"refresh_steps" json:"refresh_steps,omitempty"`
 	Values       map[string]string   `yaml:"values" json:"values,omitempty"`
@@ -707,10 +690,9 @@ const (
 var PaginationTypes = []string{PaginationLink, PaginationNextURL, PaginationCursor, PaginationPage, PaginationOffset}
 
 // StartTLSProtocols are the values of request.starttls, in the order an
-// error lists them. They are here rather than beside the dialogue that
-// speaks them (fetch/starttls.go) because the configuration schema, which
-// is the same in every build, names them in a build without either type
-// that takes the key.
+// error lists them. They are here, not beside the code that speaks them
+// (fetch/starttls.go), because the configuration schema, the same in every
+// build, names them even in a build without the types that take the key.
 var StartTLSProtocols = []string{"smtp", "imap", "pop3", "ftp"}
 
 // GRPCCodeNames are the gRPC status codes by number, as a configuration
@@ -736,11 +718,11 @@ type RetryConfig struct {
 	// Codes are the gRPC status codes a grpc request retries, by name;
 	// UNAVAILABLE alone when unset. Only for the grpc type.
 	Codes []string `yaml:"codes"`
-	// Statuses are the HTTP statuses an http or graphite request retries,
-	// written as accept_status is: 408, 425, 429 and 5xx when unset. A list
-	// replaces that set, and an empty one retries no status, while a
-	// connection that failed is retried still. Not for the grpc type, which
-	// retries by Codes.
+	// Statuses are the HTTP statuses that an http or graphite request
+	// retries, written like accept_status: 408, 425, 429 and 5xx when
+	// unset. A list replaces that set; an empty one retries no status, but
+	// a failed connection is still retried. Not for grpc, which retries by
+	// Codes.
 	Statuses []string `yaml:"statuses"`
 	// RetryAfter makes the wait before retrying an answer of Statuses the
 	// one its Retry-After header asks for, in place of Backoff. Off, the
@@ -789,12 +771,11 @@ type TLSConfig struct {
 	// and sent as SNI, when the target is addressed by something else, such
 	// as an IP address.
 	ServerName string `yaml:"server_name" json:"server_name,omitempty"`
-	// Set says the tls key was written, even as an empty mapping: a request
-	// type that may speak TLS or not, such as tcp, ldap, redis, grpc and
-	// sql, speaks it when the block is written, so tls: {} asks for TLS
-	// verified with the system roots and never leaves a scrape plaintext.
-	// It is part of the value, so a block compared with TLSConfig{} is set
-	// when it was written. UnmarshalYAML sets it.
+	// Set says the tls key was written, even as an empty mapping: a type
+	// that may or may not use TLS (tcp, ldap, redis, grpc, sql) uses it when
+	// the block is written, so tls: {} requests TLS verified with the system
+	// roots and never leaves a scrape in plaintext. It is part of the value,
+	// so a written block differs from TLSConfig{}. UnmarshalYAML sets it.
 	Set bool `yaml:"-" json:"-"`
 }
 
@@ -892,11 +873,10 @@ type BinaryConfig struct {
 // Set reports whether response.binary says anything.
 func (b BinaryConfig) Set() bool { return b.ByteOrder != "" || len(b.Fields) > 0 }
 
-// BinaryField is one field of response.binary: its name in the document,
-// its type, where it starts, after the field before it when Offset is nil,
-// how many values of the type it is, an array of them when Count is set,
-// how many bytes a string or a skip is, and its byte order, the layout's
-// when empty.
+// BinaryField is one field of response.binary: its name in the document, its
+// type, its start (after the previous field when Offset is nil), its count
+// (an array when Count is set), the byte length of a string or skip, and its
+// byte order (the layout's when empty).
 type BinaryField struct {
 	Name      string `yaml:"name"`
 	Type      string `yaml:"type"`
@@ -1013,9 +993,9 @@ type OTLPConfig struct {
 	// the metric's unit (exporter/otlpnames.go).
 	MetricNames string `yaml:"metric_names"`
 	// ExponentialHistograms sends the exporter's own duration histograms as
-	// OTLP exponential histograms, whose buckets follow the durations
-	// observed, rather than with their fixed classic buckets. Off by default:
-	// a receiver must support them, and Prometheus' OTLP endpoint stores them
+	// OTLP exponential histograms, whose buckets follow the observed
+	// durations, instead of with fixed classic buckets. Off by default: the
+	// receiver must support them, and Prometheus' OTLP endpoint stores them
 	// as native histograms only when it ingests those.
 	ExponentialHistograms bool `yaml:"exponential_histograms"`
 	// Scope is the instrumentation scope the export's metrics and log
@@ -1029,10 +1009,10 @@ type OTLPConfig struct {
 }
 
 // OTLPExporterInstanceConfig is otlp.exporter_instance: whether every
-// resource the export sends carries an attribute naming this replica, under
-// which key, and with which value. The configuration's check fills in the
-// value left out (config.validateOTLP): the --allocator.member name in
-// allocator mode, else the host name.
+// exported resource carries an attribute naming this replica, under which
+// key, and with which value. A missing value is filled in at load
+// (config.validateOTLP): the --allocator.member name in allocator mode,
+// otherwise the host name.
 type OTLPExporterInstanceConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	Attribute string `yaml:"attribute"`
@@ -1046,11 +1026,10 @@ func (o *OTLPExporterInstanceConfig) UnmarshalYAML(n *yaml.Node) error {
 	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPExporterInstanceConfig", "otlp.exporter_instance")
 }
 
-// DefaultOTLPExporterInstanceAttribute is otlp.exporter_instance.attribute
-// when left out. It is not service.instance.id, which Prometheus' OTLP
-// receiver makes the instance label of every series, in place of the
-// target's, and which a static target's otlp.instance_id sets to the
-// target's name.
+// DefaultOTLPExporterInstanceAttribute is the default of
+// otlp.exporter_instance.attribute. It is not service.instance.id, which
+// Prometheus' OTLP receiver turns into every series' instance label, and
+// which a static target's otlp.instance_id sets to the target's name.
 const DefaultOTLPExporterInstanceAttribute = "pue.exporter.instance"
 
 // OTLPScopeConfig is otlp.scope: the name and version of the
@@ -1101,11 +1080,11 @@ const (
 	DefaultOTLPLogsMaxPendingRecords = 10000
 )
 
-// OTLPTracesConfig is otlp.traces: whether a trace is exported of each probe
+// OTLPTracesConfig is otlp.traces: whether to export a trace of each probe
 // and static target scrape that took Threshold or longer, with Errors of
-// each that failed, with ParentBased of each its caller sampled, and of a
-// SampleRatio share of the rest, at most MaxPerSecond a second, where to,
-// and how many spans may wait.
+// each that failed, with ParentBased of each that its caller sampled, and
+// of a SampleRatio share of the rest, at most MaxPerSecond per second;
+// where to send them; and how many spans may wait.
 type OTLPTracesConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// Endpoint is the OTLP/HTTP traces endpoint; left out, otlp.endpoint
@@ -1179,23 +1158,22 @@ func (o *OTLPConfig) UnmarshalYAML(n *yaml.Node) error {
 	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPConfig", "otlp")
 }
 
-// MaxOTLPUnreadyAfterFailures is the most otlp.unready_after_failures may
-// be. The status page shows when the failed export ended that made the
-// exporter unready, under whatever threshold a reload sets during a run of
-// failures, so it keeps the end of each failure of the run up to the
-// threshold's most (exporter/otlp.go); the bound keeps that a few kilobytes.
-// A thousand failed exports are 17 minutes at the least otlp.interval, 1s,
-// and more than 8 hours at the default, 30s.
+// MaxOTLPUnreadyAfterFailures is the maximum of
+// otlp.unready_after_failures. The status page shows when the failed export
+// that made the exporter unready ended, under whatever threshold a reload
+// sets during a run of failures, so it keeps the end of each failure of the
+// run up to this maximum (exporter/otlp.go); the bound keeps that to a few
+// kilobytes. A thousand failed exports take 17 minutes at the minimum
+// otlp.interval, 1s, and over 8 hours at the default, 30s.
 const MaxOTLPUnreadyAfterFailures = 1000
 
 // DefaultOTLPMaxPendingPoints is otlp.max_pending_points when unset.
 const DefaultOTLPMaxPendingPoints = 100000
 
 // The defaults of otlp.batch_max_size and otlp.batch_max_bytes, and the
-// least otlp.batch_max_bytes. 8192 data points is what the OpenTelemetry
-// Collector's batch processor sends at once, and 4MiB the largest message a
-// gRPC receiver takes by default, well under the 20MiB an OTLP/HTTP
-// receiver takes.
+// minimum of otlp.batch_max_bytes. 8192 data points is what the OpenTelemetry
+// Collector's batch processor sends at once, and 4MiB is the largest message
+// a gRPC receiver accepts by default, well under the 20MiB of OTLP/HTTP.
 const (
 	DefaultOTLPBatchMaxSize  = 8192
 	DefaultOTLPBatchMaxBytes = 4 << 20
@@ -1265,21 +1243,19 @@ type MetricRule struct {
 	TimeFormat string `yaml:"time_format"`
 	TimeZone   string `yaml:"time_zone"`
 	// Histogram, on a rule of type histogram, makes the values the rule
-	// reads the observations of a histogram instead of series of their own
-	// (transform.observeValue). Without it a rule of any transform but
-	// prometheus reads one value per series and cannot be a histogram, so
-	// the block is what asks for one.
+	// reads the observations of a histogram instead of separate series
+	// (transform.observeValue). Only prometheus rules can otherwise be
+	// histograms, so the block is how a rule asks for one.
 	Histogram *HistogramRule `yaml:"histogram"`
 }
 
 // DerivedRule is one entry of a collector's derived list: a metric family
-// computed from families the collector's rules, or earlier entries, make. It
-// sets exactly one of Sum, Difference and Ratio, each a list of the names
-// of the families it reads, as the rules name them. By, which only Sum
-// takes, makes Sum add up the series of its one family into one series for
-// each set of values of the labels By keeps; written as [], into one series.
-// Hidden computes the family for later entries to read without exporting
-// it.
+// computed from families that the collector's rules, or earlier entries,
+// produce. It sets exactly one of Sum, Difference and Ratio, each a list of
+// the names of the families it reads. By, only for Sum, adds the series of
+// its one family into one series per set of values of the labels By keeps
+// (written as [], into one series). Hidden computes the family for later
+// entries without exporting it.
 type DerivedRule struct {
 	Name        string     `yaml:"name"`
 	Type        MetricType `yaml:"type"`
@@ -1298,12 +1274,11 @@ type HistogramRule struct {
 	Buckets []float64 `yaml:"buckets"`
 }
 
-// MaxHistogramBuckets bounds a histogram block's buckets. Each is a sample
-// of every histogram the rule makes on every scrape, and each value read is
-// counted in every bucket from its own up, so a histogram of a few thousand
-// buckets would cost every scrape and every query far more than the
-// distribution it describes is worth; client libraries default to about a
-// dozen.
+// MaxHistogramBuckets bounds a histogram block's buckets. Each bucket is a
+// sample of every histogram the rule makes on every scrape, and each value
+// is counted in every bucket from its own upwards, so thousands of buckets
+// would cost every scrape and query far more than the distribution is
+// worth; client libraries default to about a dozen.
 const MaxHistogramBuckets = 100
 
 // What a metric rule does when it cannot produce its value. The first two keep
@@ -1406,12 +1381,11 @@ type TransformConfig struct {
 
 // Configuration validation checks everything about a metric rule that can be
 // known before a scrape: that its name is a Prometheus metric name, and that
-// every expression it holds compiles in the language its transform speaks.
-// Compiling here also fills the expression caches (expr/exprcache.go), so a scrape
-// runs programs that already exist. A mistake is therefore reported at
-// startup, on reload and by --dry-run, naming the collector, the rule and the
-// label, instead of failing — or, for a CSS selector, silently matching
-// nothing — on every scrape.
+// every expression compiles in its transform's language. Compiling here also
+// fills the expression caches (expr/exprcache.go), so a scrape runs existing
+// programs. A mistake is reported at startup, on reload and by --dry-run,
+// naming the collector, the rule and the label, instead of failing (or, for
+// a CSS selector, silently matching nothing) on every scrape.
 
 // The error policy vocabulary is shared by error_handling and error_mode:
 // fail stops the scrape, log carries on and logs why, ignore carries on
@@ -1447,13 +1421,12 @@ type CacheConfig struct {
 
 var cacheConfigKeys = []string{"ttl", "stale_if_error", "revalidate"}
 
-// UnmarshalYAML refuses the keys it does not know, which a custom decoder
-// would otherwise let through, and explains the one-value form. The keys of
-// a mapping merged in with << are the cache's own keys, and checked as such,
-// and a key that is an alias is the key it names (KeyName). Every unknown
-// key and every value of the wrong kind is said, in the order of the file
-// (decodeBlock), and as the decoder's own errors, so the rest of the file
-// is read and its problems said too.
+// UnmarshalYAML refuses unknown keys, which a custom decoder would otherwise
+// accept, and explains the one-value form. The keys of a mapping merged in
+// with << are checked as the cache's own keys, and an alias key is the key
+// it names (KeyName). Every unknown key and wrongly typed value is reported,
+// in file order (decodeBlock), as the decoder's own errors, so the rest of
+// the file is read and its problems reported too.
 func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	n = resolveAlias(n)
 	if n.Kind == yaml.ScalarNode {
@@ -1479,15 +1452,14 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 }
 
 // FailureBackoffConfig is a collector's failure_backoff: after After
-// consecutive failed trips to a target, its trips are answered as failed
-// without contacting it for Initial, the wait doubling with each further
-// failure up to Max. A trip that failed by running out of its budget counts
-// only when that budget was at least MinBudget. Each is nil until the load
-// fills in its default (config.validateFailureBackoff), so a value written
-// 0 is told from one left out. Enabled false turns the backoff off, for a
-// collector whose file's defaults give it one; the load then leaves
-// FailureBackoff nil, as for a collector without the block, and a
-// backoff on with Enabled nil.
+// consecutive failed trips to a target, its trips fail without contacting it
+// for Initial, the wait doubling with each further failure up to Max. A trip
+// that failed by running out of its budget counts only when that budget was
+// at least MinBudget. Each is nil until the load fills in its default
+// (config.validateFailureBackoff), so a written 0 differs from an omitted
+// value. Enabled false turns the backoff off, for a collector whose file's
+// defaults give it one; the load then leaves FailureBackoff nil, as without
+// the block, and a backoff with Enabled nil is on.
 type FailureBackoffConfig struct {
 	Enabled   *bool     `yaml:"enabled,omitempty"`
 	After     *int      `yaml:"after"`
@@ -1504,12 +1476,11 @@ func BackoffSwitchedOff(b *FailureBackoffConfig) bool {
 	return b != nil && b.Enabled != nil && !*b.Enabled
 }
 
-// UnmarshalYAML refuses the keys it does not know in the words the cache's
-// do, naming the block rather than the type, and explains the one-value
-// form. The keys of a mapping merged in with << are the block's own keys,
-// and a key that is an alias is the key it names (KeyName). Every unknown
-// key and every value of the wrong kind is said, in the order of the file,
-// as the cache's are.
+// UnmarshalYAML refuses unknown keys in the same words as the cache's,
+// naming the block, and explains the one-value form. The keys of a mapping
+// merged in with << are the block's own keys, and an alias key is the key it
+// names (KeyName). Every unknown key and wrongly typed value is reported in
+// file order, as for the cache.
 func (b *FailureBackoffConfig) UnmarshalYAML(n *yaml.Node) error {
 	n = resolveAlias(n)
 	if n.Kind == yaml.ScalarNode && n.ShortTag() == boolTag {

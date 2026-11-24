@@ -29,83 +29,107 @@ make ci         # what CI runs, one after another: fmt-check, lint, lint-request
 make test-external  # opt-in; probes real third-party endpoints
 ```
 
-The binaries `make build` makes are in `bin/`, and `make run` always builds
-before it runs, so the binary that runs is never one built before a pull. A
-plain `go build .` leaves `./prometheus-universal-exporter` in the repository
-root instead, ignored by git and soon older than `bin/`'s; `make build` warns
-while one is there. An example is a directory under `examples/`, named by the
-directory, such as `open-meteo`, whose configuration is its `config.yaml`
-beside an optional static target file and any collector files its
-`collector_files` names, or `examples/config.<name>.<format>-test.yaml`,
-named by `<name>`, such as `ecb`; `tools/run-example.sh` reads the names, the
-files and the opt-in request types an example needs (a `type:
-<name>` line of an opt-in type's), from the tree. Before it runs the binary it prints the
-landing page's URL, the status page's, which every example has (its recent
-probes fill as soon as anything probes), and the first probe URL that the
-comment opening the configuration gives as `curl '…/probe?…'`, when the
-collector it names is one of the example's and its target is one a local run
-can reach: `localhost`, `127.0.0.1`, `[::1]`, or a DNS name with a dot that is
-no placeholder (a first label ending in `-host`, an address of one network, or
-a name under `example.com` or a top-level domain such as `example`, `local`,
-`internal` or `svc`, are placeholders). For a placeholder, such as filebeat's
-`filebeat-host`, it prints the probe with `<your target>` in its place.
-`HOST` is `127.0.0.1` so that an example is reachable from this machine alone;
-`HOST=0.0.0.0` or `HOST=::` serves it to the network, and the URLs printed are
-then on `localhost` or `[::1]`, which a browser on this machine can open. An
-IPv6 `HOST` may be given bare or in brackets (`HOST=::1`); an empty `HOST=`
-fails before anything is built.
+**Binaries.** `make build` puts the binaries in `bin/`, and `make run`
+always builds before it runs, so the binary that runs is never one built
+before a pull. A plain `go build .` leaves `./prometheus-universal-exporter`
+in the repository root instead, ignored by git and soon older than the one
+in `bin/`; `make build` warns while it is there.
+
+**Examples.** An example is either a directory under `examples/`, named by
+the directory, such as `open-meteo`, or a file
+`examples/config.<name>.<format>-test.yaml`, named by `<name>`, such as
+`ecb`. A directory's configuration is its `config.yaml`, next to an
+optional static target file and any collector files that its
+`collector_files` names. `tools/run-example.sh` reads the names, the files
+and the opt-in request types that an example needs (a `type: <name>` line
+of an opt-in type) from the tree.
+
+Before it runs the binary, it prints:
+
+- the landing page's URL;
+- the status page's URL, which every example has (its recent probes fill as
+  soon as anything probes);
+- the first probe URL that the comment opening the configuration gives as
+  `curl '…/probe?…'`, when the collector it names belongs to the example
+  and its target is one that a local run can reach: `localhost`,
+  `127.0.0.1`, `[::1]`, or a DNS name with a dot that is not a placeholder.
+  A first label ending in `-host`, an address of one network, or a name
+  under `example.com` or a top-level domain such as `example`, `local`,
+  `internal` or `svc` is a placeholder. For a placeholder, such as
+  filebeat's `filebeat-host`, it prints the probe with `<your target>` in
+  its place.
+
+`HOST` is `127.0.0.1`, so that an example is reachable from this machine
+only. `HOST=0.0.0.0` or `HOST=::` serves it to the network, and the URLs
+printed are then on `localhost` or `[::1]`, which a browser on this machine
+can open. An IPv6 `HOST` may be given bare or in brackets (`HOST=::1`). An
+empty `HOST=` fails before anything is built.
 
 ## Changelog
 
 A pull request that changes what someone running the exporter or installing
 the chart sees adds its lines to `## Unreleased` in
-[`CHANGELOG.md`](../CHANGELOG.md): under `### What changed for you` what an
-upgrade makes them do or notice (a key or value renamed or removed, a default
-changed, a metric renamed), under `### New` and `### Fixed` the rest. The
-section becomes a GitHub Release's description, so its lines are written for
-users; a refactor, a test or a CI change adds none. [Releases](RELEASING.md#release-notes)
-says how a release moves the lines into a section of its own.
+[`CHANGELOG.md`](../CHANGELOG.md):
+
+- under `### What changed for you`, what an upgrade makes them do or notice
+  (a key or value renamed or removed, a default changed, a metric renamed);
+- under `### New` and `### Fixed`, the rest.
+
+The section becomes a GitHub Release's description, so its lines are
+written for users. A refactor, a test or a CI change adds none.
+[Releases](RELEASING.md#release-notes) describes how a release moves the
+lines into their own section.
 
 ## The specifications
 
-A change writes its rules, as MUST rules, once, in the section of the
-feature it changes: [`SPECIFICATION-EXPORTER.md`](SPECIFICATION-EXPORTER.md)
-for the exporter, [`SPECIFICATION-CHART.md`](SPECIFICATION-CHART.md) for the
-chart, and `SPECIFICATION-<TYPE>.md` for what is one request type's alone,
-its section of § 5.1 (every type but `http` has one, listed under
-[The other request types](SPECIFICATION-EXPORTER.md#the-other-request-types)).
-§ 34 holds only the rules the test suite is held to: a change adds no list of
-its tests or of the cases they cover, since each test says what it checks in
-its name and its comment, and `TestTheSpecificationsListNoTests` fails on a
-test named in a specification or a § 34 section that lists an area's cases.
+A change writes its rules once, as MUST rules, in the section of the feature
+that it changes:
+
+- [`SPECIFICATION-EXPORTER.md`](SPECIFICATION-EXPORTER.md) for the exporter;
+- [`SPECIFICATION-CHART.md`](SPECIFICATION-CHART.md) for the chart;
+- `SPECIFICATION-<TYPE>.md` for what belongs to one request type alone, its
+  section of § 5.1 (every type except `http` has one, listed under
+  [The other request types](SPECIFICATION-EXPORTER.md#the-other-request-types)).
+
+§ 34 holds only the rules that the test suite is held to. A change adds no
+list of its tests or of the cases they cover, because each test says what it
+checks in its name and its comment. `TestTheSpecificationsListNoTests` fails
+on a test named in a specification or on a § 34 section that lists an
+area's cases.
 
 ## Goroutines of a fetch
 
-A panic of a scrape is recovered where its goroutine starts, and fails that
-scrape alone. A goroutine a fetch starts itself is outside that, and its
-panic would end the exporter, so each one that runs the type's code — asks a
-server, reads or parses an answer — hands its panic back to the scrape
-(`internal/fetch/goroutinepanic.go`): `defer panicked.keep()` in each of
-several goroutines the fetch waits for, with `panicked.raise()` after the
-wait, or `panicToError` around the work of one whose error is what it hands
-over, which `FetchCollector` raises. A goroutine that only closes a
-connection or copies bytes needs neither.
+A panic of a scrape is recovered where its goroutine starts, and fails only
+that scrape. A goroutine that a fetch starts itself is outside that
+recovery, and its panic would end the exporter. Each such goroutine that
+runs the type's code (asks a server, reads or parses an answer) therefore
+hands its panic back to the scrape (`internal/fetch/goroutinepanic.go`):
+
+- `defer panicked.keep()` in each of several goroutines that the fetch waits
+  for, with `panicked.raise()` after the wait;
+- or `panicToError` around the work of a goroutine whose error is what it
+  hands over, which `FetchCollector` raises.
+
+A goroutine that only closes a connection or copies bytes needs neither.
 
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`), its
 allocator mode (`allocator.go`), the `--dry-run` report (`check.go`) and
-`--healthcheck` (`healthcheck.go`), with
-the tests of the command line itself
-(`cli_test.go`, `shutdown_test.go`); the target allocator's command line is
-`cmd/pue-allocator`, with its own, and `tools/depupdate` is the command that
-proposes updates for the versions the Dockerfile pins
-([Dependency updates](DEPENDENCIES.md)). The tests that check the repository as a
-whole — the documentation, the chart, the workflows, the Dockerfile, the
-shipped examples and schemas, and the layering below — are in
-`test/repository`, a package of tests only, which runs from the repository
-root. Everything else is under `internal/`, in packages that each import only
-the ones above them in this list:
+`--healthcheck` (`healthcheck.go`), with the tests of the command line
+itself (`cli_test.go`, `shutdown_test.go`).
+
+- The target allocator's command line is `cmd/pue-allocator`, with its own
+  tests.
+- `tools/depupdate` is the command that proposes updates for the versions
+  that the Dockerfile pins ([Dependency updates](DEPENDENCIES.md)).
+- The tests that check the repository as a whole (the documentation, the
+  chart, the workflows, the Dockerfile, the shipped examples and schemas,
+  and the layering below) are in `test/repository`, a package of tests only,
+  which runs from the repository root.
+
+Everything else is under `internal/`, in packages that each import only the
+ones above them in this list:
 
 | Package | What it holds |
 | --- | --- |
@@ -129,281 +153,349 @@ the ones above them in this list:
 | `internal/ldaptest` | A stand-in LDAP server for the `ldap` type's tests: a TCP server, or a TLS one for `ldaps://`, its self-signed certificate written to a file, answering LDAPv3 messages in BER as a directory server does — a simple bind, anonymous or as an account it was given, `invalidCredentials` to a wrong password, StartTLS unless told to refuse it, and a search of the entries a test gave it by base, scope and filter, with the attributes asked for, a page at a time with the Simple Paged Results control unless told to ignore it, and continuation references — with a hook that answers a request with any bytes, to play a broken, hostile or silent server, and the requests it was sent recorded, each filter written back as RFC 4515 text. It imports the standard library alone; imported only by tests. |
 | `internal/sshtest` | An in-process SSH server with an SFTP subsystem for the `sshfile` type's tests, and commands for the `sshexec` type's, run by the test's own function or by `/bin/sh`, with their exit statuses, signals and stderr, serving the test's own temporary directories, with host keys, key and password authentication, encrypted client keys, a switch that makes it stop answering, a limit on the sessions of a connection, counts of the sessions open and of the directory entries listed, and a hook that serves SFTP sessions in the test's place; imported only by tests, and behind the two types' build tags, so a build without them compiles no SSH code even for its tests. |
 
-A package's tests live beside it, unless they need more than it can import: a
-test that validates a whole configuration lives in `internal/config`, and one
-that probes through a running `Server` lives in `internal/exporter`, even when
-what it checks is a transform or a request type.
+A package's tests live next to it, unless they need more than it can import.
+A test that validates a whole configuration lives in `internal/config`, and
+one that probes through a running `Server` lives in `internal/exporter`,
+even when what it checks is a transform or a request type.
 
 ### How a request type is registered
 
 A request type registers a `fetch.RequestType` from the `init` function of
 its `internal/fetch/requesttype_<name>.go`, under the build constraint that
-decides whether a build carries it. The registration holds everything the
-exporter knows of the type, and the rest of the exporter reads it from the
-registry, `fetch.RequestTypes`, rather than naming the type: nothing in
+decides whether a build includes it. The registration holds everything that
+the exporter knows about the type. The rest of the exporter reads it from
+the registry, `fetch.RequestTypes`, instead of naming the type: nothing in
 package `main`, `internal/config`, `internal/decode`, `internal/exporter` or
-`internal/transform` names a request type, which
-`TestCorePackagesNameNoRequestType` keeps so, with an allowlist of the same
-words meaning something else, such as the graphite decoder or `tcp` as a
-network.
+`internal/transform` names a request type. `TestCorePackagesNameNoRequestType`
+keeps it so, with an allowlist of the same words used with another meaning,
+such as the graphite decoder or `tcp` as a network.
 
 - `Name`, `Fields`, `Config`, `Overrides` and `TargetFields`: the type's
-  name, the keys of the request block's common part it accepts, the struct
-  of the keys only it accepts (below), the probe parameters that may change
-  them and the keys a static target may set.
-- `Requester`: what every type does, an interface each registration gives a
-  small value of (`httpRequester{}`, `tcpRequester{}`): `Validate` checks a
-  collector's request and fills in its defaults, `Fetch` performs one,
-  `CheckTarget` checks a target, `Label` and `Method` give the `url` and
-  `http_method` labels of the verbose self-metrics, and `Display` renders a
-  target for logs. A type whose target is a URL embeds `fetch.URLTarget`,
-  http's label, method and display, and overrides what differs, as graphite
-  does `Method`.
-- The optional hooks, function fields left nil by a type without the
-  capability: a target a probe may leave out (`OptionalTarget`), the checks
-  of a static target's request (`CheckOverride`, `CheckTargetRequest`), the
-  files read at a request or at the load (`CheckFiles`, `ReadFiles`,
-  `NamedFiles`), what `--dry-run` shows of its request's policy (`Policy`),
-  the method and body of a request made over HTTP (`MethodBody`),
-  connections kept across scrapes (`Follow`, `CloseConnections`, `Connections`,
-  `ConnectionLimit`, `ConnectionPools`) and logins (`Logins`). They stay
-  fields rather than methods of `Requester` so that a type without the
-  capability says nothing, instead of implementing a method to say it has
-  none.
-- What the rest of the exporter knows of the type: its own self-metric
-  families (`Families`; the shared ones follow from its keys and hooks, the
-  target lists giving `http_exporter_targets_refused_total`), whether its
-  cached responses are revalidated (`Revalidates`), what the collectors
-  page and the debug page ask for as its target (`TargetHint`, a label and
-  an example of its forms, or `NoTarget`) and what a response of it pasted
-  on the debug page is (`AnswerHint`) — both required, a type registered
-  without them failing at its start — whether the debug page writes
-  it (`DebugPage`), its decoder (`JSONAnswer`, `Decoder`, `Rows`,
-  `FileExtensions`), the article its name is read with (`Article`), its rule
-  in the configuration schema (`SchemaRule`) and what the schema says of its
-  own keys (`KeyRules`), the templated parts of its request and the
-  encoding of their values (`Templates`, `templateEscapers`), the filters a
-  field of its own kind takes (`templateFilterRules`, as grpc's message
-  takes only those that write JSON) and whether a probe's overrides replace
-  it (`templateReplacers`), and the places a refusal of unused probe
-  parameters names (`UnusedParams`). The shared template code,
-  `requesttemplate.go`, keys no rule by a field's place:
-  `TestTheSharedTemplateCodeKnowsNoFieldOfOneType` fails for a file of
-  `internal/fetch` every build compiles that compares a templated field's
-  `where` with a literal.
+  name, the keys of the request block's common part that it accepts, the
+  struct of the keys that only it accepts (below), the probe parameters that
+  may change them, and the keys that a static target may set.
+- `Requester`: what every type does. It is an interface, and each
+  registration gives a small value of it (`httpRequester{}`,
+  `tcpRequester{}`).
+  - `Validate` checks a collector's request and fills in its defaults.
+  - `Fetch` performs one request.
+  - `CheckTarget` checks a target.
+  - `Label` and `Method` give the `url` and `http_method` labels of the
+    verbose self-metrics.
+  - `Display` renders a target for logs.
+  - A type whose target is a URL embeds `fetch.URLTarget` (http's label,
+    method and display) and overrides what differs, as graphite does with
+    `Method`.
+- The optional hooks, function fields that a type without the capability
+  leaves nil:
+  - a target that a probe may leave out (`OptionalTarget`);
+  - the checks of a static target's request (`CheckOverride`,
+    `CheckTargetRequest`);
+  - the files read at a request or at load (`CheckFiles`, `ReadFiles`,
+    `NamedFiles`);
+  - what `--dry-run` shows of its request's policy (`Policy`);
+  - the method and body of a request made over HTTP (`MethodBody`);
+  - connections kept across scrapes (`Follow`, `CloseConnections`,
+    `Connections`, `ConnectionLimit`, `ConnectionPools`);
+  - logins (`Logins`).
 
-A collector's `request` block is written flat, its type's keys beside
-`type`, but only the keys several types take are fields of
-`model.RequestConfig`, its common part; `TestTheCommonPartHoldsNoKeyOfOneType`
-fails for a field there that one type alone takes. The keys only one type
-takes are fields of the type's own struct, declared in its file beside the
-registration and given as its `Config`, such as `fetch.TCPConfig{}` with
-`send` and `terminator`. The loader reads `request.type` and puts the keys
-of that type's own into a value of its struct, which the collector holds in
-`Request.Own`, written back flat when the collector is written as YAML (its
-cache key, a reload's comparison); a key of another type's own goes into
-`Request.Foreign`, which the validation refuses as it refuses a key of the
-common part the type does not take. The block keeps the order the file has
-its keys in, `Request.Order` (`internal/model/keyorder.go`), so that of
-several keys refused the error names the first in the file, whatever
-refuses each, and a check of several keys alike ranges over them in that
-order (`model.InFileOrder`), never over a map; the decoder asks the registry which keys a type refuses
-(`model.RequestKeys.Refuses`), to leave an unknown key after one of them to
-be refused once it is gone. The type reads its keys with a typed
-accessor (`tcpRequest(c).Send`), and writes a changed value back into `Own`,
-which is a value, so that a copy of a collector is a copy of its keys. A
-key's schema is made from its field's Go type, as every other key's is,
-with what the type's `KeyRules` say of it by its path under the request
-block: its description, and any pattern or bound.
+  They stay fields instead of methods of `Requester`, so that a type without
+  the capability says nothing, instead of implementing a method to say that
+  it has none.
+- What the rest of the exporter knows about the type:
+  - its own self-metric families (`Families`); the shared ones follow from
+    its keys and hooks, the target lists giving
+    `http_exporter_targets_refused_total`;
+  - whether its cached responses are revalidated (`Revalidates`);
+  - what the collectors page and the debug page ask for as its target
+    (`TargetHint`, a label and an example of its forms, or `NoTarget`), and
+    what a response of it pasted on the debug page is (`AnswerHint`). Both
+    are required: a type registered without them fails at its start;
+  - whether the debug page writes it (`DebugPage`);
+  - its decoder (`JSONAnswer`, `Decoder`, `Rows`, `FileExtensions`);
+  - the article that its name is read with (`Article`);
+  - its rule in the configuration schema (`SchemaRule`) and what the schema
+    says about its own keys (`KeyRules`);
+  - the templated parts of its request and the encoding of their values
+    (`Templates`, `templateEscapers`), the filters that a field of its own
+    kind takes (`templateFilterRules`, as grpc's message takes only those
+    that write JSON), and whether a probe's overrides replace it
+    (`templateReplacers`);
+  - the places that a refusal of unused probe parameters names
+    (`UnusedParams`).
 
-A build without the type carries neither the struct nor the rules. It still
-knows the keys, from `internal/fetch/requestkeys_catalogue.go`, a catalogue
-of the own keys of every type of the tree with the Go types of their fields
-and their schemas: a type of `internal/model` by its name, and a type of the
-request type's own, such as redis's `RedisCommand`, by its structure, which
-a build without the type makes again to read the key into, so that what it
-refuses of the value it refuses as a build with the type does. So a build
-that left `tcp` out refuses `send` under another type as a key of another
-type, in the words a build with every type has, and its schema describes
-`send` as theirs does. `make schemas` writes the catalogue from a build with
-every type, by running `TestTheRequestKeyCatalogueIsCurrent`
-(`internal/config`) with `-update-request-keys`; that test otherwise holds
-it to the structs. What a rule makes of the build, such as the drivers
-`request.driver` names, is the generating build's, which has the default
-drivers: a build without `sql` describes `driver` with them.
+  The shared template code, `requesttemplate.go`, keys no rule by a field's
+  place: `TestTheSharedTemplateCodeKnowsNoFieldOfOneType` fails for a file
+  of `internal/fetch` that every build compiles and that compares a
+  templated field's `where` with a literal.
 
-So a new type is its own files and the build wiring (the guard file, the tag
-script, the Makefile's and CI's loops and the documentation's marked lists,
-each checked by a test), the catalogue `make schemas` writes, and nothing in
-the core; `make new-request-type` writes the files and the wiring
-([Adding a request type](#adding-a-request-type)). Only `internal/fetch`'s `requesttype.go` names every type of the
-tree, built or not, in `knownRequestTypes` and `optInRequestTypes`, so that
-a configuration naming a type the build left out is told so.
+**A type's own keys.** A collector's `request` block is written flat, with
+its type's keys beside `type`, but only the keys that several types take are
+fields of `model.RequestConfig`, its common part.
+`TestTheCommonPartHoldsNoKeyOfOneType` fails for a field there that only one
+type takes. The keys that only one type takes are fields of the type's own
+struct, declared in its file next to the registration and given as its
+`Config`, such as `fetch.TCPConfig{}` with `send` and `terminator`.
 
-An error whose text names where in the response it happened — a row, a node,
-an item, a line — or a size or a duration it measured is made with
-`model.Errorf`, the number given as a `model.Position`, a `model.Size` or a
-`model.Elapsed`: `model.Errorf("CSV column %q is empty in row %d", column,
-model.Position(row))`. The text reads as `fmt.Errorf`'s would; the type says
-which part of it moves from scrape to scrape, so that the
-[failure log](LOGGING.md#repeated-failures) takes the failure for the same
-wherever it happens (`model.SameFailureText`, `internal/model/samefailure.go`).
-Made with `fmt.Errorf`, such an error is a new failure to the log on every
-scrape it moves. A number the configuration gave, and a value read from the
-response, are written as they are.
+- The loader reads `request.type` and puts the keys that belong to that type
+  into a value of its struct, which the collector holds in `Request.Own`.
+  It is written back flat when the collector is written as YAML (its cache
+  key, a reload's comparison).
+- A key that belongs to another type goes into `Request.Foreign`, which the
+  validation refuses, as it refuses a key of the common part that the type
+  does not take.
+- The block keeps the order of its keys in the file, `Request.Order`
+  (`internal/model/keyorder.go`). Of several refused keys, the error
+  therefore names the first in the file, whatever refuses each, and a check
+  of several similar keys ranges over them in that order
+  (`model.InFileOrder`), never over a map.
+- The decoder asks the registry which keys a type refuses
+  (`model.RequestKeys.Refuses`), so that an unknown key after one of them is
+  refused only once that key is gone.
+- The type reads its keys with a typed accessor (`tcpRequest(c).Send`) and
+  writes a changed value back into `Own`. `Own` is a value, so a copy of a
+  collector is a copy of its keys.
+- A key's schema is made from its field's Go type, like every other key's,
+  with what the type's `KeyRules` say about it by its path under the request
+  block: its description, and any pattern or bound.
 
-`model.Errorf` makes its text when the text is asked for, not when the error
-is made, so that a rule failing on every row costs no text for the rows that
-are only counted. Give it values that stay what they are — strings, numbers,
-errors — and never a byte slice, a builder or a buffer that is written to
-again: make the string first. It wraps what `fmt.Errorf` would, the errors
-its format names with `%w`. Where a failure names one of several things kept
-in a map, as the labels of a series are, name the first by name, so that the
-text is the same on every scrape.
+**Builds without the type.** A build without the type contains neither the
+struct nor the rules. It still knows the keys, from
+`internal/fetch/requestkeys_catalogue.go`, a catalogue of the own keys of
+every type in the tree, with the Go types of their fields and their
+schemas.
 
-An error whose text a library made cannot say so by how it is made, so it is
-given the text it is recognised by where it enters the exporter, with
-`model.SameFailureAs`: a CSV, an XML and a YAML syntax error in
-`internal/decode`, and whatever a failed fetch has of the one connection or
-attempt in `internal/fetch/samefailure.go`, at the one place every request
-type's error leaves the package. The value is taken from the error's type
-where the type has it (`(*net.OpError).Source`, a stream's number). Where a
-library keeps it only in its text — a YAML line, a gRPC status message — that
-text is read for the one form the library writes, in that place alone, and a
-text of another form is left whole: add a form there with a test that
-provokes the real failure, never a search for numbers. A gRPC status message
-is the target's as often as the client's, and a value the target sent must
-tell failures apart, so a form there is the library's words in full up to the
-value (`read tcp `, `grpc: received message larger than max (`), never the
-value's shape alone. And reading an error must not be what fails a probe:
-`sameFetchFailure` hands the error on as it came if anything in it panics.
+- A type of `internal/model` is recorded by its name. A type that belongs to
+  the request type, such as redis's `RedisCommand`, is recorded by its
+  structure, which a build without the request type rebuilds to read the key
+  into. Such a build therefore refuses what a build with the type refuses of
+  the value.
+- A build that left out `tcp` refuses `send` under another type as a key of
+  another type, in the same words as a build with every type, and its schema
+  describes `send` in the same way.
+- `make schemas` writes the catalogue from a build with every type, by
+  running `TestTheRequestKeyCatalogueIsCurrent` (`internal/config`) with
+  `-update-request-keys`. Otherwise that test holds the catalogue to the
+  structs.
+- What a rule derives from the build, such as the drivers that
+  `request.driver` names, comes from the generating build, which has the
+  default drivers: a build without `sql` describes `driver` with them.
 
-A decode error is bounded at the one place every decoder's error leaves by
-(`boundedFailure` in `internal/decode/failurebound.go`, called by
-`decode.Decode`): past 2,000 bytes the text, and what it is recognised by, are
-cut and end with the length, the mark in the recognised text. That is the
-last resort, which loses what the error says after the long part: no error
-of a decoder's own may reach it for one long value. The bound itself is
-`model.BoundedFailure` (`internal/model/failurebound.go`), and every other
-stage's error passes it where the trip reports the error, once
-(`boundedTripFailure` in `internal/exporter/pipeline.go`: the stages of
-`collect`, a file of a directory in `collectDirectory`, a static target's
-stages before its trip in `logCollectFailure`), and a rule's first failure
-where the transform hands it to the report (`ruleFailures.finish`). An error
-is read for what it is — `errors.Is`, `errors.As` — before it is bounded: a
-cut error is a new one. A new place that answers, logs or remembers an
-error's text takes the error from one of those, or bounds it itself; the
-failure log cuts what it remembers in any case. A site outside the decoders
-whose error says why after a part the target, the scraper or a script makes
-long shows that part by its start, as the decoders do, with
-`model.Shown(text, limit)` for free text or one of the helpers there are
-(`shortURLErrors` for a URL in a fetch's error, `shownScriptError` and
-`shownStderr` for what a script and its interpreter said, `shownName` in
-`MetricSet.Validate`), and is recognised with the mark in place of the
-length; the test `TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound`
-has a case for each stage, and a new stage gets one. A log line that names,
-in an attribute, a metric whose name the target or a script chose gives it
-as `model.ShownName(name)`, the rule of `shownName` without the error's
-quotes, and leaves the key its failure is remembered under as it is, the
-whole name where the name is part of it. An error that names a
-value of the body is made with `model.Errorf` and gives the value as
-`model.Quoted(value)`, or as `model.Bare(name)` where the message writes a
-name without quotes, never with `%q`, `%s` or `%v`: the argument formats as
-`model.QuoteValue` cuts a value, to 64 bytes and its length, copies no more
-than those bytes, so the error holds nothing of the body, and is recognised
-with the mark in place of the length. A text of several such values, as a
-series named by its labels, is joined of each value's `String()` and `Same()`
-and given as `model.ShownAs(text, same)`. Where a library made the text, the
-part is cut where the error enters, in the library's one form, as
-`yamlPartCut` and `yamlKeyCut` do (`internal/decode/yamlcut.go`) and
-`xmlNamesCut` does for the names an XML error holds
-(`internal/decode/xmlcut.go`); a text of no known form is left whole, for the
-bound. A cut text is made anew (`head + mark`), never a slice of the long
-one, and the new error does not wrap the long one: either would keep the
-whole text alive for as long as the failure log remembers the failure.
+A new type is therefore its own files and the build wiring (the guard file,
+the tag script, the Makefile's and CI's loops and the documentation's marked
+lists, each checked by a test), the catalogue that `make schemas` writes, and
+nothing in the core. `make new-request-type` writes the files and the wiring
+([Adding a request type](#adding-a-request-type)). Only `requesttype.go` in
+`internal/fetch` names every type in the tree, built or not, in
+`knownRequestTypes` and `optInRequestTypes`, so that a configuration that
+names a type the build left out is told so.
 
-The failure log counts, for each trip, the failures of rules it remembers
-(`ruleFailures` in `internal/exporter/failurelog.go`), so that a scrape with
-none remembered asks once and makes no rule's key, whose size is that of the
-rule's expression. A count at zero beside a remembered failure would leave a
-recovery unlogged: an entry is made in `putLocked` and dropped in
-`dropLocked` and nowhere else, which
-`TestTheRuleFailuresCountedAreTheEntriesThereAre` holds every operation to.
-The trip a failure is counted for is the key its scrape reported it with
-(`ruleFailedFor`), which the entry keeps, and that is the key the scrape asks
-with: it is not read back out of the rule's key. Nothing is read out of a
-key. Its parts are the operator's and the scraper's — a probe's target is
-any bytes its caller sends, a directory and its files have any names — and
-while a key was those parts with a NUL between them, one subject's key could
-be another's, or read as another's: the key of a directory's file named
-`rule` ended as the marker of a rule's key begins, and read at its first
-marker a rule of that file was counted for a key no scrape asks with, its
-recovery never logged
-(`TestARulesFailureIsCountedForTheTripItsScrapeAsksWith`); what was
-remembered of a probe of the target `static target one` was forgotten with
-the static target `one`; a file named `schedule` in a directory so named had
-the key of that target's skipped turns; and a target with NULs in it could
-be written to have the key of a rule of another target's probe.
+**Errors that name a position.** An error whose text names where in the
+response it happened (a row, a node, an item, a line), or a size or a
+duration that it measured, is made with `model.Errorf`, with the number
+given as a `model.Position`, a `model.Size` or a `model.Elapsed`:
+`model.Errorf("CSV column %q is empty in row %d", column, model.Position(row))`.
 
-So a key is made by one of a few constructors, in one form (`subjectKey` in
-`failurelog.go`): the kind of its subject, a letter — a probe
-(`probeFailureKey`), a static target's own (`staticTargetKey`), what a trip
-found at the address it went to (`failureKey`, `aspectKey`), a metric the
-static targets endpoint left out (`staticClashKey`); then each part of the
-subject after its length and a NUL, so that a part ends where its length
-says, whatever it holds; then what of the subject failed, when it is not the
-subject itself: one of a fixed few aspects (`failureAspect`), or the marker
-of a rule's key with the rule's name and expression, each after its length,
-and its `items` (`appendRuleFailureKey`). No two subjects have one key,
-whatever their parts hold: `TestNoTwoSubjectsHaveOneKey` reads every
-generated key back as the subject it was made of, which only a test does.
-What the log needs to know of a key it is told beside it, and keeps with the
-entry (`failureState`): the trip of a rule's failure, and whose the failure
-is — its collector, and the static target when the failure is a static
-target's own. That is what a reload goes by when it forgets
-(`forgetCollectorsLocked`, `forgetStaticTargetsLocked`) and what a trip is
-held to (`logStands`), so the two drop exactly what is the collector's and
-the static target's
-(`TestForgettingDropsExactlyWhatIsTheCollectorsOrTheStaticTargets`). A new
-thing to remember gets a constructor or an aspect of its own, with a line in
-those two tests' tables, never a string appended to a key where the failure
-is reported; and a trip's key is made once, in one allocation, the key of an
-aspect with its aspect (`aspectKey`).
-A scrape with a rule's failure remembered makes no key either, and no
-scrape makes one at all: the log does, when it first remembers a failure. A
-scrape reports a rule's failure by what tells the rule apart — its name,
-its expression and its `items` (`ruleFailedFor`) — and the log writes the
-bytes of the rule's key where the last one's were (`ruleLocked`), under its
-lock, finds the failure by them, and makes a string of them only to remember
-a failure it did not (`failedOf`): once for a rule that fails on every
-scrape, and never for a failure the full log does not remember, which is
-logged in full on every scrape for as long as the log stays full and would
-have had its key made on every one. The log returns the key the failure is
-remembered under, or none, which is what the scrape keeps of the rules that
-failed on it; a rule whose failure was not remembered it tells by the
-rule's parts (`failedAmong`), should another scrape of the trip have had the
-failure remembered meanwhile
-(`TestARuleRememberedByAnotherScrapeMeanwhileIsNotLoggedAsRecovered`). A
-debug probe, which the log is told nothing of, asks for the key an earlier
-scrape's failure is remembered under (`rememberedRule`), and makes none. And
-a scrape asks about each of its rules only when
-a failure is remembered of a rule other than those that failed on it
-(`remembersRules`), which a scrape of a target that lacks a value, on which
-the same rule fails every time, never is. The bytes of a key are made in one
-place (`appendRuleFailureKey`), so a failure is looked up by what it is
-remembered under. What the log costs a scrape is measured with
+- The text reads as `fmt.Errorf`'s would. The type marks which part of it
+  changes from scrape to scrape, so that the
+  [failure log](LOGGING.md#repeated-failures) treats the failure as the same
+  wherever it happens (`model.SameFailureText`,
+  `internal/model/samefailure.go`). Made with `fmt.Errorf`, such an error is
+  a new failure for the log on every scrape where it moves.
+- A number that the configuration gave, and a value read from the response,
+  are written as they are.
+- `model.Errorf` builds its text when the text is requested, not when the
+  error is made, so a rule that fails on every row costs no text for the rows
+  that are only counted. Give it values that do not change (strings,
+  numbers, errors), never a byte slice, a builder or a buffer that is written
+  to again: build the string first.
+- It wraps what `fmt.Errorf` would: the errors that its format names with
+  `%w`.
+- Where a failure names one of several things kept in a map, such as the
+  labels of a series, name the first by name, so that the text is the same
+  on every scrape.
+
+**Errors from libraries.** An error whose text a library built cannot carry
+this information, so it is given the text that identifies it where it
+enters the exporter, with `model.SameFailureAs`. This happens for a CSV, an
+XML and a YAML syntax error in `internal/decode`, and for whatever a failed
+fetch has of the one connection or attempt in
+`internal/fetch/samefailure.go`, the one place where every request type's
+error leaves the package.
+
+- The value is taken from the error's type where the type has it
+  (`(*net.OpError).Source`, a stream's number).
+- Where a library keeps the value only in its text (a YAML line, a gRPC
+  status message), that text is parsed for the one form that the library
+  writes, in that place only, and a text of another form is left whole. Add
+  a form there with a test that provokes the real failure, never a search
+  for numbers.
+- A gRPC status message comes from the target as often as from the client,
+  and a value that the target sent must distinguish failures. A form there
+  is therefore the library's words in full up to the value (`read tcp `,
+  `grpc: received message larger than max (`), never only the value's shape.
+- Reading an error must never be what fails a probe: `sameFetchFailure`
+  passes the error on unchanged if anything in it panics.
+
+**Bounding error text.** A decode error is bounded at the one place where
+every decoder's error leaves (`boundedFailure` in
+`internal/decode/failurebound.go`, called by `decode.Decode`). Beyond 2,000
+bytes, the text and its identifying text are cut and end with the length,
+with the mark in the identifying text. That is the last resort, which loses
+what the error says after the long part: no error of a decoder's own may
+reach it because of one long value.
+
+- The bound itself is `model.BoundedFailure`
+  (`internal/model/failurebound.go`). Every other stage's error passes it
+  once, where the trip reports the error (`boundedTripFailure` in
+  `internal/exporter/pipeline.go`: the stages of `collect`, a file of a
+  directory in `collectDirectory`, a static target's stages before its trip
+  in `logCollectFailure`), and a rule's first failure passes it where the
+  transform hands it to the report (`ruleFailures.finish`).
+- An error is examined (`errors.Is`, `errors.As`) before it is bounded: a cut
+  error is a new error.
+- A new place that answers, logs or remembers an error's text takes the
+  error from one of those places, or bounds it itself. The failure log cuts
+  what it remembers in any case.
+- Outside the decoders, a site whose error explains the cause after a part
+  that the target, the scraper or a script can make long shows that part by
+  its start, as the decoders do. Use `model.Shown(text, limit)` for free
+  text, or one of the existing helpers (`shortURLErrors` for a URL in a
+  fetch's error, `shownScriptError` and `shownStderr` for what a script and
+  its interpreter said, `shownName` in `MetricSet.Validate`). It is
+  identified with the mark in place of the length.
+  `TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound`
+  has a case for each stage, and a new stage gets one.
+- A log line that names, in an attribute, a metric whose name the target or
+  a script chose gives it as `model.ShownName(name)`, the rule of
+  `shownName` without the error's quotes. It leaves the key that its failure
+  is remembered under as it is, with the whole name where the name is part
+  of it.
+- An error that names a value of the body is made with `model.Errorf` and
+  gives the value as `model.Quoted(value)`, or as `model.Bare(name)` where
+  the message writes a name without quotes, never with `%q`, `%s` or `%v`.
+  The argument formats as `model.QuoteValue` cuts a value, to 64 bytes and
+  its length, and copies no more than those bytes, so the error holds
+  nothing of the body. It is identified with the mark in place of the
+  length.
+- A text of several such values, such as a series named by its labels, is
+  joined from each value's `String()` and `Same()` and given as
+  `model.ShownAs(text, same)`.
+- Where a library built the text, the part is cut where the error enters,
+  in the library's one form, as `yamlPartCut` and `yamlKeyCut` do
+  (`internal/decode/yamlcut.go`) and `xmlNamesCut` does for the names that
+  an XML error holds (`internal/decode/xmlcut.go`). A text of no known form
+  is left whole, for the bound.
+- A cut text is built anew (`head + mark`), never as a slice of the long one,
+  and the new error does not wrap the long one: either would keep the whole
+  text alive for as long as the failure log remembers the failure.
+
+**Counting rule failures.** The failure log counts, for each trip, the
+failures of rules that it remembers (`ruleFailures` in
+`internal/exporter/failurelog.go`). A scrape with none remembered therefore
+asks once and builds no rule key, whose size is that of the rule's
+expression.
+
+- A count at zero beside a remembered failure would leave a recovery
+  unlogged. An entry is therefore made in `putLocked` and dropped in
+  `dropLocked` and nowhere else, which
+  `TestTheRuleFailuresCountedAreTheEntriesThereAre` checks for every
+  operation.
+- The trip that a failure is counted for is the key that its scrape
+  reported it with (`ruleFailedFor`), which the entry keeps, and that is the
+  key the scrape asks with. It is not parsed back out of the rule's key.
+
+**Nothing is parsed out of a key.** A key's parts come from the operator and
+the scraper: a probe's target is any bytes its caller sends, and a directory
+and its files can have any names. When a key was those parts joined by NUL,
+one subject's key could equal, or be read as, another's:
+
+- the key of a directory's file named `rule` ended as the marker of a rule's
+  key begins, and read at its first marker, a rule of that file was counted
+  for a key that no scrape asks with, so its recovery was never logged
+  (`TestARulesFailureIsCountedForTheTripItsScrapeAsksWith`);
+- what was remembered of a probe of the target `static target one` was
+  forgotten with the static target `one`;
+- a file named `schedule` in a directory of that name had the key of that
+  target's skipped turns;
+- a target with NULs in it could be crafted to have the key of a rule of
+  another target's probe.
+
+A key is therefore built by one of a few constructors, in one form
+(`subjectKey` in `failurelog.go`):
+
+1. the kind of its subject, a letter: a probe (`probeFailureKey`), a static
+   target's own failure (`staticTargetKey`), what a trip found at the
+   address it went to (`failureKey`, `aspectKey`), or a metric that the
+   static targets endpoint left out (`staticClashKey`);
+2. each part of the subject, after its length and a NUL, so that a part ends
+   where its length says, whatever it holds;
+3. what of the subject failed, when that is not the subject itself: one of a
+   fixed few aspects (`failureAspect`), or the marker of a rule's key with
+   the rule's name and expression, each after its length, and its `items`
+   (`appendRuleFailureKey`).
+
+No two subjects have one key, whatever their parts hold:
+`TestNoTwoSubjectsHaveOneKey` reads every generated key back as the subject
+it was built from, which only a test does.
+
+- What the log needs to know about a key is passed beside it and kept with
+  the entry (`failureState`): the trip of a rule's failure, and whose
+  failure it is (its collector, and the static target when the failure is a
+  static target's own). A reload goes by that when it forgets
+  (`forgetCollectorsLocked`, `forgetStaticTargetsLocked`), and a trip is
+  held to it (`logStands`), so the two drop exactly what belongs to the
+  collector and the static target
+  (`TestForgettingDropsExactlyWhatIsTheCollectorsOrTheStaticTargets`).
+- A new thing to remember gets its own constructor or aspect, with a line in
+  the tables of those two tests, never a string appended to a key where the
+  failure is reported.
+- A trip's key is built once, in one allocation, and the key of an aspect
+  with its aspect (`aspectKey`).
+
+**No key per scrape.** A scrape with a rule's failure remembered builds no
+key either, and no scrape builds one at all: the log does, when it first
+remembers a failure.
+
+- A scrape reports a rule's failure by what distinguishes the rule: its
+  name, its expression and its `items` (`ruleFailedFor`). The log writes the
+  bytes of the rule's key over the previous one's (`ruleLocked`), under its
+  lock, finds the failure by them, and builds a string of them only to
+  remember a failure it did not know (`failedOf`). That happens once for a
+  rule that fails on every scrape, and never for a failure that the full
+  log does not remember; such a failure is logged in full on every scrape
+  for as long as the log stays full, and would otherwise have had its key
+  built on every scrape.
+- The log returns the key that the failure is remembered under, or none,
+  which is what the scrape keeps of the rules that failed on it. A rule
+  whose failure was not remembered is identified by the rule's parts
+  (`failedAmong`), in case another scrape of the trip had the failure
+  remembered meanwhile
+  (`TestARuleRememberedByAnotherScrapeMeanwhileIsNotLoggedAsRecovered`).
+- A debug probe, which the log is told nothing about, asks for the key that
+  an earlier scrape's failure is remembered under (`rememberedRule`), and
+  builds none.
+- A scrape asks about each of its rules only when a failure is remembered of
+  a rule other than those that failed on it (`remembersRules`). A scrape of
+  a target that lacks a value, on which the same rule fails every time,
+  never does.
+- The bytes of a key are built in one place (`appendRuleFailureKey`), so a
+  failure is looked up by what it is remembered under.
+
+**Measuring it.** What the log costs a scrape is measured with
 `go test -run '^$' -bench 'LogRuleFailures' ./internal/exporter/`, where
-`/every_key` is the scrape as it was while it made every rule's key and
-`/full_log` the scrape whose rules fail while the log is full of other
-targets' failures; `TestAScrapeWithARuleRememberedAllocatesNothingOfItsExpressionsSize`
-holds a scrape with a failure remembered, and
+`/every_key` is the scrape as it was while it built every rule's key, and
+`/full_log` is the scrape whose rules fail while the log is full of other
+targets' failures.
+`TestAScrapeWithARuleRememberedAllocatesNothingOfItsExpressionsSize` holds a
+scrape with a failure remembered, and
 `TestAScrapeWhoseRulesAFullLogDoesNotRememberAllocatesNothingOfItsExpressionsSize`
-one whose failures the full log does not remember and a debug probe's, to
+one whose failures the full log does not remember, and a debug probe's, to
 allocating the same for expressions of 200 bytes and of 20 KB. A rule's
-failure reported with its key made beforehand is kept beside the tests
+failure reported with its key built beforehand is kept for the tests
 (`failedUnderKey`), and
 `TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey` holds the
-two to the same lines and the same entries, a full log among them.
+two to the same lines and the same entries, including with a full log.
 
 ### Adding a request type
 
@@ -414,101 +506,138 @@ make new-request-type NAME=mqtt OPT_IN=1 GO_NAME=MQTT        # its Go name given
 make new-request-type NAME=uuid GO_NAME=UUID ARTICLE=a        # its article given
 ```
 
-runs `tools/new-request-type.sh`, POSIX `sh`, `sed` and `awk` as macOS has
-them, which refuses a name that is not lowercase letters and digits starting
-with a letter, or that is a type of the tree already, before it writes
-anything. `GO_NAME` is how the type's Go identifiers spell the name,
-`RequestType<GoName>`, `<GoName>Config` and its tests' names: the name with
-the letters of an initialism in capitals, as Go writes them, `SSHExec` for
-`sshexec`; left out, the name with its first letter in capitals,
-`Memcache`. One that is not the name's letters, in their order, or does
-not start with a capital, is refused. The generated comments, docs and test
-names write the article the name is read with — "an `ntp` collector",
-`TestAnNTPCollector…`, "a `dns` collector" — which the script works out
-from the name and its Go name: an initialism, a Go name with two capitals
-or more at its start (`NTP`, `S3File`) or a name without a vowel (`smtp`),
-is read letter by letter, so "an" goes before a letter whose name starts
-with a vowel sound, a, e, f, h, i, l, m, n, o, r, s and x; a word (`imap`,
-`redis`) is read as one, so "an" goes before a, e, i, o and u. `ARTICLE=a`
-or `ARTICLE=an` says it where that reading is wrong, as for `uuid` written
-without its Go name, and
-`sh tools/new-request-type.sh --article <name> [<GoName>]` prints the choice
-without writing anything. For a new name it writes
+runs `tools/new-request-type.sh`, written in POSIX `sh`, `sed` and `awk` as
+macOS has them. Before it writes anything, it refuses a name that is not
+lowercase letters and digits starting with a letter, or that is already a
+type in the tree.
+
+- **`GO_NAME`** is how the type's Go identifiers spell the name:
+  `RequestType<GoName>`, `<GoName>Config` and its tests' names. It is the
+  name with the letters of an initialism in capitals, as Go writes them,
+  such as `SSHExec` for `sshexec`. When left out, it is the name with its
+  first letter in capitals, `Memcache`. A Go name that is not the name's
+  letters, in their order, or that does not start with a capital, is
+  refused.
+- **The article.** The generated comments, docs and test names use the
+  article that the name is read with ("an `ntp` collector",
+  `TestAnNTPCollector…`, "a `dns` collector"). The script works it out from
+  the name and its Go name. An initialism, a Go name with two or more
+  capitals at its start (`NTP`, `S3File`), or a name without a vowel
+  (`smtp`) is read letter by letter, so "an" goes before a letter whose name
+  starts with a vowel sound: a, e, f, h, i, l, m, n, o, r, s and x. A word
+  (`imap`, `redis`) is read as one word, so "an" goes before a, e, i, o and
+  u. `ARTICLE=a` or `ARTICLE=an` sets it where that reading is wrong, as for
+  `uuid` written without its Go name.
+  `sh tools/new-request-type.sh --article <name> [<GoName>]` prints the
+  choice without writing anything.
+
+For a new name it writes:
 
 - `internal/fetch/requesttype_<name>.go`, under the type's build constraint
-  (an opt-in type's tag alone), with the registration: a
-  `<name>Requester` whose `Validate` and `CheckTarget` take anything and
-  whose `Fetch` answers `the <name> request type is not implemented yet`,
-  an empty `<Name>Config` given as `Config` with its `KeyRules`, an empty
-  `Fields`, the `timeout` and `param_<name>` every type takes as
-  `Overrides` and `timeout` as `TargetFields`, an `UnusedParams` naming
-  the label values alone, and every other hook and setting left at its zero
-  value, a comment saying what each is;
-- the tests, under the same constraint: `internal/fetch/requesttype_<name>_test.go`,
-  whose test holds a collector of the type to validating and its scrape to
-  failing as not implemented, and, of an opt-in type, checks its
-  `optInRequestKeys`; `internal/exporter/requesttype_<name>_test.go`, a
-  probe of a collector with a python transform failing so; and the type's
-  table of schema rows, empty, with its check
-  (`test/repository/schemakeys_<name>_test.go`, and an opt-in type's rows in
-  `schemakeys_<name>rows_test.go`, which the default build compiles), added
-  to the tables `TestEveryConstrainedKeyOfTheSchemasIsInATable` reads. They
-  use the helpers every type's tests share, which a lint of the type built
-  alone would otherwise report unused;
+  (only the tag of an opt-in type), with the registration: a
+  `<name>Requester` whose `Validate` and `CheckTarget` accept anything and
+  whose `Fetch` answers `the <name> request type is not implemented yet`; an
+  empty `<Name>Config` given as `Config`, with its `KeyRules`; empty
+  `Fields`; the `timeout` and `param_<name>` that every type takes as
+  `Overrides`, and `timeout` as `TargetFields`; an `UnusedParams` that names
+  only the label values; and every other hook and setting at its zero value,
+  each with a comment saying what it is.
+- The tests, under the same constraint:
+  - `internal/fetch/requesttype_<name>_test.go`, whose test checks that a
+    collector of the type validates and that its scrape fails as not
+    implemented, and, for an opt-in type, checks its `optInRequestKeys`;
+  - `internal/exporter/requesttype_<name>_test.go`, a probe of a collector
+    with a python transform that fails in the same way;
+  - the type's table of schema rows, empty, with its check
+    (`test/repository/schemakeys_<name>_test.go`, and for an opt-in type its
+    rows in `schemakeys_<name>rows_test.go`, which the default build
+    compiles), added to the tables that
+    `TestEveryConstrainedKeyOfTheSchemasIsInATable` reads.
+
+  They use the helpers that every type's tests share, which a lint of the
+  type built alone would otherwise report as unused.
 - `docs/<NAME>.md`, with the sections of the other types' pages: Building
   with `<name>` for an opt-in type, A collector with its keys' table, The
   target, Static targets, Limits, Errors and self-metrics, Limitations and
-  Troubleshooting;
-- `docs/SPECIFICATION-<NAME>.md`, the type's section of spec § 5.1 in a
-  document of its own, opened as the other types' are, with a
-  `TODO(<name>)` for its rules;
+  Troubleshooting.
+- `docs/SPECIFICATION-<NAME>.md`, the type's section of spec § 5.1 in its
+  own document, opened like the other types', with a `TODO(<name>)` for its
+  rules.
 
-and adds the type to every list that names each type: its
-`RequestType<Name>` constant, `knownRequestTypes` and, opt-in,
-`optInRequestTypes` in `internal/fetch/requesttype.go`; the guard of
-`requesttype_none.go`; the Makefile's loops over the types and its builds of
-every opt-in type, and ci.yml's `request-types` matrix, its build and test of
-every opt-in type and their lint's tags; for an opt-in type, the
-constraints that name every opt-in type (`optinkeys_test.go`,
-`optinkeys_check_test.go`, `schema_fullbuild_test.go`); the lists the
-documentation marks `<!-- request-types -->`, a row in a table of the types
-and a sentence in the others, and the build information's list of a default
-build; the README's index and its line of the types' specifications, the
-related pages of `docs/CONFIGURATION.md`, spec § 35's list of pages and
-§ 5.1's list of the types' specifications; for a type of the default build, every copy in
-the documentation of the sorted list of a default build's types the
-exporter writes in its messages (`it was built with: dns, graphite, …` in
-the opt-in types' pages, `write one of dns, graphite, …`); and the tables of the repository's and the fetch
-tests that hold a value of each type, the words the READMEs name it with
-(`readmeSourceNames`, `chartSourceNames`), its refusal of an unused probe
-parameter (`unusedRefusals`) and the pages whose Static targets section a
-test holds to the keys a target may set, its page among them, whose
-section names `timeout`.
+It also adds the type to every list that names each type:
 
-Where it adds the type follows how each list is ordered. A list the
-exporter or a script writes is sorted, and so are the Makefile's loops,
-ci.yml's matrix and the lists of the types' specifications. The documentation's lists of the types name those of the
-default build first and the opt-in ones after them, each group in the order
-the types came: a table of the types (`docs/STATIC-TARGETS.md`), the
-related pages of `docs/CONFIGURATION.md` and spec § 35's list get a type of
-the default build after the last of that group, before the opt-in ones,
-and an opt-in type last. The README's index groups the pages by what they
-read, so the type's line goes after the last type's, its title and words a
-`TODO(<name>)` that says to move it beside the types it is like; the
-sentences in a marked list get the type last, with a `TODO(<name>)` to
-write it in its place. `knownRequestTypes` and the opt-in lists of the
-Makefile and ci.yml are in the order the types came, the new one last.
-Then it runs `make schemas`, since the
-committed schemas list the types of a default build. The lists the tests
-read from the tree, the types of `internal/fetch/requesttype_*.go`, need
-no edit: `tools/request-type-tags.sh` finds a type by its file and its
-constraint, and so do the tests of the opt-in builds and of the modules
-each type links.
+- its `RequestType<Name>` constant, `knownRequestTypes` and, for an opt-in
+  type, `optInRequestTypes` in `internal/fetch/requesttype.go`;
+- the guard of `requesttype_none.go`;
+- the Makefile's loops over the types and its builds of every opt-in type,
+  and ci.yml's `request-types` matrix, its build and test of every opt-in
+  type, and their lint's tags;
+- for an opt-in type, the constraints that name every opt-in type
+  (`optinkeys_test.go`, `optinkeys_check_test.go`,
+  `schema_fullbuild_test.go`);
+- the lists that the documentation marks `<!-- request-types -->` (a row in
+  a table of the types, and a sentence in the others), and the build
+  information's list of a default build;
+- the README's index and its line of the types' specifications, the related
+  pages of `docs/CONFIGURATION.md`, spec § 35's list of pages and § 5.1's
+  list of the types' specifications;
+- for a type of the default build, every copy in the documentation of the
+  sorted list of a default build's types that the exporter writes in its
+  messages (`it was built with: dns, graphite, …` in the opt-in types'
+  pages, `write one of dns, graphite, …`);
+- the tables of the repository and fetch tests that hold a value for each
+  type: the words that the READMEs name it with (`readmeSourceNames`,
+  `chartSourceNames`), its refusal of an unused probe parameter
+  (`unusedRefusals`), and the pages whose Static targets section a test holds
+  to the keys that a target may set, including its own page, whose section
+  names `timeout`.
 
-The tree then builds, vets, lints and passes its tests, in the default
-build, with every opt-in type and with the new type alone, but those of
-the README's and the chart's words for the type, which fail until they are
-written (4 below).
+**Order.** Where it adds the type follows how each list is ordered.
+
+- A list that the exporter or a script writes is sorted, and so are the
+  Makefile's loops, ci.yml's matrix and the lists of the types'
+  specifications.
+- The documentation's lists of the types name those of the default build
+  first and the opt-in ones after them, each group in the order the types
+  were added. A table of the types (`docs/STATIC-TARGETS.md`), the related
+  pages of `docs/CONFIGURATION.md` and spec § 35's list get a type of the
+  default build after the last of that group, before the opt-in ones, and an
+  opt-in type last.
+- The README's index groups the pages by what they read, so the type's line
+  goes after the last type's, its title and words a `TODO(<name>)` that says
+  to move it beside the types it is like.
+- The sentences in a marked list get the type last, with a `TODO(<name>)` to
+  write it in its place.
+- `knownRequestTypes` and the opt-in lists of the Makefile and ci.yml are in
+  the order the types were added, with the new one last.
+
+Then it runs `make schemas`, because the committed schemas list the types of
+a default build. The lists that the tests read from the tree, the types of
+`internal/fetch/requesttype_*.go`, need no edit: `tools/request-type-tags.sh`
+finds a type by its file and its constraint, and so do the tests of the
+opt-in builds and of the modules that each type links.
+
+**Checks.** The tree then builds, vets, lints and passes its tests, in the
+default build, with every opt-in type and with the new type alone, except
+the tests of the README's and the chart's words for the type, which fail
+until those are written (step 4 below).
+
+- `TestANewRequestTypeIsWiredByTheScaffold` (`test/repository`) runs the
+  script on a copy of the tree, for an opt-in type and a type of every
+  build. It checks that the copy builds and vets in those builds, the
+  generated tests, and the tests that compare the lists of the types. It
+  also checks the article and the type's places in the lists, scaffolding a
+  type of the default build read with "an" and an opt-in one read with "a".
+- It needs a few minutes with a cold build cache, so it runs only in the
+  default build, and not under `-short` or the race detector. CI runs it in
+  its own job, `scaffold`, and `make test-scaffold` runs it alone.
+- Every place left to a person says `TODO(<name>)`, and the type's file
+  fails its scrapes with `the <name> request type is not implemented yet`.
+  `TestNoScaffoldPlaceholderIsLeftInTheTree` (`test/repository`) fails while
+  either is left for a type of the tree, so a half-written type cannot be
+  committed.
+
+The script ends by printing what is left to do:
 `TestANewRequestTypeIsWiredByTheScaffold` (`test/repository`) runs the
 script on a copy of the tree, for an opt-in type and a type of every build,
 and holds the copy to building and vetting in those builds, to the
@@ -545,90 +674,93 @@ written. The script ends by printing what is left:
 
 #### Prose that names the types
 
-These sentences and comments name the request types as prose, each saying
-what the types it lists share, so a new type joins those of them that are
-true of it by hand. Most have no test that fails when the type is left out
-(the README's and the chart's words do: `readmeSourceNames`,
+These sentences and comments name the request types in prose, each saying
+what the types it lists have in common, so a new type is added by hand to
+those that are true of it. Most have no test that fails when the type is
+left out (the README's and the chart's words do: `readmeSourceNames`,
 `chartSourceNames`).
 
-- `README.md`: the tagline, "Turn a source that was never meant for
-  Prometheus — …", and the sources paragraph, "The exporter can collect
-  metrics from almost any source: …", in the words of `readmeSourceNames`.
+- `README.md`: the tagline, "Turn almost any source into a Prometheus
+  target …", and the sources paragraph after it, in the words of
+  `readmeSourceNames`.
 - `charts/prometheus-universal-exporter/README.md`: the opening paragraph,
   in the words of `chartSourceNames`, and the features list's line of the
   collectors other than `http`'s (a type of the default build before "and",
   an opt-in one after it); `Chart.yaml`'s `description`, for a type of the
   default build.
-- `docs/CONFIGURATION.md`: the sentence after the `request.type` table of
-  what each type does ("`dns` resolves a name — see [DNS](DNS.md) — …");
-  under Choosing request types at build time, the libraries each type
-  links, or that it needs nothing outside the standard library.
-- `docs/REQUESTS.md`: the types `allowed_targets` and `denied_targets`
+- `docs/CONFIGURATION.md`: the list after the `request.type` table of what
+  each type does ("`dns` resolves a name; see [DNS](DNS.md).", …); under
+  Choosing request types at build time, the libraries that each type links,
+  or that it needs nothing outside the standard library.
+- `docs/REQUESTS.md`: the types that `allowed_targets` and `denied_targets`
   bound, and those that refuse the cloud metadata service.
-- `docs/SELF-METRICS.md`: the types `http_exporter_targets_refused_total`
-  counts, when the type takes the target lists.
-- `docs/STATIC-TARGETS.md`: the types whose target's port is checked at
-  load ("as a `grpc`, `sshfile`, `sql`, … target's is"),
-  and the row of the credentials table the type belongs in.
-- `docs/DEVELOPMENT.md`: the code layout's row of `internal/fetch`, and the
+- `docs/SELF-METRICS.md`: the types that
+  `http_exporter_targets_refused_total` counts, when the type takes the
+  target lists.
+- `docs/STATIC-TARGETS.md`: the types whose target's port is checked at load
+  ("this applies to a `grpc`, `sshfile`, … target too"), and the row of the
+  credentials table that the type belongs in.
+- `docs/DEVELOPMENT.md`: the code layout's row for `internal/fetch`, and the
   types with a table of schema rows under the schema tests.
-- `internal/fetch/requesttype.go`: the comment on the request types, of what
-  each does.
-- `docs/SPECIFICATION-EXPORTER.md`: § 1's bullet "Reach its sources
-  itself", § 5.1's sentence of the types that are implemented and its rule
-  of the types that import nothing outside the standard library, and
-  § 26.1's opening, of the types that take the target lists.
-- `test/repository/requesttypedeps_test.go` and `sqldriverdeps_test.go`:
-  the builds whose linked modules are checked, for a type that needs
-  nothing outside the standard library.
-- For an opt-in type, the Makefile's comment on `OPT_IN_REQUEST_TYPES`,
-  which names the opt-in types and their pages; `docs/CONFIGURATION.md`'s
-  paragraph of the opt-in types under Choosing request types at build
-  time, with how many there are and what they add to a binary together;
-  § 5.1's sentence of the opt-in types in `docs/SPECIFICATION-EXPORTER.md`;
-  and, for a type that reaches a server over TCP, the comments opening
-  `internal/fetch/nettypes.go` and `nettls.go`.
+- `internal/fetch/requesttype.go`: the comment on the request types, about
+  what each does.
+- `docs/SPECIFICATION-EXPORTER.md`: § 1's bullet "Reach its sources itself",
+  § 5.1's sentence of the types that are implemented and its rule of the
+  types that import nothing outside the standard library, and § 26.1's
+  opening, of the types that take the target lists.
+- `test/repository/requesttypedeps_test.go` and `sqldriverdeps_test.go`: the
+  builds whose linked modules are checked, for a type that needs nothing
+  outside the standard library.
+- For an opt-in type: the Makefile's comment on `OPT_IN_REQUEST_TYPES`,
+  which names the opt-in types and their pages; the paragraph of
+  `docs/CONFIGURATION.md` on the opt-in types under Choosing request types
+  at build time, with how many there are and what they add to a binary
+  together; § 5.1's sentence of the opt-in types in
+  `docs/SPECIFICATION-EXPORTER.md`; and, for a type that reaches a server
+  over TCP, the comments opening `internal/fetch/nettypes.go` and
+  `nettls.go`.
 
 ### Adding a secret store
 
-A [secret store](AUTHENTICATION.md#secret-stores) is of a type, a value of
-`secret_stores[].type`, and each type is one file,
+A [secret store](AUTHENTICATION.md#secret-stores) has a type, a value of
+`secret_stores[].type`. Each type is one file,
 `internal/fetch/secretstore_<name>.go`, that registers a
 `fetch.SecretStoreType` from its `init`. Everything else is the same for
 every type and lives in `secretstore.go`: the references, the cache, the use
 of a secret past `cache_ttl`, the counts and self-metrics, the checks of a
 configuration, and the schema. To add a type:
 
-1. **The store.** Write a `SecretBackend`: `Read(ctx, ref)` asks the store
-   for the secret at `ref.Path`, of `ref.Version` when it is set, within
-   `ctx`, and answers a `SecretDocument`: `Text` for a secret that is one
-   value, `Fields` for one that is several. It answers the secret whole,
-   whatever field the reference names, and is asked by several scrapes at
-   once. `secretClient` makes its HTTP client, `secretHTTP` a request held
-   to the answer's bound, and `secretStoreSaid` what a refusal says, masked.
-2. **The registration.** `Name`; `Keys`, the keys of an entry the type
-   takes beside the five every type takes; `Check`, its rules at load;
-   `New`, its constructor; `FieldRequired` when its secrets are always
-   fields; and `KeyRules`, each key's description for the schema, starting
-   with the type's name.
-3. **The keys.** A key no type takes yet is a new field of
-   `model.SecretStore`; a key another type has is shared, each type
-   describing it.
-4. **A type some builds are without** registers in every build, as `aws`
-   does, with a `Check` that says how to build with it, so its name and
-   keys are in every build's schema.
-5. **Tests**, against a stand-in of the store, as `secretstore_test.go` has
+1. **The store.** Write a `SecretBackend`. `Read(ctx, ref)` asks the store
+   for the secret at `ref.Path`, at `ref.Version` when it is set, within
+   `ctx`, and returns a `SecretDocument`: `Text` for a secret that is one
+   value, `Fields` for one that has several. It returns the whole secret,
+   whatever field the reference names, and is called by several scrapes at
+   once. `secretClient` builds its HTTP client, `secretHTTP` a request held
+   to the answer's bound, and `secretStoreSaid` the masked text of a
+   refusal.
+2. **The registration.** `Name`; `Keys`, the keys of an entry that the type
+   takes in addition to the five that every type takes; `Check`, its rules
+   at load; `New`, its constructor; `FieldRequired` when its secrets always
+   have fields; and `KeyRules`, each key's description for the schema,
+   starting with the type's name.
+3. **The keys.** A key that no type takes yet is a new field of
+   `model.SecretStore`. A key that another type has is shared, and each type
+   describes it.
+4. **A type that some builds lack** registers in every build, as `aws` does,
+   with a `Check` that says how to build with it, so that its name and keys
+   are in every build's schema.
+5. **Tests** against a stand-in of the store, as `secretstore_test.go` has
    for the others; `make schemas`; and a row in
-   `test/repository/schemakeys_http_test.go` for a key the schema holds to
-   values or a pattern.
+   `test/repository/schemakeys_http_test.go` for a key that the schema holds
+   to values or a pattern.
 6. **Documentation.** Its section of
    [AUTHENTICATION.md](AUTHENTICATION.md#secret-stores), with an example
-   that loads, its rule in § 42.6c of the specification, and a line of the
-   changelog.
+   that loads, its rule in § 42.6c of the specification, and a changelog
+   line.
 
-A test fails for a type without a constructor, with a key
-`model.SecretStore` has no field for, or with a key it does not describe,
-and for a page that leaves a type out.
+A test fails for a type without a constructor, with a key that
+`model.SecretStore` has no field for, or with a key that it does not
+describe, and for a page that leaves out a type.
 
 ## Running the tests
 
@@ -640,358 +772,413 @@ go test -short ./internal/fetch/                  # one package
 go test -short -run 'Login' ./internal/fetch/     # the tests you are working on
 ```
 
-It runs each test once, without the race detector, and leaves out two
-kinds: the scaffold's test, which builds a copy of the tree, and every test
-that calls `tier.Slow(t)` (`internal/testutil/tier`) as its first line,
-which `-short` skips. A test is marked slow when it takes a second or more
-on its own: the tests that compare a parser with an oracle over
-many generated inputs, render the chart with helm, or run a schedule on the
-real clock. About two hundred of some 4,400 are, and the quick tier
-takes a few minutes where `make test`, which runs the suite three times,
-twice under the race detector, takes far longer.
+It runs each test once, without the race detector, and leaves out two kinds
+of test: the scaffold's test, which builds a copy of the tree, and every
+test that calls `tier.Slow(t)` (`internal/testutil/tier`) as its first line,
+which `-short` skips.
 
-The quick tier is no gate. Before you push, run `make test`, or `make ci` for
-everything CI runs; CI runs every test, slow ones included, on every change,
-and neither `make test` nor any workflow passes `-short` (a test holds them
-to that). A new test that takes a second or more starts with
-`tier.Slow(t)`; one that is fast leaves it out, so that the quick tier still
+- A test is marked slow when it takes a second or more on its own: the tests
+  that compare a parser with an oracle over many generated inputs, render
+  the chart with helm, or run a schedule on the real clock.
+- About two hundred of some 4,400 tests are slow. The quick tier takes a few
+  minutes, where `make test`, which runs the suite three times, twice under
+  the race detector, takes far longer.
+
+The quick tier is not a gate. Before you push, run `make test`, or `make ci`
+for everything that CI runs. CI runs every test, including the slow ones, on
+every change, and neither `make test` nor any workflow passes `-short` (a
+test checks this). A new test that takes a second or more starts with
+`tier.Slow(t)`; a fast one leaves it out, so that the quick tier still
 covers what it covers.
 
 ## Repeatable tests
 
-Every test must pass however many times it runs and in whatever order, which
-`make test` checks with
-`go test -race -count=2 -shuffle=on -timeout 20m ./...`, and CI with the same
-command over each side's packages (see the CI section below), twice on a
-push to `main` or of a tag and once on a pull request, where the two race
-jobs were the longest of a run. A failure there names
-the seed it used; run it again with `-shuffle=<seed>`. The limit is a
-package's, and the command names it because `go test`'s own ten minutes are
-meant for one run without the race detector; a test keeps the Makefile and
-`ci.yml` running the same command.
+Every test must pass however many times it runs and in whatever order.
+`make test` checks this with
+`go test -race -count=2 -shuffle=on -timeout 20m ./...`, and CI with the
+same command over each side's packages (see the CI section below): twice on
+a push to `main` or of a tag, and once on a pull request, where the two race
+jobs were the longest of a run.
 
-A test that needs a TCP address nothing answers takes
-`testutil.RefusingAddress`: a socket bound to the address that never
-listens, so every connection is refused at once and no other socket can be
-handed the port while the test runs. The address of a listener that was
-closed is no substitute: the next server that asks for any free port may be
-given it, and a test that waited for a refused connection then reached that
-server instead, as a redirect to it once went round ten times in CI.
+- A failure there names the seed that it used; run it again with
+  `-shuffle=<seed>`.
+- The time limit is per package. The command names it because `go test`'s
+  own ten minutes are meant for one run without the race detector. A test
+  keeps the Makefile and `ci.yml` running the same command.
 
-State shared across tests is what breaks this. The Python worker pool is one
-such thing: its counts — starts, runs, stops, idle workers — would carry over
-from test to test. A test that runs Python calls `requirePython(t)`, which also
-gives it a pool of its own and stops that pool's workers when it ends; a test
-that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
-therefore must not use `t.Parallel`, which the swap assumes. The one
-exception is in `test/repository`, which swaps no pool: its tests that
-render the chart, each of which waits for `helm` most of its time, are made
-parallel by `requireHelm(t)`, and run beside each other once the package's
-other tests are done.
+**Refused connections.** A test that needs a TCP address where nothing
+answers uses `testutil.RefusingAddress`: a socket bound to the address that
+never listens, so every connection is refused immediately and no other
+socket can get the port while the test runs. The address of a closed
+listener is no substitute. The next server that asks for any free port may
+get it, and a test that waited for a refused connection then reached that
+server instead; a redirect to it once went round ten times in CI.
 
-What the pool counts for a collector is the collector's only while the
-collector stays ([self-metrics](SELF-METRICS.md#python-workers)): a run
-counts in the statistics its trip took for the collector it read
-(`transform.PythonStats`, handed on with the script timer), a worker in those
-of the run that started it, and a reload that removes the collector retires
-them (`PythonPool.Retire`, called where the exporter drops the collector's
-own statistics). A worker is of its statistics for as long as it lives,
-though the pool keeps workers by the collector's name and script, which a
-collector added again has too: `acquire` gives a run only an idle worker of
-the statistics the run counts in, and `Retire` and `release` stop the
-workers whose statistics are retired, so none is idle for a collector added
-again to be given. So nothing in the pool counts by a collector's name: a new
-place that counts takes the run's or the worker's statistics and counts
-through `countedLocked`, which sends what is retired to the pool's own
-count. A test of what is counted, and under which name, needs no
-interpreter: `scriptWorkers` and `fakeWorker`
-(`internal/transform/pythonstats_test.go`) stand in for workers whose start
-and whose script the test holds and releases, and `noInterpreter`
-(`internal/exporter/pythonstats_http_test.go`) is a `python3` that passes the
-load-time check and fails every worker's start, which is counted like any
-other.
+**Shared state** is what breaks repeatability. The Python worker pool is one
+example: its counts (starts, runs, stops, idle workers) would carry over
+from test to test.
 
-What the process allocates is shared the same way. `testing.AllocsPerRun` and
-`runtime.MemStats` count the allocations of every goroutine, not those of the
-function a test measures: a test server still closing its connections, a
-timer, a worker of the Python pool and the collector itself — which starts its
-workers at the first collection of the process and empties `sync.Pool` at
-every one — allocate meanwhile, the more so under the race detector, in a
-shuffled run and on a busy machine. A bound of 4 allocations for a function
-that makes 1 has met 12 in CI, and a test that ran first in its process counted
-the collector's workers as its own. The others can only add to a count, never
-take from it, so a test that bounds or compares allocations or allocated bytes
-measures them only through `internal/testutil/alloctest`, which measures
-several times and takes the least, with a collection before each measurement:
+- A test that runs Python calls `requirePython(t)`, which also gives it its
+  own pool and stops that pool's workers when the test ends. A test that
+  uses the pool without an interpreter calls `usePythonPool(t)`.
+- Tests therefore must not use `t.Parallel`, which the swap assumes. The one
+  exception is `test/repository`, which swaps no pool: its tests that render
+  the chart, each of which spends most of its time waiting for `helm`, are
+  made parallel by `requireHelm(t)`, and run beside each other once the
+  package's other tests are done.
 
-- `AllocsAtMost` and `BytesAtMost`, for a test with a bound, stop at the first
-  measurement within it, so a quiet machine pays for one;
-- `Allocations`, for a count that has none — one another is compared with
-  exactly — is the least of five;
-- `Once` is a single measurement, for a cost a test only takes a fraction of to
-  bound another by, which takes too long to measure five times.
+What the pool counts for a collector belongs to the collector only while
+the collector exists
+([self-metrics](SELF-METRICS.md#python-workers)):
 
-A test (`TestAllocationsAreMeasuredOnlyThroughAlloctest`) fails for a test file
-outside `internal/testutil` that calls `testing.AllocsPerRun` or reads the
-allocation counters of `runtime.MemStats` or of a benchmark's result itself.
+- A run counts in the statistics that its trip took for the collector it
+  read (`transform.PythonStats`, passed on with the script timer), and a
+  worker in those of the run that started it.
+- A reload that removes the collector retires them (`PythonPool.Retire`,
+  called where the exporter drops the collector's own statistics).
+- A worker belongs to its statistics for as long as it lives, although the
+  pool keeps workers by the collector's name and script, which a re-added
+  collector has too. `acquire` gives a run only an idle worker of the
+  statistics that the run counts in, and `Retire` and `release` stop the
+  workers whose statistics are retired, so none is idle for a re-added
+  collector to be given.
+- Nothing in the pool therefore counts by a collector's name. A new place
+  that counts takes the run's or the worker's statistics and counts through
+  `countedLocked`, which sends what is retired to the pool's own count.
+- A test of what is counted, and under which name, needs no interpreter.
+  `scriptWorkers` and `fakeWorker` (`internal/transform/pythonstats_test.go`)
+  stand in for workers whose start and script the test holds and releases.
+  `noInterpreter` (`internal/exporter/pythonstats_http_test.go`) is a
+  `python3` that passes the load-time check and fails every worker's start,
+  which is counted like any other.
 
-How much stack a call takes is counted for the process as well, and depends
-on the collector besides: a goroutine whose stack is outgrown is given a
-larger one, and the one it had goes back at once only while no collection is
-running. During one it is kept until the collection ends, so a call that
-ended before the collection did was measured with every stack it had outgrown
-beside the one it had: 24 MB and 32 MB for a stack of 16, on a machine busy
-enough for a collection to last from the stack's last doubling to the end of
-the call, and that was a failure of `internal/decode` nobody could repeat on
-a quiet one. A test that bounds a stack therefore measures it with no
-collection running, as `yamlStackOf` does (`yamlkeysdepth_test.go`): it turns
-the collector off, finishes the collection in progress, runs the call on a
-goroutine of its own, and puts the collector back. The measurement is then
-the goroutine's stack to the byte, 16 MB or 4 MB or nothing, whatever else
-the machine does.
+**Allocations** are shared in the same way. `testing.AllocsPerRun` and
+`runtime.MemStats` count the allocations of every goroutine, not only those
+of the function that a test measures. A test server still closing its
+connections, a timer, a worker of the Python pool and the garbage collector
+itself (which starts its workers at the first collection of the process and
+empties `sync.Pool` at every collection) allocate meanwhile, more so under
+the race detector, in a shuffled run and on a busy machine. A bound of 4
+allocations for a function that makes 1 has seen 12 in CI, and a test that
+ran first in its process counted the collector's workers as its own.
 
-The race detector changes what is allocated: under it `sync.Pool`, which `fmt`
-and the regexp and XPath engines keep their working memory in, hands back only
-some of what it is given, and some allocations are larger. A bound that is
-tight in a plain build can simply be false there. Measure a new allocation test
-under `-race` too; where its bound does not hold there with room to spare, the
-test skips its allocation assertions when `alloctest.RaceDetector` says the
-detector is on — `t.Skip("the race detector changes what is allocated")`, or a
-return before the counts where the test checks other things as well — and its
-comment says so.
+The other goroutines can only add to a count, never subtract from it. A test
+that bounds or compares allocations or allocated bytes therefore measures
+them only through `internal/testutil/alloctest`, which measures several
+times and takes the minimum, with a collection before each measurement:
 
-Time is the other thing that breaks it. CI runs the suite under the race
-detector on two cores, with another package's tests beside it, and there a
-millisecond's work has taken seconds. So a test waits for the event it is
-about and never for a length of time: it polls a condition with
-`testutil.WaitFor`, or reads a channel that a hook or its test server closes,
-under a bound of half a minute that only ends a hang. Where a test has to
-run against one of the exporter's own timeouts, choose the values so that a
-slow machine makes the test slower and never fails it: what must not happen
-is given long to not happen in, and what must happen has no bound but the
-hang's. A test does not assert that something took less than some time; it
-asserts an order, a count, or that it took at least so long. A sleep is for
-a test server's own slowness, for a clock that has to read later, or for
-what must not happen to not happen in; it is not a way to let something else
-get ahead. The two tests that hold the static target loop to its interval on
-the real clock (`statictargetcadence_test.go`) are the exception: they
-compare a time with a multiple of the interval, each beside a test of the
-same schedule on a clock of its own.
+- `AllocsAtMost` and `BytesAtMost`, for a test with a bound, stop at the
+  first measurement within the bound, so a quiet machine pays for only one;
+- `Allocations`, for a count without a bound (one that another count is
+  compared with exactly), is the minimum of five;
+- `Once` is a single measurement, for a cost of which a test takes only a
+  fraction to bound another, and which takes too long to measure five
+  times.
 
-Two helpers hold that rule for what many tests share. A Python script has a
-minute in every test, whatever its `limits.script_timeout`: `TestMain` in the
-packages that run scripts, and `usePythonPool` on each fresh pool, set it
-(`PythonPool.SetLeastScriptTimeout`), since a script of a millisecond has
-overrun the default 100ms on a busy machine. A test of the timeout itself
-calls `holdScriptsToTheirTimeout(t)`, and its script is one that never ends,
-so the timeout is what stops it however slow the machine. An interpreter has
-a minute to start in as well, where the exporter gives it ten seconds, which
-one start on a busy machine has overrun: the same two places set it
-(`PythonPool.SetStartTimeout`), and `holdScriptsToTheirTimeout` leaves it,
-since a test of the script's timeout starts an interpreter like any other. A
-test of the start's own limit sets a short one and starts a stand-in for
-`python3` that never says it is ready (`pythonstart_test.go`). Neither
-setter may be called outside a test, which a repository test holds
-(`TestOnlyTestsGiveScriptsALeastTime`). And a test's gRPC
-server never listens on a port another had in the same process
-(`grpctest.Start`, and `grpctest.Listen` for anything else a test has the
-exporter call as a gRPC target): the exporter keeps a connection per address
-and a reflection answer per connection for minutes, and the kernel gives a
-freed port out again, so a server on a reused port was answered for by what
-was kept of the one before it. A test of a server that comes back gives the
-connection an hour to wait by itself and the call a minute to connect in
-(`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
-test is about reconnects, in however long it takes.
+A test (`TestAllocationsAreMeasuredOnlyThroughAlloctest`) fails for a test
+file outside `internal/testutil` that calls `testing.AllocsPerRun` or reads
+the allocation counters of `runtime.MemStats` or of a benchmark's result
+itself.
 
-Two more of the exporter's ten seconds are limits that tests which are not
-about them run under: the TLS handshake with a target, for every test of an
-`https` target — 15 tests of `internal/fetch` and 20 of `internal/exporter`
-fail when a handshake has a nanosecond — and the time a client has to send
-a request's headers in, for every test that asks the exporter's HTTP server
-over a real connection: four tests of `internal/exporter`, and the eight of
-the main package that run the exporter in a child process. Both are half a
-minute in the tests, the bound of a hang. `TestMain` of `internal/fetch`
-and of `internal/exporter` sets the first (`fetch.SetTLSHandshakeTimeout`),
-and `TestMain` of `internal/exporter` and the child process of the main
-package's tests set the second (`exporter.SetReadHeaderTimeout`). A test of
-either limit sets a short one against something that never ends: a target
-that takes the connection and never answers the handshake
-(`internal/fetch/tlshandshake_http_test.go`), and a client that never ends
-its headers (`TestAClientThatNeverEndsItsHeadersIsDropped`). Each also reads
-the limit where the code put it — the pool's `TLSHandshakeTimeout`, and the
-read deadline on the exporter's side of the connection — so that a limit
-that was not the one set fails the test at once and not by its length. The
-exporter's own values are asserted with nothing set
-(`TestATLSHandshakeHasTenSecondsInTheExporterAndHalfAMinuteInTheTests`,
-`TestHTTPServerTimeouts`), and neither setter may be called outside a test
-(`TestOnlyTestsGiveScriptsALeastTime`).
+**Stack size** is also counted for the whole process, and depends on the
+garbage collector as well. A goroutine that outgrows its stack is given a
+larger one, and the old one is released immediately only while no collection
+is running. During a collection it is kept until the collection ends, so a
+call that ended before the collection did was measured with every stack it
+had outgrown in addition to its current one: 24 MB and 32 MB for a stack of
+16, on a machine busy enough for a collection to last from the stack's last
+doubling to the end of the call. That was a failure of `internal/decode`
+that nobody could repeat on a quiet machine.
 
-The twenty seconds an attempt to connect to a grpc target has
-(`grpcConnectTimeout` in `internal/fetch/grpcconn.go`: the TCP connection,
-the TLS handshake and the server's answer to the HTTP/2 preface) are such a
-limit too, for every test that calls a grpc server: 22 tests of
-`internal/fetch` and 6 of `internal/exporter` fail or hang when an attempt
-has a nanosecond, and a server whose preface came 21 seconds late failed
-`TestGRPCHealthNeedsNoDescriptors`. They are half a minute in the tests as
-well, set by `TestMain` of both packages (`fetch.SetGRPCConnectTimeout`,
-beside the handshake's in `internal/fetch/transport.go`, where a build
-without the grpc request type has it too); the main package's child process
-calls no grpc target. The waits between attempts (`grpcBackoff`) stay the
-exporter's. The test of the limit sets 200 milliseconds against a target
-that takes the connection and never answers the preface
-(`TestAGRPCTargetThatNeverAnswersThePrefaceIsGivenUpAtTheConnectLimit`), and
-shortens the wait before the next attempt with it: grpc-go gives an attempt
-the longer of the two, so under the exporter's wait of a second the second
-would be what the attempt has, and under the hour of a test that makes a
-connection wait before it tries again (`connectionsWaitAnHour`) an attempt
-has the hour, whatever the limit. What a connection is made with when
-nothing is set, the exporter's values one for one, is asserted
-(`TestAnAttemptToConnectHasTwentySecondsInTheExporterAndHalfAMinuteInTheTests`),
-and the setter is held to the tests like the others. The other limits of a
-grpc call are not under half a minute: a reflection question has thirty
-seconds, the dialer of a collector with a target policy thirty, a call its
-request's own timeout, and no keepalive pings are sent. The second a call
-waits for a connection that had failed (`reconnectWait`) decides no test
-that is not about it: with a nanosecond two tests fail, both of the wait
-itself and on a clock of their own (`synctest`), and the tests of a server
-that comes back give it a minute (`callsWaitForAConnection`).
+A test that bounds a stack therefore measures it with no collection running,
+as `yamlStackOf` does (`yamlkeysdepth_test.go`): it turns the collector off,
+finishes the collection in progress, runs the call on its own goroutine, and
+turns the collector back on. The measurement is then the goroutine's stack to
+the byte (16 MB, 4 MB or nothing), whatever else the machine does.
 
-A deadline is where a test most easily waits for a length of time: something
-has to have happened when the deadline passes, and a deadline on the
-machine's clock leaves it that long and no longer. Three ways keep the clock
-out of it, in this order of choice:
+The race detector changes what is allocated. Under it, `sync.Pool`, in which
+`fmt` and the regexp and XPath engines keep their working memory, returns
+only some of what it is given, and some allocations are larger. A bound that
+is tight in a plain build can simply be wrong there. Measure a new
+allocation test under `-race` too. Where its bound does not hold there with
+room to spare, the test skips its allocation assertions when
+`alloctest.RaceDetector` says that the detector is on
+(`t.Skip("the race detector changes what is allocated")`, or a return before
+the counts where the test checks other things as well), and its comment says
+so.
 
-- The test ends the deadline itself, when it has seen what had to come
-  first. `testutil.DeadlineEndedByHand` gives a context that ends as one
-  whose deadline has passed, when the test says so: the tests of a directory
-  read cut short end it once the hook that holds a file's read has been
-  called (`localfile_reads_test.go`), and a test whose reads or runs have to
-  overlap holds each until all are there, where a sleep in each only made it
-  likely (`TestLocalDirectoryReadsFilesConcurrently`, `leaveIdleWorkers`,
-  and the burst of `TestPythonWorkersAreCappedProcessWide`, whose two starts
-  wait until the other four runs wait for a worker). What a test's server
-  does once the client has read something, it does when the client has read
-  it: the target that resets a connection in the middle of an answer waits
-  for the client's side of the connection to have read the start
-  (`startRead` in `internal/fetch/samefailure_http_test.go`), where it slept
-  a second, and a test server that answers after the probe has given up is
-  held until it has (`grpctest.Options.ReflectionHold`, the relay's
-  `holdAnswers`), not for a length of time.
-- Where nothing tells the test that the earlier step is over, the code under
-  test runs on a clock of the test's own (`testing/synctest`), which stands
-  still while any goroutine of the test is at work or waits for the network
-  and moves on when all of them wait for the clock or for each other. A
-  deadline on it passes when the fetch has got as far as it gets by itself,
-  and the test asserts the time it took to the nanosecond
+**Time** is the other thing that breaks repeatability. CI runs the suite
+under the race detector on two cores, with another package's tests running
+beside it, and there a millisecond's work has taken seconds. A test
+therefore waits for the event it is about, never for a length of time: it
+polls a condition with `testutil.WaitFor`, or reads a channel that a hook or
+its test server closes, under a bound of half a minute that only ends a
+hang.
+
+- Where a test has to run against one of the exporter's own timeouts, choose
+  the values so that a slow machine makes the test slower and never fails
+  it. What must not happen is given a long time not to happen in, and what
+  must happen has no bound other than the hang's.
+- A test does not assert that something took less than some time. It
+  asserts an order, a count, or that something took at least a given time.
+- A sleep is for a test server's own slowness, for a clock that has to read
+  later, or for giving something time not to happen. It is not a way to let
+  something else get ahead.
+- The two tests that hold the static target loop to its interval on the real
+  clock (`statictargetcadence_test.go`) are the exception: they compare a
+  time with a multiple of the interval, each next to a test of the same
+  schedule on its own clock.
+
+Two helpers apply that rule to what many tests share.
+
+- **Script timeout.** A Python script has a minute in every test, whatever
+  its `limits.script_timeout`. `TestMain` in the packages that run scripts,
+  and `usePythonPool` on each fresh pool, set it
+  (`PythonPool.SetLeastScriptTimeout`), because a script of a millisecond
+  has overrun the default 100ms on a busy machine. A test of the timeout
+  itself calls `holdScriptsToTheirTimeout(t)`, and its script never ends, so
+  the timeout is what stops it however slow the machine is.
+- **Interpreter start.** An interpreter also has a minute to start in, where
+  the exporter gives it ten seconds, which one start on a busy machine has
+  exceeded. The same two places set it (`PythonPool.SetStartTimeout`), and
+  `holdScriptsToTheirTimeout` leaves it, because a test of the script's
+  timeout starts an interpreter like any other. A test of the start's own
+  limit sets a short one and starts a stand-in for `python3` that never
+  reports that it is ready (`pythonstart_test.go`).
+- Neither setter may be called outside a test, which a repository test
+  checks (`TestOnlyTestsGiveScriptsALeastTime`).
+
+**gRPC ports.** A test's gRPC server never listens on a port that another
+had in the same process (`grpctest.Start`, and `grpctest.Listen` for
+anything else that a test has the exporter call as a gRPC target). The
+exporter keeps a connection per address and a reflection answer per
+connection for minutes, and the kernel hands out a freed port again, so a
+server on a reused port was answered for by what was kept from the previous
+one. A test of a server that comes back gives the connection an hour to wait
+by itself and the call a minute to connect in (`connectionsWaitAnHour`,
+`callsWaitForAConnection`), so that only what the test is about reconnects,
+however long it takes.
+
+**TLS handshake and request headers.** Two more of the exporter's
+ten-second limits apply to tests that are not about them:
+
+- the TLS handshake with a target, for every test of an `https` target (15
+  tests of `internal/fetch` and 20 of `internal/exporter` fail when a
+  handshake has a nanosecond);
+- the time that a client has to send a request's headers in, for every test
+  that calls the exporter's HTTP server over a real connection: four tests
+  of `internal/exporter`, and the eight of the main package that run the
+  exporter in a child process.
+
+Both are half a minute in the tests, the bound of a hang. `TestMain` of
+`internal/fetch` and of `internal/exporter` sets the first
+(`fetch.SetTLSHandshakeTimeout`), and `TestMain` of `internal/exporter` and
+the child process of the main package's tests set the second
+(`exporter.SetReadHeaderTimeout`).
+
+- A test of either limit sets a short one against something that never
+  ends: a target that accepts the connection and never answers the
+  handshake (`internal/fetch/tlshandshake_http_test.go`), and a client that
+  never ends its headers (`TestAClientThatNeverEndsItsHeadersIsDropped`).
+- Each also reads the limit where the code put it (the pool's
+  `TLSHandshakeTimeout`, and the read deadline on the exporter's side of the
+  connection), so that a limit other than the one set fails the test
+  immediately and not by its length.
+- The exporter's own values are asserted with nothing set
+  (`TestATLSHandshakeHasTenSecondsInTheExporterAndHalfAMinuteInTheTests`,
+  `TestHTTPServerTimeouts`), and neither setter may be called outside a test
+  (`TestOnlyTestsGiveScriptsALeastTime`).
+
+**gRPC connect.** The twenty seconds that an attempt to connect to a grpc
+target has (`grpcConnectTimeout` in `internal/fetch/grpcconn.go`: the TCP
+connection, the TLS handshake and the server's answer to the HTTP/2
+preface) are such a limit too, for every test that calls a grpc server: 22
+tests of `internal/fetch` and 6 of `internal/exporter` fail or hang when an
+attempt has a nanosecond, and a server whose preface came 21 seconds late
+failed `TestGRPCHealthNeedsNoDescriptors`.
+
+- It is half a minute in the tests as well, set by `TestMain` of both
+  packages (`fetch.SetGRPCConnectTimeout`, next to the handshake's setter in
+  `internal/fetch/transport.go`, where a build without the grpc request type
+  has it too). The main package's child process calls no grpc target. The
+  waits between attempts (`grpcBackoff`) keep the exporter's values.
+- The test of the limit sets 200 milliseconds against a target that accepts
+  the connection and never answers the preface
+  (`TestAGRPCTargetThatNeverAnswersThePrefaceIsGivenUpAtTheConnectLimit`),
+  and shortens the wait before the next attempt with it. grpc-go gives an
+  attempt the longer of the two, so under the exporter's wait of a second,
+  the second would be what the attempt gets, and under the hour of a test
+  that makes a connection wait before it retries (`connectionsWaitAnHour`),
+  an attempt gets the hour, whatever the limit.
+- What a connection is made with when nothing is set, the exporter's values
+  one for one, is asserted
+  (`TestAnAttemptToConnectHasTwentySecondsInTheExporterAndHalfAMinuteInTheTests`),
+  and the setter is restricted to tests like the others.
+- The other limits of a grpc call are not under half a minute: a reflection
+  query has thirty seconds, the dialer of a collector with a target policy
+  thirty, and a call its request's own timeout, and no keepalive pings are
+  sent. The second that a call waits for a connection that had failed
+  (`reconnectWait`) decides no test that is not about it: with a nanosecond
+  two tests fail, both about the wait itself and on their own clock
+  (`synctest`), and the tests of a server that comes back give it a minute
+  (`callsWaitForAConnection`).
+
+**Deadlines** are where a test most easily waits for a length of time:
+something has to have happened when the deadline passes, and a deadline on
+the machine's clock allows exactly that long. Three approaches keep the
+clock out of it, in this order of preference:
+
+- **The test ends the deadline itself**, once it has seen what had to come
+  first. `testutil.DeadlineEndedByHand` gives a context that ends like one
+  whose deadline has passed, when the test says so.
+  - The tests of a directory read that is cut short end it once the hook that
+    holds a file's read has been called (`localfile_reads_test.go`).
+  - A test whose reads or runs have to overlap holds each until all of them
+    are there, where a sleep in each only made it likely
+    (`TestLocalDirectoryReadsFilesConcurrently`, `leaveIdleWorkers`, and the
+    burst of `TestPythonWorkersAreCappedProcessWide`, whose two starts wait
+    until the other four runs wait for a worker).
+  - What a test's server does once the client has read something, it does
+    when the client has read it. The target that resets a connection in the
+    middle of an answer waits for the client's side of the connection to have
+    read the start (`startRead` in
+    `internal/fetch/samefailure_http_test.go`), where it used to sleep a
+    second. A test server that answers after the probe has given up is held
+    until it has (`grpctest.Options.ReflectionHold`, the relay's
+    `holdAnswers`), not for a length of time.
+- **The code runs on the test's own clock** (`testing/synctest`), where
+  nothing tells the test that the earlier step is over. That clock stands
+  still while any goroutine of the test is working or waiting for the
+  network, and moves on when all of them wait for the clock or for each
+  other. A deadline on it passes when the fetch has got as far as it can by
+  itself, and the test asserts the time taken to the nanosecond
   (`onItsOwnClock` in `internal/fetch/fetcher_test.go`,
   `TestGRPCEachRetryOfACallWithoutAConnectionDialsAgain`, the stand-in
-  workers of `internal/transform`). What the test talks to is started outside
-  that clock, since a server waits for connections for as long as it runs and
-  would hold the clock; an HTTP target answers `Connection: close`, since a
-  connection kept open is one still read from; and what would be kept after
-  the test with the clock's time or its timers in it — a connection pool, a
-  gRPC connection — is kept in a cache of the test's own, and the gRPC
-  connection closed before the clock is left. Code that only computes never
-  lets such a clock move, so this is not for a jq program or a real Python
-  script.
-- Where neither is possible, as with a real interpreter or a jq program that
-  must be running when the deadline passes, the deadline is on the machine's
-  clock and short, and the test looks at how the run ended: when it ended
-  because the earlier step had not been reached, the test runs it again with
-  twice the time, up to some sixteen seconds
+  workers of `internal/transform`).
+  - What the test talks to is started outside that clock, because a server
+    waits for connections for as long as it runs and would hold the clock.
+  - An HTTP target answers with `Connection: close`, because a connection
+    kept open is one still being read from.
+  - What would outlive the test with the clock's time or timers in it (a
+    connection pool, a gRPC connection) is kept in the test's own cache, and
+    the gRPC connection is closed before the clock is left.
+  - Code that only computes never lets such a clock move, so this is not for
+    a jq program or a real Python script.
+- **A short deadline on the machine's clock, retried**, where neither is
+  possible, as with a real interpreter or a jq program that must be running
+  when the deadline passes. The test looks at how the run ended: when it
+  ended because the earlier step had not been reached, the test runs it
+  again with twice the time, up to about sixteen seconds
   (`TestRuleFailuresBeforeTheDeadlineAreKept`,
   `TestPythonRunCutByTheProbesDeadlineIsNotATimeout`, and the alarm of
   `TestPythonWorkerKilledByItsOwnAlarmIsReplaced`). A slow machine pays for
-  the longer runs and a quiet one for the first.
+  the longer runs, and a quiet one only for the first.
 
-A context that only keeps a test from hanging is a minute long, like the
-deadline of a probe that is to be answered; ten seconds, and five, were what
-a request that must succeed had on a machine that once took longer than that
-to start an interpreter.
+A context that only keeps a test from hanging lasts a minute, like the
+deadline of a probe that must be answered. Ten seconds, and five, were what
+a request that must succeed had on a machine that once took longer than
+that to start an interpreter.
 
-The exporter's own limits are met the same way wherever a test runs against
-one. What is meant to get through has half a minute, the bound of a hang, in
-place of the exporter's seconds: a static target scrape a test makes itself
-(`scrapeStaticTargets` with a budget of 0), an OTLP export and each of its
-attempts (`otlpConfig`, whose `timeout` is half a minute), a probe with a
-`timeout` parameter, and a target of the scrape loop, whose interval ends its
-scrape and is therefore minutes long, with a name whose first scrape is due
-at once (`soonScraped`). A test of a budget within which something has to
-happen first — the target has to answer, for the deadline to pass inside a
-rule or in the wait before a retry; an attempt has to end, for there to be
-time for another — starts with a short budget and makes the round again with
-twice the budget and a new exporter, up to half a minute, for as long as the
-round itself says the budget ran out too early
-(`TestADeadlineInsideARuleFailsTheProbe`,
-`TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer`): what says so
-must be something no failure of what the test is about can look like.
-`TestUnreachableOTLPEndpoint` makes a round without a retry again, which is
-what it is about: an exporter that does not retry makes none in any round,
-at once, and fails the test at the last. A result a second probe is to find
-in the cache is not left to be found within its `cache.ttl` on the machine's
-clock: the test reads the ttl from the entry and moves the entry ahead
-(`ageEntries` with a negative age), as it moves one back to expire it
-(`TestThePrometheusDemoExampleAnswersARepeatedScrapeFromMemory`, whose
-example keeps a result fifteen seconds). And a test that wants scrapes of
-static targets while something else goes on makes them itself
-(`scrapeStaticTargets`) beside the loop: the loop looks for a reload when a
-scrape is due and once a second besides, and a target a reload starts again
-before its first scrape was due waits anew, so reloads a few milliseconds
-apart leave the loop one scrape or two
-(`TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce`). And a test that has the exporter do
-something in its `--web.shutdown-delay` runs it in a child process that
-stays in the delay, once that is over, until the test lets it go
-(`exporterProcess.endDelay` in `shutdown_http_test.go`): the child replaces
-the wait, `waitOutShutdownDelay` in `main.go`, which is a variable for that
-alone and which nothing but a test may set
-(`TestOnlyTestsHoldTheShutdownDelay`). A test that has to show a tick of the
-configuration watch reloaded nothing has nothing of the exporter's to wait
-for, since such a tick logs nothing: its child says when each tick is over,
-behind whatever the tick logged (`config.SetWatchTicked`, set by the child
-for `helperSaysTicksEnv` in `shutdown_test.go`, and a test's alone by
-`TestOnlyTestsGiveScriptsALeastTime`), and the test reads the child's lines
-in their order (`watchstartup_grpc_test.go`). What that test has the
-interpreter of the child wait on is a named pipe of which the test holds
-both ends, not a file looked for in a loop, and the child leads a process
-group that the test ends, so a test that fails midway leaves nothing
-running. A deadline the exporter sets on a
-connection is read from the connection, not waited out
-(`notedConn` in `internal/exporter/answerwrite_test.go`).
+**The exporter's own limits** are handled the same way wherever a test runs
+against one. What is meant to get through has half a minute, the bound of a
+hang, instead of the exporter's seconds:
 
-What a test leaves behind in its own server is held to the same rule. A
-client that was stopped while it dialed leaves connections whose handshake
-the server reads later, and a test that counts what its server sees ends them
-first, at the server too: `namedServer.done` in
+- a static target scrape that a test makes itself (`scrapeStaticTargets`
+  with a budget of 0);
+- an OTLP export and each of its attempts (`otlpConfig`, whose `timeout` is
+  half a minute);
+- a probe with a `timeout` parameter;
+- a target of the scrape loop, whose interval ends its scrape and is
+  therefore minutes long, with a name whose first scrape is due immediately
+  (`soonScraped`).
+
+Other cases:
+
+- **A budget within which something has to happen first** (the target has to
+  answer, for the deadline to pass inside a rule or in the wait before a
+  retry; an attempt has to end, for there to be time for another). The test
+  starts with a short budget and repeats the round with twice the budget and
+  a new exporter, up to half a minute, for as long as the round itself shows
+  that the budget ran out too early
+  (`TestADeadlineInsideARuleFailsTheProbe`,
+  `TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer`). What shows
+  that must be something that no failure of what the test is about can look
+  like. `TestUnreachableOTLPEndpoint` repeats a round without a retry, which
+  is what it is about: an exporter that does not retry makes none in any
+  round, immediately, and fails the test at the last round.
+- **A cached result** that a second probe is to find is not left to be found
+  within its `cache.ttl` on the machine's clock. The test reads the ttl from
+  the entry and moves the entry ahead (`ageEntries` with a negative age), as
+  it moves one back to expire it
+  (`TestThePrometheusDemoExampleAnswersARepeatedScrapeFromMemory`, whose
+  example keeps a result for fifteen seconds).
+- **Static target scrapes during something else.** A test that wants scrapes
+  of static targets while something else happens makes them itself
+  (`scrapeStaticTargets`) beside the loop. The loop looks for a reload when
+  a scrape is due and once a second besides, and a target that a reload
+  restarts before its first scrape was due waits again, so reloads a few
+  milliseconds apart leave the loop one scrape or two
+  (`TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce`).
+- **The shutdown delay.** A test that has the exporter do something during
+  its `--web.shutdown-delay` runs it in a child process that stays in the
+  delay, once it is over, until the test releases it
+  (`exporterProcess.endDelay` in `shutdown_http_test.go`). The child replaces
+  the wait, `waitOutShutdownDelay` in `main.go`, which is a variable for that
+  purpose only and which only a test may set
+  (`TestOnlyTestsHoldTheShutdownDelay`).
+- **A configuration watch tick that reloaded nothing.** Such a tick logs
+  nothing, so the test has nothing of the exporter's to wait for. Its child
+  reports when each tick is over, after whatever the tick logged
+  (`config.SetWatchTicked`, set by the child for `helperSaysTicksEnv` in
+  `shutdown_test.go`, and restricted to tests by
+  `TestOnlyTestsGiveScriptsALeastTime`), and the test reads the child's
+  lines in order (`watchstartup_grpc_test.go`). What that test has the
+  child's interpreter wait on is a named pipe whose two ends the test holds,
+  not a file polled in a loop, and the child leads a process group that the
+  test ends, so a test that fails midway leaves nothing running.
+- **A deadline that the exporter sets on a connection** is read from the
+  connection, not waited out (`notedConn` in
+  `internal/exporter/answerwrite_test.go`).
+
+What a test leaves behind in its own server follows the same rule. A client
+that was stopped while it dialed leaves connections whose handshake the
+server reads later. A test that counts what its server sees therefore ends
+them first, on the server too: `namedServer.done` in
 `internal/fetch/wirename_test.go` closes what the test's dialer made and
 waits for the server to have closed each. A handshake read late was counted
-with the next case's, and failed that case now and then with a name that was
-the case before's.
+with the next case's, and occasionally failed that case with the previous
+case's name.
 
-How long the suite takes under the race detector is held down in the tests
-too. Code runs several times slower there and the command runs every test
-twice, so a test over tens of thousands of generated documents, or a body of
-megabytes, costs minutes there that it does not cost a plain run; two packages
-once took most of the ten minutes `go test` gave them. A test whose time is
-the size of what it works on names both sizes with
-`alloctest.UnlessRaced(plain, raced)` — a count of generated cases, the
-length of a body, the rounds of a loop, one row in so many of a table that is
-multiplied out — or branches on `alloctest.RaceDetector` (`raceDetector` in
-the packages that have the constant). The plain run keeps the size that makes
-the test thorough. The run under the detector takes a smaller one of the same
-kind and checks everything the plain run checks: no test is skipped there and
-no assertion left out, a text or count expected of the larger input is
-computed from the size, and a floor on what a generated corpus held — so many
-documents refused, so many with an alias — is scaled with the corpus and never
-dropped. Where a test is about a bound in the code, the smaller input is
-still past it. A test of concurrency keeps its goroutines and gives up rounds.
-One thing more is allowed where an input cannot shrink, being at a bound, and
-the slow part is an oracle the test compares with: under the detector the
-result is held to the answer the oracle is known to give, as long as the
-plain run asks the oracle itself (`yamlkeysaliasdepth_test.go`, where the
-YAML library takes seconds over a chain of aliases at the depth limit).
-A test that waits on the clock or on a Python process is not made faster this
-way and is left as it is. Aim for a second under the detector; to see where a
-package's time goes:
+**Time under the race detector** is limited in the tests too. Code runs
+several times slower there and the command runs every test twice, so a test
+over tens of thousands of generated documents, or a body of megabytes, costs
+minutes there that it does not cost a plain run. Two packages once took most
+of the ten minutes that `go test` gave them.
+
+- A test whose time depends on the size of its input names both sizes with
+  `alloctest.UnlessRaced(plain, raced)` (a count of generated cases, the
+  length of a body, the rounds of a loop, one row in so many of a table that
+  is multiplied out), or branches on `alloctest.RaceDetector`
+  (`raceDetector` in the packages that have the constant).
+- The plain run keeps the size that makes the test thorough. The run under
+  the detector uses a smaller one of the same kind and checks everything
+  that the plain run checks: no test is skipped there and no assertion left
+  out. A text or count expected of the larger input is computed from the
+  size, and a floor on what a generated corpus held (so many documents
+  refused, so many with an alias) is scaled with the corpus and never
+  dropped.
+- Where a test is about a bound in the code, the smaller input still
+  exceeds it. A test of concurrency keeps its goroutines and reduces rounds.
+- Where an input cannot shrink, because it is at a bound, and the slow part
+  is an oracle that the test compares with, the result under the detector
+  may be checked against the answer that the oracle is known to give, as
+  long as the plain run asks the oracle itself
+  (`yamlkeysaliasdepth_test.go`, where the YAML library takes seconds over a
+  chain of aliases at the depth limit).
+- A test that waits on the clock or on a Python process does not get faster
+  this way and is left as it is.
+
+Aim for a second under the detector. To see where a package's time goes:
 
 ```sh
 go test -race -count=1 -json ./internal/decode |
@@ -999,176 +1186,205 @@ go test -race -count=1 -json ./internal/decode |
   sort -rn | head -20
 ```
 
-The Python tests run `python3` from `PATH`. Every workflow that runs the
-suite — CI, the exporter release and the Dockerfile update — installs the
-Python the image ships, the Dockerfile's `PYTHON_VERSION`, with the libraries
-the image ships at the Dockerfile's versions (`lxml`, `PyYAML`,
-`python-dateutil`; PyYAML is also what `tools/check-manifests.py` reads with),
-and a test keeps each of them reading them. Run them with that version locally too: the sandbox depends on what the
-standard library imports, and that changes between releases — from 3.12,
-`zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
-sandbox change can pass on 3.11 and fail in the image.
-The tests in `internal/transform/pythonversions_test.go`, and those of how a
-script's error is cut in `scripterrorcut_test.go`, also run the worker with
-`python3.12` and `python3.13` from `PATH`, each where it is installed, and
-skip the other saying it is not, which `go test -v` shows. To run the whole
-suite with another interpreter, put a `python3` that is it first on `PATH`
-(`mkdir -p /tmp/py && ln -s /usr/bin/python3.13 /tmp/py/python3 &&
-PATH=/tmp/py:$PATH go test . ./internal/transform/ ./internal/exporter/`);
-those three packages pass so with 3.11, 3.12 and 3.13, a test of a library
-the interpreter lacks being skipped with what is missing. A test that expects
-the text of a traceback takes it from the interpreter it runs: from what the
-worker as it was writes of the same script there (`formerFailure`), or, for a
-literal example, without the markers 3.13 draws under a source line
-(`withoutMarkers`, on both sides); a new one should do the same rather than
-hold one release's text.
+**Python versions.** The Python tests run `python3` from `PATH`. Every
+workflow that runs the suite (CI, the exporter release and the Dockerfile
+update) installs the Python that the image ships, the Dockerfile's
+`PYTHON_VERSION`, with the libraries that the image ships at the
+Dockerfile's versions (`lxml`, `PyYAML`, `python-dateutil`; PyYAML is also
+what `tools/check-manifests.py` reads with), and a test keeps each workflow
+reading them.
 
-Some tests use a Python module the image does not ship. The tests named
-`TestTheStrictOpenMetricsParser…`, and the self-metrics tests that end in a
-subtest `the strict reference parser`, give the exporter's OpenMetrics answers
-to the strict parser of `prometheus_client`. The module is pinned in
-`test/python/requirements.txt`, the one place for modules only the tests use:
+- Run them with that version locally too. The sandbox depends on what the
+  standard library imports, and that changes between releases: from 3.12,
+  `zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
+  sandbox change can pass on 3.11 and fail in the image.
+- The tests in `internal/transform/pythonversions_test.go`, and the tests of
+  how a script's error is cut in `scripterrorcut_test.go`, also run the
+  worker with `python3.12` and `python3.13` from `PATH`, each where it is
+  installed, and skip the other with a message saying it is not, which
+  `go test -v` shows.
+- To run the whole suite with another interpreter, put a `python3` that is
+  that interpreter first on `PATH`
+  (`mkdir -p /tmp/py && ln -s /usr/bin/python3.13 /tmp/py/python3 &&
+  PATH=/tmp/py:$PATH go test . ./internal/transform/ ./internal/exporter/`).
+  Those three packages pass this way with 3.11, 3.12 and 3.13, and a test of
+  a library that the interpreter lacks is skipped with what is missing.
+- A test that expects the text of a traceback takes it from the interpreter
+  it runs: from what the previous worker writes for the same script there
+  (`formerFailure`), or, for a literal example, without the markers that
+  3.13 draws under a source line (`withoutMarkers`, on both sides). A new
+  test should do the same instead of holding one release's text.
+
+**Test-only Python modules.** Some tests use a Python module that the image
+does not ship. The tests named `TestTheStrictOpenMetricsParser…`, and the
+self-metrics tests that end in a subtest `the strict reference parser`, pass
+the exporter's OpenMetrics answers to the strict parser of
+`prometheus_client`. The module is pinned in
+`test/python/requirements.txt`, the one place for modules that only the
+tests use:
 
 ```sh
 python3 -m pip install -r test/python/requirements.txt
 ```
 
-Where `python3` does not have the module those tests are skipped, saying what
-is missing, so the suite runs on a machine without it. The workflows that run
-the suite — CI, the release and the Dockerfile update — install the file and
-set `STRICT_OPENMETRICS_PARSER=required` for the job, and with that variable
-set, to anything, a missing module or a missing `python3` fails those tests
-instead: a green run there has run them. Set it locally to check the same. The
-rules that parser checks are also written out in Go beside the tests
-(`strictOpenMetricsError`) and checked by tests that run everywhere; the module
-confirms that they are the parser's. Dependabot proposes new versions of the
-pinned module, and CI runs the suite on a change to the file.
+Where `python3` does not have the module, those tests are skipped with a
+message saying what is missing, so the suite runs on a machine without it.
+
+- The workflows that run the suite (CI, the release and the Dockerfile
+  update) install the file and set `STRICT_OPENMETRICS_PARSER=required` for
+  the job. With that variable set, to any value, a missing module or a
+  missing `python3` fails those tests instead, so a green run there has run
+  them. Set it locally to check the same.
+- The rules that the parser checks are also written out in Go next to the
+  tests (`strictOpenMetricsError`) and checked by tests that run everywhere;
+  the module confirms that they are the parser's.
+- Dependabot proposes new versions of the pinned module, and CI runs the
+  suite on a change to the file.
 
 ## Tests of a build with only some request types
 
-A build can carry only some request types
+A build can include only some request types
 ([Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)),
 and such a build's tests have to pass as the default build's do.
-`make test-request-types` runs the suite once for each type built on its own,
-CI runs the same over the exporter's packages, each type in a job of its own,
-and `make ci` includes it. One of them by hand:
+`make test-request-types` runs the suite once for each type built on its
+own. CI runs the same over the exporter's packages, each type in its own
+job, and `make ci` includes it. One of them by hand:
 
 ```sh
 go test -tags "$(sh tools/request-type-tags.sh localfile)" ./...
 ```
 
-A test that needs a request type says so with a build constraint on its file,
-the one the type's own code carries:
+A test that needs a request type says so with a build constraint on its
+file, the same one that the type's own code carries:
 
 ```go
 //go:build !select_request_types || request_type_http
 ```
 
-That is every test whose configuration names the type — `type: http`, or
-`testutil.MinimalConfig` and `testutil.Collector`, which are http collectors —
-that starts a stand-in for a target of the type, or that asserts what only a
-build with the type does, such as a probe parameter of http's being refused
-for a collector of another type. A test that needs two types names both,
-`!select_request_types || (request_type_http && request_type_localfile)`, as
-the tests that load `configs/config.example.yaml` do, and one that holds only
-with every type, such as the comparison of the committed schemas with what the
-code generates, carries `!select_request_types` alone. A test is never skipped
-at run time for a type the build lacks: the constraint says what the test
-needs where it can be read, and vetting a single-type build compiles exactly
-the tests that build runs.
+That applies to every test whose configuration names the type (`type: http`,
+or `testutil.MinimalConfig` and `testutil.Collector`, which are http
+collectors), that starts a stand-in for a target of the type, or that
+asserts what only a build with the type does, such as a probe parameter of
+http's being refused for a collector of another type.
 
-A test of one type that contrasts it with another is two tests, so that the
-type's own build runs what is about the type. `TestGRPCValidation` holds what
-a grpc collector's request must be and runs wherever grpc is built; the row
-that was its contrast, an http collector refused `retry.codes`, is a test of
-its own in a file with the constraint that row needs. That is the other type
-alone where the row only configures the other type
-(`TestTheKeysOfOtherTypesDoNotApplyToHTTP`), and the two together only where
-the assertion holds with both built and not otherwise, as a `method` probe
-parameter refused for a graphite collector does: without http in the build
-`method` is a parameter no type knows
-(`TestAGraphiteProbeRefusesAProbeParameterOfHTTPs`). One row that needs a
-second type never puts the whole test behind a constraint of two.
+- A test that needs two types names both,
+  `!select_request_types || (request_type_http && request_type_localfile)`,
+  as the tests that load `configs/config.example.yaml` do.
+- A test that holds only with every type, such as the comparison of the
+  committed schemas with what the code generates, carries
+  `!select_request_types` alone.
+- A test is never skipped at run time for a type that the build lacks: the
+  constraint states what the test needs where it can be read, and vetting a
+  single-type build compiles exactly the tests that the build runs.
 
-Tests that hold whatever the build carries stay in a file without a
-constraint, so every build runs them. Where a file's tests are of both kinds,
-those that need a type are in a file beside it named for the type —
-`cache_test.go` and `cache_http_test.go`,
-`requesttype_grpc_test.go` and `requesttype_grpc_http_test.go` — and a helper
-lives where everything that calls it is compiled: `helpers_test.go` for every
-build, `helpers_http_test.go` for a build with http,
-`helpers_http_or_localfile_test.go` for a build with either. A helper compiled
-into a build in which nothing calls it is what the linter reports as unused
-when it is run with that build's tags
-(`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`),
-which `make lint-request-types` does for every type, and CI in each type's
-job.
+A test of one type that contrasts it with another is split into two tests,
+so that the type's own build runs what is about the type.
+`TestGRPCValidation` checks what a grpc collector's request must be and runs
+wherever grpc is built. The row that was its contrast, an http collector
+refused `retry.codes`, is a separate test in a file with the constraint that
+row needs.
+
+- That constraint is the other type alone where the row only configures the
+  other type (`TestTheKeysOfOtherTypesDoNotApplyToHTTP`).
+- It is both types together only where the assertion holds with both built
+  and not otherwise, as for a `method` probe parameter refused for a
+  graphite collector: without http in the build, `method` is a parameter
+  that no type knows (`TestAGraphiteProbeRefusesAProbeParameterOfHTTPs`).
+- One row that needs a second type never puts the whole test behind a
+  constraint of two types.
+
+Tests that hold whatever the build includes stay in a file without a
+constraint, so every build runs them.
+
+- Where a file's tests are of both kinds, those that need a type are in a
+  file next to it named for the type: `cache_test.go` and
+  `cache_http_test.go`, `requesttype_grpc_test.go` and
+  `requesttype_grpc_http_test.go`.
+- A helper lives where everything that calls it is compiled:
+  `helpers_test.go` for every build, `helpers_http_test.go` for a build with
+  http, `helpers_http_or_localfile_test.go` for a build with either.
+- A helper compiled into a build in which nothing calls it is reported as
+  unused by the linter when it runs with that build's tags
+  (`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`),
+  which `make lint-request-types` does for every type, and CI in each type's
+  job.
 
 ### Opt-in request types
 
-Every request type of the tree is in the default build. A type may instead
-be opt-in, for one whose libraries few deployments want in the binary:
+Every request type in the tree is in the default build. A type may instead
+be opt-in, for a type whose libraries few deployments want in the binary.
 `make new-request-type NAME=<name> OPT_IN=1` makes one, which lives in its
-`internal/fetch/requesttype_<name>.go` under its own tag alone,
+`internal/fetch/requesttype_<name>.go` under its own tag only,
 
 ```go
 //go:build request_type_<name>
 ```
 
-as do the files only it needs and its tests, so a build carries it only when
-its tag is given: `sh tools/request-type-tags.sh '' '' <name>`, from the
-third argument, `OPT_IN_REQUEST_TYPES`, adds it to the default build's
-types, and `REQUEST_TYPES` may name it like any type. It is listed in
-`optInRequestTypes` (`internal/fetch`), and a configuration naming it is
-refused by a build without it, saying how to build one with it. Each type
-built on its own includes it, in the loops of `make build-request-types` and
-`make test-request-types` and CI's matrix over the request types; the build
-with every opt-in type beside the default build's is vetted, built, tested
-(`internal/fetch` and `test/repository`) and linted by `make
-build-opt-in-types`, `make test-opt-in-types` and `make lint-opt-in-types`,
-as CI does, and a test keeps their lists naming every opt-in type of the
-tree. With none, as now, the lists are empty, and the targets and CI's steps
-say so and stop. The default build's tests know an opt-in type's request
-keys without the type (`optInRequestKeys`, `internal/fetch`), and its schema
-rows are compiled in the default build, which checks that every constrained
-key of the schemas has a row, and compared with the exporter's verdicts
-against the schema the binary generates, in a build with the type (`built:
-true`), since the committed schemas, the default build's, have no such
-type.
+as do the files that only it needs and its tests. A build therefore includes
+it only when its tag is given.
+
+- `sh tools/request-type-tags.sh '' '' <name>`, from the third argument,
+  `OPT_IN_REQUEST_TYPES`, adds it to the default build's types, and
+  `REQUEST_TYPES` may name it like any type.
+- It is listed in `optInRequestTypes` (`internal/fetch`), and a build without
+  it refuses a configuration that names it, with an error that says how to
+  build one with it.
+- Each type built on its own includes it, in the loops of
+  `make build-request-types` and `make test-request-types` and in CI's matrix
+  over the request types.
+- The build with every opt-in type next to the default build's types is
+  vetted, built, tested (`internal/fetch` and `test/repository`) and linted
+  by `make build-opt-in-types`, `make test-opt-in-types` and
+  `make lint-opt-in-types`, as CI does, and a test keeps their lists naming
+  every opt-in type in the tree. With none, the lists are empty, and the
+  targets and CI's steps say so and stop.
+- The default build's tests know an opt-in type's request keys without the
+  type (`optInRequestKeys`, `internal/fetch`). Its schema rows are compiled
+  in the default build, which checks that every constrained key of the
+  schemas has a row, and compared with the exporter's verdicts against the
+  schema that the binary generates in a build with the type
+  (`built: true`), because the committed schemas, the default build's, do
+  not have the type.
 
 ### The sql request type
 
-The `sql` type's drivers each live in a file of their own,
+The `sql` type's drivers each live in their own file,
 `internal/fetch/sqldriver_<name>.go`: `mysql`, `postgres` and `sqlserver`
 under the type's constraint, and `oracle`, `clickhouse`, `snowflake` and
-`vertica` under the type's and their own tag,
+`vertica` under the type's constraint and their own tag,
 
 ```go
 //go:build (!select_request_types || request_type_sql) && sql_driver_oracle
 ```
 
-which `tools/request-type-tags.sh` gives from its second argument, the
-`SQL_DRIVERS` list: `sh tools/request-type-tags.sh '' oracle,snowflake`, and,
-with `snowflake`, gosnowflake's `minicore_disabled`, which keeps its native
-library out (a test of the snowflake driver fails in a build without it). A
-test of an opt-in driver carries its tag too, and runs in the build with every
-opt-in driver, which `make build-sql-drivers` and `make test-sql-drivers`
-vet, build and test, `make lint-sql-drivers` lints with golangci-lint (no
-other lint run compiles the drivers, and a build with more packages can give
-the analyses more to see), CI runs, and `make ci` includes; a test keeps their
-lists naming every opt-in driver of the tree. That build's snowflake driver takes a
-few minutes to compile the first time.
+which `tools/request-type-tags.sh` produces from its second argument, the
+`SQL_DRIVERS` list: `sh tools/request-type-tags.sh '' oracle,snowflake`.
+With `snowflake` it also adds gosnowflake's `minicore_disabled`, which keeps
+its native library out (a test of the snowflake driver fails in a build
+without it).
+
+- A test of an opt-in driver carries its tag too, and runs in the build with
+  every opt-in driver. `make build-sql-drivers` and `make test-sql-drivers`
+  vet, build and test that build, and `make lint-sql-drivers` lints it with
+  golangci-lint (no other lint run compiles the drivers, and a build with
+  more packages can give the analyses more to see). CI runs them, and
+  `make ci` includes them. A test keeps their lists naming every opt-in
+  driver in the tree.
+- That build's snowflake driver takes a few minutes to compile the first
+  time.
 
 The tests of the query path reach the stand-in database of `internal/sqltest`
-through the type's pools and connectors, the driver alone replaced
+through the type's pools and connectors, with only the driver replaced
 (`sqlConnectHook` in the package, `fetch.UseSQLTestDriver` from others), and
-wait for the pools' events (`sqlPoolEvent`), not for time. The tests against
-real databases (`TestLiveSQL`, `internal/fetch`) are skipped unless a variable
-names a database — `PUE_TEST_POSTGRES`, `PUE_TEST_MYSQL`, `PUE_TEST_SQLSERVER`
-as `host:port`, each with `_USER` and `_PASSWORD` — and `make test-sql-live`
-runs them. CI does not run them: its `sql-live` job, which ran them against
-PostgreSQL, MySQL and SQL Server service containers, is commented out in
-`.github/workflows/ci.yml` for now. Locally:
+wait for the pools' events (`sqlPoolEvent`), not for time.
+
+The tests against real databases (`TestLiveSQL`, `internal/fetch`) are
+skipped unless a variable names a database (`PUE_TEST_POSTGRES`,
+`PUE_TEST_MYSQL`, `PUE_TEST_SQLSERVER` as `host:port`, each with `_USER` and
+`_PASSWORD`), and `make test-sql-live` runs them. CI does not run them: its
+`sql-live` job, which ran them against PostgreSQL, MySQL and SQL Server
+service containers, is commented out in `.github/workflows/ci.yml` for now.
+Locally:
 
 ```sh
 docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres:17
@@ -1176,49 +1392,53 @@ PUE_TEST_POSTGRES=127.0.0.1:5432 PUE_TEST_POSTGRES_USER=postgres PUE_TEST_POSTGR
 ```
 
 `FuzzVerticaStatementSplitting` (`internal/fetch`, under the vertica tag)
-holds the refusal of a `vertica` statement of several parts to the driver's
-splitting, to `verticaParts` and to a reading of the server's written apart
-from it in the test, on any text and on two statements joined by a `;`. Its
-seed corpus, the cases of the vertica statement tests, runs as a test in the
-build with every opt-in driver, as CI's and `make test-sql-drivers`' run of
-`./internal/fetch/` does; to fuzz it:
+checks the refusal of a `vertica` statement with several parts against the
+driver's splitting, against `verticaParts`, and against a separate reading
+of the server's rules written in the test, on any text and on two statements
+joined by a `;`. Its seed corpus, the cases of the vertica statement tests,
+runs as a test in the build with every opt-in driver, as the run of
+`./internal/fetch/` by CI and by `make test-sql-drivers` does. To fuzz it:
 
 ```sh
 go test -tags "$(sh tools/request-type-tags.sh '' vertica)" -run '^$' \
   -fuzz FuzzVerticaStatementSplitting -fuzztime 60s ./internal/fetch/
 ```
 
-A failing input is written under `internal/fetch/testdata/fuzz/`; add it to
-the seeds in the test (`verticaFuzzSeeds`) rather than commit that file.
+A failing input is written under `internal/fetch/testdata/fuzz/`. Add it to
+the seeds in the test (`verticaFuzzSeeds`) instead of committing that file.
 
 ## Test data
 
-The files under `testdata/` are what the tests read, a directory per format
-and `testdata/chart` for the chart's. A fixture is written in the shape its
-source writes or documents, not captured from it, and the test that reads it
-says what it stands for.
+The files under `testdata/` are what the tests read, with a directory per
+format and `testdata/chart` for the chart's files. A fixture is written in
+the shape that its source writes or documents, not captured from it, and
+the test that reads it says what it stands for.
 
-`testdata/csv` holds CSV in the shapes it comes in. The `csvfixtures` tests
-read each file at three levels: the rows it decodes into
-(`internal/decode/csvfixtures_test.go`); the series, the failures and the log
-lines of a collector's rules over it (`internal/transform/csvfixtures_test.go`);
-and whole probes, of an `http` collector at a stand-in that sends the file
-with one `Content-Type` or another and of a `localfile` collector reading the
-file or a directory of them
-(`internal/exporter/csvfixtures_probe_test.go` and
-`csvfixtures_localfile_test.go`), where every series of each answer is
-asserted, in the order it is answered, in the text format and, where the two
-differ, OpenMetrics. A table
-of 5,000 rows, for the limits, is generated by the test that reads it.
+`testdata/csv` holds CSV in the shapes that it comes in. The `csvfixtures`
+tests read each file at three levels:
+
+- the rows that it decodes into (`internal/decode/csvfixtures_test.go`);
+- the series, the failures and the log lines of a collector's rules over it
+  (`internal/transform/csvfixtures_test.go`);
+- whole probes: of an `http` collector at a stand-in that sends the file
+  with one `Content-Type` or another, and of a `localfile` collector reading
+  the file or a directory of them
+  (`internal/exporter/csvfixtures_probe_test.go` and
+  `csvfixtures_localfile_test.go`). Every series of each answer is asserted,
+  in the order it is answered, in the text format and, where the two differ,
+  in OpenMetrics.
+
+A table of 5,000 rows, for the limits, is generated by the test that reads
+it.
 
 What the user documentation tells a reader to expect of a file or a page
 ([Reading CSV](CONFIGURATION.md#reading-csv-what-to-expect),
-[Reading HTML](CONFIGURATION.md#reading-html-what-to-expect)) is held line
+[Reading HTML](CONFIGURATION.md#reading-html-what-to-expect)) is checked line
 by line, over small bodies written in the test, by
 `internal/transform/csvfixtures_expect_test.go` and
-`internal/exporter/htmlfixtures_expect_test.go`, and the table of what a
-`Content-Type` names by `internal/decode/detectformat_test.go`: a line added
-to either table gets its case there.
+`internal/exporter/htmlfixtures_expect_test.go`. The table of what a
+`Content-Type` names is checked by `internal/decode/detectformat_test.go`. A
+line added to either table gets its case there.
 
 | File | What it stands for |
 | --- | --- |
@@ -1251,170 +1471,188 @@ to either table gets its case there.
 | `volumes-cr.csv` | A storage report as a spreadsheet's "CSV (Macintosh)" saves it: every line ends with a carriage return alone, and a note in quotes has one inside it. |
 | `scale-mixed-line-ends.txt` | A balance's log that several tools appended to: no header, semicolons between the fields, texts in quotes padded with blanks, and lines that end with a carriage return alone, with CRLF and with a line feed. Read with `trim_space`. |
 
-Several of them are written in a way an editor would undo — CRLF line ends,
-carriage returns alone, a byte order mark, UTF-16 and legacy encodings, blanks that end a line, no
-final line end — and a test checks that each still is. A file added to
-`testdata/csv` goes in this table and in the list of
-`internal/decode/csvfixtures_test.go`, which fails until it is in both.
+Several of them are written in a way that an editor would undo (CRLF line
+ends, lone carriage returns, a byte order mark, UTF-16 and legacy encodings,
+blanks at the end of a line, no final line end), and a test checks that each
+still is. A file added to `testdata/csv` goes in this table and in the list
+of `internal/decode/csvfixtures_test.go`, which fails until it is in both.
 
 ## The configuration schema
 
-`configs/config.schema.json`, `configs/collector-file.schema.json` for
-[collector files](CONFIGURATION.md#collector-files) and
-`configs/static-targets.schema.json` for the
-[static target file](STATIC-TARGETS.md) are generated from the
-configuration structs, and the target allocator's
-`configs/allocator-static-targets.schema.json` and
-`configs/probe-targets.schema.json` from the structs it decodes, with their
-rules in `internal/allocator/schema.go`. After adding or changing a key,
-regenerate them all, or the test suite fails:
+These schemas are generated:
+
+- `configs/config.schema.json`, `configs/collector-file.schema.json` for
+  [collector files](CONFIGURATION.md#collector-files) and
+  `configs/static-targets.schema.json` for the
+  [static target file](STATIC-TARGETS.md), from the configuration structs;
+- the target allocator's `configs/allocator-static-targets.schema.json` and
+  `configs/probe-targets.schema.json`, from the structs that it decodes,
+  with their rules in `internal/allocator/schema.go`.
+
+After adding or changing a key, regenerate them all, or the test suite
+fails:
 
 ```sh
 make schemas
 ```
 
-The committed files are the schemas of a build with every request type but
-the opt-in ones and the sql type's
-default drivers alone, which is what `make schemas` runs, and
-the tests that compare them with what the code generates run in that build
-alone: the schema a single-type binary prints lists the types it carries, and
-one built with an opt-in type or with `SQL_DRIVERS` the opt-in types and
-drivers it carries, as its loader takes them, and a test in every build
-holds it to that. So the file of those comparisons,
-`test/repository/schema_fullbuild_test.go`, is built without
-`select_request_types` and without any `request_type_<name>` tag of an
-opt-in type or `sql_driver_<name>` tag, a test keeping its constraint naming
-every opt-in type and driver of the tree; the rest of `test/repository`
-passes in the build with every opt-in driver, and in the one with every
-opt-in type, too.
+The committed files are the schemas of a build with every request type
+except the opt-in ones, and with only the sql type's default drivers, which
+is what `make schemas` runs. The tests that compare them with what the code
+generates run only in that build.
 
-Allowed values, patterns and descriptions that a struct cannot express are added
-by path, in `configSchemaRules` for the configuration and collector files and
-in `staticTargetsSchemaRules` for the target file, both in
-`internal/config/configschema.go`, and, for a key only one request type takes,
-in that type's `KeyRules`, by the key's path under the request block.
+- The schema that a single-type binary prints lists the types that it
+  includes, and one built with an opt-in type or with `SQL_DRIVERS` lists the
+  opt-in types and drivers that it includes, as its loader accepts them. A
+  test in every build checks this.
+- The file of those comparisons, `test/repository/schema_fullbuild_test.go`,
+  is therefore built without `select_request_types` and without any
+  `request_type_<name>` tag of an opt-in type or `sql_driver_<name>` tag. A
+  test keeps its constraint naming every opt-in type and driver in the tree.
+- The rest of `test/repository` also passes in the build with every opt-in
+  driver, and in the one with every opt-in type.
 
-When the exporter comes to refuse a value, give the schema the rule too where
-a schema can tell, and add the value to
-`test/repository/schemaloader_test.go`, which puts each document of its
-tables through both the committed schema and `config.Load` and fails when
-they disagree. What a schema cannot tell — a least duration, the range of a
-size, how many bytes a size written with a unit comes to, which is what
-leaves a `limits.max_output_bytes` of `20B` to the exporter where one of
-`20` is refused by both — goes in the key's description and in that file's
-table of what the exporter alone refuses.
+Allowed values, patterns and descriptions that a struct cannot express are
+added by path: in `configSchemaRules` for the configuration and collector
+files and in `staticTargetsSchemaRules` for the target file, both in
+`internal/config/configschema.go`, and, for a key that only one request type
+takes, in that type's `KeyRules`, by the key's path under the request block.
 
-A key the schema holds to allowed values, a pattern or a length also gets a
-row in the table of its request type, `test/repository/schemakeys_http_test.go`
-and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`: the document, the
-place of the key, a value both take and one both refuse, and whether both
-take the file without the key and with the key written `""`. An optional key
-takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
-in the schema — and a rule about a key is made of `writtenKey`, which goes by
-the key being written, not by its being there. A test of the build with every
-request type fails until a constrained key has its row.
+When the exporter starts refusing a value, give the schema the rule too,
+where a schema can express it, and add the value to
+`test/repository/schemaloader_test.go`. That test passes each document of
+its tables through both the committed schema and `config.Load`, and fails
+when they disagree. What a schema cannot express goes in the key's
+description and in that file's table of what only the exporter refuses: a
+minimum duration, the range of a size, or how many bytes a size written with
+a unit comes to (which is why a `limits.max_output_bytes` of `20B` is left to
+the exporter, while one of `20` is refused by both).
 
-A key that takes a size (`model.ByteSize`) says `size: true` in its row, which
-puts it through the ways a number of bytes is written (`sizeForms`): a
-number YAML reads as one is the whole number it equals to the exporter as to
-a schema, which is handed the number and not its spelling, so `1e3` and `1.0`
-are sizes, and a fraction, a negative number and the same spellings in quotes
-are refused by both. A test finds the size keys of the schemas by their
-pattern and fails until a new one has its row so marked. The validator those
-tests use takes for an integer what a JSON Schema validator does, a number
-without a fraction however large: the range of a size is the exporter's to
-refuse, and the tables say so.
+A key that the schema holds to allowed values, a pattern or a length also
+gets a row in the table of its request type,
+`test/repository/schemakeys_http_test.go` and its neighbours for `grpc`, `graphite`, `localfile`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`.
+A row has the document, the place of the key, a value that both accept and
+one that both refuse, and whether both accept the file without the key and
+with the key written `""`.
 
-No key takes a value YAML reads as none — nothing after its colon, `null`,
-`~` — and no list such an entry: to a schema null is none of a key's types,
-and the exporter refuses it in the one walk of a document beside the types
-the schemas are generated from (`valueProblems`,
+- An optional key treats `""` as the key left out; `optionalEnum` and
+  `optionalPattern` say so in the schema.
+- A rule about a key is built from `writtenKey`, which depends on the key
+  being written, not on its being present.
+- A test of the build with every request type fails until a constrained key
+  has its row.
+
+A key that takes a size (`model.ByteSize`) says `size: true` in its row,
+which runs it through the ways that a number of bytes is written
+(`sizeForms`). A number that YAML reads as a number is the whole number it
+equals, to the exporter as to a schema, which receives the number and not
+its spelling: `1e3` and `1.0` are sizes, and a fraction, a negative number
+and the same spellings in quotes are refused by both.
+
+- A test finds the size keys of the schemas by their pattern and fails until
+  a new one has its row marked this way.
+- The validator that those tests use accepts as an integer what a JSON
+  Schema validator does, a number without a fraction however large: the
+  range of a size is for the exporter to refuse, and the tables say so.
+
+No key accepts a value that YAML reads as none (nothing after its colon,
+`null`, `~`), and no list accepts such an entry. To a schema, null is none of
+a key's types, and the exporter refuses it in the one walk of a document
+beside the types that the schemas are generated from (`valueProblems`,
 `internal/config/yamlvalues.go`), so a new key needs nothing for it.
-`test/repository/schemanovalue_test.go` reads every key, list and mapping of
-names to values out of the committed schemas and puts a document with
-nothing at that one place through both; the tables above put each of their
-keys through both written `null` and `~` as well. The validator those tests
-use (`validateAgainstSchema`) reads null as a JSON Schema validator does: do
-not let it through as any type again, which is how the schemas and the
-exporter came to differ on it unseen.
 
-A key takes the kinds of value its schema says, and the exporter reads
-which from the schema: the same walk refuses a scalar YAML reads as a
-boolean or a number at a key whose schema type is `string` alone
-(`schemaKinds`), and a word of YAML 1.1's for a boolean, `yes` or `off`, at
-a key that takes a boolean, both of which the decoder takes. `schemaFor`
-gives a key of text the types `string`, `number` and `boolean`, since free
-text written `1` or `true` is the text it spells, and makes a key with
-allowed values or a pattern `string` alone; so giving a key an `enum` or a
-`pattern` makes the exporter refuse `key: 1` there, with nothing more to
-do — saying to quote the text, or, of a key with an `enum`, which values it
-takes — and `TestTheKeysHeldToTextAloneAreTheSchemas` (`internal/config`),
-which names those keys, fails until the key is added to it. A key that is
-a name or a word without a pattern says `"type": "string"` in its rule, as a
-rule's `name` does. `test/repository/schemakinds_test.go` reads every place
-of the committed schemas where a single value is written and puts a
-boolean, a number, such a word and a quoted number at it through both, and
-the tables above put each of their keys through both written `true` and
-`1`: a row whose key takes more than text, and whose text the exporter
-refuses for what a schema cannot tell, says with what (`booleanAlone`,
-`numberAlone`). The validator is handed a document as an editor hands it
-one (`documentValue`): a key of a mapping by its text, and a date written
-without quotes as the text it is to YAML 1.2.
+- `test/repository/schemanovalue_test.go` reads every key, list and mapping
+  of names to values out of the committed schemas and passes a document with
+  nothing at that one place through both. The tables above also pass each of
+  their keys through both, written as `null` and as `~`.
+- The validator that those tests use (`validateAgainstSchema`) reads null as
+  a JSON Schema validator does. Do not let it accept null as any type again:
+  that is how the schemas and the exporter came to differ on it unnoticed.
 
-A name a collector writes — a rule's, a label's — is a classic name or any
-name by the collector's `name_escaping`, which a key's own pattern cannot
-read: the patterns stand in `collectorSchemaRule`, under a condition on the
-collector, and the loader's side is `transform.TakesLabelName` and
-`checkMetricName`. `test/repository/schemaloader_names_test.go` holds the
-two to one verdict under each value of the key and each kind of transform.
+A key accepts the kinds of value that its schema allows, and the exporter
+reads which kinds from the schema. The same walk refuses a scalar that YAML
+reads as a boolean or a number at a key whose schema type is only `string`
+(`schemaKinds`), and a YAML 1.1 boolean word, such as `yes` or `off`, at a
+key that takes a boolean; the decoder accepts both.
 
-A block that `enabled` switches on is kept unchecked while it is off, by the
+- `schemaFor` gives a text key the types `string`, `number` and `boolean`,
+  because free text written `1` or `true` is the text it spells, and makes a
+  key with allowed values or a pattern `string` only.
+- Giving a key an `enum` or a `pattern` therefore makes the exporter refuse
+  `key: 1` there, with nothing more to do: the error says to quote the text
+  or, for a key with an `enum`, which values it accepts.
+  `TestTheKeysHeldToTextAloneAreTheSchemas` (`internal/config`), which names
+  those keys, fails until the key is added to it.
+- A key that is a name or a word without a pattern says `"type": "string"`
+  in its rule, as a rule's `name` does.
+- `test/repository/schemakinds_test.go` reads every place of the committed
+  schemas where a single value is written and passes a boolean, a number,
+  such a word and a quoted number there through both. The tables above pass
+  each of their keys through both, written as `true` and as `1`. A row whose
+  key takes more than text, and whose text the exporter refuses for reasons
+  that a schema cannot express, says which (`booleanAlone`, `numberAlone`).
+- The validator receives a document as an editor would pass it
+  (`documentValue`): a mapping key by its text, and a date written without
+  quotes as the text that it is in YAML 1.2.
+
+A name that a collector writes (a rule's or a label's) is a classic name, or
+any name, depending on the collector's `name_escaping`, which a key's own
+pattern cannot read. The patterns are in `collectorSchemaRule`, under a
+condition on the collector, and the loader's side is
+`transform.TakesLabelName` and `checkMetricName`.
+`test/repository/schemaloader_names_test.go` checks that the two agree under
+each value of the key and each kind of transform.
+
+A block that `enabled` switches on is left unchecked while it is off, by the
 schemas as by the exporter. A rule about the value of one of its keys
-therefore goes in the block's `then`, which holds with `enabled: true`
-(`otlpSchemaRule`), and not on the key; a keyword the key's type gives it,
-such as a whole number's `minimum`, is taken off the key by `nil` in its
-rule. `test/repository/schemaloader_otlpoff_test.go` puts every key of the
-`otlp` block through both, switched off and on, and fails for a key its
+therefore goes in the block's `then`, which applies with `enabled: true`
+(`otlpSchemaRule`), not on the key. A keyword that the key's type gives it,
+such as a whole number's `minimum`, is removed from the key by `nil` in its
+rule. `test/repository/schemaloader_otlpoff_test.go` passes every key of the
+`otlp` block through both, switched off and on, and fails for a key that its
 table lacks.
 
-A key written as nothing but blanks is not the key written `""`: it is text,
-which the key takes or refuses. What the schema and the exporter say of a
-key both ways is the table of `test/repository/schemablanks_http_test.go`,
-for the keys of a rule, of its labels and of a collector that say what is
-read; a new key of that kind gets a row there, and where blanks could only be
-a mistake that the exporter would go on to read something with, as a
-label's `expression` of blanks was, both refuse them.
+A key written as only blanks is not the key written `""`: it is text, which
+the key accepts or refuses. The table of
+`test/repository/schemablanks_http_test.go` records what the schema and the
+exporter say about both forms, for the keys of a rule, of its labels and of
+a collector that say what is read. A new key of that kind gets a row there.
+Where blanks can only be a mistake that the exporter would go on to read
+something with, as a label's `expression` of blanks was, both refuse them.
 
 ## Measuring speed
 
-`internal/exporter/probe_bench_test.go` benchmarks a whole probe — the request
-to a target on the same machine, the decode, the transform, validation and
-the answer — for each transform over the same items, 100 and 5,000 of them:
+`internal/exporter/probe_bench_test.go` benchmarks a whole probe (the
+request to a target on the same machine, the decode, the transform,
+validation and the answer) for each transform over the same items, 100 and
+5,000 of them:
 
 ```sh
 go test -run '^$' -bench 'Probe' -benchtime 2s ./internal/exporter/
 ```
 
-`jq_cached` is answered from the cache, so it measures writing an answer
-alone, and `/gzip` writing it compressed. `jq_detected` and `jq_sniffed` are
-`jq_items` with `decoder.type` left to the response: named by its
-`Content-Type`, and found from the content of a body served as `text/plain`.
-`python` runs a script that emits one series for each item, and `prescript` a
-pre-script that passes the items on to `jq` rules, so the two measure handing
-a document to a Python worker and reading its answer back. Measure a change
-to the pipeline with these before and after, on a machine doing nothing else:
-`ns/op` moves with whatever else runs, while `B/op` and `allocs/op` do not,
-and say most about a change that saves allocation. A profile says where the
-time goes:
+- `jq_cached` is answered from the cache, so it measures only writing an
+  answer, and `/gzip` writing it compressed.
+- `jq_detected` and `jq_sniffed` are `jq_items` with `decoder.type` left to
+  the response: named by its `Content-Type`, and detected from the content
+  of a body served as `text/plain`.
+- `python` runs a script that emits one series per item, and `prescript` a
+  pre-script that passes the items on to `jq` rules, so the two measure
+  handing a document to a Python worker and reading its answer back.
+
+Measure a change to the pipeline with these before and after, on a machine
+doing nothing else. `ns/op` varies with whatever else runs, while `B/op` and
+`allocs/op` do not, and they say the most about a change that saves
+allocation. A profile shows where the time goes:
 
 ```sh
 go test -run '^$' -bench 'Probe/prom/n=5000$' -benchtime 2s -cpuprofile cpu.out ./internal/exporter/
 go tool pprof -top cpu.out
 ```
 
-Two results of these benchmarks, as measured on two shared cores (the times
-are the range of three runs, old and new in turn; bytes and allocations
-hardly move from run to run):
+Two results of these benchmarks, measured on two shared cores (the times are
+the range of three runs, old and new in turn; bytes and allocations hardly
+vary from run to run):
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1425,26 +1663,30 @@ hardly move from run to run):
 | `prescript/n=100` | 4.2–5.0 ms, 403 kB, 4,089 allocations | 3.0–4.7 ms, 267 kB, 1,996 allocations |
 | `prescript/n=5000` | 118–128 ms, 22.6 MB, 200,470 allocations | 70–79 ms, 14.2 MB, 95,515 allocations |
 
-`jq_sniffed` was a body read twice: the detection parsed it with
-`encoding/json` to see that it is JSON, threw the result away, and the json
-decoder read it again. The detection now reads it with the json decoder and
-the decode returns what that made, so `jq_sniffed` costs what `jq_items` and
-`jq_detected` cost (36–41 ms at 5,000 items).
+`jq_sniffed` read the body twice: the detection parsed it with
+`encoding/json` to see that it is JSON and discarded the result, and the
+json decoder read it again. The detection now reads it with the json decoder
+and the decode returns that result, so `jq_sniffed` costs the same as
+`jq_items` and `jq_detected` (36–41 ms at 5,000 items).
 
-The csv decoder has benchmarks of its own, which report beside what a decode
-allocates what the decoded rows still hold a collection later (`held-B/op`):
+The csv decoder has its own benchmarks, which report, in addition to what a
+decode allocates, what the decoded rows still hold after a collection
+(`held-B/op`):
 
 ```sh
 go test -run '^$' -bench 'CSVDecode' -benchtime 3x ./internal/decode/
 ```
 
-`wide_header_short_rows/k=2000` is a header of 2,000 columns over 2,000
-lines of `1`, 15 kB; `one_column/10MiB` a header and lines of `1`; and
-`ten_columns/1MiB` a monitoring export of a host name, a time and eight
-numbers a line. Each row was a map with an entry for every column the
-header names, an empty one for each a short row lacks; the rows are now the
-reader's own cells, with the header's names kept once (`CSVRows` in
-`internal/decode/csvrows.go`). Measured old and new in turn on two shared
+- `wide_header_short_rows/k=2000` is a header of 2,000 columns over 2,000
+  lines of `1`, 15 kB;
+- `one_column/10MiB` is a header and lines of `1`;
+- `ten_columns/1MiB` is a monitoring export with a host name, a time and
+  eight numbers per line.
+
+Each row used to be a map with an entry for every column that the header
+names, with an empty one for each column that a short row lacks. The rows
+are now the reader's own cells, with the header's names kept once (`CSVRows`
+in `internal/decode/csvrows.go`). Measured old and new in turn on two shared
 cores:
 
 | Benchmark | Before | After |
@@ -1455,50 +1697,57 @@ cores:
 | `Probe/csv/n=100` | 0.53–0.55 ms, 144 kB, 1,273 allocations | 0.46–0.49 ms, 99 kB, 666 allocations |
 | `Probe/csv/n=5000` | 11.4–13.3 ms, 6.6 MB, 50,405 allocations | 9.5–10.5 ms, 4.3 MB, 20,389 allocations |
 
-What a line of one column still costs, some 48 bytes for a line of two, is
-the reader's: a slice of fields and a string for each record, and its place
-in the list `encoding/csv`'s `ReadAll` grows, which is most of the bytes
-allocated (`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody` holds the rows
-under 32 times the body; they are about 20 times it).
+What a line of one column still costs, about 48 bytes for a line of two
+bytes, belongs to the reader: a slice of fields and a string for each record,
+and its place in the list that `encoding/csv`'s `ReadAll` grows, which is
+most of the bytes allocated
+(`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody` holds the rows under
+32 times the body; they are about 20 times it).
 
-`python` was four times `jq_items`, and nearly all of the difference was the
-hand-over, not the script. At 5,000 items the exporter spent 20 to 24 ms
-writing the request with `json.Marshal` (a copy of the document to mark its
-NaNs, then reflection and a sort of every object's keys), and 26 to 28 ms
-reading the answer with `encoding/json` into a map for each metric and then
-into series. The worker spent 58 ms of processor time: 15 ms reading the
-request with `json.loads`, 12 ms in the script, nearly all of it in its
-5,000 calls of `metric(...)`, 22 ms walking the answer to replace NaN and the
-infinities, and 8 ms writing it with `json.dumps`. Now the exporter writes
-the same request line itself in about 5 ms and reads the answer into series
-in about 5 ms; the worker writes an answer of plain values without the walk,
-after looking through it in 4 ms, and `metric(...)` takes a label that is a
-string as it is, 8.5 ms for the 5,000 calls: 37 ms of processor time in the
-worker. What is left there is `json.loads` of the request, 15 ms, and
-`json.dumps` of the answer, 8 ms. The look through the answer also counts
-its values, a check for each list and dict that adds half a millisecond at
-5,000 metrics, and has it weighed where the count grows fourfold, as far as
-a sixty-fourth of the count goes: that is what keeps an answer that holds
-one list many times over, or in itself, from being gone through as it is
-written (`weigh` in `pythonworker.go`, and `pythonshared_test.go`).
+**The Python hand-over.** `python` took four times as long as `jq_items`,
+and nearly all of the difference was the hand-over, not the script.
 
-The look adds up how long the answer's strings are as well, one addition for
-each, and refuses an answer they alone make longer than
-`limits.max_output_bytes`. It does not add up the keys of every dict, though
-a long key held by every row is written as often as a long value. The
-cheapest way there is, `sum(map(len, d))` for each dict, took the look
-through 5,000 metrics from 5.8 ms to 9.1, through 5,000 rows of seven keys
-from 4.0 ms to 5.9, and the copy of 5,000 metrics that hold a NaN from 18.7
-ms to 22.6: half again of the look, a sixth of the whole answer, for keys
-that are a few characters each in nearly every answer there is. So the look
-adds up the keys of a few dicts — of each level of four values or more the
-fourth value and every sixty-first after it, of the dicts a copy is made of
-the fourth and every sixty-first after it — takes each for the values around
-it, as often as the level has values for each one looked at, and adds up all
-the keys only where those then say the answer is longer than the limit
-(`keyed`). Measured against the worker before it looked at keys, as the
-least of fifteen runs under a limit of 1 MiB (Python 3.12; 3.10 is within a
-few points of it), the look through an answer costs:
+- At 5,000 items the exporter spent 20 to 24 ms writing the request with
+  `json.Marshal` (a copy of the document to mark its NaNs, then reflection
+  and a sort of every object's keys), and 26 to 28 ms reading the answer
+  with `encoding/json` into a map for each metric and then into series.
+- The worker spent 58 ms of processor time: 15 ms reading the request with
+  `json.loads`, 12 ms in the script (nearly all of it in its 5,000 calls of
+  `metric(...)`), 22 ms walking the answer to replace NaN and the
+  infinities, and 8 ms writing it with `json.dumps`.
+- Now the exporter writes the same request line itself in about 5 ms and
+  reads the answer into series in about 5 ms. The worker writes an answer of
+  plain values without the walk, after scanning it in 4 ms, and
+  `metric(...)` takes a string label as it is, 8.5 ms for the 5,000 calls:
+  37 ms of processor time in the worker. What remains there is `json.loads`
+  of the request, 15 ms, and `json.dumps` of the answer, 8 ms.
+- The scan through the answer also counts its values, a check for each list
+  and dict that adds half a millisecond at 5,000 metrics, and weighs the
+  answer where the count grows fourfold, down to a sixty-fourth of the
+  count. That is what prevents an answer that holds one list many times
+  over, or contains itself, from being traversed as it is written (`weigh`
+  in `pythonworker.go`, and `pythonshared_test.go`).
+
+**Key lengths.** The scan also adds up the lengths of the answer's strings,
+one addition each, and refuses an answer that they alone make longer than
+`limits.max_output_bytes`. It does not add up the keys of every dict,
+although a long key held by every row is written as often as a long value.
+
+- The cheapest way, `sum(map(len, d))` for each dict, took the scan of 5,000
+  metrics from 5.8 ms to 9.1, of 5,000 rows of seven keys from 4.0 ms to
+  5.9, and the copy of 5,000 metrics that hold a NaN from 18.7 ms to 22.6.
+  That is half again of the scan, and a sixth of the whole answer, for keys
+  of a few characters each in nearly every answer.
+- The scan therefore adds up the keys of a few dicts: of each level of four
+  values or more, the fourth value and every sixty-first after it, and of
+  the dicts that a copy is made of, the fourth and every sixty-first after
+  it. It takes each for the values around it, as often as the level has
+  values for each one examined, and adds up all the keys only where those
+  then say the answer is longer than the limit (`keyed`).
+
+Measured against the worker before it examined keys, as the minimum of
+fifteen runs under a limit of 1 MiB (Python 3.12; 3.10 is within a few
+points), the scan through an answer costs:
 
 | answer | before | now | |
 |---|---|---|---|
@@ -1516,89 +1765,102 @@ few points of it), the look through an answer costs:
 | 5,000 metrics, a label of 20 kB on the first | 6.5 ms | 11.5 ms | +78 % |
 | the last rows, one a NaN (copied) | 17.0 ms | 19.8 ms | +16 % |
 
-and all of writing the answer 1 to 5 % more for the ordinary ones, 4 % for
-the one dict of many keys, and 21 to 31 % for the last three. An answer of
-a few values pays for its levels, a microsecond in all: each is kept, and one
-of four values or more has its fourth looked at. The last three rows are the
-worst there is for an answer within the limit: one key that is unlike the
-rest stands where the look passes, the dicts looked at say sixty-one times
-too much, and the keys of every dict are added up to find the answer within
-the limit after all. That costs what adding them up for every answer would
-(`sum(map(len, d))` in the look, measured beside it: +54 % for the rows, +65
-% for the metrics), and a tenth of the look more where the dicts are a few
-among many values, since they are picked out of the levels afterwards. It is
-done from the levels the look kept, the dicts of each picked out in one pass
-and the keys of each joined by the interpreter, 1,024 values at a time:
-`sum(map(len, map("".join, dicts)))`. A key is not asked for its length,
-which would run the `__len__` of a class of the script's own, and the dicts
-looked at before are left out. The first form of this took each dict looked
-at for sixty-one wherever it stood, and added up the keys in a second walk
-through the answer, four calls for a dict: the one dict of 50,000 keys then
-cost 18.6 ms where it cost 6.1, the rows 12.5 ms and the metrics 19.7,
-three times the look, whenever such a dict stood fourth and never when it
-stood third. What the look keeps for this is the lists it made anyway,
-eight bytes for each value of the answer until it ends (472 kB where it
-held 429 for 5,000 metrics), and for a copy a list of its dicts; the keys
-of a dict looked at are joined into one string, as long as they are, which
-is let go of at once.
+Writing the whole answer costs 1 to 5 % more for the ordinary answers, 4 %
+for the one dict of many keys, and 21 to 31 % for the last three.
 
-A row keyed by a hundred thousand characters 5,000 times, 500 MB written,
-is refused in 10 to 40 ms and 15 MiB, where the worker took 3.5 s and 1.4 GB
-to write it for the exporter to refuse. A clock does not hold two percent
-on a shared machine, so
-`TestTheLookAtKeysCostsAnAnswerWithinTheLimitNoMoreThanATwentieth` holds
-the cost by a count: the calls the worker makes for an answer, of its own
-functions and of the interpreter's (`sys.setprofile`), as it was and as it
-is, in the worker itself, for the ordinary answers and for the three kinds
-above; how many dicts it looks at; and that the keys of all dicts are added
-up once for the answers with one long key and not at all for the others,
-the one dict of many keys among them. A count of calls does not see what
-the interpreter does inside one, so it holds that no walk is made a call
-at a time, not how long a join takes: the table above is to be measured
-again when `keyed` or `key_size` changes. Counting bytecodes with
-`sys.settrace` would say more, but from Python 3.12 that count stops short
-the first time a function is traced. What the look leaves is in
-`docs/PYTHON.md`: an answer whose long keys are where the look does not
-pass, or in too few of the dicts it does.
+- An answer of a few values pays for its levels, a microsecond in all: each
+  level is kept, and one of four values or more has its fourth value
+  examined.
+- The last three rows are the worst case for an answer within the limit: one
+  key unlike the rest stands where the scan passes, the dicts examined
+  overestimate by sixty-one times, and the keys of every dict are added up to
+  find that the answer is within the limit after all. That costs what adding
+  them up for every answer would (`sum(map(len, d))` in the scan, measured
+  beside it: +54 % for the rows, +65 % for the metrics), plus a tenth of the
+  scan where the dicts are a few among many values, because they are picked
+  out of the levels afterwards.
+- It is done from the levels that the scan kept: the dicts of each are
+  picked out in one pass and the keys of each joined by the interpreter,
+  1,024 values at a time: `sum(map(len, map("".join, dicts)))`. A key is not
+  asked for its length, which would run the `__len__` of a class of the
+  script's own, and the dicts examined before are left out.
+- The first form of this took each dict examined as sixty-one wherever it
+  stood, and added up the keys in a second walk through the answer, four
+  calls per dict. The one dict of 50,000 keys then cost 18.6 ms where it
+  cost 6.1, the rows 12.5 ms and the metrics 19.7, three times the scan,
+  whenever such a dict stood fourth and never when it stood third.
+- What the scan keeps for this is the lists that it made anyway, eight bytes
+  for each value of the answer until it ends (472 kB where it held 429 for
+  5,000 metrics), and for a copy a list of its dicts. The keys of an
+  examined dict are joined into one string as long as they are, which is
+  released immediately.
 
-The shortest of the lines a worker writes set the least a
-`limits.max_output_bytes` may be: `MinPythonOutputBytes` in
-`pythonworker.go` is the longest of the line a worker is ready with, the
-line it takes a request with, and the answers of a transform's script that
-emits nothing and of a pre-script that leaves `None`, 38 bytes. The loader
-refuses a smaller limit and the schemas a smaller number
-(`leastOutputRule`); the worker and the pool hold no floor, and run under
-any limit a test gives them. `pythonleastoutput_test.go` runs a worker and
-compares its lines with those constants, so an answer that gains or loses a
-key fails there: change the lines, and the 38 that `docs/PYTHON.md`,
-`docs/CONFIGURATION.md` and the specification say.
+A row keyed by a hundred thousand characters 5,000 times, 500 MB written, is
+refused in 10 to 40 ms and 15 MiB, where the worker used to take 3.5 s and
+1.4 GB to write it for the exporter to refuse.
 
-The lines the exporter and a worker exchange are the lines they were, byte
-for byte, so `limits.max_output_bytes` bounds what it bounded and a script
-is given what it was given. Two shortcuts were measured and not taken,
-because a script would see them. Handing a worker the bytes of a JSON
-response in place of the decoded document would save writing `data`, but
-the worker would then read another document: its keys in the target's order
-rather than sorted, `1.0` as a float rather than the int the exporter's
-`1` becomes, `1e400` as `inf` rather than the text the json decoder keeps.
-And a request in a binary form Python loads faster than JSON (`pickle`
-reads this one in 7 ms, `marshal` in 6) would change the protocol the
-specification fixes, one JSON document per line.
+A clock is not accurate to two percent on a shared machine, so
+`TestTheLookAtKeysCostsAnAnswerWithinTheLimitNoMoreThanATwentieth` checks
+the cost by counting:
+
+- the calls that the worker makes for an answer, of its own functions and of
+  the interpreter's (`sys.setprofile`), before and after the change, in the
+  worker itself, for the ordinary answers and for the three kinds above;
+- how many dicts it examines;
+- that the keys of all dicts are added up once for the answers with one long
+  key, and not at all for the others, including the one dict of many keys.
+
+A count of calls does not see what the interpreter does inside one call, so
+it checks that no walk is made one call at a time, not how long a join
+takes: measure the table above again when `keyed` or `key_size` changes.
+Counting bytecodes with `sys.settrace` would say more, but from Python 3.12
+that count stops short the first time a function is traced. What the scan
+misses is described in `docs/PYTHON.md`: an answer whose long keys are where
+the scan does not pass, or in too few of the dicts that it does examine.
+
+The shortest lines that a worker writes set the minimum
+`limits.max_output_bytes`. `MinPythonOutputBytes` in `pythonworker.go` is
+the longest of: the line with which a worker reports it is ready, the line
+with which it accepts a request, and the answers of a transform script that
+emits nothing and of a pre-script that leaves `None`. That is 38 bytes.
+
+- The loader refuses a smaller limit, and the schemas a smaller number
+  (`leastOutputRule`). The worker and the pool have no floor, and run under
+  any limit that a test gives them.
+- `pythonleastoutput_test.go` runs a worker and compares its lines with
+  those constants, so an answer that gains or loses a key fails there.
+  Change the lines, and the 38 that `docs/PYTHON.md`,
+  `docs/CONFIGURATION.md` and the specification state.
+
+The lines that the exporter and a worker exchange are unchanged, byte for
+byte, so `limits.max_output_bytes` bounds what it bounded before and a
+script is given what it was given before. Two shortcuts were measured and
+not taken, because a script would see them:
+
+- Handing a worker the bytes of a JSON response instead of the decoded
+  document would save writing `data`, but the worker would then read a
+  different document: its keys in the target's order instead of sorted,
+  `1.0` as a float instead of the int that the exporter's `1` becomes, and
+  `1e400` as `inf` instead of the text that the json decoder keeps.
+- A request in a binary form that Python loads faster than JSON (`pickle`
+  reads this one in 7 ms, `marshal` in 6) would change the protocol that
+  the specification fixes: one JSON document per line.
 
 `BenchmarkYAMLMerge` in `internal/decode` decodes a YAML body with a merge
-(`<<: *base`) of a mapping of 20,000 and of 200,000 keys, beside the same
-body without the merge and with the merged pairs written out; `body-bytes`
-is what to divide `B/op` and `allocs/op` by:
+(`<<: *base`) of a mapping of 20,000 and of 200,000 keys, next to the same
+body without the merge and with the merged pairs written out. Divide
+`B/op` and `allocs/op` by `body-bytes`:
 
 ```sh
 go test -run '^$' -bench 'YAMLMerge' -benchtime 3x ./internal/decode/
 ```
 
-The walk that decodes a document with a large mapping handed the library
-each merged key and each merged value alone, two calls of it for a pair.
-It now hands them a run of 128 pairs at a time, the keys and then the values
-of the keys the merge gives. Decoding the parsed document, parsing left out
-(the least of several runs, old and new in turn; 20,000 keys):
+The walk that decodes a document with a large mapping used to hand the
+library each merged key and each merged value separately, two calls per
+pair. It now hands over a run of 128 pairs at a time: the keys, and then the
+values of the keys that the merge provides. Decoding the parsed document,
+without parsing (the minimum of several runs, old and new in turn; 20,000
+keys):
 
 | Document | Before | After |
 | --- | --- | --- |
@@ -1607,14 +1869,14 @@ of the keys the merge gives. Decoding the parsed document, parsing left out
 | merged four times | 146 ms, 150.5 bytes, 2.68 allocations | 77 ms, 74.6 bytes, 1.24 allocations |
 | a list of two, half their keys shared | 102 ms, 48.4 bytes, 0.78 allocations | 67 ms, 31.6 bytes, 0.46 allocations |
 
-A merged pair costs 230 bytes in four allocations where it cost 540 in ten,
+A merged pair costs 230 bytes in four allocations, where it cost 540 in ten,
 and a pair of the mapping itself costs 320 in four. `yamlkeysmerge_test.go`
-holds it: a merge may allocate no more than the mapping it merges, the
-library is called twice for every 128 keys of a merge, and the walk as it
-was (`yamlkeysmergeoracle_test.go`) decodes every document of the tests into
-the same value or error.
+checks this: a merge may allocate no more than the mapping it merges, the
+library is called twice for every 128 keys of a merge, and the previous walk
+(`yamlkeysmergeoracle_test.go`) decodes every document of the tests into the
+same value or error.
 
-Following a reload has a benchmark of its own,
+Following a reload has its own benchmark,
 `internal/exporter/reloadfollow_bench_test.go`:
 
 ```sh
@@ -1624,14 +1886,18 @@ go test -run '^$' -bench 'FollowReload' -benchtime 20x ./internal/exporter/
 It reloads between two configurations of 50, 500 and 2,000 collectors: the
 same collectors read again (`unchanged`), every one changed (`changed`), and
 half of them removed and as many added (`half`), each also with a static
-target of every collector in a file reloaded with them (`/static`). The
-time of the operation is the whole following, with what a reload prepares of
-it before it puts its configuration in force (below). Beside it the
-benchmark reports `following-ns/op`, what is left of it once the
-configuration is in force, and `locked-ns/op`, how long the statistics lock
-was held: every probe takes that lock to find its collector's statistics,
-and the read of the self-metrics takes it. As measured on two shared cores,
-with and without static targets, which make no difference that shows:
+target for every collector in a file reloaded with them (`/static`).
+
+- The time of the operation is the whole following, including what a reload
+  prepares of it before it puts its configuration in force (below).
+- `following-ns/op` is what remains of it once the configuration is in
+  force.
+- `locked-ns/op` is how long the statistics lock was held. Every probe takes
+  that lock to find its collector's statistics, and so does the read of the
+  self-metrics.
+
+As measured on two shared cores, with and without static targets, which make
+no visible difference:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1642,47 +1908,56 @@ with and without static targets, which make no difference that shows:
 | `unchanged/n=2000` | 0.7–1.3 s, all of it under the lock; 706.5 MB, 2,124,026 allocations | 345–562 ms, 32–45 µs of it under the lock; 388.7 MB, 1,168,226 allocations |
 | `half/n=2000` | 0.5–1.0 s, all of it under the lock; 530.2 MB, 1,593,070 allocations | 344–720 ms, 0.35–0.57 ms of it under the lock; 371.3 MB, 1,115,171 allocations |
 
-Nearly all of the time was one thing: a collector's fingerprint is
-its definition written as YAML and hashed, about 0.2 ms and 177 kB for a
-collector of one rule, and a reload worked it out for every collector of the
-new configuration and again for every collector of the one it had followed,
-with the lock held, to tell the collectors it changed. Comparing the static
-targets took 0.6 ms for 500 of them, and the maps and the drops the rest.
-Now the fingerprints of a configuration are kept with it once it is
-followed, so a reload works out those of the new configuration alone; what
-the following is to drop and replace is worked out before the lock is taken,
-into a plan; and the lock is taken to do that, once the plan is seen to be
-still of the configuration in force and from the one followed
-(`planFollowing` and `followLocked` in `reconcile.go`).
-`reloadplan_http_test.go` holds this by counts and by the order of events,
+**Fingerprints.** Nearly all of the time went to one thing. A collector's
+fingerprint is its definition written as YAML and hashed, about 0.2 ms and
+177 kB for a collector of one rule, and a reload computed it for every
+collector of the new configuration and again for every collector of the one
+it had followed, with the lock held, to find the collectors that changed.
+Comparing the static targets took 0.6 ms for 500 of them, and the maps and
+the drops took the rest.
+
+- The fingerprints of a configuration are now kept with it once it is
+  followed, so a reload computes only those of the new configuration.
+- What the following is to drop and replace is computed into a plan before
+  the lock is taken.
+- The lock is then taken to carry out the plan, once the plan is confirmed
+  to still belong to the configuration in force and to start from the one
+  followed (`planFollowing` and `followLocked` in `reconcile.go`).
+
+`reloadplan_http_test.go` checks this by counts and by the order of events,
 not by time: no definition is encoded while the lock is held, a reload
 encodes each collector of the new configuration once, a probe is answered
 while a reload is held between its plan and the lock, and over generated
-sequences of reloads with probes and scrapes held across them a server
-leaves what one that follows as it did before leaves, the former following
-kept beside the test.
+sequences of reloads, with probes and scrapes held across them, a server
+ends up in the same state as one that follows in the previous way, which is
+kept next to the test.
 
-A probe that comes when a reloaded configuration is in force and the reload
-has not yet followed it needs it followed before it reads its collector
-there, and works out the same plan. While the fingerprints were made by the
-plan, such a probe waited for those the reload had not made yet, at worst
-all of them, at every reload. So a reload makes them before it puts its
-configuration in force: the configuration manager lets the server prepare
-what a reload has read and checked (`config.Manager.OnPrepare`,
-`prepareReload` in `reconcile.go`), on the goroutine that reloads, while
-`Get` and `InForce` still answer with the configuration before it and the
-probes go on with that one. The configuration then goes in force with every
-fingerprint made, those of the collectors of the configuration followed that
-it compares them with among them, and whoever follows it first, the reload
-or a probe, has only the maps of the plan left to make. The reload as a
-whole takes what it took; its configuration is in force later by as long as
-the fingerprints take, about 0.1 s for 500 collectors; and a probe never
-waits for a reload's fingerprints. `BenchmarkFollowReloadProbeWait`, in the
-same file and found by the same `-bench`, reads a file of 50, 500 and 2,000
-collectors again as `SIGHUP` reads it, holds the reload where its
-configuration is in force and not yet followed, and asks for the state there
-as a probe does; `probe-wait-ns/op` is how long that took, and the time of
-the operation the whole reload. As measured on two shared cores:
+**Preparing fingerprints.** A probe that arrives when a reloaded
+configuration is in force but the reload has not yet followed it needs it
+followed before it reads its collector there, and computes the same plan.
+While the plan computed the fingerprints, such a probe waited for those that
+the reload had not computed yet, at worst all of them, at every reload.
+
+A reload therefore computes them before it puts its configuration in force.
+The configuration manager lets the server prepare what a reload has read and
+checked (`config.Manager.OnPrepare`, `prepareReload` in `reconcile.go`), on
+the reloading goroutine, while `Get` and `InForce` still return the previous
+configuration and the probes continue with it. The configuration then goes
+in force with every fingerprint computed, including those of the collectors
+of the followed configuration that it is compared with. Whoever follows it
+first, the reload or a probe, has only the maps of the plan left to build.
+
+- The reload as a whole takes as long as before. Its configuration is in
+  force later by as long as the fingerprints take, about 0.1 s for 500
+  collectors.
+- A probe never waits for a reload's fingerprints.
+
+`BenchmarkFollowReloadProbeWait`, in the same file and selected by the same
+`-bench`, reads a file of 50, 500 and 2,000 collectors again as `SIGHUP`
+reads it, holds the reload where its configuration is in force and not yet
+followed, and requests the state there as a probe does. `probe-wait-ns/op`
+is how long that took, and the time of the operation is the whole reload. As
+measured on two shared cores:
 
 | Collectors | A probe waited | It waits | Left of the following once in force (`following-ns/op`) |
 | --- | --- | --- | --- |
@@ -1690,51 +1965,62 @@ the operation the whole reload. As measured on two shared cores:
 | 500 | 121–181 ms | 0.11–0.30 ms | 0.13–0.37 ms |
 | 2,000 | 0.38–0.61 s | 0.5–0.7 ms | 0.5–2.3 ms |
 
-The time, the memory and the allocations of a whole reload are what they
-were, and so is the time under the lock. Only the fingerprints are prepared:
-they are of a configuration alone, which never changes once loaded, so they
-are right whatever is followed when they are used. The plan is not prepared,
-since it is from the configuration followed, which a test, or anything that
-puts a configuration in force without a reload, can make another between
-the two. The prepared fingerprints are kept beside those the probes last
-used (`fingerprintMemo`), so a probe that still holds the former
-configuration does not have the new one's made again, and the memo holds
-those of two configurations at most, the one in force and one before it
-while probes still read it. `reloadprepare_http_test.go` holds all of it by
-counting where a definition is encoded: none once a reloaded configuration
-is in force, by the reload's own following or by a probe held between the
-two, each collector of the configuration once for a reload, none for a
-static target file reloaded alone, and after 1,000 reloads no configuration
-is held but the last few. `onprepare_http_test.go` in `internal/config`
-holds the order: prepared, in force, told.
+The time, the memory and the allocations of a whole reload are unchanged, and
+so is the time under the lock.
 
-The static targets make no difference that shows above because their
-schedule is not in what is measured there: it is the scrape loop's own
-(`targetSchedule` in `statictargetschedule.go`), and looks at a reloaded
-configuration on that loop's goroutine, within a second of the reload. A
-target starts again when its collector's definition changed, which the
-schedule tells by the collector's fingerprint, kept with the target's place
-in the schedule. It made that fingerprint itself: every collector with a
-static target was encoded a second time for every reload, and so was the
-collector of every target a static target file reloaded alone started. That
-kept no probe waiting, but for 2,000 collectors with a target each it was a
-third of a second of one core and 355 MB allocated after every reload. Now
-the schedule reads the fingerprints the reload made, which the configuration
-followed keeps (`followedConfig.fingerprintOf` in `reconcile.go`). The loop
-is given the configuration, the static target file and their following as
-one (`followedInForce`), none of which changes once followed, and the
-fingerprints are read only when the configuration the schedule plans with is
-the very one that following is of; for any other, and for a caller that
-follows none, as the tests of the schedule alone are, the definition is
-encoded as it was. The schedule takes no lock for it; where the exporter
-started with the configuration, whose fingerprints no reload prepared, it
-makes the ones nothing asked for yet, once, and the probes and the next
-reload find them made. `BenchmarkFollowReloadSchedule`, in the same file and
-found by the same `-bench`, reloads as `BenchmarkFollowReload` does, every
-collector with a static target, and times the look the schedule then takes,
-alone; `encodes/op` is how many definitions the reload and the look encoded
-together, and `schedule-encodes/op` how many of them the look did. As
-measured on two shared cores, old and new in turn, three times:
+- Only the fingerprints are prepared. They belong to a configuration alone,
+  which never changes once loaded, so they are correct whatever is followed
+  when they are used.
+- The plan is not prepared, because it depends on the followed
+  configuration, which a test, or anything that puts a configuration in force
+  without a reload, can change between the two steps.
+- The prepared fingerprints are kept next to those that the probes last used
+  (`fingerprintMemo`), so a probe that still holds the previous configuration
+  does not have the new one's computed again. The memo holds those of at most
+  two configurations: the one in force, and the previous one while probes
+  still read it.
+- `reloadprepare_http_test.go` checks all of this by counting where a
+  definition is encoded: none once a reloaded configuration is in force, by
+  the reload's own following or by a probe held between the two; each
+  collector of the configuration once per reload; none for a static target
+  file reloaded alone; and after 1,000 reloads no configuration is held
+  except the last few. `onprepare_http_test.go` in `internal/config` checks
+  the order: prepared, in force, notified.
+
+**The static target schedule.** The static targets make no visible
+difference above because their schedule is not part of what is measured
+there. It belongs to the scrape loop (`targetSchedule` in
+`statictargetschedule.go`), and examines a reloaded configuration on that
+loop's goroutine, within a second of the reload. A target restarts when its
+collector's definition changed, which the schedule detects by the
+collector's fingerprint, kept with the target's place in the schedule.
+
+- The schedule used to compute that fingerprint itself: every collector with
+  a static target was encoded a second time for every reload, and so was the
+  collector of every target that a static target file reloaded alone
+  started. That kept no probe waiting, but for 2,000 collectors with a target
+  each it was a third of a second of one core and 355 MB allocated after
+  every reload.
+- The schedule now reads the fingerprints that the reload computed, which
+  the followed configuration keeps (`followedConfig.fingerprintOf` in
+  `reconcile.go`). The loop receives the configuration, the static target
+  file and their following together (`followedInForce`), none of which
+  changes once followed.
+- The fingerprints are read only when the configuration that the schedule
+  plans with is exactly the one that the following belongs to. For any other,
+  and for a caller that follows none, as in the tests of the schedule alone,
+  the definition is encoded as before.
+- The schedule takes no lock for this. Where the exporter started with the
+  configuration, whose fingerprints no reload prepared, it computes the ones
+  that nothing has requested yet, once, and the probes and the next reload
+  find them computed.
+
+`BenchmarkFollowReloadSchedule`, in the same file and selected by the same
+`-bench`, reloads as `BenchmarkFollowReload` does, with a static target for
+every collector, and times only the schedule's subsequent examination.
+`encodes/op` is how many definitions the reload and the examination encoded
+together, and `schedule-encodes/op` how many of them the examination encoded.
+As measured on two shared cores, old and new in turn, three times:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1745,36 +2031,42 @@ measured on two shared cores, old and new in turn, three times:
 | `unchanged/n=2000` | 320–333 ms; 355.2 MB, 1,069,038 allocations; 4,000 encoded, 2,000 by the look | 8.2–8.6 ms; 2.1 MB, 7,038 allocations; 2,000 encoded, none by the look |
 | `changed/n=2000` | 315–347 ms; 354.7 MB, 1,068,038 allocations; 4,000 encoded, 2,000 by the look | 6.1–7.3 ms; 1.6 MB, 6,038 allocations; 2,000 encoded, none by the look |
 
-What was then left of the look for 2,000 collectors was mostly finding each
-target's collector by its name: the schedule went through the collectors of
-the configuration once for every collector with a static target, so 2,000
-times through 2,000, and 10,000 times through 10,000. A probe did the same
-once for its collector and once more for that collector's fingerprint, when
-the collector caches, and so did the scrape of a static target: of 10,000
-collectors, a probe of the last one answered from the cache took 0.1 to
-0.2 ms where one of the first took 0.02. Now the place of each collector is
-kept by its name with the configuration's fingerprints
-(`fingerprintGeneration.place` in `fingerprint.go`), which live as long as
-the configuration does and are shared by the same callers. The collectors
-are gone through once for a configuration, by the reload that prepares it,
-before it is in force, or, for the configuration the exporter started with,
-by whoever first asks for a name; that is 0.1 ms and 109 kB for 2,000
-collectors, where the reload takes a third of a second. The map is made
-under a `sync.Once` and never changed after, so the scrape loop, the probes
-and a reload read it without a lock. `followedConfig.collectorOf` and
-`fingerprintOf` read it only for the configuration their following is of,
-and `fingerprintMemo.fingerprint` only while the fingerprints remembered are
-that configuration's: for any other configuration, as for a scrape that
-waited for a slot across a reload, and for a caller that follows none, the
-collectors are gone through as they were. `schedule-scans/op` is how many
-times the look went through them: none now, and once for every collector
-with a static target before. The benchmark also has 10,000 collectors with a
-target each, for which `-bench 'FollowReloadSchedule/.*/n=10000$' -benchtime
-5x` is enough, a reload of that many taking seconds that are not timed and
-are waited for all the same, and 500 collectors with 20 targets each
-(`/targets=20`). As measured on two shared cores, old and new in turn; the
-bytes and the allocations of the look are what they were, a scan having
-allocated nothing:
+**Finding a collector by name.** What then remained of the examination for
+2,000 collectors was mostly finding each target's collector by its name: the
+schedule went through the configuration's collectors once for every
+collector with a static target, so 2,000 times through 2,000, and 10,000
+times through 10,000. A probe did the same once for its collector and once
+more for that collector's fingerprint, when the collector caches, and so did
+the scrape of a static target. With 10,000 collectors, a probe of the last
+one answered from the cache took 0.1 to 0.2 ms, where one of the first took
+0.02.
+
+- The place of each collector is now kept by its name with the
+  configuration's fingerprints (`fingerprintGeneration.place` in
+  `fingerprint.go`), which live as long as the configuration does and are
+  shared by the same callers.
+- The collectors are scanned once per configuration, by the reload that
+  prepares it before it is in force, or, for the configuration that the
+  exporter started with, by whoever first asks for a name. That takes 0.1 ms
+  and 109 kB for 2,000 collectors, where the reload takes a third of a
+  second.
+- The map is built under a `sync.Once` and never changed afterwards, so the
+  scrape loop, the probes and a reload read it without a lock.
+- `followedConfig.collectorOf` and `fingerprintOf` read it only for the
+  configuration that their following belongs to, and
+  `fingerprintMemo.fingerprint` only while the remembered fingerprints are
+  that configuration's. For any other configuration, as for a scrape that
+  waited for a slot across a reload, and for a caller that follows none, the
+  collectors are scanned as before.
+- `schedule-scans/op` is how many times the examination scanned them: none
+  now, and once for every collector with a static target before.
+
+The benchmark also has 10,000 collectors with a target each, for which
+`-bench 'FollowReloadSchedule/.*/n=10000$' -benchtime 5x` is enough (a
+reload of that many takes seconds, which are not timed but are still waited
+for), and 500 collectors with 20 targets each (`/targets=20`). As measured on
+two shared cores, old and new in turn; the bytes and allocations of the
+examination are unchanged, because a scan allocated nothing:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1790,71 +2082,86 @@ allocated nothing:
 | `unchanged/n=500/targets=20` | 14–24 ms | 14–31 ms |
 | `changed/n=500/targets=20` | 7–17 ms | 7–17 ms |
 
-With 20 targets to a collector the look is as long as it was: it asked once
-for each collector then too, 500 times through 500, and the time is that of
-the 10,000 targets, each compared with its place in the schedule. A probe of
-the last of 2,000 collectors answered from the cache takes 17–24 µs where it
-took 23–37, and of 10,000, 14–22 µs where it took 106–224; the scrape of the
-last static target of 2,000, answered from the cache, 13–15 µs where it took
-22–53. What a probe allocates is what it was. `reloadschedule_http_test.go`
-holds it by counting the times the collectors are gone through
-(`collectorsScannedHook`), never by time: once by the schedule's first look,
-once by a reload, and not at all by the look after it, by a probe or by a
-scrape, for 60 collectors and for 240, and with five targets to a collector.
-`collectorplace_test.go` holds that what is found by a name is what going
-through the collectors found, the former lookups kept beside the test.
-`reloadschedule_http_test.go` also holds the rest by counting where a
-definition is encoded: a reload of a configuration whose collectors all have a static
-target encodes each collector once, before it is in force, and the look
-after it none, driven as the loop drives it and with the loop running; the
-fingerprints the schedule asks for first are the ones the probes use; a
-static target file reloaded alone has the look encode only a collector that
-nothing had asked about; and over generated runs of reloads every look
-leaves the schedule as the former one, kept beside the test, leaves it.
+With 20 targets per collector the examination takes as long as before: it
+also asked once for each collector then, 500 times through 500, and the time
+is that of the 10,000 targets, each compared with its place in the schedule.
 
-Two more lookups by a name grew with the configuration, both for the static
-targets. A scrape of a static target asked when it ended, before it
-published, whether a target of its name was in force, by going through the
-targets of the file (`staticTargetInForce` in `statictargetsendpoint.go`),
-and a read of the static targets endpoint that names targets noted every
-name of the file anew to look its few up (`requestedStaticTargets`). And a
-read of the verbose self-metrics, which finds the request of every static
-target to keep it tracked (`seedStaticRequests` in `requeststats.go`), went
-through the collectors of the configuration once for every target
-(`model.CollectorByName`): 2,000 times through 2,000 at every read. Now the
-first two read the names the following of a file notes anyway, once for the
-file, with the generation each target has been there from
-(`followedConfig.targetNames`, `targetsDefinedFrom` in `reconcile.go`).
-Nothing more is kept, and a reload does nothing more than it did:
-`BenchmarkFollowReload` allocates what it allocated, 390.8 MB in 1,178,256
-allocations for 2,000 collectors with a static target each. The names are
-those of the file followed and are read only when the file in force is that
-very file. From a reload putting another file in force to that reload's
-following of it, which it makes at once and works out before the statistics
-lock is taken, the targets are gone through as they were, so what is told
-is of the file in force either way. The read of the verbose self-metrics
-finds each target's collector where the configuration followed keeps its
-place (`followedConfig.collectorOf`), as a probe and a scrape do, and under
-the same condition: the read follows what is in force before it looks for
-the requests, so only a reload that comes between the two has the
-collectors gone through as they were. `staticlookups_bench_test.go` has
-both, for 100, 2,000 and 10,000 static targets of as many collectors:
+- A probe of the last of 2,000 collectors answered from the cache takes
+  17–24 µs where it took 23–37, and of 10,000, 14–22 µs where it took
+  106–224. The scrape of the last static target of 2,000, answered from the
+  cache, takes 13–15 µs where it took 22–53. What a probe allocates is
+  unchanged.
+- `reloadschedule_http_test.go` checks this by counting how often the
+  collectors are scanned (`collectorsScannedHook`), never by time: once by
+  the schedule's first examination, once by a reload, and not at all by the
+  examination after it, by a probe or by a scrape, for 60 collectors and for
+  240, and with five targets per collector.
+- `collectorplace_test.go` checks that what is found by a name is what
+  scanning the collectors found, with the previous lookups kept next to the
+  test.
+- `reloadschedule_http_test.go` also checks the rest by counting where a
+  definition is encoded: a reload of a configuration whose collectors all
+  have a static target encodes each collector once, before it is in force,
+  and the examination after it encodes none, driven as the loop drives it and
+  with the loop running; the fingerprints that the schedule requests first
+  are the ones that the probes use; a static target file reloaded alone has
+  the examination encode only a collector that nothing had asked about; and
+  over generated runs of reloads every examination leaves the schedule as the
+  previous version, kept next to the test, leaves it.
+
+**Other lookups by name.** Two more lookups by name grew with the
+configuration, both for the static targets, and a third in the verbose
+self-metrics:
+
+- A scrape of a static target asked, when it ended and before it published,
+  whether a target of its name was in force, by scanning the file's targets
+  (`staticTargetInForce` in `statictargetsendpoint.go`).
+- A read of the static targets endpoint that names targets recorded every
+  name of the file again to look up its few names (`requestedStaticTargets`).
+- A read of the verbose self-metrics, which finds the request of every static
+  target to keep it tracked (`seedStaticRequests` in `requeststats.go`),
+  scanned the configuration's collectors once for every target
+  (`model.CollectorByName`): 2,000 times through 2,000 at every read.
+
+Now:
+
+- The first two read the names that the following of a file records anyway,
+  once per file, with the generation that each target has existed since
+  (`followedConfig.targetNames`, `targetsDefinedFrom` in `reconcile.go`).
+  Nothing more is kept, and a reload does no more work than before:
+  `BenchmarkFollowReload` allocates the same, 390.8 MB in 1,178,256
+  allocations for 2,000 collectors with a static target each.
+- The names belong to the followed file and are read only when the file in
+  force is exactly that file. Between a reload putting another file in force
+  and that reload's following of it (which it does immediately and computes
+  before the statistics lock is taken), the targets are scanned as before,
+  so the answer reflects the file in force either way.
+- The read of the verbose self-metrics finds each target's collector where
+  the followed configuration keeps its place (`followedConfig.collectorOf`),
+  as a probe and a scrape do, and under the same condition. The read follows
+  what is in force before it looks for the requests, so only a reload that
+  comes between the two makes it scan the collectors as before.
+
+`staticlookups_bench_test.go` has both, for 100, 2,000 and 10,000 static
+targets of as many collectors:
 
 ```sh
 go test -run '^$' -bench 'StaticTargetLookup|SelfMetricsSeedStatic' ./internal/exporter/
 ```
 
-`BenchmarkStaticTargetLookup` is what the scrape of the last static target
-asks when it ends (`in-force`), that scrape whole, answered from the cache
-(`scrape`), and what a read of the endpoint that names that one target asks
-(`named`). `BenchmarkSelfMetricsSeedStatic` is what a verbose read does for
-the static targets: finding the request of each (`keys`), and that with the
-tracker told of them (`seed`). A configuration of 10,000 collectors takes
-seconds to load, which are not timed: `-bench 'StaticTargetLookup/n=2000$'`
-asks for one size. As measured on two shared cores that other work kept
-busy all the while, old and new in turn, seven to ten times, which is why
-the ranges are wide; what `in-force`, `scrape`, `keys` and `seed` allocate
-is what they allocated:
+- `BenchmarkStaticTargetLookup` measures what the scrape of the last static
+  target asks when it ends (`in-force`), that whole scrape answered from the
+  cache (`scrape`), and what a read of the endpoint that names that one
+  target asks (`named`).
+- `BenchmarkSelfMetricsSeedStatic` measures what a verbose read does for the
+  static targets: finding the request of each (`keys`), and that plus
+  notifying the tracker of them (`seed`).
+
+A configuration of 10,000 collectors takes seconds to load, which are not
+timed; `-bench 'StaticTargetLookup/n=2000$'` selects one size. As measured
+on two shared cores that other work kept busy throughout, old and new in
+turn, seven to ten times, which is why the ranges are wide. What `in-force`,
+`scrape`, `keys` and `seed` allocate is unchanged:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1873,69 +2180,79 @@ is what they allocated:
 | `n=2000/seed` | 92–330 ms | 113–338 ms |
 | `n=10000/seed` | 1.4–3.6 s | 0.8–1.9 s |
 
-What is left of `keys` is a target's own, about 3 µs and six allocations
-each: the overrides of its request and the label of its URL, made again at
-every read. `seed` with more than 1,000 static targets was the tracker's and
-was not changed by this: it tracks `VerboseRequestSeriesLimit` requests, the
-static targets over that are offered to it again at every read, and each
-offer went through everything tracked for an idle request to make room for
-it (`setStatic`, `adoptLocked`, `expireLocked`), so 1,000 times through
-1,000 for 2,000 targets and 9,000 times for 10,000, which is most of the
-time above and hid what `keys` gained. The tracker no longer does that:
-see below. The read that names a target goes
-on to filter every series of the endpoint by the names, which is as long as
-the endpoint is large, as it was.
+What remains of `keys` belongs to each target, about 3 µs and six
+allocations each: the overrides of its request and the label of its URL,
+built again at every read. `seed` with more than 1,000 static targets was
+dominated by the tracker and was not changed by this. The tracker tracks
+`VerboseRequestSeriesLimit` requests, the static targets beyond that are
+offered to it again at every read, and each offer scanned everything tracked
+for an idle request to make room (`setStatic`, `adoptLocked`,
+`expireLocked`): 1,000 times through 1,000 for 2,000 targets and 9,000 times
+for 10,000. That is most of the time above, and it hid what `keys` gained.
+The tracker no longer does that: see below. The read that names a target
+still filters every series of the endpoint by the names, which takes as long
+as the endpoint is large.
 
-It is held by counting, never by time. `targetsScannedHook`, beside
-`collectorsScannedHook`, is called whenever the targets of a file are gone
-through to tell whether one has a name or to note the names they have, and
-`staticlookups_http_test.go` counts both: a read of the verbose
-self-metrics goes through the collectors once, the first time, for the
-configuration the exporter started with, and not at all after, where it
-went through them once for every static target; the scrape of the last
-static target and a read that names it go through the targets not at all,
-where each did once; and a reload goes through the collectors of its
-configuration once and the targets of its file once — for 60 collectors
-with a target each, for 240, and with five targets to a collector. The
-former lookups are kept beside the tests. Over 200 generated target files
-given to the server as they are, with targets that share a name, names that
-differ by case or by blanks and the empty name, a name is told in force,
-and a read that names targets is given its names or refused, exactly as the
-former lookups do (`statictargetnames_test.go`), with the file followed,
-with one in force that is not followed yet and with nothing followed. Over
-a run of reloads of both files, of either alone and of files that are
-refused, the same holds when the files are read and not yet in force, when
-they are in force and not yet followed, and when the reload is done, and
-every scrape that read its target before a reload publishes exactly when
-the former lookup and the target's stay say it does. And over 60 generated
-configurations, collectors that share a name among them and targets of a
-collector the configuration does not have, the requests found are the
-former search's, and a verbose read is answered with the same bytes as by a
-server that tracked the former search's requests, but for the families of
-the Go runtime and of the process. Two readers that ask all three while
-reloads replace both files and either alone are answered as the former
-lookups answer whenever no reload came during the asking, which, run with
-the race detector, also shows that what was noted for the files followed is
-read while a reload notes the next. Only a test sets one of the hooks: the
-exporter declares each and reads it in one place
-(`test/repository/scanhooks_test.go`).
+This is checked by counting, never by time. `targetsScannedHook`, next to
+`collectorsScannedHook`, is called whenever the targets of a file are
+scanned to find whether one has a name or to record their names.
+`staticlookups_http_test.go` counts both:
 
-Past the limit, a static target the tracker has no room for is offered to
-it at every read of the verbose self-metrics, and every offer looked for an
-idle request to make room by going through all the requests tracked
-(`expireLocked`): with 2,000 static targets, 1,000 times through 1,000 at
-each read, once for every scrape of the self-metrics. The tracker now keeps
-a time no request that can expire was last used before (`idleFloor`), set
-when it goes through them and moved earlier when a request is used at an
-earlier time, and goes through them only when that time is an hour old, so
-when one of them may be idle; what it drops, keeps and counts is what it
-did. `BenchmarkVerboseSelfMetricsRead` in `staticlookups_bench_test.go` is
-what the tracked requests make a read do — the static targets' requests
-told to the tracker, the idle ones expired and the series of every one —
+- A read of the verbose self-metrics scans the collectors once, the first
+  time, for the configuration that the exporter started with, and not at all
+  afterwards, where it used to scan them once for every static target.
+- The scrape of the last static target and a read that names it scan the
+  targets not at all, where each used to scan them once.
+- A reload scans the collectors of its configuration once and the targets of
+  its file once.
+
+These hold for 60 collectors with a target each, for 240, and with five
+targets per collector. The previous lookups are kept next to the tests:
+
+- Over 200 generated target files given to the server as they are (with
+  targets that share a name, names that differ by letter case or blanks, and
+  the empty name), a name is reported in force, and a read that names
+  targets is given its names or refused, exactly as the previous lookups do
+  (`statictargetnames_test.go`). This holds with the file followed, with one
+  in force that is not followed yet, and with nothing followed.
+- Over a run of reloads of both files, of either alone and of refused files,
+  the same holds when the files are read and not yet in force, when they are
+  in force and not yet followed, and when the reload is done. Every scrape
+  that read its target before a reload publishes exactly when the previous
+  lookup and the target's lifetime say it does.
+- Over 60 generated configurations (with collectors that share a name, and
+  targets of a collector that the configuration does not have), the
+  requests found are those of the previous search, and a verbose read is
+  answered with the same bytes as by a server that tracked the previous
+  search's requests, except for the families of the Go runtime and of the
+  process.
+- Two readers that ask all three questions while reloads replace both files
+  and either alone are answered as the previous lookups answer whenever no
+  reload came during the question. Run with the race detector, this also
+  shows that what was recorded for the followed files is read while a reload
+  records the next.
+- Only a test sets one of the hooks: the exporter declares each and reads it
+  in one place (`test/repository/scanhooks_test.go`).
+
+**The request tracker.** Past the limit, a static target that the tracker
+has no room for is offered to it at every read of the verbose self-metrics,
+and every offer looked for an idle request to make room by scanning all the
+tracked requests (`expireLocked`): with 2,000 static targets, 1,000 times
+through 1,000 at each read, once for every scrape of the self-metrics.
+
+The tracker now keeps a time before which no request that can expire was
+last used (`idleFloor`). It is set when the tracker scans the requests and
+moved earlier when a request is used at an earlier time, and the tracker
+scans them only when that time is an hour old, that is, when one of them may
+be idle. What it drops, keeps and counts is unchanged.
+
+`BenchmarkVerboseSelfMetricsRead` in `staticlookups_bench_test.go` measures
+what the tracked requests make a read do (the static targets' requests
+reported to the tracker, the idle ones expired, and the series of each),
 with the tracker full of the static targets' requests (`static`) or of
-requests of probes that leave no room for any of them (`probed`);
+requests of probes that leave no room for any of them (`probed`).
 `BenchmarkSelfMetricsSeedStatic/seed` is the first part. Old and new back to
-back on two shared cores; neither allocates more or less than it did:
+back on two shared cores; neither allocates more or less than before:
 
 ```sh
 go test -run '^$' -bench 'SelfMetricsSeedStatic/.*/seed|VerboseSelfMetricsRead' ./internal/exporter/
@@ -1952,38 +2269,41 @@ go test -run '^$' -bench 'SelfMetricsSeedStatic/.*/seed|VerboseSelfMetricsRead' 
 | `n=2000/seed` | 71 ms | 3.4 ms |
 | `n=10000/seed` | 0.60 s | 25 ms |
 
-What is left is as long as the static targets are many: about two thirds
-is finding each target's request (`staticRequestKeys`, mostly
-`fetch.RequestLabelFor` making its URL's label again), and most of the rest
-is `setStatic` itself, which makes new statistics for each target left over
-that the tracker then turns away. It is held by counting, not by time:
-`requestsScannedHook` is called whenever `expireLocked` goes through the
-requests, and a read with twice as many static targets as the tracker holds
-goes through them at most once, with the tracker full of requests of
-probes, with them idle an hour later and with it full of static targets'
-(`requeststats_oracle_test.go`), where it went through them 2,001 times.
-The former tracker is kept beside the tests as an oracle: over generated
-runs of probes of new and tracked requests, scrapes of static targets,
-reads with the static targets as they were or changed by a reload to a few,
-nearly as many as the tracker holds or a few more, collectors removed,
-verbose switched off and time passing by seconds, minutes, about the hour
-and backwards, the tracker keeps the same requests with the same values,
-times and counts as the former one after every step, and gives the same
-series at every read; past the limit the former tracker took the static
-targets in the map's order, and the new one is held to an order it could
-have had. It costs about a second, plain or under the race detector.
+What remains grows with the number of static targets. About two thirds is
+finding each target's request (`staticRequestKeys`, mostly
+`fetch.RequestLabelFor` building its URL's label again), and most of the
+rest is `setStatic` itself, which builds new statistics for each left-over
+target that the tracker then rejects.
 
-The debug scrape of a static target, `/static-targets?debug=<name>`, finds
-its target and the target's collector before it scrapes (`staticDebugTarget`
-in `probedebug.go`). It went through the targets by value, keeping a pointer
-to the loop's copy, which put a copy of each target it passed, 416 bytes, on
-the heap, and then through the collectors (`model.CollectorByName`). It now
-goes through the targets by index and points into the file in force, which
-nothing the debug scrape does writes to, and finds the collector where the
-configuration followed keeps its place (`followedConfig.collectorOf`), as a
-scrape does, falling back to going through the collectors where a scrape
-does. `BenchmarkStaticTargetLookup` times it with the last target asked for
-(`debug`), old and new taken back to back:
+- This is checked by counting, not by time. `requestsScannedHook` is called
+  whenever `expireLocked` scans the requests. A read with twice as many
+  static targets as the tracker holds scans them at most once, with the
+  tracker full of probe requests, with those requests idle an hour later,
+  and with it full of static targets' requests
+  (`requeststats_oracle_test.go`), where it used to scan them 2,001 times.
+- The previous tracker is kept next to the tests as an oracle. Over
+  generated runs of probes of new and tracked requests, scrapes of static
+  targets, reads with the static targets unchanged or changed by a reload
+  (to a few, nearly as many as the tracker holds, or a few more), removed
+  collectors, verbose switched off, and time passing by seconds, minutes,
+  about an hour and backwards, the tracker keeps the same requests with the
+  same values, times and counts as the previous one after every step, and
+  returns the same series at every read. Past the limit, the previous tracker
+  took the static targets in the map's order, and the new one is held to an
+  order that it could have had. It costs about a second, plain or under the
+  race detector.
+
+**The debug scrape.** The debug scrape of a static target,
+`/static-targets?debug=<name>`, finds its target and the target's collector
+before it scrapes (`staticDebugTarget` in `probedebug.go`). It iterated over
+the targets by value, keeping a pointer to the loop's copy, which put a copy
+of each target it passed (416 bytes) on the heap, and then scanned the
+collectors (`model.CollectorByName`). It now iterates over the targets by
+index and points into the file in force, which nothing in the debug scrape
+writes to, and finds the collector where the followed configuration keeps
+its place (`followedConfig.collectorOf`), as a scrape does, falling back to
+scanning the collectors where a scrape does. `BenchmarkStaticTargetLookup`
+times it with the last target requested (`debug`), old and new back to back:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1991,48 +2311,52 @@ does. `BenchmarkStaticTargetLookup` times it with the last target asked for
 | `n=2000/debug` | 0.61 ms, 832,000 bytes, 2,000 allocations | 4.8 µs, none |
 | `n=10000/debug` | 2.3 ms, 4,160,000 bytes, 10,000 allocations | 54 µs, none |
 
-What is left is comparing the names of the targets passed, which costs much
-less than the scrape that follows; the targets are not noted by their names
-for it. `staticdebugtarget_test.go` holds it: finding the last of 2,000 and
-of 10,000 targets allocates nothing, where the lookup as it was, measured
-beside it, allocates once for each target; and over 200 generated pairs of
-configuration and target file, with targets that share a name, collectors
-that share one and targets of a collector the configuration lacks, the
-target and collector found are those the lookup as it was found — the
-target the first of its name, in the file itself — with the configuration
-followed, which goes through its collectors once in all
-(`collectorsScannedHook`), and with one followed that keeps no places,
-which goes through them once for each target found.
+What remains is comparing the names of the targets passed, which costs much
+less than the scrape that follows; the targets are not indexed by name for
+it. `staticdebugtarget_test.go` checks this:
 
-The check of a static target file against a configuration, which the start
-and `--dry-run` make once and a reload once for each pair of the two it asks
-about (see below), has a benchmark in
+- finding the last of 2,000 and of 10,000 targets allocates nothing, where
+  the previous lookup, measured next to it, allocates once per target;
+- over 200 generated pairs of configuration and target file (with targets
+  that share a name, collectors that share one, and targets of a collector
+  that the configuration lacks), the target and collector found are those
+  that the previous lookup found (the target being the first of its name, in
+  the file itself). This holds with the configuration followed, which scans
+  its collectors once in all (`collectorsScannedHook`), and with a followed
+  configuration that keeps no places, which scans them once for each target
+  found.
+
+**Checking a static target file.** The check of a static target file against
+a configuration, which startup and `--dry-run` make once and a reload once
+for each pair of the two that it asks about (see below), has a benchmark in
 `internal/config/targetcheck_bench_http_test.go`:
 
 ```sh
 go test -run '^$' -bench 'StaticTargetsAgainst|TargetsChecked' ./internal/config/
 ```
 
-`BenchmarkValidateStaticTargetsAgainst` is the check
-(`ValidateStaticTargetsAgainst`) of n targets against n collectors: `own`
-with each target of its own collector, `last` with every target of the last
-collector, whose path has a placeholder, and `one` with a single target.
-`BenchmarkTargetsChecked` is the search for the collectors whose descriptor
-files the check opens (`targetsChecked`), which a reload that reads the
-target file makes for the configuration read and the one in force:
-`no_message` with no target setting a `request.message`, as in every file
-without a grpc collector, `every_message` and `one_message`. The check found
-a target's collector by going through the configuration's collectors
-(`model.CollectorByName`), four times for every target, and the search once
-more for every target, whether or not it set a message, reading a name out
-of each definition of 1,224 bytes: for as many targets as collectors that is
-the square of their number. Now the collectors are gone through once for a
-check, to note where each is by its name (`collectorsByName` in
-`statictargets.go`), in the map the check made before to know the names, and
-the search does so only once it meets a target that sets a message.
-`indexes/op` is how many times they were gone through. As measured on two
-shared cores, old and new in turn (the times are the range of two or three
-runs):
+- `BenchmarkValidateStaticTargetsAgainst` is the check
+  (`ValidateStaticTargetsAgainst`) of n targets against n collectors: `own`
+  with each target of its own collector, `last` with every target of the
+  last collector, whose path has a placeholder, and `one` with a single
+  target.
+- `BenchmarkTargetsChecked` is the search for the collectors whose descriptor
+  files the check opens (`targetsChecked`), which a reload that reads the
+  target file makes for the configuration read and the one in force:
+  `no_message` with no target setting a `request.message`, as in every file
+  without a grpc collector, `every_message` and `one_message`.
+
+The check found a target's collector by scanning the configuration's
+collectors (`model.CollectorByName`), four times for every target, and the
+search scanned them once more for every target, whether or not it set a
+message, reading a name out of each definition of 1,224 bytes. For as many
+targets as collectors, that is the square of their number. Now the
+collectors are scanned once per check, to record where each is by its name
+(`collectorsByName` in `statictargets.go`), in the map that the check
+already built to know the names, and the search does so only once it meets
+a target that sets a message. `indexes/op` is how many times they were
+scanned. As measured on two shared cores, old and new in turn (the times are
+the range of two or three runs):
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2048,20 +2372,24 @@ runs):
 | `every_message/n=10000` | 0.67–0.85 s, 58,424,448 bytes, 20 allocations | 67–78 ms, 58,861,712 bytes, 55 allocations |
 | `one_message/n=10000` | 0.53–0.54 s, 1,280 bytes, 1 allocation | 1.3–1.6 ms, 438,544 bytes, 36 allocations |
 
-What was left of the check was a target's own, 4 to 6 µs each whatever the
-configuration holds: about half of it reading which keys the target's
-`request` block sets, by reflection over the block's fields and their tags
-(`setKeys` in `internal/fetch`), and a quarter binding the target's params,
-which parsed the placeholders of the collector's request anew for every
-target of it, the path's twice (`fetch.CheckRequestParams`). Which field of
-a block has which yaml key depends on its type alone, and is now read from
-the tags once for a type and kept by it (`yamlKeysOf`); only whether each
-field is set is looked at for each target. A collector's placeholders are
-found once for a check, for its first target, and kept for its others
+What then remained of the check belonged to each target, 4 to 6 µs each
+whatever the configuration holds:
+
+- about half was reading which keys the target's `request` block sets, by
+  reflection over the block's fields and their tags (`setKeys` in
+  `internal/fetch`);
+- a quarter was binding the target's params, which parsed the placeholders
+  of the collector's request again for every target of it, the path's twice
+  (`fetch.CheckRequestParams`).
+
+Which field of a block has which yaml key depends only on its type, and is
+now read from the tags once per type and kept (`yamlKeysOf`); only whether
+each field is set is examined for each target. A collector's placeholders are
+found once per check, for its first target, and kept for its others
 (`fetch.RequestParamsCheck`, which lives for one check, so that what it keeps
-cannot go stale), and `CheckRequestParams` itself, which a probe calls,
-finds them once where it found them twice. The same benchmark, old and new
-in turn, twice:
+cannot go stale). `CheckRequestParams` itself, which a probe calls, finds
+them once where it found them twice. The same benchmark, old and new in
+turn, twice:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2072,62 +2400,74 @@ in turn, twice:
 | `own/n=10000` | 39–40 ms, 3,877,267 bytes, 50,038 allocations | 18–22 ms, 3,828,729 bytes, 43,451 allocations |
 | `last/n=10000` | 49–50 ms, 6,757,022 bytes, 90,034 allocations | 15 ms, 2,597,295 bytes, 50,038 allocations |
 
-What is left for a target is 1.5 to 2 µs: whether each field of its
+What remains for a target is 1.5 to 2 µs: whether each field of its
 `request` block is set, still by reflection, a fifth of the check;
-`url.Parse` of its address, which checking the address is, as much; and
-binding its params against the placeholders found. `own` also finds the
-placeholders of each collector, each its first. Noting where 10,000
-collectors are is 1 to 2 ms. The search with every target setting a message is
-the copies it returns, a collector's definition for each such target. One
-case costs more than it did: a target file of fewer than ten or so targets,
-one of which sets a message, checked against thousands of collectors, for
-which going through them a few times was less than noting where all of them
-are — 0.6 ms where it was 0.1 for one target and 10,000 collectors, at a
-reload that reads a configuration of that size in seconds.
+`url.Parse` of its address, which is what checking the address is, as much
+again; and binding its params against the placeholders found. `own` also
+finds the placeholders of each collector, each for its first target.
+Recording where 10,000 collectors are takes 1 to 2 ms. The search with every
+target setting a message is dominated by the copies it returns, a
+collector's definition for each such target.
 
-It is held without a duration. `targetcheck_http_test.go` and
-`targetcheck_test.go` count the times the collectors are gone through
-(`collectorsIndexedHook`): once for a check, of one target and of 400, of a
-file accepted and of one refused at its last target; and for the search once
-for each configuration given, not at all for a file none of whose targets
-sets a message. `test/repository/collectorbyname_test.go` reads the two
-source files and fails when either uses `model.CollectorByName` again. And
-the check and the search as they were are kept beside the tests: over 20,000
-generated pairs of a configuration and a target file — collectors that share
-a name, a request type the build lacks, targets refused for each thing the
-check refuses and for several at once — and over every static target file
-the repository ships against every configuration it ships, the check says
-what it said, message for message, and the search finds the same collectors
-in the same order. That a collector's placeholders are found once for a
-check and a block's yaml keys once for its type is held by counting
-(`placeholdersParsedHook` and `yamlKeysReadHook` in `internal/fetch`,
-`targetcheckcost_test.go`): 1,000 checks of the params of three collectors,
-whatever parts of the request each replaces, find the placeholders three
-times, and the request blocks of 1,000 targets are read for their keys once
-at most; and by allocations (`targetcheck_http_test.go`): checking 1,100
-targets of a collector with a placeholder in its path allocates no more than
-five times for each target past 100, where it allocated nine times. Beside
-them, `setKeys` and `CheckRequestParams` as they were hold the present ones:
-over 4,000 generated collectors with placeholders well formed or not in each
-part of the request and in label values, checked with generated params and
-overrides through `CheckRequestParams` and a `RequestParamsCheck` shared by
-eight checks, the same params unused or the same error, and over generated
-request blocks of a collector and of a target, every field set and left
-unset, the same keys in the same order.
+One case costs more than before: a target file of fewer than about ten
+targets, one of which sets a message, checked against thousands of
+collectors. There, scanning the collectors a few times cost less than
+recording where all of them are: 0.6 ms where it was 0.1 for one target and
+10,000 collectors, during a reload that reads a configuration of that size
+in seconds.
 
-A reload asks whether a target file and a configuration agree up to five
-times (`Manager.apply` in `internal/config/config.go`): for the pair it read,
-for each file it read with the other in force, and again for the error of
-each file it refuses. It checked a pair each time it asked, the same pair up
-to three times, so a refused reload of a target file of 10,000 targets
-repeated a check of 30 ms or so under the reload lock. Now a reload checks
-each pair once and gives the verdict it got, the very error, when it asks
-again (`pairVerdicts`); and a target file read alone, whose check opens the
-descriptor files of the configuration read and of the one in force, which
-are then one, looks through that one once (`targetsChecked`).
+This is checked without a duration:
+
+- `targetcheck_http_test.go` and `targetcheck_test.go` count the scans of the
+  collectors (`collectorsIndexedHook`): once per check, for one target and
+  for 400, for an accepted file and for one refused at its last target; and
+  for the search, once for each configuration given, and not at all for a
+  file in which no target sets a message.
+- `test/repository/collectorbyname_test.go` reads the two source files and
+  fails when either uses `model.CollectorByName` again.
+- The previous check and search are kept next to the tests. Over 20,000
+  generated pairs of a configuration and a target file (with collectors that
+  share a name, a request type that the build lacks, targets refused for each
+  thing that the check refuses and for several at once), and over every
+  static target file that the repository ships against every configuration
+  it ships, the check returns the same result, message for message, and the
+  search finds the same collectors in the same order.
+- That a collector's placeholders are found once per check and a block's
+  yaml keys once per type is checked by counting (`placeholdersParsedHook`
+  and `yamlKeysReadHook` in `internal/fetch`, `targetcheckcost_test.go`):
+  1,000 checks of the params of three collectors, whatever parts of the
+  request each replaces, find the placeholders three times, and the request
+  blocks of 1,000 targets are read for their keys at most once.
+- It is also checked by allocations (`targetcheck_http_test.go`): checking
+  1,100 targets of a collector with a placeholder in its path allocates no
+  more than five times for each target beyond 100, where it allocated nine
+  times.
+- Next to them, the previous `setKeys` and `CheckRequestParams` check the
+  current ones. Over 4,000 generated collectors, with well-formed or
+  malformed placeholders in each part of the request and in label values,
+  checked with generated params and overrides through `CheckRequestParams`
+  and a `RequestParamsCheck` shared by eight checks, they report the same
+  unused params or the same error. Over generated request blocks of a
+  collector and of a target, with every field set and unset, they return the
+  same keys in the same order.
+
+**Checking each pair once.** A reload asks whether a target file and a
+configuration agree up to five times (`Manager.apply` in
+`internal/config/config.go`): for the pair that it read, for each file that
+it read with the other one in force, and again for the error of each file
+that it refuses. It checked a pair each time it asked, the same pair up to
+three times, so a refused reload of a target file of 10,000 targets repeated
+a check of about 30 ms under the reload lock.
+
+- A reload now checks each pair once, and returns the same verdict, the very
+  same error, when it asks again (`pairVerdicts`).
+- A target file read alone, whose check opens the descriptor files of the
+  configuration read and of the one in force, which are then the same,
+  looks through that configuration once (`targetsChecked`).
+
 `BenchmarkRefusedPairReload` in `internal/config/refusedpair_http_test.go`
-makes each kind of reload at 10,000 targets, the files read from disk, each
-refused at its last target where it is refused; `checks/op` is how many
+makes each kind of reload at 10,000 targets, with the files read from disk,
+each refused at its last target where it is refused. `checks/op` is how many
 checks it made:
 
 ```sh
@@ -2146,37 +2486,41 @@ range of two runs):
 | `targets_alone`, both read, the target file goes alone | 279–282 ms, 58.1 MB, 880,830 allocations, 4 checks | 249–262 ms, 56.1 MB, 850,829 allocations, 3 checks |
 | `neither_alone`, both read and refused | 295–305 ms, 60.1 MB, 910,839 allocations, 5 checks | 251–253 ms, 56.1 MB, 850,831 allocations, 3 checks |
 
-The rest is reading the files. It is held without a duration:
-`TestAReloadChecksEachPairOfFilesOnce` counts the checks of each of these
-reloads (`targetsValidatedHook`, which only a test sets,
-`test/repository/scanhooks_test.go`), one for each pair asked about, and
-`TestATargetFileReadAloneLooksThroughTheConfigurationInForceOnce` the times
-the collectors are gone through for a target file read alone. The reload as
-it was is kept beside the tests (`oldApply`), and over generated sequences
-of reloads — of http collectors and of a grpc collector whose descriptor set
-is replaced, removed and put back; each file accepted, refused for itself
-or refused for the other; one read or both, on demand or by a tick, with the
-watch on and off — two managers of the same files, one reloading as before
-and one as now, leave the same files in force, return the same errors, log
-the same lines in the same order, count the same reloads, and watch the same
-files for a refused one, stamped alike.
+The rest is reading the files. This is checked without a duration:
 
-The read of every collector's statistics, which each scrape of the
-self-metrics makes under that same lock, has a benchmark beside that one,
-`internal/exporter/collectorstats_bench_test.go`:
+- `TestAReloadChecksEachPairOfFilesOnce` counts the checks of each of these
+  reloads (`targetsValidatedHook`, which only a test sets,
+  `test/repository/scanhooks_test.go`): one for each pair asked about.
+- `TestATargetFileReadAloneLooksThroughTheConfigurationInForceOnce` counts
+  how often the collectors are scanned for a target file read alone.
+- The previous reload is kept next to the tests (`oldApply`). Over generated
+  sequences of reloads (of http collectors and of a grpc collector whose
+  descriptor set is replaced, removed and restored; each file accepted,
+  refused for itself or refused because of the other; one file read or both,
+  on demand or by a tick, with the watch on and off), two managers of the
+  same files, one reloading as before and one as now, leave the same files
+  in force, return the same errors, log the same lines in the same order,
+  count the same reloads, and watch the same files, stamped alike, for a
+  refused reload.
+
+**Collector statistics.** The read of every collector's statistics, which
+each scrape of the self-metrics makes under the same lock, has a benchmark
+next to that one, `internal/exporter/collectorstats_bench_test.go`:
 
 ```sh
 go test -run '^$' -bench 'CollectorStats/steady' ./internal/exporter/
 go test -run '^$' -bench 'CollectorStats/reloaded' -benchtime 20x ./internal/exporter/
 ```
 
-`steady` is a read that finds every collector's statistics there, as every
-read but the first after a reload does, and `reloaded` the first read after
-a reload that replaced every collector by another, which makes the
-statistics of each with the lock held; the reload is not timed and takes far
-longer than the read, hence the fixed number of rounds. It reports
-`locked-ns/op` as `FollowReload` does. As measured on two shared cores, old
-and new in turn, three times:
+- `steady` is a read that finds every collector's statistics already there,
+  as every read except the first after a reload does.
+- `reloaded` is the first read after a reload that replaced every collector
+  with another, which builds the statistics of each with the lock held. The
+  reload is not timed and takes far longer than the read, hence the fixed
+  number of rounds.
+
+It reports `locked-ns/op` as `FollowReload` does. As measured on two shared
+cores, old and new in turn, three times:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2187,74 +2531,87 @@ and new in turn, three times:
 | `reloaded/n=500` | 397–438 µs, 236–266 µs of it under the lock; 388,560 bytes, 1,031 allocations | 311–332 µs, 129–155 µs of it under the lock; 354,992 bytes, 1,010 allocations |
 | `reloaded/n=2000` | 1.7–2.1 ms, 1.0–1.4 ms of it under the lock; 1,580,216 bytes, 4,054 allocations | 1.2–1.3 ms, 0.58–0.59 ms of it under the lock; 1,419,680 bytes, 4,022 allocations |
 
-The read took the lock and did under it all that gave it the statistics by
-name. Of the 100–110 µs for 500 collectors, about 25 were the copy of each
-collector's definition, 1,224 bytes, which `for _, c := range` made to read
-a name; about 50 the map of the statistics, made without its size and grown
-as it was filled; about 9 the slice of the names, grown likewise; and the
-rest filling the map and finding each collector's statistics, of which only
-the finding, 6–9 µs, needs the lock. Now the names are read by index and the
-map and the slices made at their size before the lock is taken, the
-statistics are found into a slice under it, and the map is filled from that
-once it is released (`collectorStats` in `selfmetrics.go`). What the first
-read after a reload still does with the lock held is make the statistics of
-the collectors the reload added, a quarter of a microsecond each: 320 bytes,
-which is most of it, and a reading of the clock, which is when the
-collector's counters began to count. The sort of the names and the copy of
-each collector's counters, under that collector's own lock, are as they were
-and are the rest of the read.
+The read used to take the lock and do everything that produced the
+statistics by name under it. Of the 100–110 µs for 500 collectors:
 
-`collectorstats_http_test.go` holds it without a duration. One read of 500
-collectors may make 515 allocations of 210,000 bytes: it makes 510 of
-194,992, and made 531 of 228,560 while the map and the names grew; either
-left without its size is past the bound alone. And over generated sequences
-of reloads that remove, add and bring back collectors, in every order, a
-server read as now gives the names, the counters and the very statistics
-that one read as before gives, the former read kept beside the test, with a
-reload between the read of the configuration and the lock and without. The
-copy allocates nothing, so the lint holds it: gocritic's `rangeValCopy`
-reports a loop that copies a kilobyte or more at each round, which in this
-code is a loop over collectors by value and nothing else (static analysis,
-below).
+- about 25 were the copy of each collector's definition, 1,224 bytes, which
+  `for _, c := range` made to read a name;
+- about 50 were the map of the statistics, created without its size and
+  grown as it was filled;
+- about 9 were the slice of the names, grown in the same way;
+- the rest was filling the map and finding each collector's statistics, of
+  which only the finding, 6–9 µs, needs the lock.
 
-`BenchmarkOTLPPoints` (`otlpkeys_bench_test.go`) measures what an OTLP export
-does for each of its points beside encoding them. `queue` queues n series
-under a resource, as a probe or a static target's scrape does, and empties
-the queue in order, as an export does; `start` makes them the points of an
-export, each with the start time of its series:
+Now the names are read by index, and the map and the slices are created at
+their size before the lock is taken. The statistics are collected into a
+slice under the lock, and the map is filled from it once the lock is
+released (`collectorStats` in `selfmetrics.go`). What the first read after a
+reload still does with the lock held is build the statistics of the
+collectors that the reload added, a quarter of a microsecond each: 320
+bytes, which is most of it, and a reading of the clock, which marks when the
+collector's counters began. The sort of the names and the copy of each
+collector's counters, under that collector's own lock, are unchanged and
+make up the rest of the read.
+
+`collectorstats_http_test.go` checks this without a duration:
+
+- One read of 500 collectors may make 515 allocations of 210,000 bytes. It
+  makes 510 of 194,992, and made 531 of 228,560 while the map and the names
+  grew; either one left without its size exceeds the bound on its own.
+- Over generated sequences of reloads that remove, add and restore
+  collectors, in every order, a server read the new way returns the same
+  names, counters and statistics as one read the previous way, which is kept
+  next to the test, with and without a reload between the read of the
+  configuration and the lock.
+- The copy allocates nothing, so the linter checks it: gocritic's
+  `rangeValCopy` reports a loop that copies a kilobyte or more per
+  iteration, which in this code is only a loop over collectors by value
+  (static analysis, below).
+
+**OTLP keys.** `BenchmarkOTLPPoints` (`otlpkeys_bench_test.go`) measures what
+an OTLP export does for each of its points, apart from encoding them.
+`queue` queues n series under a resource, as a probe or a static target's
+scrape does, and empties the queue in order, as an export does. `start`
+turns them into the points of an export, each with the start time of its
+series:
 
 ```sh
 go test -run '^$' -bench 'OTLP' -benchtime 2s ./internal/exporter/
 ```
 
-Both make a key for every point (`otlpKey` in `otlp.go`): what a resource,
-and a series of one, is told from every other by — where points wait for an
-export, among the resources of one, and where start times are kept. A key
-was its parts joined, a NUL between them and an `=` between a name and its
-value, and the parts are a target's and the operator's: the series
-`m{a="1\x00b=2"}` had the key of `m{a="1",b="2"}`, and was never exported
-while the other was queued after it; the resource with the attribute `a=b`
-of the value `c` had the key of the one with `a` of the value `b=c`, and the
-points of both went out under the attributes of the first; and a resource
-whose last attribute held what another's series began with shared a start
-time with it. Now a key is that join and then the length of every part, so
-that no two subjects have one key whatever their parts hold
-(`TestAnOTLPKeyIsReadBackToItsParts` reads every generated key back to its
-parts, which only a test does). The join is kept, where the failure log's
-keys have each part after its length, because an export's resources and the
-points of each are sent in the order of their keys, which was the order of
-the joins: a NUL of the join is written with a `0x01` after it and two NULs
-end it, and so written the keys are in the order of the joins still
-(`TestOTLPKeysAreInTheOrderTheOldKeysHad`).
-`TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey` holds generated
-runs of exports, byte for byte, to the export as it was with the old keys,
-which are kept beside the tests, wherever no two subjects of a run had one
-old key, and every run to an export whose keys are each subject's own.
+Both build a key for every point (`otlpKey` in `otlp.go`): what distinguishes
+a resource, and a series of a resource, from every other, in the places where
+points wait for an export, among the resources of an export, and where start
+times are kept.
 
-The old key grew as it was written, beside a slice of the label names in
-order, and a start time's was joined to its resource's: four allocations for
-a series of three labels, five for its start time. The new one is made at
-its size, with the parts put in order in place: one allocation
+- A key used to be its parts joined, with a NUL between them and an `=`
+  between a name and its value, and the parts come from a target and the
+  operator. The series `m{a="1\x00b=2"}` had the key of `m{a="1",b="2"}`,
+  and was never exported while the other was queued after it. The resource
+  with the attribute `a=b` of value `c` had the key of the one with `a` of
+  value `b=c`, and the points of both went out under the attributes of the
+  first. A resource whose last attribute held what another's series began
+  with shared a start time with it.
+- A key is now that join followed by the length of every part, so that no two
+  subjects have one key, whatever their parts hold
+  (`TestAnOTLPKeyIsReadBackToItsParts` reads every generated key back into
+  its parts, which only a test does).
+- The join is kept, where the failure log's keys have each part after its
+  length, because an export sends its resources, and the points of each, in
+  the order of their keys, which was the order of the joins. A NUL of the
+  join is written with a `0x01` after it, and two NULs end it; written this
+  way, the keys are still in the order of the joins
+  (`TestOTLPKeysAreInTheOrderTheOldKeysHad`).
+- `TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey` checks
+  generated runs of exports, byte for byte, against the export with the old
+  keys, which are kept next to the tests, wherever no two subjects of a run
+  had one old key, and checks every run against an export whose keys belong
+  to each subject alone.
+
+The old key grew as it was written, next to a slice of the label names in
+order, and a start time's key was joined to its resource's: four allocations
+for a series of three labels, five for its start time. The new one is
+created at its size, with the parts sorted in place: one allocation
 (`TestAnOTLPKeyIsMadeInOneAllocation`). As measured on two shared cores (the
 times are the range of four runs, old and new in turn):
 
@@ -2265,22 +2622,24 @@ times are the range of four runs, old and new in turn):
 | `start/n=100` | 130–205 µs, 86.0 kB, 912 allocations | 122–209 µs, 67.6 kB, 515 allocations |
 | `start/n=5000` | 6.0–10.8 ms, 4.53 MB, 45,069 allocations | 5.8–8.2 ms, 3.61 MB, 25,071 allocations |
 
-A key is remembered — where a point waits, and where a start time is kept —
-as itself up to 256 bytes (`otlpKeyLongest`), and past that by its SHA-256
-digest (`otlpKeyOf`), so that what a series keeps there is bounded whatever
-its labels hold: with `otlp.probe_attributes` a probe's target, up to 8 KiB,
-was a copy in every point waiting and in every start time, 8.4 KiB each, 1.6
-GiB at the start times' bound
-(`TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget`). Shorter keys are
-not made digests: a digest of a key of 100 bytes takes about half a
-microsecond on the machine above, a fifth more than a point costs in the
-queue. A long key is made again from its point for the moment a queue is
-emptied, so the points are still in the order of their keys, and an export is
-what it was byte for byte
-(`TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests`, against
-the export with every key whole). A key is now made where its caller has
-room, one allocation up to 256 bytes and two past it, and a start time
-already known is found with none:
+A key is stored, where a point waits and where a start time is kept, as
+itself up to 256 bytes (`otlpKeyLongest`), and beyond that as its SHA-256
+digest (`otlpKeyOf`), so that what a series stores there is bounded whatever
+its labels hold. With `otlp.probe_attributes`, a probe's target, up to
+8 KiB, was copied into every waiting point and every start time, 8.4 KiB
+each, 1.6 GiB at the start times' bound
+(`TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget`).
+
+- Shorter keys are not turned into digests: a digest of a key of 100 bytes
+  takes about half a microsecond on the machine above, a fifth more than a
+  point costs in the queue.
+- A long key is rebuilt from its point when a queue is emptied, so the
+  points are still in the order of their keys, and an export is unchanged
+  byte for byte
+  (`TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests`, against
+  the export with every key whole).
+- A key is now built in the caller's buffer: one allocation up to 256 bytes
+  and two beyond, and a start time that is already known is found with none.
 
 | Benchmark | Keys whole | Keys up to 256 bytes, digests past it |
 | --- | --- | --- |
@@ -2289,59 +2648,70 @@ already known is found with none:
 | `start/n=100` | 236–292 µs, 67.6 kB, 515 allocations | 173–217 µs, 51.8 kB, 415 allocations |
 | `start/n=5000` | 10.9–11.7 ms, 3.62 MB, 25,120 allocations | 8.5–9.0 ms, 2.82 MB, 20,134 allocations |
 
-`BenchmarkDescriptorFilesCheck` (`internal/fetch/grpcdescriptors_bench_test.go`)
-is what a call of a grpc collector with descriptor files costs before it
-uses them when they did not change: the look at each file the set was read
-from (`fileSets.getStamped`), for 1, 10 and 50 files, each at a realistic
-depth (`deep`) or a link through `..data` as Kubernetes mounts a ConfigMap
-(`kubernetes`). `BenchmarkProbeGRPC` (`internal/exporter/probe_bench_grpc_test.go`)
-is a whole probe of a collector with `.proto` files and of one with a
-descriptor set, against a server on the same machine:
+**gRPC descriptor files.** `BenchmarkDescriptorFilesCheck`
+(`internal/fetch/grpcdescriptors_bench_test.go`) measures what a call of a
+grpc collector with descriptor files costs before it uses them, when they
+did not change: the check of each file that the set was read from
+(`fileSets.getStamped`), for 1, 10 and 50 files, each at a realistic depth
+(`deep`) or behind a link through `..data` as Kubernetes mounts a ConfigMap
+(`kubernetes`). `BenchmarkProbeGRPC`
+(`internal/exporter/probe_bench_grpc_test.go`) is a whole probe of a
+collector with `.proto` files and of one with a descriptor set, against a
+server on the same machine:
 
 ```sh
 go test -run '^$' -bench 'DescriptorFilesCheck' -benchtime 1s ./internal/fetch/
 go test -run '^$' -bench 'ProbeGRPC' -benchtime 1s ./internal/exporter/
 ```
 
-The look tells, as the configuration's watch does, which file a path leads
-to and its permissions besides its time and size. The watch resolves the
-path's links (`filepath.EvalSymlinks`), a look at each component; done at
-every call that cost 18–19 µs for one file and 0.8–1.0 ms for 50, against
-2–5 µs and 85–120 µs for the time and size alone, and 46 allocations for one
-file against 5. The look takes the file's device and inode from the stat it
-makes anyway (`fetch.FileIdentity`, `fileidentity_unix.go`, which the
-watch's stamp also writes; elsewhere it resolves the links), and writes its numbers without allocating: one file
-costs 4 allocations and 50 cost 110, against 5 and 160 before, in the same
-time within the noise of two shared cores, and a probe of `BenchmarkProbeGRPC`
-(0.3–0.7 ms here) allocates no more than it did (560 and 549 allocations against 563 and 551). `TestTheQuietCheckOfDescriptorFilesAllocatesNoMoreThanBefore`
-holds the look at no more allocations than the old one, kept beside the tests.
+The check determines, as the configuration's watch does, which file a path
+leads to and its permissions, in addition to its time and size.
 
-What was made fast stays fast by tests, not by the benchmarks: the decoders,
-the transforms, the duplicate check and the body read each have a test that
-bounds their allocations per series or per body, and a test that compares
-them with the plainer code they replaced, kept beside the tests, over a
-table and tens of thousands of generated inputs. The hand-over to Python is
-compared the same way, down to the worker's script as it was
-(`internal/transform/pythonoracle_test.go`), which a second pool of workers
-runs beside the current one. What the failure log costs a scrape whose rules
-fail has a benchmark of its own, `LogRuleFailures` — nothing failing, one
-rule and thirty failing and remembered, and, as `/full_log`, one and thirty
-failing while the log is full and remembers neither — and a bound that does
-not depend on the length of the rules' expressions, for the remembered and
-for the full log alike (the failure log, above). The
-allocation bounds are
-skipped under `-race`, which changes what is allocated; `make ci` runs the
-tests without it as well.
+- The watch resolves the path's links (`filepath.EvalSymlinks`), a lookup
+  per component. Done at every call, that cost 18–19 µs for one file and
+  0.8–1.0 ms for 50, against 2–5 µs and 85–120 µs for the time and size
+  alone, and 46 allocations for one file against 5.
+- The check takes the file's device and inode from the stat that it makes
+  anyway (`fetch.FileIdentity`, `fileidentity_unix.go`, which the watch's
+  stamp also writes; on other systems it resolves the links), and formats
+  their numbers without allocating. One file costs 4 allocations and 50 cost
+  110, against 5 and 160 before, in the same time within the noise of two
+  shared cores. A probe of `BenchmarkProbeGRPC` (0.3–0.7 ms here) allocates
+  no more than before (560 and 549 allocations against 563 and 551).
+- `TestTheQuietCheckOfDescriptorFilesAllocatesNoMoreThanBefore` holds the
+  check to no more allocations than the old one, which is kept next to the
+  tests.
+
+**Keeping it fast.** What was made fast stays fast through tests, not
+benchmarks:
+
+- The decoders, the transforms, the duplicate check and the body read each
+  have a test that bounds their allocations per series or per body, and a
+  test that compares them, over a table and tens of thousands of generated
+  inputs, with the simpler code they replaced, which is kept next to the
+  tests.
+- The hand-over to Python is compared in the same way, down to the worker's
+  previous script (`internal/transform/pythonoracle_test.go`), which a second
+  pool of workers runs next to the current one.
+- What the failure log costs a scrape whose rules fail has its own
+  benchmark, `LogRuleFailures` (nothing failing; one rule and thirty failing
+  and remembered; and, as `/full_log`, one and thirty failing while the log
+  is full and remembers neither), and a bound that does not depend on the
+  length of the rules' expressions, for the remembered failures and for the
+  full log alike (see the failure log, above).
+- The allocation bounds are skipped under `-race`, which changes what is
+  allocated; `make ci` also runs the tests without it.
 
 ## Tests that reach the internet
 
-`make ci` never touches the network. The demo configurations under `examples/`
-describe real services, though, and a stub replaying a captured response cannot
-tell you when one of those services renames a field or a column: the local
-tests go on passing while the shipped configuration quietly stops working.
+`make ci` never uses the network. The demo configurations under `examples/`
+describe real services, though, and a stub replaying a captured response
+cannot tell you when one of those services renames a field or a column: the
+local tests keep passing while the shipped configuration silently stops
+working.
 
-`internal/exporter/external_e2e_test.go` closes that gap by probing the real endpoints, and it is
-off unless asked for:
+`internal/exporter/external_e2e_test.go` closes that gap by probing the real
+endpoints. It is off unless requested:
 
 ```sh
 EXTERNAL_E2E=1 go test -run TestExternal -v ./...
@@ -2349,454 +2719,535 @@ EXTERNAL_E2E=1 go test -run TestExternal -v ./...
 make test-external
 ```
 
-Without `EXTERNAL_E2E` the tests skip with a message saying how to run them, so
-`go test ./...` stays offline and deterministic. They are deliberately not in
-CI: a red build caused by somebody else's afternoon outage teaches everyone to
-ignore red builds. Run them when changing a demo configuration, and every so
-often to catch a source that has moved on.
+Without `EXTERNAL_E2E` the tests are skipped with a message saying how to run
+them, so `go test ./...` stays offline and deterministic. They are
+deliberately not in CI: a red build caused by someone else's outage teaches
+everyone to ignore red builds. Run them when changing a demo configuration,
+and occasionally to catch a source that has changed.
 
-A failure here usually means the service changed or is unreachable rather than
-that this code broke, and the assertions say so — they check that the probe
-returned 200, that each metric the configuration declares is present, and that
-the per-row or per-entry labels survived.
+A failure here usually means that the service changed or is unreachable, not
+that this code broke, and the assertions say so. They check that the probe
+returned 200, that each metric the configuration declares is present, and
+that the per-row or per-entry labels survived.
 
-The suite also holds the status page demo's detailed tests,
-`internal/exporter/grafanastatus_external_e2e_test.go`, which run its configuration against a
-captured copy of status.grafana.com's summary. They need no network but are
-opt-in like the rest.
-A test file joins the suite by being listed in `test/repository/externalgate_test.go`; every test
-in it must be named `TestExternal*`, so `make test-external` picks it up, and
-start with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which
-does run by default, fails when either is missing.
+The suite also holds the detailed tests of the status page demo,
+`internal/exporter/grafanastatus_external_e2e_test.go`, which run its
+configuration against a captured copy of status.grafana.com's summary. They
+need no network but are opt-in like the rest.
 
-The default suite covers every example too, without the network. The tests in
-`test/repository` that check the examples — against the schemas, that each
-loads, that its scripts satisfy the contract, and that a static target file
-is valid with the configuration in its directory — walk `examples/` at any
-depth, so a new example, a file or a directory like `examples/open-meteo/`,
-is covered without a test naming it. A directory's collector files are read
-with its `config.yaml`, not as examples of their own, and one its
-`collector_files` does not name fails the tests. And nine examples run against a local
-stand-in answering in their service's documented shape, with every series
-asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`),
-Open-Meteo's (`internal/exporter/openmeteo_example_test.go`, which also checks
-the query the collector sent and scrapes the example's static targets), and
-the ECB's, the METAR one with its static targets, mempool.space's, the
-Prometheus demo server's, Frankfurter's, with its pre-script, the USGS
-earthquake feed's, with the warning its incomplete row is logged with, and
-scrapethissite.com's countries page
-(`ecb_example_test.go`, `metar_example_test.go`, `mempool_example_test.go`,
-`promdemo_example_test.go`, `frankfurter_example_test.go`,
-`usgs_example_test.go` and `scrapethissite_example_test.go` beside them, on
-the stand-in of `example_standin_test.go` or, for the last, the plain site of
-`htmlfixtures_test.go`). Their fixtures under `testdata/` are
-written in the shape each service documents, not captured from it, so it is
-the external suite that says whether a service still answers that way.
+A test file joins the suite by being listed in
+`test/repository/externalgate_test.go`. Every test in it must be named
+`TestExternal*`, so that `make test-external` picks it up, and must start
+with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which does
+run by default, fails when either is missing.
 
-The pages under `testdata/html` are written the same way, each in the shape
-of a page collectors are pointed at: a load balancer's statistics report,
-an appliance's layout tables around its data tables, lists and dashboard
-cards, markup no validator would pass, entities and typographic numbers,
-what is in a page and is not its content, attribute names of JavaScript
-frameworks, the forms a value takes, a hosted status page.
-`internal/exporter/htmlfixtures_test.go` lists every file with what it stands
-for, and a test fails on a file the list does not have and on one no test
-reads. The `htmlfixtures_*_test.go` files beside it read each page with `css`
-and with `xpath` collectors written as a configuration file holds them:
-through the decoder and the transform directly, through `/probe` from a local
-server sending the `Content-Type` a real one would, and from disk with the
-`localfile` request type, naming every series and every log line. The files
-under `testdata/html/charset` are one page in the encodings a target may
-answer in — windows-1251, Shift_JIS, UTF-16 and the rest — and are not UTF-8
-on purpose: an editor that saves them as UTF-8 breaks the tests that read
-them. Some of them hold what only looks like a declaration of the encoding
-before their own — a `<meta>` in a comment, a description that mentions a
-charset — and the `.xhtml` ones start with an XML declaration, which is the
-only declaration of one and names another encoding than the `<meta>` of the
-other.
+The default suite also covers every example, without the network.
 
-Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
-CI run check exactly the same rules. Install the pinned version with `make
-lint-install`; the Makefile and the CI workflow pin the same version, and a test
-keeps them in step. `make lint` refuses to run with any other installed
-release: a different release enables different checks, so an older one passes
-locally what CI then fails (gosec's G705 taint check, for one, is newer than
-v2.5). `make lint-install` builds the linter with `go install`, which needs a Go
-at least as new as the one that release requires; Homebrew's `golangci-lint` or
-the release binary from GitHub work as well, as long as the version matches.
+- The tests in `test/repository` that check the examples (against the
+  schemas, that each loads, that its scripts satisfy the contract, and that
+  a static target file is valid with the configuration in its directory)
+  walk `examples/` at any depth. A new example, a file or a directory like
+  `examples/open-meteo/`, is therefore covered without a test naming it.
+- A directory's collector files are read with its `config.yaml`, not as
+  examples of their own, and a collector file that its `collector_files`
+  does not name fails the tests.
+- Nine examples run against a local stand-in that answers in the documented
+  shape of their service, with every series asserted: Filebeat's
+  (`internal/exporter/filebeat_example_test.go`), Open-Meteo's
+  (`internal/exporter/openmeteo_example_test.go`, which also checks the query
+  that the collector sent and scrapes the example's static targets), and the
+  ECB's, the METAR one with its static targets, mempool.space's, the
+  Prometheus demo server's, Frankfurter's with its pre-script, the USGS
+  earthquake feed's with the warning that its incomplete row is logged with,
+  and scrapethissite.com's countries page (`ecb_example_test.go`,
+  `metar_example_test.go`, `mempool_example_test.go`,
+  `promdemo_example_test.go`, `frankfurter_example_test.go`,
+  `usgs_example_test.go` and `scrapethissite_example_test.go` next to them,
+  on the stand-in of `example_standin_test.go` or, for the last, the plain
+  site of `htmlfixtures_test.go`).
+- Their fixtures under `testdata/` are written in the shape that each
+  service documents, not captured from it, so it is the external suite that
+  tells whether a service still answers that way.
 
-What VS Code and other editors underline comes from gopls, the Go language
-server, not from golangci-lint, and some of its analyzers exist only in gopls
-(`writestring`, which flags `b.WriteString(a + b)`, for one). `make
-gopls-check` runs `gopls check` over every Go file of the exporter's own,
-which the copy of gojq in `third_party` is not, and fails on any finding,
-and CI runs it too. Like the linter it is pinned (`GOPLS_VERSION`) and refuses
-another installed version; `make gopls-install` installs it, into the same
-`GOPATH/bin` the VS Code Go extension uses, so the editor then shows exactly
-what CI checks. Let the extension auto-update gopls and the editor may show
-findings of a newer release before CI has them; bump the pin to follow.
+The pages under `testdata/html` are written in the same way, each in the
+shape of a page that collectors are pointed at: a load balancer's statistics
+report, an appliance's layout tables around its data tables, lists and
+dashboard cards, markup that no validator would accept, entities and
+typographic numbers, what is in a page but is not its content, attribute
+names of JavaScript frameworks, the forms that a value takes, and a hosted
+status page.
 
-helm is pinned the same way: `HELM_VERSION` in the Makefile, which every
-workflow that installs helm installs too, and a test keeps them equal. `make
-helm-test` refuses another installed release, since helm releases word the
-schema's errors and render details differently — a chart test that passes
-with one can fail with another. `make helm-install` installs it with `go
-install`, setting the version at link time as helm's release build does: built
-from source without that, helm reports only its release line, `v4.3`. `make
-helm-test` reads a release line alone as its `.0` release, so a helm built
-from source passes a `v4.3.0` pin, and refuses it against a `v4.3.1` one;
-a version with a patch is compared whole, `v4.3.1` against `v4.3.0` too. (Homebrew's `helm` works too
-when its version matches.) To move to a newer helm, change `HELM_VERSION` and
-the workflows' `version:` together.
+- `internal/exporter/htmlfixtures_test.go` lists every file with what it
+  stands for, and a test fails on a file that the list does not have and on
+  one that no test reads.
+- The `htmlfixtures_*_test.go` files next to it read each page with `css`
+  and with `xpath` collectors written as a configuration file holds them:
+  through the decoder and the transform directly, through `/probe` from a
+  local server sending the `Content-Type` that a real one would, and from
+  disk with the `localfile` request type, naming every series and every log
+  line.
+- The files under `testdata/html/charset` are one page in the encodings that
+  a target may answer in (windows-1251, Shift_JIS, UTF-16 and the rest), and
+  are deliberately not UTF-8: an editor that saves them as UTF-8 breaks the
+  tests that read them. Some of them contain what only looks like a
+  declaration of the encoding before their own (a `<meta>` in a comment, a
+  description that mentions a charset), and the `.xhtml` ones start with an
+  XML declaration, which is their only real declaration and names a
+  different encoding from the other `<meta>`.
 
-`make helm-test` makes every chart check `ci.yml` makes: the same renders, the
-same values that have to be rejected and the same lines looked for in what is
-rendered. A test (`TestMakeHelmTestChecksWhatTheCIWorkflowChecks`) reads both
-and fails when one has a case the other lacks, so add a chart case to both.
+**golangci-lint.** Static analysis is configured in `.golangci.yml`, so a
+local `make lint` and the CI run check exactly the same rules. Install the
+pinned version with `make lint-install`; the Makefile and the CI workflow pin
+the same version, and a test keeps them in step.
 
-Both go beyond the plain renders: the Recreate strategy without a
-`rollingUpdate`, a monitor's `port` and `namespaceSelector` on both monitor
-types, the garbage collector's target (`goGC.percent` rendered as `GOGC`, and
-no `GOGC` by default), whole numbers given as `--set-json` gives them, as
-floating point, and rendered written out with no exponent (a count past
-2147483647 is refused), a configuration file whose first line is indented, the
-chart as a dependency of a parent chart, and the values that must be refused,
-among them a monitor's `auth` without a `type`, a monitor's `port` given as a
-number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
-Service, a mount at the configuration directory written with a trailing
-slash, a `goGC.percent` that is `off` with no Go memory limit, `0`, or
-set beside a `GOGC` entry in `env`, a `selfMetrics.path` at the static
-targets' status page, and an Ingress or a `LoadBalancer` or `NodePort`
-Service without `webAuth`, or with `webAuth` beside a configuration whose
-`web.basic_auth` does not read its files (the renders with
-`exposure.allowWithoutWebAuth`, and with `testdata/chart/web-auth.yaml`,
-which does, beside them). The Go tests in `test/repository`
-check the same behaviour in more detail, but are skipped without helm, so a
-case worth keeping goes into these two lists as well. Write a case that looks
-at what is rendered so that it keeps the render first
-(`out="$(helm template ...)"`) and then reads `"$out"`: neither `make` nor the
-workflow's shell fails a pipeline whose first command failed, so a check that
-some text is absent would pass on a render that failed. Every such check in
-the two lists is written that way; `tools/check-manifests.py`, which the
-render is piped into, refuses a render with no manifests for the same reason.
+- `make lint` refuses to run with any other installed release: a different
+  release enables different checks, so an older one passes locally what CI
+  then fails (gosec's G705 taint check, for example, is newer than v2.5).
+- `make lint-install` builds the linter with `go install`, which needs a Go
+  at least as new as the one that release requires. Homebrew's
+  `golangci-lint` or the release binary from GitHub work as well, as long as
+  the version matches.
 
-A check also has to be able to fail, and the same reader says whether each
+**gopls.** What VS Code and other editors underline comes from gopls, the Go
+language server, not from golangci-lint, and some of its analyzers exist
+only in gopls (`writestring`, which flags `b.WriteString(a + b)`, for
+example). `make gopls-check` runs `gopls check` over every Go file of the
+exporter's own (which excludes the copy of gojq in `third_party`) and fails
+on any finding, and CI runs it too.
+
+- Like the linter, it is pinned (`GOPLS_VERSION`) and refuses any other
+  installed version.
+- `make gopls-install` installs it into the same `GOPATH/bin` that the VS
+  Code Go extension uses, so the editor then shows exactly what CI checks.
+- If you let the extension auto-update gopls, the editor may show findings of
+  a newer release before CI has them; bump the pin to follow.
+
+**helm.** helm is pinned the same way: `HELM_VERSION` in the Makefile, which
+every workflow that installs helm also installs, and a test keeps them equal.
+
+- `make helm-test` refuses any other installed release, because helm
+  releases word the schema's errors and render details differently: a chart
+  test that passes with one can fail with another.
+- `make helm-install` installs it with `go install`, setting the version at
+  link time as helm's release build does. Built from source without that,
+  helm reports only its release line, `v4.3`.
+- `make helm-test` reads a release line alone as its `.0` release, so a helm
+  built from source passes a `v4.3.0` pin and is refused against a `v4.3.1`
+  pin. A version with a patch is compared in full, `v4.3.1` against `v4.3.0`
+  too. (Homebrew's `helm` works too when its version matches.)
+- To move to a newer helm, change `HELM_VERSION` and the workflows'
+  `version:` together.
+
+`make helm-test` makes every chart check that `ci.yml` makes: the same
+renders, the same values that have to be rejected, and the same lines looked
+for in what is rendered. A test
+(`TestMakeHelmTestChecksWhatTheCIWorkflowChecks`) reads both and fails when
+one has a case that the other lacks, so add a chart case to both.
+
+Both go beyond the plain renders. They check:
+
+- the Recreate strategy without a `rollingUpdate`;
+- a monitor's `port` and `namespaceSelector` on both monitor types;
+- the garbage collector's target (`goGC.percent` rendered as `GOGC`, and no
+  `GOGC` by default);
+- whole numbers given as `--set-json` gives them, as floating point, and
+  rendered written out with no exponent (a count above 2147483647 is
+  refused);
+- a configuration file whose first line is indented;
+- the chart as a dependency of a parent chart;
+- the values that must be refused, among them: a monitor's `auth` without a
+  `type`, a monitor's `port` given as a number, a `scrapeTimeout` longer than
+  its `interval`, an Ingress without the Service, a mount at the
+  configuration directory written with a trailing slash, a `goGC.percent`
+  that is `off` with no Go memory limit, `0`, or set beside a `GOGC` entry
+  in `env`, a `selfMetrics.path` at the static targets' status page, and an
+  Ingress or a `LoadBalancer` or `NodePort` Service without `webAuth`, or
+  with `webAuth` beside a configuration whose `web.basic_auth` does not read
+  its files (with the renders with `exposure.allowWithoutWebAuth`, and with
+  `testdata/chart/web-auth.yaml`, which does read them, next to them).
+
+The Go tests in `test/repository` check the same behaviour in more detail,
+but are skipped without helm, so a case worth keeping also goes into these
+two lists.
+
+Write a case that inspects what is rendered so that it keeps the render
+first (`out="$(helm template ...)"`) and then reads `"$out"`. Neither `make`
+nor the workflow's shell fails a pipeline whose first command failed, so a
+check that some text is absent would pass on a render that failed. Every
+such check in the two lists is written that way, and
+`tools/check-manifests.py`, which the render is piped into, refuses a render
+with no manifests for the same reason.
+
+A check must also be able to fail, and the same reader reports whether each
 one can (`TestEveryHelmCheckOfMakeAndCIFailsWhenItShould`), naming the file,
-the line and the recipe or step of one that cannot. What it holds a check to
-is how the two files run their shell:
+the line, and the recipe or step of a check that cannot. What it requires of
+a check follows from how the two files run their shell:
 
-- make runs each recipe line, with the lines continued onto it, in a shell of
-  its own started without `-e`, and the line's result is its last command's.
-  So a line of more than one command starts with `set -eu`, and no line
-  starts with make's `-`, which ignores a failure. The Makefile leaves make's
-  way of running a recipe alone: `.IGNORE`, `.ONESHELL`, `.SHELLFLAGS`,
-  `MAKEFLAGS`, a `PATH`, a `SHELL` other than sh or bash, and a second rule
-  for `helm-test` are reported. GitHub starts a step's shell as `bash -e`, so
-  a step needs no `set -e`; a `shell:` — the step's, the job's default or the
-  workflow's — that is not bash or sh started with `-e`, `continue-on-error`
-  on a step or on the job, a step's `if` other than the chart steps', any
-  `if` on the job, and a `changes` step whose `chart` filter no longer holds
-  `charts/**` are reported.
-- A render that must succeed, or a line that must be found, is a command of
-  its own: nothing follows it with `||`, `&&` or `&`, each of which takes its
-  failure away, under `set -e` too. The one exception hands the failure to an
-  `exit`, which ends the shell there: `check || exit 1`, or
+- **How the shells run.** make runs each recipe line, with the lines
+  continued onto it, in its own shell started without `-e`, and the line's
+  result is that of its last command. A line of more than one command
+  therefore starts with `set -eu`, and no line starts with make's `-`, which
+  ignores a failure.
+  - The Makefile leaves make's way of running a recipe alone: `.IGNORE`,
+    `.ONESHELL`, `.SHELLFLAGS`, `MAKEFLAGS`, a `PATH`, a `SHELL` other than
+    sh or bash, and a second rule for `helm-test` are reported.
+  - GitHub starts a step's shell as `bash -e`, so a step needs no `set -e`.
+    These are reported: a `shell:` (the step's, the job's default or the
+    workflow's) that is not bash or sh started with `-e`;
+    `continue-on-error` on a step or on the job; a step's `if` other than the
+    chart steps'; any `if` on the job; and a `changes` step whose `chart`
+    filter no longer includes `charts/**`.
+- **A render that must succeed, or a line that must be found**, is a command
+  on its own: nothing follows it with `||`, `&&` or `&`, each of which
+  discards its failure, under `set -e` too. The one exception hands the
+  failure to an `exit`, which ends the shell there: `check || exit 1`, or
   `check || { echo "..." >&2; exit 1; }`, on one line or on several.
-- A render that must be refused, or a text that must be absent, is the one
-  condition of an `if` whose `then` branch runs `exit 1`:
+- **A render that must be refused, or a text that must be absent**, is the
+  only condition of an `if` whose `then` branch runs `exit 1`:
   `if helm template ... >/dev/null 2>&1; then echo "..." >&2; exit 1; fi`.
-  Without the `exit 1` the check prints its message and passes.
-- A check is made on every run of its block. It stands at the top of the
+  Without the `exit 1`, the check prints its message and passes.
+- **A check runs on every run of its block.** It stands at the top of the
   block, in the body of a `for name in value ...; do` loop whose values are
   written out, or is the condition of an `if` that stands there, and nowhere
-  else: there is no guard a check may stand behind. One in a branch of an
-  `if` — `if false`, `if [ -n "$SKIP" ]`, the `then` of a refusal — after
-  `&&` or `||`, or in a loop over a variable, a command or nothing is
-  reported. So is an `exit`, of any status, that is not a check's own: an
-  early `exit 0` ends the block before its checks.
-- Nothing in a block changes what its commands are or how it ends: a
-  function or an `alias` (either can stand in for `helm`, `grep`, `python3`
-  or `exit`), `.` or `source`, a `PATH`, `hash`, `return`, `exec`, `break`,
-  `continue`, `set +e`, a `set` option other than `-e`, `-u`, `-x`, `-v` and
-  `pipefail`, and a `trap` are reported. The one trap allowed is the
-  clean-up both lists have, `trap 'rm -rf "$tree"' EXIT`: an `rm` alone, on
-  `EXIT`.
-- helm is piped only into `grep -q` as a command of its own or into
-  `tools/check-manifests.py`, both of which fail on a render of nothing; a
-  kept render holds the one helm command, and is read as `echo "$out" |` or
-  `printf '%s\n' "$out" |` into `grep -q` and a pattern, `python3 -c` or
-  `tools/check-manifests.py`. Another way of looking at a render — a
-  here-string, `[[ "$out" == *X* ]]`, a `grep` of a file, `grep -c`, `-F` or
-  `-e` — is no check to the comparison, and is reported by name with the
-  line to write instead: `echo "$out" | grep -q -- 'X'`.
+  else: there is no guard that a check may stand behind. A check in a branch
+  of an `if` (`if false`, `if [ -n "$SKIP" ]`, the `then` of a refusal),
+  after `&&` or `||`, or in a loop over a variable, a command or nothing is
+  reported. So is an `exit`, of any status, that does not belong to a check:
+  an early `exit 0` ends the block before its checks.
+- **Nothing in a block changes what its commands are or how it ends.** These
+  are reported: a function or an `alias` (either can stand in for `helm`,
+  `grep`, `python3` or `exit`), `.` or `source`, a `PATH`, `hash`, `return`,
+  `exec`, `break`, `continue`, `set +e`, a `set` option other than `-e`,
+  `-u`, `-x`, `-v` and `pipefail`, and a `trap`. The only trap allowed is the
+  clean-up that both lists have, `trap 'rm -rf "$tree"' EXIT`: an `rm` alone,
+  on `EXIT`.
+- **How a render is read.** helm is piped only into `grep -q` as a command on
+  its own, or into `tools/check-manifests.py`, both of which fail on an empty
+  render. A kept render holds the one helm command, and is read as
+  `echo "$out" |` or `printf '%s\n' "$out" |` into `grep -q` and a pattern,
+  `python3 -c` or `tools/check-manifests.py`. Any other way of inspecting a
+  render (a here-string, `[[ "$out" == *X* ]]`, a `grep` of a file,
+  `grep -c`, `-F` or `-e`) does not count as a check, and is reported by name
+  with the line to write instead: `echo "$out" | grep -q -- 'X'`.
 
-The reader reports what it does not understand (`!`, `elif`, `while`, `case`,
-a subshell, `{` anywhere but after a check's `||`) rather than passing it.
-`TestAHelmCheckMadeToothlessIsNoticed` makes each such change — a `|| true`,
-a dropped `exit 1` or `set -eu`, a leading `-`, `continue-on-error`, an early
-`exit 0`, an `if false` around the checks, a `trap 'exit 0' EXIT`, a `helm`
-function, an `if` on the job and the like — to a copy of the Makefile's or
-the workflow's text in memory, and fails if the reader does not report it.
-`TestAHarmlessEditOfAHelmCheckIsTakenOrToldHowToBeWritten` does the same with
-edits that take nothing from a check, and fails if one is refused without a
-finding that names it and says what to write, or is called a check that can
-never fail. A finding that a list "does not make this check of the chart"
-is about one of the cases the Go tests make too (`chartCasesMissing` in
-`test/repository/helmtest_test.go` lists them, each with its command line):
-both lists make it with exactly that command line, so a case changed on
-purpose is changed there and in both lists.
+The reader reports what it does not understand (`!`, `elif`, `while`,
+`case`, a subshell, `{` anywhere except after a check's `||`) instead of
+passing it.
 
-The files those cases render are in `testdata/chart`: a static target
+- `TestAHelmCheckMadeToothlessIsNoticed` makes each such change (a
+  `|| true`, a dropped `exit 1` or `set -eu`, a leading `-`,
+  `continue-on-error`, an early `exit 0`, an `if false` around the checks, a
+  `trap 'exit 0' EXIT`, a `helm` function, an `if` on the job and the like)
+  to an in-memory copy of the Makefile's or the workflow's text, and fails if
+  the reader does not report it.
+- `TestAHarmlessEditOfAHelmCheckIsTakenOrToldHowToBeWritten` does the same
+  with edits that weaken no check, and fails if one is refused without a
+  finding that names it and says what to write, or is called a check that can
+  never fail.
+- A finding that a list "does not make this check of the chart" concerns one
+  of the cases that the Go tests make too (`chartCasesMissing` in
+  `test/repository/helmtest_test.go` lists them, each with its command line).
+  Both lists make it with exactly that command line, so a case changed on
+  purpose is changed there and in both lists.
+
+The files that those cases render are in `testdata/chart`: a static target
 document, `indented-first-line.yaml`, and `parent`, a chart whose one
-dependency is the exporter's chart by a `file://` path. `helm dependency
-build` writes a `charts` directory and a `Chart.lock` into the parent, so
-`make helm-test` and CI build it in a temporary copy of the two charts and the
-working tree stays as it is; it needs no network. The parent pins the chart's
-version, as a real parent does, and a test fails when a chart bump leaves it
-behind.
+dependency is the exporter's chart by a `file://` path.
+`helm dependency build` writes a `charts` directory and a `Chart.lock` into
+the parent, so `make helm-test` and CI build it in a temporary copy of the
+two charts and the working tree stays unchanged; it needs no network. The
+parent pins the chart's version, as a real parent does, and a test fails
+when a chart version bump leaves it behind.
 
-Run `make hooks` once in a clone. It points git at `.githooks`, whose
-`pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` and `gopls
-check` at the pinned versions, and `go vet` — and refuses the commit when any of them fails, so a
-commit CI would fail on those never gets made. `git commit --no-verify` skips
-it once. The tests are left to `make test` and CI, since the race run takes
-minutes.
+**The pre-commit hook.** Run `make hooks` once in a clone. It points git at
+`.githooks`, whose `pre-commit` hook runs `make precommit` (`gofmt`,
+`golangci-lint` and `gopls check` at the pinned versions, and `go vet`) and
+refuses the commit when any of them fails, so a commit that CI would fail on
+those checks is never made. `git commit --no-verify` skips it once. The tests
+are left to `make test` and CI, because the race run takes minutes.
 
-That pin is coupled to the Go toolchain in a way worth knowing about.
-golangci-lint type-checks with the `golang.org/x/tools` it was released with,
-which knows only the Go releases and export data formats that existed then — run
-an older release against a newer toolchain and it does not report a lint
-failure, it fails on the standard library: `file requires newer Go version` for a
-new minor, or, as v2.13.2 does against Go 1.27.2, `export data version 5 is
-greater than maximum supported version 4`. Building it from source with the new
-Go does not help, since the format reader comes from its pinned `x/tools`. Since
-the build uses the current stable Go, the pinned linter has to be a release that
-supports that Go (v2.14.0 for Go 1.27.2), and needs bumping when a Go release —
-usually a new minor, here a patch — outruns it. Beyond the standard linters it enables `bodyclose`, `errorlint`,
+**The linter and the Go toolchain.** The linter pin is coupled to the Go
+toolchain. golangci-lint type-checks with the `golang.org/x/tools` that it
+was released with, which knows only the Go releases and export data formats
+that existed then. Run an older release against a newer toolchain and it
+does not report a lint failure; it fails on the standard library:
+`file requires newer Go version` for a new minor, or, as v2.13.2 does against
+Go 1.27.2, `export data version 5 is greater than maximum supported version
+4`. Building it from source with the new Go does not help, because the
+format reader comes from its pinned `x/tools`. The build uses the current
+stable Go, so the pinned linter must be a release that supports that Go
+(v2.14.0 for Go 1.27.2), and needs a bump when a Go release (usually a new
+minor, here a patch) outruns it.
+
+In addition to the standard linters, it enables `bodyclose`, `errorlint`,
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
-`unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
-unformatted sources rather than rewriting them.
+`unconvert` and `usestdlibvars`. The repository is gofmt-clean, and CI fails
+on unformatted sources instead of rewriting them.
 
-Of gocritic's checks that are off by default one is on: `rangeValCopy`, from
-1,024 bytes. A collector's definition (`model.Collector`) is 1,224, and the
-largest other element a loop takes by value is 656, in a test, so what it
-reports is a loop over collectors by value, which copies every collector to
-look at it. Write `for i := range cfg.Collectors` and take
+Of gocritic's checks that are off by default, one is on: `rangeValCopy`, from
+1,024 bytes. A collector's definition (`model.Collector`) is 1,224 bytes, and
+the largest other element that a loop takes by value is 656, in a test, so
+what it reports is a loop over collectors by value, which copies every
+collector to inspect it. Write `for i := range cfg.Collectors` and take
 `c := &cfg.Collectors[i]`, or read `cfg.Collectors[i].Name`. A loop that
-wants the copy, to change it and leave the configuration alone, keeps it and
+needs the copy, to change it and leave the configuration alone, keeps it and
 says so beside a `//nolint:gocritic`, as the other exceptions in the code
-do. A test in `test/repository` fails when the threshold is raised past a
+do. A test in `test/repository` fails when the threshold is raised beyond a
 collector's size or the check is dropped.
 
-Known vulnerabilities are reported by `.github/workflows/govulncheck.yml`, on
-every push and pull request and weekly on Mondays, since an advisory is
-published against code that has not changed. It is for reference only: the job
-never fails, so a new advisory cannot block a merge. Findings are written to
-the run's summary page and raise a warning on the run; a govulncheck that could
-not complete (the vulnerability database unreachable, say) warns too. Keep it
-out of the branch protection's required checks. `make vulncheck` runs the same
-pinned version locally, and a test keeps the Makefile and the workflow in step
-and checks that the step cannot fail the job.
+**govulncheck.** Known vulnerabilities are reported by
+`.github/workflows/govulncheck.yml`, on every push and pull request and
+weekly on Mondays, because an advisory can be published against code that
+has not changed.
+
+- It is for information only: the job never fails, so a new advisory cannot
+  block a merge. Findings are written to the run's summary page and raise a
+  warning on the run. A govulncheck that could not complete (for example,
+  with the vulnerability database unreachable) warns too. Keep it out of the
+  branch protection's required checks.
+- `make vulncheck` runs the same pinned version locally, and a test keeps
+  the Makefile and the workflow in step and checks that the step cannot fail
+  the job.
 
 What is scanned is what ships and what the workflows run: the exporter, the
 package at the root, and the repository's tools (`. ./tools/...`), each with
-everything it imports. The packages only tests use — `internal/grpctest`, the
-stand-in gRPC server of the grpc tests, `internal/sshtest`, the stand-in SSH
-and SFTP server of the sshfile and sshexec tests, `internal/testutil` with its
-`alloctest`, and `test/repository` — are left out, so an advisory for code
-that only a test reaches, such as the gRPC server the exporter never is, raises
-no warning; the price is that such an advisory is not reported at all. A test
-(`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's and the
-workflow's packages equal, fails for a command of the module they do not
-cover, and holds the list of what is left out: a new package is either
-imported by something scanned or added to that list with its reason.
+everything it imports.
 
-`make test` also validates the GitHub Actions workflows: `test/repository/workflows_test.go`
-decodes every file under `.github/workflows` with a parser that rejects
-duplicate mapping keys, and checks that each step sets exactly one of `run` or
-`uses` and uses no unknown keys. GitHub refuses to create a run for a workflow
-it cannot parse, which produces no jobs at all, so a CI step cannot catch that
-mistake in the commit that introduces it — the checker would be in the file
-GitHub is refusing to read. Running the tests before pushing is what protects
-you.
+- The packages that only tests use are left out: `internal/grpctest`, the
+  stand-in gRPC server of the grpc tests; `internal/sshtest`, the stand-in
+  SSH and SFTP server of the sshfile and sshexec tests; `internal/testutil`
+  with its `alloctest`; and `test/repository`. An advisory for code that only
+  a test reaches, such as the gRPC server (which the exporter never is),
+  therefore raises no warning; the cost is that such an advisory is not
+  reported at all.
+- A test (`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's
+  and the workflow's packages equal, fails for a command of the module that
+  they do not cover, and holds the list of what is left out: a new package
+  is either imported by something scanned or added to that list with its
+  reason.
+
+**Workflow files.** `make test` also validates the GitHub Actions workflows:
+`test/repository/workflows_test.go` decodes every file under
+`.github/workflows` with a parser that rejects duplicate mapping keys, and
+checks that each step sets exactly one of `run` or `uses` and uses no unknown
+keys. GitHub refuses to create a run for a workflow that it cannot parse,
+which produces no jobs at all, so a CI step cannot catch that mistake in the
+commit that introduces it: the checker would be in the file that GitHub
+refuses to read. Running the tests before pushing is what protects you.
 
 Every `uses:` in a workflow names its action by a full commit SHA, with the
-release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. A tag can be
-moved to other code by whoever controls the action's repository; a SHA cannot.
-Write a new step in that form, looking the SHA up from the release's tag, and
-leave the updates to Dependabot, which moves the SHA and the comment together.
+release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. Whoever
+controls the action's repository can move a tag to other code, but not a
+SHA. Write a new step in that form, looking up the SHA from the release's
+tag, and leave the updates to Dependabot, which moves the SHA and the comment
+together.
 `test/repository/workflowpins_test.go` fails for any other form, a
 commented-out `uses:` included, and for a `.github/dependabot.yml` without its
 `github-actions` update.
 
-It validates the chart templates the same way. `test/repository/charts_test.go` checks that
-every manifest a template renders begins its own YAML document. A template that
-renders more than one manifest — several declared, or one wrapped in a range —
-needs a `---` before each, and neither `helm lint` nor `helm template` notices a
-missing one: helm prints whatever the template produced, so two manifests merge
-into a single document and the chart only fails when someone applies it.
-`helm-test` and CI render the chart with monitors enabled and additionally fail
-when the number of manifests exceeds the number of documents the output parses
-into.
+**Chart templates.** `test/repository/charts_test.go` checks that every
+manifest a template renders begins its own YAML document. A template that
+renders more than one manifest (several declared, or one wrapped in a range)
+needs a `---` before each, and neither `helm lint` nor `helm template`
+notices a missing one: helm prints whatever the template produced, so two
+manifests merge into a single document, and the chart fails only when
+someone applies it. `helm-test` and CI render the chart with monitors
+enabled, and also fail when the number of manifests exceeds the number of
+documents that the output parses into.
 
-A template never prints a number of the values by itself. Helm reads the
+A template never prints a number from the values directly. Helm reads the
 numbers of a values file, and of `--set-json`, as floating point, and
 `{{ .Values.replicaCount }}`, `toString` and `printf "%v"` print one of a
-million or more with an exponent, `2e+06`; `--set` hands over an integer, so a
-test that sets the value with `--set` does not show it. A whole number goes
-through the `wholeNumber` helper of `_helpers.tpl`, with its name and its
-range, which writes it out and fails rendering for a fraction or a number
-outside the range, and the values schema carries the same maximum; a value
-that may also be text goes through the `text` helper before it is looked at.
-A sub-tree handed to `toYaml` needs neither: `toYaml` writes a whole number
-of up to eighteen digits out, since it goes through JSON, which does
-(`runAsUser: 1000680000`, and `2e9` as `2000000000`); only a fraction of a
-million or more, and a number past what 64 bits hold, come out with an
-exponent. `test/repository/chartwholenumbers_test.go` renders each such
-value from a values file, and a test there fails for an integer of the
-values schema that has no maximum and is not listed as one a sub-tree hands
-to `toYaml`.
+million or more with an exponent, `2e+06`. `--set` passes an integer, so a
+test that sets the value with `--set` does not reveal this.
 
-A few `gosec` findings are deliberate and are suppressed narrowly, with the
-reason stated at the suppression: `request.tls.insecure_skip_verify` is a
-documented opt-in, and the exporter necessarily reads the configuration, target
-document and credential files whose paths the operator supplies (G304).
+- A whole number goes through the `wholeNumber` helper of `_helpers.tpl`,
+  with its name and its range. The helper writes it out and fails rendering
+  for a fraction or a number outside the range, and the values schema has
+  the same maximum.
+- A value that may also be text goes through the `text` helper before it is
+  inspected.
+- A sub-tree passed to `toYaml` needs neither: `toYaml` writes out a whole
+  number of up to eighteen digits, because it goes through JSON, which does
+  (`runAsUser: 1000680000`, and `2e9` as `2000000000`). Only a fraction of a
+  million or more, and a number beyond what 64 bits hold, come out with an
+  exponent.
+- `test/repository/chartwholenumbers_test.go` renders each such value from a
+  values file, and a test there fails for an integer of the values schema
+  that has no maximum and is not listed as one that a sub-tree passes to
+  `toYaml`.
 
-Two more are scoped to the single file each applies to rather than excluded
-globally. G704 reports the outbound request as server-side request forgery,
-which is an accurate description of what this program is — an exporter whose job
-is to fetch a URL an operator supplied — so it is excluded on
-`internal/fetch/fetcher.go` only, with the exposure bounded by the scheme
-allowlist, the response size limit and each collector's
-`request.allowed_targets` and `request.denied_targets`, which the operator sets
-to say which hosts, addresses and networks its requests may reach, checked
-again on every redirect and connection (`internal/fetch/targetpolicy.go`). G703 reports the Dockerfile path that
-`tools/depupdate` takes on the command line as attacker-controlled; that is a
-developer tool with no untrusted caller, so it is excluded under `tools/`.
+**gosec suppressions.** A few `gosec` findings are deliberate and are
+suppressed narrowly, with the reason stated at the suppression:
+`request.tls.insecure_skip_verify` is a documented opt-in, and the exporter
+necessarily reads the configuration, target document and credential files
+whose paths the operator supplies (G304).
+
+Two more are limited to the one file each applies to instead of being
+excluded globally:
+
+- G704 reports the outbound request as server-side request forgery, which
+  accurately describes what this program is: an exporter whose job is to
+  fetch a URL that an operator supplied. It is excluded on
+  `internal/fetch/fetcher.go` only. The exposure is bounded by the scheme
+  allowlist, the response size limit and each collector's
+  `request.allowed_targets` and `request.denied_targets`, which the operator
+  sets to say which hosts, addresses and networks its requests may reach,
+  checked again on every redirect and connection
+  (`internal/fetch/targetpolicy.go`).
+- G703 reports the Dockerfile path that `tools/depupdate` takes on the
+  command line as attacker-controlled. That is a developer tool with no
+  untrusted caller, so it is excluded under `tools/`.
 
 ## The Go toolchain
 
-CI asks setup-go for `stable`, so the build always uses the current stable Go
-release and no workflow needs editing when Go ships a new one. The release
-builds its binaries with the Go the image is built with: it reads `GO_VERSION`
-from the Dockerfile and has setup-go resolve that minor to its newest patch
-release, so the archives and the image of one release carry the same Go. No
-workflow installs Go with `go-version-file`, which would pin the `go`
-directive's exact version, an old patch release without its security fixes;
-a test fails if one does. The `go` directive in `go.mod` is something different: it is the *minimum*
-the module requires, raised by dependency updates rather than by whichever
-toolchain builds it, so it stays where the dependencies put it. The Dockerfile
-pins `GO_VERSION` to a released minor, which `tools/depupdate` keeps moving
-within the major.
+CI asks setup-go for `stable`, so the build always uses the current stable
+Go release, and no workflow needs editing when Go ships a new one.
 
-The two can drift apart in a way that is hard to read: a dependency bump raises
-the go directive in a pull request that touches no workflow, and from then on
-every build fails with `go.mod requires go >= X` with nothing nearby to explain
-it. `test/repository/goversion_test.go` ties them together — it checks that every Go version the
-workflows request, and the one the Dockerfile pins, satisfies the go directive —
-so `go test ./...` catches the mismatch instead of the next red build.
+- The release builds its binaries with the Go that the image is built with:
+  it reads `GO_VERSION` from the Dockerfile and has setup-go resolve that
+  minor to its newest patch release, so the archives and the image of one
+  release use the same Go.
+- No workflow installs Go with `go-version-file`, which would pin the exact
+  version of the `go` directive, an old patch release without its security
+  fixes; a test fails if one does.
+- The `go` directive in `go.mod` is something different: it is the *minimum*
+  that the module requires, raised by dependency updates and not by
+  whichever toolchain builds it, so it stays where the dependencies put it.
+- The Dockerfile pins `GO_VERSION` to a released minor, which
+  `tools/depupdate` keeps moving within the major.
 
-GitHub Actions uses changed-path detection (`.github/workflows/ci.yml`): the
-checks of the whole repository — formatting, lint, gopls, vet and build (with
-each request type on its own too) and the repository's own tests,
-`test/repository` — run for changes to anything the repository tests read —
-Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
-`examples/`, `testdata/`, `docs/` and every top-level `*.md`, the
-`Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml`,
-`test/python/`, `.github/dependabot.yml`, `.gitignore`, `.githooks/`,
-`LICENSE` and `.artifacthub-repo.yml` (the filter's `go` output) — so a
-documentation-only change runs the repository tests too, which check the
-docs. `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every
-string literal of `test/repository`'s Go files that names an existing path
-of the repository, from its root, and fails for a file no pattern of the
-`go` output matches: a file those tests read whose change alone skipped them
-would merge unchecked. When it fails, add the file to the `go` output in
-every job. Under the same output, `build` builds the code for `darwin` on
-`amd64` and `arm64`, linking both commands, since the release builds archives
-for macOS from it, and `image` builds the image from the `Dockerfile` with
-`docker/build-push-action`, pushing nothing, loads it and runs its
-`--version` to see the revision it was given; a change that breaks either
-fails on its pull request rather than at release time. The Helm lint/template
-checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
-files the chart steps render. A change under `charts/` runs the Go checks
-because the template guard above lives there and is worth least on exactly
-the changes that would break it. A tag push runs everything: the filter
-compares a tag with its merge base on `main`, which for a tag on `main`'s
-newest commit finds no change, so the steps run under the outputs of the
-step `changes` after the filter, all true on a tag push and the filter's own
-otherwise (`TestATagPushRunsEveryStepOfCI` runs that step's script); a step
-reads those, never the filter's own outputs.
+The two can drift apart in a confusing way: a dependency bump raises the go
+directive in a pull request that touches no workflow, and from then on every
+build fails with `go.mod requires go >= X`, with nothing nearby to explain
+it. `test/repository/goversion_test.go` ties them together: it checks that
+every Go version that the workflows request, and the one that the Dockerfile
+pins, satisfies the go directive, so `go test ./...` catches the mismatch
+instead of the next red build.
 
-The tests of the packages themselves are split in two sides, each run only
-when something it depends on changed. `tools/ci-packages.sh allocator` lists
-the target allocator's packages, `cmd/pue-allocator` and `internal/allocator`;
-`tools/ci-packages.sh exporter` every other package but `test/repository`, so
-a new package lands on the exporter's side by itself. The filter's
-`allocator` and `exporter` outputs list, for each side, the directories of
-the module's packages its packages and their tests are built from
-(`go list -deps -test`), the files outside those its tests open (the
-exporter's read `examples/`, `configs/`, `testdata/`, `charts/`, `docs/`, the
-README and the `Dockerfile`), and what CI runs them with (`go.mod`, `go.sum`,
-`ci.yml`, the scripts, and for the exporter `test/python/`). A change to only
-`internal/allocator` runs the allocator's tests and the repository checks,
-not the exporter's; a change to only `internal/exporter` runs both sides,
-since the allocator's end-to-end test runs the exporter.
-`test/repository/cisides_test.go` works the lists out again — every Go file,
-embedded file and `testdata/` file of those packages, and every existing path
-outside its own directory a string literal of a side's package names — and
-fails for a file a side needs that its list leaves out, for an entry that
-matches none of them, for a file a side's list matches that the `go` output
-does not (the setup steps run under `go`), and for a package tested by no
-side or by both. When it fails for a new package or a new file a test reads,
-add its directory or the file to the side's list in every job.
+**Changed paths.** GitHub Actions uses changed-path detection
+(`.github/workflows/ci.yml`).
 
-CI runs in jobs side by side, so it takes about as long as its longest job:
-`lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
-and the opt-in request types') and gopls; `build` runs `go vet`, the default
-build, darwin's, and the builds with the opt-in sql drivers and request types
-with their tests; `image` builds the image, its layers read from and written
-to the GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a
-change to the sources alone downloads no module and installs nothing in the
-runtime stage again; `race` runs the race suite of `internal/exporter`, which
-has by far the most tests, and `race-rest` that of every other package of the
-exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
-which together list the side once each, as a test checks);
-`request-types`, a matrix over the request types (its checks are named
-`test (<type>)`), vets, builds and lints each type on its own under the `go`
-output and runs the exporter's tests with it under `exporter`; `scaffold`
-runs `TestANewRequestTypeIsWiredByTheScaffold` alone under `go`, the
-minutes it takes to build a copy of the tree with two new request types,
-which the step of `test` that runs the repository tests skips with `-skip`;
-`allocator` runs the
-allocator's tests, once and then under the race detector, when the
-`allocator` output names a change. The allocator's tests are not run with
-each type on its own: those that need a type are built with it, so such a
-build runs a part of them alone, and each type's job already vets and builds
-the allocator with it. `test` keeps the repository tests, the exporter's
-tests (under `exporter`) and the chart steps; a test fails when it runs a
-linter or a build again. Each of the other jobs starts with `test`'s setup
-steps but helm's, written out again, and
-`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
-`test`'s, so change them in every job at once. `image` runs no Go and no
-Python, which the `Dockerfile` brings, so it starts with the first three of
-them alone, checkout, the filter and the step `changes`, and the test holds
-a job to the whole setup as soon as it sets up or runs Go or Python. They gate their steps on the changed-path filter's outputs rather than
-with a job-level `if`: a job whose steps are skipped still passes under its
-own name, while a matrix job skipped as a whole is reported under a name no
-check expects. `make ci` runs the same commands one after another, each over
-every package (`./...`) where CI names a side's packages, so it runs
-everything whatever changed: `make test` skips the scaffold test as `test`
-does and `make test-scaffold` runs it as `scaffold` does.
-`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test a go command of
-CI or of `make ci` skips that no other command there runs with `-run`, so a
-test moved out of a suite to a job of its own still runs.
+- The checks of the whole repository (formatting, lint, gopls, vet and build,
+  also with each request type on its own, and the repository's own tests,
+  `test/repository`) run for changes to anything that the repository tests
+  read: Go sources, `go.mod` and `go.sum`, the workflows, `charts/`,
+  `configs/`, `examples/`, `testdata/`, `docs/` and every top-level `*.md`,
+  the `Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`,
+  `.golangci.yml`, `test/python/`, `.github/dependabot.yml`, `.gitignore`,
+  `.githooks/`, `LICENSE` and `.artifacthub-repo.yml` (the filter's `go`
+  output). A documentation-only change therefore runs the repository tests
+  too, which check the docs.
+- `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every string
+  literal of `test/repository`'s Go files that names an existing path of the
+  repository, from its root, and fails for a file that no pattern of the
+  `go` output matches: a file that those tests read, whose change alone
+  skipped them, would be merged unchecked. When it fails, add the file to the
+  `go` output in every job.
+- Under the same output, `build` builds the code for `darwin` on `amd64` and
+  `arm64`, linking both commands, because the release builds archives for
+  macOS from it. `image` builds the image from the `Dockerfile` with
+  `docker/build-push-action`, pushing nothing, loads it, and runs its
+  `--version` to check the revision that it was given. A change that breaks
+  either fails on its pull request instead of at release time.
+- The Helm lint and template checks run for changes under `charts/`,
+  `configs/` and `testdata/chart/`, the files that the chart steps render. A
+  change under `charts/` runs the Go checks because the template guard above
+  lives there, and is least useful on exactly the changes that would break
+  it.
+- A tag push runs everything. The filter compares a tag with its merge base
+  on `main`, which for a tag on `main`'s newest commit finds no change, so
+  the steps run under the outputs of the step `changes` after the filter:
+  all true on a tag push, and the filter's own otherwise
+  (`TestATagPushRunsEveryStepOfCI` runs that step's script). A step reads
+  those outputs, never the filter's own.
 
-Every workflow sets `permissions` at its top, read-only, so no job runs with
-the repository's default token, which may write to everything; a job that has
-to write grants itself the scopes it needs, and
-`test/repository/workflowpermissions_test.go` lists each job's write grants and
-fails for any other, so a new one is a deliberate change to that list. The
-release workflows publish only once CI has passed on the tagged commit:
+**Sides.** The tests of the packages themselves are split into two sides,
+each run only when something that it depends on changed.
+
+- `tools/ci-packages.sh allocator` lists the target allocator's packages,
+  `cmd/pue-allocator` and `internal/allocator`.
+  `tools/ci-packages.sh exporter` lists every other package except
+  `test/repository`, so a new package lands on the exporter's side by
+  default.
+- The filter's `allocator` and `exporter` outputs list, for each side: the
+  directories of the module's packages that its packages and their tests are
+  built from (`go list -deps -test`); the files outside those that its tests
+  open (the exporter's tests read `examples/`, `configs/`, `testdata/`,
+  `charts/`, `docs/`, the README and the `Dockerfile`); and what CI runs them
+  with (`go.mod`, `go.sum`, `ci.yml`, the scripts, and for the exporter
+  `test/python/`).
+- A change to only `internal/allocator` runs the allocator's tests and the
+  repository checks, not the exporter's. A change to only
+  `internal/exporter` runs both sides, because the allocator's end-to-end
+  test runs the exporter.
+- `test/repository/cisides_test.go` recomputes the lists (every Go file,
+  embedded file and `testdata/` file of those packages, and every existing
+  path outside its own directory that a string literal of a side's package
+  names). It fails for a file that a side needs and its list leaves out, for
+  an entry that matches none of them, for a file that a side's list matches
+  and the `go` output does not (the setup steps run under `go`), and for a
+  package tested by no side or by both. When it fails for a new package or a
+  new file that a test reads, add its directory or the file to the side's
+  list in every job.
+
+**Jobs.** CI runs its jobs side by side, so it takes about as long as its
+longest job:
+
+- `lint` runs gofmt, golangci-lint (the default build, the opt-in sql
+  drivers' and the opt-in request types') and gopls.
+- `build` runs `go vet`, the default build, darwin's, and the builds with
+  the opt-in sql drivers and request types with their tests.
+- `image` builds the image, with its layers read from and written to the
+  GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a change
+  to the sources alone downloads no module and installs nothing in the
+  runtime stage again.
+- `race` runs the race suite of `internal/exporter`, which has by far the
+  most tests, and `race-rest` that of every other package of the exporter's
+  side (`tools/ci-packages.sh exporter-core` and `exporter-rest`, which
+  together list each package of the side once, as a test checks).
+- `request-types`, a matrix over the request types (its checks are named
+  `test (<type>)`), vets, builds and lints each type on its own under the
+  `go` output, and runs the exporter's tests with it under `exporter`.
+- `scaffold` runs `TestANewRequestTypeIsWiredByTheScaffold` alone under
+  `go`: the minutes that it takes to build a copy of the tree with two new
+  request types. The step of `test` that runs the repository tests skips it
+  with `-skip`.
+- `allocator` runs the allocator's tests, once and then under the race
+  detector, when the `allocator` output reports a change. The allocator's
+  tests are not run with each type on its own: those that need a type are
+  built with it, so such a build runs only part of them, and each type's job
+  already vets and builds the allocator with it.
+- `test` keeps the repository tests, the exporter's tests (under `exporter`)
+  and the chart steps; a test fails when it runs a linter or a build again.
+
+Each of the other jobs starts with `test`'s setup steps except helm's,
+written out again, and `TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when
+a copy differs from `test`'s, so change them in every job at once. `image`
+runs no Go and no Python, which the `Dockerfile` brings itself, so it starts
+with only the first three of them (checkout, the filter and the step
+`changes`), and the test requires the whole setup of a job as soon as it
+sets up or runs Go or Python.
+
+The jobs gate their steps on the changed-path filter's outputs instead of
+using a job-level `if`: a job whose steps are skipped still passes under its
+own name, while a matrix job skipped as a whole is reported under a name that
+no check expects.
+
+`make ci` runs the same commands one after another, each over every package
+(`./...`) where CI names a side's packages, so it runs everything whatever
+changed. `make test` skips the scaffold test as `test` does, and
+`make test-scaffold` runs it as `scaffold` does.
+`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test that a go command of
+CI or of `make ci` skips and that no other command there runs with `-run`,
+so a test moved out of a suite into its own job still runs.
+
+**Permissions.** Every workflow sets `permissions` at its top, read-only, so
+no job runs with the repository's default token, which may write to
+everything. A job that has to write grants itself the scopes it needs, and
+`test/repository/workflowpermissions_test.go` lists each job's write grants
+and fails for any other, so a new grant is a deliberate change to that list.
+The release workflows publish only once CI has passed on the tagged commit:
 their `preflight` job runs `tools/ci-passed.py`, which `cipassed_test.go`
 runs against a stand-in of the GitHub API (`docs/RELEASING.md` says what
 counts as passed and how to release once it has).

@@ -56,7 +56,7 @@ func TestTheChartSaysTheLetterInAServicePortsNameIsItsOwnRule(t *testing.T) {
 		says []string
 	}{
 		"the chart README": {
-			paragraph(readChartFile(t, "README.md"), "`port` is a port's name, never its number"),
+			paragraph(readChartFile(t, "README.md"), "A name consists of lower-case letters"),
 			[]string{
 				"for `type: service` it is the chart's own rule, made so that a number written as a name (`\"9115\"`) is not rendered as a port name that matches nothing",
 				"Kubernetes itself allows a Service port to be named in digits alone",

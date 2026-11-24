@@ -4632,7 +4632,7 @@ The checks are:
     not as text; to use that text there, quote it: "true"`.
   - A key that takes one of a few words is told the words, because quoting a
     number would not make it one of them: `line 5: type is written 1, which YAML reads as a number, not as text; write one
-    of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`.
+  of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`.
   - A boolean is `true` or `false`. `yes`, `no`, `on`, `off`, `y` and `n`
     were booleans in YAML 1.1 and are text now, to an editor and wherever
     the exporter takes text: a label value of `NO`, for Norway, is `NO` and

@@ -34,8 +34,6 @@ type natsStandIn struct {
 	// subjects published to.
 	connects []map[string]any
 	subjects []string
-	// upgrade turns a connection to TLS after INFO, when set.
-	upgrade func() (net.Conn, error)
 }
 
 func (s *natsStandIn) serve(conn net.Conn, upgrade func() (net.Conn, error)) {

@@ -6454,10 +6454,10 @@ Static targets are unaffected: their scrapes are bounded by their own
 
 ## Watching the configuration
 
-The exporter reads its configuration once at startup, and again when asked —
-see [Reloading on demand](#reloading-on-demand). Pass `--config.watch` to
-have it re-read the configuration file and, when one is configured, the
-static target file whenever either changes on disk:
+The exporter reads its configuration once at startup, and again on request
+(see [Reloading on demand](#reloading-on-demand)). With `--config.watch`, it
+also re-reads the configuration file and, when one is configured, the static
+target file whenever either changes on disk:
 
 ```sh
 prometheus-universal-exporter \
@@ -6466,257 +6466,297 @@ prometheus-universal-exporter \
   --config.watch-interval=60s
 ```
 
-`--config.watch-interval` defaults to 60s and must be positive; passing zero or a
-negative duration alongside `--config.watch` is a command-line error (exit 2),
-at startup and with [`--dry-run`](#dry-run) alike, rather than a silently
-disabled watch. Without `--config.watch` no polling loop runs at all,
-and configuration changes take effect on restart.
+`--config.watch-interval` defaults to 60s and must be positive. Zero or a
+negative duration together with `--config.watch` is a command-line error
+(exit 2), at startup and with [`--dry-run`](#dry-run) alike, instead of a
+silently disabled watch. Without `--config.watch` no polling loop runs at
+all, and configuration changes take effect on restart.
 
-Changes are detected by modification time, size and permissions rather than
-filesystem events: any other time than the one last read is a change, an
-older one included, as `cp -p`, `rsync -t` or a `mv` of a prepared file leave
-it, and so is a `chmod`, which may have made a file readable or unreadable.
-The files are stamped before they are read, so an edit made while they are is
-read by the next tick. That is
-deliberate: Kubernetes republishes a mounted ConfigMap by atomically swapping
-the `..data` symlink, which replaces the inode a file-level event watch is
+Changes are detected by modification time, size and permissions, not by
+filesystem events. Any time other than the one last read is a change,
+including an older one, as `cp -p`, `rsync -t` or a `mv` of a prepared file
+leave it. So is a `chmod`, which may have made a file readable or
+unreadable. The files are stamped before they are read, so an edit made
+during the read is picked up by the next tick. Polling is deliberate:
+Kubernetes republishes a mounted ConfigMap by atomically swapping the
+`..data` symlink, which replaces the inode that a file-level event watch is
 attached to, so such a watch would stop firing after the first change.
 
-A reload rejected because a file could not be read — the configuration
-file, a collector file or the static target file missing, a directory, or
-unreadable for its permissions or a directory's — is tried again at every
-tick until the file can be read, with the other of the two files when that
-one was rejected only for disagreeing with it, although nothing the stamps
-hold changed:
-a file can become readable through its owner, an ACL or the permissions of
-a directory above it, which no stamp of the file shows. The rejection is
-logged and counted once, as any; a try that fails the same way again logs
-nothing and counts nothing, and one that fails another way — the file
-readable now but invalid — is a rejection of its own, logged and counted
-once, after which the file is again read only when it changes. A reload
-rejected for what a file says is not tried again until a file changes.
+A reload that is rejected because a file could not be read is tried again at
+every tick until the file can be read. That covers the configuration file, a
+collector file or the static target file being missing, being a directory,
+or being unreadable because of its permissions or a directory's. The other
+of the two files is retried with it when it was rejected only for
+disagreeing with it. The retry happens although nothing in the stamps
+changed, because a file can become readable through its owner, an ACL or
+the permissions of a parent directory, none of which the file's stamp
+shows.
 
-The watch follows the [collector files](#collector-files) too: a collector file
-edited, a new file matching a pattern, or a file removed triggers a reload.
+- The rejection is logged and counted once, like any other. A retry that
+  fails in the same way logs nothing and counts nothing.
+- A retry that fails in a different way (the file is now readable but
+  invalid) is a separate rejection, logged and counted once. After that, the
+  file is again read only when it changes.
+- A reload rejected for what a file contains is not tried again until a file
+  changes.
+
+The watch covers the [collector files](#collector-files) too: an edited
+collector file, a new file that matches a pattern, or a removed file
+triggers a reload.
 
 ### Descriptor files
 
-The watch also follows the statement files of the sql collectors in force,
-`request.statement_file` (see [A statement in a file](SQL.md#a-statement-in-a-file)):
-the statement is read when the configuration loads, so a file edited reloads
-at the next tick, a statement the file no longer holds rejected as the load
-would reject it. And it follows the descriptor files of the grpc collectors in force:
-a collector's `request.protoset_file` and `request.proto_files`, and the
-files those `.proto` files import, through however many files. The
-configuration is checked against them when it loads — the collector's `rpc`
+The watch also covers the statement files of the sql collectors in force,
+`request.statement_file` (see
+[A statement in a file](SQL.md#a-statement-in-a-file)). The statement is
+read when the configuration loads, so an edited file causes a reload at the
+next tick, and a statement the file no longer contains is rejected as the
+load would reject it.
+
+It also covers the descriptor files of the grpc collectors in force: a
+collector's `request.protoset_file` and `request.proto_files`, and the files
+that those `.proto` files import, through any number of files. The
+configuration is checked against them when it loads: the collector's `rpc`
 must be a method they define, and its `message`, like a static target's
-`request.message`, must fit that method's request type — and a grpc collector
-reads them again by itself at its next call once they change (see
-[Descriptors](GRPC.md#descriptors)). Nothing would check the configuration
-against the new files, though: a descriptor set replaced by one without the
-method would be found by the probes that then fail, with the last reload
-still reported as successful. So when one of these files changes, appears or
-disappears, the next tick reloads, as it does for the configuration file: the
-configuration is read and checked again, against the files as they are now.
-No flag turns this on and none turns it off; it is part of `--config.watch`.
+`request.message`, must fit that method's request type. A grpc collector
+also re-reads the files itself at its next call once they change (see
+[Descriptors](GRPC.md#descriptors)). But nothing would check the
+configuration against the new files: a descriptor set replaced by one
+without the method would only be noticed through failing probes, with the
+last reload still reported as successful. So when one of these files
+changes, appears or disappears, the next tick reloads, as it does for the
+configuration file, and the configuration is read and checked again against
+the files as they are now. There is no flag to turn this on or off; it is
+part of `--config.watch`.
 
 When everything still fits, the reload is logged like any other, as
 `configuration reloaded` with `"trigger":"watch"`, and counted as a
-successful reload. The collectors are defined as they were, so nothing is
-dropped or started again: their counters, their cached results, what the
-[failure log](LOGGING.md#repeated-failures) remembers of them and the
-cadence of their static targets are kept. A result cached before the change
-was made with the old descriptors, and is served until its
+successful reload. The collectors are defined as before, so nothing is
+dropped or restarted: their counters, their cached results, what the
+[failure log](LOGGING.md#repeated-failures) remembers about them, and the
+schedule of their static targets are kept. A result cached before the change
+was produced with the old descriptors and is served until its
 [`cache.ttl`](#response-caching) runs out.
 
-When something no longer fits — the service no longer has the method, the
-request type no longer has a field the `message` sets, a `.proto` file does
-not compile, an import is gone — the reload is rejected at that tick, with
-the reason:
+When something no longer fits (the service no longer has the method, the
+request type no longer has a field that the `message` sets, a `.proto` file
+does not compile, an import is gone), the reload is rejected at that tick,
+with the reason:
 
 ```json
 {"level":"ERROR","msg":"configuration reload rejected","trigger":"watch","file":"/etc/exporter/config.yaml","error":"collector \"queue_stats\": the service acme.queue.v1.QueueService in protoset_file /etc/exporter/protos/queue.pb has no method GetStats; it has GetQueue, Watch","retried_when":"the configuration or a file it names changes"}
 ```
 
 `http_exporter_config_last_reload_successful{file="config"}` then reads `0`
-until a reload succeeds, so a descriptor that broke a collector can be
-alerted on from the tick that found it — see
+until a reload succeeds, so you can alert on a descriptor that broke a
+collector from the tick that found it; see
 [Configuration reloads](SELF-METRICS.md#configuration-reloads). The
-configuration in force stays in force, but not the old descriptors: the
-collector reads the changed files at its next call whatever became of the
-reload, so the calls that no longer fit them fail, for the reason the reload
-was rejected for, until the files are mended. The rejected reload is logged
-once, and not tried again until a file changes again; the tick after the
-files are mended reloads, and is logged as a reload.
+configuration in force stays in force, but the old descriptors do not: the
+collector reads the changed files at its next call whatever happened to the
+reload. The calls that no longer fit them therefore fail, for the same
+reason the reload was rejected, until the files are fixed. The rejected
+reload is logged once and not tried again until a file changes again. The
+tick after the files are fixed reloads, and is logged as a reload.
 
 The [static target file](STATIC-TARGETS.md#reloading) is read and checked
-again with the configuration when a target in force sets a
-`request.message` for a collector that reads descriptor files: the message
-is checked against the same files. Which descriptor file changed is not
-asked, so such a target file is read also for a file of a collector none of
-its targets uses, and is then found as it was. A message the new files refuse
-is reported for the target file, on a line of its own and in its own series:
+again with the configuration when a target in force sets a `request.message`
+for a collector that reads descriptor files, because the message is checked
+against the same files. The watch does not determine which descriptor file
+changed, so such a target file is also read for a file of a collector that
+none of its targets uses, and is then found unchanged. A message that the
+new files refuse is reported for the target file, on its own line and in its
+own series:
 
 ```json
 {"level":"ERROR","msg":"static target reload rejected","trigger":"watch","file":"/etc/exporter/targets.yaml","error":"target \"orders\": request.message does not fit acme.queue.v1.GetStatsRequest: (line 1:30): unknown field \"include_shards\"","retried_when":"the static target file, a file its check opens or the configuration changes"}
 ```
 
-The configuration is then rejected with it, naming the same target, since
-the two take effect only as a pair that agrees; both stay as they were, and
-both are read again when the file changes once more. A target file without
-such a target is not read for a descriptor file, and neither is one whose
-own last reload was rejected: that one is read again for what its line names
-as `retried_when`. Where that line names the configuration — the target
-file names a collector the configuration does not have, say — it means the
-configuration file, its collector files and, while the configuration is
-rejected too, the files that one is tried again for. A descriptor file of
-the configuration in force changing reloads the configuration, which is the
-one the target file was rejected by, and leaves the target file as it is;
-the descriptor files the target file's own check opened are named apart, as
-`a file its check opens`, and do read it again.
+The configuration is then rejected with it, with an error that names the
+same target, because the two take effect only as a pair that agrees. Both
+stay as they were, and both are read again when the file changes once more.
 
-Which files are watched follows the configuration in force: a reload that
-removes a grpc collector, or points it at other files, changes them from
-that reload on. An imported file is watched where the `proto_import_paths`
-resolved it, and so is the place in an earlier import path where it was
-looked for and not found, since a file appearing there is the one compiled
-from then on; a file of the same name in a later import path is never read
-and not looked at, and neither are the places of the well-known files
-(`google/protobuf/*.proto`), which are built in. A file has changed when its
-modification time, its size or its permissions have, when it appeared or
-disappeared, or when its path leads to another file: through a symbolic
+- A target file without such a target is not read for a descriptor file.
+  Neither is one whose own last reload was rejected: that one is read again
+  for what its line names as `retried_when`.
+- Where that line names the configuration (for example because the target
+  file names a collector the configuration does not have), it means the
+  configuration file, its collector files and, while the configuration is
+  rejected too, the files for which the configuration is retried.
+- A change to a descriptor file of the configuration in force reloads the
+  configuration, which is what rejected the target file, and leaves the
+  target file as it is. The descriptor files that the target file's own
+  check opened are named separately, as `a file its check opens`, and do
+  cause it to be read again.
+
+**Which files are watched.** The set follows the configuration in force: a
+reload that removes a grpc collector, or points it at other files, changes
+the set from that reload on.
+
+- An imported file is watched where `proto_import_paths` resolved it. The
+  place in an earlier import path where it was looked for and not found is
+  watched too, because a file that appears there is the one compiled from
+  then on.
+- A file of the same name in a later import path is never read and not
+  watched. Neither are the locations of the well-known files
+  (`google/protobuf/*.proto`), which are built in.
+
+**What counts as a change.** A file has changed when its modification time,
+its size or its permissions have changed, when it appeared or disappeared,
+or when its path leads to another file. The last happens through a symbolic
 link, which is how Kubernetes swaps in a new version of a mounted ConfigMap,
 or because another file was renamed over it, which the file's device and
-inode tell even when the new file has the time, size and permissions of the
-old. The reload checks the configuration against the descriptors as the
-collectors read them, and a collector's call looks at its files as the watch
-does: a link pointed at a file with the very time and size of the old one,
-or a file renamed over by one of the same time, size and permissions,
-reloads, and the next call compiles the new file; a file whose permissions
-alone changed reloads too, and the next call reads it again. One made
-unreadable by a `chmod` then fails the reload and that call with
-`permission denied` — an unreadable file in an earlier import path too,
-rather than the next import path's file of that name being read, as it is
-when the file is missing there. The exporter run as root reads a file
-whatever its permissions, so there a `chmod` only makes the next call
-compile the files once more, and it succeeds.
+inode reveal even when the new file has the time, size and permissions of
+the old one.
 
-The device and inode are what the filesystem reports. On one that gives an
-unchanged file another inode number — a FUSE filesystem mounted without
-`use_ino`, once the kernel has dropped the file from its cache, or the
-files mounted again — the file counts as changed: the next tick reloads,
-and the next call compiles the files again, once each time the number
-changes. Nothing reads the files to tell otherwise, since that would cost
-every call a read; on a filesystem that changed the number at every look,
-every tick would reload and every call compile.
+The reload checks the configuration against the descriptors as the
+collectors read them, and a collector's call looks at its files in the same
+way as the watch:
 
-The cost is one look at each of these files per tick: a tick that finds them
-as they were reads no file, compiles nothing and logs nothing. However many
-of them changed since the last tick, there is one reload. Starting the
-exporter reloads nothing: the files are stamped as the configuration is
-first read, before it is checked against them, so one edited while the
-exporter was starting is seen by the first tick. A reload stamps them the
-same way, before it validates what it read, however `request.type` and
-`descriptors` are written (`GRPC` is `grpc`): the `.proto` files are compiled
-then, to learn what they import, and that compile is the one the validation
-uses, so a startup and a reload compile no file twice unless it does not
-compile. Without `--config.watch` none of this is done: no descriptor file
-is stamped, and a startup or a reload reads them only to check the
-configuration.
+- A link pointed at a file with exactly the time and size of the old one,
+  or a file renamed over by one with the same time, size and permissions,
+  causes a reload, and the next call compiles the new file.
+- A file whose permissions alone changed causes a reload too, and the next
+  call reads it again. A file made unreadable by a `chmod` then fails the
+  reload and that call with `permission denied`. That is also true of an
+  unreadable file in an earlier import path: the file of that name in the
+  next import path is not read instead, as it is when the file is missing
+  there.
+- The exporter running as root reads a file whatever its permissions, so
+  there a `chmod` only makes the next call compile the files once more,
+  successfully.
+
+The device and inode are what the filesystem reports. On a filesystem that
+gives an unchanged file a different inode number (a FUSE filesystem mounted
+without `use_ino`, once the kernel has dropped the file from its cache, or
+after the files are mounted again), the file counts as changed. The next
+tick reloads, and the next call compiles the files again, once each time the
+number changes. Nothing reads the files to decide otherwise, because that
+would cost every call a read. On a filesystem that changed the number at
+every look, every tick would reload and every call would compile.
+
+**Cost.** The cost is one look at each of these files per tick. A tick that
+finds them unchanged reads no file, compiles nothing and logs nothing.
+However many of them changed since the last tick, there is one reload.
+
+- Starting the exporter reloads nothing. The files are stamped when the
+  configuration is first read, before it is checked against them, so a file
+  edited while the exporter was starting is noticed by the first tick.
+- A reload stamps them in the same way, before it validates what it read,
+  however `request.type` and `descriptors` are written (`GRPC` is `grpc`).
+  The `.proto` files are compiled at that point to learn what they import,
+  and the validation uses that same compilation, so a startup and a reload
+  compile no file twice unless it fails to compile.
+- Without `--config.watch` none of this happens: no descriptor file is
+  stamped, and a startup or a reload reads them only to check the
+  configuration.
 
 ### Rejected reloads
 
-A reload that is rejected is not tried again until something changes, and is
-logged once. What can change is more than the configuration: loading it opens
-the files it names, and a reload that runs in the moment one is being
-replaced — a certificate missing while a Secret is rotated, the new
-certificate in place before its key — is rejected for that file alone. So
-while a configuration is rejected the watch also looks at the files it names
-and the load opens, and those of the configuration in force:
+A rejected reload is not tried again until something changes, and is logged
+once. More than the configuration can change, though. Loading it opens the
+files it names, and a reload that runs at the moment one of them is being
+replaced (a certificate missing while a Secret is rotated, or the new
+certificate in place before its key) is rejected because of that file alone.
+While a configuration is rejected, the watch therefore also covers the files
+that it names and the load opens, as well as those of the configuration in
+force:
 
 - `otlp.tls.ca_file`, `cert_file` and `key_file`, when `otlp` is enabled;
 - `web.basic_auth.username_file` and `password_file`, when it is enabled;
 - a sql collector's `request.statement_file`;
 - a grpc collector's `request.protoset_file` and `request.proto_files`, and
-  the files those `.proto` files import, through however many files, which
-  the configuration does not name and the compile reads all the same: each
-  where the `proto_import_paths` resolved it, and a missing one in every
-  place it was looked for, so a reload rejected for an import that is not
-  there is tried again when the file appears. The place in an earlier import
-  path where a file was looked for before it was found counts too, since a
-  file appearing there is the one compiled from then on; a file of the same
-  name in a later import path is never read, and is not looked at. Neither
-  are the well-known files (`google/protobuf/*.proto`), which are built in.
+  the files that those `.proto` files import, through any number of files.
+  The configuration does not name the imported files, but the compile reads
+  them. Each is watched where `proto_import_paths` resolved it. A missing
+  one is watched in every place it was looked for, so a reload rejected for
+  a missing import is tried again when the file appears. The place in an
+  earlier import path where a file was looked for before it was found counts
+  too, because a file that appears there is the one compiled from then on. A
+  file of the same name in a later import path is never read and not
+  watched. Neither are the well-known files (`google/protobuf/*.proto`),
+  which are built in.
 
-When one of them appears, disappears or changes — its modification time, its
-size, its permissions, or the file the path leads to, through a symbolic
-link, which is how Kubernetes swaps in a new version of a Secret, or by
-another file renamed over it, which its device and inode tell — the next
-tick reloads, once however many of them changed, and a reload that then
-succeeds is logged like any other. A tick that finds them as they were does
-nothing and logs nothing: it reads no file and compiles none. The descriptor
-files are watched as they were before the rejected reload read them, so one
-mended while that reload was still running — after it was read, before the
-reload was rejected — is not taken as read: the next tick reloads. Once the
-configuration is in force the watch goes on looking at the
-[descriptor files](#descriptor-files) alone, and leaves the certificates and
-the credential files be: nothing in the configuration is checked against
-them, and the export and the exporter's own authentication each read their
-files again when they change. A
-collector's own credential and TLS files are read at each request, not when
-the configuration loads, and never reject a reload.
+The next tick reloads when one of these files appears, disappears or
+changes. A change is a different modification time, size or permissions, or
+a path that leads to another file. The last happens through a symbolic link,
+which is how Kubernetes swaps in a new version of a Secret, or because
+another file was renamed over it, which its device and inode reveal.
 
-The [static target file](STATIC-TARGETS.md#reloading) is tried again the
-same way. Checking it opens the `request.protoset_file` and
-`request.proto_files` of the grpc collectors whose targets set a
-`request.message`, and the files those `.proto` files import, which the
-message is checked against, so a reload of the target file in the moment
-such a file is being replaced is rejected for that file alone. While the
-target file is rejected the watch looks at those files too, the imported
-ones as for the configuration and each as it was before the check read it,
-and the tick after one changes reads the
-target file again,
-although it is as it was, and the configuration with it, whose
-[descriptor files](#descriptor-files) they are; a tick that finds them as
-they were does nothing and logs nothing. Once the target file is in force
-they go on being watched as the configuration's descriptor files are: one
-changing reads both again.
-A target file rejected for what it says itself — one that is not YAML, a
-target without a collector — opens no other file, and is read again when it
-changes. A target's own credential files (`request.bearer_token_file`,
-`request.basic_auth_file`) are read at each scrape and never reject a
-reload.
+- There is one reload however many of the files changed, and a reload that
+  then succeeds is logged like any other.
+- A tick that finds the files unchanged does nothing and logs nothing: it
+  reads no file and compiles none.
+- The descriptor files are watched as they were before the rejected reload
+  read them. One that was fixed while that reload was still running (after
+  it was read, before the reload was rejected) is therefore not treated as
+  read: the next tick reloads.
+- Once the configuration is in force, the watch covers only the
+  [descriptor files](#descriptor-files) and no longer the certificates and
+  credential files. Nothing in the configuration is checked against those,
+  and the export and the exporter's own authentication each read their files
+  again when they change.
+- A collector's own credential and TLS files are read at each request, not
+  when the configuration loads, and never reject a reload.
 
-The watch does not relax any reload rule. An invalid configuration, one that
-would disable OTLP while a loaded static target sets `export_via_otlp`, a
-collector name defined twice, and a pre-script that stops producing `data` are
-all still rejected, with the last valid configuration
-left active and the reason logged, with the rejected file's path as `file`
-(`configuration reload rejected` or `static target reload rejected`). `http_exporter_config_last_reload_successful`
-then reads `0` until a reload succeeds, so a change that did not take can be
-alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
+The [static target file](STATIC-TARGETS.md#reloading) is retried in the same
+way. Checking it opens the `request.protoset_file` and `request.proto_files`
+of the grpc collectors whose targets set a `request.message`, and the files
+that those `.proto` files import, because the message is checked against
+them. A reload of the target file at the moment such a file is being
+replaced is therefore rejected because of that file alone.
+
+- While the target file is rejected, the watch covers those files too: the
+  imported ones as for the configuration, and each as it was before the
+  check read it.
+- The tick after one of them changes reads the target file again, although
+  it is unchanged, and the configuration with it, because they are the
+  configuration's [descriptor files](#descriptor-files). A tick that finds
+  them unchanged does nothing and logs nothing.
+- Once the target file is in force, they stay watched as the configuration's
+  descriptor files are: a change to one reads both files again.
+- A target file rejected for its own content (it is not YAML, or a target
+  has no collector) opens no other file, and is read again when it changes.
+- A target's own credential files (`request.bearer_token_file`,
+  `request.basic_auth_file`) are read at each scrape and never reject a
+  reload.
+
+The watch does not relax any reload rule. These are all still rejected: an
+invalid configuration, one that would disable OTLP while a loaded static
+target sets `export_via_otlp`, a collector name defined twice, and a
+pre-script that stops producing `data`. The last valid configuration stays
+active, and the reason is logged with the rejected file's path as `file`
+(`configuration reload rejected` or `static target reload rejected`).
+`http_exporter_config_last_reload_successful` then reads `0` until a reload
+succeeds, so you can alert on a change that did not take effect; see
+[Configuration reloads](SELF-METRICS.md#configuration-reloads).
 
 With the watch on, the line of a rejected reload also says, as
-`retried_when`, what the watch reads that file again for, and names only
-what applies: the file itself (`the configuration changes`, which counts its
-collector files, or `the static target file changes`); with it a file
-watched while the file is rejected, as above (`the configuration or a file
-it names changes`, and `the configuration, a file it names or a file one of
-those imports changes` when a `.proto` file it names imports others); and
-the other of the two files, when this one was
-rejected only because it disagrees with the other as in force — a target
-naming a collector the configuration does not have, say — so that a change
-to either may settle it (`the static target file, a file its check opens or
-the configuration changes`). A file rejected because a file it reads could
-not be read adds that it is tried at every tick (`the configuration changes,
-and at every tick while a file it reads cannot be read`). Without `--config.watch` nothing is read again
-until a reload is asked for, and the line has no `retried_when`.
+`retried_when`, what causes the watch to read that file again. It names only
+what applies:
+
+- The file itself: `the configuration changes`, which includes its collector
+  files, or `the static target file changes`.
+- With it, a file watched while the file is rejected, as above: `the
+  configuration or a file it names changes`, or `the configuration, a file
+  it names or a file one of those imports changes` when a `.proto` file it
+  names imports others.
+- The other of the two files, when this one was rejected only because it
+  disagrees with the other as in force (for example, a target that names a
+  collector the configuration does not have), so that a change to either may
+  resolve it: `the static target file, a file its check opens or the
+  configuration changes`.
+- A file rejected because a file it reads could not be read adds that it is
+  tried at every tick: `the configuration changes, and at every tick while a
+  file it reads cannot be read`.
+
+Without `--config.watch` nothing is read again until a reload is requested,
+and the line has no `retried_when`.
 
 ## Reloading on demand
 
-A tool that has just written the configuration can reload the exporter at once
-instead of waiting for the watch, and find out whether the new configuration
-was accepted:
+A tool that has just written the configuration can reload the exporter
+immediately instead of waiting for the watch, and learn whether the new
+configuration was accepted:
 
 ```sh
 kill -HUP "$(pidof prometheus-universal-exporter)"   # always available
@@ -6724,9 +6764,9 @@ kill -HUP "$(pidof prometheus-universal-exporter)"   # always available
 curl -X POST http://exporter:8080/-/reload            # with --web.enable-lifecycle
 ```
 
-Both reload the configuration, with its collector files, and the static
-target file, whether or not they changed, under exactly the rules the watch
-follows. `POST` (or `PUT`) `/-/reload` answers:
+Both reload the configuration with its collector files, and the static
+target file, whether or not they changed, under the same rules as the watch.
+`POST` (or `PUT`) `/-/reload` answers:
 
 | Status | Meaning |
 | --- | --- |
@@ -6735,117 +6775,141 @@ follows. `POST` (or `PUT`) `/-/reload` answers:
 | `403` | The exporter was started without `--web.enable-lifecycle`. |
 | `405` | Any method other than `POST` or `PUT`. |
 
-The endpoint is off unless `--web.enable-lifecycle` is passed, as in Prometheus,
-and when `web.basic_auth` is configured it needs the same credentials as the
-other endpoints. `SIGHUP` needs no flag, and is safe to send at any time: one
-that arrives while the exporter is still starting, reading its configuration
-and checking its Python scripts, does not end the process but waits, and the
-exporter reloads once as soon as it has started. Either way the reload is logged with
-what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counted
-in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
-from different triggers never interleave: one runs at a time.
+The endpoint is off unless `--web.enable-lifecycle` is passed, as in
+Prometheus. When `web.basic_auth` is configured, it needs the same
+credentials as the other endpoints.
+
+`SIGHUP` needs no flag and is safe to send at any time. One that arrives
+while the exporter is still starting (reading its configuration and checking
+its Python scripts) does not end the process: it waits, and the exporter
+reloads once as soon as it has started.
+
+In both cases the reload is logged with its trigger (`"trigger":"http"`,
+`"sighup"` or `"watch"`) and counted in the
+[reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads from
+different triggers never interleave: one runs at a time.
 
 ### What a reload changed
 
-Each file a reload puts in force is logged with what it changed, under
-`changes`: the `configuration reloaded` line names the collectors added,
-removed and changed, and the `static targets reloaded` line the static
-targets, each list sorted, or says `no changes`:
+Each file that a reload puts in force is logged with what it changed, under
+`changes`. The `configuration reloaded` line names the collectors added,
+removed and changed. The `static targets reloaded` line does the same for
+the static targets. Each list is sorted, and a reload without changes says
+`no changes`:
 
 ```json
 {"level":"INFO","msg":"configuration reloaded","trigger":"sighup","collectors":12,"collector_files":3,"changes":"collectors added: queue_depth; collectors removed: legacy_status; collectors changed: weather"}
 {"level":"INFO","msg":"static targets reloaded","trigger":"sighup","targets":40,"changes":"no changes"}
 ```
 
-A collector is changed when anything in its definition differs, in the
-configuration file or in a collector file, a key it takes from its file's
-[defaults](#defaults-for-the-collectors-of-a-file) included, which is also what drops its
-cached results (see [Response caching](#response-caching)); a static target
-when anything in its entry differs, the file's defaults it takes included.
-Each list names ten and counts the rest — `collectors added: a01, …, a10
-and 30 more` — so a reload that replaces a whole file writes a line of
-bounded length. Whatever triggered it, the watch, `SIGHUP`, `/-/reload` or a
-bundle from the [target allocator](ALLOCATOR.md), a reload says the same, and
-a rejected reload puts nothing in force and changes nothing.
+- A collector is changed when anything in its definition differs, in the
+  configuration file or in a collector file, including a key that it takes
+  from its file's [defaults](#defaults-for-the-collectors-of-a-file). The
+  same condition drops its cached results (see
+  [Response caching](#response-caching)).
+- A static target is changed when anything in its entry differs, including
+  the file's defaults that it takes.
+- Each list names ten entries and counts the rest (`collectors added: a01,
+  …, a10 and 30 more`), so a reload that replaces a whole file writes a line
+  of bounded length.
+- The line is the same whatever triggered the reload: the watch, `SIGHUP`,
+  `/-/reload` or a bundle from the [target allocator](ALLOCATOR.md).
+- A rejected reload puts nothing in force and changes nothing.
 
 The landing page at `/` shows when the last reload put something in force,
-and what it changed as a table, both files' changes together: a row for each
-list, with what changed (collectors or static targets), how (added, removed
-or changed), how many, and the names, the first 10 and a count of the rest.
-A reload that changed nothing says so in a sentence, and before the first
-the page says the exporter has not been reloaded since it started. How long ago that was
-is `http_exporter_config_last_reload_success_timestamp_seconds`
+and what it changed as a table that combines the changes of both files. It
+has a row for each list, with what changed (collectors or static targets),
+how (added, removed or changed), how many, and the names: the first 10 and a
+count of the rest. A reload that changed nothing says so in a sentence.
+Before the first reload, the page says that the exporter has not been
+reloaded since it started. The time of the last successful reload is
+`http_exporter_config_last_reload_success_timestamp_seconds`
 ([Configuration reloads](SELF-METRICS.md#configuration-reloads)).
 
-Whatever the trigger, the exporter's state follows the new configuration: a
-removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
-those of its [Python workers](SELF-METRICS.md#python-workers) with them,
-and what was kept about it is dropped, and a changed collector's cached results
-are dropped, and its [static targets](STATIC-TARGETS.md#reloading) are scraped
-again within ten seconds. The configuration and the static target file take
-effect together, in one step: nothing ever runs with the new one of the two
-and the old other.
+Whatever the trigger, the exporter's state follows the new configuration:
 
-A probe or a static target scrape that had read its collector before the
-reload goes on with the collector it read, and is answered. When the reload
-removed that collector, or changed its definition, what such a late probe or
-scrape leaves under the collector's name goes nowhere: its result is not
-cached, so a collector brought back under the name is not answered with it
-within `cache.ttl` or `cache.stale_if_error`, and it does not count in the
-`limits.max_cache_entries` of the collector now under the name; and its
-failure or its success is not taken for a failure or a
-[recovery](LOGGING.md#repeated-failures) of that collector, the failure being
-logged at debug level only, marked `"superseded":true`. A collector the reload
-left as it was caches and logs as it did, whichever configuration its probe
-had read.
+- A removed collector's [self-metrics](SELF-METRICS.md#collector-metrics)
+  stop, together with those of its
+  [Python workers](SELF-METRICS.md#python-workers), and what was kept about
+  it is dropped.
+- A changed collector's cached results are dropped, and its
+  [static targets](STATIC-TARGETS.md#reloading) are scraped again within ten
+  seconds.
+- The configuration and the static target file take effect together, in one
+  step: nothing ever runs with the new version of one and the old version of
+  the other.
 
-That holds from the moment the reload is made: the reload itself, whether
-`/-/reload`, `SIGHUP` or the watch made it, drops the cached results of the
-collectors it removed or changed and forgets their remembered failures before
-it returns, so `/-/reload` answers when that is done. A failure that ends in
-the instant before is one from before the reload, logged as such and forgotten
-with the rest. A changed collector's remembered failures are forgotten as a
-removed one's are, so the first failure of the new definition is logged in
-full as a first failure, and a static target that failed under the old
-definition and succeeds under the new one is not logged as recovered. A
-static target that the reload removed from the static target file, or changed
-there, is treated as one whose collector changed, though the collector is as
-it was: its remembered failures are forgotten, the failure of a scrape that
-had read it before the reload is logged at debug level only, marked
-`"superseded":true`, and the success of such a scrape is no recovery of the
-target now under the name.
+**Probes in flight.** A probe or a static target scrape that had read its
+collector before the reload continues with the collector it read, and is
+answered. When the reload removed that collector or changed its definition,
+what such a late probe or scrape would leave under the collector's name is
+discarded:
 
-A static target's scrape that had read its target before a reload removed or
-changed the target, or its collector, publishes nothing on the
-[static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint) or over OTLP, even when a target is
-back under the name as it was: the endpoint keeps what it has of the target
-now under the name until that target's own first scrape replaces it. That
-scrape is made within ten seconds of the reload, or as soon as the earlier
-scrape has ended, also when reloads in quick succession changed the target,
-or its collector, and changed it back, or removed it and brought it back. A
-target the reload left as it was, with its collector, is published as before.
+- Its result is not cached. A collector brought back under the name is
+  therefore not answered with it within `cache.ttl` or
+  `cache.stale_if_error`, and the result does not count toward the
+  `limits.max_cache_entries` of the collector now under the name.
+- Its failure or success does not count as a failure or a
+  [recovery](LOGGING.md#repeated-failures) of that collector. The failure is
+  logged at debug level only, marked `"superseded":true`.
 
-Identical probes in flight [share one trip](#identical-probes-share-one-request) only
-within one stay of their collector: a probe of a collector that reloads
-changed and changed back, or removed and brought back, while an earlier probe
-was at the target makes a trip of its own, and its result is cached and its
-failure logged as any probe's of a collector in force.
+A collector that the reload left unchanged caches and logs as before,
+whichever configuration its probe had read.
+
+This applies from the moment of the reload. Whether `/-/reload`, `SIGHUP` or
+the watch made it, the reload itself drops the cached results of the
+collectors it removed or changed and forgets their remembered failures
+before it returns, so `/-/reload` answers when that is done.
+
+- A failure that ends in the instant before the reload belongs to the time
+  before it: it is logged as such and forgotten with the rest.
+- A changed collector's remembered failures are forgotten like a removed
+  one's. The first failure of the new definition is therefore logged in full
+  as a first failure, and a static target that failed under the old
+  definition and succeeds under the new one is not logged as recovered.
+- A static target that the reload removed from the static target file, or
+  changed there, is treated like one whose collector changed, although the
+  collector is unchanged. Its remembered failures are forgotten. The failure
+  of a scrape that had read it before the reload is logged at debug level
+  only, marked `"superseded":true`. The success of such a scrape is not a
+  recovery of the target now under the name.
+
+**Publishing.** A static target's scrape that had read its target before a
+reload removed or changed the target, or its collector, publishes nothing on
+the
+[static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint) or
+over OTLP, even when a target is back under the name unchanged. The endpoint
+keeps what it has of the target now under the name until that target's own
+first scrape replaces it. That scrape is made within ten seconds of the
+reload, or as soon as the earlier scrape has ended. This also applies when
+reloads in quick succession changed the target, or its collector, and
+changed it back, or removed it and brought it back. A target that the reload
+left unchanged, with its collector, is published as before.
+
+**Shared probes.** Identical probes in flight
+[share one trip](#identical-probes-share-one-request) only within one stay
+of their collector. Suppose reloads changed a collector and changed it back,
+or removed it and brought it back, while an earlier probe was at the target.
+A new probe of that collector then makes its own trip, and its result is
+cached and its failure logged like those of any probe of a collector in
+force.
 
 ## Metric lint
 
-The metric lint is advice about the series a collector makes: names that
-break Prometheus's [naming conventions](https://prometheus.io/docs/practices/naming/),
-labels whose values look unbounded, and one name that two collectors make in
+The metric lint is advice about the series that a collector produces: names
+that break Prometheus's
+[naming conventions](https://prometheus.io/docs/practices/naming/), labels
+whose values look unbounded, and one name that two collectors produce in
 different ways. The [dry run](#dry-run) lists what the configuration alone
-shows, and the [debug report](#debug-probes) and the
-[debug page](#the-debug-page) add what the series of a run show. It is
-advice and never more: the dry run passes with it, exit status `0`, and a
-probe, a static target's scrape and a debug run answer what they answer
-without it. Nothing else reports it — not startup, a reload or a probe.
+shows. The [debug report](#debug-probes) and the
+[debug page](#the-debug-page) add what the series of a run show.
 
-Each finding names its collector, its rule by an id that stays the same, and
-the metric, by the name it is exported under, with the collector's
-`metrics_prefix`:
+The lint is only advice. The dry run still passes (exit status `0`), and a
+probe, a static target's scrape and a debug run answer the same with or
+without it. Nothing else reports it: not startup, not a reload, not a probe.
+
+Each finding names its collector, its rule by a stable id, and the metric by
+the name it is exported under, with the collector's `metrics_prefix`:
 
 ```text
 [counter-total] metric "jobs_done": a counter whose name does not end in _total is written as jobs_done in the Prometheus text format and as jobs_done_total in OpenMetrics, so its name depends on the format a scraper asks for; name it jobs_done_total
@@ -6859,31 +6923,38 @@ the metric, by the name it is exported under, with the collector's
 | `unbounded-label` | debug only | A label whose values in one run look like ids or times, or are more than 100. |
 | `name-clash` | dry run, debug | A metric name another collector makes with another type, help or labels. |
 
-The rules read the names the configuration gives — a rule's `name` and the
-`name` of a [derived entry](#derived-series) that is not `hidden`, with the
-collector's `metrics_prefix`, a derived entry of the `type` it is written
-with, `gauge` without one — and, in a debug run, the names of the series
-the run made, so that the names a `python` script makes or a `prometheus`
-rule without a `name` passes on are linted there too, though the dry run
-cannot know them. A finding both give is shown once.
+The rules read the names that the configuration gives: a rule's `name`, and
+the `name` of a [derived entry](#derived-series) that is not `hidden`, each
+with the collector's `metrics_prefix`. A derived entry has the `type` it is
+written with, or `gauge` without one. In a debug run the rules also read the
+names of the series that the run produced. The names that a `python` script
+produces, or that a `prometheus` rule without a `name` passes on, are
+therefore linted there, although the dry run cannot know them. A finding
+that both give is shown once.
 
 ### counter-total
 
 The exporter does not add `_total` to a counter's name in the Prometheus
-text format: a counter named `jobs_done` is the series `jobs_done` there and
-`jobs_done_total` in [OpenMetrics](#openmetrics), which a scraper chooses.
-So a rule of `type: counter` whose name does not end in `_total` is
-reported, with the name to give it. A rule of `type: gauge` whose name ends
-in `_total` is reported too: the suffix says counter, and `rate()` over a
-gauge that goes down gives nonsense. A rule of `type: untyped`, and a
-`prometheus` rule without a `type`, which keeps the series' own, are not.
+text format. A counter named `jobs_done` is the series `jobs_done` there and
+`jobs_done_total` in [OpenMetrics](#openmetrics), and the scraper chooses
+the format.
+
+- A rule of `type: counter` whose name does not end in `_total` is reported,
+  with the name to give it.
+- A rule of `type: gauge` whose name ends in `_total` is reported too: the
+  suffix indicates a counter, and `rate()` over a gauge that decreases gives
+  meaningless results.
+- A rule of `type: untyped` is not reported. Neither is a `prometheus` rule
+  without a `type`, which keeps the type of the series.
 
 ### unit-suffix
 
-A name is read as its words, the parts between underscores, in any case.
+A name is read as its words, which are the parts between underscores, in any
+letter case.
 
-- **A unit that is not a base unit**, as the last word, or the last before a
-  counter's `_total`, is reported with the base unit's name and the
+- **A unit that is not a base unit.** When such a unit is the last word, or
+  the last word before a counter's `_total`, the name is reported with the
+  base unit's name and the
   [`scale`](#mapping-text-to-values-and-scaling-them) that converts the
   value:
 
@@ -6897,32 +6968,33 @@ A name is read as its words, the parts between underscores, in any case.
   | `kib`, `mib`, `gib` | `bytes` | `1024`, `1048576`, `1073741824` |
   | `percent`, `percentage` | `ratio` | `0.01` |
 
-  `us` and `ns` are a region or a namespace as often as a unit, so they are
-  read as one only in a name that also has a word of a duration (below):
+  `us` and `ns` mean a region or a namespace as often as a unit. They are
+  read as a unit only in a name that also has a duration word (below):
   `request_latency_us` is reported, `requests_us` is not.
-- **A duration or a time without `seconds`**: a name with one of the words
+- **A duration or a time without `seconds`.** A name with one of the words
   `duration`, `latency`, `elapsed`, `uptime`, `age`, `time` or `timestamp`
-  and without the word `seconds` (or `ratio`) is reported, with the name of
-  a duration in seconds, `request_duration_seconds`, and of a point in time,
-  a Unix time in seconds, `last_success_time_timestamp_seconds`; a name with
-  `timestamp` is given the second alone. `timeout` and `timeouts` are not
-  among the words, since they count timeouts more often than they measure
-  one, nor is `times`, which counts.
-- **A size without `bytes`**: a name with the word `memory` and without the
+  and without the word `seconds` (or `ratio`) is reported. The finding gives
+  the name of a duration in seconds, `request_duration_seconds`, and of a
+  point in time as a Unix time in seconds,
+  `last_success_time_timestamp_seconds`. A name with `timestamp` is given
+  only the second. `timeout` and `timeouts` are not among the words, because
+  they count timeouts more often than they measure one. Neither is `times`,
+  which counts.
+- **A size without `bytes`.** A name with the word `memory` and without the
   word `bytes` (or `ratio`) is reported, with the name in bytes. `size` is
   not among the words: `queue_size`, `pool_size` and `batch_size` count
   items.
 
-The lists are short on purpose: a word that is as often something else
-would make advice nobody reads.
+The lists are short on purpose: a word that often means something else would
+produce advice that nobody reads.
 
 ### unbounded-label
 
-Each value of a label is a series of its own, which Prometheus keeps for as
-long as it keeps the metric, so a label whose values keep changing — a
-request id, a user, a time — grows the series without bound. In a debug
-run, each label of each metric is reported, once, when among the run's
-series
+Each value of a label is a separate series, which Prometheus keeps for as
+long as it keeps the metric. A label whose values keep changing (a request
+id, a user, a time) therefore grows the number of series without bound. In a
+debug run, each label of each metric is reported once when, among the run's
+series:
 
 - it has more than 100 distinct values, or else
 - one of its values is a UUID (`5f0c6c2e-8a5b-4c1e-9d3f-2b7a1e0c9d48`), a
@@ -6931,42 +7003,51 @@ series
   or an RFC 3339 time (`2026-10-24`, `2026-10-24T09:14:05Z`,
   `2026-10-24 09:14:05.123+03:00`).
 
-The finding quotes the value, by its first 64 bytes. An address with its
-port, `10.0.0.7:9100`, is not reported: a target's address is the most
-common bounded label there is. Nor is the shape of a value held against a
-metric that has one series in the run, such as
-`build_info{revision="9fceb02d0ae598e95dc970b74767f19372d61af8"}`: one
-series cannot grow its metric's series within a scrape, and an info metric's
-one value changes only when what it describes does. Two series of such
-values are reported as any are. The dry run sees no values, so it gives
-none of this advice.
+The finding quotes the first 64 bytes of the value.
+
+- An address with its port, such as `10.0.0.7:9100`, is not reported: a
+  target's address is the most common bounded label.
+- The shape of a value is not held against a metric that has one series in
+  the run, such as
+  `build_info{revision="9fceb02d0ae598e95dc970b74767f19372d61af8"}`. One
+  series cannot grow its metric's series within a scrape, and the one value
+  of an info metric changes only when what it describes changes. Two series
+  with such values are reported like any others.
+- The dry run sees no values, so it gives none of this advice.
 
 ### name-clash
 
 Prometheus keeps one type and one help text for a metric name, and a query
-over the series of two collectors that make one name mixes them. So each
-name a collector's rules make that a rule of another collector makes with
+over the series of two collectors that produce the same name mixes them. A
+name that a collector's rules produce is therefore reported when a rule of
+another collector produces it with:
 
 - another type,
 - another help text, where both rules have a `description`, or
-- other label names — the rules' labels and `transform.labels`, as
-  `transform.remove_labels` and `transform.rename_labels` leave them, and a
-  derived `sum` `by` labels its `by` and `transform.labels` so left —
+- other label names. These are the rules' labels and `transform.labels`,
+  after `transform.remove_labels` and `transform.rename_labels`. For a
+  derived `sum` with `by` labels, they are its `by` labels and
+  `transform.labels`, after the same two settings.
 
-is reported, for each of the two collectors, naming the other. What a side
-cannot know is not compared: the names a `python` script makes or a
-`prometheus` rule without a `name` passes on, the type a `prometheus` rule
-without a `type` keeps, the labels of a `prometheus` transform's series,
-which are the target's, and the labels of a derived entry's series by
-series operation, which are its operands' series'. The dry run compares every collector of the
-configuration; a debug run compares the collector it runs with the others
-in force, one written on the debug page with every configured collector of
-another name.
+The clash is reported for each of the two collectors, and each report names
+the other collector. What one side cannot know is not compared:
+
+- the names that a `python` script produces, or that a `prometheus` rule
+  without a `name` passes on;
+- the type that a `prometheus` rule without a `type` keeps;
+- the labels of a `prometheus` transform's series, which are the target's;
+- the labels of the series of a derived entry that uses a series operation,
+  which are those of its operands' series.
+
+The dry run compares every collector of the configuration. A debug run
+compares the collector it runs with the others in force. A collector written
+on the debug page is compared with every configured collector of another
+name.
 
 ### Silencing a rule
 
-A collector's `lint.ignore` lists the rules whose advice is not given for
-it, by their ids:
+A collector's `lint.ignore` lists, by id, the rules whose advice is not
+given for it:
 
 ```yaml
 collectors:
@@ -6975,18 +7056,18 @@ collectors:
       ignore: [unit-suffix, name-clash]
 ```
 
-An id that is no rule's fails the configuration, as any wrong value does,
-so a misspelt id silences nothing unnoticed. `name-clash` is silenced for
-the collector that lists it: the other collector of the pair still reports
-the clash, naming it. The debug report says which rules a collector
-silences.
+An id that belongs to no rule fails the configuration, like any wrong value,
+so a misspelt id cannot silently silence nothing. `name-clash` is silenced
+only for the collector that lists it: the other collector of the pair still
+reports the clash and names it. The debug report says which rules a
+collector silences.
 
 ## Debugging collectors
 
-When a collector does not give what it should, run it and read what
-happened, step by step: the requests, the response, each stage, what was
-logged and the series a probe would have answered. One flag, `--web.debug`
-(the Helm chart's `server.debug`), sets how far that goes:
+When a collector does not produce what it should, run it and read what
+happened step by step: the requests, the response, each stage, what was
+logged, and the series that a probe would have answered. One flag,
+`--web.debug` (the Helm chart's `server.debug`), sets how much is available:
 
 | `--web.debug` | What is served |
 |---------------|----------------|
@@ -6994,240 +7075,279 @@ logged and the series a probe would have answered. One flag, `--web.debug`
 | `edit` | The [debug page](#the-debug-page), `/debug`, where a collector — the playground, written there, or one of the configuration by name — is run on a **pasted** response. Nothing is fetched, so nothing a target answers is ever shown. `debug=true` and `debug=<name>` are still answered `403`. |
 | `full` | Everything `edit` serves, and what shows a target's answer: on the page, fetching a target through a configured collector or scraping a static target; [`/probe?...&debug=true`](#debug-probes); and [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target). The [status page](ENDPOINTS.md#status-page) shows each error whole, with the values of the answer it quotes and what it holds for the operator alone, such as an [`sshexec`](SSHEXEC.md) command's stderr, which below `full` it leaves out as a probe's caller is answered ([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)). |
 
-Any other value stops the exporter at startup, as any wrong flag does
-(exit status 2). Every run, whichever asked for it, is made by the same
-engine and reported in the same terms: as plain text by the two URLs, and as
-JSON by the page, which shows the text report too. Each is counted in
+Any other value stops the exporter at startup, like any wrong flag (exit
+status 2). Every run is made by the same engine and reported in the same
+terms, whichever way it was requested: as plain text by the two URLs, and as
+JSON by the page, which shows the text report too. Each run is counted in
 `http_exporter_debug_runs_total{kind, result}`
 ([Self-metrics](SELF-METRICS.md#debug-runs)), and in no collector's
 self-metrics.
 
-Use `edit` where the people who can open the exporter's pages may write and
-try collectors but should not see what the targets answer: the page runs
-only on what they paste. Turn `full` on while a collector is being fixed
-against its real target, and off again: a report shows what the target sent,
-and a secret under a header name that does not read as one, or in the body,
-is shown as the target sent it.
-[Debugging](AUTHENTICATION.md#debugging-collectors) says what each level lets
-a visitor of the exporter's pages do.
+- Use `edit` where the people who can open the exporter's pages may write
+  and try collectors but should not see what the targets answer: the page
+  runs only on what they paste.
+- Turn `full` on while a collector is being fixed against its real target,
+  and off again afterwards. A report shows what the target sent, and a
+  secret under a header name that does not look like one, or in the body, is
+  shown as the target sent it.
 
-`--web.debug.dangerous` (the chart's `server.debugDangerous`), with `full`
-only, lifts what the playground is refused for the server's sake: see
-[Dangerous debug mode](#dangerous-debug-mode).
+[Debugging](AUTHENTICATION.md#debugging-collectors) describes what each
+level lets a visitor of the exporter's pages do.
+
+`--web.debug.dangerous` (the chart's `server.debugDangerous`) is valid with
+`full` only. It lifts the restrictions that protect the server from the
+playground: see [Dangerous debug mode](#dangerous-debug-mode).
 
 ### The debug page
 
-`/debug` runs one collector and shows the series a probe would answer, the
-stages, the [metric lint](#metric-lint)'s advice, what was logged, the
-requests sent and the response read and,
-folded away, the whole [report](#debug-probes). It runs when *Run* is
-pressed, and at no other time: not after an edit, and never when it opens,
-where the collector and the target its address names are filled in and wait
-for *Run*, since a link on any page can name them. The landing page
-links it, and `/collectors` links each collector into it, the collector
-chosen and, at `full`, with the target the collector's form holds when the
-link is followed.
+`/debug` runs one collector and shows the series that a probe would answer,
+the stages, the advice of the [metric lint](#metric-lint), what was logged,
+the requests sent, the response read and, folded away, the whole
+[report](#debug-probes).
+
+It runs only when *Run* is pressed: not after an edit, and never when the
+page opens. On opening, the collector and the target that the page's address
+names are filled in and wait for *Run*, because a link on any page can name
+them. The landing page links to it, and `/collectors` links each collector
+into it, with the collector chosen and, at `full`, with the target that the
+collector's form holds when the link is followed.
 
 The collector run is one of two:
 
-- **The playground**, a collector written on the page: the YAML of one
-  collector, as it is written under `collectors:` — a mapping that starts with `name`, without the dash. It is
-  read as a configuration's collectors are: the same keys, the same checks,
-  and a mistake is reported in the words a load would use, with line numbers
-  counted from the collector's first line. `${NAME}` references are left as
-  they are written, whatever `--config.expand-env` says. It is never put in
-  force, and its own request block never makes a request: it may be of any
-  request type the build has, its `request.type` saying only how its answer
-  is read — its decoder, a `sql` collector's rows, the JSON document a
-  `tlscert` handshake is made into — and the keys a request needs to be
-  made, such as an `sshfile` collector's `known_hosts_file` or a `grpc`
-  collector's `proto_files`, are not required of it. It takes no
-  [defaults](#defaults-for-the-collectors-of-a-file): `defaults` is a key of
-  a file, and refused here as `collectors` is, while a configured collector
-  runs with the keys it took from its file's.
-- **Configured**: one of the configuration in force, chosen by name, run as
-  it is configured, its Python included: its script is the operator's, and
-  reads whatever a target sends on every probe, which is what a pasted body
-  stands for.
+- **The playground** is a collector written on the page: the YAML of one
+  collector as it is written under `collectors:`, that is, a mapping that
+  starts with `name`, without the dash.
+  - It is read like a configuration's collectors: the same keys and the same
+    checks. A mistake is reported in the words a load would use, with line
+    numbers counted from the collector's first line.
+  - `${NAME}` references are left as written, whatever `--config.expand-env`
+    says.
+  - It is never put in force, and its own request block never makes a
+    request. It may be of any request type the build has. Its `request.type`
+    only determines how its answer is read: its decoder, a `sql` collector's
+    rows, or the JSON document that a `tlscert` handshake is turned into.
+    The keys that a request needs in order to be made, such as an `sshfile`
+    collector's `known_hosts_file` or a `grpc` collector's `proto_files`,
+    are not required.
+  - It takes no [defaults](#defaults-for-the-collectors-of-a-file).
+    `defaults` is a key of a file and is refused here, as `collectors` is. A
+    configured collector runs with the keys it took from its file's
+    defaults.
+- **Configured** is a collector of the configuration in force, chosen by
+  name. It runs as configured, including its Python: the script is the
+  operator's and reads whatever a target sends on every probe, which is what
+  a pasted body stands for.
 
-The editor shows the collector that runs. While none of the configuration
-is chosen, *Playground* in the list, it holds the playground — the example,
-an `http` collector, every time the page opens, then what was written, for
-as long as the page is open; nothing of it is kept in the browser. A configured
-collector chosen, in the list or by the link from `/collectors`, is shown
-in its place, read-only, since it runs as configured:
+The editor shows the collector that runs. While no configured collector is
+chosen (*Playground* in the list), it holds the playground. That is the
+example, an `http` collector, every time the page opens, and then whatever
+was written, for as long as the page is open. Nothing of it is kept in the
+browser. A configured collector, chosen in the list or by the link from
+`/collectors`, is shown instead. It is read-only, because it runs as
+configured:
 
-- **As its file writes it**: its keys in the order the file has them, its
-  `${NAME}` references as written, not what they expand to, the keys an
-  anchor or a merge key (`<<`) gives it written out, as the loader reads
-  them, and the file's comments left out. A folded block scalar, such as a
-  `statement: >-` of several lines, is shown with the lines the file writes
-  it over, not folded into one, as a literal one (`|`) is. The keys it takes
-  from its file's [defaults](#defaults-for-the-collectors-of-a-file) are
-  added where it would write them, each marked `# from the file's defaults`.
-- **Without its credentials**, at `edit` as at `full`: a value whose key
-  reads as a credential's — `bearer_token`, `basic_auth`'s `password`, a
-  header, a query parameter or a login field named like one, by the rule
-  a debug report withholds a header by — is shown as `<redacted>`, and so
-  is every path a `*_file` key names, which no page shows; a URL's userinfo
-  and the values of its query parameters named like credentials are
-  withheld. Any other text of the request — a header's or a query
-  parameter's value, an `http` body, a `grpc` message, a `tcp` send, a
-  `redis` command's argument, a `sql` statement — is shown `<redacted>`
-  whole when something in it reads as a credential, by the rule an error's
-  text is masked by (`"password": "…"`, `token=…`, `Bearer …`, a URL's
-  userinfo, `<password>…</password>`, JSON written as a string in JSON,
-  `\"password\":\"…\"`), or when it logs in to a text protocol: `AUTH …`,
-  `PASS …` or `APOP …` at the start of a line or after a `;`, IMAP's
-  `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, or `AUTH` framed as
-  RESP (`*2\r\n$4\r\nAUTH\r\n$7\r\n…`); a word that only begins like
-  one, such as `author`, is not. A folded block among them is then shown on
-  one line.
-  A Python script is shown as written, but for what reads as a
-  credential in it, which is masked as an error's text is; keep a script's
-  credentials in a file it reads.
+- **As its file writes it.** Its keys are in the order of the file. Its
+  `${NAME}` references are shown as written, not expanded. The keys that an
+  anchor or a merge key (`<<`) gives it are written out, as the loader reads
+  them. The file's comments are left out. A folded block scalar, such as a
+  `statement: >-` of several lines, is shown on the lines the file uses, not
+  folded into one, like a literal one (`|`). The keys it takes from its
+  file's [defaults](#defaults-for-the-collectors-of-a-file) are added where
+  it would write them, each marked `# from the file's defaults`.
+- **Without its credentials**, at `edit` as at `full`:
+  - A value whose key looks like a credential's is shown as `<redacted>`:
+    `bearer_token`, the `password` of `basic_auth`, or a header, query
+    parameter or login field with such a name, by the same rule that
+    withholds a header in a debug report.
+  - Every path that a `*_file` key names is shown as `<redacted>` too; no
+    page shows these paths.
+  - A URL's userinfo and the values of its query parameters named like
+    credentials are withheld.
+  - Any other text of the request (a header's or a query parameter's value,
+    an `http` body, a `grpc` message, a `tcp` send, a `redis` command's
+    argument, a `sql` statement) is shown as `<redacted>` as a whole when
+    something in it looks like a credential, by the rule that masks an
+    error's text: `"password": "…"`, `token=…`, `Bearer …`, a URL's
+    userinfo, `<password>…</password>`, or JSON written as a string in JSON
+    (`\"password\":\"…\"`).
+  - The same applies when the text logs in to a text protocol: `AUTH …`,
+    `PASS …` or `APOP …` at the start of a line or after a `;`, IMAP's
+    `a1 LOGIN user …`, Redis's `HELLO 3 AUTH user …`, or `AUTH` framed as
+    RESP (`*2\r\n$4\r\nAUTH\r\n$7\r\n…`). A word that only begins like one,
+    such as `author`, does not count. A folded block among these texts is
+    then shown on one line.
+  - A Python script is shown as written, except for what looks like a
+    credential in it, which is masked like an error's text. Keep a script's
+    credentials in a file that it reads.
 
-*Edit a copy* makes the playground a copy of that YAML, which then runs in
-its place, under the rules for the playground. The copy leaves out what the
-playground would refuse: every key of the request ending in `_file` or
-`_files` (`tls.ca_file`, `password_file`, `bearer_token_file`,
-`known_hosts_file`, …) and a `login`, each line replaced by a comment that
-says what was dropped and why,
-`# tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)`,
-and a block left with nothing, such as a `tls:` that held only `ca_file`,
-with it, so that the copy loads; a block written in flow style,
-`tls: {ca_file: /etc/ca.pem, server_name: api.example}`, is written out one
-key to a line for its comment to have a line of its own. A note above the
-editor lists what was left out. A target probed, or a static target scraped, through the collector it
-was copied from is still fetched with them. In [dangerous debug
-mode](#dangerous-debug-mode) a `login` is kept, but the paths, which the
-page withholds, are dropped all the same, each comment saying to write the
-path in its place. Python is left in: the note says that a run of the copy
-is refused until the script is taken out, as for any playground, but in
-dangerous debug mode. The files of a [`protobuf`
-decoder](#protobuf-responses), `response.protobuf`'s, are files of the
-server's too: a playground that names them is refused likewise, so a
-collector of that decoder is run by its name. Any other value shown `<redacted>` has to be left out
-or written again. A copy of a collector of any request type
-runs: a `tlscert` collector's copy reads a pasted handshake, or what
-`tls_cert` answers when a target is probed or a static target scraped
-through it. The page remembers the collector the playground was copied
-from, through edits, while it is open, and fetches a target through it.
-*Edit a copy* waits for the collector's YAML: it is disabled while the page
-reads it, and stays so when it could not be read;
-*Back to the example*, shown while the playground is a copy, puts the
-example back.
+*Edit a copy* makes the playground a copy of that YAML. The copy then runs
+instead, under the rules for the playground.
 
-The editor numbers its lines in a gutter beside the text, for the YAML of a
-configured collector as for the playground. It does not wrap: a long line,
-such as a statement, scrolls sideways, and the numbers stay beside their
-lines however the text is scrolled. When a run of the playground is refused
-with a mistake on a line — `line 7: unknown key "bogus" in a metric rule` —
-each line the error names is marked, in the gutter and by a band behind it,
-and `line 7` in the error is a link that selects that line in the editor;
-the marks go with the next edit. In the playground Tab indents by two
-spaces, or indents the lines selected, and Shift+Tab outdents them; to leave
-the editor with the keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on
-a Mac, runs from anywhere on the page, as *Run* does.
+- **What the copy leaves out.** The copy omits what the playground would
+  refuse: every key of the request that ends in `_file` or `_files`
+  (`tls.ca_file`, `password_file`, `bearer_token_file`, `known_hosts_file`,
+  …) and a `login`. Each line is replaced by a comment that says what was
+  dropped and why, such as
+  `# tls.ca_file dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)`.
+  A block left empty, such as a `tls:` that held only `ca_file`, is dropped
+  with it, so that the copy loads. A block written in flow style,
+  `tls: {ca_file: /etc/ca.pem, server_name: api.example}`, is written out
+  with one key per line so that the comment has its own line. A note above
+  the editor lists what was left out.
+- **Fetching.** A target probed, or a static target scraped, through the
+  collector it was copied from is still fetched with the omitted keys.
+- **Dangerous debug mode.** In
+  [dangerous debug mode](#dangerous-debug-mode) a `login` is kept. The
+  paths, which the page withholds, are still dropped, and each comment says
+  to write the path in its place.
+- **Python** is left in. The note says that a run of the copy is refused
+  until the script is removed, as for any playground, except in dangerous
+  debug mode.
+- **`protobuf` descriptors.** The files of a
+  [`protobuf` decoder](#protobuf-responses) (`response.protobuf`) are also
+  files of the server. A playground that names them is refused in the same
+  way, so run a collector with that decoder by its name.
+- **Redacted values.** Any other value shown as `<redacted>` must be left
+  out or written again.
+- **Request types.** A copy of a collector of any request type runs. A
+  `tlscert` collector's copy reads a pasted handshake, or what `tls_cert`
+  answers when a target is probed or a static target scraped through it.
+- The page remembers which collector the playground was copied from, through
+  edits, while it is open, and fetches a target through it.
+- *Edit a copy* waits for the collector's YAML: it is disabled while the
+  page reads it, and stays disabled when it could not be read. *Back to the
+  example*, shown while the playground is a copy, restores the example.
 
-The YAML is coloured as it is typed: keys, strings, numbers, booleans and
-`null`, comments, a list's dashes, punctuation, a block scalar's indicator
-(`|`, `>-`) and its lines, anchors and aliases (`&a`, `*a`), tags (`!!str`),
-and the exporter's own `{{param_<name>}}` placeholders and `${NAME}`
-references, each in a colour of its own in either theme; a value the page
-withholds, `<redacted>`, is shown muted. The colouring is a layer behind the
-text, which stays the browser's own: undo, Tab, input methods and paste work
-as in any text box. A block — a key with lines indented under it, a list
-item with more of it below, a block scalar — folds behind the ▾ button
-beside its number, its first line then ending in how many lines it hides,
-`… 12 lines`, which unfolds it when clicked; the other lines keep their
-numbers, so the gutter skips the hidden ones, and a line an error names
-that is folded away is marked on the line of its fold. Tab reaches one of
-the buttons, the one last used or else the first, and the arrow keys, Home
-and End go to the others; Enter or Space folds or unfolds. *Expand all* and
-*Collapse all* above the editor unfold every block or fold them all. A configured collector's YAML folds as it is read. The playground
-cannot be edited while a block of it is folded — a text box cannot hide
-lines of its own — so folding it shows it as a configured collector's is
-shown, read-only; a click on its text, Enter, or *Expand all* unfolds it
-and puts the caret where it was clicked. *Run*, *Copy as*, *Edit a copy*
-and the lines an error names always take the whole YAML, folded or not.
+**Line numbers and errors.** The editor numbers its lines in a gutter beside
+the text, for a configured collector's YAML and for the playground. It does
+not wrap: a long line, such as a statement, scrolls sideways, and the
+numbers stay beside their lines however the text is scrolled. When a run of
+the playground is refused with a mistake on a line (`line 7: unknown key
+"bogus" in a metric rule`), each line that the error names is marked in the
+gutter and with a band behind it. `line 7` in the error is a link that
+selects that line in the editor. The marks disappear with the next edit.
 
-It reads one of three responses:
+**Keys.** In the playground, Tab indents by two spaces, or indents the
+selected lines, and Shift+Tab outdents them. To leave the editor with the
+keyboard, press Esc, then Tab. Ctrl+Enter, or ⌘+Enter on a Mac, runs from
+anywhere on the page, like *Run*.
 
-- **A pasted response**: a body, up to 1 MiB, its `Content-Type`, a status,
-  200 unless given, and other headers. No request is made. The body starts
-  as the example's answer with the example playground, and empty with a
-  configured collector or a copy of one; a body that has been written in is
-  kept whichever collector is chosen. The status must be
-  one the collector's `request.accept_status` accepts, and the body is held
-  to its response limit, as a fetched response would be. The page asks for
-  a status and headers only for an `http` or `graphite` collector, whose
-  answers are HTTP responses, and for a `Content-Type` only where it can
-  choose the decoder; the body's placeholder says what to paste: what the
-  target answers, a file's content, or, for the types that make their
-  answer, the JSON document a run's *Response* shows. For the playground
-  these follow the `request.type` written in the editor as it is typed,
-  in block style (`request:` with `type: sql` under it) or in flow style
-  (`request: {type: sql}`); with none written, or a type the build does not
-  have, the page asks as for `http`, and the run says what is wrong. What
-  was typed in a field the type hides is kept for when it is shown again,
-  and is not sent. A response pasted for a `localfile` collector that reads
-  a directory is read as one file. A `sql` collector's
-  response is its rows, pasted as JSON as a run's *Response* shows them, a
-  list of objects of each row's columns by name,
-  `[{"state": "open", "jobs": 3}]`: a whole number is read as an integer,
-  `true` and `false` as 1 and 0, and `null` leaves the column out of its
-  row, as `NULL` does; anything else is refused with `400`.
+**Colours.** The YAML is coloured as it is typed: keys, strings, numbers,
+booleans and `null`, comments, a list's dashes, punctuation, a block
+scalar's indicator (`|`, `>-`) and its lines, anchors and aliases (`&a`,
+`*a`), tags (`!!str`), and the exporter's own `{{param_<name>}}`
+placeholders and `${NAME}` references. Each has its own colour in either
+theme. A value that the page withholds, `<redacted>`, is shown muted. The
+colouring is a layer behind the text, which remains the browser's own: undo,
+Tab, input methods and paste work as in any text box.
 
-  The other headers are rows of a name and a value, starting with one
-  empty row; *+ Add header* adds a row and *×* removes one. A row left blank
-  is not sent. A name may be given again, in any case, as a response may
-  repeat a header: the run has each value, in the order of the rows. A row
-  with a value and no name, or with a name that is not an HTTP token
-  (letters, digits and ``!#$%&'*+.^_`|~-``), is marked on the row with why,
-  `Header name "Bad Name" is not one HTTP allows.`, and the run is not
-  sent; the server checks again what it is sent. The rows are kept when
-  another collector is chosen.
-- **A target**, *Probe a target* on the page, at `full` only: fetched
-  exactly as `/probe?debug=true` fetches it, through a configured collector — the one chosen, or the one the
-  playground was copied from — with its request block,
+**Folding.** A block (a key with lines indented under it, a list item that
+continues below, or a block scalar) folds with the ▾ button beside its line
+number.
+
+- The first line of a folded block ends with the number of lines it hides,
+  `… 12 lines`. A click on that unfolds it.
+- The other lines keep their numbers, so the gutter skips the hidden ones. A
+  line that an error names and that is folded away is marked on the line of
+  its fold.
+- Tab reaches one of the buttons (the one last used, or else the first). The
+  arrow keys, Home and End move to the others. Enter or Space folds or
+  unfolds.
+- *Expand all* and *Collapse all* above the editor unfold or fold every
+  block.
+- A configured collector's YAML folds in place. The playground cannot be
+  edited while one of its blocks is folded,
+  because a text box cannot hide its own lines. Folding it therefore shows
+  it read-only, like a configured collector's. A click on its text, Enter,
+  or *Expand all* unfolds it and puts the caret where it was clicked.
+- *Run*, *Copy as*, *Edit a copy* and the lines that an error names always
+  use the whole YAML, folded or not.
+
+The collector reads one of three responses:
+
+- **A pasted response**: a body of up to 1 MiB, its `Content-Type`, a status
+  (200 unless given) and other headers. No request is made.
+  - The body starts as the example's answer with the example playground, and
+    empty with a configured collector or a copy of one. A body that has been
+    edited is kept whichever collector is chosen.
+  - The status must be one that the collector's `request.accept_status`
+    accepts, and the body is held to the collector's response limit, as a
+    fetched response would be.
+  - The page asks for a status and headers only for an `http` or `graphite`
+    collector, whose answers are HTTP responses, and for a `Content-Type`
+    only where it can choose the decoder. The body's placeholder says what
+    to paste: what the target answers, a file's content or, for the types
+    that build their own answer, the JSON document that a run's *Response*
+    shows.
+  - For the playground, these fields follow the `request.type` written in
+    the editor as it is typed, in block style (`request:` with `type: sql`
+    under it) or in flow style (`request: {type: sql}`). With no type
+    written, or a type the build does not have, the page asks as for `http`,
+    and the run says what is wrong. Text typed in a field that the type
+    hides is kept for when the field is shown again, and is not sent.
+  - A response pasted for a `localfile` collector that reads a directory is
+    read as one file.
+  - A `sql` collector's response is its rows, pasted as JSON in the form
+    that a run's *Response* shows: a list of objects with each row's columns
+    by name, `[{"state": "open", "jobs": 3}]`. A whole number is read as an
+    integer, `true` and `false` as 1 and 0, and `null` leaves the column out
+    of its row, as `NULL` does. Anything else is refused with `400`.
+
+  The other headers are rows of a name and a value, starting with one empty
+  row. *+ Add header* adds a row and *×* removes one. A blank row is not
+  sent. A name may be repeated, in any letter case, as a response may repeat
+  a header: the run has each value, in the order of the rows. A row with a
+  value and no name, or with a name that is not an HTTP token (letters,
+  digits and ``!#$%&'*+.^_`|~-``), is marked on the row with the reason,
+  `Header name "Bad Name" is not one HTTP allows.`, and the run is not sent.
+  The server checks again what it receives. The rows are kept when another
+  collector is chosen.
+- **A target** (*Probe a target* on the page), at `full` only. It is fetched
+  exactly as `/probe?debug=true` fetches it, through a configured collector:
+  the one chosen, or the one the playground was copied from. The fetch uses
+  that collector's request block,
   [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
   credentials, `accept_status` and
   [`max_concurrent_probes`](#limiting-concurrent-probes), and the probe
-  parameters entered on the page. The playground decodes and transforms what
-  the collector it was copied from fetched; see below for what the page asks
-  for; one not copied from a configured
-  collector, as the example, has nothing to fetch through, so *Probe a
-  target* is not offered with it. A collector run on what another fetched
-  reads what a collector of its own request type fetches only, as it
-  reads that type's answer: a copy whose type was changed is refused
-  (`400`).
-- **A static target's scrape**, at `full` only: made once as its schedule
-  makes it, with the target's own settings and credentials, its interval as
-  the budget and its labels on the series, as
+  parameters entered on the page.
+  - The playground decodes and transforms what the collector it was copied
+    from fetched; see below for what the page asks for.
+  - A playground that was not copied from a configured collector, such as
+    the example, has nothing to fetch through, so *Probe a target* is not
+    offered with it.
+  - A collector that runs on what another collector fetched can read only
+    what a collector of its own request type fetches, because it reads that
+    type's answer. A copy whose type was changed is refused (`400`).
+- **A static target's scrape**, at `full` only. It is made once, as the
+  schedule makes it: with the target's own settings and credentials, its
+  interval as the budget and its labels on the series, as
   [`/static-targets?debug=<name>`](STATIC-TARGETS.md#debugging-a-static-target)
-  makes it, through the target's own collector. Nothing is published. The
-  target is chosen from a list of the static targets scraped through the
-  collector a target is fetched through — the configured one chosen, or the
-  one the playground was copied from — each shown as its name and its
-  target, `sofia — https://api.open-meteo.com`, with any
-  credential in the address withheld as the
-  [status page](ENDPOINTS.md#status-page) withholds it. The list is read
-  again whenever that collector changes, so it follows a reload of the
-  static target file. With no static target of that collector, or none at
-  all, *Scrape a static target* is offered disabled with a note saying so;
-  the example playground, copied from no collector, scrapes none, as it
-  fetches none. The panel says whose static targets it lists: *Static
-  targets of tls_cert, the collector chosen.*, or *…, the collector this
-  playground was copied from.* The scrape is read by the collector chosen, the target's
-  own, or by the playground, a copy of it that may have been edited.
-  `/debug?static_target=<name>` opens the page with that target chosen and
-  its collector chosen on the left.
+  makes it, through the target's own collector. Nothing is published.
+  - The target is chosen from a list of the static targets scraped through
+    the collector that a target is fetched through: the configured one
+    chosen, or the one the playground was copied from. Each is shown as its
+    name and its target, `sofia — https://api.open-meteo.com`, with any
+    credential in the address withheld as the
+    [status page](ENDPOINTS.md#status-page) withholds it.
+  - The list is read again whenever that collector changes, so it follows a
+    reload of the static target file.
+  - With no static target of that collector, or none at all, *Scrape a
+    static target* is offered disabled, with a note that says so. The
+    example playground, copied from no collector, scrapes none, as it
+    fetches none.
+  - The panel says whose static targets it lists: *Static targets of
+    tls_cert, the collector chosen.*, or *…, the collector this playground
+    was copied from.*
+  - The scrape is read by the collector chosen (the target's own) or by the
+    playground (a copy of it that may have been edited).
+  - `/debug?static_target=<name>` opens the page with that target chosen and
+    its collector chosen on the left.
 
-What the page asks for follows the request type of the collector it is
-for — the collector run, for a pasted response, the playground's being the
-one its editor writes, and the one a target is probed through, for a target —
-as each type says it, so a build without a type has nothing of it:
+What the page asks for follows the request type of the relevant collector.
+For a pasted response that is the collector run (for the playground, the
+type its editor writes). For a target it is the collector that the target is
+probed through. Each type declares its own fields, so a build without a type
+shows nothing of it:
 
 | Request type | Target, as the page labels and hints it |
 | --- | --- |
@@ -7248,227 +7368,260 @@ as each type says it, so a build without a type has nothing of it:
 | `tcp` | Server: `host:port` |
 | `ldap` | LDAP server: `host, host:port or ldaps://host:port` |
 
-The probe parameters are rows of a name and a value, as the headers are:
-a row for each of the collector's own `{{param_<name>}}` placeholders, its
-name filled in and its value empty, which takes the default, shown greyed
-in the box (none for one without a default); *+ Add parameter* adds a row,
-whose name box suggests the other parameters its type takes from a probe,
-`header_<name>` for each header it forwards. A blank row is not sent, and
-one with an empty value is sent empty, which a `param_<name>` takes as not
-given. The page marks on its row what `/probe` would refuse: a value with
-no name, `target`, `collector` or `debug`, which the page sets itself, and
-a parameter given again, `Probe parameter path is given 2 times; give it
-once.`, but for a `header_<name>`, each value of which is forwarded; the
-run is not sent then. Choosing another collector makes the rows again,
-keeping what was typed for a name the new one takes too. A collector that
-takes none, such as a `dns` collector without a placeholder, is offered no
-rows, and the page says *This collector takes no probe parameters.* The page reads the form of each collector again with
-its YAML from `/debug/collector`, so it follows a reload. The target is
-probed as `/probe?debug=true` probes it, and the page says through which
-collector: *Probed through status_json, the collector chosen.*
+The probe parameters are rows of a name and a value, like the headers.
 
-*Copy as*, below the parameters, gives the probe as it is asked of the
-exporter outside the page, made from the form as it stands and made again
-as the target and the rows change:
+- There is a row for each of the collector's own `{{param_<name>}}`
+  placeholders, with its name filled in and its value empty. An empty value
+  takes the default, which is shown greyed in the box (nothing for a
+  placeholder without a default).
+- *+ Add parameter* adds a row. Its name box suggests the other parameters
+  that the type takes from a probe, with `header_<name>` for each header it
+  forwards.
+- A blank row is not sent. A row with an empty value is sent empty, which a
+  `param_<name>` treats as not given.
+- The page marks on its row what `/probe` would refuse: a value with no
+  name; `target`, `collector` or `debug`, which the page sets itself; and a
+  repeated parameter, `Probe parameter path is given 2 times; give it
+  once.`, except for a `header_<name>`, each value of which is forwarded.
+  The run is then not sent.
+- Choosing another collector builds the rows again and keeps what was typed
+  for a name that the new collector also takes.
+- A collector that takes no parameters, such as a `dns` collector without a
+  placeholder, is offered no rows, and the page says *This collector takes
+  no probe parameters.*
+- The page reads each collector's form again with its YAML from
+  `/debug/collector`, so it follows a reload.
 
-- **URL**: the `/probe` URL, absolute and resolved against the page's own
-  address, so a path prefix in front of the exporter is kept, with
-  `collector`, `target` and each filled parameter row, a repeated
-  `header_<name>` once for each row, URL-encoded:
+The target is probed as `/probe?debug=true` probes it, and the page says
+through which collector: *Probed through status_json, the collector chosen.*
+
+*Copy as*, below the parameters, gives the probe in the form used to request
+it from the exporter outside the page. It is built from the current form and
+rebuilt as the target and the rows change:
+
+- **URL**: the `/probe` URL. It is absolute and resolved against the page's
+  own address, so a path prefix in front of the exporter is kept. It has
+  `collector`, `target` and each filled parameter row (a repeated
+  `header_<name>` once for each row), URL-encoded:
   `http://exporter:8080/probe?collector=status_json&target=http%3A%2F%2Fapi%3A8080&param_city=sofia`.
 - **curl**: `curl -s` and the URL in single quotes.
-- **scrape_config**: a Prometheus job of the collector and the target, the
-  multi-target job of [the `localfile` page](LOCALFILE.md#scraping-with-prometheus): the
-  parameters under `params`, the target moved into the `target` parameter
-  and `instance`, and the exporter scraped at the host and port the page was
-  opened at — inside a cluster, use its service's address instead. Its
-  `metrics_path` is the path as it reads, `/my pfx/probe` behind a prefix
-  with a space, not `/my%20pfx/probe`: Prometheus escapes the path itself. A
-  collector that names its own target, such as a `kubernetes` collector, is
-  given the exporter as the job's target and no `target` parameter. Every
-  value is a single-quoted YAML scalar.
+- **scrape_config**: a Prometheus job for the collector and the target, the
+  multi-target job of
+  [the `localfile` page](LOCALFILE.md#scraping-with-prometheus). The
+  parameters are under `params`, the target is moved into the `target`
+  parameter and `instance`, and the exporter is scraped at the host and port
+  that the page was opened at. Inside a cluster, use its service's address
+  instead. Its `metrics_path` is the literal path, `/my pfx/probe` behind a
+  prefix with a space, not `/my%20pfx/probe`, because Prometheus escapes the
+  path itself. A collector that names its own target, such as a
+  `kubernetes` collector, gets the exporter as the job's target and no
+  `target` parameter. Every value is a single-quoted YAML scalar.
 - **Debug report URL**: the URL with `debug=true`, the
   [debug probe](#debug-probes).
 
-The buttons are disabled, with a note saying why, while the target is
-empty or a parameter row is wrong. With the playground, a copy of a
-collector, they probe through the collector it was copied from, as
-configured: `/probe` runs only the configured collectors, so the
-playground's edits are not in what is copied, and the page says so. A
-button shows what it copies in a box, so it can be selected where the
-browser does not let the page use the clipboard, and says *Copied the
-curl command.* when it did. With `web.basic_auth` on, curl is given
-`-u USER`, which asks for the password, and the job a commented
-`basic_auth` to fill in; the credential is never on the page.
-*Scrape a static target* offers *Copy as* too: its
-`/static-targets?targets=<name>` URL and the curl command for it.
+- The buttons are disabled, with a note that says why, while the target is
+  empty or a parameter row is wrong.
+- With the playground as a copy of a collector, they probe through the
+  collector it was copied from, as configured. `/probe` runs only the
+  configured collectors, so the playground's edits are not part of what is
+  copied, and the page says so.
+- A button shows what it copies in a box, so the text can be selected where
+  the browser does not let the page use the clipboard, and says *Copied the
+  curl command.* when it did.
+- With `web.basic_auth` on, curl gets `-u USER`, which asks for the
+  password, and the job gets a commented `basic_auth` to fill in. The
+  credential is never on the page.
+- *Scrape a static target* offers *Copy as* too: its
+  `/static-targets?targets=<name>` URL and the curl command for it.
 
-The series a run gave are shown as a table, or as the Prometheus text a probe
-would answer; *Table* and *Text* switch between them, and the browser keeps
-the choice. The text is the whole answer, to the byte. The table has a row
-for each sample — a histogram's buckets, `_sum` and `_count` and a summary's
-quantiles each a row of their own, `le` and `quantile` among the labels — and
-the columns `name`, one for each label name any row has, in alphabetical
-order, `value`, as the text writes it (`NaN`, `+Inf`), and `type`, from the
-metric's `# TYPE`:
+The series of a run are shown as a table, or as the Prometheus text that a
+probe would answer. *Table* and *Text* switch between them, and the browser
+keeps the choice. The text is the whole answer, byte for byte. The table has
+a row for each sample. A histogram's buckets, `_sum` and `_count`, and a
+summary's quantiles, each have their own row, with `le` and `quantile` among
+the labels. The columns are `name`, one column for each label name that any
+row has (in alphabetical order), `value` as the text writes it (`NaN`,
+`+Inf`), and `type` from the metric's `# TYPE`:
 
-- **Sorting**: a column's header sorts by it, and again reverses the order;
-  `value`, `le` and `quantile` sort as numbers, and a row without the label
-  sorts last either way.
-- **Filtering**: the filter box keeps the rows whose name, a `label=value`
-  or value holds its text, whatever the case, and *Metric* keeps one metric's
-  rows; the page says how many rows of how many are left, `3 of 12 series`.
+- **Sorting**: a click on a column's header sorts by it, and a second click
+  reverses the order. `value`, `le` and `quantile` sort as numbers, and a
+  row without the label sorts last in either direction.
+- **Filtering**: the filter box keeps the rows whose name, `label=value` or
+  value contains its text, in any letter case, and *Metric* keeps the rows
+  of one metric. The page says how many rows are left, `3 of 12 series`.
 - **Lint**: a [metric lint](#metric-lint) finding is shown on the rows of
-  the metric it names, in a `lint` column, as its rule, which opens to its
-  advice. A series does not record the rule that made it, so a finding is
-  put by the metric's name: every row of that metric has it. A finding about
-  a metric no row is of — a rule that gave no series — is listed above the
-  table. The *Lint* section below lists every finding as before.
-- **Size**: at most 2000 rows are drawn, so a large answer leaves the page
-  quick; past them the page says so, and the filter narrows them. The text
-  has them all.
+  the metric it names, in a `lint` column, as its rule, which opens to show
+  the advice. A series does not record the rule that produced it, so a
+  finding is matched by the metric's name: every row of that metric has it.
+  A finding about a metric with no row (a rule that produced no series) is
+  listed above the table. The *Lint* section below still lists every
+  finding.
+- **Size**: at most 2000 rows are drawn, so that a large answer leaves the
+  page responsive. Beyond that the page says so, and the filter narrows the
+  rows. The text has all of them.
 
 What a target sent is put in the table as text, never as HTML. On a narrow
 screen the table scrolls sideways in its own box.
 
 With [OTLP](OTLP.md) enabled, a third tab, *OTLP*, shows what the next
-export would send of the run's series, for every kind of run: a pasted
-response, a fetched target or a static target's scrape, of a configured
-collector or of the playground. It is made by the export's own code, so it
-is what the export does, not a description of it:
+export would send of the run's series. It is there for every kind of run: a
+pasted response, a fetched target or a static target's scrape, with a
+configured collector or with the playground. The export's own code produces
+it, so it shows what the export does and is not a description of it:
 
-- **Resource and scope**: a probe's points are under the exporter-wide
-  resource, `otlp.service_name` and `otlp.resource_attributes`, with the
-  `collector` and `target` attributes of `otlp.probe_attributes`; the
-  playground's as a probe of it would be. A static target's scrape is under
-  the target's own resource, its `otlp.labels_as_resource` moved to it and
-  its name its `service.instance.id` with `otlp.instance_id`, also when it
-  does not set `export_via_otlp`, which the tab then says. With
-  `otlp.exporter_instance` on, every resource carries its attribute too,
-  with the value in force, and a note says what it is. The scope is
-  `otlp.scope`'s name and version.
-- **Data points**: a row for each, with its Prometheus name and its OTLP
-  name, which differ under `otlp.metric_names: otel`, its kind — `gauge`,
-  `sum (cumulative, monotonic)`, `histogram (cumulative)` or `summary` — its
-  unit, its attributes and its value: a histogram's count, sum and each
-  bucket's own count, a summary's count, sum and quantiles. A row the
-  export changed has a badge that opens to why: a family exported as
-  gauges because its bucket counts fall or a counter is NaN, `_total` taken
-  off, the unit `s` from `_seconds`, a label moved to the resource, an
-  attribute added. The table sorts by a column's header and keeps the rows
-  that hold the filter's text. It sorts, as the series table does, as every
-  sortable table of the exporter's and the allocator's pages does: numbers
-  by their value, and text as it reads, the numbers in it by theirs,
-  `node2` before `node10`, a letter's case no matter.
-- **Left out**: points the export would leave out, a name exported as two
-  kinds or, under `otel` naming, for two Prometheus names, with the warning
-  the export logs of them. Only the run's own points are checked against
-  one another: those of other probes and static targets in the same export,
-  and the exporter's own series, are not the run's.
-- **Request body**: the `ExportMetricsServiceRequest`, folded away, its
-  points at the run's time in whole milliseconds, as an export's are; it is
-  sent on one line, gzipped unless `otlp.compression: none`. It is shown as
-  a tree: each object and array folds behind a ▸/▾ button, which the
-  keyboard reaches too, and shows, folded, how many keys or items it has
-  and the value of its `name` or `key`, `{…} 2 keys · pue-playground`; a
-  folded attribute shows its key and value, `{…} service.name =
-  "pue-playground"`, so the resource's and each point's attributes read
-  without unfolding them. Keys, strings, numbers, booleans and `null` have
-  colours of their own in either theme. It opens four levels below the top, down to
-  each resource's attributes and the scope's metrics; *Expand all* and
-  *Collapse all* open every node or fold all but the top. A node's
-  contents are made when it is first opened, so a body of thousands of
-  points shows at once and *Expand all* goes a level at a time without
-  holding up the page. A node of many items, an array of 200000 points,
-  fills in a couple of thousand items a frame, the page answering
-  meanwhile; one that cannot be shown says so. *Copy* copies the body as indented JSON, which the
-  tree is made from. A cumulative point starts at its own time, as at a
-  series' first export: the export remembers when each series started,
-  which a run neither reads nor changes.
-- **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on:
-  each line the run logged as the record the log export makes of it — its
-  time, severity, body and attributes — those below `otlp.logs.level`
-  marked as not exported, and the `ExportLogsServiceRequest` of the rest,
-  shown as the metrics' body is, a tree for each request when the records
-  are more than one holds. A
-  probe logs a failure as `probe failed`, where a run says `debug run
-  failed`, and a repeated one once and then every five minutes. With
-  `otlp.traces` on, each record shows the trace and the span it would be
-  linked to, which a run's never is
-  ([Linking metrics, logs and traces](OTLP.md#on-the-debug-page)).
-- **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on: the
-  spans the trace export would make of the run, by the export's own code —
-  the probe's or the scrape's, each stage's and each request's — as a tree
-  with each span's start, duration, a bar of its time within the run's, its
-  status and its attributes, the `ExportTraceServiceRequest` they would be
-  sent in, shown as the metrics' body is, and whether a probe or a scrape
-  that took as long and ended as the run did would be exported, and by
-  which rule, or why none would keep it: `otlp.traces.threshold`,
-  `otlp.traces.errors`, `otlp.traces.parent_based` (a run has no caller's
-  `traceparent`) and `otlp.traces.sample_ratio`, with the run's trace id's
-  randomness against the threshold. `otlp.traces.max_per_second` is not
-  taken, and the line says so of a trace kept. The run's own trace is
-  never exported. With `otlp.traces.propagate`, the run's requests carry
-  its `traceparent`, which their request lines show, unsampled (`00`) and
-  with no `th` in their `tracestate`, since the trace is never exported.
+- **Resource and scope.**
+  - A probe's points are under the exporter-wide resource
+    (`otlp.service_name` and `otlp.resource_attributes`) with the
+    `collector` and `target` attributes of `otlp.probe_attributes`. The
+    playground's points are shown as a probe of it would have them.
+  - A static target's scrape is under the target's own resource: its
+    `otlp.labels_as_resource` are moved to it, and its name is its
+    `service.instance.id` with `otlp.instance_id`. This is shown also when
+    the target does not set `export_via_otlp`, which the tab then says.
+  - With `otlp.exporter_instance` on, every resource also carries its
+    attribute, with the value in force, and a note says what it is.
+  - The scope is the name and version of `otlp.scope`.
+- **Data points.** There is a row for each point, with its Prometheus name
+  and its OTLP name (they differ under `otlp.metric_names: otel`), its kind
+  (`gauge`, `sum (cumulative, monotonic)`, `histogram (cumulative)` or
+  `summary`), its unit, its attributes and its value: a histogram's count,
+  sum and each bucket's own count, or a summary's count, sum and quantiles.
+  - A row that the export changed has a badge that opens to show why: a
+    family exported as gauges because its bucket counts fall or a counter is
+    NaN, `_total` removed, the unit `s` from `_seconds`, a label moved to
+    the resource, or an attribute added.
+  - A click on a column's header sorts the table, and the filter keeps the
+    rows that contain its text. It sorts like the series table and every
+    other sortable table of the exporter's and the allocator's pages:
+    numbers by value, and text alphabetically with the numbers in it by
+    value (`node2` before `node10`), ignoring letter case.
+- **Left out.** These are the points that the export would leave out: a name
+  exported as two kinds or, under `otel` naming, for two Prometheus names.
+  They are shown with the warning that the export logs for them. Only the
+  run's own points are checked against one another. Those of other probes
+  and static targets in the same export, and the exporter's own series, are
+  not part of the run.
+- **Request body.** This is the `ExportMetricsServiceRequest`, folded away.
+  Its points have the run's time in whole milliseconds, like an export's.
+  The export sends it on one line, gzipped unless `otlp.compression: none`.
+  - It is shown as a tree. Each object and array folds behind a ▸/▾ button,
+    which the keyboard reaches too. A folded node shows how many keys or
+    items it has and the value of its `name` or `key`,
+    `{…} 2 keys · pue-playground`. A folded attribute shows its key and
+    value, `{…} service.name = "pue-playground"`, so the attributes of the
+    resource and of each point can be read without unfolding them.
+  - Keys, strings, numbers, booleans and `null` each have their own colour
+    in either theme.
+  - The tree opens four levels below the top, down to each resource's
+    attributes and the scope's metrics. *Expand all* and *Collapse all* open
+    every node or fold all but the top.
+  - A node's contents are built when it is first opened. A body of thousands
+    of points therefore shows immediately, and *Expand all* goes one level
+    at a time without blocking the page. A node with many items, such as an
+    array of 200000 points, fills in a couple of thousand items per frame
+    while the page stays responsive. A node that cannot be shown says so.
+  - *Copy* copies the body as indented JSON, which the tree is built from.
+  - A cumulative point starts at its own time, as at a series' first export.
+    The export remembers when each series started, and a run neither reads
+    nor changes that.
+- **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on.
+  Each line that the run logged is shown as the record that the log export
+  would make of it: its time, severity, body and attributes.
+  - Records below `otlp.logs.level` are marked as not exported. The
+    `ExportLogsServiceRequest` of the rest is shown like the metrics' body,
+    with one tree per request when there are more records than one request
+    holds.
+  - A probe logs a failure as `probe failed`, where a run says `debug run
+    failed`, and logs a repeated failure once and then every five minutes.
+  - With `otlp.traces` on, each record shows the trace and the span that it
+    would be linked to. A run's record is never linked
+    ([Linking metrics, logs and traces](OTLP.md#on-the-debug-page)).
+- **Spans**, with [`otlp.traces`](OTLP.md#traces-of-slow-requests) on. These
+  are the spans that the trace export would make of the run, produced by the
+  export's own code: the probe's or the scrape's span, each stage's and each
+  request's.
+  - They are shown as a tree, with each span's start, duration, a bar of its
+    time within the run's time, its status and its attributes.
+  - The `ExportTraceServiceRequest` that they would be sent in is shown like
+    the metrics' body.
+  - The tab says whether a probe or a scrape that took as long and ended in
+    the same way as the run would be exported, and by which rule, or why no
+    rule would keep it: `otlp.traces.threshold`, `otlp.traces.errors`,
+    `otlp.traces.parent_based` (a run has no caller's `traceparent`) and
+    `otlp.traces.sample_ratio`, with the randomness of the run's trace id
+    compared against the threshold. `otlp.traces.max_per_second` is not
+    applied, and the line says so for a trace that is kept.
+  - The run's own trace is never exported. With `otlp.traces.propagate`, the
+    run's requests carry its `traceparent`, which their request lines show.
+    It is unsampled (`00`) and has no `th` in its `tracestate`, because the
+    trace is never exported.
 
 Nothing of a run reaches the export: nothing is queued, no start time is
-remembered, the export's self-metrics and status are unchanged, and
-nothing is sent.
+remembered, the export's self-metrics and status are unchanged, and nothing
+is sent.
 
-With `otlp.enabled` the page has a panel of its own below *Output*, *OTLP
-endpoints*, there before anything has run, since testing the endpoint has
-nothing to do with a run. At `full` it offers *Test the metrics
-endpoint*, with `otlp.logs` *Test the logs endpoint* and with
-`otlp.traces` *Test the traces endpoint*: one empty export,
-`{"resourceMetrics":[]}`, `{"resourceLogs":[]}` or `{"resourceSpans":[]}`,
-sent to the
-endpoint the configuration names, with `otlp.headers`, `otlp.tls`,
-`otlp.compression` and `otlp.timeout`, once, never retried. The page shows
-the status, how long it took, the error of the connection, of TLS or of a
-timeout in full, the headers sent — each of `otlp.headers` by its name
-alone, its value `<redacted>` whatever the header is called, and the
-`Content-Type` and `Content-Encoding` the export sets as sent — the answer's
-headers and body, its `partialSuccess`, and what an export would make of
-the answer — a success, a retry or a refusal. It counts in none of the
-export's self-metrics and changes nothing the status page shows. One test
-runs at a time; another asked meanwhile is answered `429`. At `edit` the
-buttons are disabled.
+With `otlp.enabled` the page has a separate panel below *Output*, *OTLP
+endpoints*. It is present before anything has run, because testing the
+endpoint is independent of a run.
 
-The playground may do nothing past the response, since what it is given
-runs on the server, unless [`--web.debug.dangerous`](#dangerous-debug-mode)
-lifts these:
+- At `full` it offers *Test the metrics endpoint*, with `otlp.logs` also
+  *Test the logs endpoint*, and with `otlp.traces` also *Test the traces
+  endpoint*.
+- A test sends one empty export (`{"resourceMetrics":[]}`,
+  `{"resourceLogs":[]}` or `{"resourceSpans":[]}`) to the endpoint that the
+  configuration names, with `otlp.headers`, `otlp.tls`, `otlp.compression`
+  and `otlp.timeout`. It is sent once and never retried.
+- The page shows the status, the time taken, and the full error of the
+  connection, of TLS or of a timeout.
+- It shows the headers sent. Each header of `otlp.headers` is shown by name
+  only, with its value as `<redacted>` whatever the header is called. The
+  `Content-Type` and `Content-Encoding` that the export sets are shown as
+  sent.
+- It shows the answer's headers and body, its `partialSuccess`, and how an
+  export would treat the answer: as a success, a retry or a refusal.
+- A test counts in none of the export's self-metrics and changes nothing
+  that the status page shows.
+- One test runs at a time. Another one requested meanwhile is answered
+  `429`.
+- At `edit` the buttons are disabled.
+
+The playground is restricted beyond reading the response, because what it is
+given runs on the server. [`--web.debug.dangerous`](#dangerous-debug-mode)
+lifts these restrictions:
 
 - **Python is never run.** A collector with `transform.type: python` or a
-  `pre_script` is refused, at `full` as at `edit`; put it in the
+  `pre_script` is refused, at `full` as at `edit`. Put it in the
   configuration and run it by name.
-- **Its request block is inert**, whatever its type: no run makes a
-  request with it, so a `sql`, `tlscert` or `localfile` playground reaches
-  no database, host or file. A pasted response is decoded as it is, and a
-  target is fetched, or a static target scraped, through a configured
-  collector alone.
-- **No file of the server's**: every request key ending in `_file` or
-  `_files`, of any type — `request.bearer_token_file`, the `request.tls`
-  files, an `sshfile` collector's `known_hosts_file`, a `grpc` collector's
-  `protoset_file` — and a `request.login`, which reads its secrets from
-  files, are refused, named in the order the collector has them. A pasted
-  response needs no credential, and a fetched target gets the configured
-  collector's.
+- **Its request block is inert**, whatever its type. No run makes a request
+  with it, so a `sql`, `tlscert` or `localfile` playground reaches no
+  database, host or file. A pasted response is decoded as it is, and a
+  target is fetched, or a static target scraped, only through a configured
+  collector.
+- **No file of the server's.** Every request key that ends in `_file` or
+  `_files`, of any type, is refused: `request.bearer_token_file`, the
+  `request.tls` files, an `sshfile` collector's `known_hosts_file`, a `grpc`
+  collector's `protoset_file`. A `request.login`, which reads its secrets
+  from files, is refused too. The refusal names them in the order the
+  collector has them. A pasted response needs no credential, and a fetched
+  target gets the configured collector's.
 
-A run takes as long as a probe may — the timeout on the page, sent as
-Prometheus's scrape timeout, within `--probe.default-timeout`, or a static
-target's interval — and at most 4 runs of the page are in progress at once;
-one more is answered `503`. A run fills no cache and is answered from none,
-reading only what a debug probe reads of it (a configured collector's stale
+**Limits.** A run may take as long as a probe: the timeout on the page, sent
+as Prometheus's scrape timeout, within `--probe.default-timeout`, or a
+static target's interval. At most 4 runs of the page are in progress at
+once; one more is answered `503`.
+
+**Side effects.** A run fills no cache and is answered from none. It reads
+only what a debug probe reads of the cache: a configured collector's stale
 result and the response it would
-[revalidate](#revalidating-expired-responses)), counts in no
-collector's self-metrics but the [Python worker
-series](SELF-METRICS.md#python-workers) of a configured collector's script,
-and logs one `debug run served` line at `info`, which the OTLP log export
-does not take. The page is behind
-`web.basic_auth` when that is configured;
-[Debugging](AUTHENTICATION.md#debugging-collectors) says how a run is kept
-from being sent by another site.
+[revalidate](#revalidating-expired-responses). It counts in no collector's
+self-metrics, except the
+[Python worker series](SELF-METRICS.md#python-workers) of a configured
+collector's script. It logs one `debug run served` line at `info`, which the
+OTLP log export does not take.
+
+The page is behind `web.basic_auth` when that is configured.
+[Debugging](AUTHENTICATION.md#debugging-collectors) describes how a run is
+protected from being sent by another site.
 
 The page posts each run to `POST /debug/run` as JSON, which a script can do
 too:
@@ -7479,18 +7632,23 @@ curl -s http://exporter:8080/debug/run \
   -d '{"collector": "name: x\nrequest: {type: http}\ndecoder: {type: json}\ntransform: {type: jq}\nmetrics: [{name: up, type: gauge, expression: .up}]\n", "body": "{\"up\": 1}"}'
 ```
 
-The editor reads a configured collector from `GET
-/debug/collector?name=<name>`, which answers it as JSON: `name`, `yaml`, the
-YAML as the page shows it, `from_defaults`, the keys it took from its
-file's defaults, at `full` `static_targets`, the static targets scraped
-through it, each a `name` and its `target` as the list shows it, `[]` for
-none, and `form`, what the page asks a run of it for: `request_type`,
-`answer`, the body's placeholder, `content_type` and `http_answer`, whether
-it asks for a `Content-Type` and for a status and headers, `target_label`
-and `target_hint`, or `no_target`, `params`, its own probe parameters, each
-a `name` and its `default`, and `other_params`, the names of the others it
-takes, each left out when it takes none; a name the configuration does not
-have is answered `404` with `error`.
+The editor reads a configured collector from
+`GET /debug/collector?name=<name>`, which answers it as JSON:
+
+- `name`;
+- `yaml`, the YAML as the page shows it;
+- `from_defaults`, the keys it took from its file's defaults;
+- at `full`, `static_targets`: the static targets scraped through it, each
+  with a `name` and its `target` as the list shows it, or `[]` for none;
+- `form`, what the page asks for to run it: `request_type`; `answer`, the
+  body's placeholder; `content_type` and `http_answer`, whether it asks for
+  a `Content-Type` and for a status and headers; `target_label` and
+  `target_hint`, or `no_target`; `params`, its own probe parameters, each
+  with a `name` and its `default`; and `other_params`, the names of the
+  others it takes. `params` and `other_params` are each left out when it
+  takes none.
+
+A name that the configuration does not have is answered `404` with `error`.
 
 A run sends `collector`, the YAML, or `configured`, a name; and `body` with
 `content_type`, `status` and `headers`, or `target` with `params` and, for

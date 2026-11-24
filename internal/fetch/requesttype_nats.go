@@ -108,7 +108,19 @@ func init() {
 }
 
 // natsRequester is the nats request type's Requester.
-type natsRequester struct{}
+type natsRequester struct{ parsedTarget[natsTarget] }
+
+// natsTarget reads a nats target: label returns the url label of a
+// request of it.
+type natsTarget struct{}
+
+func (natsTarget) label(target string) (string, error) {
+	address, err := parseNetTarget("nats", target, natsPorts, false)
+	if err != nil {
+		return "", err
+	}
+	return natsLabel(address), nil
+}
 
 // Validate checks a nats collector's request: streams and consumers that
 // are names, which need jetstream, and one way of logging in.
@@ -165,12 +177,6 @@ func (natsRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchNATS(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a nats collector's target.
-func (natsRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseNetTarget("nats", target, natsPorts, false)
-	return err
-}
-
 // natsLabel is the url label of a request to address: nats:// and the
 // server, tls:// for a target written so.
 func natsLabel(address netAddress) string {
@@ -180,26 +186,8 @@ func natsLabel(address netAddress) string {
 	return "nats://" + address.hostPort
 }
 
-// Label is the url label of a nats request.
-func (natsRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseNetTarget("nats", target, natsPorts, false)
-	if err != nil {
-		return "", err
-	}
-	return natsLabel(address), nil
-}
-
 // Method is the http_method label of a nats request: what a scrape times.
 func (natsRequester) Method(*model.Collector, RequestOverrides) string { return natsMethod }
-
-// Display renders a nats target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (natsRequester) Display(target string) string {
-	if _, err := parseNetTarget("nats", target, natsPorts, false); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // natsToken reads request.bearer_token_file, "" when the collector names
 // none; an empty file is a failure.
@@ -282,19 +270,7 @@ func fetchNATS(ctx context.Context, target string, c *model.Collector, overrides
 	doc.Host = address.host
 	doc.Port, _ = strconv.Atoi(port)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // natsConn is a connection of a scrape, read line by line.

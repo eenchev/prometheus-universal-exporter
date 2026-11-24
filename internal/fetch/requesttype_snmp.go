@@ -172,7 +172,19 @@ func init() {
 }
 
 // snmpRequester is the snmp request type's Requester.
-type snmpRequester struct{}
+type snmpRequester struct{ parsedTarget[snmpTarget] }
+
+// snmpTarget reads an snmp target: label returns the url label of a
+// request of it.
+type snmpTarget struct{}
+
+func (snmpTarget) label(target string) (string, error) {
+	address, err := parseSNMPTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "snmp://" + address.hostPort, nil
+}
 
 // Validate checks an snmp collector's request and fills in its defaults.
 func (snmpRequester) Validate(c *model.Collector) error {
@@ -366,21 +378,6 @@ func (snmpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchSNMP(ctx, target, c, overrides)
 }
 
-// CheckTarget checks an snmp collector's target.
-func (snmpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseSNMPTarget(target)
-	return err
-}
-
-// Label is the url label of an snmp request: snmp://host:port.
-func (snmpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseSNMPTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "snmp://" + address.hostPort, nil
-}
-
 // Method is the http_method label of an snmp request: WALK when the
 // collector walks a table, GET when it only reads objects one by one.
 func (snmpRequester) Method(c *model.Collector, _ RequestOverrides) string {
@@ -388,15 +385,6 @@ func (snmpRequester) Method(c *model.Collector, _ RequestOverrides) string {
 		return snmpMethodWalk
 	}
 	return snmpMethodGet
-}
-
-// Display renders an snmp target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (snmpRequester) Display(target string) string {
-	if _, err := parseSNMPTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
 }
 
 // snmpAddress is a target as a scrape reaches it.
@@ -640,15 +628,7 @@ func fetchSNMP(ctx context.Context, target string, c *model.Collector, overrides
 	if limit := responseLimit(c); int64(len(body)) > limit {
 		return nil, model.MarkError(model.Errorf("the JSON document of what %s answered is %d bytes, larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes, or walk fewer columns", address.hostPort, len(body), model.Size(limit)), model.ErrLimitExceeded)
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // snmpSession is a scrape's requests to its agent: the socket, the

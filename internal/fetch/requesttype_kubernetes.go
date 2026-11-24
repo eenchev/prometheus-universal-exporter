@@ -544,15 +544,7 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 	if int64(len(body)) > limit {
 		return nil, model.MarkError(fmt.Errorf("the document of the listing of %s is %d bytes, more than the response limit, %d bytes; narrow the listing, or raise max_response_bytes", kubernetesRequest(c).Resource, len(body), limit), model.ErrLimitExceeded)
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // kubernetesEach runs do for 0 to n-1, kubernetesConcurrency at a time. The

@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -161,7 +160,19 @@ func init() {
 }
 
 // radiusRequester is the radius request type's Requester.
-type radiusRequester struct{}
+type radiusRequester struct{ parsedTarget[radiusTarget] }
+
+// radiusTarget reads a radius target: label returns the url label of a
+// request of it.
+type radiusTarget struct{}
+
+func (radiusTarget) label(target string) (string, error) {
+	address, err := parseRADIUSTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "radius://" + address.hostPort, nil
+}
 
 // Validate checks a radius collector's request and fills in its defaults:
 // the mode, the shared secret's file, the account the mode needs, and how
@@ -226,36 +237,12 @@ func (radiusRequester) Fetch(ctx context.Context, target string, c *model.Collec
 	return fetchRADIUS(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a radius collector's target.
-func (radiusRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseRADIUSTarget(target)
-	return err
-}
-
-// Label is the url label of a radius request: radius:// and the server.
-func (radiusRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseRADIUSTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "radius://" + address.hostPort, nil
-}
-
 // Method is the http_method label of a radius request: the packet sent.
 func (radiusRequester) Method(c *model.Collector, _ RequestOverrides) string {
 	if radiusRequest(c).Mode == radiusModeStatus {
 		return "STATUS-SERVER"
 	}
 	return radiusMethod
-}
-
-// Display renders a radius target for logs and labels: as written, since
-// it holds no credentials, when it is one at all.
-func (radiusRequester) Display(target string) string {
-	if _, err := parseRADIUSTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
 }
 
 // radiusAddress is a target: the server's host and port.
@@ -398,19 +385,7 @@ func fetchRADIUS(ctx context.Context, target string, c *model.Collector, overrid
 	}
 	at.outcome(fmt.Sprintf("%s after %d of %d sent", doc.Reply, doc.Attempts, *r.Resends+1), false)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // radiusPacket writes the request: an Access-Request with the account (PAP

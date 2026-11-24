@@ -11,7 +11,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -320,10 +319,8 @@ func (sipRequester) Method(*model.Collector, RequestOverrides) string { return s
 // Display renders a sip target for logs and labels: as written, since it
 // holds no credentials, when it is one at all.
 func (sipRequester) Display(target string) string {
-	if _, err := parseNetTarget("sip", target, sipPorts(sipUDP), false); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
+	_, err := parseNetTarget("sip", target, sipPorts(sipUDP), false)
+	return shownTarget(target, err)
 }
 
 // sipDocument is a server's response as the transforms read it.
@@ -407,19 +404,7 @@ func fetchSIP(ctx context.Context, target string, c *model.Collector, overrides 
 		doc.TLSVersion, doc.TLSCipherSuite = tls.VersionName(state.Version), tls.CipherSuiteName(state.CipherSuite)
 	}
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // sipTLSState is the TLS state of a connection made over TLS, nil of any

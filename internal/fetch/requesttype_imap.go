@@ -638,15 +638,7 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	if err != nil {
 		return nil, err
 	}
-	resp := &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}
+	resp := jsonBody(body, target, c, start)
 	if state := conn.tlsState(); state != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: tlsConnectionOf(state)}
 	}

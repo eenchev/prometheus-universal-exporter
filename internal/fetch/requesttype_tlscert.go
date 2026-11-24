@@ -503,15 +503,7 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	}
 	traceOutcome(ctx, began+outcome)
 	traceFacts(ctx, tlsCertFacts(&doc, state)...)
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // tlsCertStartTLS asks the server conn reaches to begin TLS, as

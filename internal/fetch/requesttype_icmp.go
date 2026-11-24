@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -140,7 +139,19 @@ func init() {
 }
 
 // icmpRequester is the icmp request type's Requester.
-type icmpRequester struct{}
+type icmpRequester struct{ parsedTarget[icmpTarget] }
+
+// icmpTarget reads an icmp target: label returns the url label of a
+// request of it.
+type icmpTarget struct{}
+
+func (icmpTarget) label(target string) (string, error) {
+	host, err := parseICMPTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "icmp://" + host, nil
+}
 
 // Validate checks an icmp collector's request and fills in its defaults.
 func (icmpRequester) Validate(c *model.Collector) error {
@@ -181,32 +192,8 @@ func (icmpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchICMP(ctx, target, c, overrides)
 }
 
-// CheckTarget checks an icmp collector's target.
-func (icmpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseICMPTarget(target)
-	return err
-}
-
-// Label is the url label of an icmp request: icmp:// and the host.
-func (icmpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	host, err := parseICMPTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "icmp://" + host, nil
-}
-
 // Method is the http_method label of an icmp request.
 func (icmpRequester) Method(*model.Collector, RequestOverrides) string { return icmpMethod }
-
-// Display renders an icmp target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (icmpRequester) Display(target string) string {
-	if _, err := parseICMPTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // parseICMPTarget reads a target: a host name or an address, an IPv6 one
 // in brackets or not, and nothing else.
@@ -312,19 +299,7 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 		}
 	}
 	doc.Host, doc.DurationSeconds = host, time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // icmpPingAddress pings address, of host, as r says, its request recorded

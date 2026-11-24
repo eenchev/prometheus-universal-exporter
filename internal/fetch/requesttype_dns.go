@@ -422,15 +422,7 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	default:
 		traceOutcome(ctx, fmt.Sprintf("%d records", doc.Count))
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // dnsFailure describes a failed lookup. The resolver's own error names the

@@ -5,7 +5,6 @@ package fetch
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -276,19 +275,7 @@ func fetchTCPConnect(ctx context.Context, start time.Time, target string, addres
 		doc.Open, doc.OpenPorts = open == len(ports), &open
 	}
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // tcpConnect connects to hostPort through the target policy, makes the TLS

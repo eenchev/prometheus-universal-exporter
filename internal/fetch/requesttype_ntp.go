@@ -117,7 +117,23 @@ func init() {
 }
 
 // ntpRequester is the ntp request type's Requester.
-type ntpRequester struct{}
+type ntpRequester struct{ parsedTarget[ntpTarget] }
+
+// ntpTarget reads an ntp target: label returns the url label of a
+// request of it.
+type ntpTarget struct{}
+
+func (ntpTarget) label(target string) (string, error) {
+	addresses, err := parseNTPTargets(target)
+	if err != nil {
+		return "", err
+	}
+	hosts := make([]string, len(addresses))
+	for i, a := range addresses {
+		hosts[i] = a.hostPort
+	}
+	return "ntp://" + strings.Join(hosts, ","), nil
+}
 
 // Validate checks an ntp collector's request and fills in its defaults;
 // those of the common part it does not take are refused before it is asked.
@@ -153,37 +169,8 @@ func (ntpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 	return fetchNTP(ctx, target, c, overrides, forwarded)
 }
 
-// CheckTarget checks an ntp collector's target.
-func (ntpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseNTPTargets(target)
-	return err
-}
-
-// Label is the url label of an ntp request: ntp:// and the server, or
-// each of the servers, by commas.
-func (ntpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	addresses, err := parseNTPTargets(target)
-	if err != nil {
-		return "", err
-	}
-	hosts := make([]string, len(addresses))
-	for i, a := range addresses {
-		hosts[i] = a.hostPort
-	}
-	return "ntp://" + strings.Join(hosts, ","), nil
-}
-
 // Method is the http_method label of an ntp request.
 func (ntpRequester) Method(*model.Collector, RequestOverrides) string { return ntpMethod }
-
-// Display renders an ntp target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (ntpRequester) Display(target string) string {
-	if _, err := parseNTPTargets(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // ntpMethod is the http_method label of a request for the time.
 const ntpMethod = "QUERY"
@@ -406,15 +393,7 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 			return nil, err
 		}
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // ntpServer asks address for the time, samples times, each request a

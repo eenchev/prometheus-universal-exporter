@@ -5,7 +5,6 @@ package fetch
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,7 +103,19 @@ func init() {
 }
 
 // whoisRequester is the whois request type's Requester.
-type whoisRequester struct{}
+type whoisRequester struct{ parsedTarget[whoisTarget] }
+
+// whoisTarget reads a whois target: label returns the url label of a
+// request of it.
+type whoisTarget struct{}
+
+func (whoisTarget) label(target string) (string, error) {
+	domain, err := parseWhoisDomain(target)
+	if err != nil {
+		return "", err
+	}
+	return "whois://" + domain, nil
+}
 
 // Validate checks a whois collector's request: the server is host or
 // host:port, and the prefix one short line.
@@ -138,32 +149,8 @@ func (whoisRequester) Fetch(ctx context.Context, target string, c *model.Collect
 	return fetchWhois(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a whois collector's target, which is a domain.
-func (whoisRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseWhoisDomain(target)
-	return err
-}
-
-// Label is the url label of a whois request: whois:// and the domain.
-func (whoisRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	domain, err := parseWhoisDomain(target)
-	if err != nil {
-		return "", err
-	}
-	return "whois://" + domain, nil
-}
-
 // Method is the http_method label of a whois request.
 func (whoisRequester) Method(*model.Collector, RequestOverrides) string { return whoisMethod }
-
-// Display renders a whois target for logs and labels: as written, since it
-// holds no credentials, when it is a domain at all.
-func (whoisRequester) Display(target string) string {
-	if _, err := parseWhoisDomain(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // parseWhoisDomain reads a target: a domain name of two labels or more, an
 // internationalised one in its ASCII form, as every host is written.
@@ -284,19 +271,7 @@ func fetchWhois(ctx context.Context, target string, c *model.Collector, override
 	}
 	doc.read(text)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // whoisAsk sends one question to server and reads the answer until the

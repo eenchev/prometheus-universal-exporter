@@ -306,7 +306,7 @@ func (modbusRequester) Fetch(ctx context.Context, target string, c *model.Collec
 		return nil, err
 	}
 	traceFacts(ctx, intFact("modbus.reads", len(values)), intFact("modbus.unit", int(unit)))
-	return &HTTPResponse{StatusCode: http.StatusOK, NoStatus: true, Headers: http.Header{"Content-Type": {"application/json"}}, Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // modbusQuantity is how many registers or bits a read asks for.

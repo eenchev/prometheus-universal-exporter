@@ -749,15 +749,7 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 	if limit := responseLimit(c); int64(len(body)) > limit {
 		return nil, model.MarkError(model.Errorf("the document of the replies is %d bytes as JSON, larger than the response limit of %d bytes, the replies' control characters, quotes and backslashes taking more as JSON escapes them; raise request.max_response_bytes or limits.max_response_bytes, or ask for less", len(body), model.Size(limit)), model.ErrLimitExceeded)
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // redisDial makes a connection to address, over TLS when secure. cfg's

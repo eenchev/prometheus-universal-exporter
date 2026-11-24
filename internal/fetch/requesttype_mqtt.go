@@ -642,7 +642,7 @@ func (mqttRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		return nil, model.MarkError(model.Errorf("the document of %d messages is %d bytes, larger than the response limit; lower request.max_messages, or raise request.max_response_bytes or limits.max_response_bytes", len(doc.Messages), model.Size(int64(len(body)))), model.ErrLimitExceeded)
 	}
 	traceFacts(ctx, intFact("mqtt.messages", len(doc.Messages)))
-	resp := &HTTPResponse{StatusCode: http.StatusOK, NoStatus: true, Headers: http.Header{"Content-Type": {"application/json"}}, Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
+	resp := jsonBody(body, target, c, start)
 	if state != nil && state.connection != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: state.connection}
 	}

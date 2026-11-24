@@ -3290,6 +3290,10 @@ request's User-Agent; `username` and `password_file` are the account a
 Digest challenge is answered with; `max_response_bytes`, `allowed_targets`
 and `denied_targets` apply too. The decoder is `json`; its table is in
 [SIP](SIP.md#a-collector).
+
+For `amqp`, TODO(amqp): say here what this list says of each other type, and move it to its place among them.
+
+For `nats`, TODO(nats): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3377,6 +3381,10 @@ requires a `target`, the domain.
 
 `sip`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the SIP server, `host` or `host:port`.
+
+`amqp`, TODO(amqp): say here what this list says of each other type, and move it to its place among them.
+
+`nats`, TODO(nats): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -7595,6 +7603,8 @@ nothing there.
 - [RADIUS.md](RADIUS.md) — the opt-in `radius` request type.
 - [WHOIS.md](WHOIS.md) — the opt-in `whois` request type.
 - [SIP.md](SIP.md) — the opt-in `sip` request type.
+- [AMQP.md](AMQP.md) — the opt-in `amqp` request type.
+- [NATS.md](NATS.md) — the opt-in `nats` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

@@ -1252,6 +1252,7 @@ what is the type's alone — its keys, what a target is for it, its fetch and
 what it answers — and is held to the rules above, which every type shares,
 as it is to the rest of this specification:
 
+- [`amqp`](SPECIFICATION-AMQP.md)
 - [`dns`](SPECIFICATION-DNS.md)
 - [`ftp`](SPECIFICATION-FTP.md)
 - [`graphite`](SPECIFICATION-GRAPHITE.md)
@@ -1263,6 +1264,7 @@ as it is to the rest of this specification:
 - [`localfile`](SPECIFICATION-LOCALFILE.md)
 - [`modbus`](SPECIFICATION-MODBUS.md)
 - [`mqtt`](SPECIFICATION-MQTT.md)
+- [`nats`](SPECIFICATION-NATS.md)
 - [`ntp`](SPECIFICATION-NTP.md)
 - [`pop3`](SPECIFICATION-POP3.md)
 - [`radius`](SPECIFICATION-RADIUS.md)
@@ -9700,7 +9702,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, `sip` in `docs/SIP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, `sip` in `docs/SIP.md`, `amqp` in `docs/AMQP.md`, `nats` in `docs/NATS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index

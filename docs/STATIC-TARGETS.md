@@ -95,6 +95,8 @@ collector is looked at):
 | [`radius`](RADIUS.md#static-targets), opt-in | the RADIUS server, required | `timeout` |
 | [`whois`](WHOIS.md#static-targets), opt-in | the domain, required | `timeout` |
 | [`sip`](SIP.md#static-targets), opt-in | the SIP server, required | `timeout` |
+| [`amqp`](AMQP.md#static-targets), opt-in | TODO(amqp) | TODO(amqp) |
+| [`nats`](NATS.md#static-targets), opt-in | TODO(nats) | TODO(nats) |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target

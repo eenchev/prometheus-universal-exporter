@@ -466,6 +466,10 @@ filled wherever a rule's label has one, which is every transform but
 value](CONFIGURATION.md#long-label-values). A `python` script reads the
 parameters itself, as [`params`](#in-expressions).
 
+
+`amqp`, TODO(amqp): say here what this list says of each other type, and move it to its place among them.
+
+`nats`, TODO(nats): say here what this list says of each other type, and move it to its place among them.
 <!-- /request-types -->
 
 **Written as in a header value.** `{{param_<name>}}` or

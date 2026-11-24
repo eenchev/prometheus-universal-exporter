@@ -7,21 +7,21 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A reload that is rejected leaves the last valid configuration in force,
-// which is the right thing for the exporter to do and the wrong thing to keep
-// quiet about: nothing changes, so nothing looks wrong, while the change
-// somebody made is not running. The log says so once. These self-metrics say
-// so for as long as it is true, so it can be alerted on, under the names
-// Prometheus itself uses for the same thing:
+// A rejected reload leaves the last valid configuration in force. That is
+// the right thing for the exporter to do, but it should not be silent:
+// nothing changes, so nothing looks wrong, yet the change somebody made is
+// not running. The log says so once. These self-metrics say so for as long
+// as it is true, so it can be alerted on. They use the names Prometheus
+// itself uses for the same thing:
 //
 //	http_exporter_config_last_reload_successful{file}
 //	http_exporter_config_last_reload_success_timestamp_seconds{file}
 //	http_exporter_config_reloads_total{file, result}
 //
-// file is "config" for the configuration file, with its collector files, and
-// "static_targets" for the static target file, which is only reported when one is
-// configured. Loading at startup counts as a successful load; the counter
-// counts only reloads after it.
+// file is "config" for the configuration file together with its collector
+// files, and "static_targets" for the static target file. The latter is only
+// reported when one is configured. Loading at startup counts as a successful
+// load; the counter counts only reloads after it.
 
 // ReloadMetricHelp is the help of the reload families.
 var ReloadMetricHelp = map[string]string{

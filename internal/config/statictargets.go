@@ -18,12 +18,12 @@ import (
 
 var targetNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// LoadStaticTargets reads the static target document. A target file carries
-// the addresses and credentials of the things being scraped, which is exactly
-// the material an operator wants to keep out of a committed file, so it may
-// take them from the environment: WithStaticTargetsEnvExpansion, which
-// --static-targets.expand-env turns on, independently of the configuration's
-// --config.expand-env.
+// LoadStaticTargets reads the static target document. A target file holds
+// the addresses and credentials of the scraped things, which is exactly what
+// an operator wants to keep out of a committed file. So the file may take
+// them from the environment with WithStaticTargetsEnvExpansion. The flag
+// --static-targets.expand-env turns that on, independently of the
+// configuration's --config.expand-env.
 func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
@@ -34,14 +34,14 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 
 // DiscoveredTargetsKey is the static target file's key for the targets the
 // target allocator discovers (cmd/pue-allocator). Only the allocator reads
-// it: it expands each entry into written targets before a replica is
-// handed its share, so a file the exporter reads never needs it.
+// it. The allocator expands each entry into written targets before it hands
+// a replica its share, so a file the exporter reads never needs it.
 const DiscoveredTargetsKey = "discovered_targets"
 
-// ParseStaticTargets reads the text of a static target document, which
-// path names in messages. A document with discovered_targets is refused:
-// the exporter discovers nothing, and would otherwise scrape none of them
-// without a word.
+// ParseStaticTargets reads the text of a static target document. path names
+// the document in messages. A document with discovered_targets is refused:
+// the exporter discovers nothing, and would otherwise silently scrape none of
+// them.
 func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) {
 	var err error
 	if err = refuseAllocatorKeys(b); err != nil {
@@ -65,12 +65,12 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	return &f, nil
 }
 
-// refuseAllocatorKeys refuses a document with a key only the target
-// allocator reads, naming the allocator, rather than as an unknown key:
-// discovered_targets and default_weight at its top level, and weight and
-// weight_label on a target written under targets. A document that is no
-// YAML mapping is left to the decoder, which says what is wrong with it,
-// as is a key merged in from an anchor.
+// refuseAllocatorKeys refuses a document with a key that only the target
+// allocator reads, and names the allocator instead of reporting an unknown
+// key. These keys are discovered_targets and default_weight at the top level,
+// and weight and weight_label on a target under targets. A document that is
+// not a YAML mapping is left to the decoder, which says what is wrong with
+// it. The same goes for a key merged in from an anchor.
 func refuseAllocatorKeys(b []byte) error {
 	var doc yaml.Node
 	_ = yaml.Unmarshal(b, &doc)
@@ -117,9 +117,9 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 }
 
 // ValidateDiscoveringStaticTargets is ValidateStaticTargets for the target
-// allocator's static target file with discovered_targets, whose targets
-// may be empty: the discovered ones may be all it has, and none may have
-// been discovered yet.
+// allocator's static target file with discovered_targets. Its targets may be
+// empty: the discovered ones may be all it has, and none may have been
+// discovered yet.
 func ValidateDiscoveringStaticTargets(f *model.StaticTargetFile) error {
 	return validateStaticTargets(f)
 }
@@ -169,10 +169,10 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 		if fetch.HasPathParams(t.Request.Path) {
 			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a static target has no probe to supply them, so write the path out in full", t.Name)
 		}
-		// Nor anywhere else the target writes a value of its own: they are
-		// sent as written, so a placeholder would reach the target as text.
-		// This holds for a value an environment reference supplied too,
-		// since the file is checked after it is expanded.
+		// Placeholders are also refused in every other value the target writes
+		// itself. Those values are sent as written, so a placeholder would
+		// reach the target as text. This also holds for a value from an
+		// environment reference, since the file is checked after expansion.
 		if err := refuseParamPlaceholders(t); err != nil {
 			return err
 		}
@@ -184,10 +184,10 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 		if t.Request.Timeout < 0 {
 			return fmt.Errorf("target %q request.timeout must not be negative", t.Name)
 		}
-		// Statuses and codes are written as a scrape compares them here,
-		// once, while nothing reads the file yet: the check against the
-		// configuration, which a reload repeats on the file in force,
-		// only reads them.
+		// Statuses and codes are normalized here to the form a scrape
+		// compares, once, while nothing reads the file yet. The check against
+		// the configuration, which a reload repeats on the file in force, only
+		// reads them.
 		fetch.NormalizeTargetRequest(t)
 		switch {
 		case t.Interval < 0:
@@ -241,9 +241,9 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 				return fmt.Errorf("target %q labels sets %s, which the static targets endpoint sets to the target's name", t.Name, StaticTargetLabel)
 			}
 			// Prometheus sets job and instance on every series it scrapes.
-			// The endpoint is scraped keeping the series' own labels, as the
-			// chart's monitor does, so a target's job or instance would move
-			// its series out of the job that scrapes the endpoint.
+			// The endpoint is scraped with the series' own labels kept, as the
+			// chart's monitor does. So a target's job or instance label would
+			// move its series out of the job that scrapes the endpoint.
 			if name == "job" || name == "instance" {
 				return fmt.Errorf("target %q labels sets %s, which Prometheus sets when it scrapes the static targets endpoint; with honor_labels the target's would replace it, so name the label something else, such as task", t.Name, name)
 			}
@@ -280,12 +280,12 @@ func validateStaticTargets(f *model.StaticTargetFile) error {
 const otlpServiceInstanceIDAttribute = "service.instance.id"
 
 // checkTargetResourceKeys refuses a target whose otlp.labels_as_resource or
-// otlp.instance_id would give its resource an attribute it has already,
-// from its own otlp.resource_attributes or from the exporter-wide ones it
-// keeps: the resource would carry the key twice. An attribute written ""
-// is one left out (exporter/statictarget.go's targetResource): the
-// target's keeps the exporter-wide one of the name, and that is none. A label's name has no dot, so neither service.name nor
-// service.instance.id can be one.
+// otlp.instance_id would add an attribute its resource already has, from its
+// own otlp.resource_attributes or from the exporter-wide ones it keeps. The
+// resource would then carry the key twice. An attribute written "" counts as
+// left out (exporter/statictarget.go's targetResource): the target keeps the
+// exporter-wide attribute of that name, if there is one. A label name
+// has no dot, so it can be neither service.name nor service.instance.id.
 func checkTargetResourceKeys(t *model.StaticTarget, o model.OTLPConfig) error {
 	from := func(key string) string {
 		if t.OTLP.ResourceAttributes[key] != "" {
@@ -309,12 +309,15 @@ func checkTargetResourceKeys(t *model.StaticTarget, o model.OTLPConfig) error {
 	return checkTargetExporterInstance(t, o)
 }
 
-// checkTargetExporterInstance refuses a target whose resource would have the
-// attribute of otlp.exporter_instance already: from its own
-// otlp.resource_attributes, written "" or not, as the exporter-wide ones are
-// held to it (checkExporterInstance), from its otlp.labels_as_resource, or,
-// with otlp.instance_id, as service.instance.id. Either would replace the
-// replica's name on the target's resource, or the replica's name it.
+// checkTargetExporterInstance refuses a target whose resource would already
+// have the otlp.exporter_instance attribute. The attribute can come from:
+//   - its own otlp.resource_attributes, written "" or not, as the
+//     exporter-wide ones are held to it (checkExporterInstance);
+//   - its otlp.labels_as_resource;
+//   - otlp.instance_id, as service.instance.id.
+//
+// Either would replace the replica's name on the target's resource, or be
+// replaced by it.
 func checkTargetExporterInstance(t *model.StaticTarget, o model.OTLPConfig) error {
 	e := o.ExporterInstance
 	if !e.Enabled {
@@ -341,14 +344,14 @@ func checkTargetExporterInstance(t *model.StaticTarget, o model.OTLPConfig) erro
 // their series apart.
 const StaticTargetLabel = "static_target"
 
-// staticTargetSeriesLabels are the labels the exporter adds to the series of
-// a static target after the scrape's validation, which holds every other
-// label name to limits.max_label_name_length, longest first: static_target
-// on every series the endpoint serves and OTLP exports of it (the exporter's
-// withStaticTargetLabel), and collector and target on its health series
-// (staticTargetHealthMetrics). A label added before the validation, such as
-// the file label of a collector that reads a directory, fails the scrape
-// when it is too long, as any label does.
+// staticTargetSeriesLabels are the labels the exporter adds to a static
+// target's series after the scrape's validation, longest first. That
+// validation holds every other label name to limits.max_label_name_length.
+// The labels are static_target, on every series the endpoint serves and on
+// its OTLP exports (the exporter's withStaticTargetLabel), and collector and
+// target, on its health series (staticTargetHealthMetrics). A label added
+// before the validation, such as the file label of a collector that reads a
+// directory, fails the scrape when it is too long, like any label.
 var staticTargetSeriesLabels = []struct{ name, on string }{
 	{StaticTargetLabel, "every series of it"},
 	{"collector", "its health series"},
@@ -357,9 +360,9 @@ var staticTargetSeriesLabels = []struct{ name, on string }{
 
 // ValidateStaticTargetsAgainst enforces the preconditions that depend on the
 // exporter configuration: every target must name a configured collector, and a
-// target exported over OTLP needs OTLP export enabled. It writes into neither:
-// a reload checks the file in force against the configuration it read, and
-// the file it read against the configuration in force, while scrapes read
+// target exported over OTLP needs OTLP export enabled. It writes into neither
+// value. A reload checks the file in force against the configuration it read,
+// and the file it read against the configuration in force, while scrapes read
 // both.
 func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) error {
 	if hook := targetsValidatedHook.Load(); hook != nil {
@@ -413,10 +416,10 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		if err := checkRetriesFitTheInterval(t, collector); err != nil {
 			return err
 		}
-		// A target's labels go on every series of its collector, past the
-		// scrape's validation, so they are held here to the collector's
-		// limits.max_label_name_length, which every other label name of
-		// those series is held to.
+		// A target's labels go on every series of its collector, after the
+		// scrape's validation. So they are checked here against the
+		// collector's limits.max_label_name_length, which applies to every
+		// other label name of those series.
 		for _, name := range model.SortedKeys(t.Labels) {
 			if limit := collector.Limits.MaxLabelNameLength; limit > 0 && len(name) > limit {
 				return fmt.Errorf("target %q label name %q is %d bytes, longer than limits.max_label_name_length %d of collector %q; shorten it or raise the collector's limit", t.Name, name, len(name), limit, t.Collector)
@@ -430,12 +433,12 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 			}
 		}
 		// Every placeholder of the collector, in its request or in a label
-		// value (fetch/labelparams.go), must be filled, by the target's
-		// params or a default, since nothing else can fill it; and every
-		// param must fill one, since an unused one is a misspelling.
-		// Catching both here makes them startup errors naming both sides.
-		// A parameter's value may hold clock placeholders only, and none
-		// when it fills a label value.
+		// value (fetch/labelparams.go), must be filled by the target's params
+		// or a default, since nothing else can fill it. Every param must fill
+		// a placeholder, since an unused one is a misspelling. Checking both
+		// here makes them startup errors that name both sides. A parameter's
+		// value may hold only clock placeholders, and none when it fills a
+		// label value.
 		if err := fetch.CheckTargetParams(collector, t); err != nil {
 			return err
 		}
@@ -462,35 +465,35 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 }
 
 // A static target names its collector, and every check of the target
-// against the configuration needs that collector. Going through the
-// configuration's collectors for it (model.CollectorByName) costs as much as
-// the configuration is large, and the check went through them four times
-// for every target, and once more for each configuration to learn which
-// descriptor files it opens (targetsChecked): for 10,000 targets of as many
-// collectors that was seconds of a reload, which checked the pair up to
-// five times. So where the collectors are is noted once for a check, by their
-// names, and each target's is found there. The exporter keeps the same for
-// the configuration it follows (internal/exporter, fingerprintGeneration);
-// that one lives with what the exporter keeps for a configuration in force,
-// and the check is also of a configuration that is not in force yet.
+// against the configuration needs that collector. Finding it among the
+// configuration's collectors (model.CollectorByName) costs time in
+// proportion to the configuration's size. The check did that four times per
+// target, and once more per configuration to learn which descriptor files it
+// opens (targetsChecked). For 10,000 targets of as many collectors that took
+// seconds of a reload, which checked the pair up to five times. So the
+// collectors are indexed by name once per check, and each target's collector
+// is looked up there. The exporter keeps the same index for the configuration
+// it follows (internal/exporter, fingerprintGeneration). That one lives with
+// what the exporter keeps for a configuration in force, and this check also
+// runs on a configuration that is not in force yet.
 
 // targetsValidatedHook, set by tests, is called at each check of a static
-// target file against a configuration (ValidateStaticTargetsAgainst), so a
-// test can count the checks a reload makes: one for each pair of the two it
-// asks about, however often it asks (Manager.apply).
+// target file against a configuration (ValidateStaticTargetsAgainst). A test
+// can then count the checks a reload makes: one for each pair it asks about,
+// however often it asks (Manager.apply).
 var targetsValidatedHook atomic.Pointer[func()]
 
-// collectorsIndexedHook, set by tests, is called whenever the collectors of
-// a configuration are gone through to note where each is (collectorsByName):
-// once for each time, not for each collector, so a test can count the times
-// and see that it is once for a check, not once for each static target.
+// collectorsIndexedHook, set by tests, is called whenever a configuration's
+// collectors are indexed by name (collectorsByName). It is called once per
+// indexing, not per collector, so a test can count the indexings and see
+// that there is one per check, not one per static target.
 var collectorsIndexedHook atomic.Pointer[func()]
 
-// collectorsByName is the collectors of c by their names, each the one
-// model.CollectorByName(c, name) returns: the very collector of c and not a
-// copy, and of two that share a name the first, which is why they are gone
-// through from the last. A loaded configuration has no two of one name
-// (Validate), and a name it has none of is not in the map.
+// collectorsByName maps the collectors of c by name. Each entry is the one
+// model.CollectorByName(c, name) returns: the collector of c itself, not a
+// copy, and the first of two that share a name, which is why the loop runs
+// from the last. A loaded configuration has no two collectors of one name
+// (Validate), and a name it does not have is not in the map.
 func collectorsByName(c *model.Config) map[string]*model.Collector {
 	if hook := collectorsIndexedHook.Load(); hook != nil {
 		(*hook)()
@@ -508,12 +511,11 @@ func collectorsByName(c *model.Config) map[string]*model.Collector {
 var paramPlaceholder = regexp.MustCompile(`\{\{\s*` + fetch.PathParamPrefix)
 
 // refuseParamPlaceholders refuses a {{param_...}} placeholder in a value the
-// target writes itself — its target, request.body, header values, a
-// graphite collector's request.targets and a grpc collector's
-// request.message and metadata values; its
-// request.path is checked with the collector's stricter rule. Such values are
-// sent as written, with no probe to fill a placeholder; the target's params
-// are what fill the collector's.
+// target writes itself: its target, request.body, header values, a graphite
+// collector's request.targets, and a grpc collector's request.message and
+// metadata values. Its request.path is checked with the collector's stricter
+// rule. Such values are sent as written, with no probe to fill a placeholder.
+// The target's params are what fill the collector's placeholders.
 func refuseParamPlaceholders(t *model.StaticTarget) error {
 	refuse := func(where string) error {
 		return fmt.Errorf("target %q %s cannot use {{param_...}} placeholders: a static target's own values are sent as written, with no probe to fill them; write the value out in full, or fill the collector's placeholders under params", t.Name, where)

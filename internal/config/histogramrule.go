@@ -7,19 +7,20 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// checkHistogramRule checks a rule's histogram block, the rule named by
-// where, its type defaulted already. The block makes a histogram of the
-// values the rule reads, so it belongs to a rule of type histogram whose
-// transform reads values: not to a prometheus rule, which passes on the
-// target's histograms with their own buckets, nor to a python rule, whose
-// script makes its series itself. Its buckets are the upper bounds of the
-// histogram's buckets, written once each and in increasing order, as the
-// exposition writes them: a bound out of order, or written twice, is a
-// mistake that sorting would hide. +Inf is every histogram's last bucket,
-// added by the exporter, so neither it nor any other bound that is not a
-// finite number is one to write.
+// checkHistogramRule checks a rule's histogram block. where names the rule,
+// whose type is already defaulted. The block makes a histogram of the values
+// the rule reads. So it belongs to a rule of type histogram whose transform
+// reads values. It does not belong to a prometheus rule, which passes on the
+// target's histograms with their own buckets, or to a python rule, whose
+// script makes its series itself.
 //
-// A label named le is refused too: a histogram's buckets carry that label,
+// The buckets are the upper bounds of the histogram's buckets. Each is
+// written once, in increasing order, as the exposition writes them. A bound
+// out of order or written twice is a mistake that sorting would hide. +Inf
+// is every histogram's last bucket and the exporter adds it, so neither it
+// nor any other non-finite bound should be written.
+//
+// A label named le is refused too. A histogram's buckets carry that label,
 // and a series that set its own would fail every scrape, as a histogram read
 // from a target with one does (model.MetricSet.Validate).
 func checkHistogramRule(x *model.Collector, r *model.MetricRule, where string) error {

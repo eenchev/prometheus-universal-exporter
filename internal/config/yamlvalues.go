@@ -15,66 +15,64 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The YAML decoder turns some values into others without a word: a number
-// with a fraction where a whole number belongs loses the fraction, so
-// max_metrics: 0.5 is 0, the default, and max_concurrent_probes: 1.9 is 1;
-// and a key YAML reads as no value at all — null, ~ or nothing before the
-// colon — is dropped from a mapping with its value, so value_map:
-// {null: 0} maps nothing. Neither is what the file says, so both are
-// refused, naming the key, the value and the line, beside whatever the
-// decoder itself refuses.
+// The YAML decoder silently turns some values into others. A number with a
+// fraction where a whole number belongs loses the fraction, so max_metrics:
+// 0.5 is 0, the default, and max_concurrent_probes: 1.9 is 1. A key YAML
+// reads as no value at all (null, ~ or nothing before the colon) is dropped
+// from a mapping with its value, so value_map: {null: 0} maps nothing.
+// Neither is what the file says, so both are refused, naming the key, the
+// value and the line, in addition to whatever the decoder itself refuses.
 //
 // So is a value YAML reads as none (noValue): nothing after a colon or a
-// dash, null or ~. The decoder drops such an entry of a list, so that a rule
-// meant under a bare dash is missing with nothing said, leaves the key of
-// such a value as if it were not written, and takes such a value of a
-// mapping for "" or for 0, which value_map: {up: } then maps up to. The
-// schemas refuse each, a null being none of the types a key takes, and so
-// does the load, at every key, list and mapping the files have: the walk is
-// of the types the schemas are generated from (configSchema), so a key added
-// to them is held to it without anyone remembering to.
+// dash, null or ~. The decoder drops such an entry of a list, so a rule meant
+// under a bare dash goes missing silently. It treats the key of such a value
+// as if it were not written. It takes such a value in a mapping for "" or 0,
+// so value_map: {up: } maps up to that. The schemas refuse each, since a null
+// is none of the types a key takes. So does the load, at every key, list and
+// mapping of the files: the walk follows the types the schemas are generated
+// from (configSchema), so a key added to them is checked without anyone
+// remembering to.
 //
-// And so is a value YAML reads as another kind than its key takes, which the
-// decoder takes all the same. It hands a key of text the text of whatever is
-// written, so name: true is the name "true" and delimiter: 1 the character
-// 1, and it reads the words YAML 1.1 had for a boolean — yes, no, on, off, y
-// and n — as one where a key takes a boolean, text though they are to YAML
-// now and to anything else that reads the file. The schemas say which keys
-// take what: a key of free text, an expression among them, takes a number
-// or a boolean as the text it spells, as the decoder reads it, so that
-// value: 1 and description: 404 need no quotes; a key the schemas hold to
-// text alone — one with allowed values or a pattern, which is a name, a
-// host or a word of a few — takes none, and a boolean is true or false. The
-// load holds each key to what its schema says (schemaKinds), so that an
-// editor and the exporter flag the same value: a number or a boolean where
-// text alone is taken is refused, saying to quote it if the text is meant,
-// or, where the key takes one of a few words, which they are; and a word
-// that is no boolean where one is taken is refused, saying which of true
-// and false it would have been read as.
+// A value that YAML reads as a different kind than its key takes is refused
+// too, although the decoder accepts it. The decoder hands a text key the
+// text of whatever is written, so name: true is the name "true" and
+// delimiter: 1 the character 1. Where a key takes a boolean, it reads the
+// YAML 1.1 boolean words (yes, no, on, off, y and n) as booleans, though they
+// are text to YAML now and to anything else that reads the file. The schemas
+// say which keys take what. A free-text key, an expression among them, takes
+// a number or a boolean as the text it spells, as the decoder reads it, so
+// value: 1 and description: 404 need no quotes. A key the schemas restrict
+// to text (one with allowed values or a pattern, which is a name, a host or
+// one of a few words) takes neither, and a boolean is true or false. The
+// load checks each key against its schema (schemaKinds), so an editor and
+// the exporter flag the same value. A number or a boolean where only text is
+// accepted is refused, with a hint to quote it if the text is meant or, for
+// a key that takes one of a few words, which words they are. A word that is
+// not a boolean where one is expected is refused, saying which of true and
+// false it would have been read as.
 //
-// And a number YAML reads with a point or an exponent is read by its digits
-// where a whole number is taken. The decoder makes a float64 of it and
+// A number that YAML reads with a point or an exponent is read by its digits
+// where a whole number is expected. The decoder makes a float64 of it and
 // converts that, so 9007199254740993.0 became the whole number below it, and
 // one past the range of the key's integer wrapped around or was refused as
-// no whole number, as the platform's conversion had it: 9.3e18 was a
-// negative number on amd64. Such a number is the whole number it is
-// written as (model.ReadWholeNumber), as it is to a schema, which is handed
-// the number and not how it was written; one the key's integer does not
-// hold is refused, naming the key, the number and the range, and so is one
-// past the range of a float64, 1e400, which the decoder takes for text
-// (pastFloat64); and one with a fraction is refused as it was, however small
-// the fraction. A number
-// written with digits alone is the decoder's to read, as it was. An entry
-// of request.accept_status, which the schemas take as a status written as a
-// number or as text, is read as the number it is too (wholeNumberText): the
-// decoder handed the exporter the number as it is written, 200.0 or 0xC8,
-// which is no status to it, while it is the status 200 to a schema.
+// no whole number, depending on the platform's conversion: 9.3e18 was a
+// negative number on amd64. Such a number is the whole number it is written
+// as (model.ReadWholeNumber), as it is to a schema, which is handed the
+// number and not how it was written. A number the key's integer does not
+// hold is refused, naming the key, the number and the range. So is one past
+// the range of a float64, such as 1e400, which the decoder takes for text
+// (pastFloat64). One with a fraction is refused as before, however small the
+// fraction. A number written with digits alone is left to the decoder, as
+// before. An entry of request.accept_status, which the schemas take as a
+// status written as a number or as text, is also read as the number it is
+// (wholeNumberText). The decoder handed the exporter the number as written,
+// 200.0 or 0xC8, which is no status to it, while it is the status 200 to a
+// schema.
 
-// valueKinds is what a schema says of a place of its file where a value is
-// written, and of the places under it: whether the place takes text alone,
-// the values it is then held to, where it is held to some, and what the
-// keys of a block there, the entries of a list and the values of a mapping
-// take in their turn.
+// valueKinds is what a schema says of a place in its file where a value is
+// written, and of the places under it: whether the place takes only text,
+// the values it is held to (if any), and what the keys of a block there, the
+// entries of a list and the values of a mapping take in turn.
 type valueKinds struct {
 	textOnly bool
 	allowed  []string
@@ -141,10 +139,10 @@ func kindsOf(schema map[string]any) *valueKinds {
 	return kinds
 }
 
-// schemaKinds is what the schema of a file of type t says its places take,
-// read once from the schema the type's rules give, so that a key that comes
+// schemaKinds is what the schema of a file of type t says its places take.
+// It is read once from the schema the type's rules give, so a key that comes
 // to be held to values or a pattern is held to text by the load without
-// being listed here. A type that is no file's has none.
+// being listed here. A type that is not a file's type has none.
 func schemaKinds(t reflect.Type) *valueKinds {
 	return kindsByFile()[t]
 }
@@ -188,11 +186,12 @@ var yamlBooleanWords = map[string]bool{
 	"n": false, "N": false, "no": false, "No": false, "NO": false, "off": false, "Off": false, "OFF": false,
 }
 
-// withValueProblems adds to a decoding error, or to none, the values of the
-// document the decoder would change in silence. decoded points to what the
-// document was decoded into, whose whole numbers written with a point or an
-// exponent it writes as the numbers they are, and the entries of
-// request.accept_status written as a number as the statuses they are.
+// withValueProblems adds to a decoding error, or to no error, the values of
+// the document that the decoder would change silently. decoded points to
+// what the document was decoded into. withValueProblems writes into it the
+// whole numbers written with a point or an exponent as the numbers they are,
+// and the entries of request.accept_status written as a number as the
+// statuses they are.
 func withValueProblems(err error, document []byte, decoded any) error {
 	problems, readAgain := checkValues(document, reflect.ValueOf(decoded).Elem())
 	var typeErr *yaml.TypeError
@@ -260,22 +259,22 @@ func keysOfAnotherType(n *yaml.Node) func(key string) bool {
 }
 
 // valueProblems walks the document beside the type it is decoded into, as
-// the decoder does: an alias is what it names, a key that is an alias the
+// the decoder does: an alias is what it names, a key that is an alias is the
 // key it names (model.KeyName), and a merge key supplies the keys of what it
-// merges in that the mapping does not set itself (model.DecodedEntries). Only a value the decoder uses is looked at, where
-// it is written: one in an anchor that the mapping merging it in overrides is
-// no mistake of that mapping's, and one that is used is reported at its own
-// line.
+// merges in that the mapping does not set itself (model.DecodedEntries).
+// Only a value the decoder uses is checked, where it is written. A value in
+// an anchor that the merging mapping overrides is not that mapping's
+// mistake, and a value that is used is reported at its own line.
 func valueProblems(document []byte, t reflect.Type) []string {
 	problems, _ := checkValues(document, reflect.New(t).Elem())
 	return problems
 }
 
-// checkValues is valueProblems of the document decoded into decoded, which
-// it walks beside the document, writing into it what is read again here: a
-// whole number written with a point or an exponent, and a number at a place
-// of text that takes one. readAgain are the decoder's messages of such
-// values, which are said here instead.
+// checkValues is valueProblems of the document decoded into decoded. It walks
+// decoded beside the document and writes into it what is read again here: a
+// whole number written with a point or an exponent, and a number at a text
+// place that takes one. readAgain holds the decoder's messages about such
+// values, which are reported here instead.
 func checkValues(document []byte, decoded reflect.Value) (problems []string, readAgain map[string]bool) {
 	var doc yaml.Node
 	if yaml.Unmarshal(document, &doc) != nil || len(doc.Content) == 0 {
@@ -308,14 +307,14 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 				out = out.Elem()
 			}
 		}
-		// A request block is walked as it is read, as its common part and
-		// every request type's own keys (model.RequestView), and what the
-		// walk writes into the view is written back into the block. The
-		// value of a key the block's request type does not take is held to
-		// no kind: the key is refused for that, whatever its value
+		// A request block is walked as it is read: as its common part and
+		// every request type's own keys (model.RequestView). What the walk
+		// writes into the view is written back into the block. The value of
+		// a key that the block's request type does not take is held to no
+		// kind. The key is refused for that, whatever its value
 		// (fetch.ValidateRequest), with the type's own key where one does
-		// what the collector meant (fetch.RequestType.KeyAdvice), and told
-		// of the values of another type's key it would point the wrong
+		// what the collector meant (fetch.RequestType.KeyAdvice). It is not
+		// told the values of another type's key, which would point the wrong
 		// way, as starttls: true in an ldap collector was told tcp's
 		// protocols. A value that is none is refused there as anywhere.
 		var foreign func(key string) bool
@@ -479,10 +478,10 @@ func checkValues(document []byte, decoded reflect.Value) (problems []string, rea
 var yamlFloat = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$`)
 
 // pastFloat64 reports whether a scalar is a number written with a point or
-// an exponent past the range of a float64, such as 1e400, which the YAML
-// decoder, failing to make a float64 of it, reads as text. It is plain and
-// untagged, for quoted or tagged !!str it is text to YAML too; to YAML 1.2,
-// and to a schema in an editor, it is a number.
+// an exponent past the range of a float64, such as 1e400. The YAML decoder
+// fails to make a float64 of it and reads it as text. The scalar is plain
+// and untagged, since quoted or tagged !!str it is text to YAML too. To YAML
+// 1.2, and to a schema in an editor, it is a number.
 func pastFloat64(n *yaml.Node) bool {
 	return n.Tag == "!!str" && n.Style == 0 && yamlFloat.MatchString(strings.ReplaceAll(n.Value, "_", ""))
 }
@@ -497,16 +496,15 @@ func decoderRefusal(n *yaml.Node, t reflect.Type) string {
 	return fmt.Sprintf("line %d: cannot unmarshal %s `%s` into %s", n.Line, n.ShortTag(), value, t)
 }
 
-// wholeNumberText is the text of the whole number a scalar YAML reads as a
-// number is, at a place of text that takes a whole number from least to
-// most beside text, when it is one in that range: 200.0, 2e2, 0xC8, 0o310
+// wholeNumberText is the text of the whole number that a scalar YAML reads as
+// a number stands for, at a text place that takes a whole number from least
+// to most beside text, when it is one in that range. 200.0, 2e2, 0xC8, 0o310
 // and 2_00 are 200, which an entry of request.accept_status takes as a
-// number, while the text it was handed, as written, is no status. Digits
-// alone, with a sign or leading zeros, are the number they are in decimal,
-// +200 and 0200 the 200 YAML 1.2 reads them as, where the text as written
-// passed the load and matched no status. A number out of the range, or that
-// is no whole number, is left as it is written, for what reads the text to
-// refuse.
+// number, while the text it was handed as written is no status. Digits
+// alone, with a sign or leading zeros, are the decimal number they spell:
+// +200 and 0200 are 200, as YAML 1.2 reads them, while the text as written
+// passed the load and matched no status. A number out of the range, or not
+// a whole number, is left as written, for whatever reads the text to refuse.
 func wholeNumberText(n *yaml.Node, least, most int64) (string, bool) {
 	// Text, quoted, is what reads it to take or refuse as it is.
 	tag := n.ShortTag()

@@ -12,20 +12,20 @@ import (
 )
 
 // Loading a configuration opens more files than the configuration and its
-// collector files: the ones it names and validation reads, to refuse at the
-// load what would otherwise fail later. A reload can therefore be refused
-// for a file the watch never looked at — a certificate missing for the moment
-// in which a Secret is replaced — and, with the configuration itself
-// unchanged, would never be tried again. So the watch stamps those files
-// too while a configuration is refused (Manager.retryFiles). The descriptor
-// files among them, which the configuration is checked against, it stamps
-// as long as the configuration is in force (Manager.descriptors): a
-// collector reads them again at a call when they change, and the reload
-// that follows at the next tick says whether the configuration still fits
-// them.
+// collector files: the files it names that validation reads, so the load
+// refuses what would otherwise fail later. A reload can therefore be refused
+// for a file the watch never looked at, such as a certificate missing for the
+// moment in which a Secret is replaced. With the configuration itself
+// unchanged, that reload would never be tried again. So the watch also
+// stamps those files while a configuration is refused (Manager.retryFiles).
+// It stamps the descriptor files among them, which the configuration is
+// checked against, as long as the configuration is in force
+// (Manager.descriptors): a collector reads them again at a call when they
+// change, and the reload at the next tick says whether the configuration
+// still fits them.
 
-// namedFiles are the files the configurations name that loading one opens,
-// each once, in order:
+// namedFiles are the files named by the configurations that loading one
+// opens, each once, in order:
 //
 //   - otlp.tls.ca_file, cert_file and key_file, when otlp is enabled: the
 //     export needs them from the start (fetch.CheckClientTLS);
@@ -39,10 +39,10 @@ import (
 //
 // A collector's own credential and TLS files are not among them: they are
 // read at a request, not at the load, so they refuse no configuration. The
-// files a .proto file imports, which the configuration does not name, are
-// known only once the load has read the files that do the importing
-// (importedFiles). A nil configuration names none. A load WithoutNamedFiles,
-// the target allocator's, opens none of them.
+// files a .proto file imports are not named by the configuration, and are
+// known only once the load has read the importing files (importedFiles). A
+// nil configuration names none. A load WithoutNamedFiles (the target
+// allocator's) opens none of them.
 func namedFiles(configs ...*model.Config) []string {
 	var files []string
 	add := func(paths ...string) {
@@ -74,21 +74,21 @@ func namedFiles(configs ...*model.Config) []string {
 var readFiles = fetch.ReadFiles
 
 // importedFiles are the paths that reading the descriptor files of the
-// configurations' collectors looked at and that are not among named: the
-// files that the .proto files of a grpc collector's request.proto_files
-// import, through however many files, as its import paths resolved them, and
-// the places such a file was looked for at and not found (fetch.ReadFiles).
-// A load is refused for those as it is for a file the configuration names —
-// an imported file that does not compile, or is missing — so they are stamped
-// with the named files while it is refused.
+// configurations' collectors looked at, other than those in named. These are
+// the files that the .proto files of a grpc collector's request.proto_files
+// import, directly or through other files, as its import paths resolved
+// them, and the places where such a file was looked for and not found
+// (fetch.ReadFiles). A load is refused for these just as for a file the
+// configuration names (an imported file that does not compile, or is
+// missing), so they are stamped with the named files while it is refused.
 //
-// Which they are is known only when the load has read the files that import
-// them, so they cannot be stamped before it reads them, as the named files
-// are. They are stamped here, after it, and settled says the stamp is as
-// good as one taken before: nothing the reading looked at changed between
-// the reading and the stamp. When something did, the caller reloads at the
-// next tick whatever it finds, as it would for an edit made while a named
-// file was being read.
+// They are known only after the load has read the files that import them,
+// so unlike the named files they cannot be stamped before that reading.
+// They are stamped here, after it. settled reports that the stamp is as good
+// as one taken before: nothing the reading looked at changed between the
+// reading and the stamp. When something did, the caller reloads at the next
+// tick whatever it finds, as it would for an edit made while a named file
+// was being read.
 func importedFiles(named []string, configs ...*model.Config) (files []string, stamp string, settled bool) {
 	look := func() (files, reads []string) {
 		for _, c := range configs {
@@ -116,10 +116,10 @@ func importedFiles(named []string, configs ...*model.Config) (files []string, st
 	return files, stamp, slices.Equal(reads, again)
 }
 
-// stampedFiles are files and how they were at one moment (filesStamp); a
-// stamp no files have, as the empty one of files that are there to stamp,
-// says they are to be read again whatever they are like. imports says files
-// that the .proto files among them import are among them.
+// stampedFiles are files and their state at one moment (filesStamp). A stamp
+// that no files have, like the empty stamp of files that are there to stamp,
+// says they must be read again whatever their state. imports reports that
+// the files imported by the .proto files among them are included.
 type stampedFiles struct {
 	files   []string
 	stamp   string
@@ -132,14 +132,14 @@ func (s stampedFiles) changed() bool {
 }
 
 // namedDescriptorFiles are the descriptor files a configuration names: the
-// request.protoset_file and request.proto_files of its collectors, which
-// only a grpc collector may set (fetch.ValidateRequest), so a build without
-// the grpc request type has none in force. They are the files of namedFiles
-// that the configuration is checked against, its method and its messages,
-// and so the ones the watch goes on looking at once the configuration is in
-// force (Manager.descriptors); the certificates and credential files among
-// namedFiles say nothing about the configuration, and are watched only
-// while it is refused. A nil configuration names none.
+// request.protoset_file and request.proto_files of its collectors. Only a
+// grpc collector may set them (fetch.ValidateRequest), so a build without
+// the grpc request type has none in force. Of the files in namedFiles, these
+// are the ones the configuration (its method and its messages) is checked
+// against, so the watch keeps looking at them once the configuration is in
+// force (Manager.descriptors). The certificates and credential files in
+// namedFiles say nothing about the configuration, and are watched only while
+// it is refused. A nil configuration names none.
 func namedDescriptorFiles(c *model.Config) []string {
 	if c == nil {
 		return nil
@@ -148,23 +148,24 @@ func namedDescriptorFiles(c *model.Config) []string {
 }
 
 // stampDescriptors stamps the descriptor files of a configuration that is
-// about to be validated: the files it names, as they are before anything
-// reads them, and the files that its .proto files import, which are read
-// here to learn which they are, before the validation needs them, and
-// stamped once they have been (importedFiles). The validation that follows
-// checks the configuration against that reading while the files stay as
-// they are, and reads them again when one changed, which the stamp then
-// tells: a file edited at any moment from here on, while the configuration
-// is validated or put in force, is not as stamped, and the next tick of the
-// watch reloads. The compile is the one the validation would make, kept for
-// it (fetch.ReadFiles), so stamping costs no second one, but for files that
-// do not compile, which are read again by whoever needs them.
+// about to be validated. It stamps the files the configuration names, as
+// they are before anything reads them. It also stamps the files its .proto
+// files import: these are read here to learn which they are, before the
+// validation needs them, and stamped after the reading (importedFiles). The
+// validation that follows checks the configuration against that reading
+// while the files stay unchanged, and reads them again when one changed,
+// which the stamp then shows. A file edited at any moment from here on,
+// while the configuration is validated or put in force, no longer matches
+// the stamp, and the next tick of the watch reloads. The compile is the one
+// the validation would make, kept for it (fetch.ReadFiles), so stamping
+// costs no second compile, except for files that do not compile, which
+// whoever needs them reads again.
 //
 // The configuration is as its files write it, and the validation changes
-// nothing that says which the files are: the paths are used as written, and
-// the request.type and request.descriptors that decide whether there are
-// imported files are read here as the validation names them, whatever their
-// case (fetch.ReadFiles). So the files stamped are the ones the validated
+// nothing that decides which the files are: the paths are used as written,
+// and the request.type and request.descriptors that decide whether there are
+// imported files are read here as the validation names them, in any case
+// (fetch.ReadFiles). So the files stamped are the ones the validated
 // configuration reads, and nothing is left to stamp once it is in force.
 func stampDescriptors(c *model.Config) stampedFiles {
 	named := namedDescriptorFiles(c)
@@ -172,24 +173,23 @@ func stampDescriptors(c *model.Config) stampedFiles {
 	return stampedFiles{files: files, stamp: stamp, imports: imports}
 }
 
-// targetsNamedFiles are the files that checking a static target file
-// against the configurations opens, each once: the descriptor files of the
-// collectors named by its targets that set a request.message, which a grpc
-// collector's message type is read from to check the target's
-// (fetch.CheckTargetRequest). A reload of the target file can thus be
-// refused for a file that neither it nor the watch of a configuration in
-// force looks at, and is tried again when that file changes
-// (Manager.targetsRetryFiles). The files a target itself names, its
-// credential files, are read at a scrape, not at the load, and refuse no
-// target file.
+// targetsNamedFiles are the files that checking a static target file against
+// the configurations opens, each once: the descriptor files of the collectors
+// its targets name that set a request.message. A grpc collector's message
+// type is read from them to check the target's (fetch.CheckTargetRequest).
+// So a reload of the target file can be refused for a file that neither the
+// target file nor the watch of a configuration in force looks at. It is
+// tried again when that file changes (Manager.targetsRetryFiles). The files
+// a target itself names, its credential files, are read at a scrape, not at
+// the load, and refuse no target file.
 func targetsNamedFiles(f *model.StaticTargetFile, configs ...*model.Config) []string {
 	return namedFiles(targetsChecked(f, configs...))
 }
 
-// targetsChecked are the collectors whose descriptor files the check of a
-// static target file against the configurations opens, as a configuration
-// of their own: the files they name are targetsNamedFiles, and the files
-// those import are watched with them (importedFiles).
+// targetsChecked are the collectors whose descriptor files are opened when a
+// static target file is checked against the configurations, as a
+// configuration of their own. The files they name are targetsNamedFiles, and
+// the files those import are watched with them (importedFiles).
 func targetsChecked(f *model.StaticTargetFile, configs ...*model.Config) *model.Config {
 	var checked model.Config
 	for _, c := range configs {
@@ -215,19 +215,19 @@ func targetsChecked(f *model.StaticTargetFile, configs ...*model.Config) *model.
 	return &checked
 }
 
-// filesStamp describes files as they are on disk now: for each, the file its
-// path leads to, with its modification time, size and permissions, or that
-// there is none. The path is followed as reading it would be, so a file
-// replaced by pointing a symbolic link elsewhere — how Kubernetes publishes
-// a new version of a mounted Secret or ConfigMap, swapping ..data — is
-// another file even when its time and size are those of the old one. The
-// file is also told by its identity, the device and inode its stat holds
-// where the system gives them (fetch.FileIdentity), as the check of a grpc
-// collector's descriptor files at each call tells it: a file renamed over
-// by another of the same time, size and permissions at the same path leads
-// to the same resolved path, and only its identity tells the call's new
-// files from the ones the configuration was checked against. The identity
-// costs nothing beyond the stat.
+// filesStamp describes files as they are on disk now: for each path, the
+// file it leads to with its modification time, size and permissions, or the
+// fact that there is none. The path is followed as reading it would follow
+// it, so a file replaced by pointing a symbolic link elsewhere is another
+// file even when its time and size match the old one. This is how
+// Kubernetes publishes a new version of a mounted Secret or ConfigMap, by
+// swapping ..data. The file is also identified by the device and inode its
+// stat holds, where the system gives them (fetch.FileIdentity), as the check
+// of a grpc collector's descriptor files does at each call. A file renamed
+// over by another with the same time, size and permissions at the same path
+// leads to the same resolved path, and only its identity tells the call's
+// new files from the ones the configuration was checked against. The
+// identity costs nothing beyond the stat.
 func filesStamp(paths []string) string {
 	var b strings.Builder
 	for _, path := range paths {

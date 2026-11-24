@@ -83,13 +83,13 @@ var (
 	wrongKindError    = regexp.MustCompile("^(line \\d+): cannot unmarshal !!(\\w+)(?: `(.*)`)? into (\\S+)$")
 )
 
-// Extension keys: a top-level key of the configuration, a collector file or
-// the static target file that begins with x- is the file's own, ignored by
-// the exporter. It holds what YAML anchors (&name) define for the rest of the
-// file to reuse with aliases (*name) and merge keys (<<: *name), such as the
-// request and transform several collectors share, without the definition
-// itself being read as a setting. Only the top level is open: an x- key
-// anywhere else is a misspelt setting like any other unknown key.
+// Extension keys: a top-level key that begins with x- in the configuration,
+// a collector file or the static target file belongs to the file and is
+// ignored by the exporter. It holds what YAML anchors (&name) define for the
+// rest of the file to reuse with aliases (*name) and merge keys (<<: *name),
+// such as the request and transform several collectors share, without the
+// definition itself being read as a setting. Only the top level is open: an
+// x- key anywhere else is a misspelt setting like any other unknown key.
 
 // extensionKeyTypes are the documents whose top level takes x- keys.
 var extensionKeyTypes = map[string]bool{"Config": true, "collectorFile": true, "StaticTargetFile": true}
@@ -200,16 +200,16 @@ var refuseNotScalarKeys = notScalarKeys
 
 // notScalarKeys refuses a document with a mapping key that is a sequence or
 // a mapping, or an alias of one, anywhere in it, naming the line of every
-// such key; nil for a document without one, and for one that is no YAML,
-// which the decoder refuses in its own words.
+// such key. It returns nil for a document without one, and for one that is
+// not YAML, which the decoder refuses in its own words.
 //
 // The files are read as the JSON their schemas describe, whose keys are
-// text, and such a key has no text to be one. The decoder refuses it in
-// words that do not say so: as a value where a single one belongs, at the
-// key's line ("expected a single value, not a list"), and two of them in
-// one mapping as one key written twice (`mapping key "" already defined`),
-// since it tells keys apart by their text and these have none. A key in an
-// x- block nobody merges in is refused too: the block is YAML of the file,
+// text, and such a key has no text. The decoder refuses it in words that do
+// not say so: as a value where a single one belongs, at the key's line
+// ("expected a single value, not a list"), and two of them in one mapping
+// as one key written twice (`mapping key "" already defined`), since it
+// tells keys apart by their text and these have none. A key in an x- block
+// that nobody merges in is refused too: the block is YAML of the file,
 // written to be reused.
 func notScalarKeys(document []byte) error {
 	var problems []string

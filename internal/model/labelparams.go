@@ -1,12 +1,12 @@
 package model
 
-// A collector's fixed label values may hold {{param_<name>}} placeholders,
-// which a probe's parameters fill as they fill the request's
-// (fetch/labelparams.go): the values of transform.labels and the value of a
-// metric rule's static label. Whether a collector has any is decided once,
-// when the configuration loads, and kept here in its parsed form: a probe of
-// a collector without one, as nearly every collector is, reads a nil pointer
-// and does nothing more.
+// A collector's fixed label values may hold {{param_<name>}} placeholders.
+// A probe's parameters fill them as they fill the request's
+// (fetch/labelparams.go). These are the values of transform.labels and the
+// value of a metric rule's static label. Whether a collector has any is
+// decided once, when the configuration loads, and kept here in parsed form.
+// A probe of a collector without any, which is nearly every collector, reads
+// a nil pointer and does nothing more.
 
 // LabelParams is the label values of a collector that hold a placeholder,
 // each parsed. It is made when the configuration loads and never changed:
@@ -20,11 +20,11 @@ type LabelParams struct {
 }
 
 // ExpressionParams is what the jq or yq expressions of a collector's rules
-// read of $params, the probe's parameters (fetch.ParseExpressionParams):
-// the parameters they read by name, without the param_ prefix and sorted,
-// and whether one reads $params otherwise, as a whole or by a name it
-// makes, which may be any parameter's. It is made when the configuration
-// loads and never changed.
+// read of $params, the probe's parameters (fetch.ParseExpressionParams). It
+// holds the parameters they read by name, sorted and without the param_
+// prefix, and whether one reads $params in another way: as a whole, or by a
+// name it makes, which may be any parameter's. It is made when the
+// configuration loads and never changed.
 type ExpressionParams struct {
 	Names []string
 	Any   bool

@@ -12,27 +12,27 @@ import (
 )
 
 // ByteSize is a size in bytes. The configuration may write it as a plain
-// number of bytes, 10485760, or with a unit, 10MiB: B; kB, MB, GB and TB,
-// powers of 1000; KiB, MiB, GiB and TiB, powers of 1024. The unit is case
-// insensitive and may follow a space, and the number may have a fraction,
-// 1.5GiB, rounded down to whole bytes. A size is never negative, a number
-// without a unit is a whole number of bytes, and a size is under 2^63 bytes,
-// the most a ByteSize holds: anything else is refused rather than read as
-// some other size. A number of bytes written without quotes is the whole
-// number it equals however YAML writes it, with a point or an exponent too:
-// 1e6 and 1048576.0 are sizes, as they are whole numbers at every other key
-// that takes one and to the schema, which is handed the number and not how
-// it was written.
+// number of bytes, 10485760, or with a unit, 10MiB. The units are B; kB,
+// MB, GB and TB, powers of 1000; and KiB, MiB, GiB and TiB, powers of 1024.
+// The unit is case insensitive and may follow a space. The number may have
+// a fraction, 1.5GiB, which is rounded down to whole bytes. A size is never
+// negative, a number without a unit is a whole number of bytes, and a size
+// is under 2^63 bytes, the most a ByteSize holds. Anything else is refused
+// rather than read as some other size. A number of bytes written without
+// quotes is the whole number it equals, however YAML writes it, even with a
+// point or an exponent: 1e6 and 1048576.0 are sizes. They are whole numbers
+// at every other key that takes one and to the schema, which is handed the
+// number and not how it was written.
 type ByteSize int64
 
-// ByteSizePattern is what UnmarshalYAML accepts as a string, exactly, but
-// for the range, which no pattern can hold: a whole number of bytes, or a
-// number, whole or with a fraction, followed by a unit, after one space or
-// none. It is the pattern of a size in the configuration schema, so an editor
-// flags the spellings the exporter refuses: a fraction without a unit, a
-// sign, an exponent, an unknown unit, space around the size. It is of text
-// alone: a number YAML reads as one is no string to a schema, and is read by
-// wholeBytes.
+// ByteSizePattern is exactly what UnmarshalYAML accepts as a string, except
+// for the range, which no pattern can hold. That is a whole number of bytes,
+// or a number, whole or with a fraction, followed by a unit after one space
+// or none. It is the pattern of a size in the configuration schema, so an
+// editor flags the spellings the exporter refuses: a fraction without a
+// unit, a sign, an exponent, an unknown unit, space around the size. It
+// covers text only: a number YAML reads as a number is not a string to a
+// schema, and is read by wholeBytes.
 const ByteSizePattern = `^([0-9]+|[0-9]+(\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$`
 
 var byteSizeRE = regexp.MustCompile(ByteSizePattern)
@@ -118,16 +118,16 @@ func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 	}
 	v, err := parseByteSize(n.Value)
 	if err != nil {
-		// What is no size as text is one as a number YAML reads with a
-		// point or an exponent, when it is a whole number of bytes: the
-		// schema takes 1e3 and 1.0 for the 1000 and the 1 it is handed, and
-		// so does every other key of a whole number.
+		// Text that is not a size can still be one as a number YAML reads
+		// with a point or an exponent, when it is a whole number of bytes.
+		// The schema takes 1e3 and 1.0 as the 1000 and the 1 it is handed,
+		// and so does every other key of a whole number.
 		if n.ShortTag() == "!!float" {
-			// And a whole number no size holds is refused for what it is, in
-			// the words of one written without a point or an exponent: 1e19
-			// is too large and -1e3 negative, and neither is a spelling to
-			// correct. Digits alone, which the text refuses as too large,
-			// keep its words.
+			// A whole number that no size holds is refused for what it is,
+			// in the words used for one written without a point or an
+			// exponent: 1e19 is too large and -1e3 negative, and neither is
+			// a spelling to correct. Digits alone, which the text refuses as
+			// too large, keep its words.
 			switch whole, is := wholeBytes(n.Value); {
 			case is == wholeSize:
 				*b = whole
@@ -166,9 +166,9 @@ const (
 )
 
 // wholeBytes reads a number written with a point or an exponent, such as
-// 1e3, 1.0 or 2.5e2, as the whole number of bytes it is, and says of one that
-// is no size why: it has a fraction, it is negative, or it is 2^63 or more.
-// It goes by the digits as ReadWholeNumber does.
+// 1e3, 1.0 or 2.5e2, as the whole number of bytes it is. For one that is not
+// a size, it says why: it has a fraction, it is negative, or it is 2^63 or
+// more. It goes by the digits, as ReadWholeNumber does.
 func wholeBytes(written string) (ByteSize, wholeNumber) {
 	whole, ok := ReadWholeNumber(written)
 	switch {
@@ -213,17 +213,17 @@ func (w WholeNumber) Int(bits int) (int64, bool) {
 }
 
 // ReadWholeNumber reads a number written with a point or an exponent, such
-// as 1e3, 1.0 or -2.5e2, as the whole number it is, and reports false of one
-// that has a fraction and of what is no number: infinity, not-a-number, text
-// under the tag of a number. It goes by the digits as they are written and
-// not by the float64 YAML makes of them, which holds no whole number past
-// 2^53 exactly: 9007199254740993.0 is that number and not the one below it,
+// as 1e3, 1.0 or -2.5e2, as the whole number it is. It reports false for one
+// with a fraction and for what is not a number: infinity, not-a-number, or
+// text under the tag of a number. It goes by the digits as written, not by
+// the float64 YAML makes of them, which holds no whole number past 2^53
+// exactly. So 9007199254740993.0 is that number and not the one below it,
 // 9.223372036854775807e18 is the largest int64 and not 2^63, and a fraction
 // too small for a float64 to tell from none is one. An underscore between
-// the digits is left out, as the YAML decoder leaves it out of a number that
-// does not start with its point. A size reads its numbers by it
-// (wholeBytes), and so does the configuration's loader a whole number at a
-// key of one.
+// the digits is dropped, as the YAML decoder drops it from a number that
+// does not start with its point. Sizes read their numbers through it
+// (wholeBytes), and so does the configuration's loader for a whole number
+// at a key that takes one.
 func ReadWholeNumber(written string) (WholeNumber, bool) {
 	if !strings.HasPrefix(written, ".") {
 		written = strings.ReplaceAll(written, "_", "")
@@ -245,11 +245,11 @@ func ReadWholeNumber(written string) (WholeNumber, bool) {
 	significant := strings.TrimRight(digits, "0")
 	zeros := len(digits) - len(significant) - len(fraction)
 	if exponent != "" {
-		// An exponent counts no further than past every digit written and
-		// the 20 of 2^64, where the number is too large or a fraction
-		// whatever its digits; one too long to be read, which Atoi gives
-		// as the furthest it reads, is further still. So the sum stays one
-		// an int holds.
+		// An exponent counts no further than past every digit written plus
+		// the 20 of 2^64. Beyond that the number is too large, or a
+		// fraction, whatever its digits. One too long to be read, which Atoi
+		// returns as the furthest it reads, is further still. So the sum
+		// stays one an int holds.
 		shift, _ := strconv.Atoi(exponent)
 		far := len(written) + 20
 		zeros += min(max(shift, -far), far)

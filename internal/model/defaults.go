@@ -14,19 +14,19 @@ import (
 // A file of many similar collectors repeats the same limits, retries and
 // target policies in each. A top-level defaults block, in the configuration
 // and in each collector file, writes them once for the collectors of that
-// file. YAML merge keys cannot do it: a key written beside <<: replaces the
-// merged one whole, so a collector that sets one limit of a merged limits
-// block loses the others, and a merge brings in whole blocks, not the keys
-// nested in them.
+// file. YAML merge keys cannot do this. A key written beside <<: replaces
+// the merged one whole, so a collector that sets one limit of a merged
+// limits block loses the others. A merge also brings in whole blocks, not
+// the keys nested in them.
 //
-// The keys defaults may set are listed here (DefaultsKeys) rather than
-// being every key of a collector: each is a setting that is the same for
-// collectors of different request types and decoders, so one block can serve
-// a whole file. The load gives each collector of the file every key of the
-// block it does not write itself, key by key at every depth: a collector that
-// writes limits.max_metrics keeps the defaults' other limits. A list, such as
-// request.allowed_targets, is one key and replaced whole, never joined with
-// the collector's.
+// The keys defaults may set are listed here (DefaultsKeys); they are not
+// every key of a collector. Each is a setting that is the same for
+// collectors of different request types and decoders, so one block can
+// serve a whole file. The load gives each collector of the file every key of
+// the block that it does not write itself, key by key at every depth. A
+// collector that writes limits.max_metrics keeps the defaults' other limits.
+// A list, such as request.allowed_targets, is one key and is replaced whole,
+// never joined with the collector's.
 
 // CollectorDefaults is the defaults block of a configuration file or of a
 // collector file.
@@ -51,8 +51,8 @@ type DefaultsRequest struct {
 	AllowedTargets   []string    `yaml:"allowed_targets"`
 	DeniedTargets    []string    `yaml:"denied_targets"`
 	// ProxyURL and ProxyBasicAuthFile are taken by the collectors whose
-	// request type takes them, http and graphite: the proxy is where the
-	// exporter runs more than what a collector asks, and a file of
+	// request type takes them, http and graphite. The proxy depends more on
+	// where the exporter runs than on what a collector asks, and a file of
 	// collectors behind one proxy names it once.
 	ProxyURL           string              `yaml:"proxy_url"`
 	ProxyBasicAuthFile *ProxyBasicAuthFile `yaml:"proxy_basic_auth_file"`
@@ -70,13 +70,12 @@ var (
 )
 
 // UnmarshalYAML reads a defaults block. A key defaults may not set is
-// refused, naming it, whether it is a key of a collector or of nothing; the
+// refused by name, whether it is a key of a collector or of nothing. The
 // file's decoder does not look into a type that decodes itself, so the keys
 // of its blocks are checked here as it would check them. Each block is
-// decoded on its own, so the error of one that checks its own keys (tls,
+// decoded on its own. So the error of a block that checks its own keys (tls,
 // cache, failure_backoff), which may end the decoding of everything around
-// it, loses none of the others, and every problem is reported in the order
-// of the file.
+// it, loses none of the others. Every problem is reported in file order.
 func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 	type plain CollectorDefaults
 	n = resolveAlias(n)
@@ -126,9 +125,9 @@ func (d *CollectorDefaults) UnmarshalYAML(n *yaml.Node) error {
 		case "error_handling":
 			problems = append(problems, unknownKeys(entry.Value, reflect.TypeOf(ErrorHandling{}), "model.ErrorHandling")...)
 		}
-		// Each value of the block is decoded on its own, so that a
-		// message the decoder gives with its line alone is placed at its
-		// key (placedDecodeProblems): on a line of several, it is said
+		// Each value of the block is decoded on its own, so a message
+		// the decoder gives with only its line is placed at its key
+		// (placedDecodeProblems). On a line with several, it is reported
 		// where the file has it, not where the block's mapping begins.
 		field, _ := fieldByKey(blocks, block)
 		for _, problem := range placedDecodeProblems(entry.Value, field.Type(), keyAt{"", entry.Key.Line, entry.Key.Column}) {
@@ -185,13 +184,13 @@ func placedProblem(value *yaml.Node, message string) keyProblem {
 	return keyProblem{line, column, message}
 }
 
-// DefaultableKeys are the keys a collector, or a defaults block, written as
-// the mapping n, sets of those defaults may set, by their paths, in the
-// order the decoder reads them (DecodedEntries): the keys of each block,
-// such as limits.max_metrics, and request.tls and failure_backoff
-// themselves, since writing either block, even empty, is a setting of its
-// own — TLS spoken, a backoff with its defaults. A key written "" is left
-// out (leftOut).
+// DefaultableKeys returns the keys that a collector or a defaults block,
+// written as the mapping n, sets among those defaults may set. They are
+// given by path, in the order the decoder reads them (DecodedEntries): the
+// keys of each block, such as limits.max_metrics, and request.tls and
+// failure_backoff themselves. Writing either of those blocks, even empty, is
+// a setting of its own: TLS spoken, a backoff with its defaults. A key
+// written "" is left out (leftOut).
 func DefaultableKeys(n *yaml.Node) []string {
 	var keys []string
 	inner := func(path string, n *yaml.Node) {
@@ -227,21 +226,21 @@ func DefaultableKeys(n *yaml.Node) []string {
 	return keys
 }
 
-// leftOut says whether a value written is the key left out: "", which an
-// optional key takes as left out, so that a collector that writes an error
-// policy "" takes the defaults' policy, and a policy "" in defaults gives
-// none.
+// leftOut says whether a written value means the key is left out. That is
+// "", which an optional key takes as left out. So a collector that writes an
+// error policy "" takes the defaults' policy, and a policy "" in defaults
+// gives none.
 func leftOut(value *yaml.Node) bool {
 	value = resolveAlias(value)
 	return value != nil && value.Kind == yaml.ScalarNode && value.ShortTag() == stringTag && value.Value == ""
 }
 
-// ApplyTo gives x the value of each key of the block (Keys) that x does
-// not write itself — written, the DefaultableKeys of its mapping — and
-// that applies says applies to it, a copy of each, and returns those keys.
+// ApplyTo gives x a copy of the value of each key of the block (Keys) that x
+// does not write itself and that applies says applies to it, and returns
+// those keys. written is what x writes: the DefaultableKeys of its mapping.
 // A key of the request block given to x joins its Order after the keys x
-// writes, so of several keys the validation refuses it names one x writes
-// first, and the others in the order the block has them.
+// writes. So of several keys the validation refuses, it names one x writes
+// first, and the others in the block's order.
 func (d *CollectorDefaults) ApplyTo(x *Collector, written []string, applies func(key string) bool) []string {
 	var given []string
 	from := reflect.ValueOf(d).Elem()
@@ -319,9 +318,9 @@ func copyValue(v reflect.Value) reflect.Value {
 }
 
 // RequestKeyRefused says whether a request block of the type refuses the
-// key, by its path (retry.codes for codes in retry), as one the type does
-// not take (RequestKeys.Refuses); false for a type the build does not
-// have, which the validation refuses the block for.
+// key, given by path (retry.codes for codes in retry), as one the type does
+// not take (RequestKeys.Refuses). It is false for a type the build does not
+// have; the validation refuses the block for that.
 func RequestKeyRefused(requestType, key string) bool {
 	refuses := currentRequestLayout().refuses
 	return refuses != nil && refuses(requestType, key)

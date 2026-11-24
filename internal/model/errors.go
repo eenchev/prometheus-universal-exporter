@@ -98,15 +98,16 @@ func JoinProblems(errs ...error) error {
 	return all
 }
 
-// What a probe's caller is answered of a failure is less than the operator
-// is shown. The caller may be anyone the probe endpoint answers, and may
-// point a collector at a target, a file or a command its parameters let
-// through; what the target answered is the operator's, as what it means is
-// the series. So the caller is answered a failure's text (CallerText) with
-// every value of the answer it quotes (QuotedValue) withheld, and with what
-// an error marked as the operator's (WithOperatorDetail) holds replaced by
-// what the caller may be told of it; the log shows the whole text, and so
-// do the debug report and, with --web.debug=full, the status page.
+// A probe's caller is told less about a failure than the operator is shown.
+// The caller may be anyone the probe endpoint answers, and may point a
+// collector at a target, a file or a command its parameters let through.
+// What the target answered is the operator's, since what it means is the
+// series.
+// So the caller gets a failure's text (CallerText) with every quoted value
+// of the answer (QuotedValue) withheld. What an error marked as the
+// operator's (WithOperatorDetail) holds is replaced by what the caller may
+// be told of it. The log shows the whole text, and so do the debug report
+// and, with --web.debug=full, the status page.
 
 // WithheldMark is what a caller is shown in place of a value of the answer
 // that a failure quotes.
@@ -119,7 +120,7 @@ const WithheldFailure = "what failed is in the exporter's log"
 
 // operatorError is an error whose text holds what is for the exporter's
 // operator alone, such as what a remote command wrote to stderr or what a
-// database said: the log shows the whole text, and the caller of a probe
+// database said. The log shows the whole text, and a probe's caller sees
 // only caller.
 type operatorError struct {
 	err    error
@@ -139,14 +140,14 @@ func WithOperatorDetail(err error, caller string) error {
 	return &operatorError{err: err, caller: caller}
 }
 
-// CallerText is the text of err as a probe's caller is answered it: each
-// error WithOperatorDetail marked, wherever it is in the chain, replaced by
-// what the caller is shown of it, each value of the answer an error made by
-// Errorf quotes replaced by WithheldMark (or by the text the value gives
-// the caller, QuotedValue.ForCaller), and the text around them, what wraps
-// them, as it is. When a wrapper rewrote the text of an error that has
-// something to withhold, so that its text is not found in the whole, the
-// caller is answered WithheldFailure.
+// CallerText returns the text of err as a probe's caller is answered it.
+// Each error marked WithOperatorDetail, anywhere in the chain, is replaced
+// by what the caller is shown of it. Each value of the answer that an error
+// made by Errorf quotes is replaced by WithheldMark, or by the text the
+// value gives the caller (QuotedValue.ForCaller). The text around them, from
+// the wrappers, stays as it is. If a wrapper rewrote the text of an error
+// that has something to withhold, so its text is not found in the whole,
+// the caller is answered WithheldFailure.
 func CallerText(err error) string {
 	if err == nil {
 		return ""
@@ -185,12 +186,12 @@ func callerText(err error) (text string, ok bool) {
 	return withCallerParts(err, err.Error())
 }
 
-// TextRewriter is an error whose text is the text of the error it wraps
-// rewritten, as a redaction rewrites the URLs in it: RewriteText makes of a
-// text of the wrapped error's what the error makes of its own. CallerText
-// tells a caller such an error as it rewrites what the caller is told of
-// the wrapped one, which a search for the wrapped error's text in the
-// rewritten one would not find.
+// TextRewriter is an error whose text is the wrapped error's text rewritten,
+// as a redaction rewrites the URLs in it. RewriteText makes of a text of the
+// wrapped error what the error makes of its own. CallerText uses it to
+// rewrite what the caller is told of the wrapped error in the same way,
+// since a search for the wrapped error's text in the rewritten text would
+// not find it.
 type TextRewriter interface {
 	error
 	Unwrap() error

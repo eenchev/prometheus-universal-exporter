@@ -3,16 +3,16 @@ package model
 import "math"
 
 // An exponential histogram, OpenTelemetry's name for what Prometheus calls a
-// native histogram, has no bounds of its own: its buckets are the powers of a
-// base, 2^(2^-scale), so that at scale 0 they are (0.5, 1], (1, 2], (2, 4],
-// …, at scale 1 each of those halves on the logarithmic scale, and so on.
+// native histogram, has no bounds of its own. Its buckets are the powers of
+// a base, 2^(2^-scale). At scale 0 they are (0.5, 1], (1, 2], (2, 4], …; at
+// scale 1 each of those halves on the logarithmic scale, and so on.
 // Bucket i holds the values in (base^i, base^(i+1)]. A recorder starts at
-// the finest scale and lowers it, merging neighbouring buckets in pairs,
-// whenever an observation would need more than a bounded number of
-// buckets, so the histogram's resolution adapts to the range of values it
+// the finest scale. Whenever an observation would need more than a bounded
+// number of buckets, it lowers the scale and merges neighbouring buckets in
+// pairs. So the histogram's resolution adapts to the range of values it
 // actually sees, in bounded memory.
 //
-// Prometheus's native histograms are the same buckets: its schema is the
+// Prometheus's native histograms use the same buckets. Its schema is the
 // scale, and its bucket i is (base^(i-1), base^i], one index above
 // OpenTelemetry's. A histogram recorded here is written as either: OTLP's
 // ExponentialHistogram and, in Prometheus's protobuf exposition, a native
@@ -52,12 +52,13 @@ func NewExponentialHistogram() *ExponentialHistogram {
 	return &ExponentialHistogram{Scale: ExponentialMaxScale}
 }
 
-// ExponentialIndex is the bucket of a positive, finite value v at a scale:
-// the i for which base^i < v <= base^(i+1), base being 2^(2^-scale). It is
-// the mapping function of OpenTelemetry's data model: a value's binary
-// exponent alone at a scale of 0 or below, and its logarithm above; an exact
-// power of two, which falls on a bound, is placed by its exponent, since a
-// logarithm rounded either way could put it in the bucket above.
+// ExponentialIndex returns the bucket of a positive, finite value v at a
+// scale: the i for which base^i < v <= base^(i+1), with base 2^(2^-scale).
+// It is the mapping function of OpenTelemetry's data model. At a scale of 0
+// or below it uses only the value's binary exponent, and above 0 its
+// logarithm. An exact power of two falls on a bound and is placed by its
+// exponent, since a logarithm rounded either way could put it in the bucket
+// above.
 func ExponentialIndex(v float64, scale int32) int32 {
 	frac, exp := math.Frexp(v)
 	// v = frac × 2^exp with frac in [0.5, 1): v = 1.f × 2^(exp-1).
@@ -75,11 +76,11 @@ func ExponentialIndex(v float64, scale int32) int32 {
 	return int32(math.Ceil(math.Log(v)*math.Ldexp(math.Log2E, int(scale)))) - 1
 }
 
-// Observe adds a value, keeping at most maxSize buckets: when v falls further
-// from the buckets held than they allow, the scale is lowered first, by as
-// little as brings every bucket, v's included, within maxSize. A value of 0
-// or below, which no power of the base is, counts in ZeroCount; NaN is not
-// observed.
+// Observe adds a value, keeping at most maxSize buckets. When v falls
+// further from the held buckets than they allow, the scale is first
+// lowered, by the least amount that brings every bucket, v's included,
+// within maxSize. A value of 0 or below, which no power of the base is,
+// counts in ZeroCount. NaN is not observed.
 func (h *ExponentialHistogram) Observe(v float64, maxSize int) {
 	if math.IsNaN(v) {
 		return
@@ -129,10 +130,10 @@ func (h *ExponentialHistogram) last() int32 {
 	return h.Offset + int32(len(h.Counts)) - 1 //nolint:gosec // G115: at most a few hundred buckets
 }
 
-// Downscale lowers the scale by by, merging each 2^by neighbouring buckets
+// Downscale lowers the scale by by. It merges each 2^by neighbouring buckets
 // into the one bucket of the lower scale that holds them all: bucket i
-// becomes bucket i >> by, the shift rounding towards minus infinity, as the
-// bounds of the lower scale are every 2^by'th bound of the higher.
+// becomes bucket i >> by, with the shift rounding towards minus infinity,
+// because the lower scale's bounds are every 2^by'th bound of the higher.
 func (h *ExponentialHistogram) Downscale(by int32) {
 	if by <= 0 {
 		return

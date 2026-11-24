@@ -9,29 +9,28 @@ import (
 	"unicode/utf8"
 )
 
-// A failure's text says where in the response it happened — row 3, node 7,
-// line 12 — and how large the thing was that went over a limit, because that
-// is what the operator goes and looks at. The log, though, tells a failure
-// that keeps happening from a new one by its text (internal/exporter's
-// failure log), and a table whose empty cell is in row 3 on one scrape and in
-// row 7 on the next, or a label 612 bytes long and then 640, is the same
-// failure to whoever reads the log: logged in full on every scrape, it buries
-// the rest, is never summed up as a repeat, and its recovery counts only
-// since it last moved.
+// A failure's text says where in the response it happened (row 3, node 7,
+// line 12) and how large the thing was that went over a limit, because that
+// is what the operator goes and looks at. But the log tells a failure that
+// keeps happening from a new one by its text (internal/exporter's failure
+// log). A table whose empty cell is in row 3 on one scrape and in row 7 on
+// the next, or a label 612 bytes long and then 640, is the same failure to
+// whoever reads the log. Logged in full on every scrape, it buries the rest,
+// is never summed up as a repeat, and its recovery counts only since it last
+// moved.
 //
-// So an error that carries such a part says which part of its text it is, by
-// the type of the argument it is made with (Position, Size, Elapsed, through
-// Errorf), and SameFailureText gives the text the failure is recognised by:
-// the whole text with those parts replaced by a fixed mark. The text itself,
-// which is what is logged and what a scraper is answered, is unchanged. No
-// message is searched for numbers: a value the response held, as in `value
+// So an error that carries such a part marks which part of its text it is,
+// by the type of the argument it is made with (Position, Size, Elapsed,
+// through Errorf). SameFailureText gives the text the failure is recognised
+// by: the whole text with those parts replaced by a fixed mark. The text
+// itself, which is logged and returned to a scraper, is unchanged. No
+// message is searched for numbers. A value the response held, as in `value
 // "n/a" is not a number`, is part of what the failure is, and a number the
 // configuration gave is the same on every scrape.
 //
-// A value of the response that an error shows is shown by its start when it
-// is long (QuotedValue, made by Quoted and Bare), with its length after it:
-// the start is part of what the failure is, and the length, a size measured,
-// is not.
+// A long value of the response is shown by its start (QuotedValue, made by
+// Quoted and Bare), followed by its length. The start is part of what the
+// failure is. The length, a measured size, is not.
 
 // Position is a number in a failure's text that says where in the response
 // the failure happened: a row, a node, an item, a line, a column.
@@ -52,14 +51,14 @@ func (e Elapsed) String() string { return time.Duration(e).String() }
 const MovingMark = "#"
 
 // QuotedValue is a value of the response as a failure's text shows it,
-// given to Errorf: no more of it than its start, with how long it was, so
-// that a value the target made as long as its response leaves the text short
-// and what the text says after the value read. In the text the failure is
-// recognised by, the length is the mark: the same failure with a longer or a
-// shorter value that starts the same is one failure to the log.
+// passed to Errorf. It holds only the value's start, with its full length.
+// So a value the target made as long as its response leaves the text short,
+// and what the text says after the value stays readable. In the text the
+// failure is recognised by, the length is the mark: the same failure with a
+// longer or shorter value that starts the same is one failure to the log.
 //
-// It is made of the value once, and holds nothing of it but the start it
-// shows: an error keeps its arguments for as long as it is kept.
+// It is made from the value once and holds nothing of it but the start it
+// shows, because an error keeps its arguments for as long as it is kept.
 type QuotedValue struct {
 	// text is what the failure's text shows of the value, and same what the
 	// failure is recognised by. caller, when set, is what a probe's caller
@@ -85,9 +84,9 @@ func Bare[T ~string | ~[]byte](text T) QuotedValue {
 }
 
 // ShownAs is what a failure's text shows of the response where that is more
-// than one value, as a series named by its labels is: the text made of the
-// values as each is shown (String), and the text it is recognised by, made
-// of what each is recognised by (Same).
+// than one value, such as a series named by its labels. text is made of the
+// values as each is shown (String), and same of what each is recognised by
+// (Same).
 func ShownAs(text, same string) QuotedValue { return QuotedValue{text: text, same: same} }
 
 // shownBytes is how many bytes of a value are shown: all of one no longer
@@ -145,11 +144,11 @@ type movingPart struct{}
 
 func (movingPart) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, MovingMark) }
 
-// movingError is an error made by Errorf: the format and the arguments, of
-// which the text is made when it is asked for, and the text the failure is
-// recognised by when the failure log asks. A rule that fails on every row of
-// a table makes an error a row, of which one is logged: the others are
-// counted and dropped, and cost no text.
+// movingError is an error made by Errorf. It holds the format and the
+// arguments, and makes the text from them when asked. It makes the text the
+// failure is recognised by when the failure log asks. A rule that fails on
+// every row of a table makes one error per row, and one of them is logged.
+// The others are counted and dropped, and cost no text.
 type movingError struct {
 	format string
 	args   []any
@@ -217,25 +216,25 @@ type sameText string
 func (s sameText) Error() string { return string(s) }
 
 // Errorf is fmt.Errorf for a failure whose text says where in the response
-// it happened or how large something measured was: those arguments are
+// it happened or how large something measured was. Those arguments are
 // given as a Position, a Size or an Elapsed, which are formatted as the
-// numbers and the duration they are, and a value of the response it shows as
-// a QuotedValue. The error reads as fmt.Errorf's does, and wraps what
-// fmt.Errorf's would: the errors the format names with %w, and no error
-// written with another verb.
+// numbers and the duration they are. A value of the response it shows is
+// given as a QuotedValue. The error reads as fmt.Errorf's does and wraps
+// what fmt.Errorf's would: the errors the format names with %w, and no
+// error written with another verb.
 //
-// The text is made when it is read, not here, so the arguments are values
-// that stay what they are: names, numbers, texts and errors.
+// The text is made when it is read, not here, so the arguments must be
+// values that do not change: names, numbers, texts and errors.
 func Errorf(format string, args ...any) error {
 	e := &movingError{format: format, args: args}
 	wrapping := strings.Count(format, "%w")
 	if wrapping == 0 {
 		return e
 	}
-	// One %w and one error among the arguments is nearly every failure
-	// that wraps, and is told without making the text. Anything else — a
-	// second %w, a second error, a %% that may stand before a w — is
-	// fmt.Errorf's to say.
+	// Nearly every failure that wraps has one %w and one error among the
+	// arguments, and that case is handled without making the text.
+	// Anything else (a second %w, a second error, a %% that may stand
+	// before a w) is left to fmt.Errorf.
 	var inner error
 	errs := 0
 	for _, arg := range args {
@@ -272,15 +271,15 @@ func SameFailureAs(err error, same string) error {
 	return &sameAsError{err: err, same: same}
 }
 
-// SameFailureText is the text a failure is recognised by: its text, with the
-// parts that say where in the response it happened and what was measured
-// replaced by a fixed mark, so that two failures differing only in those
-// read the same. An error without such a part is recognised by its text as
-// it is.
+// SameFailureText returns the text a failure is recognised by. It is the
+// failure's text with the parts that say where in the response it happened
+// and what was measured replaced by a fixed mark, so two failures that
+// differ only in those read the same. An error without such a part is
+// recognised by its text as it is.
 //
-// The errors that wrap one that has such a part have written its text into
-// theirs, so that text is replaced where it stands in the whole; a wrapper
-// that rewrote it leaves the whole as it is.
+// Errors that wrap one with such a part have written its text into theirs,
+// so that text is replaced where it stands in the whole. If a wrapper
+// rewrote it, the whole is left as it is.
 func SameFailureText(err error) (same string) {
 	// An error that is a nil pointer of its type panics when asked for its
 	// text; fmt writes such a one as <nil>, and so the failure is recognised

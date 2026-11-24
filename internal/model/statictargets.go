@@ -106,19 +106,19 @@ type TargetRequestConfig struct {
 	PasswordFile   string `yaml:"password_file"`
 	// CommunityFile, AuthPasswordFile and PrivPasswordFile replace an snmp
 	// collector's: the community of v1 and v2c, and the passwords of a v3
-	// user, whose name is Username. RequestTimeout and Retries replace its
-	// own: how long each request waits for its answer, and how many
-	// times one unanswered is sent again.
+	// user, whose name is Username. RequestTimeout and Retries replace the
+	// collector's own: how long each request waits for its answer, and how
+	// many times an unanswered request is sent again.
 	CommunityFile    string    `yaml:"community_file"`
 	AuthPasswordFile string    `yaml:"auth_password_file"`
 	PrivPasswordFile string    `yaml:"priv_password_file"`
 	RequestTimeout   *Duration `yaml:"request_timeout"`
 	Retries          *int      `yaml:"retries"`
-	// TLS replaces, as a whole block, a redis, ldap, tcp, sql, grpc, http
-	// or graphite collector's request.tls for this target; nil keeps the
-	// collector's. Written, even as tls: {}, it asks for TLS
-	// (TLSConfig.Set), so a target can ask for TLS its collector does not,
-	// but not leave out TLS its collector asks for; for http and graphite
+	// TLS replaces, as a whole block, the request.tls of a redis, ldap,
+	// tcp, sql, grpc, http or graphite collector for this target. nil keeps
+	// the collector's. When written, even as tls: {}, it asks for TLS
+	// (TLSConfig.Set). So a target can ask for TLS its collector does not,
+	// but cannot leave out TLS its collector asks for. For http and graphite
 	// the URL's scheme decides, and tls: {} verifies with the system roots.
 	TLS *TLSConfig `yaml:"tls,omitempty"`
 	// Connections replaces, key by key, a sql collector's
@@ -131,16 +131,16 @@ type TargetRequestConfig struct {
 	// request.rate_limit for this target's requests.
 	RateLimit *RateLimitConfig `yaml:"rate_limit,omitempty"`
 	// Order is the keys the block sets, and those of each mapping it holds
-	// directly as retry.codes, in the order the file has them
-	// (keyorder.go), so that of several keys the check against the
-	// target's collector refuses it names the first in the file. Two
-	// targets that differ in it alone scrape alike (SameStaticTarget).
+	// directly such as retry.codes, in file order (keyorder.go). So of
+	// several keys that the check against the target's collector refuses,
+	// it names the first in the file. Two targets that differ only in Order
+	// scrape alike (SameStaticTarget).
 	Order []string `yaml:"-"`
 }
 
 // SameStaticTarget says whether two static targets scrape alike: they are
-// equal but for the order their request blocks have their keys in, which
-// only the check of a block reads (TargetRequestConfig.Order), so that a
+// equal except for the order of the keys in their request blocks. Only the
+// check of a block reads that order (TargetRequestConfig.Order). So a
 // reload does not take a target whose keys were moved for a changed one.
 func SameStaticTarget(a, b StaticTarget) bool {
 	a.Request.Order, b.Request.Order = nil, nil
@@ -208,16 +208,16 @@ func (o TargetOTLPConfig) Set() bool {
 }
 
 // UnmarshalYAML records whether path and body were present, because an empty
-// string is a meaningful override for both. A key a merge key (<<) supplies
-// is present like one written out, and a key that is an alias is the key its
-// anchor holds (KeyName): *p : x with &p body sets the body. It records the
-// order of the keys too (Order).
+// string is a meaningful override for both. A key that a merge key (<<)
+// supplies counts as present, like one written out. A key that is an alias
+// is the key its anchor holds (KeyName): *p : x with &p body sets the body.
+// It also records the order of the keys (Order).
 func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain TargetRequestConfig
-	// Node.Decode does not refuse unknown keys the way the file's decoder
-	// does, so they are checked here, or a misspelt key would be ignored;
-	// the values are decoded all the same, so a value of the wrong kind is
-	// said beside them, in the order of the file (decodeBlock).
+	// Node.Decode does not refuse unknown keys as the file's decoder does,
+	// so they are checked here; otherwise a misspelt key would be ignored.
+	// The values are still decoded, so a value of the wrong kind is
+	// reported beside them, in file order (decodeBlock).
 	n = resolveAlias(n)
 	if n.Kind != yaml.MappingNode {
 		return notAMapping(n, "model.TargetRequestConfig")

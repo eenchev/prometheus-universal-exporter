@@ -1,7 +1,7 @@
 # How do I…
 
-Find your task, follow the link. Each link goes to the part of the reference
-that does it, usually with an example to copy. New here? Start with
+Find your task and follow the link. Each link goes to the part of the reference
+that covers it, usually with an example to copy. New here? Start with
 [Getting started](GETTING-STARTED.md).
 
 ## Read data

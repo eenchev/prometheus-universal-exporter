@@ -1,11 +1,11 @@
 # WebSocket
 
-The `websocket` request type reads messages from a WebSocket endpoint: a
+The `websocket` request type reads messages from a WebSocket endpoint. A
 scrape makes the opening handshake, sends one text message when the
-collector has one — a subscription, a query — reads the messages the
-collector asks for, and closes. Use it for services that publish their
-state on a socket and have no HTTP endpoint for it: a status feed, a
-ticker, a GraphQL subscription's first result.
+collector has one (a subscription or a query), reads the messages that the
+collector asks for, and closes. Use it for services that publish their state
+on a socket and have no HTTP endpoint for it: a status feed, a ticker, or a
+GraphQL subscription's first result.
 
 It stays a pull: a scrape connects, reads and closes, and no connection
 outlives it.
@@ -121,9 +121,9 @@ exceeded.
 ## Errors and self-metrics
 
 The scrape fails when the handshake is not answered with a 101 as RFC 6455
-has it, naming the status the server gave; when the server chooses a
-subprotocol that was not offered; and when it sends a frame the protocol
-does not allow.
+requires (the error names the status that the server gave), when the server
+chooses a subprotocol that was not offered, and when it sends a frame that
+the protocol does not allow.
 
 ```text
 the handshake with wss://feed.example.com:443/ws: the server answered HTTP status 401, not 101: it does not serve a WebSocket there, or refuses this client

@@ -8,8 +8,9 @@ statistics — without a bridge in between.
 
 It stays a pull. Prometheus scrapes the exporter, the exporter asks the
 broker, and the answer is what the broker sent on the collector's
-subscriptions; nothing is published, and nothing reaches the exporter that
-a collector did not subscribe to. MQTT 3.1.1, which every broker speaks.
+subscriptions. Nothing is published, and nothing that a collector did not
+subscribe to reaches the exporter. The type speaks MQTT 3.1.1, which every
+broker speaks.
 
 The type is opt-in: the default build and the published image leave it out
 (see [Building with mqtt](#building-with-mqtt)).
@@ -80,9 +81,11 @@ collectors:
 
 A probe takes `timeout` and `param_<name>` parameters, which fill the
 placeholders of `topics` and the collector's
-[label values](REQUESTS.md#in-label-values). A value written into a topic
-is one level of it: one with a `/`, `+` or `#` is refused, so a probe reads
-no topic the collector did not write. The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+[label values](REQUESTS.md#in-label-values). A value written into a topic is
+one level of it: a value with a `/`, `+` or `#` is refused, so a probe reads
+no topic that the collector did not write.
+
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
 other decoder, and a transform that does not read JSON (`regex`, `csv`,
 `css`, `prometheus`), is refused when the configuration loads; use `jq`,
 `yq` or `python`.
@@ -119,31 +122,30 @@ long ago the exporter received it.
 
 Three ways of reading, by what the collector sets.
 
-**Neither key (the default).** Each scrape connects, subscribes, reads
-for `window`, and disconnects. It sees each topic's retained message, which
-the broker sends on subscribing, and whatever is published within the
-window. Nothing is connected between scrapes. This suits topics whose
-publishers set the retain flag, which is what the flag is for; set
-`max_messages` to the number of topics and a scrape ends as soon as it has
-them all.
+**Neither key (the default).** Each scrape connects, subscribes, reads for
+`window`, and disconnects. It sees each topic's retained message, which the
+broker sends on subscribing, and whatever is published within the window.
+Nothing stays connected between scrapes. This suits topics whose publishers
+set the retain flag, which is what the flag is for. Set `max_messages` to
+the number of topics, and a scrape ends as soon as it has them all.
 
-**`persistent_session: true`**, with a `client_id` and `qos: 1`. Each
-scrape still connects and disconnects, but the broker keeps the session:
-what is published at QoS 1 while no scrape is connected is queued by the
-broker and delivered to the next one. `messages` then holds every message
-since the last scrape, in order, for a transform that counts or sums them.
-The broker's queue has a limit of its own, and the session outlives the
-collector: a broker keeps queueing for a `client_id` that never returns
+**`persistent_session: true`**, with a `client_id` and `qos: 1`. Each scrape
+still connects and disconnects, but the broker keeps the session: what is
+published at QoS 1 while no scrape is connected is queued by the broker and
+delivered to the next scrape. `messages` then holds every message since the
+last scrape, in order, for a transform that counts or sums them. The
+broker's queue has a limit of its own, and the session outlives the
+collector: a broker keeps queueing for a `client_id` that never returns,
 until its session expiry clears it.
 
-**`keep_connection: true`.** The first scrape makes the connection and
-waits `window` for the first messages; the connection then stays, and the
-exporter remembers the last message of each topic that comes on it, of up
-to `max_messages` topics. A scrape answers at once from what is
-remembered: `messages` is one entry a topic, sorted by topic, each with
-`count`, how many messages of the topic came on this connection. This suits
-topics published without the retain flag, more often than a scrape's
-window would catch.
+**`keep_connection: true`.** The first scrape makes the connection and waits
+`window` for the first messages. The connection then stays, and the exporter
+remembers the last message of each topic that comes on it, for up to
+`max_messages` topics. A scrape answers at once from what is remembered:
+`messages` holds one entry per topic, sorted by topic, each with `count`,
+how many messages of the topic came on this connection. This suits topics
+published without the retain flag more often than a scrape's window would
+catch.
 
 ```yaml
 request:
@@ -153,20 +155,24 @@ request:
   idle_timeout: 10m
 ```
 
-A kept connection is one for each collector, broker, account and set of
-topics, placeholders filled; it is pinged twice in each `keep_alive`, made
-again by the next scrape when it ended, and closed when no scrape used it
-for `idle_timeout`, when a reload removes its collector, and at shutdown.
-`connection.new` is `true` on the scrape that made it, `received` counts
-its messages, and `dropped` those of topics beyond `max_messages` or
-beyond `max_response_bytes`, counted as the document holds them. What is remembered is in memory alone: a
-restart begins again. The exporter keeps at most 256 such connections.
+There is one kept connection for each collector, broker, account and set
+of topics, with placeholders filled.
 
-With several replicas of the exporter, leave `client_id` out: a broker
-takes one connection of a client identifier at a time, and two replicas
-with the same one cut each other off, scrape after scrape. For the same
-reason `persistent_session`, which needs a fixed `client_id`, is for one
-exporter.
+- It is pinged twice in each `keep_alive`, and made again by the next scrape
+  when it has ended.
+- It is closed when no scrape has used it for `idle_timeout`, when a reload
+  removes its collector, and at shutdown.
+- `connection.new` is `true` on the scrape that made it. `received` counts
+  its messages, and `dropped` those of topics beyond `max_messages` or
+  beyond `max_response_bytes`, counted as the document holds them.
+- What is remembered is held in memory only: a restart begins again.
+- The exporter keeps at most 256 such connections.
+
+With several replicas of the exporter, leave `client_id` out. A broker takes
+one connection per client identifier at a time, and two replicas with the
+same one cut each other off, scrape after scrape. For the same reason,
+`persistent_session`, which needs a fixed `client_id`, is for one exporter
+only.
 
 ## Static targets
 

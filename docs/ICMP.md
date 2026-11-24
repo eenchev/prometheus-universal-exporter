@@ -3,12 +3,12 @@
 The `icmp` request type pings a host, as `ping` does: it sends ICMP echo
 requests and hands the transform a JSON document of how many replies came
 back and how long each took. Use it where a host's reachability is what you
-want to know and no port of it is the thing to check — a router, a switch,
-a host behind a firewall that answers pings, the gateway of a site — and
-alert on the loss and the round trips. Whether a port takes a connection
-is a [`tcp`](TCP.md#checking-that-a-port-is-open) collector's
-`connect_only`, which goes beside a ping of the same host as a collector
-of its own ([With a ping](TCP.md#with-a-ping)).
+want to know and no port of it is the thing to check (a router, a switch, a
+host behind a firewall that answers pings, the gateway of a site), and alert
+on the loss and the round trips. Whether a port accepts a connection is
+checked by a [`tcp`](TCP.md#checking-that-a-port-is-open) collector's
+`connect_only`, which goes beside a ping of the same host as a collector of
+its own ([With a ping](TCP.md#with-a-ping)).
 
 The echoes go on an unprivileged ICMP socket, so the exporter needs neither
 root nor `CAP_NET_RAW` ([Permissions](#permissions)).
@@ -64,17 +64,21 @@ takes about `(count - 1) × interval + reply_timeout`, and ends sooner once
 every reply came; keep it within the probe's timeout, which ends it
 whatever is left.
 
-The document has `host`, as the target named it; `address`, the address
-pinged, and `family`, 4 or 6; `sent` and `received`, and `loss_ratio`, the
-share of echoes with no reply, 0 to 1; `rtts_seconds`, the round trip of
-each reply, in order from the shortest; `rtt_min_seconds`,
-`rtt_avg_seconds`, `rtt_max_seconds` and `rtt_stddev_seconds`, the
-population standard deviation, when a reply came, and left out when none
-did, so that a rule of them is a [missing
-value](CONFIGURATION.md#when-a-metric-cannot-be-extracted) for a host that
-answered nothing; `duplicates`, the replies that came twice;
-`payload_bytes`; and `duration_seconds`, the whole scrape, the lookup
-included.
+The document has:
+
+- `host`, as the target named it;
+- `address`, the address pinged, and `family`, 4 or 6;
+- `sent` and `received`, and `loss_ratio`, the share of echoes with no
+  reply, from 0 to 1;
+- `rtts_seconds`, the round trip of each reply, in order from the shortest;
+- `rtt_min_seconds`, `rtt_avg_seconds`, `rtt_max_seconds` and
+  `rtt_stddev_seconds` (the population standard deviation), when a reply
+  came. They are left out when none did, so that a rule of them gives a
+  [missing value](CONFIGURATION.md#when-a-metric-cannot-be-extracted) for a
+  host that answered nothing;
+- `duplicates`, the replies that came twice;
+- `payload_bytes`;
+- `duration_seconds`, the whole scrape, the lookup included.
 
 **A host that answers nothing is no failure.** The scrape answers with
 `received` 0 and a loss of 1, which is what a rule alerts on:
@@ -86,10 +90,10 @@ included.
 
 ## Every address
 
-A name with several addresses — a pool behind round-robin DNS, a
-dual-stack host — is pinged at one of them, so a bad one among them, or a
+A name with several addresses (a pool behind round-robin DNS, or a
+dual-stack host) is pinged at one of them, so a bad address among them, or a
 broken IPv6 path, goes unseen half the time. `all_addresses: true` pings
-every address, at once, each with its own socket:
+every address at the same time, each with its own socket:
 
 ```yaml
     request:
@@ -118,12 +122,12 @@ every address, at once, each with its own socket:
   {"address":"192.0.2.2","family":4,"sent":3,"received":0,"loss_ratio":1,"rtts_seconds":[],"duplicates":0}]}
 ```
 
-- `addresses` are the addresses pinged, in the order the resolver gave
-  them, of the families `ip_family` takes: `ip4` or `ip6` alone, and with
-  `prefer_ip4` or `prefer_ip6`, or left out, both, the preferred first.
-  Each has the counts, round trips and statistics an address alone has at
-  the top of the document. At most 16 are pinged; `addresses_found` is how
-  many the name has of those families.
+- `addresses` are the addresses pinged, in the order that the resolver gave
+  them, of the families that `ip_family` takes: `ip4` or `ip6` alone, or
+  both with `prefer_ip4` or `prefer_ip6` or when it is left out, the
+  preferred family first. Each has the counts, round trips and statistics
+  that an address alone has at the top of the document. At most 16 are
+  pinged; `addresses_found` is how many the name has of those families.
 - The top of the document is of all of them together: `sent`, `received`,
   `loss_ratio`, the round trips and their statistics, with `address` `""`
   and `family` 0.
@@ -148,11 +152,11 @@ may set `timeout`, and no other key.
 ## Permissions
 
 The echoes go on an ICMP datagram socket (`SOCK_DGRAM` of `IPPROTO_ICMP`),
-which the system answers the replies to on its own, never a raw socket. On
-Linux a process may open one when its group is in the sysctl
+never a raw socket, and the system routes the replies to it on its own. On
+Linux, a process may open one when its group is in the sysctl
 `net.ipv4.ping_group_range`, which Docker, containerd and systemd set to
-every group (`0 2147483647`); a system that leaves it at the kernel's
-`1 0` refuses the socket, and every scrape fails:
+every group (`0 2147483647`). A system that leaves it at the kernel's `1 0`
+refuses the socket, and every scrape fails:
 
 ```text
 opening an ICMP socket to ping 192.0.2.1: socket: permission denied; the system lets no process of the exporter's group open one: on Linux, set the sysctl net.ipv4.ping_group_range to take the group, such as "0 2147483647"
@@ -181,19 +185,20 @@ round trip a number for each reply, so `max_response_bytes` does not apply.
 ## Errors and self-metrics
 
 What fails a scrape is being unable to ask: a name that does not resolve
-(`looking up gw.example: lookup gw.example: no such host`), one with no
-address of the family `ip_family` asks for, an address the target lists
-refuse, and a socket the system does not open. An echo the network has no
-route for, and one the host or a router answers with an ICMP error, is a
-lost echo, counted in `loss_ratio`, not a failure. A failed scrape is
-counted and logged as any other type's, in the stage `icmp`; the verbose
-self-metrics label it `url="icmp://<host>"`.
+(`looking up gw.example: lookup gw.example: no such host`), a name with no
+address of the family that `ip_family` asks for, an address that the target
+lists refuse, and a socket that the system does not open.
+
+An echo that the network has no route for, and one that the host or a
+router answers with an ICMP error, is a lost echo, counted in `loss_ratio`,
+not a failure. A failed scrape is counted and logged as any other type's,
+in the stage `icmp`; the verbose self-metrics label it `url="icmp://<host>"`.
 
 ## Limitations
 
-- **Echo only.** The type sends echo requests and reads echo replies; it
-  does not trace a route, and does not read the TTL a reply came with,
-  which a datagram socket does not hand on.
+- **Echo only.** The type sends echo requests and reads echo replies. It
+  does not trace a route, and does not read the TTL that a reply came with,
+  which a datagram socket does not pass on.
 - **Linux and macOS.** A build for another system has the type, and every
   scrape fails, saying so.
 - **One address, unless asked.** A name with several addresses is pinged at

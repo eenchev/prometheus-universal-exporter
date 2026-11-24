@@ -1,10 +1,10 @@
 # FTP
 
-The `ftp` request type reads one file from an FTP server and hands it to
-the decoder its extension names, as [`sshfile`](SSHFILE.md) reads one over
-SFTP and [`localfile`](LOCALFILE.md) one from the exporter's own disk. It
-is for the systems that still drop their files on an FTP server: a CSV a
-batch job leaves every night, a status file an appliance exports.
+The `ftp` request type reads one file from an FTP server and hands it to the
+decoder that its extension names, as [`sshfile`](SSHFILE.md) reads one over
+SFTP and [`localfile`](LOCALFILE.md) one from the exporter's own disk. It is
+for the systems that still drop their files on an FTP server: a CSV that a
+batch job leaves every night, or a status file that an appliance exports.
 
 It only reads: the commands that store, rename or delete are not in the
 code. Plaintext FTP, explicit TLS (`AUTH TLS`) and TLS from the first byte
@@ -90,14 +90,15 @@ before anything is sent: the file is `request.path`'s, and the account
 
 ## What a scrape does
 
-One control connection: log in, `TYPE I`, `SIZE` and `MDTM` for the file,
-a passive data connection, `RETR`, `QUIT`. The data connection is always
-passive (`EPSV`, and `PASV` for a server without it), made by the exporter
-to the server the control connection reached, whatever address the
-server's answer names — which is also what gets through NAT — and through
-the collector's target lists. Under TLS the data connection is TLS too,
-and resumes the control connection's session, as vsftpd and ProFTPD
-require.
+A scrape uses one control connection: log in, `TYPE I`, `SIZE` and `MDTM`
+for the file, a passive data connection, `RETR`, `QUIT`.
+
+- The data connection is always passive (`EPSV`, or `PASV` for a server
+  without it). The exporter makes it to the server that the control
+  connection reached, whatever address the server's answer names, which
+  also gets through NAT, and it goes through the collector's target lists.
+- Under TLS, the data connection is TLS too, and resumes the control
+  connection's session, as vsftpd and ProFTPD require.
 
 The answer has `Last-Modified` when the server answered `MDTM`, and the
 file's certificate is the control connection's for

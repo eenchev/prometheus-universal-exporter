@@ -1,12 +1,12 @@
 # IMAP
 
-The `imap` request type logs in to a mail server as a mail client does and
+The `imap` request type logs in to a mail server as a mail client does, and
 asks how much mail each mailbox holds: the greeting, `CAPABILITY`,
-`STARTTLS`, a login, then `STATUS` for each mailbox the collector names.
-No message is read, marked or moved, and no mailbox is opened unless the
-collector [counts messages by a search](#counting-messages-by-a-search),
-which opens one read-only. What the server said is handed to the transforms as one JSON document. Use it to
-watch:
+`STARTTLS`, a login, then `STATUS` for each mailbox that the collector
+names. No message is read, marked or moved, and no mailbox is opened unless
+the collector [counts messages by a search](#counting-messages-by-a-search),
+which opens one read-only. What the server said is handed to the transforms
+as one JSON document. Use it to watch:
 
 - how many messages a mailbox holds and how many are unread, such as a
   support inbox nobody is answering or a queue a job should be emptying;
@@ -101,11 +101,10 @@ other decoder, and a transform that does not read JSON (`regex`, `csv`,
 `css`, `prometheus`), is refused when the configuration loads; use `jq`,
 `yq` or `python`.
 
-Without `auth`, the login is `AUTHENTICATE PLAIN` where the server offers
-it and `LOGIN` otherwise. A password or a token is never sent over a
-connection that is not TLS: a
-server that offers no `STARTTLS` fails the scrape before the login, unless
-`allow_plaintext` says the server has none.
+Without `auth`, the login is `AUTHENTICATE PLAIN` where the server offers it,
+and `LOGIN` otherwise. A password or a token is never sent over a connection
+that is not TLS: a server that offers no `STARTTLS` fails the scrape before
+the login, unless `allow_plaintext` says that the server has none.
 
 ## The target
 
@@ -211,25 +210,26 @@ Criteria most servers take: `ALL`, `UNSEEN`, `SEEN`, `UNANSWERED`,
 
 The mailbox is opened with `EXAMINE`, which is read-only: the server marks
 nothing read and changes no flag, and the exporter fetches no message. A
-`{{param_name}}` placeholder in a search must stand within double quotes,
-as in `FROM "{{param_sender}}"`, and its value may hold no double quote or
-backslash, so a probe changes the text searched for and never the
+`{{param_name}}` placeholder in a search must stand within double quotes, as
+in `FROM "{{param_sender}}"`, and its value may hold no double quote or
+backslash. A probe therefore changes the text searched for, never the
 criteria.
 
 With `oldest`, the count also says how long its oldest message has waited,
-which is what an alert on an unanswered inbox wants. The first of the
-matching messages in the mailbox's own order, the order they arrived in
-it, is asked for its arrival date, `INTERNALDATE`, and nothing else of it:
-`oldest_timestamp` is that date in seconds since the epoch, `null` when
-nothing matches. A message moved into the mailbox later than others
-arrived keeps its place after them.
+which is what an alert on an unanswered inbox needs. The first matching
+message in the mailbox's own order (the order in which messages arrived in
+it) is asked for its arrival date, `INTERNALDATE`, and nothing else.
+`oldest_timestamp` is that date in seconds since the epoch, or `null` when
+nothing matches. A message moved into the mailbox later than others arrived
+keeps its place after them.
 
-A mailbox the server does not open and a search it refuses, as it does
-criteria it cannot read, are answers: the count is in the document with
-`ok` false, what the server said in `text` and `count` `null`, and the
-scrape succeeds. A server without `ESEARCH` lists every match for the
-exporter to count, which for a search matching very many messages can
-reach `max_response_bytes`; narrow the search or raise the limit.
+A mailbox that the server does not open, and a search that it refuses (as
+it refuses criteria that it cannot read), are answers: the count is in the
+document with `ok` false, what the server said in `text`, and `count`
+`null`, and the scrape succeeds. A server without `ESEARCH` lists every
+match for the exporter to count, which for a search matching very many
+messages can reach `max_response_bytes`; narrow the search or raise the
+limit.
 
 ## Gmail
 
@@ -274,14 +274,17 @@ refresh token with the scope `https://mail.google.com/` serves both.
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of an `imap` collector is a mail
-server, written as a probe's target is. Its `request` may set `timeout`,
-and `username`, `password_file` and `tls` for a server with an account or a
-certificate authority of its own; a target that sets `username` logs in
-with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with a token sets no
-`password_file`; its `username` alone names the mailbox the collector's
-token logs in to, which is how one
-[application's token](SMTP.md#an-applications-own-token) watches many.
+server, written as a probe's target is. Its `request` may set `timeout`, and
+`username`, `password_file` and `tls` for a server with an account or a
+certificate authority of its own.
+
+- A target that sets `username` logs in with its own `password_file`.
+- A `tls` block replaces the collector's whole block.
+- A target of a collector that logs in with a token sets no
+  `password_file`. Its `username` alone names the mailbox that the
+  collector's token logs in to, which is how one
+  [application's token](SMTP.md#an-applications-own-token) watches many
+  mailboxes.
 
 ## Limits
 
@@ -294,18 +297,18 @@ kept.
 
 ## Errors and self-metrics
 
-The scrape fails, naming the server and its answer, when the greeting is
-not `* OK`, `CAPABILITY`, `STARTTLS` or `LIST` is refused, TLS cannot be
-begun, the certificate does not verify, or the login is refused:
+The scrape fails, naming the server and its answer, when the greeting is not
+`* OK`, `CAPABILITY`, `STARTTLS` or `LIST` is refused, TLS cannot be begun,
+the certificate does not verify, or the login is refused:
 
 ```text
 the server imap.example.com:993 refused AUTHENTICATE PLAIN for support@example.com with NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)
 ```
 
-That is the exporter's log; whoever called `/probe` is answered `NO` and
+That is the exporter's log. Whoever called `/probe` is answered `NO` and
 `[withheld; in the exporter's log]` for the server's words, as for
 [any failed probe](CONFIGURATION.md#what-a-failed-probes-caller-is-told). A
-password is in no error, log line or debug report: a
+password is in no error, log line or debug report. A
 [debug probe](CONFIGURATION.md#debug-probes) shows each command and its
 answer, with `AUTHENTICATE PLAIN ***` and `LOGIN "name" ***` for the ones
 that carry it, and a token is shown the same way.

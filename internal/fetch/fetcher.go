@@ -769,38 +769,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if err != nil {
 		return nil, err
 	}
-	tlsSettings := c.Request.TLS
-	if overrides.InsecureSkipVerify != nil {
-		tlsSettings.InsecureSkipVerify = *overrides.InsecureSkipVerify
-	}
-	followRedirects := c.Request.FollowRedirects
-	if overrides.FollowRedirects != nil {
-		followRedirects = *overrides.FollowRedirects
-	}
-	// Go only negotiates HTTP/2 on a custom transport when it is asked to, so
-	// this defaults to the protocol the exporter has always used. It applies to
-	// HTTPS targets: cleartext HTTP/2 is not negotiated.
-	enableHTTP2 := c.Request.EnableHTTP2
-	if overrides.EnableHTTP2 != nil {
-		enableHTTP2 = *overrides.EnableHTTP2
-	}
-	// new_connection sends every request of the trip on a connection made
-	// for it, from a pool that keeps none (transport.go).
-	newConnection := c.Request.NewConnection
-	if overrides.NewConnection != nil {
-		newConnection = *overrides.NewConnection
-	}
-	// ip_family is the family every connection of the trip is made over
-	// (ipfamily.go).
-	ipFamily := c.Request.IPFamily
-	if overrides.IPFamily != "" {
-		ipFamily = overrides.IPFamily
-	}
+	transport, followRedirects := tripTransport(c, overrides)
 	// The connection pool is shared by every request made with the same TLS
 	// and HTTP/2 settings (transport.go). So a static target with its own tls
 	// block gets its own pool, and a connection made with one client
 	// certificate never carries a request that must present another.
-	client, err := HTTPClient(withProxy(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c), newConnections: newConnection, ipFamily: ipFamily}, c), followRedirects, 0)
+	client, err := HTTPClient(withProxy(transport, c), followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -811,7 +785,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if transport, ok := client.Transport.(*http.Transport); ok {
 		proxy = transport.Proxy
 	}
-	ctx, err = withTargetPolicy(ctx, c, u, proxy, overrides.TLS != nil, ipFamily)
+	ctx, err = withTargetPolicy(ctx, c, u, proxy, overrides.TLS != nil, transport.ipFamily)
 	if err != nil {
 		return nil, err
 	}
@@ -830,83 +804,21 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// prefer_ip4 or prefer_ip6 dial gives the first family half of the time
 	// left (ipfamily.go).
 	requestContext = withDialDeadline(requestContext)
-	method, requestBody := methodBody(c)
-	if overrides.Method != "" {
-		method = overrides.Method
-	}
-	if overrides.Body != nil {
-		requestBody = *overrides.Body
-	} else if HasPathParams(requestBody) {
-		requestBody, err = templateField{"request.body", requestBody, "body"}.render(overrides.Params)
-		if err != nil {
-			return nil, err
-		}
-	}
-	headers, err := renderedValues(c.Request.Headers, "header", "request.headers.", overrides.Params)
-	if err != nil {
+	t := &httpTrip{ctx: requestContext, target: target, c: c, overrides: overrides, forwarded: forwarded, u: u, client: client, proxy: proxy}
+	if err := t.prepare(); err != nil {
 		return nil, err
-	}
-	retryAttempts := c.Request.Retry.Attempts
-	retryBackoff := time.Duration(c.Request.Retry.Backoff)
-	if overrides.RetryAttempts != nil {
-		retryAttempts = *overrides.RetryAttempts
-	}
-	if overrides.RetryBackoff != nil {
-		retryBackoff = *overrides.RetryBackoff
-	}
-	if retryAttempts < 0 {
-		retryAttempts = 0
-	}
-	retryAnyMethod := c.Request.Retry.NonIdempotent
-	if overrides.RetryNonIdempotent != nil {
-		retryAnyMethod = *overrides.RetryNonIdempotent
-	}
-	contentType := ""
-	if overrides.formPost {
-		// The query, the type's own parameters and request.query alike,
-		// goes in the body. The request only reads, so it is retried as a
-		// GET would be.
-		method, requestBody, contentType = http.MethodPost, u.RawQuery, "application/x-www-form-urlencoded"
-		u.RawQuery = ""
-		retryAnyMethod = true
-	}
-	if !retryAnyMethod && !IdempotentMethod(method) {
-		retryAttempts = 0
-	}
-	if retryBackoff < 0 {
-		retryBackoff = 0
-	}
-	retryAfter := c.Request.Retry.RetryAfter
-	if overrides.RetryAfter != nil {
-		retryAfter = *overrides.RetryAfter
-	}
-	// wait waits backoff before a retry, after a failure no Retry-After
-	// came with. Under retry.retry_after the debug report shows each wait,
-	// so one Retry-After set can be told from the backoff.
-	wait := func(backoff time.Duration, why string) error {
-		err := waitRetry(requestContext, backoff)
-		if retryAfter {
-			if err != nil {
-				traceWait(requestContext, fmt.Sprintf("then the wait of %s, %s, was cut short: %v", backoff, why, err))
-			} else {
-				traceWait(requestContext, fmt.Sprintf("then waited %s, %s", backoff, why))
-			}
-		}
-		return err
 	}
 
 	// The login is made, or its token taken from those kept, once the
 	// target has passed the collector's policy, so a target the policy
 	// refuses never has a login made for it.
-	login, err := startLogin(ctx, target, c, overrides, forwarded, hostOverride(headers, forwarded...))
-	if err != nil {
+	if t.login, err = startLogin(ctx, target, c, overrides, forwarded, hostOverride(t.headers, forwarded...)); err != nil {
 		return nil, err
 	}
-	authorization := ""
-	if !login.sends("Authorization") {
+	if !t.login.sends("Authorization") {
 		// A static target's login sent in Authorization replaces the
 		// collector's credential, as the target's own credential does.
-		if authorization, err = collectorAuthorization(c, forwarded...); err != nil {
+		if t.authorization, err = collectorAuthorization(c, forwarded...); err != nil {
 			return nil, err
 		}
 	}
@@ -914,198 +826,210 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	// conditional (Revalidable) and that neither the collector nor the probe
 	// has made conditional itself. No method counts as GET, as for a graphite
 	// request, which leaves request.method unset.
-	cached := revalidationFrom(ctx)
-	if cached != nil && (overrides.pageURL != nil || (method != "" && method != http.MethodGet && method != http.MethodHead) || setsConditional(headers, forwarded)) {
-		cached = nil
+	t.cached = revalidationFrom(ctx)
+	if t.cached != nil && (overrides.pageURL != nil || (t.method != "" && t.method != http.MethodGet && t.method != http.MethodHead) || setsConditional(t.headers, forwarded)) {
+		t.cached = nil
 	}
-	start := time.Now()
-	limit := responseLimit(c)
+	return t.send()
+}
+
+// tripTransport is how the connections of a request of c are made, and
+// whether it follows redirects: the collector's settings, with a static
+// target's or a probe's overrides of them.
+func tripTransport(c *model.Collector, overrides RequestOverrides) (TransportSettings, bool) {
+	settings := TransportSettings{
+		TLS:         c.Request.TLS,
+		EnableHTTP2: c.Request.EnableHTTP2,
+		policy:      policyOf(c),
+		// new_connection sends every request of the trip on a connection
+		// made for it, from a pool that keeps none (transport.go).
+		newConnections: c.Request.NewConnection,
+		// ip_family is the family every connection of the trip is made over
+		// (ipfamily.go).
+		ipFamily: c.Request.IPFamily,
+	}
+	if overrides.InsecureSkipVerify != nil {
+		settings.TLS.InsecureSkipVerify = *overrides.InsecureSkipVerify
+	}
+	// Go only negotiates HTTP/2 on a custom transport when it is asked to,
+	// so this defaults to the protocol the exporter has always used. It
+	// applies to HTTPS targets: cleartext HTTP/2 is not negotiated.
+	if overrides.EnableHTTP2 != nil {
+		settings.EnableHTTP2 = *overrides.EnableHTTP2
+	}
+	if overrides.NewConnection != nil {
+		settings.newConnections = *overrides.NewConnection
+	}
+	if overrides.IPFamily != "" {
+		settings.ipFamily = overrides.IPFamily
+	}
+	followRedirects := c.Request.FollowRedirects
+	if overrides.FollowRedirects != nil {
+		followRedirects = *overrides.FollowRedirects
+	}
+	return settings, followRedirects
+}
+
+// tripRetry is how a request retries: its collector's request.retry, with
+// a static target's or a probe's overrides of it.
+type tripRetry struct {
+	attempts  int
+	backoff   time.Duration
+	anyMethod bool
+	after     bool
+}
+
+// tripRetryOf is the retry of a request of c.
+func tripRetryOf(c *model.Collector, overrides RequestOverrides) tripRetry {
+	r := tripRetry{
+		attempts:  c.Request.Retry.Attempts,
+		backoff:   time.Duration(c.Request.Retry.Backoff),
+		anyMethod: c.Request.Retry.NonIdempotent,
+		after:     c.Request.Retry.RetryAfter,
+	}
+	if overrides.RetryAttempts != nil {
+		r.attempts = *overrides.RetryAttempts
+	}
+	if overrides.RetryBackoff != nil {
+		r.backoff = *overrides.RetryBackoff
+	}
+	if overrides.RetryNonIdempotent != nil {
+		r.anyMethod = *overrides.RetryNonIdempotent
+	}
+	if overrides.RetryAfter != nil {
+		r.after = *overrides.RetryAfter
+	}
+	r.attempts, r.backoff = max(r.attempts, 0), max(r.backoff, 0)
+	return r
+}
+
+// httpTrip is one request of an http or graphite collector, with its
+// retries: what fetch has settled before the first attempt is sent.
+type httpTrip struct {
+	// ctx is the request's context: the probe's, or the shorter one of a
+	// timeout of its own.
+	ctx       context.Context
+	target    string
+	c         *model.Collector
+	overrides RequestOverrides
+	forwarded []http.Header
+	u         *url.URL
+	client    *http.Client
+	proxy     func(*http.Request) (*url.URL, error)
+
+	method, body, contentType string
+	headers                   map[string]string
+	retry                     tripRetry
+	login                     *requestLogin
+	authorization             string
+	cached                    *CachedResponse
+
+	start time.Time
+	limit int64
 	// protocolErrors counts the attempts that ended with their HTTP/2
 	// connection closed for a protocol error before the answer's headers.
-	protocolErrors := 0
+	protocolErrors int
+}
+
+// prepare settles the request's method, body, headers and retry.
+func (t *httpTrip) prepare() error {
+	var err error
+	t.method, t.body = methodBody(t.c)
+	if t.overrides.Method != "" {
+		t.method = t.overrides.Method
+	}
+	if t.overrides.Body != nil {
+		t.body = *t.overrides.Body
+	} else if HasPathParams(t.body) {
+		if t.body, err = (templateField{"request.body", t.body, "body"}).render(t.overrides.Params); err != nil {
+			return err
+		}
+	}
+	if t.headers, err = renderedValues(t.c.Request.Headers, "header", "request.headers.", t.overrides.Params); err != nil {
+		return err
+	}
+	t.retry = tripRetryOf(t.c, t.overrides)
+	if t.overrides.formPost {
+		// The query, the type's own parameters and request.query alike,
+		// goes in the body. The request only reads, so it is retried as a
+		// GET would be.
+		t.method, t.body, t.contentType = http.MethodPost, t.u.RawQuery, "application/x-www-form-urlencoded"
+		t.u.RawQuery = ""
+		t.retry.anyMethod = true
+	}
+	if !t.retry.anyMethod && !IdempotentMethod(t.method) {
+		t.retry.attempts = 0
+	}
+	return nil
+}
+
+// wait waits backoff before a retry, after a failure no Retry-After came
+// with. Under retry.retry_after the debug report shows each wait, so one
+// Retry-After set can be told from the backoff.
+func (t *httpTrip) wait(backoff time.Duration, why string) error {
+	err := waitRetry(t.ctx, backoff)
+	if t.retry.after {
+		if err != nil {
+			traceWait(t.ctx, fmt.Sprintf("then the wait of %s, %s, was cut short: %v", backoff, why, err))
+		} else {
+			traceWait(t.ctx, fmt.Sprintf("then waited %s, %s", backoff, why))
+		}
+	}
+	return err
+}
+
+// send sends the request, and again for each retry, and returns its answer.
+func (t *httpTrip) send() (*HTTPResponse, error) {
+	t.start = time.Now()
+	t.limit = responseLimit(t.c)
 	// Timing a request's phases costs a trace of nine hooks per attempt. That
 	// cost is skipped for a collector whose rules read neither $timings nor
 	// $remote_ip, the address the trace sees the connection made to
 	// (model.Collector.TimingsUnread). A debug run times them regardless of the
 	// rules, since its report shows them. So does a trip exported as a trace,
 	// whose requests' spans show them (TracedRequest.Phases).
-	timed := !c.TimingsUnread || debugRun(ctx) || spanTraced(ctx)
-	for attempt := 0; attempt <= retryAttempts; attempt++ {
-		var reqBody io.Reader
-		if requestBody != "" {
-			reqBody = strings.NewReader(requestBody)
-		}
+	timed := !t.c.TimingsUnread || debugRun(t.ctx) || spanTraced(t.ctx)
+	for attempt := 0; attempt <= t.retry.attempts; attempt++ {
 		// Each attempt times its own requests: what the answer carries is
 		// of the attempt that brought it (HTTPTrip).
 		attemptStart := time.Now()
-		attemptContext := requestContext
+		attemptContext := t.ctx
 		var timing *tripTrace
 		if timed {
-			timing = newTripTrace(requestContext, attemptStart)
-			attemptContext = httptrace.WithClientTrace(requestContext, timing.hooks())
+			timing = newTripTrace(t.ctx, attemptStart)
+			attemptContext = httptrace.WithClientTrace(t.ctx, timing.hooks())
 		}
-		req, err := http.NewRequestWithContext(attemptContext, method, u.String(), reqBody)
+		req, err := t.request(attemptContext, attempt)
 		if err != nil {
 			return nil, err
 		}
-		if contentType != "" {
-			req.Header.Set("Content-Type", contentType)
-		}
-		for k, v := range headers {
-			setRequestHeader(req, k, v)
-		}
-		if authorization != "" {
-			req.Header.Set("Authorization", authorization)
-		}
-		login.set(req)
-		if len(forwarded) > 0 {
-			for k, v := range forwarded[0] {
-				if strings.EqualFold(k, "Accept-Encoding") {
-					// Never forwarded (checkHeaderNames says why):
-					// Prometheus asks the exporter for gzip on every
-					// scrape, which is no reason to ask the target.
-					continue
-				}
-				if strings.EqualFold(k, "Host") {
-					if len(v) > 0 {
-						req.Host = v[len(v)-1]
-					}
-					continue
-				}
-				req.Header[k] = append([]string(nil), v...)
-			}
-		}
-		// Set on every attempt, so a retry and the request sent again
-		// after a new login are as conditional as the first.
-		if cached != nil {
-			setConditional(req, cached)
-		}
-
-		// A request refused here is refused again on every attempt, so
-		// it ends the trip.
-		waited, err := waitRateLimit(requestContext, req.URL)
-		if err != nil {
-			return nil, err
-		}
-		span := propagateTrace(requestContext, req.Header, false)
-		// Signed last, over the request as it is sent (httpsign.go).
-		if signHTTPRequest != nil {
-			if err := signHTTPRequest(requestContext, c, req, requestBody); err != nil {
-				return nil, err
-			}
-		}
-		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
-		traceSpanID(requestContext, span)
-		traceAttempt(requestContext, attempt)
-		traceRateLimitWait(requestContext, waited, false)
-		resp, err := client.Do(req)
+		resp, err := t.client.Do(req)
 		if err != nil {
 			timing.recordPhases()
-			// Go's error quotes the whole URL, request.query included, and
-			// of an answer that is no HTTP, its first line, which a
-			// probe's caller is not told (answerquoted.go).
-			err = withAnswerWithheld(RedactURLErrors(err))
-			traceFailedOutcome(requestContext, "error: "+err.Error())
-			// Headers over the bound are over it on every attempt, and
-			// Go's own words for it name neither the limit's reason nor
-			// what to do about it.
-			if responseHeadersTooLarge(err) {
-				return nil, model.MarkError(fmt.Errorf("the response headers are larger than %d bytes, the most the exporter reads of a response's headers, whatever max_response_bytes allows its body; the target has to send fewer or smaller headers", maxResponseHeaderBytes), model.ErrLimitExceeded)
+			if err := t.failed(err, attempt); err != nil {
+				return nil, err
 			}
-			// Over HTTP/2, the same answer usually ends as a connection the client
-			// closed for a protocol error. That error says nothing about headers and
-			// has other causes too, so it cannot be called a limit. Go hands that
-			// one error to every request waiting on the connection, so the first one
-			// may be caused by another request's answer. It is therefore retried
-			// once, as one of the collector's retries, on a connection of its own
-			// (onOwnConnection). The request whose answer closed the first
-			// connection is retried at the same moment, and on a shared connection it
-			// would close that one too. A second error is therefore caused by this
-			// request's own answer. What broke the protocol twice is not sent again,
-			// so the request ends there, and the error says where to look.
-			if http2ProtocolError(err) {
-				protocolErrors++
-				if protocolErrors == 1 && attempt < retryAttempts && requestContext.Err() == nil {
-					if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
-						return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
-					}
-					client = onOwnConnection(client)
-					continue
-				}
-				closed := "in answer to this request or to another on the same connection, and the request had no retry left to be sent again on a new one"
-				if protocolErrors > 1 {
-					closed = "as the connection before it was, so the request is not retried again"
-				}
-				return nil, fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, %s; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, closed, maxResponseHeaderBytes)
-			}
-			// Each of these is refused again on every attempt: a refused target, a
-			// redirect that would send the body or show the client certificate to a
-			// host that is not trusted, a request the rate limit would delay past the
-			// deadline, and proxy credentials that could not be read.
-			var redirectRefused *redirectRefusedError
-			var proxyCredentials *proxyCredentialsError
-			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) && !errors.Is(err, errRateLimitRefused) && !errors.As(err, &proxyCredentials) {
-				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
-					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
-				}
-				continue
-			}
-			return nil, fmt.Errorf("HTTP request failed: %w", err)
+			continue
 		}
-		traceHTTPOutcome(requestContext, resp)
-		// A Content-Length over the limit refuses the answer before a byte
-		// of it is read. A HEAD answer's Content-Length is the size of a
-		// body it does not have, so it is not held against it.
-		if method != http.MethodHead && resp.ContentLength > limit {
-			_ = resp.Body.Close()
-			return nil, model.MarkError(model.Errorf("response size %d exceeds limit %d", model.Size(resp.ContentLength), limit), model.ErrLimitExceeded)
+		traceHTTPOutcome(t.ctx, resp)
+		body, readErr, closeErr, err := t.read(resp)
+		if err != nil {
+			return nil, err
 		}
-		// The Content-Length is the length of the body as it is read here. Go
-		// removes it from an answer it decompresses itself, the only kind that is
-		// decompressed at all (checkHeaderNames). A HEAD answer's Content-Length is
-		// that of a body it does not have.
-		declared := resp.ContentLength
-		if method == http.MethodHead {
-			declared = 0
-		}
-		var body []byte
-		var readErr error
-		switch {
-		case resp.StatusCode == http.StatusSwitchingProtocols:
-			// A 101 has no body. What follows it on the connection is the protocol it
-			// switched to, such as WebSocket frames, which the server may send as
-			// long as the connection is open. Go hands over the connection as the
-			// body. It is closed unread, so the answer is just the status and headers,
-			// and the probe ends at once instead of reading the protocol's traffic
-			// until its deadline.
-			body = []byte{}
-		case declared > 0:
-			body, readErr = readBody(resp.Body, limit, declared)
-		case method == http.MethodHead || resp.ContentLength == 0:
-			// An answer that has no body, or says it has none, is read
-			// without the hint of the last answer's size: a buffer of that
-			// size would be made for nothing.
-			body, readErr = readUnsizedBody(resp.Body, limit)
-		default:
-			// Nothing says how long the body is, so the last answer of the
-			// same collector and target does.
-			body, readErr = readHintedBody(resp.Body, limit, bodySizeHintOf(c.Name, target))
-		}
-		closeErr := resp.Body.Close()
 		trip := timing.trip(resp, attemptStart, time.Now())
 		// A connection through a proxy is to the proxy, whose address is
 		// not the target's: $remote_ip is null then.
-		if trip.RemoteIP.IsValid() && resp.Request != nil && viaProxy(proxy, resp.Request.URL) {
+		if trip.RemoteIP.IsValid() && resp.Request != nil && viaProxy(t.proxy, resp.Request.URL) {
 			trip.RemoteIP = netip.Addr{}
 		}
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
-			traceBodyError(requestContext, readErr)
+			traceBodyError(t.ctx, readErr)
 			// A connection that broke while the body was being read is
 			// retried as one that broke before the answer began, unless the
 			// probe's own time is what ran out.
-			if attempt < retryAttempts && requestContext.Err() == nil {
-				if waitErr := wait(retryBackoff, "retry.backoff"); waitErr != nil {
+			if attempt < t.retry.attempts && t.ctx.Err() == nil {
+				if waitErr := t.wait(t.retry.backoff, "retry.backoff"); waitErr != nil {
 					return nil, fmt.Errorf("reading response: %w (the wait before retrying was cut short: %w)", readErr, waitErr)
 				}
 				continue
@@ -1115,10 +1039,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if closeErr != nil {
 			return nil, fmt.Errorf("closing response: %w", closeErr)
 		}
-		if int64(len(body)) > limit {
+		if int64(len(body)) > t.limit {
 			// Reading stopped one byte past the limit, so the size is not
 			// known and is not made up.
-			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", limit), model.ErrLimitExceeded)
+			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", t.limit), model.ErrLimitExceeded)
 		}
 		// A 401 to a request that logged in, or a status in login.relogin_on, means
 		// the target refuses the token, which may have been revoked or expired
@@ -1127,8 +1051,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		// made within the request's deadline. A 401 from where a redirect led
 		// without the token, to another origin, refused no token, and is handled
 		// like any other answer.
-		if login.refuses(resp.StatusCode) && login.carried(resp.Request) {
-			again, err := login.again(requestContext)
+		if t.login.refuses(resp.StatusCode) && t.login.carried(resp.Request) {
+			again, err := t.login.again(t.ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -1137,48 +1061,215 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 				continue
 			}
 		}
-		if cached != nil && resp.StatusCode == http.StatusNotModified {
-			// The cached response is current: it is the answer, as if
-			// it had been downloaded again.
-			traceOutcomeNote(requestContext, notModifiedNote(cached))
-			return &HTTPResponse{StatusCode: cached.StatusCode, Headers: revalidated(cached, resp.Header), Body: cached.Body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: true, NotModified: true, Trip: trip}, nil
+		if response, retry := t.answer(resp, body, trip, attempt); !retry {
+			return response, nil
 		}
-		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start), Conditional: cached != nil, Trip: trip}
-		// The answer of a request a redirect led to says so when the
-		// redirect left the collector's headers behind, so a 401 from
-		// there can be told from one the target gave.
-		if resp.Request != nil && resp.Request.Response != nil {
-			response.RedirectWithheld = redirectWithheldFrom(requestContext)
-		}
-		// An answer the collector accepts is its answer, not a failure to retry,
-		// even a 503 it asked to read. The load refuses a retry.statuses entry
-		// that is fully accepted (checkRetryStatuses). So this matters only when a
-		// class is retried and some of its statuses are accepted, or for the
-		// default set.
-		if retriedStatus(c, overrides, resp.StatusCode) && !AcceptedStatus(c, overrides, resp.StatusCode) && attempt < retryAttempts {
-			// If the deadline, a shutdown or the caller cuts a wait short, what the
-			// target answered is kept. The status and body say why the scrape failed,
-			// while the bare context error would only say that time ran out.
-			next := retryWait{wait: retryBackoff, why: "retry.backoff"}
-			if retryAfter {
-				next = retryAfterWait(requestContext, resp.Header.Get("Retry-After"), retryBackoff, time.Now())
-			}
-			if next.giveUp != "" {
-				// Waiting until the deadline would only fail the same
-				// way later, with no answer to show for it.
-				response.NotRetried = next.giveUp
-				traceWait(requestContext, "not retried: "+next.giveUp)
-				return response, nil
-			}
-			if wait(next.wait, next.why) != nil {
-				return response, nil
-			}
-			continue
-		}
-		return response, nil
 	}
 	// Every attempt returns or continues, and the last cannot continue.
 	panic("unreachable")
+}
+
+// request is the request of an attempt, to be sent with ctx.
+func (t *httpTrip) request(ctx context.Context, attempt int) (*http.Request, error) {
+	var body io.Reader
+	if t.body != "" {
+		body = strings.NewReader(t.body)
+	}
+	req, err := http.NewRequestWithContext(ctx, t.method, t.u.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	if t.contentType != "" {
+		req.Header.Set("Content-Type", t.contentType)
+	}
+	for k, v := range t.headers {
+		setRequestHeader(req, k, v)
+	}
+	if t.authorization != "" {
+		req.Header.Set("Authorization", t.authorization)
+	}
+	t.login.set(req)
+	if len(t.forwarded) > 0 {
+		for k, v := range t.forwarded[0] {
+			if strings.EqualFold(k, "Accept-Encoding") {
+				// Never forwarded (checkHeaderNames says why): Prometheus
+				// asks the exporter for gzip on every scrape, which is no
+				// reason to ask the target.
+				continue
+			}
+			if strings.EqualFold(k, "Host") {
+				if len(v) > 0 {
+					req.Host = v[len(v)-1]
+				}
+				continue
+			}
+			req.Header[k] = append([]string(nil), v...)
+		}
+	}
+	// Set on every attempt, so a retry and the request sent again after a
+	// new login are as conditional as the first.
+	if t.cached != nil {
+		setConditional(req, t.cached)
+	}
+
+	// A request refused here is refused again on every attempt, so it ends
+	// the trip.
+	waited, err := waitRateLimit(t.ctx, req.URL)
+	if err != nil {
+		return nil, err
+	}
+	span := propagateTrace(t.ctx, req.Header, false)
+	// Signed last, over the request as it is sent (httpsign.go).
+	if signHTTPRequest != nil {
+		if err := signHTTPRequest(t.ctx, t.c, req, t.body); err != nil {
+			return nil, err
+		}
+	}
+	traceRequest(t.ctx, req.Method, req.URL.String(), req.Header, req.Host, false)
+	traceSpanID(t.ctx, span)
+	traceAttempt(t.ctx, attempt)
+	traceRateLimitWait(t.ctx, waited, false)
+	return req, nil
+}
+
+// failed handles an attempt that got no answer, err: it returns nil when the
+// attempt is to be made again, or the error the request fails with.
+func (t *httpTrip) failed(err error, attempt int) error {
+	// Go's error quotes the whole URL, request.query included, and of an
+	// answer that is no HTTP, its first line, which a probe's caller is not
+	// told (answerquoted.go).
+	err = withAnswerWithheld(RedactURLErrors(err))
+	traceFailedOutcome(t.ctx, "error: "+err.Error())
+	// Headers over the bound are over it on every attempt, and Go's own
+	// words for it name neither the limit's reason nor what to do about it.
+	if responseHeadersTooLarge(err) {
+		return model.MarkError(fmt.Errorf("the response headers are larger than %d bytes, the most the exporter reads of a response's headers, whatever max_response_bytes allows its body; the target has to send fewer or smaller headers", maxResponseHeaderBytes), model.ErrLimitExceeded)
+	}
+	// Over HTTP/2, the same answer usually ends as a connection the client
+	// closed for a protocol error. That error says nothing about headers and
+	// has other causes too, so it cannot be called a limit. Go hands that
+	// one error to every request waiting on the connection, so the first one
+	// may be caused by another request's answer. It is therefore retried
+	// once, as one of the collector's retries, on a connection of its own
+	// (onOwnConnection). The request whose answer closed the first
+	// connection is retried at the same moment, and on a shared connection it
+	// would close that one too. A second error is therefore caused by this
+	// request's own answer. What broke the protocol twice is not sent again,
+	// so the request ends there, and the error says where to look.
+	if http2ProtocolError(err) {
+		t.protocolErrors++
+		if t.protocolErrors == 1 && attempt < t.retry.attempts && t.ctx.Err() == nil {
+			if waitErr := t.wait(t.retry.backoff, "retry.backoff"); waitErr != nil {
+				return fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
+			}
+			t.client = onOwnConnection(t.client)
+			return nil
+		}
+		closed := "in answer to this request or to another on the same connection, and the request had no retry left to be sent again on a new one"
+		if t.protocolErrors > 1 {
+			closed = "as the connection before it was, so the request is not retried again"
+		}
+		return fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, %s; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, closed, maxResponseHeaderBytes)
+	}
+	// Each of these is refused again on every attempt: a refused target, a
+	// redirect that would send the body or show the client certificate to a
+	// host that is not trusted, a request the rate limit would delay past the
+	// deadline, and proxy credentials that could not be read.
+	var redirectRefused *redirectRefusedError
+	var proxyCredentials *proxyCredentialsError
+	if attempt < t.retry.attempts && t.ctx.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) && !errors.Is(err, errRateLimitRefused) && !errors.As(err, &proxyCredentials) {
+		if waitErr := t.wait(t.retry.backoff, "retry.backoff"); waitErr != nil {
+			return fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("HTTP request failed: %w", err)
+}
+
+// read reads and closes the body of resp. err refuses the answer before it
+// is read; readErr and closeErr are what reading and closing it returned.
+func (t *httpTrip) read(resp *http.Response) (body []byte, readErr, closeErr, err error) {
+	// A Content-Length over the limit refuses the answer before a byte of it
+	// is read. A HEAD answer's Content-Length is the size of a body it does
+	// not have, so it is not held against it.
+	if t.method != http.MethodHead && resp.ContentLength > t.limit {
+		_ = resp.Body.Close()
+		return nil, nil, nil, model.MarkError(model.Errorf("response size %d exceeds limit %d", model.Size(resp.ContentLength), t.limit), model.ErrLimitExceeded)
+	}
+	// The Content-Length is the length of the body as it is read here. Go
+	// removes it from an answer it decompresses itself, the only kind that is
+	// decompressed at all (checkHeaderNames). A HEAD answer's Content-Length is
+	// that of a body it does not have.
+	declared := resp.ContentLength
+	if t.method == http.MethodHead {
+		declared = 0
+	}
+	switch {
+	case resp.StatusCode == http.StatusSwitchingProtocols:
+		// A 101 has no body. What follows it on the connection is the protocol it
+		// switched to, such as WebSocket frames, which the server may send as
+		// long as the connection is open. Go hands over the connection as the
+		// body. It is closed unread, so the answer is just the status and headers,
+		// and the probe ends at once instead of reading the protocol's traffic
+		// until its deadline.
+		body = []byte{}
+	case declared > 0:
+		body, readErr = readBody(resp.Body, t.limit, declared)
+	case t.method == http.MethodHead || resp.ContentLength == 0:
+		// An answer that has no body, or says it has none, is read without
+		// the hint of the last answer's size: a buffer of that size would be
+		// made for nothing.
+		body, readErr = readUnsizedBody(resp.Body, t.limit)
+	default:
+		// Nothing says how long the body is, so the last answer of the same
+		// collector and target does.
+		body, readErr = readHintedBody(resp.Body, t.limit, bodySizeHintOf(t.c.Name, t.target))
+	}
+	return body, readErr, resp.Body.Close(), nil
+}
+
+// answer is the request's answer from resp, whose body is body, unless
+// retry says that the attempt is to be made again for its status.
+func (t *httpTrip) answer(resp *http.Response, body []byte, trip *HTTPTrip, attempt int) (response *HTTPResponse, retry bool) {
+	if t.cached != nil && resp.StatusCode == http.StatusNotModified {
+		// The cached response is current: it is the answer, as if it had
+		// been downloaded again.
+		traceOutcomeNote(t.ctx, notModifiedNote(t.cached))
+		return &HTTPResponse{StatusCode: t.cached.StatusCode, Headers: revalidated(t.cached, resp.Header), Body: t.cached.Body, Target: t.target, Collector: t.c.Name, Duration: time.Since(t.start), Conditional: true, NotModified: true, Trip: trip}, false
+	}
+	response = &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: t.target, Collector: t.c.Name, Duration: time.Since(t.start), Conditional: t.cached != nil, Trip: trip}
+	// The answer of a request a redirect led to says so when the redirect
+	// left the collector's headers behind, so a 401 from there can be told
+	// from one the target gave.
+	if resp.Request != nil && resp.Request.Response != nil {
+		response.RedirectWithheld = redirectWithheldFrom(t.ctx)
+	}
+	// An answer the collector accepts is its answer, not a failure to retry,
+	// even a 503 it asked to read. The load refuses a retry.statuses entry
+	// that is fully accepted (checkRetryStatuses). So this matters only when a
+	// class is retried and some of its statuses are accepted, or for the
+	// default set.
+	if !retriedStatus(t.c, t.overrides, resp.StatusCode) || AcceptedStatus(t.c, t.overrides, resp.StatusCode) || attempt >= t.retry.attempts {
+		return response, false
+	}
+	// If the deadline, a shutdown or the caller cuts a wait short, what the
+	// target answered is kept. The status and body say why the scrape failed,
+	// while the bare context error would only say that time ran out.
+	next := retryWait{wait: t.retry.backoff, why: "retry.backoff"}
+	if t.retry.after {
+		next = retryAfterWait(t.ctx, resp.Header.Get("Retry-After"), t.retry.backoff, time.Now())
+	}
+	if next.giveUp != "" {
+		// Waiting until the deadline would only fail the same way later,
+		// with no answer to show for it.
+		response.NotRetried = next.giveUp
+		traceWait(t.ctx, "not retried: "+next.giveUp)
+		return response, false
+	}
+	if t.wait(next.wait, next.why) != nil {
+		return response, false
+	}
+	return nil, true
 }
 
 // setRequestHeader sets a header of a request, Host included: Go sends the

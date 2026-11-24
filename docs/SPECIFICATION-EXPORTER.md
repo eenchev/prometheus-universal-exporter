@@ -9790,6 +9790,25 @@ link to it rather than restate it. Documentation that moves MUST move whole: a
 subject MUST have exactly one home, so that a reader who follows a link is not
 sent back to a shorter version of what they just left.
 
+The user documentation (the README, the pages under `docs/` other than these
+specifications, and the chart's README) and the comments in the code MUST be
+written in plain technical English, so that a reader whose first language is
+not English can follow them:
+
+- Short sentences that each say one thing. A long sentence is split rather
+  than joined with semicolons or nested clauses.
+- The subject first, the verb soon after it, and the active voice: "the
+  exporter retries the request", not "the request is retried".
+- Common words rather than rare or literary ones, and one name for one thing
+  throughout.
+- What something does before why it does it, and a list or a table where the
+  text would otherwise run through many items.
+
+Plain wording MUST NOT cost accuracy: every fact, number, limit and condition
+stays. Error and log messages, configuration keys and anything the text quotes
+keep their exact wording. A Go doc comment MUST start with the name it
+documents followed by a space, as the linter requires.
+
 ---
 
 # 36. Extensibility requirements

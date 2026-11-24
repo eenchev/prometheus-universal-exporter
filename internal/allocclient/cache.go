@@ -17,39 +17,45 @@ import (
 )
 
 // The cache directory holds the bundle in force the way Kubernetes holds a
-// mounted ConfigMap: each generation's files in a directory of their own,
-// ..gen-<generation>; a symbolic link ..data to the one in force; and for
-// each top-level name of the bundle a link to it through ..data, such as
-// config.yaml -> ..data/config.yaml. A new bundle is written into its own
-// directory, checked there, and put in force by replacing ..data, one
-// rename: whoever opens a file through the links then finds the new
-// generation, and before it the old, never part of each. The configuration
-// manager reads <cache-dir>/config.yaml and <cache-dir>/static-targets.yaml,
-// and the swap and its reload happen under its reload lock, so no reload
-// reads the configuration of one generation with the collector files of
-// another. The other generations' directories are removed once the new one
-// is in force, and a refused one at once, but never the one ..data names,
-// nor is that one written again: a swap or a restore cut short can leave
-// ..data at the new generation, and that is put right before the next
-// bundle is written (repair); and when ..data names a generation not in
-// force, as a cached bundle that did not load at the start, and that
-// generation is received again, it is checked and reloaded where it is.
-// Files are written 0600 and directories 0700: a bundle holds
+// mounted ConfigMap:
+//   - each generation's files are in a directory of their own,
+//     ..gen-<generation>;
+//   - a symbolic link ..data points to the one in force;
+//   - each top-level name of the bundle has a link through ..data, such as
+//     config.yaml -> ..data/config.yaml.
+//
+// A new bundle is written into its own directory, checked there, and put in
+// force by replacing ..data, which is a single rename. Whoever opens a file
+// through the links finds the new generation from then on, and the old one
+// before, never a mix of both. The configuration manager reads
+// <cache-dir>/config.yaml and <cache-dir>/static-targets.yaml, and the swap
+// and its reload happen under its reload lock, so no reload reads the
+// configuration of one generation with the collector files of another.
+//
+// The other generations' directories are removed once the new one is in
+// force, and a refused one at once. The one that ..data names is never
+// removed, nor written again:
+//   - a swap or a restore cut short can leave ..data at the new generation,
+//     and that is put right before the next bundle is written (repair);
+//   - when ..data names a generation that is not in force (a cached bundle
+//     that did not load at startup) and that generation is received again,
+//     it is checked and reloaded where it is.
+//
+// Files are written 0600 and directories 0700, because a bundle holds
 // configuration, which may name credentials.
 //
-// What is put in force survives a crash: each file is synced before its
-// generation's directory is, each directory after the files and
-// directories in it, and the cache directory after the generation's
-// directory and the new links are made, before ..data is replaced, and
-// again after it is, so a restart finds either the generation before or
-// the whole new one.
+// What is put in force survives a crash. Each file is synced before its
+// generation's directory, each directory after the files and directories in
+// it, and the cache directory after the generation's directory and the new
+// links are made, before ..data is replaced and again after. A restart
+// therefore finds either the previous generation or the whole new one.
 //
-// At the start the cache directory is tidied (Tidy): a bundle is resumed
-// only when the client installed it, and what a write cut short by a crash
-// left, or files put there by hand, is removed.
+// At startup the cache directory is tidied (Tidy). A bundle is resumed only
+// when the client installed it, and anything that a write cut short by a
+// crash left, or that was put there by hand, is removed.
 //
-// The names beginning with ".." are the cache directory's own: a bundle
-// with a top-level name like that is refused.
+// The names beginning with ".." belong to the cache directory: a bundle with
+// such a top-level name is refused.
 const (
 	dataLink  = "..data"
 	genPrefix = "..gen-"
@@ -66,12 +72,12 @@ func linkedGeneration(cacheDir string) string {
 	return strings.TrimPrefix(target, genPrefix)
 }
 
-// CachedGeneration is the generation of the bundle the client installed in
-// the cache directory, empty when there is none: ..data must name the
-// directory ..gen-<generation>, whose files must be that generation, a
-// bundle the client would take, and each of its top-level names must link
-// through ..data. A config.yaml put into the cache directory by hand, or a
-// generation whose write was cut short, is no bundle.
+// CachedGeneration is the generation of the bundle that the client installed
+// in the cache directory, or "" when there is none. ..data must name the
+// directory ..gen-<generation>, whose files must be that generation and a
+// bundle that the client would accept, and each of its top-level names must
+// link through ..data. A config.yaml put into the cache directory by hand, or
+// a generation whose write was cut short, is not a bundle.
 func CachedGeneration(cacheDir string) string {
 	generation := linkedGeneration(cacheDir)
 	if generation == "" {
@@ -123,16 +129,16 @@ func readTree(dir string) (map[string]string, error) {
 	return files, err
 }
 
-// Tidy readies the cache directory at the start, before anything reads it,
-// and returns the generation of the bundle the client installed there
-// (CachedGeneration), empty for none. It removes what else the client may
-// have left, as a write cut short by a crash or a kill does: the other
-// generations' directories and a ..tmp-link. Without an installed bundle it
-// also removes ..data and the links through it, and config.yaml and
-// static-targets.yaml unless they link through ..data, so the configuration
-// manager finds no files the client did not put there. Other files are
-// left alone. What cannot be removed is logged, and is tried again after
-// the next bundle is put in force.
+// Tidy prepares the cache directory at startup, before anything reads it,
+// and returns the generation of the bundle that the client installed there
+// (CachedGeneration), or "" for none. It removes anything else that the
+// client may have left, as after a write cut short by a crash or a kill: the
+// other generations' directories and a ..tmp-link. Without an installed
+// bundle, it also removes ..data and the links through it, and config.yaml
+// and static-targets.yaml unless they link through ..data, so the
+// configuration manager finds no files that the client did not put there.
+// Other files are left alone. Whatever cannot be removed is logged, and
+// removed again after the next bundle is put in force.
 func Tidy(cacheDir string, logger *slog.Logger) string {
 	generation := CachedGeneration(cacheDir)
 	entries, err := os.ReadDir(cacheDir)
@@ -172,13 +178,15 @@ func Tidy(cacheDir string, logger *slog.Logger) string {
 }
 
 // apply writes b into the cache directory, checks it and puts it in force.
-// refusal is why b was refused, with the files in force kept; err is a
-// failure to write into the cache directory, b neither in force nor
-// refused, to be fetched and tried again. A reload that refused b, with the
-// files before it not put back, is such a failure: ..data may still name
-// b's directory, which is kept, and the next try puts them back first. A
-// b already in the directory ..data names, with none in force, is checked
-// and reloaded there unwritten (inUseUnchanged).
+//   - refusal is why b was refused; the files in force are kept.
+//   - err is a failure to write into the cache directory: b is neither in
+//     force nor refused, and is fetched and tried again. A reload that
+//     refused b without the earlier files being put back is such a failure:
+//     ..data may still name b's directory, which is kept, and the next try
+//     puts them back first.
+//
+// A b already in the directory that ..data names, with none in force, is
+// checked and reloaded there without being written (inUseUnchanged).
 func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 	if err := checkBundle(b); err != nil {
 		return err, nil
@@ -230,14 +238,14 @@ func (c *Client) apply(b *allocapi.Bundle) (refusal, err error) {
 	return nil, nil
 }
 
-// inUseUnchanged reports whether b is the generation ..data names, its
-// directory holding b's files, while no generation is in force: a cached
-// bundle that did not load at the start is so, and the allocator, asked
-// without a generation, sends it again. Its directory is then checked and
-// reloaded where it is, not written again: config.yaml reads it all the
-// while, and a refusal leaves it as it was. With a generation in force,
-// ..data naming another is what a swap or a restore cut short left, and
-// repair puts the one in force back first.
+// inUseUnchanged reports whether b is the generation that ..data names, with
+// its directory holding b's files, while no generation is in force. That is
+// the case for a cached bundle that did not load at startup, which the
+// allocator sends again when asked without a generation. Its directory is
+// then checked and reloaded where it is, not written again: config.yaml
+// reads it all the while, and a refusal leaves it as it was. With a
+// generation in force, ..data naming another one is what a swap or a
+// restore cut short left, and repair puts the one in force back first.
 func (c *Client) inUseUnchanged(b *allocapi.Bundle) bool {
 	c.mu.Lock()
 	inForce := c.inForce
@@ -258,11 +266,11 @@ func (c *Client) discard(generation string) {
 }
 
 // repair puts the generation in force back in the cache directory when a
-// swap or a restore cut short left ..data naming another, so a bundle is
+// swap or a restore cut short left ..data naming another, so that a bundle is
 // always written beside the files in force and its restore puts those back.
-// With a generation in force the links are put back, and the files reloaded,
-// under the reload lock, as a swap is; with none in force there is nothing
-// a reload could put in force, and ..data and its links are removed.
+// With a generation in force, the links are put back and the files reloaded
+// under the reload lock, as for a swap. With none in force, there is nothing
+// that a reload could put in force, so ..data and its links are removed.
 func (c *Client) repair() error {
 	c.mu.Lock()
 	want := c.inForce
@@ -289,10 +297,10 @@ func (c *Client) repair() error {
 	return relinkErr
 }
 
-// checkBundle refuses a bundle whose files could leave the directory they
-// are written into, that has no configuration, whose generation is not its
-// files' digest, or that has a top-level name the cache directory keeps for
-// itself.
+// checkBundle refuses a bundle that has no configuration, whose files could
+// leave the directory they are written into, whose generation is not its
+// files' digest, or that has a top-level name that the cache directory keeps
+// for itself.
 func checkBundle(b *allocapi.Bundle) error {
 	if err := allocapi.CheckFiles(b.Files); err != nil {
 		return err
@@ -308,10 +316,11 @@ func checkBundle(b *allocapi.Bundle) error {
 	return nil
 }
 
-// writeTree writes files into dir, which it makes anew, and syncs each
-// directory it made, the deepest first and dir last, so the names in them
-// are on disk before the swap makes dir reachable. The cache directory's
-// entry for dir is synced by the swap (relink), before ..data names dir.
+// writeTree writes files into dir, which it creates, and syncs each
+// directory that it made, the deepest first and dir last, so the names in
+// them are on disk before the swap makes dir reachable. The cache
+// directory's entry for dir is synced by the swap (relink), before ..data
+// names dir.
 func writeTree(dir string, files map[string]string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return err
@@ -427,14 +436,14 @@ func (c *Client) link(name, target string) error {
 	return nil
 }
 
-// relink makes the links through ..data those of names: one is made for
-// each name that has none, then ..data is pointed at the generation's
-// directory, or removed when generation is empty, and then the links of
-// other names are removed. Until ..data is replaced every link finds the
-// old generation, or nothing, and from then on the new one. The cache
-// directory is synced before ..data is replaced, so the generation's
-// directory and the new links are on disk before ..data can name them, and
-// again at the end, so the replacement is.
+// relink makes the links through ..data match names. It first makes a link
+// for each name that has none, then points ..data at the generation's
+// directory (or removes it when generation is empty), and then removes the
+// links of other names. Until ..data is replaced, every link finds the old
+// generation, or nothing, and from then on the new one. The cache directory
+// is synced before ..data is replaced, so the generation's directory and the
+// new links are on disk before ..data can name them, and again at the end,
+// so that the replacement is too.
 func (c *Client) relink(generation string, names []string) error {
 	have := c.linkedNames()
 	for _, name := range names {

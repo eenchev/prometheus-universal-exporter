@@ -2162,35 +2162,39 @@ statuspage_component_status{status!="operational"}
 ```
 
 [`examples/config.filebeat.json-test.yaml`](../examples/config.filebeat.json-test.yaml)
-reads [Filebeat's monitoring endpoint](https://www.elastic.co/guide/en/beats/filebeat/current/http-endpoint.html),
-`/stats`, `/` and `/inputs/`, into `filebeat_*` metrics: counters as `_total`,
-milliseconds and nanoseconds as seconds, outcomes of one kind as one family
-with a label
-(`filebeat_output_events_total{outcome="failed"}`), and `error_mode: ignore` on
-the sections only some Filebeats report, so they are absent rather than failing
-the scrape. With the Kafka output it also reads the Kafka client's own metrics
-from `libbeat.outputs`, which other outputs do not have: bytes sent and
-received, requests in flight, requests sent and their latency as
-`filebeat_output_kafka_request_latency_seconds{quantile="0.99"}` and friends.
-Its third collector, `filebeat_inputs`, reads `/inputs/`, an array with one
-object per running input, with `items: .[]`: a series per input and metric
-with the labels `id` and `input` (the type), such as
-`filebeat_input_pipeline_events_total{id="nginx-access",input="filestream",outcome="published"}`
-for every input, `filebeat_input_files_active` and the file, message, byte and
-event counters for `filestream` inputs, and
-`filebeat_input_processing_time_seconds{quantile="0.99"}` for the inputs that
-measure it. Filebeat reports that time as percentiles of a sample, not as
-buckets, so it is gauges with a `quantile` label rather than a histogram. Every
-rule there is `required: false`, as an input reports the metrics of its type
-and no others and a Filebeat may answer `[]`: what is not reported has no
-series, and nothing is logged.
+reads [Filebeat's monitoring endpoint](https://www.elastic.co/guide/en/beats/filebeat/current/http-endpoint.html)
+(`/stats`, `/` and `/inputs/`) into `filebeat_*` metrics:
+
+- Counters are exported as `_total`, and milliseconds and nanoseconds as
+  seconds. Outcomes of one kind form one family with a label
+  (`filebeat_output_events_total{outcome="failed"}`).
+- The sections that only some Filebeats report use `error_mode: ignore`, so
+  they are absent instead of failing the scrape.
+- With the Kafka output, the example also reads the Kafka client's own
+  metrics from `libbeat.outputs`, which other outputs do not have: bytes sent
+  and received, requests in flight, and requests sent with their latency, as
+  `filebeat_output_kafka_request_latency_seconds{quantile="0.99"}` and
+  similar series.
+- Its third collector, `filebeat_inputs`, reads `/inputs/`, an array with one
+  object per running input, with `items: .[]`. It produces a series per
+  input and metric with the labels `id` and `input` (the type), such as
+  `filebeat_input_pipeline_events_total{id="nginx-access",input="filestream",outcome="published"}`
+  for every input, `filebeat_input_files_active` and the file, message, byte
+  and event counters for `filestream` inputs, and
+  `filebeat_input_processing_time_seconds{quantile="0.99"}` for the inputs
+  that measure it. Filebeat reports that time as percentiles of a sample,
+  not as buckets, so it is exported as gauges with a `quantile` label, not
+  as a histogram.
+- Every rule in that collector is `required: false`, because an input
+  reports only the metrics of its type and a Filebeat may answer `[]`. What
+  is not reported has no series, and nothing is logged.
 
 [`examples/open-meteo/`](../examples/open-meteo/config.yaml) reads the current
 weather of a place from [Open-Meteo](https://open-meteo.com), which needs no
-API key. Its `config.yaml` takes the place from the probe — `latitude:
-"{{param_latitude:42.6977}}"`, Sofia unless the probe says otherwise — asks for
-metres per second, and turns the answer into `weather_*` series that carry the
-grid point the API answered for, with percentages as ratios and the
+API key. Its `config.yaml` takes the place from the probe (`latitude:
+"{{param_latitude:42.6977}}"`, Sofia unless the probe says otherwise) and asks
+for metres per second. It turns the answer into `weather_*` series that carry
+the grid point the API answered for, with percentages as ratios and the
 observation time as Unix seconds. A repeated probe of one place is answered
 from memory for five minutes, and while the API is down the last result is
 served, marked stale, for an hour (`cache.ttl`, `cache.stale_if_error`):
@@ -2200,21 +2204,23 @@ curl 'http://localhost:8080/probe?collector=open_meteo_current&target=https://ap
 ```
 
 The [`static-targets.yaml`](../examples/open-meteo/static-targets.yaml) beside
-it has the exporter scrape three places itself, every ten minutes; see
+it makes the exporter scrape three places itself, every ten minutes; see
 [Static targets](STATIC-TARGETS.md#the-target-file).
 
 [`examples/config.ecb.xml-test.yaml`](../examples/config.ecb.xml-test.yaml)
 reads the [euro foreign exchange reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
-the European Central Bank publishes every working day, an XML document with
-every element in a namespace and the data in attributes. The collector gives
-the two namespaces prefixes of its own with
-[`response.namespaces`](#xml-namespaces), selects the `rate` attributes
-themselves, `//e:Cube[@currency]/@rate`, and reads each one's currency from the
-attribute beside it, `../@currency`; a second rule computes its value,
-`count(...)`; and a third reads the day the rates are for, the `time`
-attribute, as a value with
-[`time_format`](#reading-a-date-or-a-time-as-the-value), so no series changes
-its labels from one day to the next:
+that the European Central Bank publishes every working day. The XML document
+has every element in a namespace and the data in attributes.
+
+- The collector gives the two namespaces its own prefixes with
+  [`response.namespaces`](#xml-namespaces).
+- One rule selects the `rate` attributes themselves,
+  `//e:Cube[@currency]/@rate`, and reads each one's currency from the
+  attribute beside it, `../@currency`.
+- A second rule computes its value with `count(...)`.
+- A third rule reads the day the rates are for, the `time` attribute, as a
+  value with [`time_format`](#reading-a-date-or-a-time-as-the-value), so no
+  series changes its labels from one day to the next.
 
 ```sh
 curl 'http://localhost:8080/probe?collector=ecb_reference_rates&target=https://www.ecb.europa.eu'
@@ -2227,13 +2233,13 @@ ecb_euro_reference_rates_timestamp_seconds 1.7908992e+09
 ```
 
 [`examples/config.scrapethissite.html-test.yaml`](../examples/config.scrapethissite.html-test.yaml)
-reads an HTML page, [Countries of the World](https://www.scrapethissite.com/pages/simple/)
-on scrapethissite.com, a site made for practising scraping, with the `css`
-transform. The page holds one `div.country` per country:
-[`items`](#metrics-per-item) selects those blocks, and the population, the
-area and the country's name are selectors within one block, the name a
-[`required`](#collectors) label, so every country is a series of each
-metric, named by the page itself:
+reads an HTML page with the `css` transform:
+[Countries of the World](https://www.scrapethissite.com/pages/simple/) on
+scrapethissite.com, a site made for practising scraping. The page has one
+`div.country` per country. [`items`](#metrics-per-item) selects those blocks,
+and the population, the area and the country's name are selectors within one
+block. The name is a [`required`](#collectors) label, so every country is a
+series of each metric, named by the page itself:
 
 ```sh
 curl 'http://localhost:8080/probe?collector=countries_html&target=https://www.scrapethissite.com'
@@ -2246,28 +2252,31 @@ country_area{country="Andorra"} 468
 
 [`examples/metar/`](../examples/metar/config.yaml) reads an airport's latest
 weather report, its METAR, from the text file the US National Weather Service
-keeps for every station in the world — `LBSF 030900Z 12004KT 9999 FEW043
-BKN100 14/08 Q1021 NOSIG` — with the `text` decoder and one regex per metric.
-The station is a [path parameter](REQUESTS.md#path-parameters),
-`{{param_station:LBSF}}`. Every regex but one starts at the report's line with
-the station's code in a group a `station` label reads, and has the number
-further along in the group named `value`; the one for the report's time
-starts at the line before it. A report may end with a forecast (`BECMG
-27015G25KT 3000`) and with remarks, whose groups are written like the
-observation's own, so each rule says where its group stands and does not look
-for it anywhere on the line: the wind directly after the station and the
-time, the visibility directly after the wind, the pressure directly after the
-temperature. A report with no gust, a variable wind or a wind in metres per
-second then gives no such series, and never the forecast's. A report leaves
-out what it has nothing to
-say about and writes some things in one of two ways, so the rules are
-`required: false`, and two rules may give one metric: a temperature is read by
-one rule as `14` and by another, with `scale: -1`, as `M05`, and a pressure in
-inches of mercury (`A3012`) is scaled to hectopascals beside the rule for
-`Q1021`. Knots become metres per second the same way. The line before the
-report, `2026/10/03 09:00`, is when it was made, which
-[`time_format: "2006/01/02 15:04"`](#reading-a-date-or-a-time-as-the-value)
-reads as `metar_observation_timestamp_seconds`:
+keeps for every station in the world (`LBSF 030900Z 12004KT 9999 FEW043
+BKN100 14/08 Q1021 NOSIG`), with the `text` decoder and one regex per metric.
+
+- The station is a [path parameter](REQUESTS.md#path-parameters),
+  `{{param_station:LBSF}}`.
+- Every regex except one starts at the report's line, with the station's
+  code in a group that a `station` label reads and the number further along
+  in the group named `value`. The regex for the report's time starts at the
+  line before it.
+- A report may end with a forecast (`BECMG 27015G25KT 3000`) and with
+  remarks, whose groups are written like the observation's own. Each rule
+  therefore states where its group is and does not search the whole line:
+  the wind directly after the station and the time, the visibility directly
+  after the wind, the pressure directly after the temperature. A report with
+  no gust, a variable wind or a wind in metres per second then gives no such
+  series, and never the forecast's.
+- A report omits what it has nothing to say about and writes some things in
+  one of two ways, so the rules are `required: false`, and two rules may
+  feed one metric. A temperature is read by one rule as `14` and by another,
+  with `scale: -1`, as `M05`. A pressure in inches of mercury (`A3012`) is
+  scaled to hectopascals beside the rule for `Q1021`. Knots become metres per
+  second in the same way.
+- The line before the report, `2026/10/03 09:00`, is when it was made.
+  [`time_format: "2006/01/02 15:04"`](#reading-a-date-or-a-time-as-the-value)
+  reads it as `metar_observation_timestamp_seconds`.
 
 ```sh
 curl 'http://localhost:8080/probe?collector=metar&target=https://tgftp.nws.noaa.gov&param_station=EGLL'
@@ -2279,22 +2288,25 @@ scrapes three airports every ten minutes, each adding its `city` label to the
 
 [`examples/config.mempool.json-test.yaml`](../examples/config.mempool.json-test.yaml)
 reads three endpoints of [mempool.space](https://mempool.space/docs/api/rest)'s
-REST API, which every self-hosted mempool instance serves too, with three
-collectors that share one request through a YAML anchor: the recommended fee
-rates, one series per key of the answer with
-[`items: to_entries[]`](#metrics-per-item) and the keys renamed by a label's
-[`value_map`](#mapping-text-to-values-and-scaling-them); the backlog of
-unconfirmed transactions, its fees scaled from satoshis to bitcoin; and the
-height of the newest block, an answer that is a number and nothing else, read
-as text by a regex.
+REST API, which every self-hosted mempool instance also serves. Its three
+collectors share one request through a YAML anchor:
+
+- the recommended fee rates, one series per key of the answer with
+  [`items: to_entries[]`](#metrics-per-item), with the keys renamed by a
+  label's [`value_map`](#mapping-text-to-values-and-scaling-them);
+- the backlog of unconfirmed transactions, with its fees scaled from
+  satoshis to bitcoin;
+- the height of the newest block, an answer that is only a number, read as
+  text by a regex.
 
 [`examples/config.promdemo.prometheus-test.yaml`](../examples/config.promdemo.prometheus-test.yaml)
-passes a Prometheus server's own `/metrics` through, the project's
+passes a Prometheus server's own `/metrics` through, from the project's
 [public demo server](https://prometheus.demo.prometheus.io) or any other. It
-has no metrics rules: [`include` and `exclude`](#collector-wide-labels) keep
-some two dozen families out of everything the server exposes, a histogram and
-a summary whole among them, and `rename` gives the `process_*` and `go_*`
-families, names every Go program exposes, names of the server's own:
+has no metrics rules. [`include` and `exclude`](#collector-wide-labels) keep
+about two dozen families out of everything the server exposes, including a
+whole histogram and a whole summary. `rename` gives the `process_*` and
+`go_*` families, whose names every Go program exposes, names specific to the
+server:
 
 ```sh
 curl 'http://localhost:8080/probe?collector=prometheus_server&target=https://prometheus.demo.prometheus.io'
@@ -2302,19 +2314,19 @@ curl 'http://localhost:8080/probe?collector=prometheus_server&target=https://pro
 
 [`examples/config.grafanastatus.json-test.yaml`](../examples/config.grafanastatus.json-test.yaml)
 is a complete collector for [status.grafana.com](https://status.grafana.com),
-and for any page hosted on Atlassian Statuspage, which all publish the same
-`/api/v2/summary.json`:
+and for any page hosted on Atlassian Statuspage, because they all publish the
+same `/api/v2/summary.json`:
 
 ```sh
 curl 'http://localhost:8080/probe?collector=statuspage&target=https://status.grafana.com'
 ```
 
 It exposes the page's overall indicator, every component and component group,
-unresolved incidents by impact, scheduled maintenances by status, and the start
-of the next maintenance. Component names repeat on that page — the same region
-appears under most product groups, and occasionally twice in one group — so
-each component series also carries `component_id` and `group`, which keeps the
-series distinct. The group is found through `$root`:
+unresolved incidents by impact, scheduled maintenances by status, and the
+start of the next maintenance. Component names repeat on that page: the same
+region appears under most product groups, and occasionally twice in one
+group. Each component series therefore also carries `component_id` and
+`group`, which keeps the series distinct. The group is found through `$root`:
 
 ```yaml
 - name: group
@@ -2331,24 +2343,26 @@ jq's `capture`:
 ```
 
 A component whose name carries neither, such as `Support Tickets`, matches
-nothing, and so has neither label.
+nothing and so has neither label.
 
-For every component that is not operational it also exposes
-`statuspage_component_incident_info`, whose labels name the incident or
-maintenance in progress behind the status and carry that event's latest update
-as `message`, collapsed to one line and cut to 300 bytes by `truncate: true`.
-Maintenance that is only scheduled is not counted as the cause. A component
-marked down with no event behind it still gets the series, without those labels.
+For every component that is not operational, the example also exposes
+`statuspage_component_incident_info`. Its labels name the incident or
+maintenance in progress behind the status and carry that event's latest
+update as `message`, collapsed to one line and cut to 300 bytes by
+`truncate: true`. Maintenance that is only scheduled is not counted as the
+cause. A component marked down with no event behind it still gets the
+series, without those labels.
 
-No series carries the page's name: Prometheus labels every series with the
-target it probed (`instance`), which already tells two pages apart.
-`statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
+No series carries the page's name. Prometheus labels every series with the
+target it probed (`instance`), which already distinguishes two pages.
+`statuspage_info{page="Grafana Cloud"}` carries the name once, for
+dashboards.
 
 [`examples/tcp/`](../examples/tcp/config.yaml) reads three services that
-report their statistics as text over TCP, with the
-[`tcp`](TCP.md) request type: memcached's `stats`, read up to its
-`END` line, ZooKeeper's `mntr` and HAProxy's `show stat`, the first two with
-regular expressions and HAProxy's CSV by its columns. Its
+report their statistics as text over TCP, with the [`tcp`](TCP.md) request
+type: memcached's `stats`, read up to its `END` line, ZooKeeper's `mntr`,
+and HAProxy's `show stat`. The first two are read with regular expressions,
+and HAProxy's CSV by its columns. Its
 [`static-targets.yaml`](../examples/tcp/static-targets.yaml) scrapes a
 memcached pair, a ZooKeeper ensemble and an HAProxy:
 
@@ -2358,9 +2372,9 @@ curl 'http://localhost:8080/probe?collector=memcached&target=localhost:11211'
 
 ### Mapping text to values and scaling them
 
-When a status has an order — up, degraded, down — one number per status is
-simpler than a series per status. `value_map` turns the text an expression
-gives into the value, and `"*"` maps any value it does not list:
+When a status has an order, such as up, degraded and down, one number per
+status is simpler than a series per status. `value_map` turns the text an
+expression gives into the value, and `"*"` maps any value it does not list:
 
 ```yaml
 - name: app_state
@@ -2373,51 +2387,69 @@ gives into the value, and `"*"` maps any value it does not list:
     "*": -1
 ```
 
-The value is looked up as text: a regex capture, a CSS element's or XPath
-node's text or a CSV cell without its surrounding blanks, a jq or yq number as
-JSON writes it (`7`, `0.5`) and a boolean as `true` or `false`. Case matters.
-`"*"` catches numbers too; without it, a value the map does not list is read as
-a number, and one that is not a number fails the rule, saying so.
+The value is looked up as text:
 
-The error names the value as you would read it: text quoted, cut to its
-first 64 bytes when it is longer — `metric "state": value "n/a" is not a
-number; map text to numbers with value_map` — and an object or an array by
-what it is rather than its whole content — `value is an object with 2 keys,
-not a number`, `an array of 3 items`, `null` — which usually means the
+- a regex capture, the text of a CSS element or an XPath node, or a CSV
+  cell, without surrounding blanks;
+- a jq or yq number as JSON writes it (`7`, `0.5`);
+- a boolean as `true` or `false`.
+
+Letter case matters. `"*"` catches numbers too. Without it, a value the map
+does not list is read as a number, and one that is not a number fails the
+rule with a message that says so.
+
+The error shows the value as you would read it. Text is quoted and cut to
+its first 64 bytes when it is longer: `metric "state": value "n/a" is not a
+number; map text to numbers with value_map`. An object or an array is
+described by what it is, not by its whole content: `value is an object with
+2 keys, not a number`, `an array of 3 items`, `null`. That usually means the
 expression stops one field short. A jq or yq boolean, `true` or `false`, is
-read as `1` or `0`; the words as text, in a CSV cell or an HTML element, are
-[not numbers](#what-counts-as-a-number).
+read as `1` or `0`. The same words as text, in a CSV cell or an HTML
+element, are [not numbers](#what-counts-as-a-number).
 
 #### What counts as a number
 
-Text is a number when it is written as one: an integer or a decimal, with or
-without digits on either side of the point (`42`, `-17`, `007`, `3.14`, `.5`,
-`5.`), an exponent (`1.5e3`, `2E-3`), a leading `+` or `-`, and `NaN`, `Inf`
-and `Infinity` in any case, the last two with a sign or without. Blanks around
-it do not matter, and an integer too long for a float is read as the nearest
-one: `9007199254740993` is `9007199254740992`. A number too small for a float
-is `0` (`1e-400`), and one too large is not rounded to infinity but fails its
-rule (`value "1e400" is beyond the range of a 64-bit float`). That holds for a
-CSV cell, a regex capture, the text of a CSS element or an XPath node, and a
-jq or yq string alike.
+Text is a number when it is written as one:
 
-Anything else is text, and fails its rule as `value "..." is not a number`:
-a thousands separator (`1,234`, `1 234`, `1_000`), a decimal comma (`1,5`), a
-percent sign or a unit (`85%`, `12.5 MB`), a currency, hexadecimal, octal and
-binary (`0x1F`, `0x1p-2`, `0o17`, `0b101`), digits that are not ASCII, and the
-words exports write in place of a value: `N/A`, `-`, `null`, and `true`,
-`false`, `yes`, `no`, `on` and `off` written as text (a JSON or YAML boolean
-is `1` or `0`). An empty cell is not a
-failure of this kind but a [missing value](#when-a-metric-cannot-be-extracted).
-A size, a duration, a time or a percentage written for people (`12.5 MB`,
-`1h2m`, `85%`) is read in a jq or yq expression, or a Python script, by the
-[value-parsing helpers](#value-parsing-helpers). The other remedies are
-`value_map`, for the texts that stand for a value (`"N/A": 0`,
-`"yes": 1`, `"1_000": 1000`), and a `pre_script`, which can rewrite a column
-before the rules read it — read `85%` with `parse_percent`, turn `1.234,56`
-into `1234.56`.
-`value_map` reads only the texts it lists, so it suits a handful of words and
-not a column of decimal commas, which is two lines of a pre-script:
+- an integer or a decimal, with or without digits on either side of the
+  point (`42`, `-17`, `007`, `3.14`, `.5`, `5.`);
+- an exponent (`1.5e3`, `2E-3`) and a leading `+` or `-`;
+- `NaN`, `Inf` and `Infinity` in any letter case, the last two with or
+  without a sign.
+
+Surrounding blanks do not matter. An integer too long for a float is read as
+the nearest float: `9007199254740993` is `9007199254740992`. A number too
+small for a float is `0` (`1e-400`). A number too large is not rounded to
+infinity; it fails its rule (`value "1e400" is beyond the range of a 64-bit
+float`). These rules apply equally to a CSV cell, a regex capture, the text
+of a CSS element or an XPath node, and a jq or yq string.
+
+Anything else is text and fails its rule as `value "..." is not a number`:
+
+- a thousands separator (`1,234`, `1 234`, `1_000`) or a decimal comma
+  (`1,5`);
+- a percent sign or a unit (`85%`, `12.5 MB`), or a currency;
+- hexadecimal, octal and binary (`0x1F`, `0x1p-2`, `0o17`, `0b101`);
+- digits that are not ASCII;
+- the words that exports write in place of a value: `N/A`, `-`, `null`, and
+  `true`, `false`, `yes`, `no`, `on` and `off` written as text (a JSON or
+  YAML boolean is `1` or `0`).
+
+An empty cell is not a failure of this kind but a
+[missing value](#when-a-metric-cannot-be-extracted).
+
+The remedies are:
+
+- The [value-parsing helpers](#value-parsing-helpers), which read a size, a
+  duration, a time or a percentage written for people (`12.5 MB`, `1h2m`,
+  `85%`) in a jq or yq expression or a Python script.
+- `value_map`, for texts that stand for a value (`"N/A": 0`, `"yes": 1`,
+  `"1_000": 1000`).
+- A `pre_script`, which can rewrite a column before the rules read it: read
+  `85%` with `parse_percent`, or turn `1.234,56` into `1234.56`.
+
+`value_map` reads only the texts it lists, so it suits a handful of words,
+not a column of decimal commas. That takes two lines of a pre-script:
 
 ```yaml
 transform:
@@ -2427,39 +2459,40 @@ transform:
         row["price"] = row["price"].replace(".", "").replace(",", ".")
 ```
 
-Two kinds of value are numbers before the exporter reads any text, and are
-the number their maker made:
+Two kinds of value are already numbers before the exporter reads any text,
+and keep the number their source produced:
 
-- A number an XPath function or operator computes — `number(//v)`,
-  `sum(//v)`, `//v * 1` — is converted by the XPath engine, which reads
+- A number that an XPath function or operator computes (`number(//v)`,
+  `sum(//v)`, `//v * 1`) is converted by the XPath engine, which reads
   `1_000` as 1000 and `0x1p-2` as 0.25. Select the node itself, `//v`, to
-  have its text read as above.
+  have its text read by the rules above.
 - An unquoted value of a YAML response is a number by YAML's own syntax:
   `v: 1_000` is 1000, `v: 0x10` is 16 and `v: 017` is 15. Only a quoted
   YAML string, like a JSON string, is text to a rule.
 
-The numbers of the configuration itself are YAML's: `scale: 1_000` is 1000
+The numbers in the configuration itself follow YAML: `scale: 1_000` is 1000
 there.
 
-`NaN`, `Inf` and `Infinity` are numbers where a response writes them, as the
-text of a cell or an element: that is the value the source gives, and it is
+`NaN`, `Inf` and `Infinity` are numbers where a response writes them as the
+text of a cell or an element. That is the value the source gives, and it is
 exported, so `//v` over `<v>NaN</v>` is a series whose value is NaN. A NaN
-an XPath expression computes is another thing: `number(//v)` over
-`<v>n/a</v>` is the XPath engine saying it could not read a number, and is
-the rule's [missing value](#when-a-metric-cannot-be-extracted), with
-`metric "v" XPath "number(//v)" computed NaN, not a number`. The two differ
-because the first is what the source says and the second is what the engine
-says of text that was no number. A `sum()` over nodes one of which is `NaN`
-comes to NaN and is computed, a missing value too; one over infinities of
-one sign is that infinity, and is exported.
+that an XPath expression computes is different: `number(//v)` over
+`<v>n/a</v>` is the XPath engine reporting that it could not read a number.
+That is the rule's [missing value](#when-a-metric-cannot-be-extracted), with
+the error `metric "v" XPath "number(//v)" computed NaN, not a number`. The
+first is what the source says, and the second is what the engine says about
+text that was not a number. A `sum()` over nodes of which one is `NaN`
+results in NaN and is computed, so it is a missing value too. A `sum()` over
+infinities of one sign is that infinity, and is exported.
 
-`scale` multiplies the value, mapped or read as a number — `0.001` for
-milliseconds to seconds, `100` for a fraction to a percentage. A scale that is
-exactly one over a whole number, as `0.001`, `0.000000001`, `1e-9` or `0.5`
-is written, divides by that number instead, so 412 milliseconds are `0.412`
-seconds, not the `0.41200000000000003` multiplying by the binary
-approximation of `0.001` gives. A scale that only comes close to such a
-number, `0.3333333333` or `1.5e-9`, multiplies like any other:
+`scale` multiplies the value, whether mapped or read as a number: `0.001`
+for milliseconds to seconds, `100` for a fraction to a percentage. A scale
+that is written as exactly one over a whole number, such as `0.001`,
+`0.000000001`, `1e-9` or `0.5`, divides by that number instead. 412
+milliseconds are then `0.412` seconds, not the `0.41200000000000003` that
+multiplying by the binary approximation of `0.001` gives. A scale that only
+comes close to such a number, such as `0.3333333333` or `1.5e-9`, multiplies
+like any other:
 
 ```yaml
 - name: api_latency_seconds
@@ -2470,9 +2503,10 @@ number, `0.3333333333` or `1.5e-9`, multiplies like any other:
 Both work in every transform with rules: `regex`, `css`, `xpath`, `csv`, `jq`
 and `yq`.
 
-A label takes a `value_map` too, from text to text — a code to its name — with
-`"*"` for any other value; without a match and without `"*"`, the value is kept
-as it is, and a value mapped to `""` leaves the label off:
+A label takes a `value_map` too, from text to text, for example from a code
+to its name, with `"*"` for any other value. Without a match and without
+`"*"`, the value is kept as it is. A value mapped to `""` leaves the label
+off:
 
 ```yaml
 - name: worker_up
@@ -2484,16 +2518,20 @@ as it is, and a value mapped to `""` leaves the label off:
       value_map: {"1": running, "2": stopped, "0": "", "*": unknown}
 ```
 
-A label's `value_map` needs a rule with a `name`, and an expression to map;
-it is refused on a static label, on a `python` rule, and, mapping a value to
-`""`, on a `required` label. A `prometheus` rule takes `scale`, for plain samples only — a
-histogram's or summary's bounds are values too — and not `value_map`, since its
-values are numbers already; a `python` script sets its values itself, and
-takes neither. `scale` must be a finite number other than 0.
+Restrictions:
 
-A map that is long, or the same for many rules, goes in a file:
-`value_map_file` names one, on a rule or on a label, beside `value_map` or in
-its place:
+- A label's `value_map` needs a rule with a `name`, and an expression to
+  map. It is refused on a static label, on a `python` rule and, when it maps
+  a value to `""`, on a `required` label.
+- A `prometheus` rule takes `scale`, for plain samples only (the bounds of a
+  histogram or summary are values too), and not `value_map`, because its
+  values are already numbers.
+- A `python` script sets its values itself and takes neither.
+- `scale` must be a finite number other than 0.
+
+A map that is long, or shared by many rules, can go in a file.
+`value_map_file` names one, on a rule or on a label, together with
+`value_map` or in its place:
 
 ```yaml
 - name: device_state
@@ -2507,96 +2545,103 @@ its place:
       value_map_file: /etc/exporter/maps/sites.yaml
 ```
 
-The file is a YAML or JSON mapping, a key and its value a line
-(`"17": Frankfurt`), of at most 10,000 entries and 1 MiB; a rule's maps to
-numbers, a label's to text. It is read when the configuration loads and
-joined with the `value_map` beside it, whose entries win, and from there on
-the rule is as if the whole map were written in it. The path is absolute.
-With `--config.watch` an edit of the file reloads the configuration, and a
-file that is missing or is no mapping refuses the load, naming the rule and
-the file. The [target allocator](ALLOCATOR.md) does not open it: mount it
-on every replica. A collector written on the [debug
-page](#debugging-collectors) names none, outside [dangerous debug
-mode](#dangerous-debug-mode).
+- The file is a YAML or JSON mapping with one key and value per line
+  (`"17": Frankfurt`), of at most 10,000 entries and 1 MiB. A rule's file
+  maps to numbers, and a label's to text.
+- It is read when the configuration loads and merged with the `value_map`
+  beside it, whose entries take precedence. From then on the rule behaves as
+  if the whole map were written in it.
+- The path is absolute.
+- With `--config.watch`, an edit of the file reloads the configuration. A
+  file that is missing or is not a mapping refuses the load, with an error
+  that names the rule and the file.
+- The [target allocator](ALLOCATOR.md) does not open the file. Mount it on
+  every replica.
+- A collector written on the [debug page](#debugging-collectors) cannot name
+  one, outside [dangerous debug mode](#dangerous-debug-mode).
 
-Rules of one `name` make one metric, so a label they share must map alike:
-two such rules giving one label different `value_map`s are refused at load,
-since the same value would read as two names in one series. Give them one
-`value_map`, or different names. The map goes by the series' name: a
-`prometheus` rule without a `name` keeps each series' own, and its series of
-a name another rule has take that rule's `value_map`, its static labels
-included. A label with `truncate: true` is cut after it is mapped, so the
-value exported is within the limit (see [Long label values](#long-label-values)).
+Rules with the same `name` make one metric, so a label they share must be
+mapped the same way. Two such rules that give one label different
+`value_map`s are refused at load, because the same value would read as two
+names in one series. Give them one `value_map`, or different names. The map
+applies by the series' name: a `prometheus` rule without a `name` keeps each
+series' own name, and its series with a name that another rule has take that
+rule's `value_map`, including its static labels. A label with
+`truncate: true` is cut after it is mapped, so the exported value is within
+the limit (see [Long label values](#long-label-values)).
 
 #### Adding up nodes with `sum()`
 
-The XPath engine's `sum()` leaves out of the sum, without a word, every node
-it cannot read as a number, and a number with blanks around it — the cell of
-a table printed one cell to a line — is one it cannot read: the sum of a
-column was a wrong number, often `0`, and no error. XPath itself has the sum
-of text that is no number NaN. So the exporter reads the nodes of a `sum()`
-itself, and a sum has a value only when every node it adds up is a number:
+The XPath engine's `sum()` silently leaves out every node it cannot read as
+a number. A number with blanks around it, such as the cell of a table
+printed one cell per line, is one it cannot read. The sum of a column was
+therefore a wrong number, often `0`, with no error, although XPath itself
+defines the sum of text that is not a number as NaN. The exporter therefore
+reads the nodes of a `sum()` itself, and a sum has a value only when every
+node it adds up is a number:
 
-- An expression that is one `sum(...)` and nothing else, as
-  `sum(//td[@class='bytes'])`, is added up by the exporter: each node's
-  text without the blanks around it, read as the engine reads a number. A
-  node that is not a number — `n/a`, `1,234`, `12 MB`, an empty cell —
-  leaves the rule [missing its value](#when-a-metric-cannot-be-extracted),
-  by `required` and `error_mode` as any missing value:
+- An expression that is one `sum(...)` and nothing else, such as
+  `sum(//td[@class='bytes'])`, is added up by the exporter. It takes each
+  node's text without surrounding blanks and reads it as the engine reads a
+  number. A node that is not a number (`n/a`, `1,234`, `12 MB`, an empty
+  cell) leaves the rule
+  [missing its value](#when-a-metric-cannot-be-extracted), handled by
+  `required` and `error_mode` like any missing value:
   `metric "bytes" HTML XPath "sum(//td[@class='bytes'])" cannot be computed:
   it adds up text that is not a number, first "n/a" (2 of 14 nodes)` (over
-  XML it says `XPath`). Leave
-  such nodes out with a predicate, as in
-  `sum(//td[@class='bytes'][number(.) = number(.)])`, or select the nodes
-  with a rule of their own — where `value_map` or a `pre_script` makes
-  numbers of the text — and add the series up in PromQL.
-- Where `sum()` is a part of a larger expression, as in
+  XML the message says `XPath`). Exclude such nodes with a predicate, as in
+  `sum(//td[@class='bytes'][number(.) = number(.)])`. Alternatively, select
+  the nodes with a rule of their own, where `value_map` or a `pre_script`
+  turns the text into numbers, and add the series up in PromQL.
+- Where `sum()` is part of a larger expression, as in
   `sum(//v) div count(//v)` or `round(sum(//v))`, the engine computes it
-  with the rest and reads each node as it stands. The rule is missing its
-  value when the engine would leave a node out, and there blanks around a
-  number count: `metric "mean" XPath "sum(//v) div count(//v)" cannot be
+  with the rest and reads each node as it is. The rule is missing its value
+  when the engine would leave a node out, and here blanks around a number
+  count: `metric "mean" XPath "sum(//v) div count(//v)" cannot be
   computed: sum(//v) leaves out text it cannot read as a number, first
   " 12 " (1 of 3 nodes), and blanks around a number count`. XPath 1.0
-  cannot trim each node of a set — `normalize-space()` takes one — so
+  cannot trim each node of a set (`normalize-space()` takes one node), so
   select the nodes with a rule of their own and add the series up in
   PromQL, or rewrite the text in a `pre_script`.
-- A label is held to the same: `sum(../td)` is the sum of all its cells,
-  and one with a cell that is no number is a label that cannot be read. A
-  label has no missing value, so its series fails, as the metric's
-  `error_mode` says, with an error that names the metric, the node and the
-  label, and the series of the other nodes are made.
+- A label follows the same rule: `sum(../td)` is the sum of all its cells,
+  and a label with a cell that is not a number cannot be read. A label has
+  no missing value, so its series fails, as the metric's `error_mode` says,
+  with an error that names the metric, the node and the label. The series of
+  the other nodes are still produced.
 
-This reaches the calls of `sum()` that are evaluated where the expression
-is: outside every predicate. A `sum()` inside a predicate, as in
-`//row[sum(v) > 10]`, is evaluated by the engine for each node the
-predicate is asked of, and still leaves out what it cannot read. An
-argument that is a number or a string and no node-set is the engine's as
-well: `sum(count(//v))` is that number, and a string, as in
-`sum(string(//v))` or `sum(translate(//v, ',', ''))`, is the number it reads
-as, with no blanks around it. A string that is no number is one the engine
-fails on, which is
-[the rule's failure](#when-the-xpath-engine-fails-on-an-expression):
-`metric "v" XPath "sum(string(//v))" cannot be evaluated: the XPath engine
-failed on it: sum() function argument type must be a node-set or number`.
-Use `number(...)` for one value that may be no number, which is then the
-rule's missing value. A prefix before the name is passed over, as the
-engine passes over it: `fn:sum(//v)` is `sum(//v)`, alone and as a part of
-a larger expression.
+This covers the calls of `sum()` that are evaluated where the expression is,
+that is, outside every predicate.
 
-The nodes of a sum are read whether or not the engine would come to
-evaluate it, as on the right of an `or` whose left is true. Where the
+- A `sum()` inside a predicate, as in `//row[sum(v) > 10]`, is evaluated by
+  the engine for each node the predicate is applied to, and still leaves out
+  what it cannot read.
+- An argument that is a number or a string, not a node-set, is also left to
+  the engine. `sum(count(//v))` is that number. A string, as in
+  `sum(string(//v))` or `sum(translate(//v, ',', ''))`, is the number it
+  reads as, with no surrounding blanks. On a string that is not a number
+  the engine fails, which is
+  [the rule's failure](#when-the-xpath-engine-fails-on-an-expression):
+  `metric "v" XPath "sum(string(//v))" cannot be evaluated: the XPath engine
+  failed on it: sum() function argument type must be a node-set or number`.
+  Use `number(...)` for one value that may not be a number; that is then the
+  rule's missing value.
+- A prefix before the name is ignored, as the engine ignores it:
+  `fn:sum(//v)` is `sum(//v)`, alone and as part of a larger expression.
+
+The nodes of a sum are read whether or not the engine would actually
+evaluate it, as on the right of an `or` whose left side is true. Where the
 engine fails on reading them, as it does on a predicate it cannot evaluate
 over the response, the sum is left to the engine: the rule has its value
-when the engine never comes to the call, and fails when it does. A sum
-whose nodes are all numbers without blanks is the number it always was.
+when the engine never reaches the call, and fails when it does. A sum whose
+nodes are all numbers without blanks gives the same number as before.
 
 ### Reading a date or a time as the value
 
-A date or a time in a response — when a report was made, a job last ran, a
-certificate ends — is worth a series whose value is that moment in Unix
-seconds: `time() - app_last_backup_timestamp_seconds` is then how long ago it
-was. `time_format` says the text an expression gives is a time and how it is
-written:
+A date or a time in a response, such as when a report was made, when a job
+last ran or when a certificate expires, is worth a series whose value is
+that time in Unix seconds. `time() - app_last_backup_timestamp_seconds` then
+gives how long ago it was. `time_format` declares that the text an
+expression gives is a time, and how it is written:
 
 ```yaml
 - name: app_last_backup_timestamp_seconds
@@ -2605,17 +2650,17 @@ written:
   time_zone: Europe/Sofia
 ```
 
-`time_format` is a name, in either case, or a layout:
+`time_format` is a name, in any letter case, or a layout:
 
 - `rfc3339` reads `2026-10-03T09:00:00Z` and `2026-10-03T12:00:00.25+03:00`,
-  with or without a fraction of a second;
+  with or without a fraction of a second.
 - `rfc1123` reads the date of an HTTP header, `Sat, 03 Oct 2026 09:00:00 GMT`,
-  and the same with a numeric zone, `+0300`;
-- a layout is the reference time, `Mon Jan 2 15:04:05 MST 2006`, written the
-  way the text writes its times — the convention of Go's `time` package,
-  which Promtail and Telegraf take their layouts in too. Each part of the
-  reference time has a number of its own, so the layout says where each part
-  stands:
+  and the same with a numeric zone, `+0300`.
+- A layout is the reference time, `Mon Jan 2 15:04:05 MST 2006`, written the
+  way the text writes its times. This is the convention of Go's `time`
+  package, which Promtail and Telegraf also use for layouts. Each part of
+  the reference time has its own number, so the layout shows where each part
+  is:
 
 | Part | Written in a layout as |
 | --- | --- |
@@ -2636,95 +2681,125 @@ written:
 | `Oct 3, 2026 9:00 PM` | `"Jan 2, 2006 3:04 PM"` |
 | `20261003T090007Z` | `"20060102T150405Z07:00"` |
 
-Quote a layout, so YAML hands it over as the text it is. The dots, the
-slashes, a `T` between the date and the time and any other text that is none
-of the parts above stand for themselves. A part is a part wherever it stands,
-though, and whatever was meant by it: the digits `1` to `5` and `01` to `06`,
-inside a longer number too, `15`, `2006` and `002`; the names `Jan`,
-`January`, `Mon` and `Monday`; `PM`, `pm` and `MST`; `-07` and `Z07`; and
-zeros or nines after a dot or a comma. In `"Q4 2006-01-02"` the `4` is the
-minute, so the text may have any number there; the `3` of `"… UTC+3"` is an
-hour, and the layout is refused for having no `PM` beside it. When the text
-has such digits or words around its time, have the rule's expression give the
-time alone, as a regex's capture group does, and write the layout for that.
+Quote a layout, so that YAML passes it on as text. The dots, the slashes, a
+`T` between the date and the time, and any other text that is not one of the
+parts above stand for themselves.
 
-A fraction of a second needs nothing in the layout: seconds written `05` read
-`07`, `07.5` and `07,123456` alike. Write `05` or, to the same effect,
-`05.999999999`. Zeros after the seconds stand for exactly that many digits:
-`05.000` reads `07.123` and neither `07` nor `07.5`. A year of two digits,
-`06`, is one of 1969 to 2068: `69` to `99` are in the 1900s.
+A part is a part wherever it appears, whatever was intended:
+
+- the digits `1` to `5` and `01` to `06`, even inside a longer number, and
+  `15`, `2006` and `002`;
+- the names `Jan`, `January`, `Mon` and `Monday`;
+- `PM`, `pm` and `MST`;
+- `-07` and `Z07`;
+- zeros or nines after a dot or a comma.
+
+In `"Q4 2006-01-02"` the `4` is the minute, so the text may have any number
+there. The `3` of `"… UTC+3"` is an hour, and the layout is refused because
+it has no `PM` beside it. When the text has such digits or words around its
+time, make the rule's expression return the time alone, as a regex capture
+group does, and write the layout for that.
+
+Fractions and two-digit years:
+
+- A fraction of a second needs nothing in the layout: seconds written `05`
+  read `07`, `07.5` and `07,123456` alike. Write `05` or, to the same
+  effect, `05.999999999`.
+- Zeros after the seconds stand for exactly that many digits: `05.000` reads
+  `07.123` and neither `07` nor `07.5`.
+- A two-digit year, `06`, is a year from 1969 to 2068: `69` to `99` are in
+  the 1900s.
 
 A layout is written without blanks before or after it, as the text is read
-without its own, and the hour of a 12-hour clock needs `PM` (or `pm`) in the
-layout: `"2006-01-02 03:04:05"` would read no afternoon, so it is refused;
-write `15` for a 24-hour clock.
+without its own. The hour of a 12-hour clock needs `PM` (or `pm`) in the
+layout: `"2006-01-02 03:04:05"` could read no afternoon, so it is refused.
+Write `15` for a 24-hour clock.
 
-The value is the time in Unix seconds, a fraction of a second kept, and
-[`scale`](#mapping-text-to-values-and-scaling-them) applies after: `1000`
-gives milliseconds. A time already written as a number of Unix seconds needs
-no `time_format`, and one in milliseconds only `scale: 0.001`.
+The value is the time in Unix seconds, with any fraction of a second kept.
+[`scale`](#mapping-text-to-values-and-scaling-them) applies afterwards:
+`1000` gives milliseconds. A time already written as a number of Unix
+seconds needs no `time_format`, and one in milliseconds needs only
+`scale: 0.001`.
 
-A text that names its zone or its offset from UTC is read by it, when the
-layout has the zone as one of its parts: `Z07:00`, `-0700`, `-07:00` or `MST`.
-One that does not is read in `time_zone`, an IANA name such as `Europe/Sofia`
-or `America/New_York`, by the offset that zone has on that day, summer time
-included; without `time_zone` it is read as UTC. A zone typed into the layout
-as the text has it — the `Z` of `"2006-01-02T15:04:05Z"`, a `UTC` or a `GMT`
-— is text to match and no zone, so such a text is read in `time_zone` as
-well: write `Z07:00` or `MST` in its place. The zones are built into the
-binary, so they are known in an image or on a host that has no zone files. An
-abbreviation in the text (`MST` in the layout) is read as one of
-`time_zone`'s own — `EET` and `EEST` with `Europe/Sofia` — or as `UTC` or
-`GMT`; `GMT+3` and `GMT-5`, `GMT` with a whole number of hours, are that many
-hours ahead of UTC and behind it. Any other abbreviation fails the rule, since
-an abbreviation alone does not say an offset.
+**Time zones.**
 
-On the night the clocks change, a local time without a zone of its own is one
-of two moments, or none. It is then read as Go's `time.Date` reads it, by the
-offset before the change or the one after, with no promise of which: in
-`Europe/Sofia`, `2026-10-25 03:30`, which the clocks show twice, is read as
-the second, in winter time (01:30 UTC), and `2026-03-29 03:30`, which they
-skip, as an hour after 02:30 (01:30 UTC). A source that writes UTC or its
-offset has no such hour.
+- A text that names its zone or its offset from UTC is read by it, when the
+  layout has the zone as one of its parts: `Z07:00`, `-0700`, `-07:00` or
+  `MST`.
+- A text that does not is read in `time_zone`, an IANA name such as
+  `Europe/Sofia` or `America/New_York`, with the offset that zone has on
+  that day, including summer time. Without `time_zone` it is read as UTC.
+- A zone typed into the layout literally, as the text has it (the `Z` of
+  `"2006-01-02T15:04:05Z"`, a `UTC` or a `GMT`), is text to match, not a
+  zone. Such a text is therefore read in `time_zone` as well. Write `Z07:00`
+  or `MST` in its place.
+- The zones are built into the binary, so they are known in an image or on a
+  host that has no zone files.
+- An abbreviation in the text (`MST` in the layout) is read as one of
+  `time_zone`'s own (`EET` and `EEST` with `Europe/Sofia`), or as `UTC` or
+  `GMT`. `GMT+3` and `GMT-5`, that is `GMT` with a whole number of hours,
+  are that many hours ahead of UTC or behind it. Any other abbreviation
+  fails the rule, because an abbreviation alone does not determine an
+  offset.
 
-The text is read without its surrounding blanks, like `value_map`'s. It works
-in every transform with rules: a regex capture, a CSS element's or XPath
-node's text, a CSV cell, a jq or yq string. A jq or yq value that is not text
-— a number, an object — fails the rule, saying `time_format` reads text. An
-empty or absent text is a missing value, as for any rule. Text that is no time
-in the format fails the rule, under its
-[`error_mode`](#when-a-metric-cannot-be-extracted), naming the text and the
-format: `metric "app_last_backup_timestamp_seconds": value "never" is not a
-time in time_format "2006-01-02 15:04:05"; write the layout as the text writes
-the reference time, Mon Jan 2 15:04:05 MST 2006`.
+On the night the clocks change, a local time without a zone of its own is
+one of two moments, or none. It is then read as Go's `time.Date` reads it,
+by the offset before the change or the one after, with no guarantee of
+which. In `Europe/Sofia`, `2026-10-25 03:30`, which the clocks show twice,
+is read as the second occurrence, in winter time (01:30 UTC), and
+`2026-03-29 03:30`, which they skip, as an hour after 02:30 (01:30 UTC). A
+source that writes UTC or its offset has no such hour.
 
-`time_format` and `value_map` do not go together, since each turns the text
-into the value, and neither a `python` nor a `prometheus` rule takes
-`time_format`. A layout must have a year, a month and a day: `15:04` alone is
-no moment, and `yyyy-mm-dd` or `%Y-%m-%d`, layouts of other conventions, hold
-no part of the reference time at all. A sample date, `2026-10-03`, or the
-name of another format, `iso8601`, is read as a layout too, its digits as
-parts, and refused for what that layout lacks or cannot read, in words that
-end with what a layout is. All of this is
-[checked when the configuration loads](#checked-when-the-configuration-loads).
+**What is read, and failures.** The text is read without its surrounding
+blanks, like `value_map`'s. `time_format` works in every transform with
+rules: on a regex capture, the text of a CSS element or an XPath node, a CSV
+cell, and a jq or yq string.
 
-Either key written empty, `time_format: ""` or `time_zone: ""`, is the key
-left out, as an optional key of free text is throughout the configuration: a
-rule with `time_format: ""` reads its value as a number, and may have a
-`value_map`; `time_zone: ""` is UTC beside a `time_format` and nothing
-without one; and `time_format: ""` beside a `time_zone` that names a zone is
-refused as `time_zone` without `time_format`. The
-[schema](#editor-support) says the same of each.
+- A jq or yq value that is not text, such as a number or an object, fails
+  the rule with a message that says `time_format` reads text.
+- An empty or absent text is a missing value, as for any rule.
+- Text that is not a time in the format fails the rule, under its
+  [`error_mode`](#when-a-metric-cannot-be-extracted), with an error that
+  names the text and the format: `metric "app_last_backup_timestamp_seconds":
+  value "never" is not a time in time_format "2006-01-02 15:04:05"; write
+  the layout as the text writes the reference time, Mon Jan 2 15:04:05 MST
+  2006`.
+
+**Checks at load.** All of the following is
+[checked when the configuration loads](#checked-when-the-configuration-loads):
+
+- `time_format` and `value_map` cannot be combined, because each turns the
+  text into the value. Neither a `python` nor a `prometheus` rule takes
+  `time_format`.
+- A layout must have a year, a month and a day. `15:04` alone is not a point
+  in time, and `yyyy-mm-dd` or `%Y-%m-%d`, layouts of other conventions,
+  contain no part of the reference time at all.
+- A sample date, `2026-10-03`, or the name of another format, `iso8601`, is
+  read as a layout too, with its digits as parts. It is refused for what
+  that layout lacks or cannot read, with a message that ends by explaining
+  what a layout is.
+
+Either key written empty, `time_format: ""` or `time_zone: ""`, counts as
+the key left out, like every optional key of free text in the configuration:
+
+- A rule with `time_format: ""` reads its value as a number and may have a
+  `value_map`.
+- `time_zone: ""` is UTC beside a `time_format`, and has no effect without
+  one.
+- `time_format: ""` beside a `time_zone` that names a zone is refused as
+  `time_zone` without `time_format`.
+
+The [schema](#editor-support) describes each key the same way.
 
 ### Value-parsing helpers
 
-Targets often write a value for people rather than as a number: Redis's
+Targets often write a value for people instead of as a number. Redis's
 `used_memory_human` is `1.00M`, an API reports an uptime as `1h2m` and a
-load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`, a
-Kubernetes object asks for `250m` of CPU and `2Gi` of memory. Five
-helpers read those forms, so a rule need not take them apart with a regular
-expression of its own. In every jq and yq expression they are functions of
-their input:
+load as `55.12%`, a status page shows `Sat, 03 Oct 2026 09:00:00 GMT`, and a
+Kubernetes object requests `250m` of CPU and `2Gi` of memory. Five helpers
+read those forms, so that a rule does not need its own regular expression to
+take them apart. In every jq and yq expression they are functions of their
+input:
 
 ```yaml
 - name: redis_memory_used_bytes
@@ -2739,10 +2814,10 @@ their input:
   expression: .resources.requests.memory | parse_quantity   # "2Gi" -> 2147483648
 ```
 
-and a [Python](PYTHON.md) script or pre-script has them as functions of the
-same names, `parse_bytes(row["size"])`. The two give the same number, and fail
-with the same message, for every input: both are tested against one file of
-test vectors, `testdata/values/helpers.json`.
+A [Python](PYTHON.md) script or pre-script has them as functions of the same
+names, as in `parse_bytes(row["size"])`. The jq and Python versions give the
+same number and fail with the same message for every input: both are tested
+against one file of test vectors, `testdata/values/helpers.json`.
 
 | Helper | Reads | Gives | Examples |
 | --- | --- | --- | --- |
@@ -2752,14 +2827,15 @@ test vectors, `testdata/values/helpers.json`.
 | `parse_percent` | A number followed by `%` | A ratio | `55.12%` and `55.12 %` → 0.5512; `100%` → 1; `-3.5%` → -0.035 |
 | `parse_quantity` | A [Kubernetes quantity](https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/quantity/): a number, then a suffix or none | Its base unit: cores, bytes, a count | `250m` → 0.25; `2Gi` → 2147483648; `500M` → 500000000; `1e3` → 1000; `-100m` → -0.1 |
 
-What each reads, exactly:
+The exact rules for each:
 
 - **A number** is digits, with or without a fraction after a dot (`3`, `3.5`,
-  `.5`, `5.`), and at most 100 digits. It has no sign, except
-  where `parse_duration`, `parse_percent` and `parse_quantity` take one
-  below, no exponent (`1e3`) but as `parse_quantity`'s suffix, no thousands
-  separator and no decimal comma. Blanks around the whole text — spaces,
-  tabs and line ends — are dropped, as a rule drops them around a value.
+  `.5`, `5.`), and at most 100 digits. It has no sign (except where
+  `parse_duration`, `parse_percent` and `parse_quantity` accept one, below),
+  no exponent such as `1e3` (except as `parse_quantity`'s suffix), no
+  thousands separator and no decimal comma. Blanks around the whole text
+  (spaces, tabs and line ends) are dropped, as a rule drops them around a
+  value.
 - **`parse_bytes`**: no unit and `B` are bytes; `KiB`, `MiB`, `GiB`, `TiB`,
   `PiB` and `EiB` are powers of 1024 (IEC); `kB`, `MB`, `GB`, `TB`, `PB` and
   `EB` are powers of 1000 (SI); and a bare letter, `K`, `M`, `G`, `T`, `P` or
@@ -2783,10 +2859,11 @@ What each reads, exactly:
     and under 60 for minutes and seconds. Two fields are minutes and
     seconds, not hours and minutes.
   - in ISO 8601: `P`, then weeks (`W`) and days (`D`), then `T` and hours
-    (`H`), minutes (`M`) and seconds (`S`), each part optional but one there,
-    in that order, in upper case, a fraction on the last part only:
-    `PT1H2M3S`, `P1DT2H`, `PT0.5S`, `P2W`. Years and months (`P1Y`, `P1M`)
-    are refused: they have no fixed length in seconds.
+    (`H`), minutes (`M`) and seconds (`S`). Each part is optional, but at
+    least one must be present. The parts are in that order and in upper
+    case, and only the last part may have a fraction: `PT1H2M3S`, `P1DT2H`,
+    `PT0.5S`, `P2W`. Years and months (`P1Y`, `P1M`) are refused, because
+    they have no fixed length in seconds.
 - **`parse_time`** reads
   - RFC 3339 and the ISO 8601 date and time it is a form of:
     `2026-10-03T09:00:00Z`, with `T`, `t` or a blank between the date and
@@ -2797,57 +2874,64 @@ What each reads, exactly:
     the names of the day and the month in any case. The day of the week
     must be the date's.
 
-  Any year from `0000` to `9999` is read, in the Gregorian calendar
-  extended back before its adoption; a moment before 1970 is negative,
+  Any year from `0000` to `9999` is read, in the Gregorian calendar extended
+  back before its adoption. A time before 1970 is negative:
   `1969-12-31T23:59:59Z` → -1.
 
   A date and time without a zone or an offset, `2026-10-03 09:00:00`, is
-  refused rather than read as UTC: it names no single moment. Seconds must
-  be written and be under 60, and the date must exist (`2026-02-30` fails).
-  A time in any other layout is read with a rule's
-  [`time_format`](#reading-a-date-or-a-time-as-the-value), which takes a
-  layout and a `time_zone`, or in jq with `strptime` and `mktime`; the
-  helper reads only the two forms whose zone is in the text.
-- **`parse_percent`**: a number with a sign or none, blanks or none, and
-  `%`, which must be there. It gives the ratio, a hundredth of the
-  percentage, since Prometheus keeps ratios in its base unit, 0 to 1:
-  `55.12%` is `0.5512`, beside the other ratios of a target, and a query
-  needs no division by 100. Multiply by 100 with the rule's `scale` to keep
-  the percentage.
-- **`parse_quantity`**: a number with a sign or none, then, with no blank
-  before it, a suffix written in its case, as Kubernetes writes CPU,
-  memory, storage and counts: `Ki`, `Mi`, `Gi`, `Ti`, `Pi` and `Ei` are
-  powers of 1024; `n`, `u`, `m`, `k`, `M`, `G`, `T`, `P` and `E` are
-  powers of 1000, from a billionth to 10^18, so `m` is a thousandth and `M`
-  a million; and `e3` or `E-3`, `e` or `E` with a sign or none and one or
-  two digits, is a power of ten. It gives the quantity in its base unit,
-  `250m` of CPU 0.25 cores and `2Gi` of memory 2147483648 bytes. `K`, a
-  blank before the suffix, and anything after it fail.
+  refused instead of being read as UTC, because it does not identify one
+  point in time. Seconds must be written and be under 60, and the date must
+  exist (`2026-02-30` fails). To read a time in any other layout, use a
+  rule's [`time_format`](#reading-a-date-or-a-time-as-the-value), which
+  takes a layout and a `time_zone`, or `strptime` and `mktime` in jq. The
+  helper reads only the two forms that carry their zone in the text.
+- **`parse_percent`**: a number with or without a sign, optional blanks, and
+  a `%`, which is required. It gives the ratio, a hundredth of the
+  percentage, because Prometheus keeps ratios in their base unit, 0 to 1.
+  `55.12%` is `0.5512`, consistent with the other ratios of a target, and a
+  query needs no division by 100. Multiply by 100 with the rule's `scale` to
+  keep the percentage.
+- **`parse_quantity`**: a number with or without a sign, followed directly,
+  with no blank, by a case-sensitive suffix, as Kubernetes writes CPU,
+  memory, storage and counts:
+  - `Ki`, `Mi`, `Gi`, `Ti`, `Pi` and `Ei` are powers of 1024.
+  - `n`, `u`, `m`, `k`, `M`, `G`, `T`, `P` and `E` are powers of 1000, from
+    a billionth to 10^18, so `m` is a thousandth and `M` a million.
+  - `e3` or `E-3` (`e` or `E`, an optional sign, and one or two digits) is a
+    power of ten.
 
-Each number is read exactly and rounded to a float once: `1.1GB` is
-1100000000 and `0.1s0.2s` 0.3, not 1100000000.0000002 and
-0.30000000000000004, as multiplying and adding floats on the way would give.
+  It gives the quantity in its base unit: `250m` of CPU is 0.25 cores, and
+  `2Gi` of memory is 2147483648 bytes. `K`, a blank before the suffix, and
+  anything after the suffix fail.
 
-Each reads text. `parse_bytes`, `parse_duration` and `parse_quantity` also
-take a number, a JSON or YAML number in jq and an `int` or a `float` in
-Python, as being bytes, seconds or a quantity already, and give it back
-unchanged, since an API that
-writes `"1.5K"` for one value may write `1536` for another. Anything else —
+Each number is read exactly and rounded to a float once. `1.1GB` is
+1100000000 and `0.1s0.2s` is 0.3, not 1100000000.0000002 and
+0.30000000000000004, which multiplying and adding floats along the way would
+give.
+
+Each helper reads text. `parse_bytes`, `parse_duration` and `parse_quantity`
+also accept a number (a JSON or YAML number in jq, an `int` or a `float` in
+Python), treat it as bytes, seconds or a quantity already, and return it
+unchanged, because an API that writes `"1.5K"` for one value may write
+`1536` for another. Anything else fails with a message that says what the
+helper reads, such as `parse_time reads text, not a number`. That covers
 `null` (`None`), a boolean, an object, an array, and a number given to
-`parse_time` or `parse_percent` — fails, saying what the helper reads:
-`parse_time reads text, not a number`. A field a response may leave out is
-passed on only when it is there, `.uptime | values | parse_duration`, so it
-is a [missing value](#when-a-metric-cannot-be-extracted) rather than a
-failure.
+`parse_time` or `parse_percent`. Pass a field that a response may omit only
+when it is present, as in `.uptime | values | parse_duration`, so that it is
+a [missing value](#when-a-metric-cannot-be-extracted) instead of a failure.
 
-Text a helper cannot read fails as any other failing expression of its
-transform does: a jq or yq rule with the helper's error, under the rule's
-[`error_mode`](#when-a-metric-cannot-be-extracted) (`try ... catch` and `?`
-catch it, as they catch any jq error), and a Python script or pre-script
-with a `ValueError` (a `TypeError` for what is not text), which the script
-may catch and otherwise fails it as any exception does. The message names
-the helper and quotes the text, cut to its first 64 bytes with its length
-when it is longer, and says what to write:
+Text that a helper cannot read fails like any other failing expression of
+its transform:
+
+- A jq or yq rule fails with the helper's error, under the rule's
+  [`error_mode`](#when-a-metric-cannot-be-extracted). `try ... catch` and
+  `?` catch it, as they catch any jq error.
+- A Python script or pre-script gets a `ValueError` (a `TypeError` for input
+  that is not text), which the script may catch and which otherwise fails it
+  like any exception.
+
+The message names the helper, quotes the text (cut to its first 64 bytes,
+with its length, when it is longer) and says what to write:
 
 ```text
 parse_bytes cannot read "12 KB/s" as a size: write a number, then optionally blanks and a unit: B, KiB to EiB, kB to EB, or K to E
@@ -2857,16 +2941,16 @@ parse_percent cannot read "55.12" as a percentage: write a number followed by %,
 parse_quantity cannot read "1K" as a quantity: write a number and a Kubernetes suffix or none: Ki to Ei, n, u, m, k, M to E, or an exponent such as e3
 ```
 
-The helpers are gojq functions the exporter adds, named so that none hides
-a builtin of jq or gojq. They are there in every jq expression the exporter
-evaluates, those of [pagination](REQUESTS.md#pagination) and
-[logins](AUTHENTICATION.md#logging-in-to-a-target) included.
+The helpers are gojq functions that the exporter adds, named so that none
+hides a builtin of jq or gojq. They are available in every jq expression the
+exporter evaluates, including those of [pagination](REQUESTS.md#pagination)
+and [logins](AUTHENTICATION.md#logging-in-to-a-target).
 
 ### Programs written for jq
 
-The engine is [gojq](https://github.com/itchyny/gojq), which leaves out a
-few names jq has. The exporter adds them, so a program written and tried
-with `jq` loads as it is:
+The engine is [gojq](https://github.com/itchyny/gojq), which lacks a few
+names that jq has. The exporter adds them, so a program written and tested
+with `jq` loads unchanged:
 
 | Name | Here |
 | --- | --- |
@@ -2877,13 +2961,13 @@ with `jq` loads as it is:
 | `@base32`, `@base32d` | Encode text as base32, and decode it, padded or not, also in a string, as `@base32 "id=\(.id)"`. |
 
 `input`, `inputs` and a module read with `import` or `include` are refused
-when the configuration loads, since a program has its one input and no
-files; `$ENV` and `env` are empty.
+when the configuration loads, because a program has exactly one input and no
+files. `$ENV` and `env` are empty.
 
-To see what an expression makes part of the way, put `debug` where the
-value is and probe with `debug=true`, or run the collector on the debug
-page: each value is a line of the report's log, with its rule and its
-expression, `debug(message)` showing the message instead.
+To see an intermediate value of an expression, put `debug` where the value
+is and probe with `debug=true`, or run the collector on the debug page. Each
+value is a line of the report's log, with its rule and its expression;
+`debug(message)` shows the message instead.
 
 ```yaml
 - name: queue_jobs
@@ -2896,17 +2980,18 @@ level=INFO msg="jq debug" rule="metric \"queue_jobs\"" expression=".queues[] | d
 level=INFO msg="jq debug" rule="metric \"queue_jobs\"" expression=".jobs | debug(\"jobs of \\(.)\") | tonumber" value="\"jobs of 7\""
 ```
 
-A value is written as JSON, cut after 1024 bytes, and a transform shows
-its first hundred lines. A scrape pays nothing for a `debug` left in a rule.
+A value is written as JSON and cut after 1024 bytes, and a transform shows
+its first hundred lines. A `debug` left in a rule costs a normal scrape
+nothing.
 
 ### Histograms from a list of values
 
-A response often lists things one by one — the requests of the last minute
+A response often lists things one by one: the requests of the last minute
 with their durations, the files of a directory with their sizes, the jobs of
-a queue with their ages — where a distribution says more than a series per
-thing, and more than a series per thing is worth to store. A rule of `type:
-histogram` with a `histogram` block counts the values it reads in a
-histogram instead of making each a series, without a Python script:
+a queue with their ages. For such data a distribution is more useful than a
+series per item, and cheaper to store. A rule of `type: histogram` with a
+`histogram` block counts the values it reads into a histogram instead of
+making each one a series, without a Python script:
 
 ```yaml
 metrics:
@@ -2920,33 +3005,47 @@ metrics:
 ```
 
 Nothing changes for a rule without the block: `type: histogram` without it is
-refused for every transform but `prometheus`, as it was. The block is taken by
-the `jq`, `yq`, `xpath`, `css`, `csv` and `regex` transforms, and refused on a
-`prometheus` rule, which passes on the target's histograms with their own
-buckets, and on a `python` rule, whose script makes its series itself.
+still refused for every transform except `prometheus`. The block is accepted
+by the `jq`, `yq`, `xpath`, `css`, `csv` and `regex` transforms. It is
+refused on a `prometheus` rule, which passes on the target's histograms with
+their own buckets, and on a `python` rule, whose script makes its series
+itself.
 
-The values are what the rule would otherwise make series of, read the same
-way: every value a `jq` or `yq` expression gives, or the one value of each
-item with `items`; the text of each node an XPath expression selects, or the
-one value it computes; each match of a regex; a column's cell in each row of
-a CSV; and the text of each element a CSS selector matches within each item
-with `items`, or, without `items`, of every element it matches — which a rule
-of another type refuses more than one of, since nothing would tell their
-series apart. `value_map`, `time_format` and `scale` apply to each value
-before it is counted, so the `scale: 0.001` above counts milliseconds in
-buckets of seconds.
+**The values.** The values are the ones the rule would otherwise turn into
+series, read in the same way:
 
-`buckets` are the upper bounds of the histogram's buckets: finite numbers, in
-increasing order, each once, at most 100. The bucket `+Inf` is added; written
-among them it is refused, as are a bound out of order or written twice, NaN,
-`-Inf`, an empty list and the block on a rule of any other type or of none.
-A value is counted in every bucket whose bound it is at most, as Prometheus'
-`le` says — a value of exactly 0.1 is in `le="0.1"` — and in `+Inf`; the
-`_sum` is the sum of the values, after `scale`, and the `_count` how many
-there were. An infinity is counted as client libraries count one: `-Inf` in
-every bucket, `+Inf` in the bucket `+Inf` alone. The histogram is written as
-any other, a `_bucket` line of each bound and of `+Inf`, then `_sum` and
-`_count`; the example's target listing requests of 3ms, 40ms and 2s gives:
+- every value a `jq` or `yq` expression gives, or the one value of each item
+  with `items`;
+- the text of each node an XPath expression selects, or the one value it
+  computes;
+- each match of a regex;
+- a column's cell in each row of a CSV;
+- the text of each element a CSS selector matches within each item with
+  `items` or, without `items`, of every element it matches. (A rule of
+  another type refuses more than one such element, because nothing would
+  distinguish their series.)
+
+`value_map`, `time_format` and `scale` apply to each value before it is
+counted, so the `scale: 0.001` above counts milliseconds in buckets of
+seconds.
+
+**The buckets.** `buckets` are the upper bounds of the histogram's buckets:
+finite numbers in increasing order, each once, at most 100. The `+Inf`
+bucket is added automatically. These are refused: `+Inf` written in the
+list, a bound out of order or written twice, NaN, `-Inf`, an empty list, and
+the block on a rule of any other type or of none.
+
+- A value is counted in every bucket whose bound is greater than or equal to
+  it, as Prometheus' `le` means (a value of exactly 0.1 is in `le="0.1"`),
+  and in `+Inf`.
+- The `_sum` is the sum of the values, after `scale`, and the `_count` is how
+  many there were.
+- An infinity is counted as client libraries count one: `-Inf` in every
+  bucket, `+Inf` in the `+Inf` bucket alone.
+
+The histogram is written like any other: a `_bucket` line for each bound and
+for `+Inf`, then `_sum` and `_count`. If the example's target lists requests
+of 3ms, 40ms and 2s, the result is:
 
 ```text
 # HELP request_duration_seconds Durations of the requests the target lists.
@@ -2963,12 +3062,12 @@ request_duration_seconds_sum 2.043
 request_duration_seconds_count 3
 ```
 
-The labels apply to the histogram, not to each value. A static label is on
-every histogram of the rule; a label read from the response splits the
-values into one histogram for each distinct set of label values, in the
-order its first value came, which is what `items` makes natural — the
-durations of each method below, from a CSV of one request a row, are a
-histogram per method:
+**Labels.** The labels apply to the histogram, not to each value. A static
+label is on every histogram of the rule. A label read from the response
+splits the values into one histogram for each distinct set of label values,
+in the order in which each set first appears. `items` makes this natural: in
+the example below, a CSV with one request per row gives a histogram of
+durations per method:
 
 ```yaml
 transform:
@@ -2985,55 +3084,72 @@ metrics:
       buckets: [0.01, 0.1, 1]
 ```
 
-A label with an empty value is no label, so values whose labels differ only
-in one are one histogram's, as they are one series to Prometheus. The labels
-are grouped by the values their expressions give: a label's `value_map` or
-`truncate: true` that makes two sets alike afterwards leaves two histograms
-of one series, which fails the scrape as a duplicate series, so map such
-values in the expression instead. Two sets that differ are two histograms
-whatever bytes their values hold: a value that is not UTF-8 is grouped by
-its bytes as read, before the exporter repairs it.
+- A label with an empty value is not a label. Values whose labels differ
+  only in such a label therefore belong to one histogram, as they are one
+  series to Prometheus.
+- The values are grouped by what the label expressions give. If a label's
+  `value_map` or `truncate: true` makes two sets identical afterwards, the
+  result is two histograms of one series, which fails the scrape as a
+  duplicate series. Map such values in the expression instead.
+- Two sets that differ are two histograms whatever bytes their values hold.
+  A value that is not UTF-8 is grouped by its bytes as read, before the
+  exporter repairs it.
 
-A value that cannot be counted is handled by the rule's
-[`error_mode`](#when-a-metric-cannot-be-extracted), as any rule's value is: a
-value that is no number, and NaN, which is in no bucket and would make the
-sum NaN for good (`metric "request_duration_seconds": value is NaN,
-which a histogram cannot count`), and a missing value, such as a `null`
-among the durations, as `required` says. Under `log` and `ignore` the
-histogram counts the other values, and under `fail` the scrape fails.
+**Values that cannot be counted** are handled by the rule's
+[`error_mode`](#when-a-metric-cannot-be-extracted), like any rule's value.
+That covers a value that is not a number; NaN, which belongs to no bucket and
+would make the sum NaN permanently (`metric "request_duration_seconds":
+value is NaN, which a histogram cannot count`); and a missing value, such as
+a `null` among the durations, as `required` says. Under `log` and `ignore`
+the histogram counts the other values, and under `fail` the scrape fails.
 
-An empty list is a histogram that counted nothing — every bucket, the
-`_sum` and the `_count` 0 — so the series is there whether the target listed
-anything or not, and is no missing value whatever `required` says: a `jq`
-expression that gives no value, `items` that select nothing, an XPath
-expression or a CSS selector that selects nothing, a regex that matches
-nothing, a CSV without rows. Only a rule whose labels are all static has
-one: a rule with a label read from the response has no labels to give a
-histogram of no value, and makes none. A `jq` path into a key the response
-lacks, `.requests[]` of a document without `requests`, is no empty list but
-an error of the expression, as it is for any rule.
+**An empty list** gives a histogram that counted nothing, with every bucket,
+the `_sum` and the `_count` at 0. The series therefore exists whether or not
+the target listed anything, and an empty list is not a missing value,
+whatever `required` says. Empty lists are: a `jq` expression that gives no
+value, `items` that select nothing, an XPath expression or a CSS selector
+that selects nothing, a regex that matches nothing, and a CSV without rows.
 
-Each histogram is one series of
-[`limits.max_metrics`](#memory), however many values it counts, so a
-list of a hundred thousand durations costs one series; a rule whose labels
-split its values into more histograms than the limit allows fails the scrape
-as a rule of too many series does. How many values a response can hold is
+- Only a rule whose labels are all static has such an empty histogram. A
+  rule with a label read from the response has no labels to give a
+  histogram of no values, so it produces none.
+- A `jq` path into a key the response lacks, such as `.requests[]` on a
+  document without `requests`, is not an empty list but an error of the
+  expression, as for any rule.
+
+**Limits.** Each histogram is one series for
+[`limits.max_metrics`](#memory), however many values it counts, so a list of
+a hundred thousand durations costs one series. A rule whose labels split its
+values into more histograms than the limit allows fails the scrape, like a
+rule with too many series. The number of values a response can hold is
 bounded by its size (`max_response_bytes`).
 
-The histogram describes the values of this one response. It is made anew on
-every scrape and counts nothing of the scrape before, so its buckets and its
-`_count` go down as well as up when the target's list changes, which a
-histogram Prometheus' client libraries keep never does: `rate()` and
-`increase()` over it mean nothing unless the target's list itself only grows.
-Read it as it is, as with `histogram_quantile(0.95,
+**Reading the histogram.** The histogram describes the values of this one
+response. It is built anew on every scrape and carries nothing over from the
+previous one. Its buckets and its `_count` therefore go down as well as up
+when the target's list changes, which never happens to a histogram kept by
+Prometheus' client libraries. `rate()` and `increase()` over it are
+meaningless unless the target's list itself only grows. Read it as it is,
+for example with `histogram_quantile(0.95,
 request_duration_seconds_bucket)` for the 95th percentile of the listed
-durations, summed by `le` across targets where needed. It is exported as a
-`histogram`, in the text format, [OpenMetrics](#openmetrics) (not as a
-`gaugehistogram`, which Prometheus reads as gauges) and to
-[OTLP](OTLP.md), where it is a histogram data point of the bounds and counts
-of each bucket. `--dry-run` checks the block as startup does, and a
-[debug probe](#debug-probes) counts each histogram as one series of its
-metric and shows it among the metrics as the probe answers it.
+durations, summed by `le` across targets where needed.
+
+It is exported as a `histogram`: in the text format, in
+[OpenMetrics](#openmetrics) (not as a `gaugehistogram`, which Prometheus
+reads as gauges) and to [OTLP](OTLP.md), where it is a histogram data point
+with the bounds and counts of each bucket. `--dry-run` checks the block as
+startup does. A [debug probe](#debug-probes) counts each histogram as one
+series of its metric and shows it among the metrics as the probe answers it.
+
+### Derived series
+
+A target often counts things that a dashboard wants as a ratio or a total.
+memcached counts the gets that found their item and those that did not, not
+its hit ratio. A queue lists its items by shard, where the depth of each
+queue is wanted. A collector's `derived` list computes series from the
+collector's own series after its transform has produced them. It works the
+same way under every transform (`regex`, `csv`, `xpath`, `css`, `jq`, `yq`,
+`python` and `prometheus`), so no Python script or recording rule is needed:
 
 ### Derived series
 
@@ -3076,10 +3192,10 @@ transform — `regex`, `csv`, `xpath`, `css`, `jq`, `yq`, `python` and
 memcached_get_hit_ratio 0.9
 ```
 
-[examples/tcp/config.yaml](../examples/tcp/config.yaml) has it for a real
-memcached. Each entry has a `name`, an optional `description`, which is the
-help text, and a `type`, `gauge` (the default), `counter` or `untyped`, and
-sets exactly one operation, a list of the names of the families it reads:
+[examples/tcp/config.yaml](../examples/tcp/config.yaml) has this for a real
+memcached. Each entry has a `name`, an optional `description` (the help
+text) and a `type`: `gauge` (the default), `counter` or `untyped`. It sets
+exactly one operation, with a list of the names of the families it reads:
 
 | Operation | Computes |
 | --- | --- |
@@ -3096,87 +3212,104 @@ derived:
     by: [queue]
 ```
 
-**Matching.** Series by series means as PromQL matches two vectors one to one
-without `on` or `ignoring`: a series of `a` is paired with the series of `b`
-that has exactly its labels, names and values, a label of an empty value
-being no label, and the result has those labels. A series with no partner
-in every other family makes no derived series, nor does a label set that two
-series of one family have, which has no one partner. To compute over
-families whose labels differ, add up the one with more labels `by` the
-labels of the other first, in a hidden entry, and read that.
+**Matching.** "Series by series" means what PromQL does when it matches two
+vectors one to one without `on` or `ignoring`. A series of `a` is paired with
+the series of `b` that has exactly the same labels, names and values (a
+label with an empty value is not a label), and the result has those labels.
+A series without a partner in every other family produces no derived series.
+Neither does a label set that two series of one family share, because it has
+no single partner. To compute over families whose labels differ, first add
+up the one with more labels `by` the labels of the other, in a hidden entry,
+and read that entry.
 
-**Order and hidden entries.** The entries are computed in their order, and
-an entry may read an earlier one as it reads a rule. An entry with `hidden:
-true` is computed for the entries after it and not exported, as the sum of
-hits and misses above, which `memcached_commands_total{command="get"}`
-exports already; a hidden entry that no later entry reads is refused.
+**Order and hidden entries.** The entries are computed in order, and an
+entry may read an earlier one as it reads a rule. An entry with
+`hidden: true` is computed for the entries after it and not exported, like
+the sum of hits and misses above, which
+`memcached_commands_total{command="get"}` already exports. A hidden entry
+that no later entry reads is refused.
 
-**No number, no series.** A result that is NaN or infinite makes no series:
-a `ratio` over 0, such as the hit ratio of a server that has had no get yet,
-is left out rather than exported as NaN, which no query can use. That is no
-failure: the target answered every value it was asked for.
+**No number, no series.** A result that is NaN or infinite produces no
+series. A `ratio` over 0, such as the hit ratio of a server that has had no
+get yet, is left out instead of being exported as NaN, which no query can
+use. This is not a failure: the target answered every value it was asked
+for.
 
-**Where in the scrape.** The entries read the series as the rules made them:
-after each rule's `value_map`, `scale` and `time_format`, the label value
-maps and [truncation](#long-label-values), and before `transform.labels`,
-`remove_labels` and `rename_labels`, [`metrics_prefix`](#prefixing-a-collectors-metrics)
-and [`name_escaping`](#utf-8-names), which then apply to the derived series
-as to every other. So an operand is written as the rule's `name` is written,
-without the prefix, a label of `by` as the rule's label is named, before any
-rename, and a derived series gets the collector's static labels whatever its
-operands' labels were. A derived series has no timestamp, whatever its
-operands had. Each exported derived series counts against
-[`limits.max_metrics`](#memory), and a scrape whose rules and derived entries
-make more fails as one whose rules make too many does; a hidden entry's
-series are not counted. Derived series are cached, served to
+**Where in the scrape.** The entries read the series as the rules produced
+them:
+
+- after each rule's `value_map`, `scale` and `time_format`, the label value
+  maps and [truncation](#long-label-values);
+- before `transform.labels`, `remove_labels` and `rename_labels`,
+  [`metrics_prefix`](#prefixing-a-collectors-metrics) and
+  [`name_escaping`](#utf-8-names), which then apply to the derived series as
+  to every other.
+
+Consequently, an operand is written as the rule's `name` is written, without
+the prefix, and a label in `by` as the rule's label is named, before any
+rename. A derived series gets the collector's static labels whatever its
+operands' labels were, and has no timestamp, whatever its operands had.
+
+Each exported derived series counts against
+[`limits.max_metrics`](#memory). A scrape whose rules and derived entries
+produce more fails, as one whose rules produce too many does. A hidden
+entry's series are not counted. Derived series are cached, served to
 [static targets](STATIC-TARGETS.md) and exported to [OTLP](OTLP.md) like any
-other, and a [debug probe](#debug-probes) lists each family it got as
+other. A [debug probe](#debug-probes) lists each family it got as
 `memcached_get_hit_ratio: 1 (derived: ratio of memcached_get_hits_total,
-memcached_gets_total)`, and the entries that got none apart from the rules.
+memcached_gets_total)`, and lists the entries that got none separately from
+the rules.
 
-**Checked at load.** An entry's name may be no rule's of the collector and no
-other entry's, nor a `_bucket`, `_sum` or `_count` of a histogram or summary
-rule; it is held to the rules' name checks and to
-`limits.max_metric_name_length` as exported, and its `description` to
-`limits.max_help_length`. Each operand is the name of a rule of the
-collector or of an earlier entry, of a counter, a gauge or an untyped
-family: a histogram or a summary has no one value to compute with. `sum`
-reads two families or more, `difference` and `ratio` two, and `by` goes only
-with a `sum` of one, its labels each once. The series of a `python` script
-and of a `prometheus` pass-through are named at run time, so under those two
-an operand that no rule names is taken, and read from the series of that
-name each scrape makes; a family of that name that a scrape shows to be a
-histogram or a summary makes no series of the entry and is a failure of the
-entry under `error_mode: log`: [logged](#when-a-metric-cannot-be-extracted)
-once per failing target, counted in `http_exporter_rule_failures_total`
-under the entry's name, which every entry has from 0, and shown by a debug
-probe.
+**Checked at load.**
 
-**Names and operands a scrape shows.** Under those two transforms the target
-or the script may also export a family of an entry's own name, which no load
-check can see. The entry's series would then be duplicates of the target's,
-which fail the whole scrape, so the entry makes none and the scrape keeps the
-target's family as it came: that is a failure of the entry, logged, counted
-and shown as the histogram operand above is, and a later entry that reads it
-reads no series. An operand that the scrape has no series of — one the
-target leaves out while it has nothing to count, or a name no target ever
-exports — gives the entry no series and is no failure, since the absence can
-be what the target means; a debug probe lists the entry among those that got
-none with the operand that had none, as `requests_failed_ratio (operand
-requests_failed_total: no series)`, the operands of a hidden entry it reads
-among them.
+- An entry's name must not be the name of a rule of the collector or of
+  another entry, nor a `_bucket`, `_sum` or `_count` of a histogram or
+  summary rule. It is subject to the rules' name checks and to
+  `limits.max_metric_name_length` as exported, and its `description` to
+  `limits.max_help_length`.
+- Each operand is the name of a rule of the collector or of an earlier
+  entry, for a counter, a gauge or an untyped family. A histogram or a
+  summary has no single value to compute with.
+- `sum` reads two or more families, and `difference` and `ratio` read two.
+  `by` is allowed only with a `sum` of one family, with each label listed
+  once.
+
+**Names known only at run time.** The series of a `python` script and of a
+`prometheus` pass-through are named at run time. Under those two transforms:
+
+- An operand that no rule names is accepted and read from the series of that
+  name that each scrape produces. If a scrape shows a family of that name to
+  be a histogram or a summary, the entry produces no series. That is a
+  failure of the entry under `error_mode: log`:
+  [logged](#when-a-metric-cannot-be-extracted) once per failing target,
+  counted in `http_exporter_rule_failures_total` under the entry's name
+  (which every entry has from 0), and shown by a debug probe.
+- The target or the script may also export a family with an entry's own
+  name, which no load check can detect. The entry's series would then be
+  duplicates of the target's, which fail the whole scrape. The entry
+  therefore produces none, and the scrape keeps the target's family as it
+  came. That is a failure of the entry, logged, counted and shown like the
+  histogram operand above, and a later entry that reads it reads no series.
+- An operand of which the scrape has no series (one the target leaves out
+  while it has nothing to count, or a name no target ever exports) gives the
+  entry no series. That is not a failure, because the absence may be what
+  the target means. A debug probe lists the entry among those that got none,
+  with the operand that had none, as `requests_failed_ratio (operand
+  requests_failed_total: no series)`, including the operands of a hidden
+  entry it reads.
 
 ### Conditional metrics and labels
 
-There is no `when` key: each transform already says in its own language which
-values become series, and a second, shared condition language would repeat it.
-The condition goes where the transform reads the value.
+There is no `when` key. Each transform already expresses in its own language
+which values become series, and a second, shared condition language would
+duplicate that. Put the condition where the transform reads the value.
 
 **jq and yq.** `select(...)` keeps the items that match, and
-`if ... then ... else empty end` gives a value only when a condition holds;
-`$status` and `$headers` are there for conditions on the answer itself. A rule
-whose condition can leave it without a value needs `required: false`, or no
-value is a missing value, logged under `error_mode`:
+`if ... then ... else empty end` gives a value only when a condition holds.
+`$status` and `$headers` are available for conditions on the answer itself.
+A rule whose condition can leave it without a value needs
+`required: false`. Otherwise the absence is a missing value, logged under
+`error_mode`:
 
 ```yaml
 - name: queue_depth
@@ -3193,8 +3326,8 @@ value is a missing value, logged under `error_mode`:
 **XPath.** A predicate selects the nodes: `//queue[@state='active']/depth`,
 with labels read relative to each node, such as `../@name`.
 
-**CSS.** `items` takes any selector, `:has()` included, so the rows kept are
-those that hold what the condition looks for:
+**CSS.** `items` takes any selector, including `:has()`, so the rows kept
+are the ones that contain what the condition looks for:
 
 ```yaml
 - name: queue_depth
@@ -3206,12 +3339,13 @@ those that hold what the condition looks for:
 ```
 
 **Regex.** The pattern is the condition: only text it matches becomes a
-series. `(?m)^(\d+) (\w+) up$` reads the lines of services that are up, the
-first group the value and the second the `service` label (`expression: "2"`).
-Where the label comes first in the line, name the value's group:
-`(?m)^(?P<service>\w+) up (?P<value>\d+)$`, with `expression: service`.
+series. `(?m)^(\d+) (\w+) up$` reads the lines of services that are up, with
+the first group as the value and the second as the `service` label
+(`expression: "2"`). Where the label comes first in the line, name the
+value's group: `(?m)^(?P<service>\w+) up (?P<value>\d+)$`, with
+`expression: service`.
 
-**CSV.** A rule reads every row. To keep only some, filter them in a
+**CSV.** A rule reads every row. To keep only some rows, filter them in a
 [pre-script](PYTHON.md), which leaves the rows it keeps in `data`:
 
 ```yaml
@@ -3221,24 +3355,26 @@ transform:
     data = [row for row in data if row["state"] == "active"]
 ```
 
-When the filter can leave no row at all, give the rules `required: false`, as
-for a jq condition: a response without a row is a missing value of every
+When the filter can remove every row, give the rules `required: false`, as
+for a jq condition. A response without a row is a missing value for every
 required rule.
 
 **Python.** The script calls `metric(...)` for what it wants exported, under
-any condition it likes.
+any condition.
 
 **Labels.** A label whose expression gives no value, or `null`, is left off
-the series — `if .shared then .owner else null end` in jq — and so is one whose
-[`value_map`](#mapping-text-to-values-and-scaling-them) maps its value to `""`.
-A `required` label turns its absence into a failure of the rule instead.
+the series (`if .shared then .owner else null end` in jq). So is a label
+whose [`value_map`](#mapping-text-to-values-and-scaling-them) maps its value
+to `""`. A `required` label turns its absence into a failure of the rule
+instead.
 
 **Series that come and go.** A conditional series exists only while its
-condition holds. When it stops, Prometheus marks the series stale: `rate()`
-and `increase()` have gaps across it, an alert on its value stops firing
-rather than resolving, and `absent()` is the only way to see it gone. When the
-absence itself means something — a queue that is not active — prefer one series
-that is always there, with `1` and `0`:
+condition holds. When the condition stops holding, Prometheus marks the
+series stale: `rate()` and `increase()` have gaps across it, an alert on its
+value stops firing instead of resolving, and `absent()` is the only way to
+see that it is gone. When the absence itself means something, such as a
+queue that is not active, prefer one series that always exists, with `1`
+and `0`:
 
 ```yaml
 - name: queue_active

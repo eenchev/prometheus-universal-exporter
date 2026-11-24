@@ -1461,56 +1461,66 @@ collectors:
 ```
 
 - **`proxy_url`** is `http://host:port`, `https://host:port` or
-  `socks5://host:port` (`socks5h://` alike), and nothing else: no path, no
-  query, no credentials, no placeholder. `direct` reaches the targets without
-  a proxy. Left out, the environment's proxy applies, as above.
-- **Everything the collector sends goes through it**: its requests, their
-  retries, pages and followed redirects, and its [login](AUTHENTICATION.md#logging-in-to-a-target).
-  There is no `NO_PROXY` of a collector: `localhost` goes through it too.
-- **`http://`** is asked in plain text: an `http` target's request whole, an
-  `https` target's through a `CONNECT` tunnel, with TLS end to end with the
-  target and its [TLS settings](#tls) unchanged. **`https://`** is the same over
-  TLS to the proxy, verified against the system's roots — on Linux those
-  `SSL_CERT_FILE` and `SSL_CERT_DIR` name, when set — without a client
-  certificate: the
-  collector's `tls` block is the target's, and its client certificate,
-  CA and `server_name` are not used with the proxy. **`socks5://`** is asked
-  to connect to the target by name, which the proxy resolves.
-- **Credentials** come from files, `proxy_basic_auth_file`, its `username` and
-  `password`, read at every request so a rotated Secret is picked up, and
-  sent as `Proxy-Authorization` (`http` and `https`) or as the SOCKS
-  username and password. A `proxy_url` with credentials in it is refused when
-  the configuration loads, without quoting them, and so are credentials
-  without a `proxy_url` to send them to. A credential file that cannot be
-  read, or is empty, fails the request at once, without its retries, as a
+  `socks5://host:port` (also `socks5h://`), and nothing else: no path, no
+  query, no credentials, no placeholder. `direct` reaches the targets
+  without a proxy. When it is left out, the environment's proxy applies, as
+  above.
+- **Everything that the collector sends goes through it**: its requests,
+  their retries, pages and followed redirects, and its
+  [login](AUTHENTICATION.md#logging-in-to-a-target). A collector has no
+  `NO_PROXY`: `localhost` goes through the proxy too.
+- **`http://`** is contacted in plain text. An `http` target's request is
+  sent whole, and an `https` target's through a `CONNECT` tunnel, with TLS
+  end to end with the target and its [TLS settings](#tls) unchanged.
+- **`https://`** is the same over TLS to the proxy. The proxy is verified
+  against the system's roots (on Linux those that `SSL_CERT_FILE` and
+  `SSL_CERT_DIR` name, when set), without a client certificate. The
+  collector's `tls` block belongs to the target, and its client certificate,
+  CA and `server_name` are not used with the proxy.
+- **`socks5://`** is asked to connect to the target by name, which the proxy
+  resolves.
+- **Credentials** come from the files of `proxy_basic_auth_file`, its
+  `username` and `password`. They are read at every request, so a rotated
+  Secret is picked up, and sent as `Proxy-Authorization` (`http` and
+  `https`) or as the SOCKS username and password. A `proxy_url` with
+  credentials in it is refused when the configuration loads, without quoting
+  them. So are credentials without a `proxy_url` to send them to. A
+  credential file that cannot be read, or is empty, fails the request
+  immediately, without its retries, as a
   [`basic_auth_file`](AUTHENTICATION.md) does.
 - **Target lists** apply to the target, as behind the environment's proxy:
-  its name, and the addresses the exporter looks it up to ([Restricting
-  targets](#restricting-targets)). The proxy's own address is the
-  configuration's, and is not held to `allowed_targets` and `denied_targets`.
-- **Connections.** Collectors with different proxies, or different
-  credentials for one, never share a connection ([Connections](#connections)).
+  to its name, and to the addresses that the exporter resolves it to
+  ([Restricting targets](#restricting-targets)). The proxy's own address
+  comes from the configuration and is not held to `allowed_targets` and
+  `denied_targets`.
+- **Connections.** Collectors with different proxies, or with different
+  credentials for one proxy, never share a connection
+  ([Connections](#connections)).
 - **No [`ip_family`](#address-families)** beside a `proxy_url` other than
-  `direct`: the proxy chooses the family it connects to the target over.
+  `direct`: the proxy chooses the family over which it connects to the
+  target.
 - **`--dry-run`** lists, for each `http` and `graphite` collector, the proxy
-  in force under `request_policies` as `proxy`: its `proxy_url`, its own or
-  its file's `defaults`', `direct`, or `environment` when it names none and
-  follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, with the files of
-  `proxy_basic_auth_file`, never what they hold. What the environment names
-  is not shown, since a proxy URL there may hold a password.
-- **Configuration only.** No probe parameter sets the proxy, and neither does
-  a static target: a target behind another proxy is a collector of its own.
-  A file's [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file)
-  may give its `http` and `graphite` collectors their proxy and its
-  credentials' files. The credentials of a `defaults` block that names the
-  proxy are for that proxy alone: a collector that writes a `proxy_url` of
-  its own — another proxy, or `direct` — does not take them, and writes its
-  own credentials if its proxy asks for some, as `partner_api` below does;
-  `--dry-run` does not list them among the keys it took. Credentials in
-  `defaults` without a `proxy_url` are for the collectors that name their
-  own proxies, and every one of them that does takes them; one that goes
-  `direct` does not. Credentials no collector takes are refused, as any key
-  of `defaults` is that applies to no collector.
+  in force under `request_policies` as `proxy`: its `proxy_url` (its own or
+  from its file's `defaults`), `direct`, or `environment` when it names none
+  and follows `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. It shows the files
+  of `proxy_basic_auth_file`, never their content. What the environment
+  names is not shown, because a proxy URL there may hold a password.
+- **Configuration only.** No probe parameter sets the proxy, and neither
+  does a static target: a target behind another proxy needs its own
+  collector. A file's
+  [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file) may
+  give its `http` and `graphite` collectors their proxy and the files of its
+  credentials.
+  - The credentials of a `defaults` block that names the proxy are for that
+    proxy only. A collector that writes its own `proxy_url` (another proxy,
+    or `direct`) does not take them, and writes its own credentials if its
+    proxy requires some, as `partner_api` below does. `--dry-run` does not
+    list them among the keys it took.
+  - Credentials in `defaults` without a `proxy_url` are for the collectors
+    that name their own proxies. Every collector that does takes them; one
+    that goes `direct` does not.
+  - Credentials that no collector takes are refused, like any key of
+    `defaults` that applies to no collector.
 
   ```yaml
   defaults:
@@ -1533,10 +1543,10 @@ collectors:
 
 ### Over a Unix socket
 
-An `http` collector can send its requests over a Unix domain socket in place
-of a TCP connection to the URL's host, as `curl --unix-socket` does: Docker's
-API on `/var/run/docker.sock`, a php-fpm or nginx status page served on a
-socket, a systemd service's:
+An `http` collector can send its requests over a Unix domain socket instead
+of a TCP connection to the URL's host, as `curl --unix-socket` does.
+Examples are Docker's API on `/var/run/docker.sock`, a php-fpm or nginx
+status page served on a socket, or the socket of a systemd service:
 
 ```yaml
 collectors:
@@ -1547,53 +1557,59 @@ collectors:
       path: /v1.43/info
 ```
 
-A probe of `target=http://docker` asks the socket `GET /v1.43/info` with
-`Host: docker`.
+A probe of `target=http://docker` sends `GET /v1.43/info` with
+`Host: docker` to the socket.
 
-- **`unix_socket`** is the absolute path of the socket. A relative path, one
-  of nothing but blanks, one with a placeholder or a control character are
-  refused when the configuration loads; `""` is the key left out. So is a
-  path longer than the system's socket addresses hold, 107 bytes on Linux
-  and 103 on macOS, which could never be connected to; the message gives its
-  length and the limit. The schema leaves the length to the exporter, since
-  it differs from system to system. Linux's abstract sockets, written with a
-  leading `@`, are not absolute paths and are refused. It is the
-  `http` type's and the [`tcp`](TCP.md#over-a-unix-socket) type's: another
-  type's collector that sets it is refused, as any key of another type is.
-- **The URL keeps its meaning**: its host is the `Host` header, its path and
-  query are the request's, joined with `path` and `query` as usual. The host
-  is never looked up or dialed; any name will do, such as `http://docker` or
-  `http://localhost`.
-- **`https://`** URLs are asked with TLS over the socket, the URL's host
-  being the server name the certificate is verified for, with the
+- **`unix_socket`** is the absolute path of the socket.
+  - These are refused when the configuration loads: a relative path, a path
+    of only blanks, and a path with a placeholder or a control character.
+    `""` is the same as leaving the key out.
+  - A path longer than the system's socket addresses hold (107 bytes on
+    Linux, 103 on macOS) is refused too, because it could never be connected
+    to. The message gives its length and the limit. The schema leaves the
+    length to the exporter, because it differs between systems.
+  - Linux's abstract sockets, written with a leading `@`, are not absolute
+    paths and are refused.
+  - The key belongs to the `http` type and the
+    [`tcp`](TCP.md#over-a-unix-socket) type. A collector of another type
+    that sets it is refused, like any key of another type.
+- **The URL keeps its meaning.** Its host is the `Host` header, and its path
+  and query are the request's, joined with `path` and `query` as usual. The
+  host is never looked up or dialed, so any name works, such as
+  `http://docker` or `http://localhost`.
+- **`https://`** URLs are requested with TLS over the socket. The URL's host
+  is the server name that the certificate is verified for, with the
   collector's [TLS settings](#tls).
-- **Everything the collector sends goes to the socket**: its requests, their
-  retries, pages and followed redirects, whatever host a redirect names, and
-  its [login](AUTHENTICATION.md#logging-in-to-a-target).
-- **No proxy.** The socket stands in place of one: `proxy_url` and
-  `proxy_basic_auth_file` beside `unix_socket` are refused, the environment's
-  proxy does not apply, and the collector takes neither from its file's
+- **Everything that the collector sends goes to the socket**: its requests,
+  their retries, pages and followed redirects (whatever host a redirect
+  names), and its [login](AUTHENTICATION.md#logging-in-to-a-target).
+- **No proxy.** The socket takes the place of a proxy. `proxy_url` and
+  `proxy_basic_auth_file` beside `unix_socket` are refused, the
+  environment's proxy does not apply, and the collector takes neither from
+  its file's
   [`defaults`](CONFIGURATION.md#defaults-for-the-collectors-of-a-file).
   `--dry-run` lists the collector under `request_policies` with its
-  `unix_socket`, and no `proxy`. [`ip_family`](#address-families) beside
-  `unix_socket` is refused too: the socket's connection has no address
-  family.
-- **Configuration only.** No probe parameter sets the socket, and neither does
-  a static target or `defaults`: whoever can reach `/probe` names the URL,
-  whose host only goes into the request, never the file the exporter
-  connects to. The socket's path is trusted as the configuration is, and is
-  not held to `allowed_targets` and `denied_targets`.
-- **Target lists** apply to the URL's host as written: a name to the names
-  and globs, an address written as the host to the addresses and networks.
-  The name is not looked up, since the connection goes to the socket and not
-  to an address, so a name that `allowed_targets` does not list by name is
-  refused even when the list holds networks.
+  `unix_socket` and no `proxy`. [`ip_family`](#address-families) beside
+  `unix_socket` is refused too, because the socket's connection has no
+  address family.
+- **Configuration only.** No probe parameter sets the socket, and neither
+  does a static target or `defaults`. Whoever can reach `/probe` names the
+  URL, whose host only goes into the request, and never the file that the
+  exporter connects to. The socket's path is trusted like the rest of the
+  configuration and is not held to `allowed_targets` and `denied_targets`.
+- **Target lists** apply to the URL's host as written: a name is matched
+  against the names and globs, and an address written as the host against
+  the addresses and networks. The name is not looked up, because the
+  connection goes to the socket and not to an address. A name that
+  `allowed_targets` does not list by name is therefore refused even when the
+  list holds networks.
 - **Connections.** Collectors with different sockets never share a
   connection, and none shares one with a collector that dials TCP
   ([Connections](#connections)).
 - **Errors.** A socket that cannot be reached fails the request with an
-  error naming its path, `dial unix /var/run/docker.sock: connect: permission
-  denied`, in the exporter's log; a probe's caller is told the path withheld
+  error that names its path, `dial unix /var/run/docker.sock: connect:
+  permission denied`, in the exporter's log. The caller of a probe gets the
+  error with the path withheld
   ([What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told)).
 
 The exporter needs read and write access to the socket file. In Kubernetes,
@@ -1613,16 +1629,16 @@ podSecurityContext:
   supplementalGroups: [998]   # the group the socket belongs to on the node
 ```
 
-Access to Docker's socket is control of the node's containers: give it to
-an exporter whose `/probe` only those you trust can reach, and prefer a
-read-only socket proxy in front of it where you have one.
+Access to Docker's socket gives control of the node's containers. Give it
+only to an exporter whose `/probe` can be reached only by people you trust,
+and prefer a read-only socket proxy in front of it where you have one.
 
 ### FastCGI
 
-An `http` collector can speak FastCGI to its target in place of HTTP, for an
-application that answers on a FastCGI port or socket alone: PHP-FPM's status
-and ping pages, which PHP-FPM serves to its FastCGI clients and to no
-browser, or any FastCGI application's own status script.
+An `http` collector can use FastCGI instead of HTTP with its target. This is
+for an application that answers only on a FastCGI port or socket: PHP-FPM's
+status and ping pages, which PHP-FPM serves to its FastCGI clients and to no
+browser, or the status script of any FastCGI application.
 
 ```yaml
 collectors:
@@ -1645,49 +1661,54 @@ collectors:
 
 A probe of `target=http://php-fpm:9000` asks PHP-FPM on port 9000 for
 `/status?json`, as `cgi-fcgi -bind -connect php-fpm:9000` does with
-`SCRIPT_NAME=/status SCRIPT_FILENAME=/status QUERY_STRING=json`; PHP-FPM
-answers its status when `pm.status_path` is `/status`. With
+`SCRIPT_NAME=/status SCRIPT_FILENAME=/status QUERY_STRING=json`. PHP-FPM
+answers with its status when `pm.status_path` is `/status`. With
 [`unix_socket`](#over-a-unix-socket), such as `/run/php/php-fpm.sock`, the
 request goes to the socket and the URL's host only names it.
 
-- **The request is the collector's**: its URL's path, decoded, is the
-  script, `SCRIPT_NAME`, and with `document_root` before it its file,
-  `SCRIPT_FILENAME` (the path alone without one); its query is
-  `QUERY_STRING`; its method `REQUEST_METHOD`; each header an `HTTP_`
-  parameter (`X-Pool` is `HTTP_X_POOL`), `Content-Type` and the body's
-  length `CONTENT_TYPE` and `CONTENT_LENGTH`; its body the application's
-  stdin. `Proxy` is sent as no parameter, since `HTTP_PROXY` sets a proxy
-  in many applications. `GATEWAY_INTERFACE`, `SERVER_NAME`, `SERVER_PORT`,
-  `REQUEST_URI`, `DOCUMENT_URI`, `DOCUMENT_ROOT`, `SERVER_ADDR` and
-  `REMOTE_ADDR` are set too.
+- **The request is the collector's.**
+  - The decoded path of its URL is the script, `SCRIPT_NAME`. With
+    `document_root` in front, it is the script's file, `SCRIPT_FILENAME`
+    (without `document_root`, the path alone).
+  - Its query is `QUERY_STRING`, and its method is `REQUEST_METHOD`.
+  - Each header is an `HTTP_` parameter (`X-Pool` is `HTTP_X_POOL`).
+    `Content-Type` and the body's length are `CONTENT_TYPE` and
+    `CONTENT_LENGTH`. Its body is the application's stdin.
+  - `Proxy` is not sent as a parameter, because `HTTP_PROXY` sets a proxy in
+    many applications.
+  - `GATEWAY_INTERFACE`, `SERVER_NAME`, `SERVER_PORT`, `REQUEST_URI`,
+    `DOCUMENT_URI`, `DOCUMENT_ROOT`, `SERVER_ADDR` and `REMOTE_ADDR` are set
+    too.
 - **`params`** adds parameters, or replaces those above by name, such as
   `SCRIPT_FILENAME: /usr/share/php/status.php`. A name is letters, digits
-  and `_`, not starting with a digit; a value holds no placeholder and no
-  control character.
+  and `_`, and does not start with a digit. A value holds no placeholder and
+  no control character.
 - **The answer is read as an HTTP answer.** The application's `Status`
-  header is the status, `200` without one, so `accept_status`, retries,
-  decoders and rules read it as they read an HTTP server's; what the
-  application wrote to its stderr before its headers, PHP-FPM's `Primary
-  script unknown` for a path it has no script for, is the
-  `X-Fastcgi-Stderr` header, its first 4 KiB, which a jq rule reads as
-  `$headers["x-fastcgi-stderr"]`.
-- **Plaintext, to the application.** A target is an `http://` URL, or a
-  bare `host:port`, as Prometheus's discovery hands one over, which is read
-  as `http://`; the port is the application's FastCGI port, `80` when the
-  target names none. `https` targets, `tls`, `proxy_url`,
-  `proxy_basic_auth_file` and `login` are refused beside `fastcgi`, and the
-  environment's proxy does not apply. A redirect to an `https://` URL is not
-  followed: it fails the request rather than leave FastCGI for an HTTPS
-  request to the host it names.
-  `allowed_targets` and `denied_targets` hold the connection as they hold an
-  HTTP request's.
-- **One connection a request.** The application closes the connection once
-  it has answered, as a FastCGI client that does not ask it to keep it open
-  is answered.
-- **Errors.** A target that answers no FastCGI record, such as an HTTP
-  server, fails the request: `the answer is no FastCGI record, version 72; is
-  the target a FastCGI application's port?`. An application that closes the
-  connection before it ended the request fails it too.
+  header is the status, or `200` without one. `accept_status`, retries,
+  decoders and rules therefore read it as they read an HTTP server's answer.
+  What the application wrote to its stderr before its headers (for example
+  PHP-FPM's `Primary script unknown` for a path that it has no script for)
+  is the `X-Fastcgi-Stderr` header, limited to its first 4 KiB. A jq rule
+  reads it as `$headers["x-fastcgi-stderr"]`.
+- **Plaintext, to the application.** A target is an `http://` URL, or a bare
+  `host:port` as Prometheus's discovery produces it, which is read as
+  `http://`. The port is the application's FastCGI port, or `80` when the
+  target names none.
+  - `https` targets, `tls`, `proxy_url`, `proxy_basic_auth_file` and `login`
+    are refused beside `fastcgi`, and the environment's proxy does not
+    apply.
+  - A redirect to an `https://` URL is not followed. It fails the request
+    instead of leaving FastCGI for an HTTPS request to the host that it
+    names.
+  - `allowed_targets` and `denied_targets` apply to the connection as they
+    apply to an HTTP request's.
+- **One connection per request.** The application closes the connection once
+  it has answered, which is how it answers a FastCGI client that does not
+  ask it to keep the connection open.
+- **Errors.** A target that answers with no FastCGI record, such as an HTTP
+  server, fails the request: `the answer is no FastCGI record, version 72;
+  is the target a FastCGI application's port?`. An application that closes
+  the connection before it has ended the request fails it too.
 
 ## Retries
 
@@ -1700,27 +1721,31 @@ request:
     backoff: 2s   # fixed delay between attempts
 ```
 
-The exporter retries transport failures and the HTTP statuses `retry.statuses`
-lists, by default the transient ones: `408`, `425`, `429` and `5xx`. Other
-HTTP statuses are returned immediately. Two
-failures are not retried, since the same request would fail the same way: a
-target the collector's lists [refuse](#restricting-targets) and response
-headers over [their bound](#compression-and-the-response-size). An HTTP/2
-connection closed for a protocol error before the answer's headers were read
-is retried once, on a new connection, since the error may be for another
-request's answer on the connection; the second such error ends the request.
-A
-connection that breaks while the body is being read — reset, or closed before
-the length it promised — counts as a transport failure and is retried too,
-unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debug-probes)
-shows such an attempt as its status followed by `then the body broke off`.
-A `401` to a collector that [logs in](AUTHENTICATION.md#logging-in-to-a-target)
-is sent once more with the token of a new login, whatever the method; that
-is no attempt of `retry.attempts`, and is made within the probe's deadline.
+The exporter retries transport failures and the HTTP statuses that
+`retry.statuses` lists. By default these are the transient ones: `408`,
+`425`, `429` and `5xx`. Other HTTP statuses are returned immediately.
 
-Only requests whose method is idempotent are retried — `GET`, `HEAD`,
-`OPTIONS`, `TRACE`, `PUT` and `DELETE` — since sending a `POST` or `PATCH`
-again may repeat what it did. When a target is known to handle a repeated
+- Two failures are not retried, because the same request would fail in the
+  same way: a target that the collector's lists
+  [refuse](#restricting-targets), and response headers over
+  [their bound](#compression-and-the-response-size).
+- An HTTP/2 connection closed for a protocol error before the answer's
+  headers were read is retried once, on a new connection, because the error
+  may be for the answer of another request on that connection. The second
+  such error ends the request.
+- A connection that breaks while the body is being read (reset, or closed
+  before the length it promised) counts as a transport failure and is
+  retried too, unless the probe's time has run out. A
+  [debug probe](CONFIGURATION.md#debug-probes) shows such an attempt as its
+  status followed by `then the body broke off`.
+- A `401` to a collector that
+  [logs in](AUTHENTICATION.md#logging-in-to-a-target) is sent once more with
+  the token of a new login, whatever the method. That does not count as an
+  attempt of `retry.attempts`, and it is made within the probe's deadline.
+
+Only requests with an idempotent method are retried (`GET`, `HEAD`,
+`OPTIONS`, `TRACE`, `PUT` and `DELETE`), because sending a `POST` or `PATCH`
+again may repeat its effect. When a target is known to handle a repeated
 `POST` safely, allow it:
 
 ```yaml
@@ -1732,30 +1757,33 @@ request:
 ```
 
 Without it, a `POST` collector with `retry.attempts` is logged as a
-configuration warning at startup, and its failed requests are not retried. The
-retry count and fixed delay can be overridden for one scrape with the
-`retry_attempts` and `retry_backoff` probe parameters. Retries share the scrape/target
-timeout, so the retry loop cannot extend the configured deadline indefinitely.
-`attempts` is at most 10, in the configuration, a static target and the
-`retry_attempts` parameter alike: whoever can reach `/probe` chooses the
-parameter, and without a bound one probe of a failing target could send it
-requests in a tight loop until its deadline.
+configuration warning at startup, and its failed requests are not retried.
+
+- The retry count and the fixed delay can be overridden for one scrape with
+  the `retry_attempts` and `retry_backoff` probe parameters.
+- Retries share the timeout of the scrape or target, so the retry loop
+  cannot extend the configured deadline.
+- `attempts` is at most 10, in the configuration, in a static target and in
+  the `retry_attempts` parameter. Whoever can reach `/probe` chooses the
+  parameter, and without a bound one probe of a failing target could send it
+  requests in a tight loop until its deadline.
 
 When the deadline, or a shutdown, cuts short the wait before a retry, the
-probe still reports what the target last answered: a `503` stays a failed
+probe still reports what the target last answered. A `503` remains a failed
 `http_status` stage with the target's body in the log and
 `http_exporter_scrape_http_status_code` at 503, and the error adds that the
-probe ran out of its budget. After a connection that failed, the error is that
-connection error, noting that the wait before retrying was cut short.
+probe ran out of its budget. After a failed connection, the error is that
+connection error, with a note that the wait before the retry was cut short.
 
-A status the collector [accepts](#accepting-other-statuses) is its answer and
-is not retried, even a `503`.
+A status that the collector [accepts](#accepting-other-statuses) is its
+answer and is not retried, even a `503`.
 
-`retry.statuses`, for `http` and `graphite` collectors, says which statuses
-are retried. It is written as [`accept_status`](#accepting-other-statuses) is,
-statuses from 100 to 599 and classes such as `5xx`, and refused in the same
-words when an entry is neither. A list replaces the default set rather than
-adding to it, so write the default's statuses that should stay retried. A
+`retry.statuses`, for `http` and `graphite` collectors, sets which statuses
+are retried. It is written like
+[`accept_status`](#accepting-other-statuses): statuses from 100 to 599 and
+classes such as `5xx`. An entry that is neither is refused with the same
+message. A list replaces the default set instead of adding to it, so include
+the default statuses that should still be retried. This example is for a
 service that answers `404` while it is still starting, and whose `5xx` are
 retried as before:
 
@@ -1767,9 +1795,9 @@ request:
     statuses: [404, 408, 425, 429, "5xx"]   # 404 added to the default
 ```
 
-A target whose `500` and `501` say the request itself is wrong, which
-another attempt cannot change, and whose gateway errors are worth asking
-again:
+This example is for a target whose `500` and `501` mean that the request
+itself is wrong, which another attempt cannot change, and whose gateway
+errors are worth a retry:
 
 ```yaml
 request:
@@ -1778,38 +1806,42 @@ request:
     statuses: [429, 502, 503, 504]   # 500 and 501 are no longer retried
 ```
 
-An empty list, `statuses: []`, retries no status at all, while a connection
-that failed, or broke while its body was read, is retried still; `attempts:
-0` is what turns retries off altogether. An entry every status of which the
-collector accepts is refused when the configuration loads, since an accepted
-status is the answer and that entry could never be retried: `retry.statuses:
-[503]` with `accept_status: ["2xx", 503]`, and `retry.statuses: [200]` with
-no `accept_status`, which accepts every 2xx. A class of which only some
-statuses are accepted is taken, and the others are retried: with
-`retry.statuses: ["5xx"]` and `accept_status: ["2xx", 503]`, a `503` is the
-answer and any other `5xx` is retried. Any other status may be listed, a 2xx
-that `accept_status` leaves out or a 3xx that is not followed among them.
-`retry.statuses` without `attempts` changes nothing until a static target's
-`retry.attempts`, or the `retry_attempts` probe parameter, sets some, as with
-`backoff`. A [static target](STATIC-TARGETS.md) may replace it with its own
-`retry.statuses`; no probe parameter sets it. `--dry-run` lists a collector's
-`retry.statuses` under `request_policies`, and a [debug
-probe](CONFIGURATION.md#debug-probes) says, below its requests, how often
-and on which statuses its request is retried.
+- An empty list, `statuses: []`, retries no status at all, but a connection
+  that failed, or broke while its body was read, is still retried.
+  `attempts: 0` is what turns retries off completely.
+- An entry whose every status the collector accepts is refused when the
+  configuration loads, because an accepted status is the answer and that
+  entry could never be retried: `retry.statuses: [503]` with
+  `accept_status: ["2xx", 503]`, and `retry.statuses: [200]` with no
+  `accept_status`, which accepts every 2xx.
+- A class of which only some statuses are accepted is allowed, and the
+  others are retried: with `retry.statuses: ["5xx"]` and
+  `accept_status: ["2xx", 503]`, a `503` is the answer and any other `5xx`
+  is retried.
+- Any other status may be listed, including a 2xx that `accept_status`
+  leaves out and a 3xx that is not followed.
+- `retry.statuses` without `attempts` changes nothing until a static
+  target's `retry.attempts`, or the `retry_attempts` probe parameter, sets
+  some, as with `backoff`.
+- A [static target](STATIC-TARGETS.md) may replace it with its own
+  `retry.statuses`. No probe parameter sets it.
+- `--dry-run` lists a collector's `retry.statuses` under `request_policies`,
+  and a [debug probe](CONFIGURATION.md#debug-probes) says, below its
+  requests, how often and on which statuses its request is retried.
 
-A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
-`[UNAVAILABLE]` by default, and has no `non_idempotent`, `statuses` or
-`retry_after`; `retry.codes` is refused for every other type, and
-`retry.statuses` and `retry.retry_after` for `grpc`. See
+A `grpc` collector retries by gRPC status code instead, with `retry.codes`
+(`[UNAVAILABLE]` by default), and has no `non_idempotent`, `statuses` or
+`retry_after`. `retry.codes` is refused for every other type, and
+`retry.statuses` and `retry.retry_after` are refused for `grpc`. See
 [gRPC](GRPC.md#errors-and-retries).
 
 ### Waiting as Retry-After asks
 
 A target that rate-limits or is briefly down often says when to come back,
 in a `Retry-After` header on its `429` or `503`. The exporter ignores the
-header unless a collector asks for it with `retry.retry_after`, for `http`
-and `graphite` collectors; without it every retry waits `backoff`, whatever
-the target says:
+header unless a collector enables it with `retry.retry_after`, for `http`
+and `graphite` collectors. Without it every retry waits for `backoff`,
+whatever the target says:
 
 ```yaml
 request:
@@ -1819,52 +1851,58 @@ request:
     retry_after: true    # a retried 429 or 503 waits what its Retry-After asks
 ```
 
-With it, an answer that is retried — its status listed in `retry.statuses`,
-not accepted, with an attempt left — waits what its `Retry-After` asks for
-instead of `backoff`. A target that answers
+With it, an answer that is retried (its status is listed in
+`retry.statuses`, it is not accepted, and an attempt is left) waits for the
+time that its `Retry-After` gives instead of `backoff`. A target that
+answers
 
 ```
 HTTP/1.1 429 Too Many Requests
 Retry-After: 3
 ```
 
-is asked again 3 seconds later. The value is a number of seconds, digits
-alone, or an HTTP date such as `Wed, 21 Oct 2026 07:28:00 GMT`, which is
-waited until by the exporter's clock, not the answer's `Date` header; a date
-already past is no wait. A value that is neither — `soon`, `-1`, `1.5`,
-`+3` — is ignored, and `backoff` waited as without the header. A status
-that is not retried is the answer, whatever its `Retry-After`, as is the
-answer of the last attempt, and the wait after a failed connection, which
-has no answer to carry the header, is `backoff` still. The `401` resent
-with a new [login](AUTHENTICATION.md#logging-in-to-a-target)'s token is
-not affected.
+is asked again 3 seconds later.
 
-The probe's deadline bounds the wait, and there is no other bound: a
-`Retry-After` that asks for longer than the probe has left is not waited
-at all, since the retry could not be sent in time and the probe would fail
-the same way later. The answer is then the probe's answer at once, a failed
-`http_status` stage whose error says why it was not retried:
+- The value is a number of seconds, digits only, or an HTTP date such as
+  `Wed, 21 Oct 2026 07:28:00 GMT`. The exporter waits until that date by its
+  own clock, not by the answer's `Date` header. A date in the past means no
+  wait.
+- A value that is neither (`soon`, `-1`, `1.5`, `+3`) is ignored, and the
+  wait is `backoff`, as without the header.
+- A status that is not retried is the answer, whatever its `Retry-After`. So
+  is the answer of the last attempt.
+- The wait after a failed connection, which has no answer to carry the
+  header, is still `backoff`.
+- The `401` that is resent with the token of a new
+  [login](AUTHENTICATION.md#logging-in-to-a-target) is not affected.
+
+The probe's deadline bounds the wait, and there is no other bound. A
+`Retry-After` that asks for longer than the probe has left is not waited for
+at all, because the retry could not be sent in time and the probe would fail
+in the same way later. The answer is then immediately the probe's answer: a
+failed `http_status` stage whose error says why it was not retried:
 
 ```
 received HTTP status 503, not retried: its Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time
 ```
 
-A [static target](STATIC-TARGETS.md) may set `retry.retry_after` either
-way, replacing the collector's; no probe parameter sets it. `--dry-run`
-lists it under `request_policies` as `retry_after: true`. A [debug
-probe](CONFIGURATION.md#debug-probes) says in its retry line that a
-retried answer's `Retry-After` replaces the backoff, and shows below each
-request that was retried the wait taken and why, `then waited 3s, as
+A [static target](STATIC-TARGETS.md) may set `retry.retry_after` to either
+value, which replaces the collector's. No probe parameter sets it.
+`--dry-run` lists it under `request_policies` as `retry_after: true`. A
+[debug probe](CONFIGURATION.md#debug-probes) says in its retry line that the
+`Retry-After` of a retried answer replaces the backoff. Below each request
+that was retried it shows the wait taken and why, `then waited 3s, as
 Retry-After asked`, or `then waited 1s, retry.backoff; the answer has no
-Retry-After`, or below the last one why it was not retried.
+Retry-After`, and below the last one why it was not retried.
 
 ## Accepting other statuses
 
-A response is decoded when its status is 2xx; any other fails the scrape in
-the `http_status` stage. Some targets answer with a useful body under another
-status — a health endpoint that reports its checks with `503`, an API that says
-`404` with a JSON body for an empty queue. `accept_status` lists the statuses
-whose answers are decoded, for `http` and `graphite` collectors:
+A response is decoded when its status is 2xx. Any other status fails the
+scrape in the `http_status` stage. Some targets answer with a useful body
+under another status: a health endpoint that reports its checks with `503`,
+or an API that answers `404` with a JSON body for an empty queue.
+`accept_status` lists the statuses whose answers are decoded, for `http` and
+`graphite` collectors:
 
 ```yaml
 request:
@@ -1885,25 +1923,33 @@ metrics:
 ```
 
 Listing statuses replaces the default, so write `2xx` to keep the successful
-ones. A status written as a number is the status YAML reads it as, however it
-is written: `503.0`, `5.03e2`, `0x1F7`, `+503` and `0503` are all 503, as they
-are to the [schema](CONFIGURATION.md#editor-support). In quotes it is text,
-held to what the schema takes: a status's three digits, `"503"`, or a class,
-`"5xx"` or `"5XX"`. Text with a sign, leading zeros or blanks, `"+503"`,
-`"0503"` or `" 503 "`, is refused, as `"503.0"` is, and so are a number
-with a fraction, such as `503.5`, and one outside 100 to 599, such as `6e2`,
-naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries), and an entry of `retry.statuses` that is accepted whole is refused. jq and yq rules read the
-status as `$status` and the headers as `$headers`, an object of lower-case
-header names, each with its values joined by `, `:
-`$headers["retry-after"]`. A Python script has them as `response.status_code`
-and `response.headers`, which keeps each header's values as a list under its
-canonical name (`response.headers["Retry-After"]`); `response.header("retry-after")`
-joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the call's status
-code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
-`localfile` or `sshfile` collector, which has no status, it is `null`.
+ones.
 
-`accept_status: [any]` accepts every status from 100 to 599, for a
-collector that reports whatever the target answers rather than failing on
+- A status written as a number is the status that YAML reads, however it is
+  written: `503.0`, `5.03e2`, `0x1F7`, `+503` and `0503` are all 503, as
+  they are for the [schema](CONFIGURATION.md#editor-support).
+- In quotes it is text, and is held to what the schema accepts: the three
+  digits of a status, `"503"`, or a class, `"5xx"` or `"5XX"`.
+- These are refused, with an error that names the collector or the static
+  target and the entry: text with a sign, leading zeros or blanks (`"+503"`,
+  `"0503"` or `" 503 "`), `"503.0"`, a number with a fraction such as
+  `503.5`, and a number outside 100 to 599 such as `6e2`.
+- An accepted status is not [retried](#retries), and an entry of
+  `retry.statuses` that is accepted as a whole is refused.
+
+**Reading the status and headers.** jq and yq rules read the status as
+`$status` and the headers as `$headers`, an object of lower-case header
+names, each with its values joined by `, `: `$headers["retry-after"]`. A
+Python script has them as `response.status_code` and `response.headers`,
+which keeps each header's values as a list under its canonical name
+(`response.headers["Retry-After"]`). `response.header("retry-after")` joins
+them with `, ` as `$headers` does. For a `grpc` collector `$status` is the
+call's status code, `0` for `OK` (see
+[`accept_codes`](GRPC.md#errors-and-retries)). For a `localfile` or
+`sshfile` collector, which has no status, it is `null`.
+
+`accept_status: [any]` accepts every status from 100 to 599. It is for a
+collector that reports whatever the target answers instead of failing on
 some of it, such as an uptime check whose rules compare `$status`:
 
 ```yaml
@@ -1914,29 +1960,33 @@ request:
 ```
 
 With [`decoder.type: none`](CONFIGURATION.md#no-decoder) beside it, no body
-is decoded either, so an empty or HTML answer fails nothing. `any` is
-written alone and in lower case: beside another entry, `[any,
-503]`, or as `ANY`, it is refused when the configuration loads, as the
-schema refuses it. A status past 599, which some servers send, still fails
-in the `http_status` stage. Since an accepted status is not retried,
-`retry.statuses` with entries is refused beside `[any]` (an empty list is
-taken), and a retry is made on a failed connection alone; `retry.statuses`
-itself takes no `any`. A redirect that `follow_redirects` follows is
-followed as before, and the status of the answer it leads to is the one
-accepted. A [static target](STATIC-TARGETS.md) may set its own `[any]`, or
-replace the collector's `[any]` with a list.
+is decoded either, so an empty or HTML answer causes no failure.
+
+- `any` is written alone and in lower case. Beside another entry
+  (`[any, 503]`) or as `ANY`, it is refused when the configuration loads, as
+  the schema refuses it.
+- A status above 599, which some servers send, still fails in the
+  `http_status` stage.
+- Because an accepted status is not retried, `retry.statuses` with entries
+  is refused beside `[any]` (an empty list is allowed), and a retry is made
+  only on a failed connection. `retry.statuses` itself takes no `any`.
+- A redirect that `follow_redirects` follows is followed as before, and the
+  status of the answer that it leads to is the one accepted.
+- A [static target](STATIC-TARGETS.md) may set its own `[any]`, or replace
+  the collector's `[any]` with a list.
 
 A `101 Switching Protocols` has no body: what follows it on the connection
-is the protocol the server switched to. Its answer is the status and the
-headers alone, and the connection is closed at once, unread, never kept for
-another request, so a [WebSocket endpoint's](#websocket-endpoints) frames are
-not read as a body until the probe's deadline.
+is the protocol that the server switched to. Its answer is only the status
+and the headers. The connection is closed immediately, unread, and never
+kept for another request, so the frames of a
+[WebSocket endpoint](#websocket-endpoints) are not read as a body until the
+probe's deadline.
 
 ## Timings, TLS and the final URL
 
-Beside `$status` and `$headers`, jq and yq rules of an `http` or `graphite`
-collector read what the request was besides its answer, and a Python script
-has the same on its `response`:
+In addition to `$status` and `$headers`, jq and yq rules of an `http` or
+`graphite` collector can read facts about the request other than its answer.
+A Python script has the same on its `response`:
 
 | jq and yq | Python | What it is |
 | --- | --- | --- |
@@ -1959,8 +2009,8 @@ metrics:
         expression: .key
 ```
 
-`$timings` is an object of five numbers of seconds, measured on the request
-with Go's `net/http/httptrace`:
+`$timings` is an object with five numbers of seconds, measured on the
+request with Go's `net/http/httptrace`:
 
 | Key | The time |
 | --- | --- |
@@ -1970,37 +2020,45 @@ with Go's `net/http/httptrace`:
 | `first_byte` | from the request's start, when it asked for a connection, to the first byte of the answer |
 | `total` | from the request's start to the end of reading the body |
 
-A phase the request did not have is `null`, not `0`: on a connection kept
-from an earlier request there is no lookup, connection or handshake, which
-[`new_connection`](#connections) makes every request have; over
-plain HTTP no handshake; to an IP address or over a [Unix
-socket](#over-a-unix-socket) no lookup. Through a [proxy](#proxies) the
-lookup and the connection are the proxy's, and the handshake the target's
-through the tunnel; a connection to an `https://` proxy is made by the
-exporter itself, and its handshake is not timed.
+A phase that the request did not have is `null`, not `0`:
 
-A request is timed only when something can read its timings: when a jq or
-yq text of the collector names `$timings` or `$remote_ip`, which the same
-trace sees, or it runs a Python script, and
-in a [debug probe](CONFIGURATION.md#debug-probes) or on the debug page,
-whose report shows them; the trace costs every request a few allocations
-that a collector reading none of it is spared.
+- On a connection kept from an earlier request there is no lookup,
+  connection or handshake. [`new_connection`](#connections) gives every
+  request all three.
+- Over plain HTTP there is no handshake.
+- To an IP address or over a [Unix socket](#over-a-unix-socket) there is no
+  lookup.
+- Through a [proxy](#proxies) the lookup and the connection are the proxy's,
+  and the handshake is the target's through the tunnel. A connection to an
+  `https://` proxy is made by the exporter itself, and its handshake is not
+  timed.
 
-The values are of one request: the one whose status `$status` is. That is
-the last attempt of a [retried](#retries) request, the request a
-[redirect](#redirects-and-http2) led to, not the one redirected (so a
-redirect to another host has a lookup, a connection and a handshake of its
-own), and of a [paginated](#pagination) collector the first page, or the
-page whose status failed the scrape. A [revalidated
-response](CONFIGURATION.md#revalidating-expired-responses) has those of the
-conditional request, whose `304` is answered with the cached status and
-body; a probe the [response cache](CONFIGURATION.md#response-caching)
-answers runs no rule, and its series are those of the scrape that filled
-it, timings included.
+A request is timed only when something can read its timings: when a jq or yq
+text of the collector names `$timings` or `$remote_ip` (which the same trace
+provides), when the collector runs a Python script, and in a
+[debug probe](CONFIGURATION.md#debug-probes) or on the debug page, whose
+report shows them. The trace costs every request a few allocations, which a
+collector that reads none of it does not pay.
 
-`$tls` is `null` over plain HTTP, and otherwise an object of the
-connection the answer came on, the same request's, and of the certificate
-the target presented on it, nothing secret:
+The values belong to one request: the one whose status is `$status`.
+
+- For a [retried](#retries) request, that is the last attempt.
+- For a [redirect](#redirects-and-http2), it is the request that the
+  redirect led to, not the one redirected. A redirect to another host
+  therefore has its own lookup, connection and handshake.
+- For a [paginated](#pagination) collector, it is the first page, or the
+  page whose status failed the scrape.
+- A
+  [revalidated response](CONFIGURATION.md#revalidating-expired-responses)
+  has the values of the conditional request, whose `304` is answered with
+  the cached status and body.
+- A probe that the [response cache](CONFIGURATION.md#response-caching)
+  answers runs no rule. Its series are those of the scrape that filled the
+  cache, including the timings.
+
+`$tls` is `null` over plain HTTP. Otherwise it is an object that describes
+the connection on which the answer of the same request came, and the
+certificate that the target presented on it. It contains nothing secret:
 
 | Key | What it is |
 | --- | --- |
@@ -2011,68 +2069,83 @@ the target presented on it, nothing secret:
 | `not_before`, `not_after` | The target's certificate's validity, in Unix seconds |
 | `subject_cn`, `issuer_cn` | The common names of its subject and its issuer |
 
-The names and values are those of the [`tlscert` type](TLSCERT.md#the-document)'s
-document, so a rule reads the two alike. `$tls.not_after` is when the certificate the
-target serves expires, the one an uptime check alerts on; a chain's
-intermediates and roots, and a certificate on a port that speaks no HTTP,
-are the `tlscert` type's. Through an `https://` proxy, a plain HTTP request
-has no `$tls`: the connection it came on is the proxy's.
+The names and values are those of the document of the
+[`tlscert` type](TLSCERT.md#the-document), so a rule reads the two in the
+same way. `$tls.not_after` is when the certificate that the target serves
+expires, which is what an uptime check alerts on. A chain's intermediates
+and roots, and a certificate on a port that does not speak HTTP, are covered
+by the `tlscert` type. Through an `https://` proxy, a plain HTTP request has
+no `$tls`: the connection it came on is the proxy's.
 
-`$url` is the URL of the same request: the target's, or with
-[`follow_redirects`](#redirects-and-http2) where the redirects led, and
-`$redirects` how many were followed to get there, `0` without
-`follow_redirects` or when the target answered at once. `$url` is shown as
-a target is in a log line: its userinfo and its fragment are left out, and
-the value of a query parameter whose name reads as a credential's —
-`token`, `api_key`, `password`, `sig`, `code` and `ticket`, which the
-redirect back from a login carries, and the like
-([the rule](LOGGING.md#repeated-failures)) — is `<redacted>`, and so is the
-value of a path parameter of such a name, after a `;` or an escaped
-`%3B`, as a servlet's session rides in the path when cookies are off:
-`/app;jsessionid=<redacted>`. A debug report shows `$url` as the rules
-read it, its escapes kept, with every query value the configuration did
-not set masked as well. Every other
-parameter, and every segment of the path, is kept as it was sent, so a
-label of `$url` is safe to the extent that rule is: an order number, a
-tenant or an e-mail address in a parameter of another name is kept, a URL
-that carries one a redirect chose, such as a login page's `?next=`, makes a
-series of every value, and a secret that is a segment of the path whole,
-as a bot's token in `/bot123456:AAE…/getMe`, has no name to tell it by and
-is kept. Keep the URL's path alone where that matters,
-`$url | split("?")[0] | split(";")[0]`, which ends it before its query
-and its first path parameter, and put `$url` in a label only for sites
-whose paths carry no secret.
+`$url` is the URL of the same request: the target's or, with
+[`follow_redirects`](#redirects-and-http2), the URL that the redirects led
+to. `$redirects` is how many redirects were followed to get there: `0`
+without `follow_redirects` or when the target answered directly.
 
-`$http_version` is the version of HTTP the same request's answer came in,
-`"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's `probe_http_version`
-writes it: `"2"` only where [`enable_http2`](#redirects-and-http2) let the
-request negotiate it. `$remote_ip` is the IP address its connection was
-made to, kept from an earlier request or made for it, `"203.0.113.7"` or
-`"2001:db8::7"`, the address the name resolved to and the family the
-connection took ([Address families](#address-families)). It is `null`
-through a [proxy](#proxies), whose address the connection is made to and is
-no address of the target's, and over a [Unix socket](#over-a-unix-socket),
-which has none. A name with several addresses, or one that moves, gives a
-value of each, so `$remote_ip` in a label makes a series of every address
-the site was reached at; the [uptime recipe](#uptime-probes) keeps the
-family alone, `4` or `6`.
+`$url` is shown as a target is shown in a log line:
+
+- Its userinfo and its fragment are left out.
+- The value of a query parameter whose name looks like a credential's is
+  `<redacted>`: `token`, `api_key`, `password`, `sig`, `code` and `ticket`
+  (which the redirect back from a login carries), and similar names
+  ([the rule](LOGGING.md#repeated-failures)).
+- The value of a path parameter with such a name, after a `;` or an escaped
+  `%3B`, is `<redacted>` too. A servlet's session is carried in the path in
+  this way when cookies are off: `/app;jsessionid=<redacted>`.
+- A debug report shows `$url` as the rules read it, with its escapes kept,
+  and with every query value that the configuration did not set masked as
+  well.
+
+Every other parameter, and every segment of the path, is kept as it was
+sent. A label of `$url` is therefore only as safe as that rule:
+
+- An order number, a tenant or an e-mail address in a parameter with another
+  name is kept.
+- A URL that carries a parameter chosen by a redirect, such as a login
+  page's `?next=`, produces a series for every value.
+- A secret that is a whole segment of the path, such as a bot's token in
+  `/bot123456:AAE…/getMe`, has no name to recognise it by and is kept.
+
+Where that matters, keep only the URL's path,
+`$url | split("?")[0] | split(";")[0]`, which ends it before its query and
+its first path parameter, and put `$url` in a label only for sites whose
+paths carry no secret.
+
+`$http_version` is the version of HTTP in which the answer of the same
+request came, `"1.0"`, `"1.1"` or `"2"`, as blackbox_exporter's
+`probe_http_version` writes it. It is `"2"` only where
+[`enable_http2`](#redirects-and-http2) let the request negotiate it.
+
+`$remote_ip` is the IP address that the request's connection was made to,
+whether the connection was kept from an earlier request or made for this
+one: `"203.0.113.7"` or `"2001:db8::7"`. It is the address that the name
+resolved to, in the family that the connection used
+([Address families](#address-families)).
+
+- It is `null` through a [proxy](#proxies), because the connection is made
+  to the proxy's address, which is not an address of the target. It is also
+  `null` over a [Unix socket](#over-a-unix-socket), which has no address.
+- A name with several addresses, or one that moves, gives a value for each.
+  `$remote_ip` in a label therefore produces a series for every address at
+  which the site was reached. The [uptime recipe](#uptime-probes) keeps only
+  the family, `4` or `6`.
 
 `$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and `$remote_ip`
-are `null` for every other
-request type, and on a response pasted on the [debug
-page](CONFIGURATION.md#the-debug-page); every jq and yq program has the
-variables, so a rule that reads them loads whatever the collector's type.
-A pagination's `next` and a login's `token` expression read them as `null`
-too. A [debug probe](CONFIGURATION.md#debug-probes)'s report and the debug
-page show their values under the response's status, in that order, `$url`
-with the values of the query masked as the report's request lines mask
-them.
+are `null` for every other request type, and on a response pasted on the
+[debug page](CONFIGURATION.md#the-debug-page). Every jq and yq program has
+the variables, so a rule that reads them loads whatever the collector's
+type. A pagination's `next` and a login's `token` expression read them as
+`null` too. The report of a
+[debug probe](CONFIGURATION.md#debug-probes) and the debug page show their
+values under the response's status, in that order, with the query values of
+`$url` masked as the report's request lines mask them.
 
 ## Uptime probes
 
-An uptime check of HTTP and HTTPS sites, the job of
-[blackbox_exporter](https://github.com/prometheus/blackbox_exporter)'s
-`http` prober, is one collector:
+An uptime check of HTTP and HTTPS sites, which is the job of the `http`
+prober of
+[blackbox_exporter](https://github.com/prometheus/blackbox_exporter), is one
+collector:
 [`configs/config.uptime.example.yaml`](../configs/config.uptime.example.yaml).
 
 ```yaml
@@ -2123,41 +2196,43 @@ collectors:
             expression: .cipher_suite
 ```
 
-Each key has its part:
+What each key does:
 
 - [`report_failures: true`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
-  answers a probe that fails — a name that does not resolve, a refused
-  connection, a timeout, a certificate that does not verify — `200` with
-  `http_exporter_probe_success 0` and the stage that failed, rather than
+  answers a failed probe (a name that does not resolve, a refused
+  connection, a timeout, a certificate that does not verify) with `200`,
+  `http_exporter_probe_success 0` and the stage that failed, instead of
   `502` and no sample.
-- `method: HEAD` asks for no body. A site that refuses `HEAD` answers `405`:
-  use `GET` there, whose body is read, up to `max_response_bytes`, and
-  thrown away.
+- `method: HEAD` requests no body. A site that refuses `HEAD` answers `405`.
+  Use `GET` there; its body is read, up to `max_response_bytes`, and
+  discarded.
 - [`follow_redirects: true`](#redirects-and-http2) follows the site's
-  redirects, so the status is the one of where they lead, and
+  redirects, so the status is that of the final destination, and
   `$redirects` counts them.
 - [`new_connection: true`](#connections) makes every probe, and every
-  request of its redirects, connect anew: each looks the name up, connects
-  and verifies the certificate the site serves now, and times the three. On
-  a connection kept from the last probe, a site that moved to another
-  address, or now serves a certificate that does not verify, would still
-  answer `site_up 1`, with the old certificate in `$tls`, until the
-  connection closed.
+  request of its redirects, connect anew. Each one looks up the name,
+  connects and verifies the certificate that the site serves now, and times
+  all three. On a connection kept from the last probe, a site that moved to
+  another address, or that now serves a certificate that does not verify,
+  would still answer `site_up 1`, with the old certificate in `$tls`, until
+  the connection closed.
 - [`accept_status: [any]`](#accepting-other-statuses) makes every status the
-  answer, so a `503` is `site_up 0` with its status rather than a failed
+  answer, so a `503` is `site_up 0` with its status instead of a failed
   probe.
-- [`decoder.type: none`](CONFIGURATION.md#no-decoder) reads no body: the
-  rules read `$status` and the variables of [Timings, TLS and the final
-  URL](#timings-tls-and-the-final-url), never the document.
+- [`decoder.type: none`](CONFIGURATION.md#no-decoder) reads no body. The
+  rules read `$status` and the variables of
+  [Timings, TLS and the final URL](#timings-tls-and-the-final-url), never
+  the document.
 - `required: false` on the TLS rules: over plain HTTP `$tls` is `null`, and
-  those series are left out rather than reported as missing values; so is
-  `site_ip_protocol` through a proxy, where `$remote_ip` is `null`.
-- `site_ip_protocol` is the family of the address the site was reached at,
-  read from [`$remote_ip`](#timings-tls-and-the-final-url), and not the
-  address itself: a site behind several addresses, or one whose address
-  changes, would make a series of each in a label. Where the address is
-  wanted, an info series of it is one rule more, `expression: "1"` with a
-  label of `$remote_ip`, at that cost.
+  those series are left out instead of being reported as missing values. The
+  same applies to `site_ip_protocol` through a proxy, where `$remote_ip` is
+  `null`.
+- `site_ip_protocol` is the family of the address at which the site was
+  reached, read from [`$remote_ip`](#timings-tls-and-the-final-url), and not
+  the address itself. A site behind several addresses, or one whose address
+  changes, would produce a series for each address in a label. Where the
+  address is needed, an info series for it takes one more rule,
+  `expression: "1"` with a label of `$remote_ip`, at that cost.
 
 Prometheus names each site as the probe's target:
 
@@ -2181,14 +2256,14 @@ scrape_configs:
         replacement: exporter.example:8080
 ```
 
-With the Prometheus Operator, the sites are a `Probe`, as they are for
+With the Prometheus Operator, the sites are a `Probe`, as for
 blackbox_exporter, and the chart renders one for each of its `probes`
-entries: [Probes](PROMETHEUS-OPERATOR.md#probes), and the chart README's
+entries. See [Probes](PROMETHEUS-OPERATOR.md#probes), and the chart README's
 [Uptime probes](../charts/prometheus-universal-exporter/README.md#uptime-probes)
 for a complete values file.
 
-The series of one probe, of `https://example.com`, which redirected once,
-to `https://www.example.com/`:
+These are the series of one probe of `https://example.com`, which redirected
+once, to `https://www.example.com/`:
 
 ```text
 site_up 1
@@ -2222,17 +2297,18 @@ http_exporter_probe_elapsed_seconds 0.149
 | `http_exporter_probe_success` | `1` when the probe got an answer, whatever its status; `0` when it failed, with `http_exporter_probe_failed_stage{stage}` naming the stage. |
 | `http_exporter_probe_elapsed_seconds` | How long the whole probe took, the redirects included. |
 
-A site is down when either says so: `http_exporter_probe_success == 0`, no
-answer at all, or `site_up == 0`, an answer that is not a `2xx`. Both carry
-the job's and the target's labels, so `http_exporter_probe_success == 0 or
-site_up == 0` lists the sites that are down.
+A site is down when either series says so: `http_exporter_probe_success ==
+0` (no answer at all) or `site_up == 0` (an answer that is not a `2xx`).
+Both carry the job's and the target's labels, so
+`http_exporter_probe_success == 0 or site_up == 0` lists the sites that are
+down.
 
 ### WebSocket endpoints
 
-A WebSocket endpoint is up when it accepts the handshake (RFC 6455): a
-`GET` asking to upgrade, which it answers `101 Switching Protocols` with the
-key's `Sec-WebSocket-Accept`. That is an `http` collector of its own, the
-handshake's headers its request's:
+A WebSocket endpoint is up when it accepts the handshake (RFC 6455): a `GET`
+that asks to upgrade, which the endpoint answers with `101 Switching
+Protocols` and the `Sec-WebSocket-Accept` of the key. That is a separate
+`http` collector, with the handshake's headers as its request headers:
 
 ```yaml
 collectors:
@@ -2259,36 +2335,37 @@ collectors:
         expression: $status
 ```
 
-- The four headers are sent as written: `Connection` and `Upgrade` are
+- The four headers are sent as written. `Connection` and `Upgrade` are
   hop-by-hop headers, which a collector's `headers` may set (a probe's
-  `header_` parameters never forward them). A request asking for a
+  `header_` parameters never forward them). A request that asks for a
   WebSocket is sent over HTTP/1.1, even under
   [`enable_http2`](#redirects-and-http2) to a server that speaks HTTP/2,
-  which has no `Upgrade`.
-- The key is any 16 bytes in base64, the same on every probe; the
-  `Sec-WebSocket-Accept` the endpoint answers it with is fixed by it, the
-  base64 of the SHA-1 of the key followed by
-  `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`. The key above is RFC 6455's own
-  example, whose answer is `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`; for another key,
+  because HTTP/2 has no `Upgrade`.
+- The key is any 16 bytes in base64, the same on every probe. It determines
+  the `Sec-WebSocket-Accept` that the endpoint answers with: the base64 of
+  the SHA-1 of the key followed by `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`.
+  The key above is RFC 6455's own example, whose answer is
+  `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`. For another key,
   `printf '%s' "<key>258EAFA5-E914-47DA-95CA-C5AB0DC85B11" | openssl sha1
-  -binary | base64` gives it. A rule comparing it tells a WebSocket server
-  from something that answers `101` without having read the key.
-- [`accept_status: [101]`](#accepting-other-statuses) takes the `101` as
-  the answer, and fails the probe on any other status, in the `http_status`
+  -binary | base64` gives it. A rule that compares it distinguishes a
+  WebSocket server from something that answers `101` without having read the
+  key.
+- [`accept_status: [101]`](#accepting-other-statuses) accepts the `101` as
+  the answer and fails the probe on any other status, in the `http_status`
   stage, which `report_failures` reports. With `accept_status: [any]`,
   another status is `websocket_up 0` with its status instead.
-- The `101` is the answer: the headers alone, the connection closed at
-  once, unread, so the probe ends as soon as the handshake is answered,
-  however long the endpoint would keep sending.
-- An endpoint behind `wss://` is the same with an `https://` target, the
-  handshake made over TLS.
+- The `101` is the answer: only the headers. The connection is closed
+  immediately, unread, so the probe ends as soon as the handshake is
+  answered, however long the endpoint would keep sending.
+- An endpoint behind `wss://` is the same with an `https://` target; the
+  handshake is made over TLS.
 
-The exporter checks the handshake only, and sends and reads no message.
+The exporter checks only the handshake. It sends and reads no message.
 
 ### Compared with blackbox_exporter
 
-The series of blackbox_exporter's `http` prober, and its address-family
-settings, and what answers each here:
+This table lists the series of blackbox_exporter's `http` prober and its
+address-family settings, with the equivalent here:
 
 | blackbox_exporter | Here | Differences |
 | --- | --- | --- |
@@ -2304,48 +2381,52 @@ settings, and what answers each here:
 | `probe_tls_version_info{version}` | `site_tls_version_info{version}` | The same, `TLS 1.3`, with the cipher suite as a label beside it. |
 | `preferred_ip_protocol`, `ip_protocol_fallback` (settings of the module) | [`ip_family`](#address-families) (a key of the request, and a probe parameter) | `preferred_ip_protocol: ip4` with `ip_protocol_fallback: true` is `prefer_ip4`, and with `false` it is `ip4`; `ip6` alike. blackbox_exporter prefers `ip6` by default, and falls back only when the name has no address of the family it prefers; `prefer_ip6` falls back too when none of those addresses takes the connection. Left out here, a site is connected to over either family, as Go connects. |
 
-Other series of blackbox_exporter's have no rule above, but read what is
-there: `probe_http_content_length` is `$headers["content-length"] |
-tonumber`, and `probe_http_last_modified_timestamp_seconds` is
-`$headers["last-modified"] | parse_time` (see the [value-parsing
-helpers](CONFIGURATION.md#value-parsing-helpers)).
+Other series of blackbox_exporter have no rule above, but can be read from
+what is available: `probe_http_content_length` is
+`$headers["content-length"] | tonumber`, and
+`probe_http_last_modified_timestamp_seconds` is
+`$headers["last-modified"] | parse_time` (see the
+[value-parsing helpers](CONFIGURATION.md#value-parsing-helpers)).
 
 What this collector does not do:
 
 - No ICMP: an `http` collector does not ping. A host's reachability is a
-  connection to one of its ports, or the [`icmp`](ICMP.md) type's echoes.
-- No raw TCP: a port that speaks something other than HTTP is the
-  [`tcp`](TCP.md) type's, and a name's records
-  the [`dns`](DNS.md) type's.
+  connection to one of its ports, or the echoes of the [`icmp`](ICMP.md)
+  type.
+- No raw TCP: a port that speaks something other than HTTP is for the
+  [`tcp`](TCP.md) type, and a name's records for the [`dns`](DNS.md) type.
 - One certificate: the chain's intermediates and roots, a chain that does
-  not verify and the reason, and a TLS port that speaks no HTTP are the
-  [`tlscert`](TLSCERT.md) type's.
+  not verify and the reason, and a TLS port that does not speak HTTP are for
+  the [`tlscert`](TLSCERT.md) type.
 - No body check: blackbox_exporter's `fail_if_body_matches_regexp` is a
-  `GET` with a decoder and a rule that reads the body, in a collector of its
-  own.
+  `GET` with a decoder and a rule that reads the body, in a separate
+  collector.
 
 ## One connection per scrape
 
 `ldap`, `redis` and `tcp` collectors make a connection for each scrape and
-close it when the scrape is over, rather than keeping one between scrapes as
-`http`, `grpc`, `sql`, `sshfile` and `sshexec` do. A scrape of them sends a
-few requests, seconds apart at most, and a connection kept between scrapes,
-a minute or more apart, would need its own keepalive, idle timeout and
-limit, as the kept connections of the others have, and a way to tell a
-connection the server closed while idle from one that failed, for no gain a
-scrape would see: each scrape costs a TCP handshake, a TLS one over TLS,
-and for `ldap` a bind, some milliseconds against the scrape's own interval.
-Exported traces show it as the `connection.*` spans of the scrape's first
-request ([Traces of slow requests](OTLP.md#traces-of-slow-requests)).
+close it when the scrape is over. They do not keep one between scrapes, as
+`http`, `grpc`, `sql`, `sshfile` and `sshexec` do.
+
+A scrape of these types sends a few requests, at most seconds apart. A
+connection kept between scrapes, which are a minute or more apart, would
+need its own keepalive, idle timeout and limit, like the kept connections of
+the other types, and a way to distinguish a connection that the server
+closed while idle from one that failed. A scrape would gain nothing visible
+from this: each scrape costs a TCP handshake, a TLS handshake over TLS, and
+for `ldap` a bind, which is a few milliseconds compared with the scrape's
+interval. Exported traces show the cost as the `connection.*` spans of the
+scrape's first request
+([Traces of slow requests](OTLP.md#traces-of-slow-requests)).
 
 ## Pagination
 
 An API that pages its answer gives one request only the first page. With
-`request.pagination` an `http` collector fetches the pages after it too and
-merges them into one JSON document: the first page, with the array its items
-are in, `items`, holding the items of every page in order. The decoder, the
-rules and the limits then read that document as the answer, so a collector
-written for one page reads every page unchanged.
+`request.pagination` an `http` collector also fetches the following pages
+and merges them into one JSON document: the first page, in which the array
+that holds its items, `items`, holds the items of every page in order. The
+decoder, the rules and the limits then read that document as the answer, so
+a collector written for one page reads every page unchanged.
 
 ```yaml
 request:
@@ -2378,11 +2459,11 @@ Link: <https://api.github.com/organizations/1/repos?per_page=100&page=2>; rel="n
       <https://api.github.com/organizations/1/repos?per_page=100&page=7>; rel="last"
 ```
 
-and the collector asks for page 2, then each page its `Link` names, until a
-page names none. `github_repos` is the number of repositories on every page,
-not on the first.
+and the collector requests page 2, then each page that its `Link` names,
+until a page names none. `github_repos` is the number of repositories on all
+pages, not only on the first.
 
-`type` says how the next page is found:
+`type` sets how the next page is found:
 
 | `type` | The next page | Needs |
 | --- | --- | --- |
@@ -2422,81 +2503,97 @@ pagination:              # /events?offset=0, ?offset=50, ... with limit: "50" in
   items: .events
 ```
 
-`items` is a jq path, such as `.items`, `.data.results` or `.data[0].rows`,
-or `.` for a page that is an array; an expression that names no place, such as
-`.items | length`, is refused when the configuration loads. A page whose items
-array is missing or `null` has no items. `next` is any jq expression over the
-page, with `$headers` and `$status` as in a [rule](#accepting-other-statuses),
-so a cursor sent in a header is `$headers["x-next-cursor"]`; it gives the next
-URL or cursor as text, a cursor as a number too, and `null`, `false` or `""`
-when there is no next page. `param` replaces a parameter of that name in the
-target's own query; `request.query` may not set it, since the pagination sets
-it on every page.
+- `items` is a jq path, such as `.items`, `.data.results` or
+  `.data[0].rows`, or `.` for a page that is an array. An expression that
+  names no place, such as `.items | length`, is refused when the
+  configuration loads. A page whose items array is missing or `null` has no
+  items.
+- `next` is any jq expression over the page, with `$headers` and `$status`
+  as in a [rule](#accepting-other-statuses), so a cursor sent in a header is
+  `$headers["x-next-cursor"]`. It gives the next URL or cursor as text (a
+  cursor may also be a number), and `null`, `false` or `""` when there is no
+  next page.
+- `param` replaces a parameter of that name in the target's own query.
+  `request.query` may not set it, because the pagination sets it on every
+  page.
 
-The pages end at the first page that names no next one: no `rel="next"`, a
-`next` that gives `null`, `false` or `""`, or, for `page` and `offset`, a page
-whose items array is empty or missing. They end at `max_pages` too, 10 by
-default and at most 1000, the first page included. A trip that stops at
-`max_pages` while the last page named another, or for `page` and `offset` held
-items, is no failure: it is answered with the pages it fetched, counted in
-`http_exporter_pagination_max_pages_reached_total`, and logged at warn level,
-once and then sparingly while it repeats, until a trip fetches every page
-again. Every page fetched is counted in `http_exporter_pages_fetched_total`
-(see [self-metrics](SELF-METRICS.md)).
+**Where the pages end.** The pages end at the first page that names no next
+one: no `rel="next"`, a `next` that gives `null`, `false` or `""`, or, for
+`page` and `offset`, a page whose items array is empty or missing. They also
+end at `max_pages`, which is 10 by default and at most 1000, including the
+first page.
 
-Every page is a request of the collector's own: the same method, body,
+A trip that stops at `max_pages` while the last page named another one, or
+for `page` and `offset` held items, is not a failure. It is answered with
+the pages it fetched, counted in
+`http_exporter_pagination_max_pages_reached_total`, and logged at warn
+level, once and then sparingly while it repeats, until a trip fetches every
+page again. Every page fetched is counted in
+`http_exporter_pages_fetched_total` (see
+[self-metrics](SELF-METRICS.md)).
+
+**Each page is the collector's request.** It has the same method, body,
 headers, credentials, TLS settings, retries and redirect rules, and the same
 [`allowed_targets` and `denied_targets`](#restricting-targets), checked on
-each page's connections. A next page is the target's to name, and is sent the
-collector's credentials, so one that leaves the target's origin — its scheme,
-host or port — fails the trip before it is asked for, and so does one that
-names a page fetched already, which would go round in a circle.
+each page's connections. The target names the next page, and that page is
+sent the collector's credentials. A next page that leaves the target's
+origin (its scheme, host or port) therefore fails the trip before it is
+requested. So does one that names a page already fetched, which would loop.
 
-A target reached by its address with a [`Host` header](#the-host-header), the
-collector's or a static target's, writes its links with that `Host`:
-`https://10.0.0.5/items` with `Host: api.example` is answered with
-`Link: <https://api.example/items?page=2>; rel="next"`. A next page on the
-`Host`'s virtual host — the target's scheme, and the `Host`'s port, the
-scheme's own when it names none — is on the target's origin too, and is
-fetched as the first page was: from `https://10.0.0.5/items?page=2`, with
-`Host: api.example`. `api.example` is never looked up: what it resolves to
-may be another server, one the target's `allowed_targets` and
-`denied_targets` were not checked against, and it would be sent the
-collector's credentials; at the target's address the page stays on the host
-the policy let through, at the virtual host the configuration chose. A next
-page on the virtual host's other ports or scheme, or on any other host, still
-fails the trip. The probe's
-`timeout`, and the scrape's deadline, cover every page together. The response
-limit (`max_response_bytes`) holds each page, the pages together, and the
-merged document.
+**Behind a `Host` header.** A target reached by its address with a
+[`Host` header](#the-host-header), the collector's or a static target's,
+writes its links with that `Host`: `https://10.0.0.5/items` with
+`Host: api.example` is answered with
+`Link: <https://api.example/items?page=2>; rel="next"`.
 
-The pages are read as JSON: a collector with `request.pagination` decodes with
-`json`, which a `decoder.type` left out becomes, and any other decoder is
-refused when the configuration loads. A first page that is not JSON, or is
-answered with a status the collector does not
-[accept](#accepting-other-statuses), is the answer as it would be without
-pagination, and fails in the `decode` or the `http_status` stage. A later page
-with such a status fails the trip in the `http_status` stage with that page's
-status and body, the error naming the page: `received HTTP status 503 on page 3
-of request.pagination, https://api.example.com/tickets?page=3`. A later page
-that is not JSON, items that are not an array, and a `next` that gives
-something other than text or a number fail it in the fetch stage, naming the
-page. An answer of one page is the page as it came, byte for byte; an answer
-of several is the merged document written again as JSON, its other keys those
-of the first page, its status and headers the first page's.
+- A next page on the virtual host of the `Host` (the target's scheme, and
+  the port of the `Host`, or the scheme's default when it names none) is
+  also on the target's origin. It is fetched as the first page was: from
+  `https://10.0.0.5/items?page=2`, with `Host: api.example`.
+- `api.example` is never looked up. What it resolves to may be another
+  server, which the target's `allowed_targets` and `denied_targets` were not
+  checked against, and it would be sent the collector's credentials. At the
+  target's address the page stays on the host that the policy allowed, at
+  the virtual host that the configuration chose.
+- A next page on another port or scheme of the virtual host, or on any other
+  host, still fails the trip.
+
+**Limits.** The probe's `timeout`, and the scrape's deadline, cover all
+pages together. The response limit (`max_response_bytes`) applies to each
+page, to the pages together, and to the merged document.
+
+**JSON only.** The pages are read as JSON. A collector with
+`request.pagination` decodes with `json`, which is what an omitted
+`decoder.type` becomes; any other decoder is refused when the configuration
+loads.
+
+- A first page that is not JSON, or that is answered with a status that the
+  collector does not [accept](#accepting-other-statuses), is the answer as
+  it would be without pagination, and fails in the `decode` or the
+  `http_status` stage.
+- A later page with such a status fails the trip in the `http_status` stage
+  with that page's status and body, and the error names the page: `received
+  HTTP status 503 on page 3 of request.pagination,
+  https://api.example.com/tickets?page=3`.
+- A later page that is not JSON, items that are not an array, and a `next`
+  that gives something other than text or a number fail the trip in the
+  fetch stage, with an error that names the page.
+- An answer of one page is the page as it came, byte for byte. An answer of
+  several pages is the merged document written again as JSON, with the other
+  keys, the status and the headers of the first page.
 
 A [debug probe](CONFIGURATION.md#debug-probes) lists every page's request
-with its number, `(page 2)`, says how many pages the response is merged from,
-and whether the pages stopped at `max_pages`. A static target of the
-collector pages through its own target and path the same way.
-`request.pagination` is the collector's: a static target cannot set it, nor a
-probe parameter change it.
+with its number, `(page 2)`, and says how many pages the response is merged
+from and whether the pages stopped at `max_pages`. A static target of the
+collector pages through its own target and path in the same way.
+`request.pagination` belongs to the collector: a static target cannot set
+it, and a probe parameter cannot change it.
 
 ## Rate limiting
 
-A target that answers badly when it is asked too often — an old appliance, a
-legacy application server — can be asked no faster than a set rate, however
-many probes, static targets, retries and pages ask it at once:
+A target that misbehaves when it is asked too often, such as an old
+appliance or a legacy application server, can be limited to a set rate,
+however many probes, static targets, retries and pages ask it at once:
 
 ```yaml
 request:
@@ -2505,62 +2602,66 @@ request:
     burst: 1                 # requests sent at once after a pause; 1 when left out
 ```
 
-`request.rate_limit` belongs to `http` and `graphite` collectors; a collector
-of any other type that sets it is refused when the configuration loads, as
-any key its type does not take. `requests_per_second` is required, a number
-greater than 0; `burst`, when set, is at least 1.
+`request.rate_limit` belongs to `http` and `graphite` collectors. A
+collector of any other type that sets it is refused when the configuration
+loads, like any key that its type does not take. `requests_per_second` is
+required and is a number greater than 0. `burst`, when set, is at least 1.
 
-The limit is kept for each origin — scheme, host and port — the collector's
-requests go to, a port left out being the scheme's own, so
-`http://legacy.example` and `http://legacy.example:80` share it. Each
-collector has its own: two collectors asking the same host are limited
-apart, and one collector's requests never wait on another's; for a limit
-they share, see [Rate limits per host](#rate-limits-per-host). Every request
-sent counts, where it is sent: each attempt of a [retry](#retries), each
-[page](#pagination), each hop of a [followed redirect](#redirects-and-http2),
-and each request of a [login](AUTHENTICATION.md#logging-in-to-a-target), the
-last two against the origin they go to, which is the target's own when they
-stay on it.
+**Scope.** The limit is kept for each origin (scheme, host and port) that
+the collector's requests go to. A port that is left out is the scheme's
+default, so `http://legacy.example` and `http://legacy.example:80` share the
+limit.
 
-A request takes its turn from a bucket that holds `burst` turns and fills
-again at `requests_per_second`: with a turn to spare it is sent at once, and
-otherwise it waits for the next. A request whose turn would come at or past
-its deadline — the probe's or the scrape's time, or a login's own — is not
-made to wait: it fails at once, since the wait could only end in the same
-failure later, and is not retried, since a retry would only meet the same
-limit closer to the deadline:
+- Each collector has its own limit. Two collectors that ask the same host
+  are limited separately, and one collector's requests never wait for
+  another's. For a limit that they share, see
+  [Rate limits per host](#rate-limits-per-host).
+- Every request sent counts, against the origin it is sent to: each attempt
+  of a [retry](#retries), each [page](#pagination), each hop of a
+  [followed redirect](#redirects-and-http2), and each request of a
+  [login](AUTHENTICATION.md#logging-in-to-a-target). For the last two, the
+  origin is the target's own when they stay on it.
+
+**Waiting.** A request takes its turn from a bucket that holds `burst` turns
+and refills at `requests_per_second`. With a turn available it is sent
+immediately; otherwise it waits for the next turn. A request whose turn
+would come at or after its deadline (the probe's or the scrape's time, or a
+login's own) is not made to wait. It fails immediately, because the wait
+could only end in the same failure later, and it is not retried, because a
+retry would meet the same limit closer to the deadline:
 
 ```
 rate limit of 2 requests per second for http://legacy.example:80 would delay the request past its deadline: it would wait 1.5s for its turn, and 800ms is left; ask the target less often, raise request.rate_limit, or the timeout
 ```
 
-A wait cut short — the probe's client gone, the exporter shutting down —
-gives its turn back. The requests that waited are counted in
+A wait that is cut short (the probe's client has gone, or the exporter is
+shutting down) returns its turn. The requests that waited are counted in
 `http_exporter_rate_limit_waits_total`, and those refused in
-`http_exporter_rate_limit_refused_total`, by collector alone
-([Self-metrics](SELF-METRICS.md)). A [debug probe](CONFIGURATION.md#debug-probes)
-shows, under each request that waited, how long and why: `sent after waiting
-500ms for its turn under the rate limit of 2 requests per second for
-http://legacy.example:80`; its own requests take their turns as any other's,
-and are not counted.
+`http_exporter_rate_limit_refused_total`, by collector only
+([Self-metrics](SELF-METRICS.md)). A
+[debug probe](CONFIGURATION.md#debug-probes) shows, under each request that
+waited, how long and why: `sent after waiting 500ms for its turn under the
+rate limit of 2 requests per second for http://legacy.example:80`. Its own
+requests take their turns like any others and are not counted.
 
-A [static target](STATIC-TARGETS.md) of the collector may set a
-`rate_limit` of its own, which replaces the collector's for its requests,
-both keys together, `burst` 1 when it leaves it out. Its requests then have
-their own limit for each origin, apart from the one the collector's other
-targets share there, so a target given a lower rate is not slowed further by
-them. No probe parameter sets or changes the limit. The buckets of origins
-not asked for a while are forgotten once they have filled again, when they
-hold nothing a new one would not, and at most 10,000 are kept, the least
-recently used forgotten first beyond that; a change of the limit starts it
-from a full bucket.
+A [static target](STATIC-TARGETS.md) of the collector may set its own
+`rate_limit`, which replaces the collector's for its requests: both keys
+together, with `burst` 1 when it is left out. Its requests then have their
+own limit for each origin, separate from the one that the collector's other
+targets share there, so a target with a lower rate is not slowed further by
+them. No probe parameter sets or changes the limit.
+
+The buckets of origins that have not been used for a while are forgotten
+once they have refilled, when they hold nothing that a new bucket would not.
+At most 10,000 are kept, and beyond that the least recently used is
+forgotten first. A change of the limit starts it from a full bucket.
 
 ### Rate limits per host
 
-`request.rate_limit` is a collector's own, so several collectors calling one
-API share nothing, and together may ask it faster than its quota allows.
-The top-level `rate_limits` list sets limits that every collector's requests
-to a host share:
+`request.rate_limit` belongs to one collector. Several collectors that call
+one API therefore share nothing, and together they may ask it faster than
+its quota allows. The top-level `rate_limits` list sets limits that the
+requests of every collector to a host share:
 
 ```yaml
 rate_limits:
@@ -2575,94 +2676,111 @@ rate_limits:
 ```
 
 Every `http` and `graphite` request to one of an entry's hosts takes a turn
-from the entry's bucket — one bucket for the entry, whichever of its hosts a
-request goes to — whichever collector, probe or static target sends it,
-counted as `request.rate_limit` counts: each attempt of a retry, each page,
-each hop of a followed redirect that goes to the host, and each request of a
-login. It takes the turn in addition to the one it takes under its
-collector's own `rate_limit`, or its static target's, first that one and
-then the entry's; a request refused by one gives back the turn it took under
-the other, since it is not sent. Waiting is as for `request.rate_limit`: a
-request waits for its turn unless the turn would come at or past its
-deadline, and then fails at once, without a retry, naming the entry:
+from the entry's bucket, whichever collector, probe or static target sends
+it. There is one bucket for the entry, whichever of its hosts a request goes
+to. Requests are counted as for `request.rate_limit`: each attempt of a
+retry, each page, each hop of a followed redirect that goes to the host, and
+each request of a login.
+
+The request takes this turn in addition to the one under its collector's own
+`rate_limit`, or its static target's: first that one, then the entry's. A
+request refused by one returns the turn that it took under the other,
+because it is not sent. Waiting works as for `request.rate_limit`: a request
+waits for its turn unless the turn would come at or after its deadline, and
+then fails immediately, without a retry, with an error that names the entry:
 
 ```
 rate limit of 5 requests per second of rate_limits entry "billing_api" for api.billing.example would delay the request past its deadline: it would wait 1.2s for its turn, and 800ms is left; ask the entry's hosts less often, raise the entry's rate_limit, or the timeout
 ```
 
-An entry's hosts are host names, matched in any case and with or without a
-final dot; IP addresses, matched however they are written, an IPv6 one with
-or without brackets; and wildcards `*.example.com`, which match every
-subdomain of `example.com` at any depth, `api.example.com` and
-`a.b.example.com`, but not `example.com` itself: list both for both. An IPv4
-address and the same address mapped into IPv6 are one host, which Go dials
-alike: `10.0.0.1` matches `http://[::ffff:10.0.0.1]/` and `::ffff:10.0.0.1`
-matches `http://10.0.0.1/`. An entry's IPv6 address has no zone, and is
-refused at load with one (`fe80::1%eth0`), since a zone names an interface
-of the exporter's machine rather than the host; a request's zone is ignored,
-so `fe80::1` matches `http://[fe80::1%25eth0]/` through every interface. An
-internationalised name is written in its `xn--` form,
-`xn--bcher-kva.example` for `bücher.example`, and matches that form in any
-case and with or without a final dot. A host with a character outside ASCII
-is refused at load, as in `allowed_targets`, and is not converted: a request
-whose host has one is [refused](#restricting-targets) before it is sent and
-takes no turn, so the `xn--` form is the only one a limited request names
-such a host in. A host is written alone, without a scheme, port or path: an
-entry applies to every port and scheme of its hosts, since a quota is kept
-for a host rather than for one of its ports. A request matches by the host
-of its URL, not by the address it resolves to, so a host reached by two
-names needs both listed. The first entry whose hosts match a request
-applies, in the order of the list, so an exact name listed before a wildcard
-over it takes its requests out of the wildcard's entry. A host may be listed
-once, in one entry, and the same host twice is refused when the
-configuration loads; so is a host that a wildcard of an earlier entry covers
-— `api.example.com` or `*.api.example.com` after an entry with
-`*.example.com` — since the earlier entry would always match it first and
-the later one never apply. The error names both entries; list the narrower
-entry first:
+**Hosts.** An entry's hosts are:
+
+- host names, matched in any letter case and with or without a final dot;
+- IP addresses, matched however they are written, an IPv6 address with or
+  without brackets;
+- wildcards `*.example.com`, which match every subdomain of `example.com` at
+  any depth (`api.example.com` and `a.b.example.com`) but not `example.com`
+  itself. List both to cover both.
+
+The following rules apply:
+
+- An IPv4 address and the same address mapped into IPv6 are one host, and Go
+  dials them identically: `10.0.0.1` matches `http://[::ffff:10.0.0.1]/`,
+  and `::ffff:10.0.0.1` matches `http://10.0.0.1/`.
+- An entry's IPv6 address has no zone, and is refused at load with one
+  (`fe80::1%eth0`), because a zone names an interface of the exporter's
+  machine and not the host. A request's zone is ignored, so `fe80::1`
+  matches `http://[fe80::1%25eth0]/` through every interface.
+- An internationalised name is written in its `xn--` form,
+  `xn--bcher-kva.example` for `bücher.example`, and matches that form in any
+  letter case and with or without a final dot. A host with a character
+  outside ASCII is refused at load, as in `allowed_targets`, and is not
+  converted. A request whose host has one is
+  [refused](#restricting-targets) before it is sent and takes no turn, so
+  the `xn--` form is the only form in which a limited request names such a
+  host.
+- A host is written alone, without a scheme, port or path. An entry applies
+  to every port and scheme of its hosts, because a quota is kept for a host
+  and not for one of its ports.
+- A request matches by the host of its URL, not by the address that it
+  resolves to, so a host reached by two names needs both listed.
+- The first entry whose hosts match a request applies, in the order of the
+  list. An exact name listed before a wildcard that covers it therefore
+  takes its requests out of the wildcard's entry.
+- A host may be listed once, in one entry. The same host twice is refused
+  when the configuration loads. So is a host that a wildcard of an earlier
+  entry covers (`api.example.com` or `*.api.example.com` after an entry with
+  `*.example.com`), because the earlier entry would always match it first
+  and the later one would never apply. The error names both entries; list
+  the narrower entry first:
 
 ```
 rate_limits entry "exact" lists "api.example.com", which rate_limits entry "wild"'s "*.example.com" covers already; the first entry that matches applies, so rate_limits entry "exact" would never apply to it: list the narrower entry before the broader one
 ```
 
-Within one entry a host its own wildcard covers is let be, since the entry
-applies to it either way. Also refused are an entry without a `name`, two
-entries of one name, an entry without hosts and a `rate_limit` that
-`request.rate_limit` would refuse. `burst` is 1 when left out.
+Within one entry, a host that the entry's own wildcard covers is accepted,
+because the entry applies to it in either case. Also refused are an entry
+without a `name`, two entries with one name, an entry without hosts, and a
+`rate_limit` that `request.rate_limit` would refuse. `burst` is 1 when left
+out.
 
-An entry's bucket is kept by each exporter process, not shared between
-processes. Several replicas — behind the [target allocator](ALLOCATOR.md) or
-otherwise — each have a bucket of their own for an entry, so N replicas
-together may ask its hosts up to N × `requests_per_second`, with N × `burst`
-at once. Give each replica the host's quota divided by the number of
-replicas, or have the allocator keep the targets that ask the host on one
-replica: [static targets](ALLOCATOR.md#static-targets) of one `shard_key`
-land on one replica, and a [probe job](ALLOCATOR.md#probe-targets) with
-`shard_key: address` keeps every probe of one host and port on one. A probe
-Prometheus sends to another replica, which any replica answers, takes its
-turn there.
+**Replicas.** An entry's bucket is kept by each exporter process and is not
+shared between processes. Several replicas, behind the
+[target allocator](ALLOCATOR.md) or otherwise, each have their own bucket
+for an entry. N replicas together may therefore ask its hosts up to N ×
+`requests_per_second`, with N × `burst` at once. Either give each replica
+the host's quota divided by the number of replicas, or have the allocator
+keep the targets that ask the host on one replica:
+[static targets](ALLOCATOR.md#static-targets) of one `shard_key` are placed
+on one replica, and a [probe job](ALLOCATOR.md#probe-targets) with
+`shard_key: address` keeps every probe of one host and port on one replica.
+A probe that Prometheus sends to another replica, which any replica answers,
+takes its turn there.
 
 Only `http` and `graphite` requests are limited, as with
-`request.rate_limit`: a `grpc`, `sql`, `redis` or other collector's requests
-take no turn, whatever host they go to. No probe parameter sets or changes
-an entry.
+`request.rate_limit`. The requests of a `grpc`, `sql`, `redis` or other
+collector take no turn, whatever host they go to. No probe parameter sets or
+changes an entry.
 
-A [debug probe](CONFIGURATION.md#debug-probes)'s requests take their turns as
-any other's, and are not counted; its report shows, under a request that
-waited, the entry it waited for. The requests an entry made wait are counted
-in `http_exporter_host_rate_limit_waits_total{rule="billing_api"}`, and those
-it refused in `http_exporter_host_rate_limit_refused_total`, by entry, with no
-collector label ([Self-metrics](SELF-METRICS.md#rate-limits-per-host)).
+The requests of a [debug probe](CONFIGURATION.md#debug-probes) take their
+turns like any others and are not counted. Its report shows, under a request
+that waited, the entry that it waited for. The requests that an entry made
+wait are counted in
+`http_exporter_host_rate_limit_waits_total{rule="billing_api"}`, and those
+that it refused in `http_exporter_host_rate_limit_refused_total`, by entry,
+with no collector label
+([Self-metrics](SELF-METRICS.md#rate-limits-per-host)).
 
-A reload that leaves an entry as it was keeps its bucket, with the turns it
-has promised to requests waiting; one that changes it — its hosts or its
-`rate_limit` — starts it from a full bucket, as a changed `request.rate_limit`
-does. An entry's counts are kept while an entry of its name is in force, and
-forgotten when a reload removes it.
+A reload that leaves an entry unchanged keeps its bucket, with the turns
+that it has promised to waiting requests. A reload that changes it (its
+hosts or its `rate_limit`) starts it from a full bucket, as a changed
+`request.rate_limit` does. An entry's counts are kept while an entry of its
+name is in force, and forgotten when a reload removes it.
 
 ## TLS
 
-The collector can configure target TLS verification and trust material:
+The collector can configure TLS verification and trust material for the
+target:
 
 ```yaml
 request:
@@ -2674,44 +2792,49 @@ request:
     server_name: status.internal.example
 ```
 
-`server_name` is the name the target's certificate is checked against, and
-sent as SNI, when the target is addressed by something the certificate does
-not name — an IP address, a Service's cluster name — as with a
-[`Host` header](#the-host-header). Unset, it is the target's host. It holds
-for every host a [followed redirect](#what-a-followed-redirect-carries)
-leads to as well, as `ca_file` and `insecure_skip_verify` do; the client
-certificate is presented to the target's origin and to the hosts in
-`redirect_trusted_hosts`, and a redirect over `https` to any other host is
-refused.
+`server_name` is the name that the target's certificate is checked against,
+and that is sent as SNI. Use it when the target is addressed by something
+that the certificate does not name, such as an IP address or a Service's
+cluster name, as with a [`Host` header](#the-host-header). When it is unset,
+it is the target's host. It also applies to every host that a
+[followed redirect](#what-a-followed-redirect-carries) leads to, as
+`ca_file` and `insecure_skip_verify` do. The client certificate is presented
+to the target's origin and to the hosts in `redirect_trusted_hosts`, and a
+redirect over `https` to any other host is refused.
 
 A client certificate needs both `cert_file` and `key_file`; one without the
-other stops the exporter at startup. The files themselves are read at the first
-request, and again when they change, so a Secret mounted later is picked up;
-[`--dry-run`](CONFIGURATION.md#dry-run) reads them, warning of one a request
-would fail on, as it does a `login`'s own `tls` block's.
+other stops the exporter at startup. The files themselves are read at the
+first request, and again when they change, so a Secret mounted later is
+picked up. [`--dry-run`](CONFIGURATION.md#dry-run) reads them and warns
+about one that a request would fail on, as it does for the files of a
+`login`'s own `tls` block.
 
-A [`tlscert`](TLSCERT.md) collector takes the same block, read by the same
-code, but for `insecure_skip_verify`: it reports a chain that does not
-verify rather than refusing it. A [`kubernetes`](KUBERNETES.md#outside-the-cluster)
-collector takes it only beside `api_server`, also without
-`insecure_skip_verify`, since it sends the API server a token. A
-[`redis`](REDIS.md#tls) collector takes it whole, and speaks TLS when it is
-set or the target is a `rediss://` URL, a [`tcp`](TCP.md#tls) collector
-takes it whole too, and speaks TLS when it is set, and so does an
-[`ldap`](LDAP.md#tls) collector, with `ldaps://`, or after StartTLS with
-`start_tls`.
+Other request types take the same block:
+
+- A [`tlscert`](TLSCERT.md) collector takes it, read by the same code,
+  except for `insecure_skip_verify`: it reports a chain that does not verify
+  instead of refusing it.
+- A [`kubernetes`](KUBERNETES.md#outside-the-cluster) collector takes it
+  only beside `api_server`, also without `insecure_skip_verify`, because it
+  sends the API server a token.
+- A [`redis`](REDIS.md#tls) collector takes the whole block, and uses TLS
+  when it is set or the target is a `rediss://` URL.
+- A [`tcp`](TCP.md#tls) collector takes the whole block too, and uses TLS
+  when it is set.
+- An [`ldap`](LDAP.md#tls) collector does the same, with `ldaps://`, or
+  after StartTLS with `start_tls`.
 
 A [static target](STATIC-TARGETS.md#credentials-and-tls-of-a-target) of an
-`http` or `graphite` collector may name a `tls` block of its own, which
-replaces the collector's whole for every request of that target: its pages,
-its redirects and its login. `tls: {}` there verifies with the system roots
-alone; the URL's scheme, not the block, decides whether TLS is spoken. No
+`http` or `graphite` collector may name its own `tls` block, which replaces
+the collector's block as a whole for every request of that target: its
+pages, its redirects and its login. `tls: {}` there verifies with the system
+roots only. The URL's scheme, not the block, decides whether TLS is used. No
 probe parameter sets it.
 
-For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
-collector setting. Set it to `true` only for endpoints where certificate
-verification is intentionally unavailable; it disables server certificate
-verification and should not be used as a general workaround.
+For a one-off scrape, the `insecure_skip_verify` probe parameter overrides
+the collector setting. Set it to `true` only for endpoints where certificate
+verification is intentionally unavailable. It disables verification of the
+server certificate and should not be used as a general workaround.
 
 ```yaml
 params:

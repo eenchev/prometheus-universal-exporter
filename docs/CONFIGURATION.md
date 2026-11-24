@@ -4658,36 +4658,38 @@ The checks are:
     is taken. A number or a boolean in quotes is text, which no key of
     numbers or booleans accepts.
 
-The last four look at the values YAML gives the exporter. With a
-[merge key](#reusing-settings-with-yaml-anchors), a key the mapping sets
-itself replaces the one merged in, and of a list of merges (`<<: [*a, *b]`)
-the first that sets a key is the one read, so
-`limits: {<<: *defaults, max_metrics: 500}` loads even if the anchor's own
-`max_metrics` is `0.5`: that value is never read there. A value that is read
-is refused, at the line it is written on. A key written as an alias,
-`*k : 7.0` with `&k max_metrics` elsewhere, is the key its anchor holds, as
-YAML reads it, and its value is read and refused as that key's, named so.
+The last four checks look at the values YAML gives the exporter.
+
+- With a [merge key](#reusing-settings-with-yaml-anchors), a key the mapping
+  sets itself replaces the merged one, and in a list of merges
+  (`<<: [*a, *b]`) the first that sets a key is the one read. So
+  `limits: {<<: *defaults, max_metrics: 500}` loads even if the anchor's own
+  `max_metrics` is `0.5`, because that value is never read there. A value
+  that is read is refused, at the line where it is written.
+- A key written as an alias, `*k : 7.0` with `&k max_metrics` elsewhere, is
+  the key its anchor holds, as YAML reads it. Its value is read and refused
+  as that key's value, and named accordingly.
 
 Each of these would otherwise load and then fail every scrape's validation,
 or be ignored, whatever the target answered.
 
 ### Two rules that are the same rule
 
-Several rules may export one metric name, each reading its series from
-another place or giving them another label. Two rules that are alike in
-everything that decides which series a rule makes are something else: the
-same rule, written twice. Each makes every series the other makes, of one
-name and one set of labels, and a scrape that has a series twice fails —
-`validation failed: duplicate metric series "up"` — on every scrape, for as
-long as the configuration runs. So the pair is refused when the
-configuration loads, naming both rules by their places among the collector's
-rules, counted from 1, and the metric:
+Several rules may export one metric name, each reading its series from a
+different place or giving them a different label. Two rules that are alike
+in everything that determines which series a rule makes are a different
+case: they are the same rule, written twice. Each produces every series the
+other produces, with one name and one set of labels, and a scrape that has a
+series twice fails (`validation failed: duplicate metric series "up"`) on
+every scrape, for as long as the configuration runs. The pair is therefore
+refused when the configuration loads. The error names both rules by their
+positions among the collector's rules, counted from 1, and the metric:
 
 ```text
 collector "node" metrics rule 1 and rule 3 are the same rule of metric "up": alike in name, expression, items and labels, each makes every series the other makes, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, or tell their series apart by a label, as with a static label that has another value in each
 ```
 
-A `prometheus` rule without a name is told of by its pattern, `… are the
+A `prometheus` rule without a name is identified by its pattern: `… are the
 same rule of the metrics that match "^node_": …`. Each copy of a rule is
 reported once, against the first.
 
@@ -4700,33 +4702,34 @@ reported once, against the first.
 | a label's `truncate`, `required` and `value_map` | no | the first two change no label's name, and a label's `value_map` is one for [all the rules of a name](#mapping-text-to-values-and-scaling-them) |
 | `type` | no | rules of one name have [one type](#checked-when-the-configuration-loads) |
 
-So two rules that differ only in a `scale`, a `description`, `required` or
-`error_mode` are the same rule, and are refused: whatever value each gives,
-it is a second value for one series. To export one name from two rules,
-tell their series apart by a label — a static label with another value in
-each is enough — or by reading another `expression` or other `items`.
+Two rules that differ only in a `scale`, a `description`, `required` or
+`error_mode` are therefore the same rule, and are refused: whatever value
+each gives, it is a second value for one series. To export one name from two
+rules, distinguish their series by a label (a static label with a different
+value in each is enough), or by reading a different `expression` or
+different `items`.
 
 Under `prometheus`, where a label reads a label of the series the rule
 passes on, the order of a rule's labels is compared too when one of them
-reads a label the rule itself sets under another name, since the order then
-decides the value.
+reads a label that the rule itself sets under another name, because the
+order then determines the value.
 
 The comparison is of what the rules write, not of what they mean. Two
-expressions that select the same thing in other words — `.v` and `(.v)`, or
-the `prometheus` expressions `'^up$'` and `'^(up)$'` — are two rules to it:
-they load, and the scrape fails on the duplicate series as before. A
-`python` collector's rules make no series, the script does, so two of them
-alike change nothing and are not refused. A JSON schema cannot compare the
-items of a list in this way, so this is one of the checks only the exporter
-makes ([Editor support](#editor-support)).
+expressions that select the same thing in different words, such as `.v` and
+`(.v)`, or the `prometheus` expressions `'^up$'` and `'^(up)$'`, are two
+rules to it. They load, and the scrape fails on the duplicate series as
+before. A `python` collector's rules produce no series (the script does), so
+two identical ones change nothing and are not refused. A JSON schema cannot
+compare the items of a list in this way, so this is one of the checks that
+only the exporter makes ([Editor support](#editor-support)).
 
 ### A name and a pattern that matches it
 
-One pair of `prometheus` rules that select the same in other words is
-decided by the configuration alone, and is refused when it loads. A rule
-without an `expression` passes on the metric its `name` names. A rule with
-an `expression` passes on every metric the expression matches. Where the
-expression matches that very name, both pass the metric on:
+One pair of `prometheus` rules that select the same thing in different words
+can be detected from the configuration alone, and is refused when it loads.
+A rule without an `expression` passes on the metric that its `name` names. A
+rule with an `expression` passes on every metric the expression matches.
+Where the expression matches that same name, both pass the metric on:
 
 ```yaml
 metrics:
@@ -4735,51 +4738,51 @@ metrics:
   - expression: '.*'
 ```
 
-Each rule makes every series of `up`, and a scrape that has a series twice
-fails — `validation failed: duplicate metric series "up"` — on every scrape
-of a target that has the metric; of a target that has none, the first rule
-makes nothing, and reports the metric missing unless it has
-`required: false`. The first rule, which is about that one metric, makes a
-series of no scrape that passes, so the load says:
+Each rule produces every series of `up`, and a scrape that has a series
+twice fails (`validation failed: duplicate metric series "up"`) on every
+scrape of a target that has the metric. On a target that does not have it,
+the first rule produces nothing and reports the metric as missing, unless it
+has `required: false`. The first rule, which is about that one metric, thus
+contributes a series to no scrape that passes, so the load reports:
 
 ```text
 collector "node" metrics rule 1 and rule 2 both pass on metric "up": rule 1 passes on the metric of that name, the expression ".*" of rule 2 matches that name, and their labels are alike, so each makes every series of the metric, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, write the expression so that it does not match "up", or tell their series apart by a label, as with a static label that has another value in each
 ```
 
 The expression is matched against the name as it is against a metric of the
-target: compiled the same, and matched anywhere in the name, so `up`,
+target: compiled the same way and matched anywhere in the name, so `up`,
 `'^u'`, `'(?i)^UP$'` and `'.*'` all match `up`. The pair is refused
-whichever of the two rules is written first, and when
+whichever of the two rules is written first, when both of these hold:
 
-- the rule with the expression has no `name`, and so keeps the metric's
-  own, or has that same `name`: with another, as in
+- The rule with the expression has no `name`, and so keeps the metric's own
+  name, or has that same `name`. With another name, as in
   `{name: alive, expression: '^up$'}`, it exports the metric under that
-  name, and the two rules load;
-- the two are alike in `labels`, as
-  [two rules that are the same rule](#two-rules-that-are-the-same-rule)
-  are: a label in one that the other has not, or has with another `value`
-  or `expression`, tells their series apart as far as the configuration
-  says, and the rules load.
+  name, and the two rules load.
+- The two are alike in `labels`, in the sense of
+  [two rules that are the same rule](#two-rules-that-are-the-same-rule). A
+  label in one that the other does not have, or has with a different `value`
+  or `expression`, distinguishes their series as far as the configuration
+  can tell, and the rules load.
 
-What else the rule of the name says changes nothing of it, as there: a
-`description`, a `scale`, a `type`, `required`, `error_mode` and a label's
-`truncate` and `required` do not say which series a rule makes. With a
-`type` other than the metric's own, the scrape fails on a metric of two
-types before it comes to the duplicate. And where its `scale` or `type` cannot
-apply to the metric, or a label it requires is missing, the rule fails on
-the series instead of making it — it makes no series of the metric there
-either.
+Nothing else that the rule with the name sets changes this, as in that
+section: a `description`, a `scale`, a `type`, `required`, `error_mode` and
+a label's `truncate` and `required` do not determine which series a rule
+makes. With a `type` other than the metric's own, the scrape fails on a
+metric of two types before it reaches the duplicate. Where its `scale` or
+`type` cannot apply to the metric, or a label it requires is missing, the
+rule fails on the series instead of producing it, so it produces no series
+of the metric there either.
 
-What else the rule with the expression says does not keep the pair from
-being refused either, with one exception, a `type` of `histogram` or
-`summary` (below), though it can change what a scrape makes of it. A
-rule that sets a `type`, a `scale` or a `required` label can fail on a
-series instead of making it: a histogram or a summary keeps its own type
-and takes no scale, a `type` of `histogram` or `summary` applies to no
-other metric, and a series may not have the label. Under `error_mode: log`
-or `ignore` the rule then carries on without that series, and the scrape
-passes with the one the rule of the name made. So what such a pair does is
-the target's to say:
+Nothing else that the rule with the expression sets keeps the pair from
+being refused either, with one exception: a `type` of `histogram` or
+`summary` (see below). Such settings can change what a scrape makes of the
+pair, though. A rule that sets a `type`, a `scale` or a `required` label can
+fail on a series instead of producing it: a histogram or a summary keeps its
+own type and takes no scale, a `type` of `histogram` or `summary` applies to
+no other metric, and a series might not have the label. Under
+`error_mode: log` or `ignore`, the rule then carries on without that series,
+and the scrape passes with the one the rule with the name produced. What
+such a pair does therefore depends on the target:
 
 | The rule with the expression sets | Each rule makes the series, and the scrape fails | That rule fails on the series, and the scrape passes | The load |
 |---|---|---|---|
@@ -4789,30 +4792,31 @@ the target's to say:
 | a `required` label | where the series has the label | where it has not | refuses the pair |
 
 `{name: request_duration_seconds}` beside `{expression: '.*', scale: 0.001}`
-passed a histogram of that name on once, and failed the scrape of a target
-where it is a gauge; `{name: up}` beside `{expression: '^up$', type: gauge}`
-failed every scrape of an ordinary target. Both are refused, whatever the
-target has: a setting that fails on some series is no way to keep a rule
-from a metric, since every series it does not fail on is made twice. The
-load names what the rule sets — its type, its scale, each label it
-requires — in place of saying that every series is made twice:
+used to pass on a histogram of that name once, and to fail the scrape of a
+target where it is a gauge. `{name: up}` beside
+`{expression: '^up$', type: gauge}` failed every scrape of an ordinary
+target. Both are refused, whatever the target has. A setting that fails on
+some series is not a way to keep a rule away from a metric, because every
+series it does not fail on is produced twice. The load names what the rule
+sets (its type, its scale, each label it requires) instead of saying that
+every series is produced twice:
 
 ```text
 collector "node" metrics rule 1 and rule 2 both pass on metric "request_duration_seconds": rule 1 passes on the metric of that name, the expression ".*" of rule 2 matches that name, and their labels are alike; the scale of rule 2 does not keep it from the metric, since every series of the metric that rule 2 does not fail on is made by each rule, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, write the expression so that it does not match "request_duration_seconds", or tell their series apart by a label, as with a static label that has another value in each
 ```
 
-Where one of the two rules sets a `type` the other does not, it says too
-that the scrape fails `or, where the two rules give the metric different
-types, as a metric of inconsistent types`. With `error_mode: fail` the rule
-fails the scrape wherever it fails on a series, so no scrape of the pair
-passes, and the load says of it what it says of the two rules above. A
-`required` label that the rule of the name has not is a label that tells
-their series apart, and those rules load.
+Where one of the two rules sets a `type` that the other does not, the
+message also says that the scrape fails `or, where the two rules give the
+metric different types, as a metric of inconsistent types`. With
+`error_mode: fail`, the rule fails the scrape wherever it fails on a series,
+so no scrape of the pair passes, and the load reports it like the two rules
+above. A `required` label that the rule with the name does not have is a
+label that distinguishes their series, and those rules load.
 
-The exception is a rule of the histograms alone, or of the summaries: a
-rule with an expression whose `type` is `histogram` or `summary`, under
-`error_mode: log` or `ignore`, is taken beside a name it matches. Here that
-is the metric `up`, and every histogram:
+**The exception** is a rule for the histograms alone, or for the summaries
+alone: a rule with an expression whose `type` is `histogram` or `summary`,
+under `error_mode: log` or `ignore`, is accepted beside a name it matches.
+In this example that is the metric `up`, and every histogram:
 
 ```yaml
 metrics:
@@ -4822,65 +4826,67 @@ metrics:
     error_mode: ignore
 ```
 
-A `type` of `histogram` or `summary` applies to a metric of that type and
-to no other, so this rule fails on, and carries on without, every gauge,
-counter, untyped metric and summary: it is a rule of the histograms alone,
-and leaves an ordinary metric to the rule of its name. Of a target with a
-gauge `up`, a counter and two histograms, the scrape has `up` once and
-each histogram once. With `error_mode: ignore` nothing is logged; with
-`log`, the default, the scrape is the same, and the rule's failures on the
-metrics that are no histograms are logged as a warning.
+A `type` of `histogram` or `summary` applies to a metric of that type and to
+no other. This rule therefore fails on, and carries on without, every gauge,
+counter, untyped metric and summary. It is a rule for the histograms alone
+and leaves an ordinary metric to the rule with its name. For a target with a
+gauge `up`, a counter and two histograms, the scrape has `up` once and each
+histogram once. With `error_mode: ignore` nothing is logged. With `log`, the
+default, the scrape is the same, and the rule's failures on the metrics that
+are not histograms are logged as a warning.
 
-The pair still makes a series twice where the target's metric of that name
-is itself a histogram — a summary, under `type: summary`. Each rule then
-makes it, and the scrape of that target fails with
-`validation failed: duplicate metric series "up"`: the type of a metric is
-the target's to say, and the load cannot tell. For a name whose metric is a
-histogram, write the expression so that it does not match the name, or take
-the rule of the name out, the other making that histogram already.
+The pair still produces a series twice where the target's metric of that
+name is itself a histogram (or a summary, under `type: summary`). Each rule
+then produces it, and the scrape of that target fails with
+`validation failed: duplicate metric series "up"`. The type of a metric is
+decided by the target, and the load cannot know it. For a name whose metric
+is a histogram, write the expression so that it does not match the name, or
+remove the rule with the name, because the other rule already produces that
+histogram.
 
 Only the `type` decides, whatever else that rule sets. With a `scale` or a
-`required` label besides, the pair loads as well: those keep the rule from
-more series, not from fewer, and a rule with `type: histogram` and a
-`scale` makes no series at all, since a histogram takes no scale. The pair
-is refused as the others are
+`required` label in addition, the pair still loads: those keep the rule from
+more series, not from fewer, and a rule with `type: histogram` and a `scale`
+produces no series at all, because a histogram takes no scale. The pair is
+refused like the others in two cases:
 
-- where the rule of the name sets that same `type`, as in
+- The rule with the name sets that same `type`, as in
   `{name: latency, type: histogram}` beside
-  `{expression: '.*', type: histogram}`: that rule then makes the metric
-  only where the other makes it too, a histogram twice and anything else
-  not at all. With another `type` in the rule of the name — `gauge`, or
-  `summary` beside `histogram` — the rules load, and no scrape has a series
-  twice: of a metric of the pattern's type the rule of the name fails, and
-  the other rule makes the one series;
-- under `error_mode: fail`, where the rule fails the scrape on the first
-  metric of another type.
+  `{expression: '.*', type: histogram}`. That rule then produces the metric
+  only where the other produces it too: a histogram twice, and anything else
+  not at all. With a different `type` in the rule with the name (`gauge`, or
+  `summary` beside `histogram`), the rules load, and no scrape has a series
+  twice: for a metric of the pattern's type, the rule with the name fails,
+  and the other rule produces the one series.
+- The rule is under `error_mode: fail`, where it fails the scrape on the
+  first metric of another type.
 
-Nothing else is refused. Rules of which the configuration does not say that
-they pass on one metric, under one name and with the same labels, load as
-they did, and fail the scrape that has a series twice with
+Nothing else is refused. Rules for which the configuration does not show
+that they pass on one metric, under one name and with the same labels, load
+as before, and fail the scrape that has a series twice with
 `duplicate metric series`:
 
 - two rules that both have an expression, such as `'^node_'` and
   `'^node_cpu'`, which both pass on a metric only if the target has one
   that both match;
-- a rule of a name beside a rule that exports another metric under that
+- a rule with a name beside a rule that exports another metric under that
   name, `{name: up}` and `{name: up, expression: '^node_up$'}`, whose
   series are the same only if the two metrics have the same labels;
-- rules whose labels differ as written and come to the same on a target,
-  such as a static `job: api` in one rule where the target's series has
-  that label already.
+- rules whose labels differ as written but end up the same on a target,
+  such as a static `job: api` in one rule where the target's series already
+  has that label.
 
-Each pair is reported once, naming both rules by their places among the
-collector's rules, counted from 1, after the copies of a rule, which are
-told of as [the same rule](#two-rules-that-are-the-same-rule) and of
-nothing else. A schema cannot ask whether one item's expression matches
-what another item names, so this too is a check only the exporter makes
+Each pair is reported once, with both rules named by their positions among
+the collector's rules, counted from 1. Copies of a rule are reported first,
+as [the same rule](#two-rules-that-are-the-same-rule), and not again here. A
+schema cannot check whether one item's expression matches what another item
+names, so this too is a check that only the exporter makes
 ([Editor support](#editor-support)).
 
-Every mistake is reported at once, not one per run: the mistakes of every
-collector and every rule, and of every [collector file](#collector-files), in
-order, one per line, each quoting the expression it is about:
+**How mistakes are reported.** Every mistake is reported at once, not one per
+run: the mistakes of every collector and every rule, and of every
+[collector file](#collector-files), in order, one per line, each quoting the
+expression it concerns:
 
 ```text
 collector "a" metric "x" expression ".foo[": unexpected EOF
@@ -4890,227 +4896,277 @@ collector "b" metric "z" regex "value=\\d+" has no capture group; the value is t
 
 A mistake in a collector that a [collector file](#collector-files) defines
 names that file, as in `collector file /etc/exporter/collectors.d/payments.yaml:
-collector "pay" metric "depth" expression ".queue.depth[": unexpected EOF`, and
-a rejected reload whose mistakes are all in one collector file is logged with
-that file as its `file`; with mistakes in several files, `file` is the
-configuration and the text names each.
+collector "pay" metric "depth" expression ".queue.depth[": unexpected EOF`.
+A rejected reload whose mistakes are all in one collector file is logged
+with that file as its `file`. With mistakes in several files, `file` is the
+configuration, and the text names each file.
 
-Past 20, the rest are counted (`and 5 more problems`); `--dry-run` lists
-every one as an error of its own. A collector whose request, limits or
-formats are wrong stops at its first such mistake, since the rest of its
-checks read them.
+After 20 mistakes, the rest are counted (`and 5 more problems`). `--dry-run`
+lists every one as a separate error. A collector whose request, limits or
+formats are wrong stops at its first such mistake, because the rest of its
+checks depend on them.
 
-A CSS selector that does not compile used to match nothing, on every scrape,
-without saying why; it is now refused when the configuration loads. The
-expressions are compiled once, then, and every scrape reuses them.
+A CSS selector that does not compile used to match nothing on every scrape,
+without an explanation. It is now refused when the configuration loads. The
+expressions are compiled once at that point, and every scrape reuses them.
 
-A file that cannot be read as a configuration is refused in its own terms:
-each error names the line and what was expected there, as in
+A file that cannot be read as a configuration is refused with errors
+specific to the file. Each error names the line and what was expected there:
 
 ```text
 line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; write one such as 500ms, 30s or 1m30s
 ```
 
-The errors come in the order of the file, and on one line, as in a block
-written `{...}`, in the order of the keys they are about: `defaults:
-{bogus: 1, limits: {max_metrics: x}}` says the unknown key first and the
-value that is no whole number after it, every time the file is loaded. A
-block is read to its end: `cache: {bogus: 1, ttl: fast, revalidate: maybe}`
-says all three of its problems, and what the rest of the file has wrong
-after them.
+The errors come in file order. On one line, as in a block written `{...}`,
+they come in the order of the keys they concern: `defaults:
+{bogus: 1, limits: {max_metrics: x}}` reports the unknown key first and then
+the value that is not a whole number, every time the file is loaded. A block
+is read to its end: `cache: {bogus: 1, ttl: fast, revalidate: maybe}` reports
+all three of its problems, followed by the problems in the rest of the file.
 
-Every unknown key is refused, a static target's `request` block
-included, since a misspelt key would otherwise be ignored without a word.
-For the same reason a file holds one YAML document: the configuration, a
+Every unknown key is refused, including in a static target's `request`
+block, because a misspelt key would otherwise be silently ignored. For the
+same reason a file holds exactly one YAML document: the configuration, a
 collector file and the static targets file are each refused when a second
-document follows a `---`, naming the line it starts on. A leading `---`, and a
-final `---` or `...` with nothing after it but comments, are fine.
+document follows a `---`, with an error that names the line it starts on. A
+leading `---`, and a final `---` or `...` followed only by comments, are
+accepted.
 
 ### Editor support
 
 [`configs/config.schema.json`](../configs/config.schema.json) is a JSON Schema of this file.
 With the YAML extension for VS Code, or any editor that uses the YAML language
-server, start a configuration with
+server, start a configuration with this line:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
 ```
 
-and the editor completes keys, shows what each one does, and flags unknown keys
-and values that are not allowed as you type. The example configurations in
-`configs/`, `config.example.yaml`, `config.otlp.example.yaml` and
-`config.uptime.example.yaml`, start with it; the ones under `examples/` do
-not.
+The editor then completes keys, shows what each one does, and flags unknown
+keys and disallowed values as you type. The example configurations in
+`configs/` (`config.example.yaml`, `config.otlp.example.yaml` and
+`config.uptime.example.yaml`) start with that line; the ones under
+`examples/` do not.
 
-The [static target file](STATIC-TARGETS.md) has a schema of its own,
-[`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
-`configs/static-targets.example.yaml` points editors at the same way. The
-[target allocator](ALLOCATOR.md)'s files have schemas of their own:
-[`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json),
-its static target file, which may have `discovered_targets`, and
-[`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json),
-its probe targets file. All of them — this one, the
-[collector file](#collector-files) one, the static target file one and the
-allocator's two — are in `configs/` with the examples, and are regenerated with
-`make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
+The other files have their own schemas, all in `configs/` beside the
+examples and all regenerated with `make schemas` (see
+[Development](DEVELOPMENT.md#the-configuration-schema)):
 
-`prometheus-universal-exporter --config.schema` prints the schema of the binary
-you are running; its `request.type` values are the request types that binary
-was built with. A key that takes one of a few words takes them as the schema
-writes them, and the exporter refuses any other spelling as the schema does:
-`request.type: http`, `transform.type: jq`, `decoder.type`, the
-`error_handling` policies and a rule's `error_mode` (`log`, not `LOG`),
-`request.pagination.type`, `request.descriptors` and `response.graphite`'s
-`value` and `invalid_lines` in lower case and without blanks around them, and
-`request.method` in upper case or lower case, `GET` or `get`. The keys whose
-values are matched in any case where they come from — `request.driver`,
-`request.record_type`, header names, `allowed_schemes` and gRPC status
-codes — take any case in the schema too. The schema is not the last
-word: startup validation also checks what a schema cannot, such as that an
-expression compiles, that a duration of several parts, such as
-`script_timeout: 400us400us`, is not under its key's least — a schema reads
-the digits of a duration of one part, but cannot add up parts —, that
-`failure_backoff.max` is not shorter than `initial`, that a duration is not
-too long to be held, that a
-[size](#sizes) is under 2^63 bytes, that any other whole number, such as
-`limits.max_metrics`, is one an int64 holds, from -2^63 to 2^63 - 1, that a
-collector given one of `tls.cert_file` and `tls.key_file` by its file's
-[defaults](#defaults-for-the-collectors-of-a-file) is given the other too,
-that two `request.headers` names are not one header in different case, and that no two
-rules of a collector are
-[the same rule](#two-rules-that-are-the-same-rule), nor a `prometheus`
-[name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
-a schema having no way to compare the items of a list by some of their
-keys. Where a
-schema can tell, it refuses what the exporter refuses: a
-`response.csv.delimiter` of more than one character, a size with a fraction
-and no unit, a block that sets keys beside a missing `enabled`, a
-`value_map` key that is empty or has blanks around it, a label's
-`expression` of nothing but blanks, an entry of `transform.include` or
-`transform.exclude` that is empty or nothing but blanks, a `prometheus`
-rule's `expression` of nothing but blanks, a `value` on a
-label of a `python` rule and such a label without `truncate: true`, a
-`python` rule's `type`, `description`, `required` and `error_mode`, a
-`required` label
-whose `value_map` maps a value to `""`, a rule without a `name` under any
-transform but `prometheus`, a rule's or a label's `name` that is not a
-classic name in a collector whose `name_escaping` is not `underscores` or
-`values`, a `grpc` collector that calls
-another service than `grpc.health.v1.Health` without `descriptors`, a
-`request.headers` name, a collector's or a static target's, or an
-`otlp.headers` one in a block switched on, that is no header name or is
-`Accept-Encoding`, a `request.query` name that is empty or holds a control
-character, a `forward_headers` entry that is no header name or one that is
-[never forwarded](AUTHENTICATION.md), a duration or a size under its key's
-least, written as a number or as text of one number and a unit, such as
-`limits.script_timeout: 500us`, `limits.max_script_memory: 16MiB`,
-`max_response_bytes: 1kB`, `otlp.interval: 500ms` in a block switched on, a
-static target file's `interval: 0.5s` and `failure_backoff.initial: 0s`, a
-`tls` block with a client certificate and no key or a key and no
-certificate, but for the file a collector takes from its file's `defaults`,
-a request with two credentials, such as `bearer_token` beside
-`bearer_token_file` or `basic_auth` beside a bearer token, a
-`basic_auth_file` without both its files, a `pagination` key of another way
-of paging, such as `next` beside `type: page`, a `grpc` collector's
-`protoset_file`, `proto_files` or `proto_import_paths` beside another source
-of `descriptors`, or that source without its files, a `python` transform
-without a `script`, and a
-negative duration, such as `timeout: -5s`, which no key takes. A duration is
-written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
-the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
-`otlp` block with `enabled: false`, which is kept unchecked, do both take a
-negative one. Unchecked is of the whole block, to both: switched off, it may
-hold a `compression` that is neither `gzip` nor `none`, a `metric_names`
-that is neither `prometheus` nor `otel`, a `scope` without a name, a negative
-`max_pending_points`, `unready_after_failures` or `batch_max_size`, an
-`unready_after_failures` over 1000, and a `batch_max_bytes` under its least, as it may an endpoint that
-is no URL, and only what is not of a key's type at all — text for a number, a
-list for text — is refused there. What is written negative is negative
-however small: `-0.4ns`,
-which rounds to zero, is refused by both as `-1ns` is. The longest duration
-is 2^63 - 1 nanoseconds, some 292 years (`2562047h47m16.854775807s`): a
-longer one, such as `2562048h`, is well written, so the schemas take it, and
-the exporter refuses it as no duration. A duration of zero is written `0s`
-or `0`: an unquoted `0` is a number to YAML, which the exporter reads as the
-duration it spells, with a sign too (`+0`, `-0`), and the schemas take the
-number 0 beside the text. No other number is a duration, to either:
-`timeout: 30` lacks its unit and is refused, not read as 30 of anything. A
-schema is handed the number and not how it was written, so a zero written
-another way — `0.0`, `00`, `0x0` — passes the schemas as the 0 it is, and
-the exporter, which reads what is written, refuses it as no duration. These
-two, a duration too long to be held and a zero that is a number but is not
-written `0`, are all the schemas and the exporter differ on in how a
-duration is written.
+- the [static target file](STATIC-TARGETS.md):
+  [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
+  `configs/static-targets.example.yaml` points editors at in the same way;
+- the [target allocator](ALLOCATOR.md)'s static target file, which may have
+  `discovered_targets`:
+  [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json);
+- the allocator's probe targets file:
+  [`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json);
+- the [collector file](#collector-files).
 
-A whole number, such as `limits.max_metrics: 1e3` or `retry.attempts: 2.0`,
-may be written with a point or an exponent: a schema is handed the number,
-and the exporter reads it by its digits, so `9007199254740993.0` is that
-number and not the one a floating-point number rounds it to. One past what an
-int64 holds, such as `1e19`, which a schema takes, the exporter refuses,
-naming the key, the number and the range, and so is one past what a
-floating-point number holds, such as `1e400`, which the YAML reader the
-exporter uses takes for text, and an editor, reading YAML 1.2, for a number; and a fraction the exporter
-refuses however small, though a schema, handed the floating-point number,
-takes `1.00000000000000000001` for 1. An entry of `request.accept_status`,
-and one of `request.retry.statuses`, is a status written as a number or as text: a number is the status it is
-however it is written — `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and
-`0503` are 503 — to both; text is text, a status's three digits or a class
-such as `2xx` or `5XX`, as the schemas' pattern has it, so `"503.0"`,
-`"0503"`, `"+503"` and `" 503 "` are refused by both, the exporter naming
-the form an entry takes. The few more spellings the exporter's
-reader takes for a number, `5_03` and `0b111110111` among them, are 503 to
-the exporter, and text that is no status to an editor, which reads YAML 1.2.
+`prometheus-universal-exporter --config.schema` prints the schema of the
+binary you are running. Its `request.type` values are the request types that
+binary was built with.
 
-An optional key written as the empty string is the key left out, to the
-exporter and to the schemas alike. Where the key takes one of a set of
-values or text of a pattern, `""` is its default: `decoder.type: ""` is
-`auto`, `name_escaping: ""` is `fail`, `request.method: ""` is `GET`, an
-error policy or a rule's `error_mode` written `""` is the one it defaults
-to, a rule's `type: ""` is `gauge`, or under a `prometheus` transform the
-type of the series it passes through, `otlp.compression: ""` is `gzip`,
-`otlp.metric_names: ""` is `prometheus`, and
-`metrics_prefix: ""`, `response.graphite.value: ""`,
-`response.graphite.invalid_lines: ""` and a static target's `name: ""` and
-`request.method: ""` are those keys left out. A key that belongs to another
-request type, such as `rpc`, `descriptors` or `method`, is left out when it
-is written `""`, and so takes no part in what that type refuses. A rule
-about a key goes by the key being written: a label has a `value` or an
-`expression`, and the one written `""` is the one it does not have, and a
-`prometheus` rule has a `name` or an `expression`, neither of which it has
-written `""`. Blanks
-are not the empty string: a key written as nothing but blanks, such as
-`" "`, is text like any other, which the key takes or refuses as it does its
-other values — a label's `value` of blanks is a constant of blanks, and its
-`expression` of blanks is refused, as an entry of blanks in
-`transform.include` or `transform.exclude` and a `prometheus` rule's
-`expression` of blanks are. A key
-that is required is as missing written `""` as left out, and refused by
-both: `transform.type`, `request.type`, a collector's `name`, a label's
-`name`, a rule's `name` under the transforms that need one, a `grpc`
-collector's `rpc`, a `localfile` collector's `root` and a static target's
-`collector`. A key written with no value at all — nothing after its colon,
-`null` or `~` — is another thing, and no key takes it: to a schema it is
-none of the types the key takes, and the exporter refuses it at every key,
-every entry of a list and every value of a mapping, naming the line, so
-that an editor and the exporter flag the same key. And a key takes the
-kinds of value its schema says, to the exporter too: free text takes a
-number and a boolean as the text they spell (`value: 1`, `description:
-404`); a key the schemas hold to allowed values or a pattern — a name, a
-word of a few, a host — takes text alone, and the exporter refuses a number
-or a boolean there, saying to quote it, where it read `name: true` as the
-name `true`; and a boolean is `true` or `false`, the exporter refusing the
-`yes` and `on` it read as one. A rule's and a label's `name` are text under
-every `name_escaping`: one that is a number, as `underscores` and `values`
-allow, is written in quotes, `name: "404"`. An editor reads the file as
-YAML 1.2, and the exporter's reader takes a few more spellings for a
-number, `1_000` and `0b101` among them: at a key of text alone the exporter
-refuses those as numbers too, which is all the two differ on there. What is
-not text has no empty form: `""` is no duration and no size, and both refuse it; and both refuse an empty entry of
-`collector_files`, `request.accept_status`, `request.retry.statuses`, `request.allowed_targets`,
-`request.denied_targets`, `request.redirect_trusted_hosts`,
-`transform.include`, `transform.exclude` and the Python
-libraries, and an empty key of a `value_map`, of `request.metadata` and of a
-static target's `params` and `labels`.
+**Letter case.** A key that takes one of a few words takes them as the schema
+writes them, and the exporter refuses any other spelling, as the schema
+does:
+
+- `request.type: http`, `transform.type: jq`, `decoder.type`, the
+  `error_handling` policies and a rule's `error_mode` (`log`, not `LOG`),
+  `request.pagination.type`, `request.descriptors`, and
+  `response.graphite`'s `value` and `invalid_lines` are in lower case and
+  without surrounding blanks.
+- `request.method` is in upper case or lower case, `GET` or `get`.
+- The keys whose values are matched in any case where they are used
+  (`request.driver`, `request.record_type`, header names, `allowed_schemes`
+  and gRPC status codes) take any case in the schema too.
+
+**What only the exporter checks.** The schema is not the final check. Startup
+validation also checks what a schema cannot:
+
+- that an expression compiles;
+- that a duration of several parts, such as `script_timeout: 400us400us`, is
+  not under its key's minimum (a schema reads the digits of a one-part
+  duration but cannot add up parts);
+- that `failure_backoff.max` is not shorter than `initial`;
+- that a duration is not too long to be represented;
+- that a [size](#sizes) is under 2^63 bytes;
+- that any other whole number, such as `limits.max_metrics`, fits an int64,
+  from -2^63 to 2^63 - 1;
+- that a collector given one of `tls.cert_file` and `tls.key_file` by its
+  file's [defaults](#defaults-for-the-collectors-of-a-file) is given the
+  other too;
+- that two `request.headers` names are not the same header in different
+  case;
+- that no two rules of a collector are
+  [the same rule](#two-rules-that-are-the-same-rule), or a `prometheus`
+  [name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
+  because a schema cannot compare the items of a list by some of their keys.
+
+**What the schema refuses too.** Where a schema can tell, it refuses what the
+exporter refuses:
+
+- a `response.csv.delimiter` of more than one character;
+- a size with a fraction and no unit;
+- a block that sets keys beside a missing `enabled`;
+- a `value_map` key that is empty or has surrounding blanks;
+- a label's `expression` of only blanks; an entry of `transform.include` or
+  `transform.exclude` that is empty or only blanks; a `prometheus` rule's
+  `expression` of only blanks;
+- a `value` on a label of a `python` rule, and such a label without
+  `truncate: true`; a `python` rule's `type`, `description`, `required` and
+  `error_mode`;
+- a `required` label whose `value_map` maps a value to `""`;
+- a rule without a `name` under any transform except `prometheus`;
+- a rule's or a label's `name` that is not a classic name, in a collector
+  whose `name_escaping` is not `underscores` or `values`;
+- a `grpc` collector that calls a service other than
+  `grpc.health.v1.Health` without `descriptors`;
+- a `request.headers` name (a collector's or a static target's), or an
+  `otlp.headers` name in a block that is switched on, that is not a header
+  name or is `Accept-Encoding`;
+- a `request.query` name that is empty or contains a control character;
+- a `forward_headers` entry that is not a header name or is one that is
+  [never forwarded](AUTHENTICATION.md);
+- a duration or a size under its key's minimum, written as a number or as
+  text of one number and a unit, such as `limits.script_timeout: 500us`,
+  `limits.max_script_memory: 16MiB`, `max_response_bytes: 1kB`,
+  `otlp.interval: 500ms` in a block that is switched on, a static target
+  file's `interval: 0.5s` and `failure_backoff.initial: 0s`;
+- a `tls` block with a client certificate and no key, or a key and no
+  certificate, except for the file a collector takes from its file's
+  `defaults`;
+- a request with two credentials, such as `bearer_token` beside
+  `bearer_token_file`, or `basic_auth` beside a bearer token; a
+  `basic_auth_file` without both its files;
+- a `pagination` key that belongs to another way of paging, such as `next`
+  beside `type: page`;
+- a `grpc` collector's `protoset_file`, `proto_files` or
+  `proto_import_paths` beside another source of `descriptors`, or that
+  source without its files;
+- a `python` transform without a `script`;
+- a negative duration, such as `timeout: -5s`, which no key accepts.
+
+**Durations.** A duration is written as Go writes one (`500ms`, `1h30m`,
+`1.5s`), for the schemas as for the exporter.
+
+- A `+` may lead it, and a `-` only a zero (`-0s`). Anything written
+  negative is negative however small: `-0.4ns`, which rounds to zero, is
+  refused by both, as `-1ns` is.
+- Only an `otlp` block with `enabled: false`, which is left unchecked,
+  accepts a negative duration, for both. "Unchecked" applies to the whole
+  block, for both. Switched off, it may hold a `compression` that is neither
+  `gzip` nor `none`, a `metric_names` that is neither `prometheus` nor
+  `otel`, a `scope` without a name, a negative `max_pending_points`,
+  `unready_after_failures` or `batch_max_size`, an `unready_after_failures`
+  over 1000, and a `batch_max_bytes` under its minimum, as it may hold an
+  endpoint that is not a URL. Only a value that is not of its key's type at
+  all (text for a number, a list for text) is refused there.
+- The longest duration is 2^63 - 1 nanoseconds, about 292 years
+  (`2562047h47m16.854775807s`). A longer one, such as `2562048h`, is well
+  formed, so the schemas accept it, and the exporter refuses it as not a
+  duration.
+- A duration of zero is written `0s` or `0`. An unquoted `0` is a number to
+  YAML, which the exporter reads as the duration it spells, also with a sign
+  (`+0`, `-0`), and the schemas accept the number 0 beside the text. No
+  other number is a duration, for either: `timeout: 30` lacks its unit and
+  is refused, not read as 30 of some unit.
+- A schema receives the number, not how it was written. A zero written
+  another way (`0.0`, `00`, `0x0`) therefore passes the schemas as the 0 it
+  is, while the exporter, which reads what is written, refuses it as not a
+  duration.
+
+These two cases, a duration too long to be represented and a zero that is a
+number but is not written `0`, are the only differences between the schemas
+and the exporter in how a duration is written.
+
+**Whole numbers.** A whole number, such as `limits.max_metrics: 1e3` or
+`retry.attempts: 2.0`, may be written with a point or an exponent. A schema
+receives the number, and the exporter reads it by its digits, so
+`9007199254740993.0` is that number and not the one a floating-point number
+rounds it to.
+
+- The exporter refuses a number beyond what an int64 holds, such as `1e19`,
+  which a schema accepts. The error names the key, the number and the range.
+- It also refuses one beyond what a floating-point number holds, such as
+  `1e400`. The YAML reader the exporter uses takes that for text, while an
+  editor, reading YAML 1.2, takes it for a number.
+- The exporter refuses a fraction however small, although a schema, which
+  receives the floating-point number, takes `1.00000000000000000001` for 1.
+
+**Statuses.** An entry of `request.accept_status`, and one of
+`request.retry.statuses`, is a status written as a number or as text.
+
+- A number is the status it equals however it is written (`503.0`, `5.03e2`,
+  `0x1F7`, `0o767`, `+503` and `0503` are all 503), for both.
+- Text is text: a status's three digits, or a class such as `2xx` or `5XX`,
+  as the schemas' pattern has it. `"503.0"`, `"0503"`, `"+503"` and
+  `" 503 "` are refused by both, and the exporter's error names the form an
+  entry takes.
+- The few additional spellings the exporter's reader takes for a number,
+  including `5_03` and `0b111110111`, are 503 to the exporter, and text that
+  is not a status to an editor, which reads YAML 1.2.
+
+**Empty strings.** An optional key written as the empty string counts as
+omitted, for the exporter and the schemas alike.
+
+- Where the key takes one of a set of values or text of a pattern, `""`
+  gives its default: `decoder.type: ""` is `auto`, `name_escaping: ""` is
+  `fail`, `request.method: ""` is `GET`, an error policy or a rule's
+  `error_mode` written `""` is its default, a rule's `type: ""` is `gauge`
+  (or, under a `prometheus` transform, the type of the series it passes
+  through), `otlp.compression: ""` is `gzip`, and `otlp.metric_names: ""` is
+  `prometheus`. `metrics_prefix: ""`, `response.graphite.value: ""`,
+  `response.graphite.invalid_lines: ""` and a static target's `name: ""` and
+  `request.method: ""` count as those keys omitted.
+- A key that belongs to another request type, such as `rpc`, `descriptors`
+  or `method`, is omitted when it is written `""`, and so is not counted in
+  what that type refuses.
+- A rule about a key depends on whether the key is written. A label has a
+  `value` or an `expression`, and the one written `""` is the one it does
+  not have. A `prometheus` rule has a `name` or an `expression`, and one
+  written `""` is one it does not have.
+- Blanks are not the empty string. A key written as only blanks, such as
+  `" "`, is text like any other, which the key accepts or refuses as it does
+  its other values. A label's `value` of blanks is a constant of blanks. Its
+  `expression` of blanks is refused, as are an entry of blanks in
+  `transform.include` or `transform.exclude` and a `prometheus` rule's
+  `expression` of blanks.
+- A required key written `""` is as missing as one left out, and is refused
+  by both: `transform.type`, `request.type`, a collector's `name`, a label's
+  `name`, a rule's `name` under the transforms that need one, a `grpc`
+  collector's `rpc`, a `localfile` collector's `root` and a static target's
+  `collector`.
+- A value that is not text has no empty form. `""` is not a duration and not
+  a size, and both refuse it. Both also refuse an empty entry of
+  `collector_files`, `request.accept_status`, `request.retry.statuses`,
+  `request.allowed_targets`, `request.denied_targets`,
+  `request.redirect_trusted_hosts`, `transform.include`,
+  `transform.exclude` and the Python libraries, and an empty key of a
+  `value_map`, of `request.metadata` and of a static target's `params` and
+  `labels`.
+
+**Values without a value, and kinds of value.**
+
+- A key written with no value at all (nothing after its colon, `null` or
+  `~`) is a different case, and no key accepts it. To a schema it is none of
+  the types the key takes. The exporter refuses it at every key, every entry
+  of a list and every value of a mapping, with an error that names the line,
+  so that an editor and the exporter flag the same key.
+- A key takes the kinds of value its schema says, for the exporter too. Free
+  text accepts a number and a boolean as the text they spell (`value: 1`,
+  `description: 404`). A key that the schemas restrict to allowed values or
+  a pattern (a name, one of a few words, a host) accepts text only: the
+  exporter refuses a number or a boolean there and says to quote it, where
+  it used to read `name: true` as the name `true`. A boolean is `true` or
+  `false`; the exporter refuses the `yes` and `on` that it used to read as
+  booleans.
+- A rule's and a label's `name` are text under every `name_escaping`. A name
+  that is a number, which `underscores` and `values` allow, is written in
+  quotes: `name: "404"`.
+- An editor reads the file as YAML 1.2, and the exporter's reader takes a
+  few more spellings for a number, including `1_000` and `0b101`. At a key
+  that accepts text only, the exporter refuses those as numbers too. That is
+  the only difference between the two there.
 
 On a static target there is no HTTP response to carry an error. `fail` there
 means the scrape serves nothing except `http_exporter_target_up` at 0, and

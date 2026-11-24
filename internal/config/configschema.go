@@ -598,9 +598,16 @@ func withDefaultsRules(rules map[string]map[string]any) map[string]map[string]an
 // collectorSchemaRules are configSchemaRules but for those of a defaults
 // block.
 func collectorSchemaRules() map[string]map[string]any {
-	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
-	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
-	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
+	rules := configRootSchemaRules()
+	maps.Copy(rules, collectorKeySchemaRules())
+	maps.Copy(rules, otlpWebAndConnectionSchemaRules())
+	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", rules)
+}
+
+// configRootSchemaRules are the rules of the configuration's own keys,
+// its collector files, secret stores and rate limits.
+func configRootSchemaRules() map[string]map[string]any {
+	return map[string]map[string]any{
 		"": {
 			"anyOf": []any{
 				map[string]any{"required": []string{"collectors"}, "properties": map[string]any{"collectors": map[string]any{"minItems": 1}}},
@@ -627,6 +634,15 @@ func collectorSchemaRules() map[string]map[string]any {
 		"rate_limits[].rate_limit":                     {"required": []string{"requests_per_second"}, "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once."},
 		"rate_limits[].rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
 		"rate_limits[].rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
+	}
+}
+
+// collectorKeySchemaRules are the rules of a collector's keys, its decoder,
+// transform and metrics rules among them.
+func collectorKeySchemaRules() map[string]map[string]any {
+	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
+	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
+	return map[string]map[string]any{
 		// What a collector must have, and each of its rules a name.
 		"collectors[]":                                    collectorSchemaRule(),
 		"collectors[].name":                               {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
@@ -789,18 +805,27 @@ func collectorSchemaRules() map[string]map[string]any {
 			"maxItems":    model.MaxHistogramBuckets,
 			"description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most " + strconv.Itoa(model.MaxHistogramBuckets) + "; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
 		},
-		"collectors[].limits.max_script_memory":      leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
-		"collectors[].limits.max_expression_memory":  leastSizeRule(minExpressionMemory, "jq and yq: the most the exporter's memory may grow by while the collector's transform runs, or a jq expression of its pagination or its login, such as 64MiB. One that takes it past that is stopped and its scrape fails as a limit exceeded. The memory is the whole exporter's, so scrapes running beside it count. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1MiB; 0, or left out, is the default, 256MiB."),
-		"collectors[].limits.max_output_bytes":       leastOutputRule(),
-		"collectors[].limits.script_timeout":         {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
-		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
-		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
-		"collectors[].request.headers":               {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.forward_headers":       {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
-		"collectors[].request.forward_headers[]":     forwardHeaderEntry(),
-		"collectors[].request.basic_auth_file":       basicAuthFileRule("http, graphite and grpc: the files the username and the password of the Basic credential are read from, at every request, such as a mounted Secret. Both are required. Not with basic_auth or a bearer token."),
-		"collectors[].request.basic_auth.username":   {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
-		"collectors[].request.query":                 {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+		"collectors[].limits.max_script_memory":     leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
+		"collectors[].limits.max_expression_memory": leastSizeRule(minExpressionMemory, "jq and yq: the most the exporter's memory may grow by while the collector's transform runs, or a jq expression of its pagination or its login, such as 64MiB. One that takes it past that is stopped and its scrape fails as a limit exceeded. The memory is the whole exporter's, so scrapes running beside it count. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1MiB; 0, or left out, is the default, 256MiB."),
+		"collectors[].limits.max_output_bytes":      leastOutputRule(),
+		"collectors[].limits.script_timeout":        {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
+		"collectors[].limits.max_response_bytes":    leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
+		"collectors[].request.max_response_bytes":   leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
+		"collectors[].request.headers":              {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.forward_headers":      {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
+		"collectors[].request.forward_headers[]":    forwardHeaderEntry(),
+		"collectors[].request.basic_auth_file":      basicAuthFileRule("http, graphite and grpc: the files the username and the password of the Basic credential are read from, at every request, such as a mounted Secret. Both are required. Not with basic_auth or a bearer token."),
+		"collectors[].request.basic_auth.username":  {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"collectors[].request.query":                {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+	}
+}
+
+// otlpWebAndConnectionSchemaRules are the rules of the otlp and web blocks,
+// and of more of a collector's keys: its name escaping and validation, the
+// response's charset, the request's connection settings and target lists,
+// and the transform's filters and labels.
+func otlpWebAndConnectionSchemaRules() map[string]map[string]any {
+	return map[string]map[string]any{
 		"otlp.headers":                               {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
 		"otlp":                                       otlpSchemaRule(),
 		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
@@ -892,7 +917,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].transform.exclude":   {"description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name."},
 		"collectors[].transform.exclude[]": filterEntry(),
 		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. Values may contain {{param_name}} placeholders, filled from the probe's parameters. See docs/CONFIGURATION.md#collector-wide-labels."},
-	})
+	}
 }
 
 // otlpSchemaRule is the rule of the otlp block, which enabled switches on

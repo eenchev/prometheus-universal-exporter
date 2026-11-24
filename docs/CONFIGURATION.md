@@ -1538,11 +1538,6 @@ single quotes, where YAML leaves the backslash to the regular expression.
 `metrics_prefix` puts a namespace in front of everything a collector exports.
 The exporter joins it with `_`, so this collector
 
-### Prefixing a collector's metrics
-
-`metrics_prefix` puts a namespace in front of everything a collector exports.
-The exporter joins it with `_`, so
-
 ```yaml
 collectors:
   - name: grafana_status
@@ -3150,16 +3145,6 @@ queue is wanted. A collector's `derived` list computes series from the
 collector's own series after its transform has produced them. It works the
 same way under every transform (`regex`, `csv`, `xpath`, `css`, `jq`, `yq`,
 `python` and `prometheus`), so no Python script or recording rule is needed:
-
-### Derived series
-
-A target often counts what a dashboard wants as a ratio or a total: memcached
-counts the gets that found their item and those that did not, not its hit
-ratio; a queue lists its items by shard, where the depth of each queue is
-wanted. A collector's `derived` list computes series from the collector's
-own series once its transform made them, the same way under every
-transform — `regex`, `csv`, `xpath`, `css`, `jq`, `yq`, `python` and
-`prometheus` — so no Python script or recording rule is needed for it:
 
 ```yaml
 - name: memcached
@@ -5168,30 +5153,37 @@ omitted, for the exporter and the schemas alike.
   that accepts text only, the exporter refuses those as numbers too. That is
   the only difference between the two there.
 
-On a static target there is no HTTP response to carry an error. `fail` there
-means the scrape serves nothing except `http_exporter_target_up` at 0, and
-`log` and `ignore` serve what could be extracted.
+A static target has no HTTP response to carry an error. For a static target,
+`fail` means the scrape serves nothing except `http_exporter_target_up` at
+0, and `log` and `ignore` serve what could be extracted.
 
-Every transform may define `transform.pre_script`. It runs once per scrape
+Every transform may define `transform.pre_script`. It runs once per scrape,
 after decoding and before metric extraction. The script receives the decoded
-value as `data` and may mutate it or replace it by assigning to `data`.
-HTML/XML pre-scripts receive raw document text, which is parsed again after the
-script, so they must leave a string: a dict or a list fails the scrape, naming
-what the script left. A `prometheus` transform's pre-script receives the series as
-`{"metrics": [...]}` and must leave them in that shape, read back into series
-for the rules; see [Python](PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform). Python transforms emit metrics with the `metric(...)` API.
+value as `data` and may mutate it, or replace it by assigning to `data`.
 
-A pre-script **must** leave its result in `data` — that is the variable the
-exporter reads back. A script that computes a value under another name throws it
-away: the transform then runs against the untouched response, so the collector
-looks like it is extracting badly rather than configured wrongly. The exporter
-therefore refuses to start when a pre-script never produces `data`, naming the
-collector, and rejects such a configuration on reload with the previous one left
-active. Replacing `data`, mutating it by key or attribute, augmenting it,
-binding it as a loop or `with` target or with `:=` (`(data := ...)`), deleting
-from it (`del data["noise"]`), and calling a method that mutates it all count.
-So does changing a part of `data` under another name, as the usual clean-up
-of rows does, and handing `data` to a function of the script's own:
+- HTML and XML pre-scripts receive the raw document text, which is parsed
+  again after the script, so they must leave a string. A dict or a list
+  fails the scrape, with an error that names what the script left.
+- A `prometheus` transform's pre-script receives the series as
+  `{"metrics": [...]}` and must leave them in that form, which is read back
+  into series for the rules; see
+  [Python](PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform).
+- Python transforms emit metrics with the `metric(...)` API.
+
+A pre-script **must** leave its result in `data`, because that is the
+variable the exporter reads back. A script that computes a value under
+another name discards it: the transform then runs against the untouched
+response, and the collector appears to extract badly instead of being
+misconfigured. The exporter therefore refuses to start when a pre-script
+never produces `data`, with an error that names the collector, and rejects
+such a configuration on reload, leaving the previous one active.
+
+All of these count as producing `data`: replacing it, mutating it by key or
+attribute, augmenting it, binding it as a loop or `with` target or with `:=`
+(`(data := ...)`), deleting from it (`del data["noise"]`), and calling a
+method that mutates it. So does changing a part of `data` under another
+name, as the usual clean-up of rows does, and passing `data` to a function
+defined in the script:
 
 ```python
 for row in data["rows"]:
@@ -5206,12 +5198,12 @@ A copy under another name is not `data`: `rows = list(data["rows"])` and
 `other = dict(data)` are new objects, and a script that changes only those
 is refused.
 
-Reading `data` does not count, however much of it the script does. A method call
-only counts when the method mutates: `data.update(...)` and
-`data["rates"].append(...)` produce `data`, while `data.items()`, `data.get(...)`
-and `data.copy()` are reads. This matters because the mistake usually looks
-busy — a script that walks `data` thoroughly and assigns the result to a
-neighbouring name:
+Reading `data` does not count, however much of it the script reads. A method
+call counts only when the method mutates: `data.update(...)` and
+`data["rates"].append(...)` produce `data`, while `data.items()`,
+`data.get(...)` and `data.copy()` are reads. This matters because the
+mistake usually looks like real work: a script that walks `data` thoroughly
+and assigns the result to a different name:
 
 ```yaml
 transform:
@@ -5231,24 +5223,24 @@ transform:
 
 The same startup check compiles every configured script, so a Python syntax
 error in a pre-script or a `python` transform script is reported before the
-exporter serves traffic rather than at the first scrape. All faults are listed
-in one message. A `python` transform emits through `metric(...)` and is not
+exporter serves traffic, not at the first scrape. All faults are listed in
+one message. A `python` transform emits through `metric(...)` and is not
 required to produce `data`.
 
-The check needs the interpreter from `--python.path`, so a configuration that
-contains any Python fails to start if that interpreter is unusable. A
+The check needs the interpreter from `--python.path`, so a configuration
+that contains any Python fails to start if that interpreter is unusable. A
 configuration with no Python scripts never invokes one. The interpreter is
-started once for a check — at startup, for `--dry-run` and at each reload —
+started once per check (at startup, for `--dry-run` and at each reload),
 whatever it finds and however many [collector files](#collector-files) the
 configuration reads.
 
 ## Reusing settings with YAML anchors
 
 Collectors of one API often share their request, transform and rule
-settings. YAML anchors write them once: `&name` marks a value, `*name` repeats
-it, and `<<: *name` merges a mapping into another. A top-level key that begins
-with `x-` is the file's own — the exporter ignores it, whatever it holds — so
-it is the place for the shared parts:
+settings. YAML anchors let you write them once: `&name` marks a value,
+`*name` repeats it, and `<<: *name` merges a mapping into another. A
+top-level key that begins with `x-` belongs to the file: the exporter
+ignores it, whatever it holds. That makes it the place for the shared parts:
 
 ```yaml
 x-weather-request: &weather_request
@@ -5284,40 +5276,46 @@ collectors:
         labels: *location
 ```
 
-An anchor can also sit where it is first used, as the Open-Meteo example's
-`labels: &location` does on its first metric; an `x-` key is for what no
-collector uses as it is. A key written beside `<<:` replaces that key of the
-merged mapping whole — `query` above, or a `request` set beside a merged
-collector — rather than being merged into it; for the limits, retries and
-target policies most collectors of a file share,
-[defaults](#defaults-for-the-collectors-of-a-file) are given key by key. Anchors work in collector
-files and the [static target file](STATIC-TARGETS.md#the-target-file) too,
-each file on its own: an anchor in one file cannot be used in another.
-Aliases and merge keys work in every mapping of the three files, a
-collector's `cache` and a static target's `request` included, and what a
-merge brings in is read as if it were written out: a key the block does not
-take is refused, and a `path` or `body` merged into a target's `request`
-replaces the collector's. A key may itself be an alias of an anchored name:
-with `x-names: [&ttl ttl]`, `cache: {*ttl : 1m}` sets `ttl`, as YAML reads
-it, in those blocks as anywhere, and an unknown key so written is refused by
-the name its anchor holds. An alias of `<<` is the text `<<`, not a merge,
-and so an unknown key. A key is text, a number, a boolean or null: one
-written as a list or a mapping (`? [a, b]`), or an alias of one, is refused
-at its line in all three files, even in an `x-` block nothing uses, as
-`line 3: a mapping key is a sequence; only scalar keys (text, numbers,
-booleans, null) can be read`.
+An anchor can also be placed where it is first used, as the Open-Meteo
+example's `labels: &location` is on its first metric. An `x-` key is for
+content that no collector uses as it is.
 
-An `x-` key is only ignored at the top level; anywhere else it is an unknown
+- A key written beside `<<:` replaces that key of the merged mapping
+  entirely (`query` above, or a `request` set beside a merged collector); it
+  is not merged into it. For the limits, retries and target policies that
+  most collectors of a file share,
+  [defaults](#defaults-for-the-collectors-of-a-file) apply key by key.
+- Anchors also work in collector files and the
+  [static target file](STATIC-TARGETS.md#the-target-file), each file
+  separately: an anchor in one file cannot be used in another.
+- Aliases and merge keys work in every mapping of the three files, including
+  a collector's `cache` and a static target's `request`. What a merge brings
+  in is read as if it were written out: a key the block does not take is
+  refused, and a `path` or `body` merged into a target's `request` replaces
+  the collector's.
+- A key may itself be an alias of an anchored name: with
+  `x-names: [&ttl ttl]`, `cache: {*ttl : 1m}` sets `ttl`, as YAML reads it,
+  in those blocks as anywhere. An unknown key written this way is refused by
+  the name its anchor holds. An alias of `<<` is the text `<<`, not a merge,
+  and therefore an unknown key.
+- A key is text, a number, a boolean or null. A key written as a list or a
+  mapping (`? [a, b]`), or an alias of one, is refused at its line in all
+  three files, even in an `x-` block that nothing uses: `line 3: a mapping
+  key is a sequence; only scalar keys (text, numbers, booleans, null) can be
+  read`.
+
+An `x-` key is ignored only at the top level. Anywhere else it is an unknown
 key like any other, and so is a bare `x-`. With
 [environment expansion](#environment-variables) on, a `${NAME}` in an `x-`
-block nothing uses is left alone, so its variable need not be set; one in a
-block an alias uses is expanded where the block is. The published
-[schemas](#editor-support) accept top-level `x-` keys too.
+block that nothing uses is left alone, so its variable does not have to be
+set. One in a block that an alias uses is expanded where the block is used.
+The published [schemas](#editor-support) accept top-level `x-` keys too.
 
 ## Collector files
 
-A long list of collectors is easier to own in several files — one per team, per
-application, or per ConfigMap key. List them under `collector_files`:
+A long list of collectors is easier to maintain in several files: one per
+team, per application or per ConfigMap key. List them under
+`collector_files`:
 
 ```yaml
 collector_files:
@@ -5328,7 +5326,7 @@ collectors:                 # optional when collector_files supplies them
     ...
 ```
 
-Each collector file holds a `collectors` list, and, if it likes,
+Each collector file holds a `collectors` list and, optionally,
 [`defaults`](#defaults-for-the-collectors-of-a-file) for them, and nothing
 else:
 
@@ -5348,50 +5346,51 @@ collectors:
 
 - **Paths.** An entry is a path or a glob pattern (`*`, `?`, `[...]`),
   resolved against the directory of the configuration file, not the working
-  directory; an absolute path is used as it is. A path must exist; a pattern may
-  match nothing, so an empty directory of collector files is fine. A directory
-  is not a file: write `collectors.d/*.yaml`. A file matched by two entries is
-  read once, and the configuration file itself is never read as a collector
-  file, so `*.yaml` next to it is safe — although another YAML file in the same
-  directory, such as a static target file, would be read and refused, so a
-  subdirectory or a naming pattern such as `collectors-*.yaml` is the better
-  habit. The Helm chart mounts its static target file in a directory of its
-  own, so in the chart's configuration directory `*.yaml` matches only the
-  collector files of `config.data`.
-- **Only collectors.** Any other key in a collector file than `collectors`
-  and `defaults` — `web`, `otlp`, a misspelt `colectors`, or a nested
-  `collector_files` — is an error naming the file, the key and its line. The exporter-wide settings belong to the
-  configuration alone, so a file of collectors can never change them. A file
-  that is empty or has an empty `collectors` list is an error too.
+  directory. An absolute path is used as it is. A path must exist; a pattern
+  may match nothing, so an empty directory of collector files is accepted. A
+  directory is not a file: write `collectors.d/*.yaml`. A file matched by
+  two entries is read once. The configuration file itself is never read as a
+  collector file, so `*.yaml` next to it is safe. However, another YAML file
+  in the same directory, such as a static target file, would be read and
+  refused, so a subdirectory or a naming pattern such as
+  `collectors-*.yaml` is better practice. The Helm chart mounts its static
+  target file in a separate directory, so in the chart's configuration
+  directory `*.yaml` matches only the collector files of `config.data`.
+- **Only collectors.** Any key in a collector file other than `collectors`
+  and `defaults` (`web`, `otlp`, a misspelt `colectors`, or a nested
+  `collector_files`) is an error that names the file, the key and its line.
+  The exporter-wide settings belong to the configuration alone, so a file of
+  collectors can never change them. A file that is empty or has an empty
+  `collectors` list is an error too.
 - **Order.** The configuration's own collectors come first, then each entry's
-  files in the order listed, a pattern's matches in file name order.
+  files in the order listed, with a pattern's matches in file name order.
 - **Validated together.** The merged collectors are validated exactly as if
   they had been written in the configuration: defaults, expressions, Python
-  scripts, everything in
+  scripts, and everything in
   [Checked when the configuration loads](#checked-when-the-configuration-loads).
   A mistake found in a collector names the collector file that defines it,
-  in the error and, when it rejects a reload, as the log line's `file`; so
-  does a fault the interpreter finds in the collector's Python, as in
-  `collector file /etc/exporter/collectors.d/payments.yaml: collector pay
-  pre_script has a Python syntax error on line 3: invalid syntax`.
-  A configuration needs at least one collector across all of them; with
-  `collector_files`, its own `collectors` key may be left out.
+  in the error and, when it rejects a reload, as the log line's `file`. The
+  same applies to a fault the interpreter finds in the collector's Python,
+  as in `collector file /etc/exporter/collectors.d/payments.yaml: collector
+  pay pre_script has a Python syntax error on line 3: invalid syntax`. A
+  configuration needs at least one collector across all files; with
+  `collector_files`, its own `collectors` key may be omitted.
 - **Unique names.** A collector name must be unique across the configuration
   and every collector file; see [Collectors](#collectors).
 - **Environment variables.** With `--config.expand-env`, `${NAME}` references
   are expanded in collector files as in the configuration.
-- **Reloading.** With `--config.watch`, editing, adding or removing a collector
-  file reloads the configuration, even though the configuration file itself did
-  not change. The files watched are those the configuration file lists, even
-  while it is refused: a configuration that adds a collector file with a
-  mistake in it reloads once that file is fixed, without touching the
-  configuration again. Starting the watch reloads nothing. A reload that would break any rule above is rejected and the last
-  valid configuration stays active.
+- **Reloading.** With `--config.watch`, editing, adding or removing a
+  collector file reloads the configuration, even though the configuration
+  file itself did not change. The files watched are those the configuration
+  file lists, even while it is refused: a configuration that adds a
+  collector file with a mistake in it reloads once that file is fixed,
+  without another change to the configuration. Starting the watch reloads
+  nothing. A reload that would break any rule above is rejected, and the
+  last valid configuration stays active.
 - **Checking.** `--dry-run` reads the collector files too and lists them under
   `details.collector_files` of its `config` entry.
-
 - **Defaults.** A collector file's `defaults` apply to its own collectors,
-  and the configuration's to the configuration's: see
+  and the configuration's to the configuration's; see
   [Defaults for the collectors of a file](#defaults-for-the-collectors-of-a-file).
 
 `prometheus-universal-exporter --config.collector-file-schema` prints the JSON

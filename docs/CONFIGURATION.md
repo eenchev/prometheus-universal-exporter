@@ -3386,14 +3386,14 @@ and `0`:
 ```
 
 `value_map` does the same for text in every transform: `{active: 1, "*": 0}`.
-Keep conditions for series whose absence means nothing, such as the depth of a
-queue that does not exist yet. The examples here are pinned by a test, so they
-stay true.
+Keep conditions for series whose absence means nothing, such as the depth of
+a queue that does not exist yet. A test checks the examples in this section,
+so they stay correct.
 
 ### Request types
 
 Every collector's `request` block starts with `type`, which is required and
-says how the collector reaches its data:
+determines how the collector reaches its data:
 
 ```yaml
 request:
@@ -3401,44 +3401,61 @@ request:
   path: /api/status
 ```
 
-There are seventeen types, every one in the default build and the published
-image: `http` asks a URL, `localfile` reads a file from the
-exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
-asks a Graphite render API for series — see [Graphite](GRAPHITE.md) —
-`grpc` calls a unary or server streaming gRPC method — see [gRPC](GRPC.md) — `sshfile`
-reads a file from another host over SFTP — see [Files over SSH](SSHFILE.md) —
-`sshexec` runs a command on another host — see [Commands over
-SSH](SSHEXEC.md) — `s3file` reads objects of S3 — see [Objects in
-S3](S3FILE.md) — `sql` runs statements on a database — see [Databases over
-SQL](SQL.md) — `redis` reads a Redis or Valkey server — see [Redis and
-Valkey](REDIS.md) — `tcp` speaks a protocol over TCP or UDP, or checks that
-a port takes a connection — see [Text protocols over TCP](TCP.md) — `ldap`
-searches an LDAP directory — see [LDAP directories](LDAP.md) — `dns`
-resolves a name — see [DNS](DNS.md) — `tlscert` reads the certificates of a
-TLS handshake — see [TLS certificates](TLSCERT.md) — `ntp` asks an NTP
-server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
-over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
-[SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
-[Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has twelve more: `smtp` holds a
-mail server's session without sending — see [SMTP](SMTP.md) — `imap`
-counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
-counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
-reads a device's registers — see [Modbus](MODBUS.md) — `mqtt` subscribes
-to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
-messages of an endpoint — see [WebSocket](WEBSOCKET.md) — `ftp` reads
-a file from an FTP server — see [Files over FTP](FTP.md) — `radius`
-authenticates an account against a RADIUS server — see [RADIUS](RADIUS.md)
-— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) —
-`sip` asks a SIP server whether it answers — see [SIP](SIP.md) — `amqp`
-asks an AMQP broker how deep its queues are — see [AMQP](AMQP.md) — and
-`nats` times a NATS server and reads its JetStream — see [NATS](NATS.md).
-An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
-prober makes, is an `http` collector — see [Uptime
-probes](REQUESTS.md#uptime-probes).
-A collector
-without `type` stops the exporter at startup with a message saying what to add,
-and so does an unknown type.
+There are seventeen types in the default build and the published image:
+
+- `http` requests a URL.
+- `localfile` reads a file from the exporter's own filesystem; see
+  [Local files](LOCALFILE.md).
+- `graphite` asks a Graphite render API for series; see
+  [Graphite](GRAPHITE.md).
+- `grpc` calls a unary or server streaming gRPC method; see
+  [gRPC](GRPC.md).
+- `sshfile` reads a file from another host over SFTP; see
+  [Files over SSH](SSHFILE.md).
+- `sshexec` runs a command on another host; see
+  [Commands over SSH](SSHEXEC.md).
+- `s3file` reads objects of S3; see [Objects in S3](S3FILE.md).
+- `sql` runs statements on a database; see [Databases over SQL](SQL.md).
+- `redis` reads a Redis or Valkey server; see
+  [Redis and Valkey](REDIS.md).
+- `tcp` speaks a protocol over TCP or UDP, or checks that a port accepts a
+  connection; see [Text protocols over TCP](TCP.md).
+- `ldap` searches an LDAP directory; see [LDAP directories](LDAP.md).
+- `dns` resolves a name; see [DNS](DNS.md).
+- `tlscert` reads the certificates of a TLS handshake; see
+  [TLS certificates](TLSCERT.md).
+- `ntp` asks an NTP server for the time; see [NTP](NTP.md).
+- `icmp` pings a host; see [Ping over ICMP](ICMP.md).
+- `snmp` reads an SNMP agent's objects and tables; see
+  [SNMP agents](SNMP.md).
+- `kubernetes` lists Kubernetes objects; see
+  [Kubernetes objects](KUBERNETES.md).
+
+A build that [asks for them](#choosing-request-types-at-build-time) has
+twelve more:
+
+- `smtp` holds a mail server's session without sending; see
+  [SMTP](SMTP.md).
+- `imap` counts the mail of an account's mailboxes; see [IMAP](IMAP.md).
+- `pop3` counts the mail of a mailbox over POP3; see [POP3](POP3.md).
+- `modbus` reads a device's registers; see [Modbus](MODBUS.md).
+- `mqtt` subscribes to a broker's topics; see [MQTT](MQTT.md).
+- `websocket` reads the messages of an endpoint; see
+  [WebSocket](WEBSOCKET.md).
+- `ftp` reads a file from an FTP server; see [Files over FTP](FTP.md).
+- `radius` authenticates an account against a RADIUS server; see
+  [RADIUS](RADIUS.md).
+- `whois` reads a domain's registration; see [WHOIS](WHOIS.md).
+- `sip` asks a SIP server whether it answers; see [SIP](SIP.md).
+- `amqp` asks an AMQP broker how deep its queues are; see [AMQP](AMQP.md).
+- `nats` times a NATS server and reads its JetStream; see [NATS](NATS.md).
+
+An uptime check of HTTP and HTTPS sites, like the one blackbox_exporter's
+`http` prober performs, is an `http` collector; see
+[Uptime probes](REQUESTS.md#uptime-probes).
+
+A collector without `type`, or with an unknown type, stops the exporter at
+startup with a message that says what to add.
 
 #### Which request type?
 
@@ -3465,9 +3482,9 @@ and so does an unknown type.
 | Kubernetes objects, or each pod's ephemeral storage | `kubernetes` | [Kubernetes objects](KUBERNETES.md) |
 
 <!-- request-types: all "For `%s`" -->
-Each type accepts its own keys. For `http`, `type` is the only required one —
-`path` can be left out when the target URL already carries the whole path, and
-`method` defaults to `GET`:
+Each type accepts its own keys. For `http`, `type` is the only required key.
+`path` can be omitted when the target URL already contains the whole path,
+and `method` defaults to `GET`:
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -3500,276 +3517,303 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `fastcgi` | none | Send the requests to a FastCGI application, such as PHP-FPM's status page, in place of an HTTP server, `{}` or with `document_root` and `params`. Not with `proxy_url`, `login` or `tls`. See [FastCGI](REQUESTS.md#fastcgi). |
 | `unix_socket` | none | The absolute path of a Unix domain socket every request of the collector, its login's included, is sent over in place of a TCP connection to the URL's host, as `curl --unix-socket` does, such as `/var/run/docker.sock`; the URL's host is still the `Host` header and its path and query the request's. Not with `proxy_url`; no probe parameter, static target or `defaults` sets it. See [Over a Unix socket](REQUESTS.md#over-a-unix-socket). |
 
-For `localfile`, `root` is required, and `path`, `max_age` and
-`max_response_bytes` are optional, or `files`, `max_files` and
-`max_total_bytes` to [read a whole directory](LOCALFILE.md#reading-a-directory);
-its table is in [Local files](LOCALFILE.md#a-collector).
+For `localfile`, `root` is required. `path`, `max_age` and
+`max_response_bytes` are optional, as are `files`, `max_files` and
+`max_total_bytes` to
+[read a whole directory](LOCALFILE.md#reading-a-directory). Its table is in
+[Local files](LOCALFILE.md#a-collector).
 
 For `graphite`, `targets` is required: the Graphite expressions to render.
 `from` and `until` set the window, `-15min` to `now` by default, and `path`
-defaults to `/render`. Every `http` key about the connection applies —
+defaults to `/render`. Every `http` key about the connection applies:
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
 `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
-`new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`,
-`rate_limit`, `proxy_url` and `proxy_basic_auth_file` — and `method` and
-`body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+`new_connection`, `ip_family`, `allowed_schemes`, `accept_status`,
+`allowed_targets`, `denied_targets`, `rate_limit`, `proxy_url` and
+`proxy_basic_auth_file`. `method` and `body` do not apply. Its table is in
+[Graphite](GRAPHITE.md#a-collector).
 
-For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
-so is `descriptors`, where its message types come from — `reflection`,
-`protoset` or `proto` — except for the built-in health service. `message` is
-the request as JSON, `{}` by default, and `metadata` its metadata; the
-credential keys, `tls`, `retry` with its `codes`, `max_response_bytes`, the
-forwarding keys, `allowed_targets` and `denied_targets` apply as for `http`, and the other `http` keys do not; its
+For `grpc`, `rpc` is required: the method as `package.Service/Method`.
+`descriptors`, the source of its message types (`reflection`, `protoset` or
+`proto`), is also required, except for the built-in health service.
+`message` is the request as JSON, `{}` by default, and `metadata` is its
+metadata. The credential keys, `tls`, `retry` with its `codes`,
+`max_response_bytes`, the forwarding keys, `allowed_targets` and
+`denied_targets` apply as for `http`; the other `http` keys do not. Its
 table is in [gRPC](GRPC.md#a-collector).
 
-For `sshfile`, `root`, `username` and `known_hosts_file` are required, and
-`private_key_file` or `password_file`, or both; `path`, or `files`,
-`max_files` and `max_total_bytes`, `max_age` and `max_response_bytes` are
-`localfile`'s, and `passphrase_file`, `keepalive_interval`,
-`keepalive_count_max`, `idle_timeout`, `max_open_connections`,
-`allowed_targets` and `denied_targets` apply too; its table is in [Files over SSH](SSHFILE.md#a-collector).
+For `sshfile`, `root`, `username` and `known_hosts_file` are required,
+together with `private_key_file` or `password_file`, or both. `path` (or
+`files`, `max_files` and `max_total_bytes`), `max_age` and
+`max_response_bytes` work as for `localfile`. `passphrase_file`,
+`keepalive_interval`, `keepalive_count_max`, `idle_timeout`,
+`max_open_connections`, `allowed_targets` and `denied_targets` apply too.
+Its table is in [Files over SSH](SSHFILE.md#a-collector).
 
 For `sql`, `driver`, `statement` and `username` are required, and
-`service_name` for the `oracle` driver; `args`, `database`, `password_file`,
+`service_name` for the `oracle` driver. `args`, `database`, `password_file`,
 `private_key_file` (`snowflake` only), `tls`, `options`, `max_rows`,
 `max_response_bytes`, `connections`, `allowed_targets` and `denied_targets`
-apply too, and no `decoder` or `response` setting; its rows are read by a
-`csv`, `jq`, `yq` or `python` transform. Its table is in [Databases over
-SQL](SQL.md#a-collector).
+apply too. No `decoder` or `response` setting applies: its rows are read by
+a `csv`, `jq`, `yq` or `python` transform. Its table is in
+[Databases over SQL](SQL.md#a-collector).
 
-For `dns`, no key is required: `record_type` is `A` by default, or `AAAA`,
-`CNAME`, `MX`, `NS`, `TXT`, `SRV` or `PTR`, `server` the resolver asked, the
-system's by default, and `transport` `udp` or `tcp`; `allowed_targets` and
-`denied_targets` apply too, matched against the name. The decoder is `json`;
-its table is in [DNS](DNS.md#a-collector).
+For `dns`, no key is required. `record_type` is `A` by default, or `AAAA`,
+`CNAME`, `MX`, `NS`, `TXT`, `SRV` or `PTR`. `server` is the resolver to ask,
+the system's by default, and `transport` is `udp` or `tcp`.
+`allowed_targets` and `denied_targets` apply too, matched against the name.
+The decoder is `json`. Its table is in [DNS](DNS.md#a-collector).
 
-For `tlscert`, no key is required: `tls` sets the roots, a client
-certificate and the name verified, `starttls`, `smtp`, `imap`, `pop3` or
-`ftp`, begins TLS after the greeting as that protocol asks for it, as for
-`tcp`, and `allowed_targets` and `denied_targets` apply as for `http`. The decoder is `json`; its table is in
+For `tlscert`, no key is required. `tls` sets the roots, a client
+certificate and the name to verify. `starttls` (`smtp`, `imap`, `pop3` or
+`ftp`) begins TLS after the greeting as that protocol requires, as for
+`tcp`. `allowed_targets` and `denied_targets` apply as for `http`. The
+decoder is `json`. Its table is in
 [TLS certificates](TLSCERT.md#a-collector).
 
-For `ntp`, no key is required, and the type has none of its own:
+For `ntp`, no key is required, and the type has no keys of its own.
 `allowed_targets` and `denied_targets` apply as for `http`, checked on the
-address the request is sent to. The decoder is `json`; its table is in
+address the request is sent to. The decoder is `json`. Its table is in
 [NTP](NTP.md#a-collector).
 
-For `kubernetes`, `resource` is required; `group` and `version`,
-`namespaces` or `all_namespaces`, `label_selector`, `field_selector`,
-`max_objects`, `max_response_bytes`, `metadata_only`, `kubelet` with
-`kubelet_via_api_server` or `kubelet_ca_file` for the nodes' kubelets'
-statistics, and `api_server` with `tls` and
-`bearer_token_file` for a cluster other than the exporter's own apply too,
-and `allowed_targets` and `denied_targets` do not, there being no target.
-The decoder is `json`; its table is in [Kubernetes objects](KUBERNETES.md#a-collector).
+For `kubernetes`, `resource` is required. These keys apply too: `group` and
+`version`; `namespaces` or `all_namespaces`; `label_selector` and
+`field_selector`; `max_objects`, `max_response_bytes` and `metadata_only`;
+`kubelet`, with `kubelet_via_api_server` or `kubelet_ca_file`, for the
+statistics of the nodes' kubelets; and `api_server`, with `tls` and
+`bearer_token_file`, for a cluster other than the exporter's own.
+`allowed_targets` and `denied_targets` do not apply, because there is no
+target. The decoder is `json`. Its table is in
+[Kubernetes objects](KUBERNETES.md#a-collector).
 
-For `s3file`,
-`root` is required; `path`, or `files`, `max_files` and `max_total_bytes`,
-`max_age` and `max_response_bytes` are `localfile`'s, and `region`,
-`endpoint`, `path_style`, `access_key_id_file`, `secret_access_key_file`,
-`session_token_file`, `allowed_targets` and `denied_targets` apply too; its
-table is in [Objects in S3](S3FILE.md#a-collector).
+For `s3file`, `root` is required. `path` (or `files`, `max_files` and
+`max_total_bytes`), `max_age` and `max_response_bytes` work as for
+`localfile`. `region`, `endpoint`, `path_style`, `access_key_id_file`,
+`secret_access_key_file`, `session_token_file`, `allowed_targets` and
+`denied_targets` apply too. Its table is in
+[Objects in S3](S3FILE.md#a-collector).
 
-For `redis`, no
-key is required: `info_sections` names the sections of INFO read, the
-default ones when left out, and `commands` the read-only commands whose
-replies are read besides; `username` and `password_file`, `db`, `tls`,
-`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
-decoder is `json`; its table is in [Redis and Valkey](REDIS.md#a-collector).
+For `redis`, no key is required. `info_sections` names the sections of INFO
+to read (the default ones when omitted), and `commands` names the read-only
+commands whose replies are read in addition. `username` and `password_file`,
+`db`, `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets`
+apply too. The decoder is `json`. Its table is in
+[Redis and Valkey](REDIS.md#a-collector).
 
-For `tcp`, no key
-is required: `send` is the text written once the connection is made, and
-`terminator` what the answer ends with, the answer ending when the server
-closes the connection without one; `greeting` is the pattern a server that
-speaks first must greet with, `starttls`, `smtp`, `imap`, `pop3` or `ftp`,
-begins TLS after the greeting as that protocol asks for it, and `document`
-answers a JSON document of the exchange; `send_hex` writes binary bytes in
-place of `send`, `answer_bytes` ends an answer of a known length, `udp`
-sends one datagram and reads one back, and `unix_socket` makes the exchange
-over a Unix socket; `tls`, `max_response_bytes`, `allowed_targets` and
-`denied_targets` apply too. The answer is a body, read by any decoder,
-`binary` among them; its table is in [Text protocols over TCP](TCP.md#a-collector).
+For `tcp`, no key is required.
 
-For `ldap`,
-`searches` is required, each search with its `name`, `base`, `scope`,
-`filter`, `attributes`, `count_only` and `max_entries`; `bind_dn` and
-`password_file`, `start_tls`, `tls`, `max_response_bytes`,
-`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
-its table is in [LDAP directories](LDAP.md#a-collector).
+- `send` is the text written once the connection is made, and `terminator`
+  is what the answer ends with. Without a terminator, the answer ends when
+  the server closes the connection.
+- `greeting` is the pattern that a server which speaks first must greet
+  with. `starttls` (`smtp`, `imap`, `pop3` or `ftp`) begins TLS after the
+  greeting as that protocol requires. `document` returns a JSON document of
+  the exchange.
+- `send_hex` writes binary bytes in place of `send`, `answer_bytes` ends an
+  answer of a known length, `udp` sends one datagram and reads one back, and
+  `unix_socket` makes the exchange over a Unix socket.
+- `tls`, `max_response_bytes`, `allowed_targets` and `denied_targets` apply
+  too.
 
-For `sshexec`,
-`command` is required, the program and its arguments as a list, with
-`username` and `known_hosts_file` and a private key or a password, as for
-`sshfile`; `success_exit_codes` names the exit statuses that are a success,
-`[0]` when left out, and `passphrase_file`, the connection's keepalive,
-idle and limit keys, `max_response_bytes`, `allowed_targets` and
+The answer is a body, read by any decoder, including `binary`. Its table is
+in [Text protocols over TCP](TCP.md#a-collector).
+
+For `ldap`, `searches` is required. Each search has its `name`, `base`,
+`scope`, `filter`, `attributes`, `count_only` and `max_entries`. `bind_dn`
+and `password_file`, `start_tls`, `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`. Its
+table is in [LDAP directories](LDAP.md#a-collector).
+
+For `sshexec`, `command` is required: the program and its arguments as a
+list. `username`, `known_hosts_file` and a private key or a password are
+required as for `sshfile`. `success_exit_codes` names the exit statuses that
+count as success, `[0]` when omitted. `passphrase_file`, the connection's
+keepalive, idle and limit keys, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The command's output is a body, read by any
-decoder; its table is in [Commands over SSH](SSHEXEC.md#a-collector).
+decoder. Its table is in [Commands over SSH](SSHEXEC.md#a-collector).
 
-For `icmp`, no
-key is required: `count` is how many echoes a scrape sends, `interval` how
-long apart, `reply_timeout` how long the last one's reply is waited for and
-`payload_bytes` the data each carries; `ip_family`, `allowed_targets` and
-`denied_targets` apply too. The decoder is `json`; its table is in [Ping
-over ICMP](ICMP.md#a-collector).
+For `icmp`, no key is required. `count` is how many echoes a scrape sends,
+`interval` the time between them, `reply_timeout` how long to wait for the
+last reply, and `payload_bytes` the data each echo carries. `ip_family`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`. Its
+table is in [Ping over ICMP](ICMP.md#a-collector).
 
-For `snmp`, at
-least one of `get`, the objects read one by one, and `walk`, the tables read
-whole, is required, each object by a name of the collector's and its
-numeric identifier; `snmp_version` is 1, 2 for v2c, the default, or 3, v1
-and v2c requiring `community_file` and v3 `username` and `security_level`,
-with `auth_protocol`, `auth_password_file`, `priv_protocol` and
-`priv_password_file` as its level asks; `request_timeout`, `retries`,
-`max_repetitions`, `walk_limit`, `hex`, `context_name`,
+For `snmp`, at least one of `get` (the objects read one by one) and `walk`
+(the tables read whole) is required. Each object is given by a name of the
+collector's choosing and its numeric identifier. `snmp_version` is 1, 2 (for
+v2c, the default) or 3. v1 and v2c require `community_file`. v3 requires
+`username` and `security_level`, with `auth_protocol`, `auth_password_file`,
+`priv_protocol` and `priv_password_file` as its level demands.
+`request_timeout`, `retries`, `max_repetitions`, `walk_limit`, `hex`,
+`context_name`, `max_response_bytes`, `allowed_targets` and `denied_targets`
+apply too. The decoder is `json`. Its table is in
+[SNMP agents](SNMP.md#a-collector).
+
+For `smtp`, an opt-in type, no key is required. `starttls_mode` controls
+whether TLS is started. `username` with `password_file` or `xoauth2` logs
+in, using the mechanism that `auth` names. `mail_from` and `rcpt_to` ask the
+server about a sender and recipients, with nothing sent. `hello`, `tls`,
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
-decoder is `json`; its table is in [SNMP agents](SNMP.md#a-collector).
+decoder is `json`. Its table is in [SMTP](SMTP.md#a-collector).
 
-For `smtp`, an opt-in type, no
-key is required: `starttls_mode` says whether TLS is begun, `username` with
-`password_file` or `xoauth2` logs in, by the mechanism `auth` names, and
-`mail_from` and `rcpt_to` ask the server about a sender and recipients,
-with nothing sent; `hello`, `tls`, `max_response_bytes`, `allowed_targets`
-and `denied_targets` apply too. The decoder is `json`; its table is in
-[SMTP](SMTP.md#a-collector).
+For `modbus`, an opt-in type, `read` is required: the registers and bits to
+read, each with a `name`, its `table`, `address`, `type`, `count` and
+`order`. `unit` is the unit id to ask, and `allowed_targets` and
+`denied_targets` apply too. The decoder is `json`. Its table is in
+[Modbus](MODBUS.md#a-collector).
 
-For `modbus`, an opt-in type,
-`read` is required, the registers and bits read, each with a `name`, its
-`table`, `address`, `type`, `count` and `order`; `unit` is the unit id
-asked, and `allowed_targets` and `denied_targets` apply too. The decoder is
-`json`; its table is in [Modbus](MODBUS.md#a-collector).
+For `mqtt`, an opt-in type, `topics` is required: the topic filters to
+subscribe to, at `qos`. `window` and `max_messages` bound what a scrape
+reads. `persistent_session` with `client_id` makes the broker keep the
+session between scrapes, and `keep_connection` makes the exporter keep the
+connection, for `idle_timeout`. `keep_alive`, `username`, `password_file`,
+`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets` apply
+too. The decoder is `json`. Its table is in [MQTT](MQTT.md#a-collector).
 
-For `mqtt`, an opt-in type,
-`topics` is required, the topic filters subscribed to at `qos`; `window`
-and `max_messages` bound what a scrape reads, `persistent_session` with
-`client_id` has the broker keep the session between scrapes, and
-`keep_connection` has the exporter keep the connection, for `idle_timeout`;
-`keep_alive`, `username`, `password_file`, `tls`, `max_response_bytes`,
-`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
-its table is in [MQTT](MQTT.md#a-collector).
+For `websocket`, an opt-in type, no key is required. `send_text` is a
+message sent after the handshake, `read_messages` is how many messages are
+read, and `read_window` is how long to wait for them. `subprotocols`,
+`headers`, `bearer_token_file`, `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. One message is a body,
+read by any decoder, and several messages are a JSON list. Its table is in
+[WebSocket](WEBSOCKET.md#a-collector).
 
-For `websocket`, an opt-in type, no
-key is required: `send_text` is a message sent after the handshake,
-`read_messages` how many messages are read and `read_window` how long they
-are waited for; `subprotocols`, `headers`, `bearer_token_file`, `tls`,
-`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. One
-message is a body, read by any decoder, and several a JSON list; its table
-is in [WebSocket](WEBSOCKET.md#a-collector).
+For `ftp`, an opt-in type, `root` is required: the directory the collector
+may read under. `path` names the file under it. `max_age`, `username`,
+`password_file`, `tls`, `max_response_bytes`, `allowed_targets` and
+`denied_targets` apply too. The file is read by the decoder that its
+extension selects. Its table is in [Files over FTP](FTP.md#a-collector).
 
-For `ftp`, an opt-in type,
-`root` is required, the directory the collector may read under, and `path`
-names the file under it; `max_age`, `username`, `password_file`, `tls`,
-`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
-file is read by the decoder its extension names; its table is in [Files
-over FTP](FTP.md#a-collector).
+For `imap`, an opt-in type, no key is required. `username` with
+`password_file` or `xoauth2` logs in, using the mechanism that `auth` names.
+`mailboxes` names the mailboxes that `STATUS` asks about, by name or by
+pattern, `INBOX` when omitted. `quota` asks for the account's quota, and
+`counts` counts the messages of a mailbox that match a search, with the
+mailbox opened read-only. `allow_plaintext`, `tls`, `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`. Its
+table is in [IMAP](IMAP.md#a-collector).
 
-For `imap`, an opt-in type, no key is required: `username` with
-`password_file` or `xoauth2` logs in, by the mechanism `auth` names,
-`mailboxes` names the mailboxes `STATUS` asks about, by name or by a
-pattern, `INBOX` when left out, `quota` asks for the account's quota, and
-`counts` counts the messages of a mailbox that match a search, opened
-read-only; `allow_plaintext`, `tls`,
-`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
-decoder is `json`; its table is in [IMAP](IMAP.md#a-collector).
-
-For `pop3`, an opt-in type, no key is required: `username` with
-`password_file` or `xoauth2` logs in, by the mechanism `auth` names, `user`,
-`apop`, `plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`, the
-mailbox's messages and their size are asked for with `STAT`, nothing
-fetched, and `list` asks for the size of the largest;
-`allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets` and
-`denied_targets` apply too. The decoder is `json`; its table is in
+For `pop3`, an opt-in type, no key is required. `username` with
+`password_file` or `xoauth2` logs in, using the mechanism that `auth` names:
+`user`, `apop`, `plain`, `login`, `cram-md5`, `xoauth2` or `oauthbearer`.
+The number of messages in the mailbox and their size are requested with
+`STAT`, with nothing fetched, and `list` asks for the size of the largest
+message. `allow_plaintext`, `tls`, `max_response_bytes`, `allowed_targets`
+and `denied_targets` apply too. The decoder is `json`. Its table is in
 [POP3](POP3.md#a-collector).
 
-For `radius`, an opt-in type, `secret_file` is required, the secret the
-server shares with the exporter, and `username` with `password_file`, the
-account the server is asked to authenticate, by `mode`, `pap` or `chap`;
-`mode: status-server` asks whether the server is alive and takes no
-account. `nas_identifier` names the sender, `resends` and
-`resend_interval` send the request again while no reply comes, and
-`require_message_authenticator` fails a reply without one;
-`allowed_targets` and `denied_targets` apply too. The decoder is `json`;
-its table is in [RADIUS](RADIUS.md#a-collector).
+For `radius`, an opt-in type, `secret_file` is required: the secret the
+server shares with the exporter. `username` with `password_file` is the
+account the server is asked to authenticate, using `mode` `pap` or `chap`.
+`mode: status-server` asks whether the server is alive and takes no account.
+`nas_identifier` names the sender, `resends` and `resend_interval` send the
+request again while no reply arrives, and `require_message_authenticator`
+fails a reply without one. `allowed_targets` and `denied_targets` apply too.
+The decoder is `json`. Its table is in [RADIUS](RADIUS.md#a-collector).
 
-For `whois`, an opt-in type, no key is required: the registry's WHOIS
-server is asked for the domain that is the target, the server IANA names
-for its top-level domain or the one `whois_server` names, with
-`query_prefix` before the domain; `max_response_bytes`, `allowed_targets`
-and `denied_targets` apply too. The decoder is `json`; its table is in
-[WHOIS](WHOIS.md#a-collector).
+For `whois`, an opt-in type, no key is required. The registry's WHOIS server
+is asked about the domain that is the target. The server is the one IANA
+names for the top-level domain, or the one `whois_server` names, and
+`query_prefix` is sent before the domain. `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`. Its
+table is in [WHOIS](WHOIS.md#a-collector).
 
-For `sip`, an opt-in type, no key is required: the SIP server that is the
-target is asked with an OPTIONS request whether it answers, over
-`sip_transport`, `udp`, `tcp` or `tls`, the last verified as `tls` says.
-`request_uri` is the URI asked, `from_uri` who asks and `user_agent` the
-request's User-Agent; `username` and `password_file` are the account a
-Digest challenge is answered with; `max_response_bytes`, `allowed_targets`
-and `denied_targets` apply too. The decoder is `json`; its table is in
-[SIP](SIP.md#a-collector).
+For `sip`, an opt-in type, no key is required. The SIP server that is the
+target is sent an OPTIONS request to see whether it answers, over
+`sip_transport` (`udp`, `tcp` or `tls`, the last verified as `tls` says).
+`request_uri` is the URI asked, `from_uri` identifies the sender, and
+`user_agent` is the request's User-Agent. `username` and `password_file`
+are the account used to answer a Digest challenge. `max_response_bytes`,
+`allowed_targets` and `denied_targets` apply too. The decoder is `json`. Its
+table is in [SIP](SIP.md#a-collector).
 
-For `amqp`, an opt-in type, no key is required: the AMQP 0-9-1 broker that
-is the target is logged in to with `username` and `password_file`, `guest`
-when left out, its `vhost` opened, `/` when left out, and each queue of
-`queues` asked for its ready messages and its consumers; `tls` is for a
+For `amqp`, an opt-in type, no key is required. The exporter logs in to the
+AMQP 0-9-1 broker that is the target with `username` and `password_file`
+(`guest` when omitted), opens its `vhost` (`/` when omitted), and asks each
+queue in `queues` for its ready messages and its consumers. `tls` is for a
 target written `amqps://`, and `allowed_targets` and `denied_targets` apply
-too. The decoder is `json`; its table is in [AMQP](AMQP.md#a-collector).
+too. The decoder is `json`. Its table is in [AMQP](AMQP.md#a-collector).
 
-For `nats`, an opt-in type, no key is required: the NATS server that is the
-target is logged in to with `username` and `password_file` or with the token
-of `bearer_token_file`, and a PING to it is timed; `jetstream: true` asks the
-account's JetStream state, and `streams` and `consumers` each one named;
-`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets` apply
-too. The decoder is `json`; its table is in [NATS](NATS.md#a-collector).
+For `nats`, an opt-in type, no key is required. The exporter logs in to the
+NATS server that is the target with `username` and `password_file`, or with
+the token in `bearer_token_file`, and times a PING to it. `jetstream: true`
+asks for the account's JetStream state, and `streams` and `consumers` for
+each one named. `tls`, `max_response_bytes`, `allowed_targets` and
+`denied_targets` apply too. The decoder is `json`. Its table is in
+[NATS](NATS.md#a-collector).
 <!-- /request-types -->
 
-Of several keys a request block may not set (a key of another type, a key
-its type does not take, a key of `retry` for other types, an unknown key),
-the error names the first in the file, the one on the earlier line or
-further left on the same line, and once that is fixed the next. So does a
-check that refuses two keys alike — an ssh collector's negative
-`keepalive_interval` and `idle_timeout`, or its credential files written
-blank or with a placeholder, a kubernetes collector's blank selectors, a
-json login's blank `token` and `expires_in`, a login's keys of another
-kind — on every load. A key the type does not take is refused for that
-whatever its value: `starttls: true` in an `ldap` collector is not told
-that `true` is no protocol of `tcp`'s, but that the key does not apply,
-with `ldap`'s own `start_tls: true` named; `start_tls` in a `tcp` or a
-`tlscert` collector names `starttls` and its protocols.
+When a request block sets several keys it may not set (a key of another
+type, a key its type does not take, a key of `retry` for other types, an
+unknown key), the error names the first one in the file: the one on the
+earlier line, or further left on the same line. Once that is fixed, it names
+the next. The same order applies, on every load, to a check that refuses two
+keys for the same reason: an ssh collector's negative `keepalive_interval`
+and `idle_timeout`, or its credential files written blank or with a
+placeholder; a kubernetes collector's blank selectors; a json login's blank
+`token` and `expires_in`; and a login's keys of another kind.
+
+A key the type does not take is refused for that reason, whatever its value.
+`starttls: true` in an `ldap` collector is not told that `true` is not one
+of `tcp`'s protocols; it is told that the key does not apply, and the error
+names `ldap`'s own `start_tls: true`. `start_tls` in a `tcp` or a `tlscert`
+collector names `starttls` and its protocols.
 
 <!-- request-types: all -->
-A key that belongs to a different type is an error rather than being ignored,
-and the same holds for `/probe` parameters: a parameter that only another type
-accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
-`param_<name>` — when it reads a directory, `timeout` and only the
-`param_<name>` its [label values' placeholders](REQUESTS.md#in-label-values)
-name, never `path` ([Reading a directory](LOCALFILE.md#reading-a-directory)) —
-and its `target` is optional. `graphite` accepts what `http` does but `method` and `body`,
-and `from` and `until`, which no other type accepts. `grpc` accepts
-`timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
-`header_<name>`, `param_<name>` and `message`, which no other type accepts.
+A key that belongs to a different type is an error instead of being ignored.
+The same applies to `/probe` parameters: a parameter that only another type
+accepts gets a `400`. The types other than `http` accept the following.
+
+`localfile` accepts only `path`, `timeout` and `param_<name>`, and its
+`target` is optional. When it reads a directory, it accepts `timeout` and
+only the `param_<name>` that its
+[label values' placeholders](REQUESTS.md#in-label-values) name, never `path`
+([Reading a directory](LOCALFILE.md#reading-a-directory)).
+
+`graphite` accepts what `http` accepts except `method` and `body`, and also
+`from` and `until`, which no other type accepts.
+
+`grpc` accepts `timeout`, `insecure_skip_verify`, `retry_attempts`,
+`retry_backoff`, `header_<name>`, `param_<name>` and `message`, which no
+other type accepts.
+
 `sshfile` accepts `path`, `timeout` and `param_<name>`, as `localfile` does,
-and requires a `target`, the host. `s3file` accepts `path`, `timeout` and
-`param_<name>` too, and requires a `target`, the bucket. `sql` accepts `timeout` and
-`param_<name>`, and requires a `target`, the database server. `dns` and
-`tlscert` accept `timeout` and `param_<name>`, and require a `target`, the
-name to resolve and the server, `host:port`, and so does `ntp`, its server
-`host:port`, port 123 when left out. `kubernetes` accepts `timeout`
-and `param_<name>`, and takes no `target`: a probe with one gets a `400`,
-since the collector lists what its configuration names. `redis` accepts
-`timeout` and `param_<name>`, and requires a `target`, the server,
-`host:port` or a `redis://` or `rediss://` URL of it, and so does `ldap`,
-its server `host:port` or an `ldap://` or `ldaps://` URL of it. `tcp`
-accepts `timeout` and `param_<name>`, and requires a `target`, the service,
-`host:port` with its port, or the host alone for a collector of
-[`ports`](TCP.md#several-ports-of-a-host). `sshexec` accepts `timeout` and
-`param_<name>`, and requires a `target`, the host, as `sshfile` does.
+and requires a `target`, the host.
+
+`s3file` accepts `path`, `timeout` and `param_<name>` too, and requires a
+`target`, the bucket.
+
+`sql` accepts `timeout` and `param_<name>`, and requires a `target`, the
+database server.
+
+`dns` and `tlscert` accept `timeout` and `param_<name>`, and require a
+`target`: the name to resolve, and the server as `host:port`.
+
+`ntp` accepts `timeout` and `param_<name>`, and requires a `target`, the
+server as `host:port`, port 123 when omitted.
+
+`kubernetes` accepts `timeout` and `param_<name>`, and takes no `target`. A
+probe with one gets a `400`, because the collector lists what its
+configuration names.
+
+`redis` accepts `timeout` and `param_<name>`, and requires a `target`, the
+server, as `host:port` or a `redis://` or `rediss://` URL.
+
+`ldap` accepts `timeout` and `param_<name>`, and requires a `target`, the
+server, as `host:port` or an `ldap://` or `ldaps://` URL.
+
+`tcp` accepts `timeout` and `param_<name>`, and requires a `target`, the
+service, as `host:port` with its port, or the host alone for a collector of
+[`ports`](TCP.md#several-ports-of-a-host).
+
+`sshexec` accepts `timeout` and `param_<name>`, and requires a `target`, the
+host, as `sshfile` does.
+
 `icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
-host, without a port, and so does `snmp`, its agent, `host` or
-`host:port`, port 161 when left out.
-`icmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
-host pinged, with no port.
+host to ping, with no port.
 
 `snmp` accepts `timeout` and `param_<name>`, and requires a `target`, the
-agent, `host:port`, port 161 when left out.
+agent, as `host` or `host:port`, port 161 when omitted.
 
 `smtp`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the mail server, `host`, `host:port`, `smtp://` or
@@ -3814,28 +3858,33 @@ requires a `target`, the AMQP broker, `host`, `host:port` or `amqps://host`.
 requires a `target`, the NATS server, `host`, `host:port` or `tls://host`.
 <!-- /request-types -->
 
-`target`, `collector` and each of these parameters is given once. A second
-value gets a `400` naming the parameter rather than one of the two being
-used: `timeout=5s&timeout=1h` does not say which was meant. `header_<name>` is
-the exception, since every value of it is forwarded. A value may be at most
-8 KiB (8192 bytes), and a longer one gets a `400` naming the parameter and the
-limit: what a probe names is kept after it is answered, in the
-[log of repeated failures](LOGGING.md#repeated-failures) and the
-[verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics), and
-is bounded there by being bounded here. A `header_<name>` value for a header
-the collector forwards may not hold a control character other than tab (a CR
-or LF among them), which Go refuses to send: it gets a `400` naming the
-parameter before the target is contacted, rather than a `502` retried and
-logged as the target's failure. A parameter no request type knows is
-not read at all, whatever its values. A whole request, its line and headers,
-may be 64 KiB; the exporter answers a longer one `431`.
+`target`, `collector` and each of these parameters may be given once.
+
+- A second value gets a `400` that names the parameter, instead of one of
+  the two being used: `timeout=5s&timeout=1h` does not say which was meant.
+  `header_<name>` is the exception, because every value of it is forwarded.
+- A value may be at most 8 KiB (8192 bytes). A longer one gets a `400` that
+  names the parameter and the limit. What a probe names is kept after the
+  probe is answered, in the
+  [log of repeated failures](LOGGING.md#repeated-failures) and the
+  [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics),
+  and this limit is what bounds it there.
+- A `header_<name>` value for a header the collector forwards must not
+  contain a control character other than tab (including CR and LF), which Go
+  refuses to send. It gets a `400` that names the parameter before the
+  target is contacted, instead of a `502` that is retried and logged as the
+  target's failure.
+- A parameter that no request type knows is not read at all, whatever its
+  values.
+- A whole request, with its request line and headers, may be 64 KiB. The
+  exporter answers a longer one with `431`.
 
 #### Choosing request types at build time
 
-Every build of the exporter carries every request type, and so does the
-published image. A build can instead carry only the types it
-needs, which keeps the other types' code, and the libraries only they use, out
-of the binary:
+By default, a build of the exporter carries every request type, and so does
+the published image. A build can instead carry only the types it needs,
+which keeps the code of the other types, and the libraries only they use,
+out of the binary:
 
 ```sh
 make build REQUEST_TYPES=http
@@ -3843,63 +3892,74 @@ docker build --build-arg REQUEST_TYPES=http -t exporter:http .
 go build -tags "$(sh tools/request-type-tags.sh http)" .
 ```
 
-`make build` writes the binary to `bin/prometheus-universal-exporter`; plain
+`make build` writes the binary to `bin/prometheus-universal-exporter`. Plain
 `go build .` writes it to the current directory.
 
-Three things that are no request types come with one, for the libraries they
-share with it: the [`protobuf` decoder](#protobuf-responses) is in the
+Three features that are not request types come with one, because they share
+its libraries: the [`protobuf` decoder](#protobuf-responses) is in the
 builds that have `grpc`, and the `aws`
 [secret store](AUTHENTICATION.md#secret-stores) and an `http` collector's
-[`aws_sigv4`](AUTHENTICATION.md#signing-requests-for-aws) in those that have
-`s3file`. A build without the type refuses a configuration that uses them,
-saying which type to build with.
+[`aws_sigv4`](AUTHENTICATION.md#signing-requests-for-aws) are in those that
+have `s3file`. A build without the type refuses a configuration that uses
+them, with a message that says which type to build with.
 
 `REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
-means every type. A name that is not a request type fails the build, and so does
-a selection that names none. The script turns the list into Go build tags —
-`select_request_types` plus `request_type_<name>` per type — which is all
-`go build -tags select_request_types,request_type_http` needs by hand.
+means every type. A name that is not a request type fails the build, and so
+does a selection that names none. The script turns the list into Go build
+tags, `select_request_types` plus `request_type_<name>` per type, so by hand
+the equivalent is `go build -tags select_request_types,request_type_http`.
 
-A collector whose type the build left out stops the exporter at startup, saying
-the type exists but this build does not include it, and which types it does. The
-startup log line and the [dry run](#dry-run) report list the types the binary
-carries, so a configuration can be checked against the build that will run it.
-To such a build the types it left out do not exist beyond that message: the
-message for a collector without `type` shows a type the build has, the schema
-`--config.schema` prints lists only its types, and a `/probe` parameter that
-only a left-out type accepts is one no request type knows, ignored rather
-than answered `400`. Each type built on its own is a build the test suite is
-run against, by CI and by `make test-request-types`
+A collector whose type the build left out stops the exporter at startup,
+with a message that says the type exists but this build does not include
+it, and which types it does include. The startup log line and the
+[dry run](#dry-run) report list the types the binary carries, so a
+configuration can be checked against the build that will run it. Beyond that
+message, the omitted types do not exist for such a build:
+
+- the message for a collector without `type` suggests a type the build has;
+- the schema that `--config.schema` prints lists only its types;
+- a `/probe` parameter that only an omitted type accepts is one that no
+  request type knows, so it is ignored instead of answered with `400`.
+
+Each type built on its own is a build that the test suite runs against, in
+CI and with `make test-request-types`
 ([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
-An http-only build leaves every other type out, and a build with `REQUEST_TYPES=localfile` reads files and makes no
-HTTP requests to targets at all. `grpc`, `sshfile` and `sql` have libraries of
-their own, which a build without them does not link: gRPC and protobuf, about
-6 MB of a stripped binary, the SSH and SFTP clients, about 1 MB, and the
-database drivers, about 6 MB for the three built in by default; `dns`,
-`ntp` and `kubernetes` need nothing outside the standard library, and
-`tlscert` only `golang.org/x/crypto/ocsp`, of a module the default build
-links already; `s3file` links the AWS SDK, about 6.7 MB, `sshexec` the SSH
-client, without the SFTP client `sshfile` links, and `redis`, `tcp`,
-`ldap`, `icmp` and `snmp` nothing outside the standard library either. The
-`sql` type's `oracle`, `clickhouse`, `snowflake` and
-`vertica` drivers are built in only when `SQL_DRIVERS` names them, beside
-`REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
-`SQL_DRIVERS` build argument ([Building with more
-drivers](SQL.md#building-with-more-drivers)).
+An http-only build omits every other type, and a build with
+`REQUEST_TYPES=localfile` reads files and makes no HTTP requests to targets
+at all.
 
-A type may also be opt-in: one no build carries unless asked, the default
-build and the published image among them, made so with `make
-new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type))
-for a type few deployments want in the binary. They are
+What each type links:
+
+- `grpc`, `sshfile` and `sql` have libraries of their own, which a build
+  without them does not link: gRPC and protobuf (about 6 MB of a stripped
+  binary), the SSH and SFTP clients (about 1 MB), and the database drivers
+  (about 6 MB for the three built in by default).
+- `dns`, `ntp` and `kubernetes` need nothing outside the standard library,
+  and `tlscert` only `golang.org/x/crypto/ocsp`, from a module the default
+  build already links.
+- `s3file` links the AWS SDK (about 6.7 MB). `sshexec` links the SSH client,
+  without the SFTP client that `sshfile` links.
+- `redis`, `tcp`, `ldap`, `icmp` and `snmp` need nothing outside the
+  standard library either.
+- The `sql` type's `oracle`, `clickhouse`, `snowflake` and `vertica` drivers
+  are built in only when `SQL_DRIVERS` names them, in addition to
+  `REQUEST_TYPES`: `make build SQL_DRIVERS=oracle`, or the image's
+  `SQL_DRIVERS` build argument
+  ([Building with more drivers](SQL.md#building-with-more-drivers)).
+
+A type can also be opt-in: no build carries it unless asked, including the
+default build and the published image. A type is made opt-in with `make
+new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-request-type)),
+for a type that few deployments want in the binary. The opt-in types are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
 [`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md), [`sip`](SIP.md), [`amqp`](AMQP.md) and [`nats`](NATS.md), each written with the standard library alone: about
 0.1 MB of a stripped binary each, and about 0.8 MB for the twelve. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
-a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
-`request_type_<name>`, adds one to a default build; a collector of one is
-refused by a build without it with a message that says the type is opt-in
-and how to build with it.
+a build carries, whatever `REQUEST_TYPES` says. The tag alone,
+`request_type_<name>`, adds one to a default build. A build without an
+opt-in type refuses a collector of that type, with a message that says the
+type is opt-in and how to build with it.
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=mqtt,modbus
@@ -3908,8 +3968,9 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=mqtt,modbus -t exporter:plant .
 
 ### When a metric cannot be extracted
 
-Each metric sets what happens when its value cannot be produced — the
-expression matches nothing, the value is not a number, a label expression fails:
+Each metric sets what happens when its value cannot be produced, for example
+when the expression matches nothing, the value is not a number, or a label
+expression fails:
 
 | `error_mode` | The failing metric | The rest of the probe | Logged |
 | --- | --- | --- | --- |
@@ -3927,136 +3988,162 @@ metrics:
     error_mode: log       # nice to have; carry on without it
 ```
 
-`ignore` and `log` keep the scrape going, so a response carries whatever could
-be extracted. That is the right choice for a metric that is useful but not
-essential: one missing value does not cost you the others. When nothing at all
-can be extracted, the probe still succeeds with an empty body. `log` writes one
-warning per failing rule, however many series failed: a rule over a
-thousand-row table that misses its value on every row logs its first error
-with `"failures":1000`, not a thousand lines. A rule that fails the same way on
-every scrape of a target is logged once and then only as a
-[repeat](LOGGING.md#repeated-failures), with its recovery logged when it works
-again; the same way, wherever in the response: the row, node or item its
-first error names, and a size the error measured, may be another on every
-scrape. Several rules of one metric name — one for each column or path its
-series come from — are each logged, remembered and recovered by themselves,
-and their lines say which rule it is with its `expression`, and its `items`,
-beside the `metric` ([Logging](LOGGING.md)); rules alike in name, expression
-and items, which their labels tell apart — alike in those too they are
-[the same rule](#two-rules-that-are-the-same-rule), which does not load —
-are one rule to the log, logged if either of them has `log`. Either way the
-series a rule carried on
-without are counted in `http_exporter_rule_failures_total{collector,
-metric}`, by the rule's metric name and so for the rules of one name
-together, so a rule that keeps failing can be graphed and alerted on.
+**`ignore` and `log`** keep the scrape going, so a response carries whatever
+could be extracted. That suits a metric that is useful but not essential:
+one missing value does not cost you the others. When nothing at all can be
+extracted, the probe still succeeds, with an empty body.
 
-`fail` is for a metric the scrape is meaningless without. A single failing rule
-with `fail` fails the whole probe, even when every other metric was extracted
-perfectly well, because the point of the mode is that a response is either
-complete or an error — never quietly partial. The probe answers `502 Bad
-Gateway` with a JSON body saying which collector, which rule and why:
+How `log` logs:
+
+- It writes one warning per failing rule, however many series failed. A rule
+  over a thousand-row table that misses its value on every row logs its
+  first error with `"failures":1000`, not a thousand lines.
+- A rule that fails the same way on every scrape of a target is logged once
+  and then only as a [repeat](LOGGING.md#repeated-failures), and its
+  recovery is logged when it works again. "The same way" means regardless of
+  position in the response: the row, node or item that its first error
+  names, and a size the error measured, may differ on every scrape.
+- Several rules with one metric name, such as one for each column or path
+  its series come from, are each logged, remembered and recovered
+  separately. Their lines identify the rule by its `expression` and its
+  `items`, beside the `metric` ([Logging](LOGGING.md)).
+- Rules that are alike in name, expression and items, and that only their
+  labels distinguish, are one rule to the log, which logs if either of them
+  has `log`. (Rules alike in labels too are
+  [the same rule](#two-rules-that-are-the-same-rule), which does not load.)
+
+In both modes, the series that a rule had to drop are counted in
+`http_exporter_rule_failures_total{collector, metric}`, by the rule's metric
+name and so for the rules of one name together. A rule that keeps failing
+can therefore be graphed and alerted on.
+
+**`fail`** is for a metric without which the scrape is meaningless. A single
+failing rule with `fail` fails the whole probe, even when every other metric
+was extracted correctly, because the purpose of the mode is that a response
+is either complete or an error, never silently partial. The probe answers
+`502 Bad Gateway` with a JSON body that says which collector, which rule and
+why:
 
 ```json
 {"status":"error","stage":"metric","collector":"exchange_rates","metric":"exchange_rate","target":"https://api.frankfurter.dev/v1/latest","error":"metric \"exchange_rate\" value is missing"}
 ```
 
-Prometheus only looks at the status, which marks the scrape down (`up` becomes
-0); the body is for whoever runs the probe by hand. Credentials in the target
-URL are redacted from it. A failed probe is never cached, so the next scrape
-goes back to the target.
+Prometheus only looks at the status, which marks the scrape as down (`up`
+becomes 0). The body is for whoever runs the probe by hand, and credentials
+in the target URL are redacted from it. A failed probe is never cached, so
+the next scrape goes back to the target.
 
-Modes are per metric, so a collector can mix them: a `fail` rule that succeeds
-does not fail the probe because a `log` rule beside it did not.
+Modes are set per metric, so a collector can mix them. A `fail` rule that
+succeeds does not fail the probe because a `log` rule beside it failed.
 
-`fail` takes precedence over the collector's `error_handling.on_transform_error`.
-That policy governs the transform as a whole — a pre-script that raises, a
-response the transform cannot read — while `error_mode: fail` is a statement
-about one metric, so a lenient `on_transform_error: ignore` does not turn it
-back into a partial success.
+`fail` takes precedence over the collector's
+`error_handling.on_transform_error`. That policy governs the transform as a
+whole, such as a pre-script that raises or a response the transform cannot
+read. `error_mode: fail` is a statement about one metric, so a lenient
+`on_transform_error: ignore` does not turn it back into a partial success.
 
-A metric that is optional — `required: false`, or a collector with
-`error_handling.allow_missing_keys: true` — is not failing when its value is
-absent, so no mode applies to it, `fail` included: it is simply left out.
+An optional metric (`required: false`, or a collector with
+`error_handling.allow_missing_keys: true`) is not failing when its value is
+absent. No mode applies to it, including `fail`: it is simply left out.
 
-A value is absent the same way in every transform: nothing matched, a null, or
-text that is empty or only whitespace — an empty CSV cell, an empty JSON
-string, an empty XML element or HTML cell, a regex group that captured
-nothing. Nothing matched is a jq expression or `items` that gave nothing, a
-regex that matched no text, a selector that matched no node, a `prometheus`
-rule that matched no metric of the response, and a `csv` rule over a response
-without a row. Text that is there but is not a number, such as `"up"`, is not
-absent: it is a failure to read the value, which `required: false` does not
-excuse.
+**What "absent" means.** A value is absent in the same way in every
+transform: nothing matched, a null, or text that is empty or only
+whitespace (an empty CSV cell, an empty JSON string, an empty XML element or
+HTML cell, a regex group that captured nothing). "Nothing matched" covers a
+jq expression or `items` that gave nothing, a regex that matched no text, a
+selector that matched no node, a `prometheus` rule that matched no metric of
+the response, and a `csv` rule over a response without a row. Text that is
+present but is not a number, such as `"up"`, is not absent. It is a failure
+to read the value, which `required: false` does not excuse.
 
-What is absent is left out in silence where a rule or a label is not
-required, and that hides a column, a field or a cell the response never had
-as well as one that is empty this time. A `csv` rule that is required tells
-the two apart, `CSV column "x" is not in the response` and `CSV column "x"
-is empty in row 3`, and a `csv` label naming a column the response does not
-have fails its rule, required or not, rather than being left off every
-series ([Reading CSV: what to expect](#reading-csv-what-to-expect) lists
-what takes a column away); a rule that is not required still says nothing of
-a value's column that is gone. While writing a collector leave its rules
-required, so that a column that is gone is reported, and read the header the
-target sends in a [debug probe](#debug-probes).
+Where a rule or a label is not required, an absent value is left out
+silently. That hides a column, a field or a cell that the response never
+had, as well as one that is merely empty this time.
 
-The error of a `css` or an `xpath` rule names its metric first, and, where
-the failure belongs to one of the things the rule selected, which: an item
-of a `css` rule's `items`, a node of those an `xpath` rule selected, each
-counted from 0 in the order of the page.
-`metric "host_load" value is missing for node 3: HTML XPath
-"//td[@class='load']" selected a node without a value` is the fourth cell
-(over XML the expression is named `XPath`), `metric "host_load"
-node 3: value "n/a" is not a number` its text, and `metric "host_load" label
-"host" is missing for node 3` a required label; a `css` rule says `item 3`
-in the same places. It reads the same in the log, in a debug probe and in
-the answer of a failed probe.
+- A required `csv` rule distinguishes the two: `CSV column "x" is not in the
+  response` and `CSV column "x" is empty in row 3`.
+- A `csv` label that names a column the response does not have fails its
+  rule, required or not, instead of being left off every series
+  ([Reading CSV: what to expect](#reading-csv-what-to-expect) lists what
+  removes a column).
+- A rule that is not required still reports nothing about a value's column
+  that has disappeared.
+
+While you write a collector, leave its rules required, so that a missing
+column is reported, and read the header the target sends in a
+[debug probe](#debug-probes).
+
+**Errors of `css` and `xpath` rules.** The error names the rule's metric
+first. Where the failure belongs to one of the things the rule selected, it
+also says which: an item of a `css` rule's `items`, or a node of those an
+`xpath` rule selected, each counted from 0 in page order. For example:
+
+- `metric "host_load" value is missing for node 3: HTML XPath
+  "//td[@class='load']" selected a node without a value` is the fourth cell
+  (over XML the expression is named `XPath`);
+- `metric "host_load" node 3: value "n/a" is not a number` is its text;
+- `metric "host_load" label "host" is missing for node 3` is a required
+  label.
+
+A `css` rule says `item 3` in the same places. The message reads the same in
+the log, in a debug probe and in the answer of a failed probe.
 
 A probe that runs out of time inside a rule is not that rule's failure, and
-no mode applies to it: the probe fails as a whole (see
+no mode applies to it. The probe fails as a whole (see
 [Probe deadlines](#probe-deadlines)).
 
 #### When the XPath engine fails on an expression
 
-The XPath engine accepts some expressions at startup that it then cannot
-evaluate, once a response holds what they stumble over:
-`//a[contains(@x, 5)]` as soon as an `a` has an `x` — the second argument
-must be a string, `'5'` — `sum(string(//v))` over text that is no number,
-`substring(//v, '1')`, `replace(//v, '(', '')`, `substring(//v, 0 div 0)`.
-That is the failure of the rule whose expression or label it is, by its
-`error_mode` like any other: the rule gives no series for that response,
-those of the nodes before the one the engine failed at included, the other
-rules give theirs, and the failure is counted and logged for the rule as
-every failure is: as one failure of the rule, the engine's, whatever nodes
-of the rule failed before the engine did — their failures are not counted
-beside it, in `http_exporter_rule_failures_total` or as missing values, and
-it is the engine's failure that is logged. The error names the metric, the
-expression — a label's, with the label's name — and what the engine said:
+The XPath engine accepts some expressions at startup that it later cannot
+evaluate, once a response contains what they fail on. Examples:
+
+- `//a[contains(@x, 5)]`, as soon as an `a` has an `x`, because the second
+  argument must be a string, `'5'`;
+- `sum(string(//v))` over text that is not a number;
+- `substring(//v, '1')`, `replace(//v, '(', '')` and
+  `substring(//v, 0 div 0)`.
+
+That is a failure of the rule whose expression or label it is, handled by
+its `error_mode` like any other:
+
+- The rule gives no series for that response, including those of the nodes
+  before the one the engine failed at. The other rules give theirs.
+- The failure is counted and logged as one failure of the rule, the
+  engine's, whatever nodes of the rule failed before the engine did. Their
+  failures are not counted in addition, in
+  `http_exporter_rule_failures_total` or as missing values, and it is the
+  engine's failure that is logged.
+
+The error names the metric, the expression (for a label's expression, with
+the label's name) and what the engine reported:
 
 ```text
 metric "marked" XPath "//a[contains(@x, 5)]" cannot be evaluated: the XPath engine failed on it: contains() function argument type must be string
 metric "job_up" label "kind": XPath "substring(../@kind, '1')" cannot be evaluated: the XPath engine failed on it: substring() function first argument type must be number
 ```
 
-What follows `failed on it:` are the engine's own words. Where they start
-with `runtime error:`, as for `substring(//v, 0 div 0)`, a position that is
-no number, the fault is in the engine or in the exporter and not in an
-argument: write the expression another way. What follows `runtime error:`
-may change with the response — `substring(//v, 0 div 0)` over a text of two
-characters fails with `slice bounds out of range [9223372036854775807:2]`,
-and with another length over another text — so the log takes such a failure
-for the same one whatever follows, and holds back its repeats. With
-`--log.level=debug` the stack of a runtime error is logged, in a line
-`the XPath engine failed with a runtime error` with the collector and the
-metric, under every `error_mode`, `ignore` included, as it is in a debug
-probe's report, which shows the lines of every level; it is in no error text
-and in no line of another level.
+The text after `failed on it:` is the engine's own. Where it starts with
+`runtime error:`, as for `substring(//v, 0 div 0)`, a position that is not a
+number, the fault is in the engine or in the exporter, not in an argument.
+Write the expression another way.
+
+The text after `runtime error:` may change with the response:
+`substring(//v, 0 div 0)` over a text of two characters fails with `slice
+bounds out of range [9223372036854775807:2]`, and with another length over
+another text. The log therefore treats such a failure as the same one
+whatever follows, and suppresses its repeats.
+
+With `--log.level=debug`, the stack of a runtime error is logged in a line
+`the XPath engine failed with a runtime error`, with the collector and the
+metric, under every `error_mode`, including `ignore`. A debug probe's
+report, which shows the lines of every level, includes it too. The stack
+appears in no error text and in no line of another level.
 
 ### When a stage of the probe fails
 
-`error_handling` covers the stages before any metric: fetching — reaching an
-`http` target and its HTTP status, or reading a `localfile` file — decoding the
-response, and the transform as a whole. It uses the same words as
+`error_handling` covers the stages before any metric: fetching (reaching an
+`http` target and its HTTP status, or reading a `localfile` file), decoding
+the response, and the transform as a whole. It uses the same words as
 `error_mode`:
 
 ```yaml
@@ -4073,94 +4160,102 @@ error_handling:
 | `ignore` | carries on without that stage's output, and counts as a success without `report_failures` | only at debug level |
 
 A probe that carries on is answered `200` with an empty exposition in the
-format the scrape asked for, exactly what a probe whose rules produced no
-series is answered: the text format's `Content-Type`, or OpenMetrics' own and
-its closing `# EOF`, compressed when the scrape accepts gzip. An exposition is
-identified by its `Content-Type`, so the answer says what it is though it
-holds nothing of the collector's, and the scrape succeeds, which is what
-carrying on is for. The failure is still counted in the collector's
-[self-metrics](SELF-METRICS.md), and the probe counts as a success, unless
-the collector sets
-[`report_failures`](#reporting-failed-probes-as-metrics), which makes it a
-failed probe that is answered `http_exporter_probe_success 0`. Nothing
-is kept in the [response cache](#response-caching) or exported over OTLP.
-Carrying on is not a failure, so with
-[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
-the last good result does not stand in for it, again unless the collector
-sets `report_failures`: the answer holds the two
-freshness series every answer of such a collector has, with
-`http_exporter_result_stale 0`, and nothing else.
+format the scrape asked for, exactly like a probe whose rules produced no
+series: the text format's `Content-Type`, or OpenMetrics' own and its
+closing `# EOF`, compressed when the scrape accepts gzip. An exposition is
+identified by its `Content-Type`, so the answer is a valid exposition
+although it holds nothing of the collector's, and the scrape succeeds, which
+is the purpose of carrying on.
+
+- The failure is still counted in the collector's
+  [self-metrics](SELF-METRICS.md).
+- The probe counts as a success, unless the collector sets
+  [`report_failures`](#reporting-failed-probes-as-metrics), which makes it a
+  failed probe that is answered `http_exporter_probe_success 0`.
+- Nothing is kept in the [response cache](#response-caching) or exported
+  over OTLP.
+- Carrying on is not a failure, so with
+  [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+  the last good result does not stand in for it, again unless the collector
+  sets `report_failures`. The answer then holds the two freshness series
+  that every answer of such a collector has, with
+  `http_exporter_result_stale 0`, and nothing else.
 
 A [static target](STATIC-TARGETS.md) follows the same policies.
-Under `fail` its scrape fails: `http_exporter_target_up` is `0` and, with
-[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails),
-the last good result is exported in its place. Under `log` and `ignore` the
-scrape carries on as a probe does: the target is up, with nothing of the
-collector's to export, only its health series, and the scrape counts as a
-success. A metric rule with `error_mode: fail` fails the scrape whatever
-`on_transform_error` says, on a probe and a static target alike.
+
+- Under `fail`, its scrape fails: `http_exporter_target_up` is `0` and, with
+  [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails),
+  the last good result is exported in its place.
+- Under `log` and `ignore`, the scrape carries on as a probe does: the
+  target is up, with nothing of the collector's to export, only its health
+  series, and the scrape counts as a success.
+- A metric rule with `error_mode: fail` fails the scrape whatever
+  `on_transform_error` says, for a probe and a static target alike.
 
 ### What a failed probe's caller is told
 
-A failed probe is answered with its stage and its error, which is all
-Prometheus needs to mark the scrape down and what someone running the probe
-by hand reads first. But whoever may call `/probe` may name the target, and
-the collector's request parameters, so what the target answered is not
-theirs to read: the answer tells them what failed, and the exporter's log
-has the whole of it. What is withheld from the answer:
+A failed probe is answered with its stage and its error. That is all
+Prometheus needs to mark the scrape as down, and it is what someone running
+the probe by hand reads first. However, anyone who may call `/probe` may
+name the target and the collector's request parameters, so what the target
+answered is not theirs to read. The answer tells them what failed, and the
+exporter's log has the full error. The following is withheld from the
+answer:
 
-- **Every value of the answer an error quotes**: the token a decoder could
-  not read (`expected float as value, got "..."`), a label value or a name of
-  the document, a CSV header, a charset the answer names, the start of a
-  Graphite server's answer that is not render JSON, a `tcp` server's
-  [greeting](TCP.md#services-that-speak-first) that did not match. Each stands as
-  `[withheld; in the exporter's log]`, and the rest of the error reads as it
-  does in the log. The names of series that are valid are not withheld: they
-  are what a successful probe answers.
-- **What a library quotes of it**: an XML syntax error's names and entities,
-  a TOML token, and a jq program's error on the answer (`cannot iterate
-  over: string ("...")`, or a rule's own `error(...)`), which is answered as
-  `the jq program failed on the answer: [withheld; in the exporter's log]`.
-  Go's HTTP client quotes the first line of an answer that is no HTTP, such
-  as an SSH or SMTP banner; that is withheld after `malformed HTTP response`,
-  for a target and for a [login](AUTHENTICATION.md#when-a-login-fails) alike.
+- **Every value of the target's answer that an error quotes**: the token a
+  decoder could not read (`expected float as value, got "..."`), a label
+  value or a name from the document, a CSV header, a charset the answer
+  names, the start of a Graphite server's answer that is not render JSON,
+  and a `tcp` server's [greeting](TCP.md#services-that-speak-first) that did
+  not match. Each is replaced by `[withheld; in the exporter's log]`, and
+  the rest of the error reads as it does in the log. The names of valid
+  series are not withheld, because a successful probe answers them anyway.
+- **What a library quotes of the answer**: an XML syntax error's names and
+  entities, a TOML token, and a jq program's error on the answer (`cannot
+  iterate over: string ("...")`, or a rule's own `error(...)`), which is
+  answered as `the jq program failed on the answer: [withheld; in the
+  exporter's log]`. Go's HTTP client quotes the first line of an answer that
+  is not HTTP, such as an SSH or SMTP banner. That is withheld after
+  `malformed HTTP response`, for a target and for a
+  [login](AUTHENTICATION.md#when-a-login-fails) alike.
 - **A script's traceback**: a [Python](PYTHON.md) transform that raised is
-  answered the exception's type and the line of the script it came from,
-  `python transform failed: KeyError at line 3 of the script; the rest is in
-  the exporter's log`, since its message and the source lines are what the
-  script made of the data; what the interpreter wrote to stderr is answered
-  as being in the log.
-- **What a server said of a refusal**: a login provider's answer
-  ([When a login fails](AUTHENTICATION.md#when-a-login-fails)), a
-  database's message, which is answered by its code
-  ([SQL](SQL.md#errors-and-self-metrics)), a Kubernetes API server's
-  message and its URL ([Permissions](KUBERNETES.md#permissions)), an S3
-  store's, which names the principal and the account, and the AWS SDK's
-  credential chain's ([S3](S3FILE.md#errors-and-self-metrics)), and an
-  [`sshexec`](SSHEXEC.md) command's stderr.
+  answered with the exception's type and the line of the script it came
+  from: `python transform failed: KeyError at line 3 of the script; the rest
+  is in the exporter's log`. Its message and the source lines are derived
+  from the data. What the interpreter wrote to stderr is reported as being
+  in the log.
+- **What a server said about a refusal**: a login provider's answer
+  ([When a login fails](AUTHENTICATION.md#when-a-login-fails)); a database's
+  message, which is answered by its code
+  ([SQL](SQL.md#errors-and-self-metrics)); a Kubernetes API server's message
+  and its URL ([Permissions](KUBERNETES.md#permissions)); an S3 store's
+  message, which names the principal and the account, and the message of
+  the AWS SDK's credential chain ([S3](S3FILE.md#errors-and-self-metrics));
+  and an [`sshexec`](SSHEXEC.md) command's stderr.
 - **The operator's own accounts and addresses**: an LDAP bind's DN
-  ([LDAP](LDAP.md)), and the addresses of the exporter's side of the
-  network — the address and port a connection was made from (`read tcp
-  [withheld; in the exporter's log]->10.1.2.3:443`), the proxy a request
-  went through, with all a connection to it or a SOCKS proxy's handshake
-  failed with, the name server a lookup asked, the path of the
+  ([LDAP](LDAP.md)), and the addresses on the exporter's side of the
+  network. Those are the address and port a connection was made from (`read
+  tcp [withheld; in the exporter's log]->10.1.2.3:443`); the proxy a request
+  went through, with everything a connection to it or a SOCKS proxy's
+  handshake failed with; the name server a lookup asked; and the path of the
   [Unix socket](REQUESTS.md#over-a-unix-socket) a request went to. The
-  address the connection went to stays: the caller named it.
+  address the connection went to stays, because the caller named it.
 
-An error over the 2,000 bytes every failure is cut to is cut after what the
-caller may be told is taken from it, so nothing withheld reaches the answer
-through the cut. A rule under `error_mode: fail` is answered its JSON object
-with the same text in `error`. The log, a [debug probe](#debug-probes)'s
-report and, with `--web.debug=full`, the
-[status page](ENDPOINTS.md#status-page) show each error whole; the
+An error over the 2,000 bytes to which every failure is cut is cut after the
+withheld parts have been removed, so nothing withheld reaches the answer
+through the cut. A rule under `error_mode: fail` is answered with its JSON
+object, with the same text in `error`. The log, a
+[debug probe](#debug-probes)'s report and, with `--web.debug=full`, the
+[status page](ENDPOINTS.md#status-page) show each error in full. The
 self-metrics count failures by stage, as before.
 
 ### Reporting failed probes as metrics
 
-A failed probe is answered `502`, so Prometheus marks the scrape down and
-keeps no sample of it: an uptime check has `up` to alert on and nothing else.
-With `report_failures: true` on the collector, a probe is always answered
-`200` with an exposition, as [blackbox_exporter](https://github.com/prometheus/blackbox_exporter)
+A failed probe is answered `502`, so Prometheus marks the scrape as down and
+keeps no sample of it: an uptime check then has only `up` to alert on. With
+`report_failures: true` on the collector, a probe is always answered `200`
+with an exposition, as
+[blackbox_exporter](https://github.com/prometheus/blackbox_exporter)
 answers, and a failure is a value:
 
 ```yaml
@@ -4180,7 +4275,7 @@ collectors:
         expression: $status
 ```
 
-A probe that succeeds is answered the collector's series, and after them:
+A probe that succeeds is answered with the collector's series, followed by:
 
 ```text
 site_status_code 200
@@ -4188,9 +4283,9 @@ http_exporter_probe_success 1
 http_exporter_probe_elapsed_seconds 0.012
 ```
 
-A target that is down, refuses the connection, cannot be named, answers a
-status the collector does not accept, or anything else that fails a stage,
-is answered:
+A target that is down, refuses the connection, cannot be resolved, answers a
+status the collector does not accept, or fails a stage in any other way is
+answered:
 
 ```text
 http_exporter_probe_success 0
@@ -4198,335 +4293,370 @@ http_exporter_probe_elapsed_seconds 0.003
 http_exporter_probe_failed_stage{stage="http"} 1
 ```
 
-`http_exporter_probe_success` is `1` or `0`.
-`http_exporter_probe_elapsed_seconds` is how long this probe took, from its
-request to its answer: the duration its
-[`http_exporter_probe_duration_seconds`](SELF-METRICS.md) histogram, on
-`/metrics`, observes, which is another series.
-`http_exporter_probe_failed_stage` names the stage that failed, the one
-the log and the self-metrics name: `http` for whatever failed in reaching an
-`http` target, its name, its connection or its TLS handshake;
-`http_status`; `decode`; `transform`; `validation`; `metric` for a rule with
-`error_mode: fail`; another request type's own fetch stage, `dns`, `tls`,
-`file`, `grpc` and the others ([Request types](#request-types)); or `panic`
-for a probe that panicked, in whatever stage, which the log has as `probe
-panicked` with its stack and the status page and the self-metrics count as
-failed, as before. Nothing of
-the error is answered, as nothing of the target's answer is
-([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)):
-the log has the error, as it always did, and so do a
-[debug probe](#debug-probes)'s report and the
-[status page](ENDPOINTS.md#status-page). The key works alike for every
-request type. The three series carry no label of the collector's
-(`transform.labels` and `metrics_prefix` are the collector's series');
-Prometheus adds the target's. [Uptime probes](REQUESTS.md#uptime-probes)
-puts the key together with the rest of an uptime check of HTTP sites.
+- `http_exporter_probe_success` is `1` or `0`.
+- `http_exporter_probe_elapsed_seconds` is how long this probe took, from
+  its request to its answer. It is the duration that its
+  [`http_exporter_probe_duration_seconds`](SELF-METRICS.md) histogram on
+  `/metrics` observes, which is a separate series.
+- `http_exporter_probe_failed_stage` names the stage that failed, the same
+  one the log and the self-metrics name:
+  - `http` for anything that failed in reaching an `http` target: its name,
+    its connection or its TLS handshake;
+  - `http_status`, `decode`, `transform` and `validation`;
+  - `metric` for a rule with `error_mode: fail`;
+  - another request type's own fetch stage: `dns`, `tls`, `file`, `grpc` and
+    the others ([Request types](#request-types));
+  - `panic` for a probe that panicked, in whatever stage. The log has it as
+    `probe panicked` with its stack, and the status page and the
+    self-metrics count it as failed, as before.
 
-What else becomes of a probe:
+Nothing of the error is in the answer, as nothing of the target's answer is
+([What a failed probe's caller is told](#what-a-failed-probes-caller-is-told)).
+The log has the error, as always, and so do a
+[debug probe](#debug-probes)'s report and the
+[status page](ENDPOINTS.md#status-page). The key works the same for every
+request type. The three series carry none of the collector's labels
+(`transform.labels` and `metrics_prefix` apply to the collector's own
+series); Prometheus adds the target's.
+[Uptime probes](REQUESTS.md#uptime-probes) combines the key with the rest
+of an uptime check of HTTP sites.
+
+How `report_failures` interacts with other settings:
 
 - **`error_handling` `log` or `ignore`** carries on past a failed stage as
   before ([When a stage of the probe fails](#when-a-stage-of-the-probe-fails)),
-  and the probe is a failure: the answer says the stage failed,
-  `http_exporter_probe_success 0` with the stage, and so does everything
-  else that counts probes, so that none of them disagrees with the answer.
-  The self-metrics count no success for it, the status page shows it
-  failed with its error, the last good result stands in for it under
-  `cache.stale_if_error`, and its trace is a failed one. It is logged as
-  its policy says, at warning level under `log` and debug under `ignore`,
-  and it is not cached, as before. Without `report_failures` such a probe
-  is a success, as it always was.
-- **A rule with `error_mode: fail`** fails the probe in the `metric` stage;
-  a rule under `log` or `ignore` that drops its series fails no stage, and
+  but the probe is a failure. The answer says the stage failed
+  (`http_exporter_probe_success 0` with the stage), and so does everything
+  else that counts probes, so that nothing disagrees with the answer: the
+  self-metrics count no success for it, the status page shows it as failed
+  with its error, the last good result stands in for it under
+  `cache.stale_if_error`, and its trace is a failed one. It is logged as its
+  policy says, at warning level under `log` and at debug level under
+  `ignore`, and it is not cached, as before. Without `report_failures` such
+  a probe is a success, as it always was.
+- **A rule with `error_mode: fail`** fails the probe in the `metric` stage.
+  A rule under `log` or `ignore` that drops its series fails no stage, and
   the probe is a success.
 - **[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)**
-  answers the last good result in place of a failed trip, a trip carried on
-  past a failed stage included, with
-  `http_exporter_result_stale 1`, and `http_exporter_probe_success 0` and
-  the stage beside them: the series stand in, while the target is failing.
+  answers the last good result in place of a failed trip, including a trip
+  that carried on past a failed stage, with `http_exporter_result_stale 1`,
+  plus `http_exporter_probe_success 0` and the stage. The series stand in
+  while the target is failing.
 - **[Response caching](#response-caching)**: a cached answer is a success.
-  The cache keeps the collector's series alone; each answer has its own
+  The cache keeps only the collector's series; each answer has its own
   elapsed time.
-- **[Shared probes](#identical-probes-share-one-request)**: probes sharing a trip each
-  answer their own elapsed time.
-- **[`failure_backoff`](#backing-off-from-failing-targets)**: a probe kept from
-  the target fails in its fetch stage.
-- **A probe refused by the target policy** (`403`), **turned away by
-  `max_concurrent_probes`** (`503`), one whose caller went away and a
-  caller's mistake (`400`) are answered as without the key: the target was
-  not asked, and they say nothing of it.
-- **The self-metrics** count a failure as one, in
+- **[Shared probes](#identical-probes-share-one-request)**: probes that share
+  a trip each answer their own elapsed time.
+- **[`failure_backoff`](#backing-off-from-failing-targets)**: a probe kept
+  from the target fails in its fetch stage.
+- **A probe refused by the target policy** (`403`), **one turned away by
+  `max_concurrent_probes`** (`503`), one whose caller went away, and a
+  caller's mistake (`400`) are answered as without the key. The target was
+  not contacted, and they say nothing about it.
+- **The self-metrics** count a failure as a failure, in
   `http_exporter_scrapes_total` against `http_exporter_scrape_success_total`
-  and the other counters, and in the probe duration histogram; it is
+  and the other counters, and in the probe duration histogram. It is
   [logged](LOGGING.md) as before.
-- **The [OTLP export](OTLP.md)** exports the collector's series, as before:
-  nothing of a failed probe, one carried on past a failed stage included,
-  and not the three series; a stale result standing in is exported as it
-  is without the key. The trace of a failed probe is a failed one, which
-  the `errors` sampling keeps, answered `200`; its `error.type` is the
-  stage that failed, `panic` included, rather than the `502` or `500` it
-  would have been answered without the key, while a stale result standing
-  in keeps `stale` and a probe `failure_backoff` kept from the target
-  `backoff`.
-- **The [status page](ENDPOINTS.md#status-page)** shows the probe failed,
-  with its error, answered `200` with its series.
+- **The [OTLP export](OTLP.md)** exports the collector's series, as before.
+  It exports nothing of a failed probe, including one that carried on past a
+  failed stage, and never the three series. A stale result that stands in is
+  exported as it is without the key. The trace of a failed probe is a failed
+  one, which the `errors` sampling keeps, although the probe is answered
+  `200`. Its `error.type` is the stage that failed, including `panic`,
+  instead of the `502` or `500` it would have been answered with without the
+  key. A stale result that stands in keeps `stale`, and a probe that
+  `failure_backoff` kept from the target keeps `backoff`.
+- **The [status page](ENDPOINTS.md#status-page)** shows that the probe
+  failed, with its error, answered `200` with its series.
 - **A [debug probe](#debug-probes)** says that a probe would have answered
-  `200` with `http_exporter_probe_success 0` in place of the failure, or,
+  `200` with `http_exporter_probe_success 0` in place of the failure or,
   where a stale result stands in, `200 with the last good result, 5s old,
   marked stale (cache.stale_if_error), with http_exporter_probe_success 0
-  and the decode stage failed (report_failures)`, and shows the series.
-- **[Static targets](STATIC-TARGETS.md)** are not changed by the key: a
+  and the decode stage failed (report_failures)`. It shows the series.
+- **[Static targets](STATIC-TARGETS.md)** are not changed by the key. A
   static target's scrape has `http_exporter_target_up` and its own
-  self-metrics, and a collector both probed and named by static targets
-  serves each as it does.
+  self-metrics, and a collector that is both probed and named by static
+  targets serves each in its own way.
 
-While `report_failures` is set, the collector's rules may not make a series
-of one of the three names: a rule or a derived family exported under one,
-after `metrics_prefix`, is refused when the configuration loads,
+While `report_failures` is set, the collector's rules must not produce a
+series with one of the three names. A rule or a derived family exported
+under one, after `metrics_prefix`, is refused when the configuration loads:
 
 ```text
 collector "uptime" metric "http_exporter_probe_success" is exported as http_exporter_probe_success, which is reserved for the series report_failures adds to every probe's answer; rename the metric, or leave report_failures out
 ```
 
-and a series a [Python](PYTHON.md) script or a `prometheus` transform makes
-under one fails the probe in the `validation` stage.
+A series that a [Python](PYTHON.md) script or a `prometheus` transform
+produces under one of the names fails the probe in the `validation` stage.
 
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at
-startup, on reload and by `--dry-run`, and an error names the collector, the
-metric and the label. A rule that has no name to be named by — `name` left
-out, written `""` or nothing but blanks — is named by its place among the
-collector's rules, counted from 1: `collector "node" metrics rule 2 has no
-name`, or, of a `prometheus` rule, which needs none, `collector "node"
-metrics rule 2 has invalid type "timer"`, where a rule with a name reads
-`collector "node" metric "up" has invalid type "timer"`. What is checked:
+startup, on reload and by `--dry-run`. An error names the collector, the
+metric and the label. A rule without a usable name (`name` omitted, written
+`""` or only blanks) is identified by its position among the collector's
+rules, counted from 1: `collector "node" metrics rule 2 has no name`. For a
+`prometheus` rule, which needs no name, the same form is used: `collector
+"node" metrics rule 2 has invalid type "timer"`, where a rule with a name
+reads `collector "node" metric "up" has invalid type "timer"`.
 
-- a metric name must be a valid Prometheus metric name, and not start with
-  `__`; a rule of any transform but `prometheus` must have one, and under
-  `prometheus` a name that reads as a pattern is told that
+The checks are:
+
+**Names**
+
+- A metric name must be a valid Prometheus metric name and must not start
+  with `__`. A rule of any transform except `prometheus` must have one.
+  Under `prometheus`, a name that looks like a pattern gets the message that
   [a pattern belongs in `expression`](#collectors). Under
-  [`name_escaping`](#utf-8-names) `underscores` or `values` a rule's name,
+  [`name_escaping`](#utf-8-names) `underscores` or `values`, a rule's name,
   and every other name the collector writes, may be any name that is not
-  blanks alone, and is exported escaped. A rule's name may be no longer than
-  `limits.max_metric_name_length` as it is exported — after `metrics_prefix`,
-  escaped by `name_escaping` — since every series of it would fail the
-  scrape: `collector "c" metric "M" is 201 bytes, longer than
-  limits.max_metric_name_length 200, so every series of that name would fail
-  validation; shorten the name or raise limits.max_metric_name_length`, or,
-  with a prefix, `collector "c" metric "M" is exported as "p_M", which is
-  longer than limits.max_metric_name_length 200`. This holds for a
-  `prometheus` rule's and a `python` rule's name too; the scrape measures a
-  histogram's or a summary's family name, not its `_bucket`, `_sum` or
-  `_count`, and so does the load, and a `prometheus` rule without a `name`
-  has nothing to measure;
-- a rule of a collector with [`report_failures`](#reporting-failed-probes-as-metrics)
-  is not exported as `http_exporter_probe_success`,
-  `http_exporter_probe_elapsed_seconds` or `http_exporter_probe_failed_stage`,
-  nor is a derived family that is not hidden;
-- every expression must compile in its transform's language — jq and yq
-  (including `items`, and undefined functions and variables), regular
-  expressions, CSS selectors, XPath with the collector's namespaces, and a
-  `prometheus` transform's patterns, `include` and `exclude`;
-- a `regex` rule must have a capture group, which is its value, and no more
-  than one named `value`; a `regex` label must name a capture group the regex
-  has;
-- a rule's [`time_format`](#reading-a-date-or-a-time-as-the-value) must be
-  `rfc3339`, `rfc1123` or a layout with a year, a month and a day, without
-  blanks around it and with `PM` beside the hour of a 12-hour clock, and its
-  `time_zone` a zone the exporter knows; `time_zone` without `time_format`,
-  `time_format` beside `value_map`, and `time_format` on a `python` or
-  `prometheus` rule are refused;
-- a `prometheus` transform's `rename` targets must be metric names;
-  `include`, `exclude` and `rename` apply only to a `prometheus` transform
-  without `metrics` rules, and an entry of `include` or `exclude` is neither
-  the empty string nor [nothing but blanks](#collector-wide-labels);
-- a label of a `python` rule sets no `value`: the script sets its labels
-  itself, and a constant for every series is
-  [`transform.labels`](#collector-wide-labels);
-- a `python` rule has a `name`, the script's series it names, and no `type`,
-  `description`, `required` or `error_mode`, which the script says of its
-  series itself, and each of its labels sets `truncate: true`
-  ([What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for));
-- a `prometheus` rule's `expression` is not nothing but blanks, and the rule
-  has a `name` or an `expression`, by which it says which metrics it passes
-  on;
-- a rule's [`histogram` block](#histograms-from-a-list-of-values) is on a
-  rule of `type: histogram` of a transform other than `prometheus` and
-  `python`, and its `buckets` are 1 to 100 finite numbers in increasing order,
-  each once, without `+Inf`; such a rule has no label named `le`. `type:
-  histogram` without the block is refused for every transform but
-  `prometheus`, the error saying the block is the way to count the values in
-  a histogram;
-- a [`derived`](#derived-series) entry has a name no rule of the collector
-  and no other entry has, the type `gauge`, `counter` or `untyped`, and
-  exactly one of `sum`, `difference` and `ratio`, each reading counters,
-  gauges or untyped families that are rules of the collector or earlier
-  entries; `by` is only beside a `sum` of one family, and a `hidden` entry is
-  read by a later one;
-- `transform.labels` and `rename_labels` must give label names, classic ones
-  unless `name_escaping` escapes the others, and two renames may not target
-  the same label. A key of `transform.labels` or a rule's label that
-  `rename_labels` renames or `remove_labels` removes may be any name that is
-  not blanks alone, since it is never exported;
-- no label name, of a rule, `transform.labels`, `rename_labels` or a static
-  target, may start with `__` — unless `rename_labels` renames it or
-  `remove_labels` removes it — which Prometheus keeps for its own labels: it
-  refuses `__name__` in what it scrapes and drops the others. A series whose
-  labels still get such a name, from a Python script or a passthrough, fails
-  validation. So does a histogram given a label `le` of its own, or a summary
-  a `quantile` — by a rule's label, `transform.labels` or a pre-script —
-  since its buckets or quantiles carry that label: the scrape fails naming the
-  series, as in `metric "h" is a histogram and has a label le of its own,
-  which its buckets carry; name the label something else`. On any other
-  series `le` and `quantile` are labels like any other;
-- rules with the same metric name must give it the same type: several rules
+  only blanks, and is exported escaped.
+- A rule's name must not be longer than `limits.max_metric_name_length` as
+  it is exported (after `metrics_prefix`, escaped by `name_escaping`),
+  because every series of it would fail the scrape: `collector "c" metric
+  "M" is 201 bytes, longer than limits.max_metric_name_length 200, so every
+  series of that name would fail validation; shorten the name or raise
+  limits.max_metric_name_length`, or, with a prefix, `collector "c" metric
+  "M" is exported as "p_M", which is longer than
+  limits.max_metric_name_length 200`. This applies to the name of a
+  `prometheus` rule and a `python` rule too. Both the scrape and the load
+  measure the family name of a histogram or a summary, not its `_bucket`,
+  `_sum` or `_count`. A `prometheus` rule without a `name` has nothing to
+  measure.
+- A rule of a collector with
+  [`report_failures`](#reporting-failed-probes-as-metrics) must not be
+  exported as `http_exporter_probe_success`,
+  `http_exporter_probe_elapsed_seconds` or
+  `http_exporter_probe_failed_stage`, and neither may a derived family that
+  is not hidden.
+- No rule may be named like a series of another rule's histogram or summary:
+  `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, or
+  `foo_sum` or `foo_count` beside a summary `foo`.
+- Rules with the same metric name must give it the same type. Several rules
   may feed one family, as `jobs{queue="a"}` and `jobs{queue="b"}` read from
-  two places, but a family has one type. A `prometheus` rule without a `type`
-  keeps the series' own and is not compared;
-- no two rules of a collector may be
-  [the same rule](#two-rules-that-are-the-same-rule): each would make every
-  series the other makes, and every scrape would fail on a duplicate series;
-- under `prometheus`, no rule's `expression` may match the `name` another
-  rule passes on the metric of, where the two give its series
-  [one name and the same labels](#a-name-and-a-pattern-that-matches-it):
-  each would make every series of that metric. A rule of the histograms or
-  the summaries alone, by its `type`, may;
-- no rule may be named as a series of another rule's histogram or summary —
-  `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
-  `foo_count` beside a summary `foo`;
-- `labels_from` is a key of a `jq` or `yq` rule, and its expression
-  compiles;
-- a rule names each of its labels once: a second label of a name is refused,
-  as `collector "c" metric "m" has two labels named "env"; a series has one
-  label of a name, so remove one of them or give it another name`, since
-  the later of the two would be the one a series gets and the earlier lost;
-- a label name of a rule, of `transform.labels` or that
-  `transform.rename_labels` renames to may be no longer than
+  two places, but a family has one type. A `prometheus` rule without a
+  `type` keeps the series' own type and is not compared.
+- No two rules of a collector may be
+  [the same rule](#two-rules-that-are-the-same-rule). Each would produce
+  every series the other produces, and every scrape would fail on a
+  duplicate series.
+- Under `prometheus`, no rule's `expression` may match the `name` of a
+  metric that another rule passes on, where the two give its series
+  [one name and the same labels](#a-name-and-a-pattern-that-matches-it),
+  because each would produce every series of that metric. A rule that is
+  only for histograms or only for summaries, by its `type`, is allowed.
+
+**Expressions and rule settings**
+
+- Every expression must compile in its transform's language: jq and yq
+  (including `items`, and undefined functions and variables), regular
+  expressions, CSS selectors, XPath with the collector's namespaces, and the
+  patterns of a `prometheus` transform, `include` and `exclude`.
+- A `regex` rule must have a capture group, which is its value, and at most
+  one group named `value`. A `regex` label must name a capture group that
+  the regex has.
+- A rule's [`time_format`](#reading-a-date-or-a-time-as-the-value) must be
+  `rfc3339`, `rfc1123` or a layout with a year, a month and a day, without
+  surrounding blanks and with `PM` beside the hour of a 12-hour clock. Its
+  `time_zone` must be a zone the exporter knows. `time_zone` without
+  `time_format`, `time_format` together with `value_map`, and `time_format`
+  on a `python` or `prometheus` rule are refused.
+- A `prometheus` transform's `rename` targets must be metric names.
+  `include`, `exclude` and `rename` apply only to a `prometheus` transform
+  without `metrics` rules, and an entry of `include` or `exclude` must not
+  be the empty string or [only blanks](#collector-wide-labels).
+- A `prometheus` rule's `expression` must not be only blanks, and the rule
+  must have a `name` or an `expression`, which is how it says which metrics
+  it passes on.
+- A label of a `python` rule must not set `value`. The script sets its
+  labels itself, and a constant for every series belongs in
+  [`transform.labels`](#collector-wide-labels).
+- A `python` rule must have a `name`, the script's series it refers to, and
+  no `type`, `description`, `required` or `error_mode`, which the script
+  determines for its series itself. Each of its labels must set
+  `truncate: true`
+  ([What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for)).
+- A rule's [`histogram` block](#histograms-from-a-list-of-values) must be on
+  a rule of `type: histogram` of a transform other than `prometheus` and
+  `python`. Its `buckets` must be 1 to 100 finite numbers in increasing
+  order, each once, without `+Inf`, and such a rule must have no label named
+  `le`. `type: histogram` without the block is refused for every transform
+  except `prometheus`, with an error that says the block is how to count
+  values into a histogram.
+- A [`derived`](#derived-series) entry must have a name that no rule of the
+  collector and no other entry has, the type `gauge`, `counter` or
+  `untyped`, and exactly one of `sum`, `difference` and `ratio`. Each
+  operation reads counters, gauges or untyped families that are rules of the
+  collector or earlier entries. `by` is allowed only with a `sum` of one
+  family, and a `hidden` entry must be read by a later one.
+- `labels_from` is a key of a `jq` or `yq` rule, and its expression must
+  compile.
+
+**Labels**
+
+- `transform.labels` and `rename_labels` must give label names: classic
+  ones, unless `name_escaping` escapes the others. Two renames must not
+  target the same label. A key of `transform.labels` or a rule's label that
+  `rename_labels` renames or `remove_labels` removes may be any name that is
+  not only blanks, because it is never exported.
+- No label name, of a rule, `transform.labels`, `rename_labels` or a static
+  target, may start with `__`, unless `rename_labels` renames it or
+  `remove_labels` removes it. Prometheus reserves such names for its own
+  labels: it refuses `__name__` in what it scrapes and drops the others. A
+  series whose labels still get such a name, from a Python script or a
+  passthrough, fails validation.
+- A histogram must not be given a label `le` of its own, nor a summary a
+  label `quantile`, by a rule's label, `transform.labels` or a pre-script,
+  because its buckets or quantiles carry that label. The scrape fails and
+  names the series, as in `metric "h" is a histogram and has a label le of
+  its own, which its buckets carry; name the label something else`. On any
+  other series, `le` and `quantile` are ordinary labels.
+- A rule must name each of its labels once. A second label with the same
+  name is refused, as `collector "c" metric "m" has two labels named "env";
+  a series has one label of a name, so remove one of them or give it another
+  name`, because a series would get the later of the two and the earlier
+  would be lost.
+- A label name of a rule, of `transform.labels`, or one that
+  `transform.rename_labels` renames to must not be longer than
   `limits.max_label_name_length` as `name_escaping` exports it, unless
   `transform.rename_labels` renames it or `transform.remove_labels` removes
-  it;
-- a `description` may be no longer than `limits.max_help_length`, and a
-  static label value, of a rule or of `transform.labels`, no longer than
-  `limits.max_label_value_length` — unless the label is cut at the scrape,
-  which it is where it has `truncate: true` or any rule of the same metric
-  name sets `truncate: true` on a label of that name, a `value_map` maps it
-  to something shorter, or `remove_labels` drops it. A
-  value that holds `{{param_...}}` placeholders is measured with each
-  replaced by its default, and by nothing where it has none. Where a
-  `value_map` of the rule's name maps such a value of a rule's label, it is
-  measured as mapped: a `"*"` entry longer than the limit is refused whatever
-  the defaults, since every value the probe gives that the map does not list
-  becomes it; a longer entry the map lists is refused only where the
-  defaults give its key, and otherwise loads, failing the scrape of a probe
-  that gives that key. A `prometheus` rule without a `name` keeps each
-  series' own name, and a `value_map` or `truncate: true` of a rule named as
-  one of those series applies to it: its static label is measured as it is,
-  for the names no rule has, and besides as each other rule's name its
-  `expression` matches maps and cuts it — matched as at the scrape,
-  unanchored unless the pattern says otherwise, against the name the target
-  wrote, before `metrics_prefix` and `name_escaping`;
-- the labels every series of a collector gets, those of `transform.labels`
-  and a rule's static labels, each name once and as `remove_labels` and
-  `rename_labels` leave them, may be no more than
-  `limits.max_labels_per_metric` — `collector "c" metric "m" gives each of
-  its series 21 labels, its static labels and transform.labels, more than
-  limits.max_labels_per_metric 20`. A label that a series may not have is
+  it.
+- A `description` must not be longer than `limits.max_help_length`.
+- A static label value, of a rule or of `transform.labels`, must not be
+  longer than `limits.max_label_value_length`, unless the label is cut at
+  the scrape. It is cut where it has `truncate: true`, where any rule of the
+  same metric name sets `truncate: true` on a label of that name, where a
+  `value_map` maps it to something shorter, or where `remove_labels` drops
+  it.
+  - A value that contains `{{param_...}}` placeholders is measured with each
+    one replaced by its default, or by nothing where it has none.
+  - Where a `value_map` of the rule's name maps such a value of a rule's
+    label, the value is measured as mapped. A `"*"` entry longer than the
+    limit is refused whatever the defaults, because every value the probe
+    gives that the map does not list becomes it. A longer entry that the map
+    lists is refused only where the defaults give its key. Otherwise it
+    loads, and fails the scrape of a probe that gives that key.
+  - A `prometheus` rule without a `name` keeps each series' own name, and a
+    `value_map` or `truncate: true` of a rule named like one of those series
+    applies to it. Its static label is measured as it is, for the names no
+    rule has, and also as mapped and cut by each other rule whose name its
+    `expression` matches. The match is made as at the scrape: unanchored
+    unless the pattern says otherwise, against the name the target wrote,
+    before `metrics_prefix` and `name_escaping`.
+- The labels that every series of a collector gets, those of
+  `transform.labels` and a rule's static labels, each name counted once and
+  as `remove_labels` and `rename_labels` leave them, must not number more
+  than `limits.max_labels_per_metric`: `collector "c" metric "m" gives each
+  of its series 21 labels, its static labels and transform.labels, more than
+  limits.max_labels_per_metric 20`. A label that a series might not have is
   not counted: a value with a `{{param_...}}` placeholder, which a probe may
-  fill with nothing, a static label of a name some `value_map` may map to
-  `""`, and a label an `expression` gives; nor are the labels the exporter
-  adds afterwards, such as a static target's;
-- an explicit `decoder.type` must be one the transform
-  [reads](#collectors);
-- a setting must belong to the decoder or transform the collector has:
-  `transform.script` to a `python` transform, `transform.libraries` and
-  `required_libs` to a collector with a `python` transform or a `pre_script`,
-  `response.csv` to the `csv` decoder, `response.graphite` to the `graphite`
-  decoder, `response.yaml` to the `yaml` decoder — each may also be left to
-  each response with `auto` — and
-  `response.namespaces` to an `xpath` transform. Anywhere else the setting
-  would be ignored, so it is refused, naming it and the decoder or transform
-  the collector has instead;
-- `response.csv.delimiter` is one character, and not a double quote or a line
-  break. For tab-separated values write `delimiter: "\t"` in double quotes,
-  where YAML reads `\t` as the tab character; in single quotes, or
-  unquoted, `\t` is a backslash and a `t`, and is refused;
-- a `{{param_...}}` placeholder stands only where a probe's parameters are
-  filled in: in the [request](REQUESTS.md#in-the-body-headers-and-query) and
-  in a [fixed label value](REQUESTS.md#in-label-values), of
-  `transform.labels` or of a rule's static label. In any other
-  setting of a collector — `request.bearer_token`, `basic_auth`,
-  `tls.server_name`, a `value_map`, a label's name — it would be
-  sent or exported as written, so it is refused, naming the field. A Python
-  script, an expression and a description are not searched: there the text
-  is the script's, the expression's or the description's own;
-- a placeholder in a label value is well formed: `{{param_<name>}}` or
+  fill with nothing; a static label of a name that some `value_map` may map
+  to `""`; and a label that an `expression` gives. The labels the exporter
+  adds afterwards, such as a static target's, are not counted either.
+
+**Decoders, settings and placeholders**
+
+- An explicit `decoder.type` must be one the transform
+  [reads](#collectors).
+- A setting must belong to the decoder or transform the collector has:
+  `transform.script` to a `python` transform; `transform.libraries` and
+  `required_libs` to a collector with a `python` transform or a
+  `pre_script`; `response.csv` to the `csv` decoder; `response.graphite` to
+  the `graphite` decoder; `response.yaml` to the `yaml` decoder (each of
+  these three is also accepted when the decoder is left to each response
+  with `auto`); and `response.namespaces` to an `xpath` transform. Anywhere
+  else the setting would be ignored, so it is refused, with an error that
+  names it and the decoder or transform the collector has instead.
+- `response.csv.delimiter` must be one character, and not a double quote or
+  a line break. For tab-separated values write `delimiter: "\t"` in double
+  quotes, where YAML reads `\t` as the tab character. In single quotes, or
+  unquoted, `\t` is a backslash and a `t`, and is refused.
+- A `{{param_...}}` placeholder is allowed only where a probe's parameters
+  are filled in: in the
+  [request](REQUESTS.md#in-the-body-headers-and-query) and in a
+  [fixed label value](REQUESTS.md#in-label-values), of `transform.labels` or
+  of a rule's static label. In any other setting of a collector
+  (`request.bearer_token`, `basic_auth`, `tls.server_name`, a `value_map`, a
+  label's name) it would be sent or exported as written, so it is refused,
+  with an error that names the field. A Python script, an expression and a
+  description are not searched, because the text there belongs to the
+  script, the expression or the description.
+- A placeholder in a label value must be well formed: `{{param_<name>}}` or
   `{{param_<name>:<default>}}`, without a space after the braces and without
-  a filter, which a label value does not take;
-- a limit is a whole number from 0: a negative one, as in
+  a filter, which a label value does not take.
+
+**Limits**
+
+- A limit must be a whole number from 0. A negative one, as in
   `limits.max_metrics: -1`, and one with a fraction, as in
-  `max_concurrent_probes: 1.9`, are refused naming the key and the value
-  rather than quietly becoming the default or losing the fraction. 0, like a
-  limit left out, is the default. Written with a point or an exponent, as
-  `1e3` or `4.0`, a limit is the whole number it equals, read by its digits,
-  and one too large for an int64, as `1e19`, or even for a floating-point
-  number, as `1e400`, is refused naming the key, the number and the range. [Sizes](#sizes) are held to the same;
-- `limits.max_output_bytes`, when it is set, is at least 38 bytes, which a
-  [Python script](PYTHON.md#how-scripts-run) that emits no metric answers
-  in: a smaller one is refused, in a collector with a script and in one
-  without, as `collector "c" limits.max_output_bytes is 26, and a Python
-  script that emits no metric answers in 38 bytes, so no transform's script
-  could answer within it; set at least 38, or leave it out, or 0, for the
-  default, 1MiB`. It once loaded and failed every scrape of a collector
-  whose transform is a script;
-- a mapping key YAML reads as no key at all — `null`, `~`, or nothing before
-  the colon, as in `value_map: {null: 0}` — is refused, since the entry would
-  be dropped; quote it, `"null"`, when that text is the key;
-- a value YAML reads as none — nothing after the colon or the dash, `null`
-  or `~` — is refused wherever the file takes a value: a key's, an entry of
-  a list, a value of a mapping. YAML hands the exporter nothing for it, so a
-  key written `ttl:` was the key left out, a bare `-` among the
-  `metrics` was no rule at all, with nothing to say that the rule meant
-  there is missing, and `value_map: {up: }` mapped `up` to 0. The error
-  names the line and the place, and says what to do: `line 12: metrics entry
-  1 is a dash with nothing after it, which YAML reads as no value at all, so
-  the entry would be left out without a word; write a metric rule there, or
-  take the entry out`, or `line 7: ttl has nothing after its colon, which
-  YAML reads as no value at all; write its value, or take the key out`. To
-  leave a key at its default, leave it out; a key of text may also be
-  written `""`, which is the key left out
-  ([Editor support](#editor-support)), and a block that sets nothing `{}`.
-  A file's own top-level `x-` keys hold what they like;
-- a value is written as the kind its key takes. YAML reads an unquoted
+  `max_concurrent_probes: 1.9`, are refused with an error that names the key
+  and the value, instead of silently becoming the default or losing the
+  fraction. 0, like an omitted limit, means the default. A limit written
+  with a point or an exponent, such as `1e3` or `4.0`, is the whole number
+  it equals, read by its digits. One too large for an int64, such as `1e19`,
+  or even for a floating-point number, such as `1e400`, is refused with an
+  error that names the key, the number and the range. [Sizes](#sizes) follow
+  the same rules.
+- `limits.max_output_bytes`, when set, must be at least 38 bytes, which is
+  what a [Python script](PYTHON.md#how-scripts-run) that emits no metric
+  answers in. A smaller value is refused, in a collector with a script and
+  in one without, as `collector "c" limits.max_output_bytes is 26, and a
+  Python script that emits no metric answers in 38 bytes, so no transform's
+  script could answer within it; set at least 38, or leave it out, or 0, for
+  the default, 1MiB`. It used to load and then fail every scrape of a
+  collector whose transform is a script.
+
+**YAML values**
+
+- A mapping key that YAML reads as no key at all (`null`, `~`, or nothing
+  before the colon, as in `value_map: {null: 0}`) is refused, because the
+  entry would be dropped. Quote it, `"null"`, when that text is the key.
+- A value that YAML reads as none (nothing after the colon or the dash,
+  `null` or `~`) is refused wherever the file takes a value: for a key, an
+  entry of a list, or a value of a mapping. YAML gives the exporter nothing
+  for it, so a key written `ttl:` used to count as omitted, a bare `-` among
+  the `metrics` was no rule at all, with nothing to report the missing rule,
+  and `value_map: {up: }` mapped `up` to 0. The error names the line and the
+  place and says what to do: `line 12: metrics entry 1 is a dash with
+  nothing after it, which YAML reads as no value at all, so the entry would
+  be left out without a word; write a metric rule there, or take the entry
+  out`, or `line 7: ttl has nothing after its colon, which YAML reads as no
+  value at all; write its value, or take the key out`. To leave a key at its
+  default, omit it. A key of text may also be written `""`, which counts as
+  omitted ([Editor support](#editor-support)), and a block that sets nothing
+  as `{}`. A file's own top-level `x-` keys may hold anything.
+- A value must be written as the kind its key takes. YAML reads an unquoted
   `true` or `False` as a boolean and `1`, `1.5e3` or `0x1F` as a number, and
-  hands a key of text the text of whatever is written. Where the text is
-  free — a `description`, an `expression`, a label's `value`, a header, a
-  query parameter, a body, a path, a `value_map`'s keys and a label's
-  `value_map` texts — that is what was meant, and `value: 1`,
-  `description: 404` and `value_map: {1: running}` need no quotes. A key
-  that takes a name, one of a few words, a host or a single character takes
-  text alone: a collector's, a rule's and a label's `name`,
-  `metrics_prefix`, `name_escaping`, `request.type`, `method`, `rpc` and
-  `descriptors`, `decoder.type`, `transform.type`, the error policies, a
-  rule's `type`, `error_mode` and `time_zone`, `response.csv.delimiter`,
-  `response.graphite.value` and `invalid_lines`, an entry of
-  `collector_files`, `redirect_trusted_hosts`, `accept_codes`, `retry.codes`
-  and the Python libraries, and a static target's `name` and
-  `request.method`. A number or a boolean there was read as its text, so
-  that `name: true` was the metric named `true`, and is refused: `line 9:
-  name is written true, which YAML reads as a boolean, not as text; to use
-  that text there, quote it: "true"`. A key that takes one of a few words
-  is told the words, which quoting a number would not make it one of: `line
-  5: type is written 1, which YAML reads as a number, not as text; write one
-  of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`. And a boolean is `true` or
-  `false`.
-  `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
-  text now, to an editor and wherever the exporter takes text — a label
-  value of `NO`, for Norway, is `NO` and not `false` — so a key that takes a
-  boolean refuses them, quoted or not, where it used to read them as one:
-  `line 3: enabled is written yes, which YAML reads as text, not as a
-  boolean; write true`. A date written without quotes, `2026-10-06`, is
-  text as well, wherever text is taken, and a number or a boolean in quotes
-  is text, which no key of numbers or booleans takes.
+  gives a key of text the text of whatever is written.
+  - Where the text is free (a `description`, an `expression`, a label's
+    `value`, a header, a query parameter, a body, a path, a `value_map`'s
+    keys and a label's `value_map` texts), that is what was meant, so
+    `value: 1`, `description: 404` and `value_map: {1: running}` need no
+    quotes.
+  - A key that takes a name, one of a few words, a host or a single
+    character accepts text only: a collector's, a rule's and a label's
+    `name`, `metrics_prefix`, `name_escaping`, `request.type`, `method`,
+    `rpc` and `descriptors`, `decoder.type`, `transform.type`, the error
+    policies, a rule's `type`, `error_mode` and `time_zone`,
+    `response.csv.delimiter`, `response.graphite.value` and `invalid_lines`,
+    an entry of `collector_files`, `redirect_trusted_hosts`, `accept_codes`,
+    `retry.codes` and the Python libraries, and a static target's `name` and
+    `request.method`. A number or a boolean there used to be read as its
+    text, so that `name: true` was the metric named `true`. It is now
+    refused: `line 9: name is written true, which YAML reads as a boolean,
+    not as text; to use that text there, quote it: "true"`.
+  - A key that takes one of a few words is told the words, because quoting a
+    number would not make it one of them: `line 5: type is written 1, which YAML reads as a number, not as text; write one
+    of dns, graphite, grpc, http, icmp, kubernetes, ldap, localfile, ntp, redis, s3file, snmp, sql, sshexec, sshfile, tcp, tlscert`.
+  - A boolean is `true` or `false`. `yes`, `no`, `on`, `off`, `y` and `n`
+    were booleans in YAML 1.1 and are text now, to an editor and wherever
+    the exporter takes text: a label value of `NO`, for Norway, is `NO` and
+    not `false`. A key that takes a boolean therefore refuses them, quoted
+    or not, where it used to read them as booleans: `line 3: enabled is
+    written yes, which YAML reads as text, not as a boolean; write true`.
+  - A date written without quotes, `2026-10-06`, is also text wherever text
+    is taken. A number or a boolean in quotes is text, which no key of
+    numbers or booleans accepts.
 
 The last four look at the values YAML gives the exporter. With a
 [merge key](#reusing-settings-with-yaml-anchors), a key the mapping sets

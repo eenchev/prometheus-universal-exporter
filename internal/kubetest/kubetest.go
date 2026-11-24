@@ -165,7 +165,8 @@ func (s *Server) Expire(path string, inconsistent bool) {
 
 // HoldFrom has the server hold the answer to its n-th request, counted from
 // 1 since it started, and to every one after it, until the client gives up,
-// so a test of a deadline does not hang on how fast the machine is.
+// so a test of a deadline does not hang on how fast the machine is. A held
+// request is never answered: the connection is closed without a response.
 func (s *Server) HoldFrom(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,8 +200,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	if hold {
+		// Returning would answer an empty 200, which a client whose
+		// giving up raced it could read as an empty page: the
+		// connection is closed without an answer instead.
 		<-r.Context().Done()
-		return
+		panic(http.ErrAbortHandler)
 	}
 	if token == "" {
 		raw, _ := os.ReadFile(filepath.Join(s.Dir, "token"))

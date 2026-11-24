@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -386,243 +387,313 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s.debugReportsRefused(), http.StatusForbidden)
 		return
 	}
-	// A debug probe refused below for what it asked is counted invalid; one
-	// that is served counts as its trip ended (serveDebugProbe).
-	served := false
-	if debug {
-		defer func() {
-			if !served {
-				s.countDebugRun(debugKindProbe, debugInvalid)
-			}
-		}()
+	p, err := s.readProbe(query)
+	if err != nil {
+		// A debug probe refused for what it asked is counted invalid; one
+		// that is served counts as its trip ended (serveDebugProbe).
+		if debug {
+			s.countDebugRun(debugKindProbe, debugInvalid)
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	if debug {
+		s.serveProbeDebug(w, r, p)
+		return
+	}
+	if hook := probeConfigReadHook.Load(); hook != nil {
+		(*hook)(p.name)
+	}
+	run := s.startProbe(r, p, start)
+	if run.answeredFromCache(w) {
+		return
+	}
+	run.budget, run.budgetSource = s.probeDeadline(r.Header, p.overrides)
+	if !coalesceProbes(p.c) || run.key == "" {
+		// No key, when the collector's definition could not be
+		// fingerprinted, is no identity to share a trip by: every such
+		// probe would share one.
+		run.alone(w)
+		return
+	}
+	run.shared(w)
+}
+
+// probeQuery is what a probe's query asks for, read and checked.
+type probeQuery struct {
+	followed     *followedConfig
+	cfg          *model.Config
+	c            *model.Collector
+	name, target string
+	logTarget    string
+	overrides    fetch.RequestOverrides
+	requestURL   string
+	method       string
+}
+
+// readProbe reads and checks a probe's query. Its error is the caller's
+// mistake, answered 400 before the target is contacted or anything is
+// counted.
+func (s *Server) readProbe(query url.Values) (*probeQuery, error) {
 	// One target and one collector, neither longer than a probe parameter may
 	// be (probeparams.go): nothing below reads a second value, and nothing
 	// below is then given a name too long to remember.
 	if err := checkProbeParams(query, probeIdentityParam); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	target := query.Get("target")
-	name := query.Get("collector")
-	if name == "" {
-		http.Error(w, "the collector parameter is required: /probe?collector=<name>&target=<target>", http.StatusBadRequest)
-		return
+	p := &probeQuery{target: query.Get("target"), name: query.Get("collector")}
+	if p.name == "" {
+		return nil, errors.New("the collector parameter is required: /probe?collector=<name>&target=<target>")
 	}
 	// The configuration is read with its generation, which tells below which
 	// statistics the probe counts in (statsSince). The collector is found by
 	// its name, where the followed configuration keeps its position
 	// (collectorOf), so its collectors are not scanned for every probe.
-	followed := s.reconcile()
-	cfg := followed.config
-	c := followed.collectorOf(cfg, name)
+	p.followed = s.reconcile()
+	p.cfg = p.followed.config
+	c := p.followed.collectorOf(p.cfg, p.name)
 	if c == nil {
-		http.Error(w, fmt.Sprintf("unknown collector %q", name), http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("unknown collector %q", p.name)
 	}
+	p.c = c
 	// Whether a target is needed, and what it may be, is the request type's
 	// to say: http needs a URL, localfile a file under its root, or nothing.
-	if err := fetch.CheckTarget(c, target, false); err != nil {
+	if err := fetch.CheckTarget(c, p.target, false); err != nil {
 		if errors.Is(err, fetch.ErrMissingTarget) {
-			http.Error(w, fmt.Sprintf("the target parameter is required for collector %q, whose request.type is %s", name, c.Request.Type), http.StatusBadRequest)
-			return
+			return nil, fmt.Errorf("the target parameter is required for collector %q, whose request.type is %s", p.name, c.Request.Type)
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	logTarget := fetch.DisplayTarget(c, target)
+	p.logTarget = fetch.DisplayTarget(c, p.target)
 	// The same holds for the parameters that change the request: each once,
 	// but for header_<name>, and none over-long.
 	if err := checkProbeParams(query, probeRequestParam(c)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
 	// The request parameters are resolved before anything is counted, so every
 	// counter this probe raises lands on the individual request as well as on
 	// the collector rather than only on the collector.
-	overrides, err := fetch.ParseRequestOverrides(query)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var err error
+	if p.overrides, err = fetch.ParseRequestOverrides(query); err != nil {
+		return nil, err
 	}
 	// Each request type accepts its own probe parameters; one that belongs to
 	// another type is a mistake, reported before anything else happens.
 	if err := fetch.CheckOverrideParams(c, query); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
 	// A forwarded header_<name> value Go would refuse to send is the
 	// caller's mistake too, not the target's failure (probeparams.go).
 	if err := checkForwardedHeaderParams(query, c.Request); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
 	// A path parameter the scrape did not supply and that has no default is the
 	// caller's mistake, reported before the target is contacted or anything is
 	// counted against it.
-	if err := fetch.CheckPathParams(c, overrides); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if err := fetch.CheckPathParams(c, p.overrides); err != nil {
+		return nil, err
 	}
-	var requestURL string
-	method := fetch.RequestMethodFor(c, overrides)
-	if label, labelErr := fetch.RequestLabelFor(target, c, overrides); labelErr == nil {
-		requestURL = label
+	p.method = fetch.RequestMethodFor(c, p.overrides)
+	if label, labelErr := fetch.RequestLabelFor(p.target, c, p.overrides); labelErr == nil {
+		p.requestURL = label
 	}
-	if debug {
-		// Counted nowhere, cached nowhere, shared with nobody
-		// (probedebug.go).
-		forwarded := forwardedHeaders(r, c.Request)
-		budget, budgetSource := s.probeDeadline(r.Header, overrides)
-		p := debugProbe{
-			upstreamProbe: upstreamProbe{
-				collector: c, target: target, logTarget: logTarget, overrides: overrides,
-				forwarded: forwarded, budget: budget, budgetSource: budgetSource,
-			},
-			requestURL: requestURL, method: method, generation: followed.generation, kind: debugKindProbe,
+	return p, nil
+}
+
+// serveProbeDebug serves a debug probe: counted nowhere, cached nowhere,
+// shared with nobody (probedebug.go).
+func (s *Server) serveProbeDebug(w http.ResponseWriter, r *http.Request, p *probeQuery) {
+	c := p.c
+	forwarded := forwardedHeaders(r, c.Request)
+	budget, budgetSource := s.probeDeadline(r.Header, p.overrides)
+	d := debugProbe{
+		upstreamProbe: upstreamProbe{
+			collector: c, target: p.target, logTarget: p.logTarget, overrides: p.overrides,
+			forwarded: forwarded, budget: budget, budgetSource: budgetSource,
+		},
+		requestURL: p.requestURL, method: p.method, generation: p.followed.generation, kind: debugKindProbe,
+	}
+	if model.UsesCache(c) || c.FailureBackoff != nil {
+		// The key the same probe without debug has: debug is no
+		// parameter of the request (probeKeyQuery).
+		key := s.probeCacheKey(p.cfg, c, p.target, probeKeyQuery(p.name, p.target, p.overrides), forwarded)
+		if model.UsesCache(c) {
+			d.staleKey = key
 		}
-		if model.UsesCache(c) || c.FailureBackoff != nil {
-			// The key the same probe without debug has: debug is no
-			// parameter of the request (probeKeyQuery).
-			key := s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
-			if model.UsesCache(c) {
-				p.staleKey = key
-			}
-			if c.FailureBackoff != nil {
-				p.backoffKey = key
-			}
+		if c.FailureBackoff != nil {
+			d.backoffKey = key
 		}
-		served = true
-		s.serveDebugProbe(w, r, p)
-		return
 	}
-	if hook := probeConfigReadHook.Load(); hook != nil {
-		(*hook)(name)
-	}
-	st := s.statsSince(followed.generation, name)
-	rec := s.probeRecorderFor(st, name, requestURL, method)
+	s.serveDebugProbe(w, r, d)
+}
+
+// probeRun is a probe being answered, once its query has been read.
+type probeRun struct {
+	s *Server
+	*probeQuery
+	r     *http.Request
+	start time.Time
+	rec   statsRecorder
+	ctx   context.Context
+	// parent is the caller's trace, and spans the probe's own, nil but
+	// while otlp.traces is on.
+	parent traceParent
+	spans  *tripSpans
+	// traced is how the probe's trace ends.
+	traced    probeTraceEnd
+	forwarded http.Header
+	keyQuery  url.Values
+	// key is the probe's identity: the cache's and the shared trip's.
+	key string
+	// cacheKey is key when the collector caches its results.
+	cacheKey string
+	// budget is how long the trip may take, and budgetSource what said so.
+	budget       time.Duration
+	budgetSource string
+}
+
+// startProbe counts the probe and begins its trace.
+func (s *Server) startProbe(r *http.Request, p *probeQuery, start time.Time) *probeRun {
+	run := &probeRun{s: s, probeQuery: p, r: r, start: start}
+	st := s.statsSince(p.followed.generation, p.name)
+	run.rec = s.probeRecorderFor(st, p.name, p.requestURL, p.method)
 	// What the probe writes under the collector's name at its end goes
 	// nowhere once a reload has removed or changed the collector read here
 	// (configRead).
-	rec.read = s.readAt(followed.generation)
-	rec.update(func(x *serverStats) { x.probes++ })
+	run.rec.read = s.readAt(p.followed.generation)
+	run.rec.update(func(x *serverStats) { x.probes++ })
 	// With otlp.traces on, the probe records its trace. The trace is exported
 	// at the end when a sampling rule keeps it (otlptracesampling.go). A
 	// caller's traceparent makes the probe a span of the caller's trace; its
 	// sampled flag and tracestate are read for the rules and the spans.
-	var parent traceParent
-	if otlpTracesOn(cfg.OTLP) || cfg.OTLP.Traces.Propagate {
-		parent = callerTrace(r.Header)
+	if otlpTracesOn(p.cfg.OTLP) || p.cfg.OTLP.Traces.Propagate {
+		run.parent = callerTrace(r.Header)
 	}
-	ctx, spans := beginTrace(r.Context(), cfg.OTLP, parent)
+	run.ctx, run.spans = beginTrace(r.Context(), p.cfg.OTLP, run.parent)
 	// With otlp.traces.propagate, the trip's requests carry the probe's
 	// trace, or with the trace export off the caller's as it came.
-	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), parent, r.Header)
-	var traced probeTraceEnd
-	// finish counts the probe's outcome and ends its per-request record. A
-	// probe that the target policy refused, or whose caller went away, leaves
-	// no new tracked request. finish is called once the answer is ready,
-	// before it is written. It also ends the probe's trace then, and traced
-	// records that end. The time a caller takes to read the answer is not
-	// part of the probe's duration or its span's. It returns the probe's
-	// duration, which report_failures answers (probereport.go).
-	finish := func(ok, refused bool) time.Duration {
-		ready := time.Now()
-		duration := ready.Sub(start)
-		if spans != nil {
-			s.endProbeTrace(cfg.OTLP, spans, c, logTarget, r.Method, start, ready, parent, traced)
-		}
-		s.load.addProbe(duration)
-		// Into the collector's statistics alone, as the trip histogram's:
-		// a request's has no histogram.
-		observeProbe(rec.collector, duration, spans.traceLink())
-		rec.update(func(x *serverStats) {
-			if ok {
-				x.success++
-			}
-			x.lastDuration = duration.Seconds()
-		})
-		rec.commit(refused)
-		return duration
+	run.ctx = withPropagation(run.ctx, p.cfg.OTLP, run.spans.traceLink(), run.parent, r.Header)
+	run.forwarded = forwardedHeaders(r, p.c.Request)
+	run.keyQuery = probeKeyQuery(p.name, p.target, p.overrides)
+	run.key = s.probeCacheKey(p.cfg, p.c, p.target, run.keyQuery, run.forwarded)
+	if model.UsesCache(p.c) {
+		run.cacheKey = run.key
 	}
-	forwarded := forwardedHeaders(r, c.Request)
-	keyQuery := probeKeyQuery(name, target, overrides)
-	key := s.probeCacheKey(cfg, c, target, keyQuery, forwarded)
-	// recentKey is what the status page records the probe under, made from
-	// the probe's key once it is known to be answered.
-	recentKey := func() recentProbeKey { return s.recent.keyOf(key, c, logTarget, keyQuery) }
-	var cacheKey string
-	if model.UsesCache(c) {
-		cacheKey = key
+	return run
+}
+
+// finish counts the probe's outcome and ends its per-request record. A
+// probe that the target policy refused, or whose caller went away, leaves
+// no new tracked request. finish is called once the answer is ready, before
+// it is written. It also ends the probe's trace then, as traced says. The
+// time a caller takes to read the answer is not part of the probe's
+// duration or its span's. It returns the probe's duration, which
+// report_failures answers (probereport.go).
+func (run *probeRun) finish(ok, refused bool) time.Duration {
+	ready := time.Now()
+	duration := ready.Sub(run.start)
+	if run.spans != nil {
+		run.s.endProbeTrace(run.cfg.OTLP, run.spans, run.c, run.logTarget, run.r.Method, run.start, ready, run.parent, run.traced)
 	}
-	if model.CacheTTL(c) > 0 {
-		mark := time.Now()
-		if cached, fetched, ok := s.cache.Get(cacheKey, mark); ok {
-			rec.update(func(x *serverStats) {
-				x.cacheHits++
-				x.emitted += uint64(len(cached.Metrics))
-			})
-			// The names were checked before the result was stored.
-			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
-			hit := &probeResult{status: http.StatusOK, metrics: &answer, ok: true, outcome: probeCached}
-			series := len(answer.Metrics)
-			if reportsProbe(c, hit) {
-				series = reportedSeries(hit)
-			}
-			if spans != nil {
-				spans.step("cache", "hit", mark, time.Now(), "answered from the response cache, fetched "+fetched.UTC().Format(time.RFC3339))
-				traced = probeTraceEnd{status: http.StatusOK, series: series, cached: true}
-			}
-			elapsed := finish(true, false)
-			s.noteProbe(rec.read, recentKey(), recentProbe{
-				at: start, duration: time.Since(start), result: probeCached,
-				status: http.StatusOK, series: series,
-			})
-			writeProbeAnswer(w, r, c, hit, elapsed, transform.UTF8Names(c))
-			s.queueProbeOTLP(answer, c, logTarget, fetched)
-			return
+	run.s.load.addProbe(duration)
+	// Into the collector's statistics alone, as the trip histogram's: a
+	// request's has no histogram.
+	observeProbe(run.rec.collector, duration, run.spans.traceLink())
+	run.rec.update(func(x *serverStats) {
+		if ok {
+			x.success++
 		}
+		x.lastDuration = duration.Seconds()
+	})
+	run.rec.commit(refused)
+	return duration
+}
+
+// recentKey is what the status page records the probe under, made from the
+// probe's key once it is known to be answered.
+func (run *probeRun) recentKey() recentProbeKey {
+	return run.s.recent.keyOf(run.key, run.c, run.logTarget, run.keyQuery)
+}
+
+// answeredFromCache answers the probe from the response cache, and says
+// whether it did.
+func (run *probeRun) answeredFromCache(w http.ResponseWriter) bool {
+	s, c := run.s, run.c
+	if model.CacheTTL(c) <= 0 {
+		return false
+	}
+	mark := time.Now()
+	cached, fetched, ok := s.cache.Get(run.cacheKey, mark)
+	if !ok {
 		// A miss is counted when the trip goes to the target (probeTrip);
 		// a probe that shares another's trip is counted as coalesced.
-		spans.step("cache", "miss", mark, time.Now(), "")
+		run.spans.step("cache", "miss", mark, time.Now(), "")
+		return false
 	}
-	budget, budgetSource := s.probeDeadline(r.Header, overrides)
-	// upstream is the trip to the target, counted on trip.
-	upstream := func(ctx context.Context, trip statsRecorder) *probeResult {
-		return s.probeUpstream(ctx, upstreamProbe{
-			collector: c, target: target, logTarget: logTarget, overrides: overrides,
-			forwarded: forwarded, rec: trip, cacheKey: cacheKey,
-			budget: budget, budgetSource: budgetSource,
-			// Probes of one target that differ in their parameters or
-			// forwarded headers (tenants, paths) fail separately in the
-			// log. The collector name is the configuration's, which the
-			// probe's matches. The name read from the query is part of the
-			// request line, and the failure log entry, kept for an hour,
-			// would keep it whole, target and all.
-			failure: probeFailureKey(c.Name, target, key), requestURL: requestURL,
-			// A probe backs off by the identity it shares a trip by.
-			backoffKey: key,
-		})
+	run.rec.update(func(x *serverStats) {
+		x.cacheHits++
+		x.emitted += uint64(len(cached.Metrics))
+	})
+	// The names were checked before the result was stored.
+	answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+	hit := &probeResult{status: http.StatusOK, metrics: &answer, ok: true, outcome: probeCached}
+	series := len(answer.Metrics)
+	if reportsProbe(c, hit) {
+		series = reportedSeries(hit)
 	}
-	// No key, when the collector's definition could not be fingerprinted,
-	// is no identity to share a trip by: every such probe would share one.
-	if !coalesceProbes(c) || key == "" {
-		// The trip is this probe's alone, and is counted where the probe is.
-		result := upstream(ctx, rec)
-		if spans != nil {
-			traced = probeTraceEndOf(result)
-			reportedTrace(c, result, &traced)
-		}
-		// A trip its caller abandoned ends without the target policy's
-		// verdict, as a shared one every caller left does below: counted on
-		// the collector, and no new request tracked.
-		elapsed := finish(result.ok, result.refused || result.abandoned)
-		if !result.abandoned {
-			s.noteProbe(rec.read, recentKey(), reportedRecent(c, result, result.recentProbe(start, false)))
-		}
-		writeProbeAnswer(w, r, c, result, elapsed, transform.UTF8Names(c))
-		return
+	if run.spans != nil {
+		run.spans.step("cache", "hit", mark, time.Now(), "answered from the response cache, fetched "+fetched.UTC().Format(time.RFC3339))
+		run.traced = probeTraceEnd{status: http.StatusOK, series: series, cached: true}
 	}
+	elapsed := run.finish(true, false)
+	s.noteProbe(run.rec.read, run.recentKey(), recentProbe{
+		at: run.start, duration: time.Since(run.start), result: probeCached,
+		status: http.StatusOK, series: series,
+	})
+	writeProbeAnswer(w, run.r, c, hit, elapsed, transform.UTF8Names(c))
+	s.queueProbeOTLP(answer, c, run.logTarget, fetched)
+	return true
+}
+
+// upstream makes the probe's trip to the target, counted on trip.
+func (run *probeRun) upstream(ctx context.Context, trip statsRecorder) *probeResult {
+	return run.s.probeUpstream(ctx, upstreamProbe{
+		collector: run.c, target: run.target, logTarget: run.logTarget, overrides: run.overrides,
+		forwarded: run.forwarded, rec: trip, cacheKey: run.cacheKey,
+		budget: run.budget, budgetSource: run.budgetSource,
+		// Probes of one target that differ in their parameters or
+		// forwarded headers (tenants, paths) fail separately in the
+		// log. The collector name is the configuration's, which the
+		// probe's matches. The name read from the query is part of the
+		// request line, and the failure log entry, kept for an hour,
+		// would keep it whole, target and all.
+		failure: probeFailureKey(run.c.Name, run.target, run.key), requestURL: run.requestURL,
+		// A probe backs off by the identity it shares a trip by.
+		backoffKey: run.key,
+	})
+}
+
+// alone answers the probe by a trip of its own, counted where the probe is.
+func (run *probeRun) alone(w http.ResponseWriter) {
+	c := run.c
+	result := run.upstream(run.ctx, run.rec)
+	if run.spans != nil {
+		run.traced = probeTraceEndOf(result)
+		reportedTrace(c, result, &run.traced)
+	}
+	// A trip its caller abandoned ends without the target policy's verdict,
+	// as a shared one every caller left does: counted on the collector, and
+	// no new request tracked.
+	elapsed := run.finish(result.ok, result.refused || result.abandoned)
+	if !result.abandoned {
+		run.s.noteProbe(run.rec.read, run.recentKey(), reportedRecent(c, result, result.recentProbe(run.start, false)))
+	}
+	writeProbeAnswer(w, run.r, c, result, elapsed, transform.UTF8Names(c))
+}
+
+// shared answers the probe by a trip that identical probes in flight share.
+func (run *probeRun) shared(w http.ResponseWriter) {
+	s, c, spans := run.s, run.c, run.spans
 	// A shared trip is counted apart from the probe that happens to start it
 	// (forTrip), since that probe may leave while the trip goes on for the
 	// others. What the trip counted belongs to the request when it ends,
@@ -631,13 +702,13 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// policy's verdict. Only probes of this stay of the collector share it
 	// (flightKey): the trip writes under the collector's name, as the probe
 	// that started it may.
-	trip := rec.forTrip()
+	trip := run.rec.forTrip()
 	mark := time.Now()
 	// The trip records its own trace, which the trace of every probe that
 	// uses it gets a copy of: the probe that started it may leave before it
 	// ends (probeFlights.doTraced).
-	result, shared, tripTrace, err := s.flights.doTraced(ctx, flightKey{probe: key, defined: followed.defined[name]}, spans != nil, func(ctx context.Context) *probeResult {
-		result := upstream(ctx, trip)
+	result, shared, tripTrace, err := s.flights.doTraced(run.ctx, flightKey{probe: run.key, defined: run.followed.defined[run.name]}, spans != nil, func(ctx context.Context) *probeResult {
+		result := run.upstream(ctx, trip)
 		trip.commit(result.refused || result.abandoned)
 		return result
 	})
@@ -657,27 +728,27 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			failure = "the caller went away before the probe's trip ended"
 			spans.adopt(tripTrace, "", cut)
 		}
-		traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: failure}
-		finish(false, true)
+		run.traced = probeTraceEnd{status: http.StatusServiceUnavailable, failed: true, stage: "abandoned", failure: failure}
+		run.finish(false, true)
 		return
 	}
 	if spans != nil {
-		traced = probeTraceEndOf(result)
-		reportedTrace(c, result, &traced)
+		run.traced = probeTraceEndOf(result)
+		reportedTrace(c, result, &run.traced)
 	}
 	if shared {
 		// The trip was another probe's: its stages and requests are under
 		// this probe's shared_trip span.
 		spans.step("shared_trip", "ok", mark, time.Now(), "answered by the trip of an identical probe in flight")
 		spans.adopt(tripTrace, "shared_trip", time.Time{})
-		rec.update(func(x *serverStats) { x.coalesced++ })
-		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
+		run.rec.update(func(x *serverStats) { x.coalesced++ })
+		s.logger.Debug("probe shared an identical probe in flight", "collector", run.name, "target", run.logTarget)
 	} else {
 		spans.adopt(tripTrace, "", time.Time{})
 	}
-	elapsed := finish(result.ok, result.refused)
-	s.noteProbe(rec.read, recentKey(), reportedRecent(c, result, result.recentProbe(start, shared)))
-	writeProbeAnswer(w, r, c, result, elapsed, transform.UTF8Names(c))
+	elapsed := run.finish(result.ok, result.refused)
+	s.noteProbe(run.rec.read, run.recentKey(), reportedRecent(c, result, result.recentProbe(run.start, shared)))
+	writeProbeAnswer(w, run.r, c, result, elapsed, transform.UTF8Names(c))
 }
 
 // upstreamProbe is what one trip to the target needs.

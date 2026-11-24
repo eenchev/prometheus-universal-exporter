@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"hash"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -238,7 +239,8 @@ func signWithHMAC(s *SignatureConfig, req *http.Request, body string) error {
 	if req.URL.RawQuery != "" {
 		req.URL.RawQuery += "&"
 	}
-	req.URL.RawQuery += s.QueryParam + "=" + signature
+	// Escaped, as a parameter's value is: base64 writes +, / and =.
+	req.URL.RawQuery += s.QueryParam + "=" + url.QueryEscape(signature)
 	return nil
 }
 

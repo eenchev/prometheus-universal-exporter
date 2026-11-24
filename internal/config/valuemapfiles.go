@@ -90,7 +90,7 @@ func readValueMapFiles(x *model.Collector) error {
 				if _, written := r.ValueMap[key]; written {
 					continue
 				}
-				n, err := strconv.ParseFloat(text, 64)
+				n, err := valueMapNumber(text)
 				if err != nil {
 					return fmt.Errorf("%s value_map_file %s maps %q to a value that is no number; a rule's value_map maps text to the series' value", where, r.ValueMapFile, key)
 				}
@@ -121,6 +121,22 @@ func readValueMapFiles(x *model.Collector) error {
 		}
 	}
 	return nil
+}
+
+// valueMapNumber is the number text writes, as a value_map written in the
+// configuration reads one: a number as YAML writes numbers, .inf and 0x10
+// among them, and one written as text, "1", as a JSON file may.
+func valueMapNumber(text string) (float64, error) {
+	if n, err := strconv.ParseFloat(text, 64); err == nil {
+		return n, nil
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &node); err != nil || len(node.Content) != 1 || node.Content[0].Kind != yaml.ScalarNode || node.Content[0].Tag != "!!int" && node.Content[0].Tag != "!!float" {
+		return 0, errors.New("no number")
+	}
+	var n float64
+	err := node.Content[0].Decode(&n)
+	return n, err
 }
 
 // checkValueMapFileKey refuses a value_map_file that is not the absolute

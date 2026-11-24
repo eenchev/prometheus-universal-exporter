@@ -11209,7 +11209,8 @@ and its failure MUST NOT hold the secret.
   name or nothing, each as it is sent. The signature, written as `encoding`
   says, `hex` unless `base64` or `base64url`, MUST be set in `header` after
   `prefix`, or added to the query as `query_param` after every other
-  parameter, so that `{{query}}` is the query without it. `secret_file` and
+  parameter, so that `{{query}}` is the query without it. A signature in the
+  query MUST be escaped as a parameter's value is. `secret_file` and
   `payload` are required, and exactly one of `header` and `query_param`; a
   payload with another `{{`, a `prefix` beside `query_param`, and a
   signature sent in `Authorization` beside a credential or a login sent

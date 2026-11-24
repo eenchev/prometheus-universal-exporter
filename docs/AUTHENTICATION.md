@@ -184,7 +184,8 @@ query without its `?`, `{{body}}`, `{{host}}`, `{{url}}` and
 none. Anything else in it is signed as it is written.
 
 - A signature in `query_param` is added after every other parameter, so
-  `{{query}}` is the query before it, which is what such APIs sign.
+  `{{query}}` is the query before it, which is what such APIs sign. It is
+  escaped as a parameter's value is, a `base64` one's `+`, `/` and `=`.
 - A timestamp an API wants signed is a [clock
   placeholder](REQUESTS.md#dates-and-times) in a header or the query,
   `"{{unix_ms}}"`, and the payload holds it as part of them:
@@ -212,7 +213,7 @@ collectors:
       headers:
         Content-Type: application/x-amz-json-1.0
         X-Amz-Target: AmazonSQS.GetQueueAttributes
-      body: '{"QueueUrl": "{{param_queue_url|json}}", "AttributeNames": ["ApproximateNumberOfMessages"]}'
+      body: '{"QueueUrl": {{param_queue_url|json}}, "AttributeNames": ["ApproximateNumberOfMessages"]}'
       aws_sigv4:
         service: sqs
         region: eu-west-1

@@ -207,6 +207,8 @@ target written so, and `http_method="PING"`.
 - **A user and a password, or a token.** NKeys, credentials files and
   account JWTs, which sign the server's nonce, are not spoken; a server
   that takes nothing else refuses the login.
+- **TLS after `INFO`.** A server set to begin with the TLS handshake
+  (`handshake_first`) is not spoken to.
 - **The client port, not the monitoring port.** Connections, routes,
   subscriptions and the server's memory are `/varz` and its neighbours on
   port 8222, which an `http` collector reads.

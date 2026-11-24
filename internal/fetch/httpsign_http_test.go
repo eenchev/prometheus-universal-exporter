@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -66,6 +67,30 @@ func TestARequestIsSignedInItsQuery(t *testing.T) {
 	resp, err := FetchCollector(context.Background(), target.URL, c, RequestOverrides{}, nil)
 	if err != nil || string(resp.Body) != "value=1\n" || requests.Load() != 2 {
 		t.Fatalf("%v %v after %d requests", resp, err, requests.Load())
+	}
+}
+
+// A signature written in base64 is escaped in the query, as a parameter's
+// value is, so the server reads the signature that was made: its +, / and
+// = would otherwise read as other characters.
+func TestABase64SignatureIsEscapedInTheQuery(t *testing.T) {
+	secret := "s3cret-key"
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte("id=7"))
+		want := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+		if r.URL.RawQuery != "id=7&sig="+url.QueryEscape(want) || r.URL.Query().Get("sig") != want {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	defer target.Close()
+	c := signedCollector(t, SignatureConfig{SecretFile: testutil.WriteFile(t, "secret", secret), Payload: "{{query}}", Encoding: "base64", QueryParam: "sig"}, func(c *model.Collector) {
+		c.Request.Query = map[string]string{"id": "7"}
+	})
+	if resp, err := FetchCollector(context.Background(), target.URL, c, RequestOverrides{}, nil); err != nil || string(resp.Body) != "value=1\n" {
+		t.Fatalf("%v %v", resp, err)
 	}
 }
 

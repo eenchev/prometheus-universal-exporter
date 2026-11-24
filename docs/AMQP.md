@@ -71,7 +71,7 @@ collectors:
 | `type` | — | **Required.** `amqp`. |
 | `queues` | — | The queues asked about, by name, at most 100, each at most 255 bytes. Left out, the scrape logs in and asks about none, which still says whether the broker takes the login and how long it took. |
 | `vhost` | `/` | The virtual host opened, at most 255 bytes. |
-| `username`, `password_file` | `guest` and `guest` | The account logged in with, both or neither. The file is read at each scrape. A broker out of the box takes `guest` from its own host alone. |
+| `username`, `password_file` | `guest` and `guest` | The account logged in with, both or neither. The file is read at each scrape. A broker out of the box takes `guest` from its own host alone. On RabbitMQ the account needs access to the virtual host and no permission in it. |
 | `tls` | — | For an `amqps://` target, how the broker's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls). |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the address the connection is made to. |
 

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,7 +40,7 @@ func valueMapConfig(states, sites string) string {
 // target allocator's is, reads none and keeps the keys.
 func TestAValueMapIsReadFromItsFile(t *testing.T) {
 	dir := t.TempDir()
-	states := testutil.WriteIn(t, dir, "states.yaml", "up: 1\ndown: 0\n\"3\": 0.5\n\"*\": -1\n")
+	states := testutil.WriteIn(t, dir, "states.yaml", "up: 1\ndown: 0\n\"3\": 0.5\n\"*\": -1\nhex: 0x10\nmost: .inf\ntext: \"2\"\n")
 	sites := testutil.WriteIn(t, dir, "sites.json", `{"fra1": "Frankfurt", "ams2": "Amsterdam", "7": 7, "gone": null, "on": true}`)
 	path := testutil.WriteIn(t, dir, "config.yaml", valueMapConfig(states, sites))
 	cfg, err := Load(path)
@@ -47,7 +48,7 @@ func TestAValueMapIsReadFromItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rule := cfg.Collectors[0].Metrics[0]
-	if len(rule.ValueMap) != 4 || rule.ValueMap["up"] != 5 || rule.ValueMap["down"] != 0 || rule.ValueMap["3"] != 0.5 || rule.ValueMap["*"] != -1 {
+	if len(rule.ValueMap) != 7 || rule.ValueMap["hex"] != 16 || !math.IsInf(rule.ValueMap["most"], 1) || rule.ValueMap["text"] != 2 || rule.ValueMap["up"] != 5 || rule.ValueMap["down"] != 0 || rule.ValueMap["3"] != 0.5 || rule.ValueMap["*"] != -1 {
 		t.Errorf("the rule's map: %v", rule.ValueMap)
 	}
 	label := rule.Labels[0].ValueMap

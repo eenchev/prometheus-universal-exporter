@@ -14,7 +14,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// Each of the ndjson, logfmt, toml and ini decoders hands a jq transform a
+// Each of the ndjson, logfmt, toml, ini and influx decoders hands a jq transform a
 // document its rules read as they read JSON, end to end through a probe:
 // items over the records of NDJSON and logfmt, and paths into the tables of
 // TOML and the sections of INI. A decoder named in the collector reads the
@@ -49,6 +49,13 @@ func TestTheNewDecodersFeedAJQTransform(t *testing.T) {
 		{"auto", "application/toml", "[server]\nrequests = 1200\n",
 			[]model.MetricRule{{Name: "server_requests", Expression: ".server.requests"}},
 			[]string{"server_requests 1200"}},
+		{"influx", "text/plain", "# telegraf\ncpu,host=web01 usage_idle=97.5,cores=8i 1556813561098000000\ncpu,host=web02 usage_idle=42,cores=4i\nmem used=12u\n",
+			[]model.MetricRule{
+				{Name: "cpu_usage_idle", Items: `.[] | select(.measurement == "cpu")`, Expression: ".fields.usage_idle", Labels: []model.LabelRule{{Name: "host", Expression: ".tags.host"}}},
+				{Name: "cpu_cores", Expression: `[.[] | select(.measurement == "cpu") | .fields.cores] | add`},
+				{Name: "points_with_a_timestamp", Expression: `[.[] | select(.timestamp != null)] | length`},
+			},
+			[]string{`cpu_usage_idle{host="web01"} 97.5`, `cpu_usage_idle{host="web02"} 42`, "cpu_cores 12", "points_with_a_timestamp 1"}},
 		{"ini", "text/plain", "uptime = 3600\n[pool]\nactive : 4\n",
 			[]model.MetricRule{{Name: "uptime_seconds", Expression: ".uptime"}, {Name: "pool_active", Expression: ".pool.active"}},
 			[]string{"uptime_seconds 3600", "pool_active 4"}},

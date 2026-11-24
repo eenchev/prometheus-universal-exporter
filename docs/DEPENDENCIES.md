@@ -105,7 +105,7 @@ default, which builds every request type, or a comma-separated list such as
 `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
 `OPT_IN_REQUEST_TYPES` adds opt-in types, which the published image leaves
-out: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`, none of which adds a dependency.
+out: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`, none of which adds a dependency.
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains
@@ -173,11 +173,11 @@ build for goquery's HTML parser. The Prometheus text format is parsed by
 the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module
 brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
 for one function, and a test fails if `go.mod` requires `prometheus/common`,
-`client_model` or `goautoneg` again. The `ndjson`, `logfmt` and `ini`
-decoders need no module: NDJSON is read by the exporter's own JSON decoder,
-line by line, and logfmt and INI by small parsers of its own
-(`internal/decode/logfmt.go`, `ini.go`), the dialects of INI agreeing on too
-little for a module to settle.
+`client_model` or `goautoneg` again. The `ndjson`, `logfmt`, `ini` and
+`influx` decoders need no module: NDJSON is read by the exporter's own JSON
+decoder, line by line, and logfmt, INI and InfluxDB line protocol by small
+parsers of its own (`internal/decode/logfmt.go`, `ini.go`, `influx.go`), the
+dialects of INI agreeing on too little for a module to settle.
 
 The [`grpc`](GRPC.md) request type has three direct dependencies of its own:
 `google.golang.org/grpc`, which also carries the reflection client and the

@@ -178,7 +178,6 @@ func TestTheStatusPageShowsAFailingOTLPExportWithItsErrorRedacted(t *testing.T) 
 	var logs bytes.Buffer
 	server.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	queueProbeMetric(server, "first_value", 1)
-	began := time.Now()
 	server.exportOTLP(context.Background(), 300*time.Millisecond)
 
 	d := otlpDetails(t, server)
@@ -207,7 +206,13 @@ func TestTheStatusPageShowsAFailingOTLPExportWithItsErrorRedacted(t *testing.T) 
 	requireContains(t, page, templateEscaped(d.Endpoint), templateEscaped(d.LastError), "OTLP export is failing: the last 1 export failed.", `<span class="bad">failed</span>`)
 
 	// It gets through again: the failures end, the error stays.
-	time.Sleep(time.Until(began.Truncate(time.Second).Add(time.Second)))
+	// In a later second than the failure, which the page times to the
+	// second and may have come a second after the test began.
+	failedAt, err := time.Parse(time.RFC3339, d.LastErrorAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Until(failedAt.Add(time.Second)))
 	down.Store(false)
 	server.exportOTLP(context.Background(), time.Minute)
 	after := otlpDetails(t, server)

@@ -38,6 +38,7 @@ start from. This page is the reference for what it may contain.
   - [No decoder](#no-decoder)
   - [NDJSON, logfmt, TOML and INI](#ndjson-logfmt-toml-and-ini)
   - [Binary answers](#binary-answers)
+  - [InfluxDB line protocol](#influxdb-line-protocol)
   - [Protobuf responses](#protobuf-responses)
   - [Character encodings](#character-encodings)
   - [Reading CSV: what to expect](#reading-csv-what-to-expect)
@@ -148,8 +149,9 @@ What a response says it is, with the decoder left to it:
 The type is read without its parameters and in any case, as the extension is.
 No content is taken for NDJSON, logfmt, TOML or INI: an NDJSON body sent
 without its type is one JSON value followed by more, which is not JSON, and
-is text; logfmt and INI have no type, and `.ini` names no decoder, so those
-two are read only with `decoder.type: logfmt` or `ini`.
+is text; logfmt, INI and InfluxDB line protocol have no type, and `.ini`
+names no decoder, so those three are read only with `decoder.type: logfmt`,
+`ini` or `influx`.
 Nothing but `text/csv` and `.csv` says CSV, and no content does: a body sent
 as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
 or `.txt`, is text, so a `python` script or a pre-script of a `jq` collector
@@ -160,7 +162,7 @@ Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
 | --- | --- |
-| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `protobuf`, `none` |
+| `jq`, `yq` | `json`, `yaml`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `influx`, `binary`, `protobuf`, `none` |
 | `regex` | `text` |
 | `csv` | `csv` |
 | `css` | `html` |
@@ -200,8 +202,8 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`,
-`protobuf`, `none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)),
+`prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `influx`,
+`binary`, `protobuf`, `none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)),
 `binary` reads the answer of a binary protocol by the layout of
 `response.binary` (see [Binary answers](#binary-answers)), and `protobuf`
 reads a protobuf message by `response.protobuf` (see [Protobuf
@@ -210,7 +212,9 @@ Graphite series — a render API answer or carbon lines — for jq, yq and Pytho
 see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
 Lines, key=value log lines, TOML and INI files into a document jq, yq and
 Python read as they read JSON; see [NDJSON, logfmt, TOML and
-INI](#ndjson-logfmt-toml-and-ini). Every collector sets `transform.type`, one of
+INI](#ndjson-logfmt-toml-and-ini). `influx` reads InfluxDB line protocol
+into a list of its points; see [InfluxDB line
+protocol](#influxdb-line-protocol). Every collector sets `transform.type`, one of
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
 no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
@@ -503,6 +507,66 @@ past the end of the answer fails the scrape in the `decode` stage, naming it:
 and the answer is 11 bytes`. No charset is applied to a binary answer, and
 `response.binary` beside any other decoder is refused when the configuration
 loads, as a layout without the decoder and the decoder without a layout are.
+
+### InfluxDB line protocol
+
+`decoder.type: influx` reads InfluxDB line protocol, the text InfluxDB is
+written with and Telegraf's `influx` data format writes, a point a line:
+
+```text
+cpu,host=web01,region=eu usage_idle=97.5,cores=8i 1556813561098000000
+```
+
+The document is the list of the points, in the order of their lines, which
+`jq`, `yq` and `python` read as they read a JSON array of objects:
+
+```json
+[{"measurement": "cpu",
+  "tags": {"host": "web01", "region": "eu"},
+  "fields": {"usage_idle": 97.5, "cores": 8},
+  "timestamp": 1556813561098000000}]
+```
+
+```yaml
+decoder:
+  type: influx
+transform:
+  type: jq
+metrics:
+  - name: cpu_usage_idle
+    items: .[] | select(.measurement == "cpu")
+    expression: .fields.usage_idle
+    labels:
+      - name: host
+        expression: .tags.host
+```
+
+- `tags` are text. A field is what the line writes it as: a float a
+  number, an integer (`8i`) and an unsigned integer (`8u`) whole numbers
+  that keep every digit, a boolean (`t`, `T`, `true`, `True`, `TRUE` and
+  the same of false) true or false, and text in double quotes a string. A
+  rule over a boolean reads 1 or 0, as over any boolean.
+- `timestamp` is the number as the line writes it, and `null` for a point
+  without one. The line does not say its precision, nanoseconds unless
+  whoever wrote it chose another, so a rule that wants seconds divides:
+  `.timestamp / 1e9`.
+- A point without tags has an empty `tags`. A key written twice in a
+  point's tags or fields keeps the later value. Blank lines and lines that
+  start with `#` are passed over, and `\,`, `\=` and a backslash before a
+  blank write those characters in a name.
+- Anything else fails the scrape, naming the line, the column and what was
+  expected there: `influx decode: line 3, column 9: unexpected 's' where
+  the timestamp is, a whole number`.
+- `auto` never chooses the decoder, since no content type or file name
+  says line protocol: name it.
+
+Line protocol is what InfluxDB takes in, so it is read where it was written
+down: a file Telegraf's `file` output writes, with
+[`localfile`](LOCALFILE.md), [`sshfile`](SSHFILE.md) or
+[`s3file`](S3FILE.md), an export of a bucket, or a service that answers
+with it. InfluxDB's own query API answers CSV, which an `http` collector
+reads with the [`csv` decoder](#reading-csv-what-to-expect). The exporter
+takes no pushed data, so it is no Telegraf output.
 
 ### Protobuf responses
 
@@ -2915,7 +2979,7 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has nine more: `smtp` holds a
+them](#choosing-request-types-at-build-time) has ten more: `smtp` holds a
 mail server's session without sending — see [SMTP](SMTP.md) — `imap`
 counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
 counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
@@ -2924,7 +2988,8 @@ to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
 messages of an endpoint — see [WebSocket](WEBSOCKET.md) — `ftp` reads
 a file from an FTP server — see [Files over FTP](FTP.md) — `radius`
 authenticates an account against a RADIUS server — see [RADIUS](RADIUS.md)
-— and `whois` reads a domain's registration — see [WHOIS](WHOIS.md).
+— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) — and
+`sip` asks a SIP server whether it answers — see [SIP](SIP.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -3186,6 +3251,15 @@ for its top-level domain or the one `whois_server` names, with
 `query_prefix` before the domain; `max_response_bytes`, `allowed_targets`
 and `denied_targets` apply too. The decoder is `json`; its table is in
 [WHOIS](WHOIS.md#a-collector).
+
+For `sip`, an opt-in type, no key is required: the SIP server that is the
+target is asked with an OPTIONS request whether it answers, over
+`sip_transport`, `udp`, `tcp` or `tls`, the last verified as `tls` says.
+`request_uri` is the URI asked, `from_uri` who asks and `user_agent` the
+request's User-Agent; `username` and `password_file` are the account a
+Digest challenge is answered with; `max_response_bytes`, `allowed_targets`
+and `denied_targets` apply too. The decoder is `json`; its table is in
+[SIP](SIP.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3270,6 +3344,9 @@ requires a `target`, the RADIUS server, `host` or `host:port`.
 
 `whois`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the domain.
+
+`sip`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the SIP server, `host` or `host:port`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3350,8 +3427,8 @@ new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-requ
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
-[`pop3`](POP3.md), [`radius`](RADIUS.md) and [`whois`](WHOIS.md), each written with the standard library alone: about
-0.1 MB of a stripped binary each, and about 0.6 MB for the nine. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md) and [`sip`](SIP.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, and about 0.7 MB for the ten. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is
@@ -7486,6 +7563,7 @@ nothing there.
 - [POP3.md](POP3.md) — the opt-in `pop3` request type.
 - [RADIUS.md](RADIUS.md) — the opt-in `radius` request type.
 - [WHOIS.md](WHOIS.md) — the opt-in `whois` request type.
+- [SIP.md](SIP.md) — the opt-in `sip` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

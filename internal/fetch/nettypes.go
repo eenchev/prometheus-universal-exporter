@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3
+//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3 || request_type_sip
 
 package fetch
 
@@ -18,7 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, modbus, mqtt, websocket, ftp, imap and pop3 request types share: each
+// What the smtp, modbus, mqtt, websocket, ftp, imap, pop3 and sip request types share: each
 // reaches one server at host:port over TCP, or over TLS on it, through the
 // collector's target policy, within the scrape's deadline, on a connection
 // of the scrape's own. The types are opt-in, so this file is in no build
@@ -50,8 +50,8 @@ func parseNetTarget(what, raw string, ports map[string]int, withRest bool) (netA
 		}
 	}
 	article := "a"
-	if strings.ContainsRune("fims", rune(what[0])) {
-		// ftp, imap, mqtt and smtp are said by their letters.
+	if strings.ContainsRune("fims", rune(what[0])) && what != "sip" {
+		// ftp, imap, mqtt and smtp are said by their letters; sip is a word.
 		article = "an"
 	}
 	forms := article + " " + what + " target is " + strings.Join(written[:len(written)-1], ", ") + " or " + written[len(written)-1]

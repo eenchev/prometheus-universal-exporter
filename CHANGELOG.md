@@ -238,6 +238,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   changed as a table, a row for the collectors or static targets added,
   removed or changed, with how many and their names, where it wrote them
   all in one sentence.
+- **[`sip`](docs/SIP.md), an opt-in request type**, asks a SIP server, a
+  proxy or a PBX, whether it answers: one OPTIONS request over UDP, TCP or
+  TLS, sent again over UDP while no response comes, with the status, how
+  long it took and what the server says of itself as a JSON document. A
+  response is an answer whatever its status, and a Digest challenge is
+  answered with `username` and `password_file`, MD5 or SHA-256. Build it
+  with `OPT_IN_REQUEST_TYPES=sip`; it adds no dependency.
+- **[`decoder.type: influx`](docs/CONFIGURATION.md#influxdb-line-protocol)**
+  reads InfluxDB line protocol, as Telegraf writes it to a file, into a
+  list of points for `jq`, `yq` and `python`: each with its measurement,
+  its tags, its fields by their types and its timestamp.
 
 ### Fixed
 

@@ -635,6 +635,7 @@
                   "logfmt",
                   "toml",
                   "ini",
+                  "influx",
                   "binary",
                   "protobuf",
                   "none",
@@ -3274,6 +3275,12 @@
                   "boolean"
                 ]
               },
+              "from_uri": {
+                "description": "sip: who the request says is asking, its From; sip:prometheus-universal-exporter@ and the target's host when left out, or request.username in its place when the collector has an account.",
+                "maxLength": 255,
+                "pattern": "^([sS][iI][pP][sS]?:[^\\x00-\\x20\\x7f\u003c\u003e\"]+)?$",
+                "type": "string"
+              },
               "get": {
                 "additionalProperties": {
                   "type": "string"
@@ -5430,7 +5437,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -5768,6 +5775,12 @@
                   "string",
                   "integer"
                 ]
+              },
+              "request_uri": {
+                "description": "sip: the URI the request asks, and its To, such as sip:1000@pbx.example.com to ask for a user; the server's own, sip:host:port, when left out.",
+                "maxLength": 255,
+                "pattern": "^([sS][iI][pP][sS]?:[^\\x00-\\x20\\x7f\u003c\u003e\"]+)?$",
+                "type": "string"
               },
               "require_message_authenticator": {
                 "description": "radius: fail the scrape when the reply carries no Message-Authenticator, as a server patched against CVE-2024-3596 always sends one; false when left out. One that is there is verified either way.",
@@ -6119,6 +6132,16 @@
                   "boolean"
                 ]
               },
+              "sip_transport": {
+                "description": "sip: what the request is sent over: udp, the default, where it is sent again while no response comes; tcp; or tls, verified as request.tls says. See docs/SIP.md#the-transport.",
+                "enum": [
+                  "udp",
+                  "tcp",
+                  "tls",
+                  ""
+                ],
+                "type": "string"
+              },
               "snmp_version": {
                 "description": "snmp: the SNMP version, 1, 2 for v2c, or 3; 2 when left out. 1 and 2 read with community_file, 3 as username with security_level. See docs/SNMP.md.",
                 "maximum": 3,
@@ -6412,8 +6435,14 @@
                   "boolean"
                 ]
               },
+              "user_agent": {
+                "description": "sip: the request's User-Agent; prometheus-universal-exporter when left out.",
+                "maxLength": 128,
+                "pattern": "^[^\\x00-\\x1f\\x7f]*$",
+                "type": "string"
+              },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"

@@ -3086,87 +3086,19 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 		count = table.Len()
 	}
 	out := &model.MetricSet{}
-	// A response without rows has no value for any rule, like a regex that
-	// matched no text or a jq items expression that selected nothing. A
-	// required rule is missing its value, and its error mode decides,
-	// instead of the scrape passing with nothing.
 	if count == 0 {
-		for _, rule := range rules {
-			// No rows is an empty list to a histogram rule, which it
-			// counts as nothing.
-			if rule.Histogram != nil {
-				if err := emptyHistogram(ctx, out, &rule); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if !requiredRule(rule, c) {
-				continue
-			}
-			missing := model.MarkError(fmt.Errorf("CSV column %q is missing: the response has no rows", rule.Expression), model.ErrMissingValue)
-			if handleMetricError(ctx, c, rule, missing) {
-				continue
-			}
-			return nil, ruleFailure(c, rule, missing)
+		if err := csvWithoutRows(ctx, out, rules, c); err != nil {
+			return nil, err
 		}
 	}
-	// Make room for a series of every row for each rule whose column the
-	// response has. For rows read by header name, the first row tells which.
-	//
-	// The rows are read one after another, each by every rule, so the row
-	// order decides what fails first, what is logged and where the series
-	// limit stops. The series are kept rule by rule, though, each rule's in
-	// row order: the exposition formats want a metric's series together, and
-	// a set that has them apart costs the writer a second pass on every probe
-	// (appendMetricSet in internal/exporter). So with several rules, each
-	// rule with a column gets a part of the room, as long as the rows are
-	// many, one part after another in rule order. next[r] is where rule r's
-	// next series goes, and ends[r] is where its part ends. Afterwards the
-	// parts are closed up over what the rows left empty. If the parts do not
-	// fit within the series limit, there are none. A rule without a part,
-	// whose column only a later row has (as a pre-script may leave them),
-	// adds its series after the parts. Both cases leave the series in row
-	// order, as a single rule has them anyway.
-	var next, ends []int
-	parts := 0
+	var parts csvParts
 	if count > 0 {
-		columns := len(rules)
-		first, named := csvRowView{table: table}, decoded && table.Named()
+		first := csvRowView{table: table}
+		named := decoded && table.Named()
 		if !decoded {
 			first.m, named = rows[0].(map[string]any)
 		}
-		if named {
-			columns = 0
-			for i := range rules {
-				if _, exists := first.cell(rules[i].Expression); exists {
-					columns++
-				}
-			}
-		}
-		// A histogram rule makes a series of each set of labels, not of
-		// each row, and has no part: its series are added after the parts.
-		for i := range rules {
-			if rules[i].Histogram != nil {
-				if _, exists := first.cell(rules[i].Expression); exists || !named {
-					columns--
-				}
-			}
-		}
-		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= count*columns) {
-			parts = count * columns
-			out.Metrics = make([]model.Metric, parts)
-			next, ends = make([]int, len(rules)), make([]int, len(rules))
-			at := 0
-			for i := range rules {
-				next[i] = at
-				if _, exists := first.cell(rules[i].Expression); (exists || !named) && rules[i].Histogram == nil {
-					at += count
-				}
-				ends[i] = at
-			}
-		} else {
-			out.Metrics = growSeries(ctx, out.Metrics, count*columns)
-		}
+		parts = makeCSVParts(ctx, out, rules, first, named, count)
 	}
 	responseColumns := csvColumns{rows: rows, table: table, columns: columns}
 	// unreadable is the rules that have failed for a label whose column the
@@ -3182,112 +3114,224 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 				return nil, csvNotARow(c, at+1, rows[at])
 			}
 		}
-		for r, rule := range rules {
+		for r := range rules {
 			if unreadable != nil && unreadable[r] {
 				continue
 			}
-			value, exists := row.cell(rule.Expression)
-			if !exists || value.blank() {
-				if requiredRule(rule, c) {
-					// A column no row has, or a cell that is empty in this
-					// row, the header's line not counted among the rows.
-					var missing error
-					if !exists && !responseColumns.inResponse(rule.Expression) {
-						missing = responseColumns.notInResponse(rule.Expression).missing
-					} else {
-						missing = model.MarkError(model.Errorf("CSV column %q is empty in row %d", rule.Expression, model.Position(at+1)), model.ErrMissingValue)
-					}
-					if handleMetricError(ctx, c, rule, missing) {
-						continue
-					}
-					return nil, ruleFailure(c, rule, missing)
+			series, made, labelUnreadable, err := csvCellSeries(ctx, out, row, at, &rules[r], c, &responseColumns)
+			if labelUnreadable {
+				if unreadable == nil {
+					unreadable = make([]bool, len(rules))
 				}
-				continue
+				unreadable[r] = true
 			}
-			n, err := value.number(rule)
 			if err != nil {
-				if handleMetricError(ctx, c, rule, err) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
-			}
-			labels := make(map[string]string, len(rule.Labels))
-			var labelErr error
-			for _, label := range rule.Labels {
-				if label.Static() {
-					labels[label.Name] = label.Value
-				} else if labelValue, exists := row.cell(label.Expression); exists && !labelValue.none() {
-					// A pre-script may leave numbers and None in a row:
-					// a number is written as the other transforms write
-					// one, and None leaves the label out.
-					text, err := labelValue.label()
-					if err != nil {
-						labelErr = fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
-						break
-					}
-					labels[label.Name] = text
-				} else if !exists && !responseColumns.inResponse(label.Expression) {
-					// A column no row has is the rule's failure, once for the
-					// response, as an unreadable label is in the xpath transform
-					// (unreadableXPathLabel). It is not a label silently left off
-					// every series. An empty cell leaves the label off.
-					labelErr = fmt.Errorf("metric %q label %q: %w", rule.Name, label.Name, responseColumns.notInResponse(label.Expression).err)
-					if unreadable == nil {
-						unreadable = make([]bool, len(rules))
-					}
-					unreadable[r] = true
-					break
-				}
-			}
-			if labelErr != nil {
-				if handleMetricError(ctx, c, rule, labelErr) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, labelErr)
-			}
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(ctx, c, rule, missing) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, missing)
-			}
-			if rule.Histogram != nil {
-				if err := observeValue(ctx, out, &rule, n, labels); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := takeSeries(ctx); err != nil {
 				return nil, err
 			}
-			series := model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels}
-			if parts > 0 && next[r] < ends[r] {
-				out.Metrics[next[r]] = series
-				next[r]++
-				continue
+			if made && !parts.place(out, r, series) {
+				out.Metrics = append(out.Metrics, series)
 			}
-			out.Metrics = append(out.Metrics, series)
 		}
 	}
-	if parts > 0 {
-		// Each part's series moved down to where the part before it ended,
-		// then the series added after the parts, and what is left over
-		// cleared, so that it keeps no labels alive.
-		filled, start := 0, 0
-		for r := range next {
-			if filled != start {
-				copy(out.Metrics[filled:], out.Metrics[start:next[r]])
-			}
-			filled += next[r] - start
-			start = ends[r]
-		}
-		if filled < parts {
-			filled += copy(out.Metrics[filled:], out.Metrics[parts:])
-			clear(out.Metrics[filled:])
-			out.Metrics = out.Metrics[:filled]
-		}
-	}
+	parts.close(out)
 	return noSeriesIsNil(out), nil
+}
+
+// csvWithoutRows applies rules to a response without rows. It has no value
+// for any rule, like a regex that matched no text or a jq items expression
+// that selected nothing. A required rule is missing its value, and its error
+// mode decides, instead of the scrape passing with nothing.
+func csvWithoutRows(ctx context.Context, out *model.MetricSet, rules []model.MetricRule, c *model.Collector) error {
+	for _, rule := range rules {
+		// No rows is an empty list to a histogram rule, which it counts as
+		// nothing.
+		if rule.Histogram != nil {
+			if err := emptyHistogram(ctx, out, &rule); err != nil {
+				return err
+			}
+			continue
+		}
+		if !requiredRule(rule, c) {
+			continue
+		}
+		missing := model.MarkError(fmt.Errorf("CSV column %q is missing: the response has no rows", rule.Expression), model.ErrMissingValue)
+		if handleMetricError(ctx, c, rule, missing) {
+			continue
+		}
+		return ruleFailure(c, rule, missing)
+	}
+	return nil
+}
+
+// csvParts is the room made for the series of a csv response, rule by rule.
+//
+// The rows are read one after another, each by every rule, so the row order
+// decides what fails first, what is logged and where the series limit stops.
+// The series are kept rule by rule, though, each rule's in row order: the
+// exposition formats want a metric's series together, and a set that has
+// them apart costs the writer a second pass on every probe (appendMetricSet
+// in internal/exporter). So with several rules, each rule with a column gets
+// a part of the room, as long as the rows are many, one part after another
+// in rule order. next[r] is where rule r's next series goes, and ends[r] is
+// where its part ends. Afterwards the parts are closed up over what the rows
+// left empty. If the parts do not fit within the series limit, there are
+// none. A rule without a part, whose column only a later row has (as a
+// pre-script may leave them), adds its series after the parts. Both cases
+// leave the series in row order, as a single rule has them anyway.
+type csvParts struct {
+	next, ends []int
+	// size is the room the parts take, 0 when there are none.
+	size int
+}
+
+// makeCSVParts makes room in out for a series of every row for each rule
+// whose column the response has. For rows read by header name (named), the
+// first row tells which.
+func makeCSVParts(ctx context.Context, out *model.MetricSet, rules []model.MetricRule, first csvRowView, named bool, count int) csvParts {
+	columns := len(rules)
+	if named {
+		columns = 0
+		for i := range rules {
+			if _, exists := first.cell(rules[i].Expression); exists {
+				columns++
+			}
+		}
+	}
+	// A histogram rule makes a series of each set of labels, not of each
+	// row, and has no part: its series are added after the parts.
+	for i := range rules {
+		if rules[i].Histogram != nil {
+			if _, exists := first.cell(rules[i].Expression); exists || !named {
+				columns--
+			}
+		}
+	}
+	room := seriesRoom(ctx)
+	if len(rules) <= 1 || columns <= 0 || (room >= 0 && room < count*columns) {
+		out.Metrics = growSeries(ctx, out.Metrics, count*columns)
+		return csvParts{}
+	}
+	p := csvParts{size: count * columns, next: make([]int, len(rules)), ends: make([]int, len(rules))}
+	out.Metrics = make([]model.Metric, p.size)
+	at := 0
+	for i := range rules {
+		p.next[i] = at
+		if _, exists := first.cell(rules[i].Expression); (exists || !named) && rules[i].Histogram == nil {
+			at += count
+		}
+		p.ends[i] = at
+	}
+	return p
+}
+
+// place puts series in rule r's part, and says whether it had room there.
+func (p *csvParts) place(out *model.MetricSet, r int, series model.Metric) bool {
+	if p.size == 0 || p.next[r] >= p.ends[r] {
+		return false
+	}
+	out.Metrics[p.next[r]] = series
+	p.next[r]++
+	return true
+}
+
+// close closes the parts up: each part's series move down to where the part
+// before it ended, then the series added after the parts, and what is left
+// over is cleared, so that it keeps no labels alive.
+func (p *csvParts) close(out *model.MetricSet) {
+	if p.size == 0 {
+		return
+	}
+	filled, start := 0, 0
+	for r := range p.next {
+		if filled != start {
+			copy(out.Metrics[filled:], out.Metrics[start:p.next[r]])
+		}
+		filled += p.next[r] - start
+		start = p.ends[r]
+	}
+	if filled < p.size {
+		filled += copy(out.Metrics[filled:], out.Metrics[p.size:])
+		clear(out.Metrics[filled:])
+		out.Metrics = out.Metrics[:filled]
+	}
+}
+
+// csvCellSeries is what rule makes of the row at index at: its series, when
+// made says it makes one. It makes none for a cell it may leave empty, or
+// as a histogram rule, whose value it observes. Its error fails the
+// transform.
+// labelUnreadable says the rule failed for a label whose column the response
+// does not have, which fails once and makes no more series.
+func csvCellSeries(ctx context.Context, out *model.MetricSet, row csvRowView, at int, rule *model.MetricRule, c *model.Collector, responseColumns *csvColumns) (series model.Metric, made, labelUnreadable bool, err error) {
+	value, exists := row.cell(rule.Expression)
+	if !exists || value.blank() {
+		if !requiredRule(*rule, c) {
+			return model.Metric{}, false, false, nil
+		}
+		// A column no row has, or a cell that is empty in this row, the
+		// header's line not counted among the rows.
+		var missing error
+		if !exists && !responseColumns.inResponse(rule.Expression) {
+			missing = responseColumns.notInResponse(rule.Expression).missing
+		} else {
+			missing = model.MarkError(model.Errorf("CSV column %q is empty in row %d", rule.Expression, model.Position(at+1)), model.ErrMissingValue)
+		}
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, missing, missing)
+	}
+	n, err := value.number(*rule)
+	if err != nil {
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, err, fmt.Errorf("metric %q: %w", rule.Name, err))
+	}
+	labels, labelUnreadable, labelErr := csvRowLabels(row, rule, responseColumns)
+	if labelErr != nil {
+		return model.Metric{}, false, labelUnreadable, csvRuleError(ctx, c, rule, labelErr, labelErr)
+	}
+	if missing := missingRequiredLabel(*rule, labels); missing != nil {
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, missing, missing)
+	}
+	if rule.Histogram != nil {
+		return model.Metric{}, false, false, observeValue(ctx, out, rule, n, labels)
+	}
+	if err := takeSeries(ctx); err != nil {
+		return model.Metric{}, false, false, err
+	}
+	return model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels}, true, false, nil
+}
+
+// csvRuleError is nil when rule's error mode carries on past err, and
+// otherwise the rule's failure with failure.
+func csvRuleError(ctx context.Context, c *model.Collector, rule *model.MetricRule, err, failure error) error {
+	if handleMetricError(ctx, c, *rule, err) {
+		return nil
+	}
+	return ruleFailure(c, *rule, failure)
+}
+
+// csvRowLabels are the labels rule gives its series of row. labelUnreadable
+// says a label's column is not in the response.
+func csvRowLabels(row csvRowView, rule *model.MetricRule, responseColumns *csvColumns) (labels map[string]string, labelUnreadable bool, err error) {
+	labels = make(map[string]string, len(rule.Labels))
+	for _, label := range rule.Labels {
+		if label.Static() {
+			labels[label.Name] = label.Value
+		} else if labelValue, exists := row.cell(label.Expression); exists && !labelValue.none() {
+			// A pre-script may leave numbers and None in a row: a number is
+			// written as the other transforms write one, and None leaves the
+			// label out.
+			text, err := labelValue.label()
+			if err != nil {
+				return nil, false, fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
+			}
+			labels[label.Name] = text
+		} else if !exists && !responseColumns.inResponse(label.Expression) {
+			// A column no row has is the rule's failure, once for the
+			// response, as an unreadable label is in the xpath transform
+			// (unreadableXPathLabel). It is not a label silently left off
+			// every series. An empty cell leaves the label off.
+			return nil, true, fmt.Errorf("metric %q label %q: %w", rule.Name, label.Name, responseColumns.notInResponse(label.Expression).err)
+		}
+	}
+	return labels, false, nil
 }
 
 // prometheusRuleUnmatched words the missing value of a prometheus rule that

@@ -937,7 +937,7 @@ type CSVConfig struct {
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
 // reads the response: json, ndjson, yaml, toml, ini, xml, csv, html,
-// logfmt, prometheus, text, graphite, binary or protobuf, or none, which reads no body. Unset or auto, the transform's type
+// logfmt, influx, prometheus, text, graphite, binary or protobuf, or none, which reads no body. Unset or auto, the transform's type
 // picks it when it implies one, and otherwise the response's content type or
 // its content.
 type DecoderConfig struct {
@@ -1347,7 +1347,7 @@ var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, L
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", "protobuf", DecoderNone}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "influx", "binary", "protobuf", DecoderNone}
 
 // DecoderNone is the decoder.type that reads no body: jq and yq rules read
 // null, with $status and $headers, and a Python script's data is None, for

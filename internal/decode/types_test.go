@@ -23,6 +23,7 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"graphite":   "a.b 1 1727000000\n",
 		"ndjson":     "{\"a\":1}\n{\"a\":2}\n",
 		"logfmt":     "a=1 b=2\n",
+		"influx":     "m v=1\n",
 		"toml":       "a = 1\n",
 		"ini":        "[s]\na = 1\n",
 		"binary":     "\x00\x01",

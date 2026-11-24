@@ -32,7 +32,7 @@ The exporter MUST:
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
 - Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`) and the registration of a domain (`whois`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, protobuf messages, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, InfluxDB line protocol, binary layouts, protobuf messages, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -1298,6 +1298,7 @@ ndjson
 logfmt
 toml
 ini
+influx
 none
 auto
 ```
@@ -1363,7 +1364,7 @@ ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
 by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
-`graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `protobuf` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+`graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `influx`, `binary`, `protobuf` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -1401,9 +1402,9 @@ which MUST select the `graphite` decoder; one ending in `.ndjson` or `.jsonl`
 MUST be given `application/x-ndjson`, and one ending in `.toml`
 `application/toml`. `application/x-ndjson` and `application/jsonl` MUST
 select the `ndjson` decoder and `application/toml` the `toml` decoder. No
-content MUST be taken for NDJSON, logfmt, TOML or INI, and no Content-Type or
-extension for logfmt or INI: those two MUST be read only by an explicit
-`decoder.type`. Such a
+content MUST be taken for NDJSON, logfmt, TOML, INI or InfluxDB line
+protocol, and no Content-Type or extension for logfmt, INI or InfluxDB line
+protocol: those three MUST be read only by an explicit `decoder.type`. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1541,6 +1542,39 @@ does (§ 6.1a).
   written twice in one section the later MUST be kept. A key before the first
   section and a section of the same name MUST fail the decode naming both
   lines, and so MUST any line that is none of these.
+
+### 6.0d The influx decoder
+
+The `influx` decoder MUST read InfluxDB line protocol, a point a line, as
+InfluxDB's own parser reads it, and MUST NOT depend on a module of
+InfluxDB's for it. It MUST be chosen by `decoder.type` alone, never by
+`auto`.
+
+- The document MUST be the list of the points in the order of their lines,
+  each a mapping of `measurement`, text; `tags`, a mapping of text to text,
+  empty for a point without tags; `fields`, a mapping of each field's key to
+  its value; and `timestamp`.
+- A line of nothing but blanks and a line that starts with `#` MUST be
+  passed over. A line MUST end at a line feed, a carriage return before it
+  dropped, but for a line feed inside a quoted field value, which is part of
+  the value.
+- In a measurement `\,` and a backslash before a blank, and in a tag's key,
+  a tag's value and a field's key those and `\=`, MUST be read as the
+  character after the backslash; any other backslash is itself.
+- A field's value MUST be read by how it is written: a number as a float,
+  which MUST be finite and MUST NOT be written as a name such as `NaN`; a
+  whole number and `i` as a 64-bit integer; a whole number and `u` as an
+  unsigned 64-bit integer; `t`, `T`, `true`, `True`, `TRUE`, `f`, `F`,
+  `false`, `False` and `FALSE` as a boolean; and text in double quotes as
+  text, `\"` and `\\` in it a quote and a backslash. An integer MUST keep
+  every digit, as a whole number of the `json` decoder does.
+- The timestamp MUST be the whole number the line writes, within 64 bits,
+  as it is written, with no precision assumed, and `null` for a point
+  without one.
+- A key written twice in a point's tags or in its fields MUST keep the
+  later value.
+- Any other line MUST fail the decode naming the line, the column and what
+  was expected there, and no more of the body.
 
 ### 6.1 Auto detection
 
@@ -3211,7 +3245,7 @@ any case, joined by `, `, as jq's `$headers` has them, and `default` when the
 response has none.
 
 `data` MUST be the decoded response: `None` for `none`; the document for JSON, YAML,
-graphite, NDJSON, logfmt, TOML and INI; the rows for CSV, dicts by header or lists without one; the body as
+graphite, NDJSON, logfmt, TOML, INI and InfluxDB line protocol; the rows for CSV, dicts by header or lists without one; the body as
 a string for text, HTML and XML; and, for Prometheus exposition,
 `{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
 `labels`, and `value` — or a histogram's `buckets` (`le`, `count`), `sum` and
@@ -8338,7 +8372,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` or `whois` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` or `sip` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9918,7 +9952,7 @@ The resulting system should behave as a generic Prometheus adapter:
 
 The request types and decoders drawn are a sample: every request type of
 § 5.1 hands the decoder its response, and every decoder of §§ 9–15a and
-§ 6.0a — NDJSON, TOML, INI, logfmt, plain text and Graphite besides those
+§§ 6.0a and 6.0d — NDJSON, TOML, INI, logfmt, InfluxDB line protocol, plain text and Graphite besides those
 drawn — feeds the same transforms. A static target (§ 42.14) enters at the
 request type, as a probe does.
 

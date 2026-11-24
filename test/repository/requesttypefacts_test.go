@@ -168,7 +168,7 @@ func TestSentencesNameTheRequestTypesThatTakeAKey(t *testing.T) {
 // decoderNames is how prose names each decoder.type.
 var decoderNames = map[string]string{
 	"json": "JSON", "ndjson": "NDJSON", "yaml": "YAML", "toml": "TOML", "ini": "INI",
-	"xml": "XML", "csv": "CSV", "html": "HTML", "logfmt": "logfmt",
+	"xml": "XML", "csv": "CSV", "html": "HTML", "logfmt": "logfmt", "influx": "InfluxDB line protocol",
 	"prometheus": "Prometheus", "text": "plain text", "graphite": "Graphite", "binary": "binary", "protobuf": "protobuf",
 }
 
@@ -242,7 +242,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"pop3":       {"a mailbox over POP3", ""},
 	"radius":     {"a login against a RADIUS server", ""},
 	"whois":      {"the registration of a domain", ""},
-	"sip":        {"TODO(sip)", ""},
+	"sip":        {"a SIP server that answers", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

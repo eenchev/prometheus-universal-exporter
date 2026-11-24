@@ -26,8 +26,8 @@ const KindRows = "sql"
 
 // Decoded is a response decoded for a transform. Kind names the decoder, and
 // Data holds what it produced: normalized JSON or YAML values, the same
-// values of NDJSON, logfmt, TOML and INI (ndjson.go, logfmt.go, toml.go,
-// ini.go), CSV rows, an
+// values of NDJSON, logfmt, TOML, INI and InfluxDB line protocol (ndjson.go,
+// logfmt.go, toml.go, ini.go, influx.go), CSV rows, an
 // *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
 // Graphite series document (graphite.go), the body as a string, or nil for
 // decoder none. Raw is the body the decoder read.
@@ -295,6 +295,12 @@ func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		v, err := decodeLogfmt(r.Body)
 		if err != nil {
 			return nil, fmt.Errorf("logfmt decode: %w", err)
+		}
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
+	case "influx":
+		v, err := decodeInflux(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("influx decode: %w", err)
 		}
 		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
 	case "toml":

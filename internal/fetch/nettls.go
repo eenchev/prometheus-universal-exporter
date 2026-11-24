@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3
+//go:build request_type_smtp || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3 || request_type_sip
 
 package fetch
 
@@ -10,7 +10,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, mqtt, websocket, ftp, imap and pop3 request types share beyond
+// What the smtp, mqtt, websocket, ftp, imap, pop3 and sip request types share beyond
 // nettypes.go, which modbus, with neither TLS nor an account, has no use
 // for.
 

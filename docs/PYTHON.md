@@ -181,6 +181,7 @@ for row in data:
 | `logfmt` | The list of the records, a dict per line of its keys and their values as strings, `None` for a key written alone. |
 | `toml` | The document, as for `json`, with each date and time a string ([NDJSON, logfmt, TOML and INI](CONFIGURATION.md#ndjson-logfmt-toml-and-ini)). |
 | `ini` | A dict of each section's dict of strings, and of each key before the first section to its string. |
+| `influx` | The list of the points, a dict per line of its `measurement`, its `tags`, a dict of strings, its `fields`, a dict of floats, ints, booleans and strings, and its `timestamp`, an int or `None` ([InfluxDB line protocol](CONFIGURATION.md#influxdb-line-protocol)). |
 | `protobuf` | A dict of the message's fields by their `.proto` names, as a `grpc` answer is, a 64-bit integer a string ([Protobuf responses](CONFIGURATION.md#protobuf-responses)); `response.body` is the bytes as they came. |
 | `binary` | A dict of each field's name to its int, float, str or list of numbers, as `response.binary` lays them out ([Binary answers](CONFIGURATION.md#binary-answers)); `response.body` is the bytes. |
 | `graphite` | The [series document](GRAPHITE.md#the-series-document), `{"series": [...]}`. |

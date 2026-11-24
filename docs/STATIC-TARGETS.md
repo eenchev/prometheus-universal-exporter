@@ -55,7 +55,7 @@ targets:
 know. A target's `target` is checked when the file loads as its collector's
 type reads it: an `http` or `graphite` target is an absolute URL, and one
 whose port is 0 or past 65535, which no connection can use, is refused
-naming the port, as a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3` or `radius` target's is. Each target names a collector from the exporter configuration and takes
+naming the port, as a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` or `sip` target's is. Each target names a collector from the exporter configuration and takes
 every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
 `new_connection`, `ip_family` and the `retry` settings — overriding the collector's own request for that target only.
@@ -94,7 +94,7 @@ collector is looked at):
 | [`pop3`](POP3.md#static-targets), opt-in | the mail server, required | `timeout`, and its own account and TLS settings: `username` and `password_file`, and `tls` |
 | [`radius`](RADIUS.md#static-targets), opt-in | the RADIUS server, required | `timeout` |
 | [`whois`](WHOIS.md#static-targets), opt-in | the domain, required | `timeout` |
-| [`sip`](SIP.md#static-targets), opt-in | TODO(sip) | TODO(sip) |
+| [`sip`](SIP.md#static-targets), opt-in | the SIP server, required | `timeout` |
 
 An `http` or `graphite` target also takes static
 `headers`, and an `http`, `graphite` or `grpc` target its own target
@@ -343,6 +343,7 @@ block, in place of the collector's. This is what each type takes:
 | `modbus` | none | no; Modbus TCP has no TLS |
 | `snmp` | `community_file` of v1 and v2c; `username`, `auth_password_file` and `priv_password_file` of v3, each replacing the collector's as its security level uses it | no; SNMP has no TLS |
 | `radius` | none: the account and the shared secret are the collector's | no; RADIUS is spoken over UDP |
+| `sip` | none: the account and the `tls` block are the collector's | no |
 | `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes`, `whois` | none | no |
 
 A target's credential file may be a reference to a

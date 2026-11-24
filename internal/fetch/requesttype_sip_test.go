@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -203,7 +204,7 @@ func TestASIPScrapeAsksWithOPTIONS(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, port, _ := net.SplitHostPort(s.addr)
-	if doc.StatusCode != 200 || doc.Reason != "OK" || !doc.OK || doc.Requests != 1 || doc.Attempts != 1 || doc.Challenged || doc.Authenticated ||
+	if doc.StatusCode != http.StatusOK || doc.Reason != "OK" || !doc.OK || doc.Requests != 1 || doc.Attempts != 1 || doc.Challenged || doc.Authenticated ||
 		doc.Host != "127.0.0.1" || strconv.Itoa(doc.Port) != port || doc.Address != s.addr || doc.Transport != "udp" || doc.Server != "stand-in/1.0" ||
 		strings.Join(doc.Allow, "|") != "INVITE|ACK|CANCEL|OPTIONS|BYE" || strings.Join(doc.Supported, "|") != "path|replaces" || strings.Join(doc.Accept, "|") != "application/sdp" ||
 		doc.Headers["cseq"][0] != "1 OPTIONS" || doc.TLSVersion != "" || doc.ResponseSeconds <= 0 || doc.DurationSeconds < doc.ResponseSeconds {
@@ -223,7 +224,7 @@ func TestASIPScrapeAsksWithOPTIONS(t *testing.T) {
 		t.Errorf("the request:\n%s", request.raw)
 	}
 	requests := trace.Requests()
-	if len(requests) != 1 || requests[0].Method != "OPTIONS" || requests[0].URL != "sip://"+s.addr || requests[0].Outcome != "200 OK, sent once" || requests[0].Header.Get("Sip-Transport") != "udp" {
+	if len(requests) != 1 || requests[0].Method != http.MethodOptions || requests[0].URL != "sip://"+s.addr || requests[0].Outcome != "200 OK, sent once" || requests[0].Header.Get("Sip-Transport") != "udp" {
 		t.Errorf("traced %+v", requests)
 	}
 	// A datagram that does not say how long its body is has the rest of it
@@ -239,7 +240,7 @@ func TestASIPScrapeAsksWithOPTIONS(t *testing.T) {
 	if label, err := RequestLabelFor(s.addr, c, RequestOverrides{}); err != nil || label != "sip://"+s.addr {
 		t.Errorf("label %q, %v", label, err)
 	}
-	if method, stage := RequestMethodFor(c, RequestOverrides{}), FetchStage(c); method != "OPTIONS" || stage != "sip" {
+	if method, stage := RequestMethodFor(c, RequestOverrides{}), FetchStage(c); method != http.MethodOptions || stage != "sip" {
 		t.Errorf("method %q, stage %q", method, stage)
 	}
 }
@@ -255,7 +256,7 @@ func TestASIPResponseIsAnAnswerWhateverItsStatus(t *testing.T) {
 		r.RequestURI, r.FromURI, r.UserAgent = "sip:1000@pbx.example.com", "sips:probe@monitoring.example.com", "probe/2"
 	})
 	doc, err := sipDoc(t, c, s.addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 404 || doc.Reason != "Not Found" || doc.OK || doc.UserAgent != "pbx 7" {
+	if err != nil || doc.StatusCode != http.StatusNotFound || doc.Reason != "Not Found" || doc.OK || doc.UserAgent != "pbx 7" {
 		t.Fatalf("document %+v, %v", doc, err)
 	}
 	request := s.requests()[0]
@@ -280,7 +281,7 @@ func TestASIPRequestIsSentAgainOverUDP(t *testing.T) {
 		return []string{"not sip at all", sipReply(other, "200 OK", nil, ""), sipReply(request, "100 Trying", nil, ""), sipReply(request, "200 OK", nil, "")}
 	})
 	doc, err := sipDoc(t, sipCollector(t, nil), s.addr, 5*time.Second)
-	if err != nil || doc.Attempts != 3 || doc.Requests != 1 || doc.StatusCode != 200 {
+	if err != nil || doc.Attempts != 3 || doc.Requests != 1 || doc.StatusCode != http.StatusOK {
 		t.Fatalf("document %+v, %v", doc, err)
 	}
 	seen := s.requests()
@@ -360,7 +361,7 @@ func TestASIPChallengeIsAnsweredWithTheAccount(t *testing.T) {
 				return []string{sipReply(request, "200 OK", nil, "")}
 			})
 			doc, err := sipDoc(t, sipCollector(t, sipAccount(t, "s3cret")), s.addr, 5*time.Second)
-			if err != nil || doc.StatusCode != 200 || !doc.Challenged || !doc.Authenticated || doc.Requests != 2 || doc.Attempts != 1 {
+			if err != nil || doc.StatusCode != http.StatusOK || !doc.Challenged || !doc.Authenticated || doc.Requests != 2 || doc.Attempts != 1 {
 				t.Fatalf("document %+v, %v", doc, err)
 			}
 			seen := s.requests()
@@ -388,13 +389,13 @@ func TestASIPChallengeThatIsNotMetIsTheAnswer(t *testing.T) {
 	}
 	s := startSIP(t, challenge(""))
 	doc, err := sipDoc(t, sipCollector(t, nil), s.addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 401 || !doc.Challenged || doc.Authenticated || doc.Requests != 1 || doc.OK {
+	if err != nil || doc.StatusCode != http.StatusUnauthorized || !doc.Challenged || doc.Authenticated || doc.Requests != 1 || doc.OK {
 		t.Errorf("without an account: %+v, %v", doc, err)
 	}
 
 	s = startSIP(t, challenge(""))
 	doc, err = sipDoc(t, sipCollector(t, sipAccount(t, "wr0ng-s3cret")), s.addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 401 || !doc.Challenged || doc.Authenticated || doc.Requests != 2 {
+	if err != nil || doc.StatusCode != http.StatusUnauthorized || !doc.Challenged || doc.Authenticated || doc.Requests != 2 {
 		t.Errorf("credentials the server does not take: %+v, %v", doc, err)
 	}
 	for _, request := range s.requests() {
@@ -410,7 +411,7 @@ func TestASIPChallengeThatIsNotMetIsTheAnswer(t *testing.T) {
 		return challenge(", stale=true")(n, request)
 	})
 	doc, err = sipDoc(t, sipCollector(t, sipAccount(t, "s3cret")), s.addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 200 || !doc.Authenticated || doc.Requests != 3 {
+	if err != nil || doc.StatusCode != http.StatusOK || !doc.Authenticated || doc.Requests != 3 {
 		t.Errorf("a stale nonce: %+v, %v", doc, err)
 	}
 
@@ -444,7 +445,7 @@ func TestASIPScrapeOverAStream(t *testing.T) {
 	plain := &sipStandIn{answer: answer}
 	stub := testutil.NewTCPStub(t, plain.serve)
 	doc, err := sipDoc(t, sipCollector(t, func(_ *model.Collector, r *SIPConfig) { r.Transport = "tcp" }), stub.Addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 200 || doc.Reason != "Fine" || doc.Transport != "tcp" || doc.Attempts != 1 || doc.BodyBytes != 5 ||
+	if err != nil || doc.StatusCode != http.StatusOK || doc.Reason != "Fine" || doc.Transport != "tcp" || doc.Attempts != 1 || doc.BodyBytes != 5 ||
 		strings.Join(doc.Allow, "|") != "INVITE|OPTIONS" || strings.Join(doc.Supported, "|") != "path" || doc.Headers["content-type"][0] != "application/sdp" || doc.Headers["call-id"] == nil || doc.TLSVersion != "" {
 		t.Fatalf("over tcp: %+v, %v", doc, err)
 	}
@@ -456,7 +457,7 @@ func TestASIPScrapeOverAStream(t *testing.T) {
 	tlsStub := testutil.NewTLSTCPStub(t, secure.serve)
 	c := sipCollector(t, func(c *model.Collector, r *SIPConfig) { r.Transport, c.Request.TLS.CAFile = "tls", tlsStub.CAFile })
 	doc, err = sipDoc(t, c, tlsStub.Addr, 5*time.Second)
-	if err != nil || doc.StatusCode != 200 || doc.Transport != "tls" || !strings.HasPrefix(doc.TLSVersion, "TLS 1.") || doc.TLSCipherSuite == "" {
+	if err != nil || doc.StatusCode != http.StatusOK || doc.Transport != "tls" || !strings.HasPrefix(doc.TLSVersion, "TLS 1.") || doc.TLSCipherSuite == "" {
 		t.Fatalf("over tls: %+v, %v", doc, err)
 	}
 	if via := secure.requests()[0].headers["via"]; !strings.HasPrefix(via, "SIP/2.0/TLS 127.0.0.1:") {

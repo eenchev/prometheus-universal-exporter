@@ -1,36 +1,42 @@
 # Configuration
 
 The exporter reads one YAML document, named by `--config.file`, and any
-[collector files](#collector-files) it lists. It declares the
-collectors — how to call a target, how to read what comes back, and which
-metrics to publish — and, optionally, the exporter's own settings under `web`
-and `otlp`, [`rate_limits`](REQUESTS.md#rate-limits-per-host), rate
-limits per host that every collector's requests share, and
-[`secret_stores`](AUTHENTICATION.md#secret-stores), the stores a credential
-is read from in place of a file. Target URLs are
-deliberately not part of it: Prometheus supplies each one per scrape.
-`otlp` exports probe results, the exporter's own metrics and, with
-`otlp.logs`, its own log over [OTLP](OTLP.md), with
-[`otlp.traces`](OTLP.md#traces-of-slow-requests) a trace of each slow probe
-and static target scrape — of each failed one too with `errors`, of each
-its caller sampled with `parent_based`, of a `sample_ratio` share of the
-rest, at most `max_per_second` a second
-([Which traces are exported](OTLP.md#which-traces-are-exported)), linked to
-the log records and the self-metrics' exemplars of the same probe, and with
-`propagate` sent to the targets as their `traceparent`
-([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces))
-— and with
-[`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
-that sends them on every resource.
+[collector files](#collector-files) it lists. The document declares the
+collectors: how to call a target, how to read the answer, and which metrics to
+publish. Target URLs are deliberately not part of it; Prometheus supplies one
+per scrape.
 
-The top-level keys are `collectors`, `collector_files`,
-[`defaults`](#defaults-for-the-collectors-of-a-file), `rate_limits`,
-`secret_stores`, `otlp` and `web`. `rate_limits` is a key of its own rather than part of a
-collector's `limits`, which bound one collector's scrape: its entries belong
-to no collector, and bound the requests of all of them together.
+The top-level keys are:
 
-`configs/config.example.yaml` is a complete working document to
-start from. This page is the reference for what it may contain.
+- `collectors` and `collector_files`: the collectors.
+- [`defaults`](#defaults-for-the-collectors-of-a-file): keys the collectors
+  of the file take when they do not set them.
+- [`rate_limits`](REQUESTS.md#rate-limits-per-host): rate limits per host,
+  shared by the requests of every collector. It is a top-level key, not part
+  of a collector's `limits` (which bound one collector's scrape), because its
+  entries belong to no collector and bound the requests of all of them
+  together.
+- [`secret_stores`](AUTHENTICATION.md#secret-stores): the stores a credential
+  can be read from in place of a file.
+- `web`: the exporter's own settings.
+- `otlp`: export over [OTLP](OTLP.md) of probe results, the exporter's own
+  metrics and, with `otlp.logs`, its own log.
+
+Two blocks under `otlp` add to the export:
+
+- [`otlp.traces`](OTLP.md#traces-of-slow-requests) exports a trace of each
+  slow probe and static target scrape. It can also export each failed one
+  (`errors`), each one whose caller is sampled (`parent_based`), and a
+  `sample_ratio` share of the rest, at most `max_per_second` per second
+  ([Which traces are exported](OTLP.md#which-traces-are-exported)). Traces are
+  linked to the log records and the self-metrics' exemplars of the same
+  probe and, with `propagate`, sent to the targets as their `traceparent`
+  ([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces)).
+- [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) names the replica
+  that sends the data on every resource.
+
+`configs/config.example.yaml` is a complete working document to start from.
+This page is the reference for what the document may contain.
 
 ## Contents
 
@@ -105,33 +111,43 @@ start from. This page is the reference for what it may contain.
 
 ## Collectors
 
-Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
+A collector holds request, response, decoder, transform, error-policy and limit settings. Target URLs are deliberately not stored in the configuration.
 
-A collector's `name` is what a probe asks for, so it must be unique: across the
-configuration's `collectors` and every [collector file](#collector-files). The
-same name twice stops the exporter at startup, fails `--dry-run`, and rejects a
-reload, with an error naming both places it was defined:
+A collector's `name` is what a probe asks for, so it must be unique across the
+configuration's `collectors` and every [collector file](#collector-files). A
+duplicate name stops the exporter at startup, fails `--dry-run` and rejects a
+reload, with an error that names both places where it was defined:
 
 ```text
 duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc/exporter/collectors.d/payments.yaml
 ```
 
-`decoder.type` chooses how the response is decoded. It is optional and
-defaults to `auto`, where the transform selects a deterministic decoder when it
-can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
-Prometheus exposition. A `graphite` collector reads with the `graphite`
-decoder, whatever its transform, and a `grpc` collector with `json`, since a
-call is answered as JSON. Other transforms — jq, yq, XPath, Python —
-decode each response by what it says it is: an `http` response by its
-`Content-Type` header, a `localfile` file by its extension, and by its content
-when neither says: an HTML page by its doctype or `<html>` element, in any
-case, within the first KiB and after any whitespace, comments and XML
-declaration, other markup as XML, JSON by its opening bracket, Prometheus text by its `# TYPE` or
-`# HELP` lines, carbon lines (`<path> <value> <timestamp>`, some path with a
-dot) as Graphite series, and anything else as text. If the decoded response cannot be used by the selected transform, the
-probe fails with a clear mapping error.
+`decoder.type` selects how the response is decoded. It is optional and
+defaults to `auto`. With `auto`, the decoder follows from the transform when
+the transform implies one:
 
-What a response says it is, with the decoder left to it:
+- `regex` reads text, `csv` reads CSV, `css` reads HTML, and `prometheus`
+  reads Prometheus exposition.
+- A `graphite` collector uses the `graphite` decoder whatever its transform,
+  and a `grpc` collector uses `json`, because a call is answered as JSON.
+
+The other transforms (jq, yq, XPath, Python) decode each response by what it
+declares itself to be: an `http` response by its `Content-Type` header, and a
+`localfile` file by its extension. When neither says, the content decides:
+
+- an HTML page by its doctype or `<html>` element, in any letter case, within
+  the first KiB and after any whitespace, comments and XML declaration;
+- other markup as XML;
+- JSON by its opening bracket;
+- Prometheus text by its `# TYPE` or `# HELP` lines;
+- carbon lines (`<path> <value> <timestamp>`, with a dot in some path) as
+  Graphite series;
+- anything else as text.
+
+If the selected transform cannot use the decoded response, the probe fails
+with a clear mapping error.
+
+With the decoder left to the response, these types and extensions select it:
 
 | `Content-Type` | Extension of a `localfile` file | Decoder |
 | --- | --- | --- |
@@ -146,17 +162,21 @@ What a response says it is, with the decoder left to it:
 | `application/toml` | `.toml` | `toml` |
 | any other, and none | any other, and none | by the content |
 
-The type is read without its parameters and in any case, as the extension is.
-No content is taken for NDJSON, logfmt, TOML or INI: an NDJSON body sent
-without its type is one JSON value followed by more, which is not JSON, and
-is text; logfmt, INI and InfluxDB line protocol have no type, and `.ini`
-names no decoder, so those three are read only with `decoder.type: logfmt`,
-`ini` or `influx`.
-Nothing but `text/csv` and `.csv` says CSV, and no content does: a body sent
-as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
-or `.txt`, is text, so a `python` script or a pre-script of a `jq` collector
-is given one string where it expected rows. Set `decoder.type: csv` for
-those. A `csv` transform reads CSV whatever the response says.
+The type is read without its parameters and without regard to letter case, as
+is the extension.
+
+Some formats are never detected:
+
+- **NDJSON, logfmt, TOML, INI and InfluxDB line protocol are not recognised by
+  content.** An NDJSON body sent without its type is one JSON value followed
+  by more, which is not JSON, so it is read as text. logfmt, INI and InfluxDB
+  line protocol have no media type, and `.ini` selects no decoder, so those
+  three are read only with `decoder.type: logfmt`, `ini` or `influx`.
+- **Only `text/csv` and `.csv` select CSV, and no content does.** A body sent
+  as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
+  or `.txt`, is text. A `python` script, or a pre-script of a `jq` collector,
+  then receives one string where it expected rows. Set `decoder.type: csv`
+  for those. A `csv` transform reads CSV whatever the response says.
 
 Each transform reads what certain decoders produce:
 
@@ -171,30 +191,31 @@ Each transform reads what certain decoders produce:
 | `python` | every decoder, `none` among them |
 
 A `decoder.type` that names a decoder the collector's transform does not read
-could never work, so it is refused when the configuration loads, naming both
-and what would work:
+could never work. It is refused when the configuration loads, with a message
+that names both and says what would work:
 
 ```text
 collector "app" decodes with json, which its regex transform cannot read: it reads text; set decoder.type to text, or use a transform that reads json: jq, yq or python
 ```
 
-A `jq` or `yq` transform with a `pre_script` is the exception: its rules read
+A `jq` or `yq` transform with a `pre_script` is the exception. Its rules read
 the mapping or list the script leaves in `data`, whatever was decoded, so it
-may name any decoder. The same table decides on a scrape, when the decoder
+may name any decoder. The same table applies at scrape time, when the decoder
 was left to each response.
 
-That fallback means a target that changes its `Content-Type`, or a file renamed
-to another extension, is quietly read another way. So a collector that leaves
-`decoder.type` unset where the transform implies none is logged at startup and
-on every reload, and listed in the [dry run](#dry-run) report:
+Because of that fallback, a target that changes its `Content-Type`, or a file
+renamed to another extension, is silently read another way. A collector that
+leaves `decoder.type` unset where the transform implies none is therefore
+logged at startup and on every reload, and listed in the [dry run](#dry-run)
+report:
 
 ```text
 {"level":"WARN","msg":"configuration warning","file":"config.yaml","warning":"collector \"app_json\" sets no decoder.type, so it decodes by the Content-Type header of each response, and by the content when that does not say; set decoder.type to fix the decoder"}
 ```
 
-Setting `decoder.type` — to `auto` too, when choosing per response is what you
-want — silences it. An explicit decoder is also what reads an ambiguous or
-mislabeled endpoint:
+Setting `decoder.type` silences the warning. That includes setting it to
+`auto`, when choosing per response is what you want. An explicit decoder is
+also how to read an ambiguous or mislabeled endpoint:
 
 ```yaml
 decoder:
@@ -203,127 +224,156 @@ decoder:
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
 `prometheus`, `text`, `graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `influx`,
-`binary`, `protobuf`, `none` and `auto`; `none` reads no body (see [No decoder](#no-decoder)),
-`binary` reads the answer of a binary protocol by the layout of
-`response.binary` (see [Binary answers](#binary-answers)), and `protobuf`
-reads a protobuf message by `response.protobuf` (see [Protobuf
-responses](#protobuf-responses)); `auto` chooses neither of the two. The `graphite` decoder reads
-Graphite series — a render API answer or carbon lines — for jq, yq and Python;
-see [Graphite](GRAPHITE.md). `ndjson`, `logfmt`, `toml` and `ini` read JSON
-Lines, key=value log lines, TOML and INI files into a document jq, yq and
-Python read as they read JSON; see [NDJSON, logfmt, TOML and
-INI](#ndjson-logfmt-toml-and-ini). `influx` reads InfluxDB line protocol
-into a list of its points; see [InfluxDB line
-protocol](#influxdb-line-protocol). Every collector sets `transform.type`, one of
-`jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
-no default, and a collector without one is refused at startup. JSON and YAML expressions
-use the embedded jq-compatible engine (the expression language is also used
-for yq-compatible transformations). A JSON body is one value and a YAML body
-one document: NDJSON, or anything else after the JSON value but whitespace,
-fails the scrape saying so (`decoder.type: ndjson` reads NDJSON), and so does a second YAML document after `---`
-(a leading `---`, and a trailing one with nothing after it, are fine), rather
-than everything after the first being dropped unseen. With
-`response.yaml.documents: list` the body is instead the list of its
-documents, in their order, whether it holds several, one or none, as a
-stream of Kubernetes manifests is read; an empty document is none of them.
-Rules then read `.[]`, or `items: .[]`. A key written twice in
-one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
-already defined at line 1`, rather than the later value replacing the earlier
-unseen: the error names the first ten such problems and counts the rest. A
-mapping key that is a sequence or a mapping (`? [a, b]`, `{x: 1}: 2`), or an
-alias of one, fails the scrape saying so, `yaml: the mapping key at line 3 is
-a sequence; only scalar keys (text, numbers, booleans) can be read`:
-the decoded body's keys are the keys of JSON objects, which only a scalar
-can be. Those keys are text, a number or a boolean being its text, so two
-keys written otherwise that are one text — `1` and `1.0`, `16` and `0x10`,
-`true` and `True`, `'1'` and `1`, a key and an alias of it — are a key
-written twice and fail the scrape the same way, by that text, `line 2:
-mapping key "1" already defined at line 1`, rather than one of the two
-being kept, which for `16` and `0x10` the YAML library did unseen and for
-the others the order of a Go map decided; so does a key merged in with
-`<<` that is the text of one of the mapping's own. A null key (`~`, `null`
-or none at all) has no text and fails the scrape at its line, `line 2:
-mapping key "~" is null, which is no text; quote it to read it as text`. A
-whole number of any length keeps every digit, in YAML as in JSON, so an
-identifier of thirty digits is the same label from either; one written with
-a fraction or an exponent is a float. YAML reads more as a number than
-JSON does, which shows in a label made of one: an unquoted `017` is octal,
-15, `0x1F` is 31, `1.10` is 1.1 and `1e3` is 1000. A version or a
-zero-padded identifier keeps its characters only when the target quotes it,
-`"017"`; where it does not, read the body with `decoder.type: text` and a
-`regex` transform. An
-error quotes no more than the start of a part of the document, followed by
-the length of the whole — the first 64 bytes of a key written twice (`mapping
-key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
-of a value that does not fit its tag and of an anchor's name — so it stays
-short whatever the document holds. A
-YAML body costs time and memory in proportion to its size whatever it holds —
-a mapping of 200,000 keys decodes in about the time it takes to parse, and a
-key written 100,000 times is refused as quickly — so `max_response_bytes`
-bounds what a target's answer can cost. A response decodes into a
-value whose lists and mappings nest 10,000 deep at most, one inside another,
-whatever its format, and a document nested deeper fails the scrape in the
-`decode` stage, saying so: a JSON one with `arrays and objects nested more than
-10000 deep, at line 1, column 10001`, and a YAML one, with or without aliases
-and however it is written, with `yaml: the document is nested more than 10000
-deep, counting what its aliases stand for; a response may nest 10000 deep at
-most`, after `line N:` where the YAML library's parser is what stops at the
-level too many and names a line (`yaml: line 3: the document is nested more
-than 10000 deep, ...`: the line that level opens on, or the line of the last
-key or value before it), the failure being one failure to the
-[log of repeated failures](LOGGING.md#repeated-failures) with or without a
-line. A YAML document is
-counted as a JSON one is, by the sequences and mappings written one inside
-another, with an alias counting as what it points at — so anchors that each
-hold an alias of the one before are as deep as the chain is long — and a
-mapping merged with `<<` counting as it is written, one level inside the
-mapping it is merged into. The exporter keeps this bound itself, before the
-document is decoded, because the YAML library keeps none on the whole: its
-parser bounds indentation and brackets apart, at 10,000 levels each (a
-document past either is refused there, in the library's words `exceeded max
-depth of 10000`, which the exporter replaces with the message above, the same
-mistake reading the same whichever of the two finds it), so brackets inside
-indentation parse nested 20,000 deep and more,
-and it decodes a chain of aliases on a stack as deep as the chain is long,
-which could exhaust the process. A [Python script](PYTHON.md#what-data-is) is
-handed a value as deep as it decodes. A document the YAML
-library itself
-fails on fails the scrape in the `decode` stage like any other that cannot be
-decoded (`the YAML library failed on the document: ...`); should the exporter's
-own code fail while it decodes one, the error says so and where (`the exporter
-failed on the YAML document (yamlkeys.go:<line> decode.(*yamlMap).set): ...; this
-is a defect of the exporter and not of the document, please report it`), which
-is what to report. XML supports XPath, HTML supports CSS
-selectors and XPath (including bare element selectors such as `h1`), text
-supports regular expressions, and Prometheus input is parsed before
-filtering/renaming. An XML document may nest its elements 512 deep, as an HTML
-document may; a deeper one fails the scrape in the `decode` stage, saying so,
-whatever its size. The other decoders too quote no more than the start of a
-value of the body they cannot read, its first 64 bytes, followed by the
-value's length, and then say what they have to say of it: `text format
-parsing error in line 7: label value "aaaa..."... (1000000 bytes) contains
-unescaped new-line`, `carbon line 3: "app.web01.requests 42 1727000000 x
-aaaa..."... (1000040 bytes) has 5 fields; want <path> <value> <timestamp>`,
-`CSV header names column "aaaa..."... (70000 bytes) twice, as columns 2 and
-3; rename one, ...`, `XML syntax error on line 2: element <aaaaaaaa... (90000
-bytes)> closed by </b>`. So an error is a line of a few hundred bytes that
-ends with what is wrong and what to change, whatever a value of the body
-holds, and so is the warning for the first line a decoder leaves out, a
-carbon line that is skipped or a sample line left out. The last resort is a
-bound on the whole error, 2,000 bytes: one longer than that — a histogram
-series named by a hundred labels, each shown — is cut there and ends with the
-length it had, `... (6400 bytes)`. The bound is that of the error of every
-stage a probe or a static target's scrape can fail at, in the answer, in the
-log and in a debug report alike ([Logging](LOGGING.md#repeated-failures)): a
-jq rule that raises `error(.message)`, a script that raises an exception with
-its data, a redirect to a URL of a megabyte and a gRPC status message of ten
-fail in 2,000 bytes at most, where the error was as long as what it quoted.
+`binary`, `protobuf`, `none` and `auto`:
+
+- `none` reads no body (see [No decoder](#no-decoder)).
+- `binary` reads the answer of a binary protocol by the layout in
+  `response.binary` (see [Binary answers](#binary-answers)), and `protobuf`
+  reads a protobuf message by `response.protobuf` (see [Protobuf
+  responses](#protobuf-responses)). `auto` never selects either of the two.
+- `graphite` reads Graphite series, from a render API answer or carbon lines,
+  for jq, yq and Python; see [Graphite](GRAPHITE.md).
+- `ndjson`, `logfmt`, `toml` and `ini` read JSON Lines, key=value log lines,
+  TOML and INI files into a document that jq, yq and Python read like JSON;
+  see [NDJSON, logfmt, TOML and INI](#ndjson-logfmt-toml-and-ini).
+- `influx` reads InfluxDB line protocol into a list of its points; see
+  [InfluxDB line protocol](#influxdb-line-protocol).
+
+Every collector sets `transform.type` to one of `jq`, `yq`, `xpath`, `css`,
+`csv`, `regex`, `prometheus` and `python`. There is no default, and a
+collector without one is refused at startup. JSON and YAML expressions use the
+embedded jq-compatible engine, which also serves yq-compatible transforms. XML
+supports XPath, HTML supports CSS selectors and XPath (including bare element
+selectors such as `h1`), text supports regular expressions, and Prometheus
+input is parsed before filtering and renaming.
+
+**One value, one document.** A JSON body is one value and a YAML body is one
+document. NDJSON, or anything other than whitespace after the JSON value,
+fails the scrape with a message that says so (`decoder.type: ndjson` reads
+NDJSON). So does a second YAML document after `---`; a leading `---`, and a
+trailing one with nothing after it, are accepted. Nothing after the first
+value is silently dropped. With `response.yaml.documents: list` the body is
+instead the list of its documents, in order, whether it holds several, one or
+none, which is how a stream of Kubernetes manifests is read. An empty
+document is not counted. Rules then read `.[]`, or `items: .[]`.
+
+**YAML mapping keys.** The keys of the decoded body are the keys of JSON
+objects, which must be scalars, and the exporter refuses anything that would
+lose a key silently:
+
+- A key written twice in one mapping fails the scrape (`line 3: mapping key
+  "a" already defined at line 1`), instead of the later value replacing the
+  earlier one. The error names the first ten such problems and counts the
+  rest.
+- A key that is a sequence or a mapping (`? [a, b]`, `{x: 1}: 2`), or an
+  alias of one, fails the scrape: `yaml: the mapping key at line 3 is a
+  sequence; only scalar keys (text, numbers, booleans) can be read`.
+- Keys are text; a number or a boolean key is its text. Two keys that are
+  written differently but have the same text (`1` and `1.0`, `16` and `0x10`,
+  `true` and `True`, `'1'` and `1`, a key and an alias of it) are therefore a
+  duplicate and fail the scrape the same way, naming that text: `line 2:
+  mapping key "1" already defined at line 1`. Otherwise one of the two would
+  be kept arbitrarily: for `16` and `0x10` the YAML library chose silently,
+  and for the others the iteration order of a Go map decided. A key merged in
+  with `<<` that has the text of one of the mapping's own keys fails too.
+- A null key (`~`, `null` or no key at all) has no text and fails the scrape
+  at its line: `line 2: mapping key "~" is null, which is no text; quote it
+  to read it as text`.
+
+**Numbers.** A whole number of any length keeps every digit, in YAML as in
+JSON, so a thirty-digit identifier gives the same label from either. A number
+written with a fraction or an exponent is a float. YAML reads more values as
+numbers than JSON does, which shows in a label made from one: an unquoted
+`017` is octal 15, `0x1F` is 31, `1.10` is 1.1 and `1e3` is 1000. A version or
+a zero-padded identifier keeps its characters only when the target quotes it
+(`"017"`). Where the target does not, read the body with `decoder.type: text`
+and a `regex` transform.
+
+**Cost and depth.** A YAML body costs time and memory in proportion to its
+size, whatever it holds: a mapping of 200,000 keys decodes in about the time
+it takes to parse, and a key written 100,000 times is refused as quickly. So
+`max_response_bytes` bounds what a target's answer can cost.
+
+A response of any format decodes into a value whose lists and mappings nest
+at most 10,000 deep. A document nested deeper fails the scrape in the
+`decode` stage:
+
+- A JSON document fails with `arrays and objects nested more than 10000 deep,
+  at line 1, column 10001`.
+- A YAML document, with or without aliases and however it is written, fails
+  with `yaml: the document is nested more than 10000 deep, counting what its
+  aliases stand for; a response may nest 10000 deep at most`. The message
+  follows `line N:` when it is the YAML library's parser that stops at the
+  excess level and names a line (`yaml: line 3: the document is nested more
+  than 10000 deep, ...`). That line is where the excess level opens, or the
+  line of the last key or value before it. With or without a line, the
+  failure is one failure to the
+  [log of repeated failures](LOGGING.md#repeated-failures).
+
+A YAML document's depth is counted like a JSON document's: by the sequences
+and mappings written one inside another. An alias counts as what it points
+at, so anchors that each hold an alias of the previous one are as deep as the
+chain is long. A mapping merged with `<<` counts as it is written, one level
+inside the mapping it is merged into.
+
+The exporter enforces this bound itself, before the document is decoded,
+because the YAML library has no bound on the whole document. The library's
+parser bounds indentation and brackets separately, at 10,000 levels each, so
+brackets inside indentation parse 20,000 deep and more. A document past
+either bound is refused by the library with `exceeded max depth of 10000`;
+the exporter replaces that with the message above, so the same mistake reads
+the same whichever check finds it. The library also decodes a chain of
+aliases on a stack as deep as the chain is long, which could exhaust the
+process. A [Python script](PYTHON.md#what-data-is) receives a value as deep
+as it decodes.
+
+An XML document may nest its elements 512 deep, as may an HTML document. A
+deeper one fails the scrape in the `decode` stage with a message that says so,
+whatever its size.
+
+**Failures inside the YAML library or the exporter.** A document the YAML
+library itself fails on fails the scrape in the `decode` stage like any other
+document that cannot be decoded (`the YAML library failed on the document:
+...`). If the exporter's own code fails while decoding one, the error says so
+and where: `the exporter failed on the YAML document (yamlkeys.go:<line>
+decode.(*yamlMap).set): ...; this is a defect of the exporter and not of the
+document, please report it`. That message is what to report.
+
+**Error length.** An error quotes only the start of a part of the document,
+followed by the length of the whole part, so it stays short whatever the
+document holds:
+
+- The YAML decoder quotes the first 64 bytes of a duplicate key (`mapping key
+  "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
+  bytes of a value that does not fit its tag and of an anchor's name.
+- The other decoders quote the first 64 bytes of a value they cannot read,
+  followed by the value's length, and then say what is wrong: `text format
+  parsing error in line 7: label value "aaaa..."... (1000000 bytes) contains
+  unescaped new-line`, `carbon line 3: "app.web01.requests 42 1727000000 x
+  aaaa..."... (1000040 bytes) has 5 fields; want <path> <value> <timestamp>`,
+  `CSV header names column "aaaa..."... (70000 bytes) twice, as columns 2 and
+  3; rename one, ...`, `XML syntax error on line 2: element <aaaaaaaa... (90000
+  bytes)> closed by </b>`.
+
+An error is therefore a line of a few hundred bytes that ends with what is
+wrong and what to change. The same holds for the warning about the first line
+a decoder leaves out, such as a skipped carbon line or a sample line.
+
+As a last resort, the whole error is limited to 2,000 bytes. A longer one,
+such as a histogram series named by a hundred labels, each shown, is cut
+there and ends with the length it had: `... (6400 bytes)`. The limit applies
+to the error of every stage at which a probe or a static target's scrape can
+fail, in the answer, in the log and in a debug report alike
+([Logging](LOGGING.md#repeated-failures)). A jq rule that raises
+`error(.message)`, a script that raises an exception with its data, a
+redirect to a URL of a megabyte and a gRPC status message of ten megabytes
+all fail in at most 2,000 bytes.
 
 ### No decoder
 
-`decoder.type: none` reads no body. A collector whose rules say what the
-status and the headers are, such as an uptime check, has nothing to decode,
-and a body that is empty, HTML or any other text fails nothing:
+`decoder.type: none` reads no body. A collector whose rules use only the
+status and the headers, such as an uptime check, has nothing to decode, and a
+body that is empty, HTML or any other text causes no failure:
 
 ```yaml
 request:
@@ -341,41 +391,48 @@ metrics:
     expression: $status
 ```
 
-jq and yq rules read `null` as the document, with `$status` and `$headers`
-as for any decoder ([Accepting other
-statuses](REQUESTS.md#accepting-other-statuses)); a rule that reads the
-document, `.x`, reads `null` and is a missing value. A Python script's `data`
-is `None`, and `response.body` and `response.text` are the body as the target
-sent it, which nothing converted: `response.charset` is refused beside
-`none`, since no decoder reads the body in it. A `regex`, `csv`, `css`,
-`xpath` or `prometheus` transform reads a body, so `none` is refused with it
-when the configuration loads, as any decoder a transform cannot read is. The
-body is still read, up to `max_response_bytes`, so `method: HEAD` is what
-spares the target sending it. A request type whose answer is JSON, `grpc`,
-`dns` and the others, and a paginated collector keep `json`, and refuse
-`none` as any other decoder.
+- **jq and yq** rules read `null` as the document, with `$status` and
+  `$headers` available as for any decoder ([Accepting other
+  statuses](REQUESTS.md#accepting-other-statuses)). A rule that reads the
+  document, such as `.x`, reads `null` and is a missing value.
+- **Python**: a script's `data` is `None`, and `response.body` and
+  `response.text` are the body as the target sent it, unconverted.
+  `response.charset` is refused together with `none`, because no decoder
+  reads the body in it.
+- A `regex`, `csv`, `css`, `xpath` or `prometheus` transform reads a body, so
+  `none` is refused with it when the configuration loads, like any decoder a
+  transform cannot read.
+- The body is still read, up to `max_response_bytes`. Use `method: HEAD` to
+  keep the target from sending it.
+- A request type whose answer is JSON (`grpc`, `dns` and the others) and a
+  paginated collector keep `json` and refuse `none`, like any other decoder.
 
 ### NDJSON, logfmt, TOML and INI
 
-These four decoders make the values the `json` decoder makes — mappings,
-lists, text, numbers, booleans and null — so a `jq` or `yq` rule reads them
-as it reads JSON, and a [Python script](PYTHON.md#what-data-is) is handed
-them as it is handed JSON. No other transform reads them, and a collector
-that names one of them with another transform is refused when the
-configuration loads. Each fails the scrape in the `decode` stage over what it
-cannot read, naming the line, and the column where there is one, and quoting
-no more of the body than the start of a value, as every decoder does.
+These four decoders produce the same kinds of values as the `json` decoder:
+mappings, lists, text, numbers, booleans and null. A `jq` or `yq` rule
+therefore reads them like JSON, and a [Python script](PYTHON.md#what-data-is)
+receives them like JSON. No other transform reads them, and a collector that
+names one of them with another transform is refused when the configuration
+loads. Each decoder fails the scrape in the `decode` stage on input it cannot
+read. The error names the line, and the column where there is one, and quotes
+only the start of a value, as every decoder does.
 
 **`ndjson`** reads newline-delimited JSON, also called JSON Lines: one JSON
-value on each line. The document is the list of the values, in the order of
-their lines, so `items: '.[]'` makes a series of each record. Blank lines are
-passed over, a carriage return before a line feed too, and a body without a
-value is the empty list. Each line is read as the `json` decoder reads a
-body, its numbers made the same way; a line that is no JSON value, that goes
-on after its value, or that ends inside it, as a pretty-printed value does,
-fails the scrape: `NDJSON decode: line 2, column 9: trailing data after the
-JSON value; NDJSON holds one value on each line`. The list is the outermost
-level of the document, so a line's value nests 9,999 deep at most.
+value per line.
+
+- The document is the list of the values, in line order, so `items: '.[]'`
+  makes a series for each record.
+- Blank lines are skipped, as is a carriage return before a line feed. A body
+  without a value is the empty list.
+- Each line is read as the `json` decoder reads a body, with numbers handled
+  the same way.
+- A line that is not a JSON value, that continues after its value, or that
+  ends inside it (as a pretty-printed value does) fails the scrape: `NDJSON
+  decode: line 2, column 9: trailing data after the JSON value; NDJSON holds
+  one value on each line`.
+- The list is the outermost level of the document, so a line's value nests at
+  most 9,999 deep.
 
 ```yaml
 decoder:
@@ -392,78 +449,88 @@ metrics:
 ```
 
 **`logfmt`** reads the `key=value` lines of Heroku's logs and of the Go
-loggers that write them, as `go-logfmt` reads them. The document is the list
-of the records, one for each line that holds a pair, each a mapping of its
-keys to their values as text — which a rule reads as a number when it is one
-([What counts as a number](#what-counts-as-a-number)). A value is a run of
-bytes without blanks, `=` and `"`, or a quoted string with the escapes of a
-JSON string (`msg="GET \"/\""`). A key written alone (`cached`) is null, so
-`has("cached")` tells it from a key the line does not write; `key=` is the
-empty string. Of a key written twice on one line the later is kept, as a JSON
-object keeps its later member: a logger may add a key a caller already gave,
-and refusing the body over it would lose every other record. Blank lines are
-passed over; anything else fails the scrape, naming the line, the column and
-the byte: `logfmt decode: line 3, column 16: unexpected '=' in a value; quote
-a value that holds it`.
+loggers that write them, as `go-logfmt` reads them.
 
-**`toml`** reads a TOML document with `github.com/BurntSushi/toml`. Tables
-are mappings, arrays and arrays of tables lists, integers and floats numbers
-(`nan` and `inf` are NaN and +Inf), and a date or a time, which JSON has not,
-is its text: an offset date-time in RFC 3339 with the fraction it was written
-with (`1979-05-27T00:32:00.5-07:00`), a local date-time as
-`1979-05-27T07:32:00` (with a `T` where it was written with a space), a local
-date as `1979-05-27` and a local time as `07:32:00`, which `time_format` reads
-as written. An error is the library's, after the line it names
-(`TOML decode: line 2: Key 'a' has already been defined.`), its message cut
-past 256 bytes with its length, as a quoted token can make it any length.
-Two bounds are kept before the library reads the body, since it keeps none
-and a few bytes can cost it far more than their size: arrays and inline
-tables nest 10,000 deep at most, as every decoder's document does; and a
-value may be named by no more than 16 parts, counting those of its `[table]`
-header, of its dotted key and of the keys of the inline tables around it
-(`[a.b]` then `c.d = { e = 1 }` names `e` by 5: `a.b.c.d.e`). The
-library looks a key up from the root for each of its parts, so a key costs
-the square of its parts: a single key of 10,000 held it for seconds. Within
-the bound, a document costs less than ten times what a flat one of its size
-does — a mebibyte of keys of 16 parts each decodes in about a second — and a
-real document names its values by a few. Past it, the scrape fails:
-`TOML decode: line 1: a value is named by more than 16 parts, ...`. The
-scan that keeps the bounds passes over a byte order mark as the library
-does, and where it cannot follow the body, which is then no TOML, it fails
-the scrape itself, naming the line (`TOML decode: line 2: expected a key and
-= after it`), rather than leave to the library a rest it has not bounded.
+- The document is the list of the records, one for each line that holds a
+  pair. Each record maps its keys to their values as text, which a rule reads
+  as a number when it is one
+  ([What counts as a number](#what-counts-as-a-number)).
+- A value is a run of bytes without blanks, `=` and `"`, or a quoted string
+  with the escapes of a JSON string (`msg="GET \"/\""`).
+- A key written alone (`cached`) is null, so `has("cached")` distinguishes it
+  from a key the line does not have. `key=` is the empty string.
+- When a key appears twice on one line, the later one is kept, as a JSON
+  object keeps its later member. A logger may add a key a caller already
+  gave, and refusing the body for that would lose every other record.
+- Blank lines are skipped. Anything else fails the scrape, naming the line,
+  the column and the byte: `logfmt decode: line 3, column 16: unexpected '='
+  in a value; quote a value that holds it`.
 
-**`ini`** reads an INI file with a parser of the exporter's own, since the
-dialects agree on little more than this. The document is a mapping of each
-section's name to the mapping of its keys to their values, as text, and of
-each key written before the first section to its value: `.pool.active` and
+**`toml`** reads a TOML document with `github.com/BurntSushi/toml`.
+
+- Tables are mappings, arrays and arrays of tables are lists, and integers
+  and floats are numbers (`nan` and `inf` are NaN and +Inf).
+- A date or a time, which JSON does not have, is its text, which
+  `time_format` reads as written: an offset date-time in RFC 3339 with the
+  fraction it was written with (`1979-05-27T00:32:00.5-07:00`), a local
+  date-time as `1979-05-27T07:32:00` (with a `T` where it was written with a
+  space), a local date as `1979-05-27` and a local time as `07:32:00`.
+- An error is the library's, after the line it names (`TOML decode: line 2:
+  Key 'a' has already been defined.`). Its message is cut after 256 bytes,
+  with its length, because a quoted token can make it any length.
+
+The exporter enforces two bounds before the library reads the body, because
+the library has none and a few bytes can cost it far more than their size:
+
+- Arrays and inline tables nest at most 10,000 deep, like every decoder's
+  document.
+- A value may be named by at most 16 parts, counting the parts of its
+  `[table]` header, of its dotted key and of the keys of the inline tables
+  around it (`[a.b]` then `c.d = { e = 1 }` names `e` by 5: `a.b.c.d.e`).
+  The library looks a key up from the root for each of its parts, so a key
+  costs the square of its parts: a single key of 10,000 parts kept it busy
+  for seconds. Within the bound, a document costs less than ten times what a
+  flat one of its size does (a mebibyte of keys of 16 parts each decodes in
+  about a second), and a real document names its values by a few parts. Past
+  the bound, the scrape fails: `TOML decode: line 1: a value is named by more
+  than 16 parts, ...`.
+
+The scan that enforces the bounds skips a byte order mark, as the library
+does. Where it cannot follow the body, which is then not TOML, it fails the
+scrape itself and names the line (`TOML decode: line 2: expected a key and =
+after it`), instead of passing the library a remainder it has not bounded.
+
+**`ini`** reads an INI file with the exporter's own parser, because the INI
+dialects agree on little more than what follows. The document maps each
+section's name to a mapping of its keys to their values, as text, and each
+key written before the first section to its value: `.pool.active` and
 `.uptime`.
 
-- `[name]` starts a section, and may be followed by a comment. A dotted name
-  is one name, and no path: `[db.primary]` is read as `.["db.primary"]`. A
-  section written twice is one section, its keys gathered from both.
+- `[name]` starts a section and may be followed by a comment. A dotted name
+  is one name, not a path: `[db.primary]` is read as `.["db.primary"]`. A
+  section written twice is one section, with the keys of both.
 - Any other line is a key and its value, split at the first `=` or `:`, each
-  without the blanks around it. The value may be empty, and is taken as
-  written, quotes included; it does not go on to the next line.
-- A comment is a whole line starting with `;` or `#`, so a value may hold
-  either, as a URL does. Blank lines are passed over.
-- Of a key written twice in one section the later is kept, since an INI file
-  is often a defaults file with lines appended to override it. Keys and names
-  keep their case.
+  without the surrounding blanks. The value may be empty and is taken as
+  written, including quotes. It does not continue on the next line.
+- A comment is a whole line that starts with `;` or `#`, so a value may
+  contain either character, as a URL does. Blank lines are skipped.
+- When a key appears twice in one section, the later one is kept, because an
+  INI file is often a defaults file with lines appended to override it. Keys
+  and names keep their letter case.
 - A key before the first section and a section of the same name would be one
-  member of the document, so the scrape fails naming both lines, as it does
-  over a line that is none of these: `INI decode: line 2: neither a section,
-  a key = value nor a comment`.
+  member of the document, so the scrape fails and names both lines. It also
+  fails on a line that is none of the above: `INI decode: line 2: neither a
+  section, a key = value nor a comment`.
 
 ### Binary answers
 
-`decoder.type: binary` reads the answer of a binary protocol — a Modbus TCP
-read over [`tcp`](TCP.md#binary-protocols), a game server's UDP query, a
-device's status frame over HTTP — by a layout the collector writes in
-`response.binary`. The document is a mapping of each field's name to its
-value, so a `jq` or `yq` rule reads `.registers[0]` and a [Python
-script](PYTHON.md#what-data-is) `data["registers"][0]`; no other transform
-reads it, and the rules never take bytes apart themselves.
+`decoder.type: binary` reads the answer of a binary protocol by a layout the
+collector writes in `response.binary`. Examples are a Modbus TCP read over
+[`tcp`](TCP.md#binary-protocols), a game server's UDP query, or a device's
+status frame over HTTP. The document maps each field's name to its value, so
+a `jq` or `yq` rule reads `.registers[0]` and a [Python
+script](PYTHON.md#what-data-is) reads `data["registers"][0]`. No other
+transform reads it, and the rules never take bytes apart themselves.
 
 ```yaml
 decoder:
@@ -496,29 +563,34 @@ metrics:
 | `fields[].length` | — | **Required** for `string` and `skip`: how many bytes. For a `cstring`, the most bytes its NUL is looked for in. No number takes it. |
 | `fields[].byte_order` | the layout's | The field's own byte order, `big` or `little`. |
 
-An integer is a number of the document as the `json` decoder makes a whole
-number, and so is a float; a `u64` past 2^63 is a float, and loses its last
-bits. A `cstring` is the text before its NUL, which is read and not kept. A
-`string` or `cstring` that holds bytes that are not UTF-8 has each of them
-read as U+FFFD, since a document holds text. Bytes after the last field are
-left unread, as an answer longer than its layout often is; a field that runs
-past the end of the answer fails the scrape in the `decode` stage, naming it:
-`binary decode: response.binary field "registers" needs 4 bytes from byte 9,
-and the answer is 11 bytes`. No charset is applied to a binary answer, and
-`response.binary` beside any other decoder is refused when the configuration
-loads, as a layout without the decoder and the decoder without a layout are.
+- An integer becomes a number of the document, as the `json` decoder makes a
+  whole number, and so does a float. A `u64` above 2^63 becomes a float and
+  loses its last bits.
+- A `cstring` is the text before its NUL; the NUL is read but not kept.
+- In a `string` or `cstring`, each byte that is not valid UTF-8 is read as
+  U+FFFD, because a document holds text.
+- Bytes after the last field are left unread, because an answer is often
+  longer than its layout. A field that runs past the end of the answer fails
+  the scrape in the `decode` stage, naming the field: `binary decode:
+  response.binary field "registers" needs 4 bytes from byte 9, and the
+  answer is 11 bytes`.
+- No charset is applied to a binary answer.
+- `response.binary` with any other decoder is refused when the configuration
+  loads, as are a layout without the decoder and the decoder without a
+  layout.
 
 ### InfluxDB line protocol
 
-`decoder.type: influx` reads InfluxDB line protocol, the text InfluxDB is
-written with and Telegraf's `influx` data format writes, a point a line:
+`decoder.type: influx` reads InfluxDB line protocol, the text format InfluxDB
+is written with and that Telegraf's `influx` data format produces, one point
+per line:
 
 ```text
 cpu,host=web01,region=eu usage_idle=97.5,cores=8i 1556813561098000000
 ```
 
-The document is the list of the points, in the order of their lines, which
-`jq`, `yq` and `python` read as they read a JSON array of objects:
+The document is the list of the points, in line order, which `jq`, `yq` and
+`python` read like a JSON array of objects:
 
 ```json
 [{"measurement": "cpu",
@@ -541,39 +613,38 @@ metrics:
         expression: .tags.host
 ```
 
-- `tags` are text. A field is what the line writes it as: a float a
-  number, an integer (`8i`) and an unsigned integer (`8u`) whole numbers
-  that keep every digit, a boolean (`t`, `T`, `true`, `True`, `TRUE` and
-  the same of false) true or false, and text in double quotes a string. A
-  rule over a boolean reads 1 or 0, as over any boolean.
-- `timestamp` is the number as the line writes it, and `null` for a point
-  without one. The line does not say its precision, nanoseconds unless
-  whoever wrote it chose another, so a rule that wants seconds divides:
+- `tags` are text. A field has the type the line writes: a float is a
+  number; an integer (`8i`) and an unsigned integer (`8u`) are whole numbers
+  that keep every digit; a boolean (`t`, `T`, `true`, `True`, `TRUE` and the
+  same forms of false) is true or false; and text in double quotes is a
+  string. A rule over a boolean reads 1 or 0, as over any boolean.
+- `timestamp` is the number as the line writes it, or `null` for a point
+  without one. The line does not state its precision, which is nanoseconds
+  unless the writer chose another, so a rule that wants seconds divides:
   `.timestamp / 1e9`.
-- A point without tags has an empty `tags`. A key written twice in a
-  point's tags or fields keeps the later value. Blank lines and lines that
-  start with `#` are passed over, and `\,`, `\=` and a backslash before a
-  blank write those characters in a name.
+- A point without tags has an empty `tags`. A key written twice in a point's
+  tags or fields keeps the later value. Blank lines and lines that start
+  with `#` are skipped. `\,`, `\=` and a backslash before a blank write those
+  characters in a name.
 - Anything else fails the scrape, naming the line, the column and what was
   expected there: `influx decode: line 3, column 9: unexpected 's' where
   the timestamp is, a whole number`.
-- `auto` never chooses the decoder, since no content type or file name
-  says line protocol: name it.
+- `auto` never selects this decoder, because no content type or file name
+  identifies line protocol. Name it explicitly.
 
-Line protocol is what InfluxDB takes in, so it is read where it was written
-down: a file Telegraf's `file` output writes, with
-[`localfile`](LOCALFILE.md), [`sshfile`](SSHFILE.md) or
-[`s3file`](S3FILE.md), an export of a bucket, or a service that answers
-with it. InfluxDB's own query API answers CSV, which an `http` collector
-reads with the [`csv` decoder](#reading-csv-what-to-expect). The exporter
-takes no pushed data, so it is no Telegraf output.
+Line protocol is InfluxDB's input format, so read it where it is written: a
+file that Telegraf's `file` output writes, with [`localfile`](LOCALFILE.md),
+[`sshfile`](SSHFILE.md) or [`s3file`](S3FILE.md); an export of a bucket; or a
+service that answers with it. InfluxDB's own query API answers CSV, which an
+`http` collector reads with the [`csv` decoder](#reading-csv-what-to-expect).
+The exporter accepts no pushed data, so it cannot act as a Telegraf output.
 
 ### Protobuf responses
 
-`decoder.type: protobuf` reads a body that is one protobuf message, as an
-API that answers `application/x-protobuf` sends, and hands it on as the
-JSON a [`grpc`](GRPC.md) answer is. The message's type comes from the
-files `response.protobuf` names, `.proto` files or a descriptor set:
+`decoder.type: protobuf` reads a body that is one protobuf message, as an API
+that answers `application/x-protobuf` sends, and passes it on as the same
+JSON a [`grpc`](GRPC.md) answer is. The message's type comes from the files
+that `response.protobuf` names, either `.proto` files or a descriptor set:
 
 ```yaml
 decoder:
@@ -596,66 +667,74 @@ metrics:
 | `proto_import_paths` | each file's directory | The directories their imports are resolved in, as `protoc -I`. |
 | `protoset_file` | — | In place of `proto_files`: a descriptor set, written with its imports by `protoc --descriptor_set_out --include_imports` or `buf build -o`. |
 
-- The document names each field as the `.proto` file does, has the fields
-  the message left unset with their zero values, and writes a 64-bit
-  integer as text, as protobuf's JSON does: read one with `tonumber`, or
-  `int(...)` in a script.
-- `jq`, `yq` and `python` read it; `auto` never chooses the decoder.
-- The files are read when the configuration loads, so a file that does not
-  compile and a message that is not in it fail the configuration, and a
-  file that changes afterwards is read again.
-- A body that is not the message fails the decode. Protobuf does not say
-  what a body is, so a body of another message may read as this one with
-  other values: name the message the endpoint sends.
-- The decoder is in every build that has the `grpc` request type, the
-  default build among them, since it reads descriptors with the same
-  libraries; a build without `grpc` refuses it.
+- The document names each field as the `.proto` file does, includes the
+  fields the message left unset with their zero values, and writes a 64-bit
+  integer as text, as protobuf's JSON mapping does. Read such a value with
+  `tonumber`, or `int(...)` in a script.
+- `jq`, `yq` and `python` read the document. `auto` never selects this
+  decoder.
+- The files are read when the configuration loads. A file that does not
+  compile, or a message that is not in it, fails the configuration. A file
+  that changes afterwards is read again.
+- A body that is not the message fails the decode. Protobuf bodies do not
+  identify their type, so a body of another message may decode as this one
+  with different values. Name the message the endpoint actually sends.
+- The decoder is in every build that has the `grpc` request type, including
+  the default build, because it reads descriptors with the same libraries. A
+  build without `grpc` refuses it.
 
 ### Character encodings
 
-Everything the exporter answers is UTF-8, as Prometheus requires; it refuses
-a whole scrape over one label value that is not. A response in another
-encoding is converted before it is decoded. The encoding comes from, in this
-order: a byte order mark (UTF-8, UTF-16LE or UTF-16BE); the collector's
-`response.charset`; the `charset` of the `Content-Type` header; and what the
-document declares in itself: for XML, the encoding of the XML declaration;
-for a document decoded as HTML, a `<meta>` in its first 1024 bytes and, in a
-page without one that declares an encoding, the encoding of an XML
-declaration the document starts with, as XHTML has one. Where the two
-disagree the `<meta>` is the one read, as in a browser. The XML declaration
-of an HTML document counts only at its very first byte: after a blank or an
-empty line it is none.
+Everything the exporter serves is UTF-8, as Prometheus requires; Prometheus
+refuses a whole scrape over one label value that is not. A response in
+another encoding is converted before it is decoded. The encoding is taken
+from the first of these that gives one:
 
-A `<meta>` is found as a browser finds one (the HTML standard's prescan), in
-a tag and not in the words `charset=`: it is a `<meta>` tag with a `charset`
-attribute, or with `http-equiv="Content-Type"` and a `content` attribute
-holding `charset=…`, in any case, quoted or not, and the first tag that
-declares an encoding is the one read. A `<meta>` inside a comment, the
-`content` of any other `<meta>` — a description that mentions
-`charset=windows-1251`, the address of a refresh — and the word in another
-element's attributes or in a title declare nothing, and neither does a
-declaration that is not whole within the first 1024 bytes. As in a browser, a
-`<meta>` or an XML declaration of an HTML document naming UTF-16 is read as
-UTF-8, since a page whose declaration could be read is not UTF-16, and
-`x-user-defined` as `windows-1252`; a byte order mark or header naming UTF-16
-is taken as it says.
+1. A byte order mark (UTF-8, UTF-16LE or UTF-16BE).
+2. The collector's `response.charset`.
+3. The `charset` of the `Content-Type` header.
+4. What the document declares in itself. For XML, that is the encoding of the
+   XML declaration. For a document decoded as HTML, it is a `<meta>` in its
+   first 1024 bytes or, in a page without a `<meta>` that declares an
+   encoding, the encoding of an XML declaration the document starts with, as
+   XHTML has one. Where the two disagree, the `<meta>` is used, as in a
+   browser. The XML declaration of an HTML document counts only at its very
+   first byte; after a blank or an empty line it is ignored.
 
-A `<meta>` naming an encoding the exporter does not know declares nothing, as
-in a browser: the next `<meta>` is looked at, then the XML declaration, and a
-page that declares nothing is taken for UTF-8. The same holds for the XML
-declaration of an HTML document. The name is the whole value of the
-attribute, so `<meta charset=utf-8/>` names `utf-8/`, which is no encoding: a
-UTF-8 page is read all the same, but a windows-1251 page whose tag is
-`<meta charset=windows-1251/>` has declared nothing, and is read as UTF-8 and
-repaired, with the warning below. Quote the value or leave a blank before
-`/>`.
+**Finding a `<meta>`.** A `<meta>` is found the way a browser finds one (the
+HTML standard's prescan): as a tag, not as the text `charset=`.
 
-The `charset` of a `Content-Type` is read from a header that is not well
-formed too: one with a parameter that has no value (`text/html;
-charset=windows-1251; q`), and two values a proxy joined with a comma
-(`text/html; charset=windows-1251, text/html`), of which the first is read. A
-header without a type and a subtype, a `charset` without a value, and one
-whose value opens a quote that is not closed (`charset="; q`) name nothing.
+- It is a `<meta>` tag with a `charset` attribute, or with
+  `http-equiv="Content-Type"` and a `content` attribute holding `charset=…`,
+  in any letter case, quoted or not. The first tag that declares an encoding
+  is used.
+- These declare nothing: a `<meta>` inside a comment; the `content` of any
+  other `<meta>`, such as a description that mentions `charset=windows-1251`
+  or the address of a refresh; the word in another element's attributes or
+  in a title; and a declaration that is not complete within the first 1024
+  bytes.
+- As in a browser, a `<meta>` or an XML declaration of an HTML document that
+  names UTF-16 is read as UTF-8, because a page whose declaration could be
+  read is not UTF-16, and `x-user-defined` is read as `windows-1252`. A byte
+  order mark or a header that names UTF-16 is taken at its word.
+- A `<meta>` that names an encoding the exporter does not know declares
+  nothing, as in a browser. The next `<meta>` is examined, then the XML
+  declaration, and a page that declares nothing is treated as UTF-8. The same
+  applies to the XML declaration of an HTML document.
+- The name is the whole value of the attribute, so `<meta charset=utf-8/>`
+  names `utf-8/`, which is not an encoding. A UTF-8 page is still read
+  correctly, but a windows-1251 page whose tag is
+  `<meta charset=windows-1251/>` has declared nothing: it is read as UTF-8
+  and repaired, with the warning described below. Quote the value or leave a
+  blank before `/>`.
+
+**The `Content-Type` header.** Its `charset` is also read from a header that
+is not well formed: one with a parameter that has no value (`text/html;
+charset=windows-1251; q`), and two values that a proxy joined with a comma
+(`text/html; charset=windows-1251, text/html`), of which the first is read.
+These name nothing: a header without a type and a subtype, a `charset`
+without a value, and a `charset` whose value opens a quote that is not closed
+(`charset="; q`).
 
 ```yaml
   - name: legacy_status
@@ -666,158 +745,180 @@ whose value opens a quote that is not closed (`charset="; q`) name nothing.
       charset: windows-1251
 ```
 
-`response.charset` is for a target that does not declare its encoding, or
+`response.charset` is for a target that does not declare its encoding or
 declares the wrong one, and for [local files](LOCALFILE.md), which declare
-none. Names follow the WHATWG Encoding Standard, as in a browser: `utf-8`,
-`windows-1252`, `iso-8859-2`, `windows-1251`, `koi8-r`, `shift_jis`, `gbk`,
-`euc-kr` and the rest; `iso-8859-1` and `latin1` are read as `windows-1252`,
-as browsers do. An unknown name in `response.charset` fails to load; an
-unknown name in the `Content-Type` header, or in the XML declaration of a
-document decoded as XML, fails the `decode` stage, naming it.
-Transforms and Python scripts see the converted body, and its `Content-Type`
-says `charset=utf-8`. A [debug report](#debug-probes) shows the response
-as the target sent it, and says what its body was converted from.
+none.
 
-What still is not valid UTF-8 after that — a target that says UTF-8 and is
-not — no longer fails the scrape: the invalid bytes in label values and help
-text are replaced with `�` (U+FFFD), counted in
-`http_exporter_invalid_utf8_total`, and logged as a warning naming the first
-metric (`first_metric`; a name longer than 200 bytes by its first 200 and its
-length, as an [error](LOGGING.md#repeated-failures) shows one). Setting
-`response.charset` fixes it at the source. Each run of
-invalid bytes becomes one `�`, however long it is, so names that differ only
-in such bytes are repaired into the same text: a page of Cyrillic names in
-windows-1251 that declares nothing gives every one-word name the label `�`,
-and the series, now duplicates of one, fail the scrape (`duplicate metric
-series`) after the warning. The remedy is the same.
+- Names follow the WHATWG Encoding Standard, as in a browser: `utf-8`,
+  `windows-1252`, `iso-8859-2`, `windows-1251`, `koi8-r`, `shift_jis`, `gbk`,
+  `euc-kr` and the rest. `iso-8859-1` and `latin1` are read as
+  `windows-1252`, as browsers do.
+- An unknown name in `response.charset` fails the load. An unknown name in
+  the `Content-Type` header, or in the XML declaration of a document decoded
+  as XML, fails the `decode` stage, which names it.
+- Transforms and Python scripts see the converted body, and its
+  `Content-Type` says `charset=utf-8`. A [debug report](#debug-probes) shows
+  the response as the target sent it, and says what its body was converted
+  from.
 
-Prometheus input is the text exposition format, version 0.0.4, or
-OpenMetrics 1.0 text, read by the exporter's own parser. It follows the
-reference parser's rules — families from HELP and TYPE lines,
-`_sum`/`_count`/`_bucket` grouped into summaries and histograms, quoted UTF-8
-names such as `{"my.metric", key="value"} 1` — and accepts three things the
-reference parser rejected: a body without a final newline, CRLF line endings,
-and trailing blanks on a line. It rejects a histogram or summary count, or a
-bucket's, that is negative, NaN, infinite or a fraction such as `1.5`: a count
-is a whole number of observations, however it is written (`7`, `7.0`,
-`1e3`). A malformed body fails the decode with the offending line
-number, for example
-`text format parsing error in line 3: expected float as value, got "n/a"`. A
-label value that is not valid UTF-8 does not fail it: it is repaired with `�`
-and counted, as above.
+**Invalid UTF-8.** Bytes that are still not valid UTF-8 after conversion, as
+from a target that says UTF-8 and is not, do not fail the scrape. The invalid
+bytes in label values and help text are replaced with `�` (U+FFFD), counted
+in `http_exporter_invalid_utf8_total`, and logged as a warning that names the
+first metric (`first_metric`; a name longer than 200 bytes is shown by its
+first 200 bytes and its length, as an
+[error](LOGGING.md#repeated-failures) shows one). Setting `response.charset`
+fixes the problem at the source.
 
-A label a target writes with an empty value is left off its series:
-`m{l="",k="v"}` is read as `m{k="v"}`. To Prometheus the two are one series,
-and the exporter exports no label with an empty value, wherever it comes
-from — a target's exposition, a rule's expression, a script, a constant
-written `""`. The label is off before anything reads the series: a
-`prometheus` rule's label that reads `l` finds none, as when the target did
-not write it, and a `required` one is missing; a pre-script and a `python`
-transform are given the series without it; and the text format, OpenMetrics
-and [OTLP](OTLP.md) carry none, with or without a script in between. What
-was refused about such a label still is: its name written twice on a
-sample, and a histogram's `le` or a summary's `quantile` that is empty,
-which is a bound that is no number rather than a label. On a series that
-has no buckets or quantiles, `le` and `quantile` are labels like any other
-and are left off when empty.
+Each run of invalid bytes becomes one `�`, however long it is, so names that
+differ only in such bytes are repaired into the same text. For example, a
+page of Cyrillic names in windows-1251 that declares nothing gives every
+one-word name the label `�`. The series are then duplicates of one, and the
+scrape fails (`duplicate metric series`) after the warning. The remedy is the
+same.
 
-Two series a target tells apart by nothing but such a label are the same
-series twice, `m{l=""}` beside `m`, and the scrape fails for the duplicate
-as it does for `m` written twice (`duplicate metric series "m"`); it failed
-before as well, the check having always read an empty label as none. A
-histogram's or a summary's samples written so are one series' samples: a
-histogram whose buckets carry `l=""` and whose `_sum` and `_count` do not is
-one histogram, where it was two halves that failed the scrape, and two whole
-histograms told apart by `l=""` alone fail the decode for the sample they
-then have twice (`second h_sum sample for the histogram h`).
+**Prometheus input.** Prometheus input is the text exposition format, version
+0.0.4, or OpenMetrics 1.0 text, read by the exporter's own parser. The parser
+follows the reference parser's rules: families from HELP and TYPE lines,
+`_sum`/`_count`/`_bucket` grouped into summaries and histograms, and quoted
+UTF-8 names such as `{"my.metric", key="value"} 1`.
 
-A histogram or a summary is passed on as the target wrote it, with its
-buckets and quantiles in ascending order, and with values that the text
-format allows and OpenMetrics does not, such as a negative `_sum` or bucket
-counts that fall (see [OpenMetrics](#openmetrics) for how those are written).
-OpenMetrics allows a histogram of buckets alone and a summary of quantiles
-alone, and some
-text format targets leave `_sum` or `_count` out: such a series is exported
-without the line, in either exposition format, never with a `_sum 0` or a
-`_count 0` the target did not write. A histogram's count is then the count of
-its `+Inf` bucket, which counts every observation, and one with a `_count`
-and no `+Inf` bucket is given the bucket.
+- It accepts three things the reference parser rejected: a body without a
+  final newline, CRLF line endings, and trailing blanks on a line.
+- It rejects a histogram or summary count, or a bucket's count, that is
+  negative, NaN, infinite or a fraction such as `1.5`. A count is a whole
+  number of observations, however it is written (`7`, `7.0`, `1e3`).
+- A malformed body fails the decode with the offending line number, for
+  example `text format parsing error in line 3: expected float as value, got
+  "n/a"`.
+- A label value that is not valid UTF-8 does not fail the decode. It is
+  repaired with `�` and counted, as described above.
 
-A histogram's `+Inf` bucket and its `_count` are one number written twice,
-and a target that updates the two without a lock is scraped between the
-updates now and then: `h_bucket{le="+Inf"} 7` beside `h_count 8`. Such a
+**Labels with an empty value.** A label that a target writes with an empty
+value is removed from its series: `m{l="",k="v"}` is read as `m{k="v"}`. To
+Prometheus the two are one series, and the exporter exports no label with an
+empty value, whatever its origin: a target's exposition, a rule's expression,
+a script, or a constant written `""`.
+
+- The label is removed before anything reads the series. A `prometheus`
+  rule's label that reads `l` finds none, as when the target did not write
+  it, and a `required` one is missing. A pre-script and a `python` transform
+  receive the series without it. The text format, OpenMetrics and
+  [OTLP](OTLP.md) carry no such label, with or without a script in between.
+- What was refused about such a label is still refused: its name written
+  twice on a sample, and an empty histogram `le` or summary `quantile`,
+  which is a bound that is not a number rather than a label. On a series
+  without buckets or quantiles, `le` and `quantile` are ordinary labels and
+  are removed when empty.
+- Two series that a target distinguishes only by such a label are the same
+  series twice (`m{l=""}` beside `m`), and the scrape fails for the duplicate
+  as it does for `m` written twice (`duplicate metric series "m"`). It failed
+  before as well, because the check has always read an empty label as none.
+- The samples of a histogram or a summary written this way belong to one
+  series. A histogram whose buckets carry `l=""` and whose `_sum` and
+  `_count` do not is one histogram, where it used to be two halves that
+  failed the scrape. Two whole histograms distinguished by `l=""` alone fail
+  the decode for the sample they then have twice (`second h_sum sample for
+  the histogram h`).
+
+**Histograms and summaries.** A histogram or a summary is passed on as the
+target wrote it, with its buckets and quantiles in ascending order. That
+includes values the text format allows and OpenMetrics does not, such as a
+negative `_sum` or bucket counts that decrease (see [OpenMetrics](#openmetrics)
+for how those are written).
+
+OpenMetrics allows a histogram with buckets alone and a summary with
+quantiles alone, and some text format targets leave `_sum` or `_count` out.
+Such a series is exported without the line, in either exposition format,
+never with a `_sum 0` or a `_count 0` that the target did not write. A
+histogram's count is then the count of its `+Inf` bucket, which counts every
+observation, and a histogram with a `_count` and no `+Inf` bucket is given
+the bucket.
+
+A histogram's `+Inf` bucket and its `_count` are the same number written
+twice. A target that updates the two without a lock is occasionally scraped
+between the updates: `h_bucket{le="+Inf"} 7` beside `h_count 8`. Such a
 histogram does not fail the scrape, which would lose every other family of
 the target with it. It is passed on as written: the text format answers
-`h_bucket{le="+Inf"} 7` and `h_count 8`, each as it was read. So is a
-histogram with neither a `+Inf` bucket nor a `_count`, which is exported
-with the buckets and the `_sum` it has and is given neither line. Neither
-is an OpenMetrics histogram, so [OpenMetrics](#openmetrics) writes both as
-`unknown` families and [OTLP](OTLP.md#delivery) as gauges, with the same
+`h_bucket{le="+Inf"} 7` and `h_count 8`, each as it was read. The same
+applies to a histogram with neither a `+Inf` bucket nor a `_count`, which is
+exported with the buckets and the `_sum` it has, without either line. Neither
+is a valid OpenMetrics histogram, so [OpenMetrics](#openmetrics) writes both
+as `unknown` families and [OTLP](OTLP.md#delivery) as gauges, with the same
 series and values.
 
-What cannot be one series fails the decode, as two samples of one plain
-series fail the scrape, and the error names the series and the line it
-starts in:
+Samples that cannot form one series fail the decode, as two samples of one
+plain series fail the scrape. The error names the series and the line it
+starts on:
 
-- two buckets with one bound, however it is written — `le="1"` and
-  `le="1.0"` — or two values of one quantile
+- two buckets with the same bound, however it is written (`le="1"` and
+  `le="1.0"`), or two values of one quantile
   (`the histogram h, which starts in line 2, has two buckets with the upper
   bound 1`);
 - a second `_sum` or `_count` sample of the series.
 
-A sample line that is no part of its family does not fail the decode: it is
-left out, and the rest of the answer is served. Under `# TYPE h histogram`, a
-sample named `h` itself, or an `h_bucket` without an `le` label, has a value
-no histogram series has a place for, and so has a sample named as its summary
-without a `quantile` label. Client libraries write such lines and Prometheus
-ingests them: Micrometer's older Prometheus registry writes a timer's
-percentiles as `x{quantile="0.95"}` under `# TYPE x histogram`, and
-VictoriaMetrics' metrics library writes its buckets as
-`x_bucket{vmrange="..."}`. The line cannot be passed on as a series of its
-own, which would be a second family under a name the histogram `x` writes
-its own lines with, so its value is not exported: the histogram is, with the
-buckets, `_sum` and `_count` it has, and every other family. The lines left
-out of the families the collector passes on are counted in
-[`http_exporter_decoder_lines_skipped_total`](SELF-METRICS.md) and logged at
-warn level once for a scrape, not once for a line, with the first of them and
-what was expected in its place (`sample lines left out ... line 2: expected
-h_bucket with an le label, h_sum or h_count as a sample of the histogram h,
-got h`); while every scrape leaves the same line out the warning is repeated
-sparingly, as a failure's is. A line that cannot be read at all, such as a
-value that is no number, still fails the decode. OpenMetrics' `_created`
-samples are read and left out, as before, and are not counted.
+**Sample lines that do not belong to their family.** Such a line does not
+fail the decode. It is left out, and the rest of the answer is served.
 
-A body is read as OpenMetrics when its `Content-Type` is
-`application/openmetrics-text`, or, when the `Content-Type` does not say
-`text/plain; version=0.0.4`, when its last line is `# EOF` — so a file of
-OpenMetrics read by a [`localfile`](LOCALFILE.md) collector is too. The
-exporter sends no `Accept` header of its own, so a target that negotiates
-answers in the text format; set `Accept: application/openmetrics-text` in
-`request.headers` to ask for OpenMetrics. Read as OpenMetrics:
+- Under `# TYPE h histogram`, a sample named `h` itself, or an `h_bucket`
+  without an `le` label, has a value that no histogram series has a place
+  for. The same is true of a sample named after its summary without a
+  `quantile` label.
+- Client libraries write such lines and Prometheus ingests them. Micrometer's
+  older Prometheus registry writes a timer's percentiles as
+  `x{quantile="0.95"}` under `# TYPE x histogram`, and VictoriaMetrics'
+  metrics library writes its buckets as `x_bucket{vmrange="..."}`.
+- The line cannot be passed on as a series of its own, because that would be
+  a second family under a name the histogram `x` uses for its own lines. Its
+  value is therefore not exported. The histogram is exported with the
+  buckets, `_sum` and `_count` it has, and so is every other family.
+- The lines left out of the families a collector passes on are counted in
+  [`http_exporter_decoder_lines_skipped_total`](SELF-METRICS.md) and logged
+  at warn level once per scrape, not once per line, with the first of them
+  and what was expected in its place (`sample lines left out ... line 2:
+  expected h_bucket with an le label, h_sum or h_count as a sample of the
+  histogram h, got h`). While every scrape leaves the same line out, the
+  warning is repeated sparingly, like a failure's.
+- A line that cannot be read at all, such as one whose value is not a number,
+  still fails the decode. OpenMetrics' `_created` samples are read and left
+  out, as before, and are not counted.
+
+**OpenMetrics.** A body is read as OpenMetrics when its `Content-Type` is
+`application/openmetrics-text`. When the `Content-Type` does not say
+`text/plain; version=0.0.4`, a body whose last line is `# EOF` is read as
+OpenMetrics too, so an OpenMetrics file read by a
+[`localfile`](LOCALFILE.md) collector qualifies. The exporter sends no
+`Accept` header of its own, so a target that negotiates answers in the text
+format. Set `Accept: application/openmetrics-text` in `request.headers` to
+ask for OpenMetrics. When a body is read as OpenMetrics:
 
 - timestamps are seconds, with a fraction, and are kept as milliseconds;
 - exemplars (`... 1 # {trace_id="abc"} 0.5`) are skipped;
 - a counter `foo`'s sample `foo_total` is the counter `foo_total`, with the
   family's help, as Prometheus names it; a family named `foo_total` is read the
   same way;
-- `_created` samples of counters, histograms and summaries are dropped: the
-  exporter has no creation time to export;
-- `unknown` is `untyped`, `stateset` a gauge, `info` the gauge `foo_info`, and
-  a `gaugehistogram` the gauges `foo_bucket` (with `le` as a plain label),
-  `foo_gcount` and `foo_gsum`: a histogram's buckets may only go up, a gauge
-  histogram's go up and down;
+- `_created` samples of counters, histograms and summaries are dropped,
+  because the exporter has no creation time to export;
+- `unknown` is `untyped`, `stateset` is a gauge, `info` is the gauge
+  `foo_info`, and a `gaugehistogram` becomes the gauges `foo_bucket` (with
+  `le` as a plain label), `foo_gcount` and `foo_gsum`, because a histogram's
+  buckets may only go up while a gauge histogram's go up and down;
 - `# UNIT` lines are ignored, and nothing but blank lines may follow `# EOF`.
 
-All non-Python transforms use the same collector-level metric declaration. Each
-entry has `name`, `description`, `type`, `labels`, and a transform-specific
-`expression`. The only allowed metric types are `gauge`, `counter`,
-`histogram`, `summary`, and `untyped`. A rule reads one value per series, so
-it is a `gauge` unless it says otherwise, and `histogram` and `summary` are
-refused at startup for every transform but `prometheus`, where a rule passes
-through a series that has its buckets or quantiles — unless a `histogram`
-rule has a [`histogram` block](#histograms-from-a-list-of-values), which
-counts the values it reads in a histogram; a `prometheus` rule
-without a `type` keeps each series' own, so a counter stays a counter:
+All non-Python transforms use the same collector-level metric declaration.
+Each entry has `name`, `description`, `type`, `labels`, and a
+transform-specific `expression`. The allowed metric types are `gauge`,
+`counter`, `histogram`, `summary` and `untyped`.
+
+- A rule reads one value per series, so it is a `gauge` unless it sets
+  another type.
+- `histogram` and `summary` are refused at startup for every transform except
+  `prometheus`, where a rule passes through a series that has its buckets or
+  quantiles. The exception is a `histogram` rule with a
+  [`histogram` block](#histograms-from-a-list-of-values), which counts the
+  values it reads into a histogram.
+- A `prometheus` rule without a `type` keeps each series' own type, so a
+  counter stays a counter.
 
 ```yaml
 collectors:
@@ -839,200 +940,271 @@ collectors:
             expression: .environment
 ```
 
-The expression and label values are interpreted by the selected transform:
+The selected transform interprets the expression and the label values:
 
-- `jq`/`yq`: jq expressions evaluated against decoded data.
-- `regex`: a RE2 expression; the capture group named `value`,
-  `(?P<value>\d+)`, is the numeric value, or the first capture group when
-  none has that name, and labels map to capture-group numbers or names. A
-  named value can stand after what a label reads, as in
-  `(?m)^(?P<host>\S+) load (?P<value>[\d.]+)$`, where the first group is the
-  `host` label's (`expression: host`, or `"1"`); groups are numbered by their
-  place in the regex whichever of them is the value, and a label may read the
-  value's group too, taking its text as written. A regex without a capture
-  group, or with two named `value`, is refused at startup. A match whose
-  value group captured nothing — an optional group that took no part, or one
-  that matched only blanks — is a missing value for that match.
-- `csv`: the expression is the numeric column name and labels map to column
-  names. With `response.csv.header: false` there are no names, and columns
-  are named by number, from 1: `expression: "2"` reads the second column. A
-  name there is refused at startup. A header naming one column twice, or
-  leaving a column that holds values unnamed, fails the scrape, naming the
-  column, rather than one silently hiding the other; rename one, or read the
-  columns by number with `header: false`. An unnamed column empty in every
-  row, as a delimiter ending each line leaves, is left out. A row with more
-  fields than the header has columns fails the scrape as well when any of
-  the extra fields holds a value, naming the line and the column — `CSV line
-  5 has a value in column 5, which the header does not name` — since the
-  value has no name to be read by: a text with a comma and no quotes around
-  it, a delimiter that is not the file's, or a quoted field of tab-separated
-  values read without `trim_space` put a row's values in the wrong columns,
-  and this is the one sign of it. Extra fields that are all empty, as a
-  delimiter ending the line leaves, are left out; a row with fewer fields
-  than the header has empty values in the columns it lacks; and with
-  `header: false` rows may be of any lengths. A line ends at a line feed, at
-  a carriage return with a line feed after it and at a carriage return
-  alone, in one file too; inside a quoted field a line feed and a carriage
-  return alone are the field's text, and a carriage return with a line feed
-  after it is read as the line feed alone. A quote inside a
-  field that does not start with one, as in `5" disk`, is read as written; a
-  quoted field left open, or with a quote in it that is not doubled, still
-  fails the scrape, whatever the other rows hold, rather than be read on over
-  the rows after it. The error of a field left open names the line the file
-  ends on, in a file whose lines end with a carriage return alone as in one
-  of line feeds: the carriage returns after the quote that is never closed
-  end lines too. `response.csv.trim_space: true` trims the blanks on both
-  sides of every field, with a header row and without one, and lets a quoted
-  field begin after blanks and end before them: `a,  "x, y"  ,b` is read as
-  `a`, `x, y` and `b`. Without it the blanks after a closing quote fail the
-  scrape as a stray quote does. With a
-  tab, or another blank that is not a space, as the delimiter an empty field
-  stays where it is, and the fields after it in their columns, and a quoted
-  field written after spaces is still a quoted field, a tab inside it kept.
-  With a space as the delimiter a run of spaces is one delimiter, which is
+- `jq`/`yq`: jq expressions evaluated against the decoded data.
+- `regex`: a RE2 expression whose capture groups give the value and the
+  labels.
+- `csv`: the expression is the name of the numeric column, and labels map to
+  column names.
+- `css`: the expression selects the HTML element whose text is numeric.
+- `xpath`: the expression selects XML or HTML nodes whose text is numeric, and
+  labels are XPath expressions evaluated at each node.
+- `prometheus`: the expression matches source metric names, and the rule can
+  remap the name, description, type and selected labels.
+
+The details for each transform follow.
+
+**`regex`.** The capture group named `value`, as in `(?P<value>\d+)`, is the
+numeric value. When no group has that name, the first capture group is the
+value. Labels map to capture-group numbers or names.
+
+- A named value can come after the text a label reads, as in
+  `(?m)^(?P<host>\S+) load (?P<value>[\d.]+)$`, where the first group belongs
+  to the `host` label (`expression: host`, or `"1"`). Groups are numbered by
+  their position in the regex, whichever of them is the value. A label may
+  also read the value's group, taking its text as written.
+- A regex without a capture group, or with two groups named `value`, is
+  refused at startup.
+- A match whose value group captured nothing (an optional group that did not
+  participate, or one that matched only blanks) is a missing value for that
+  match.
+
+**`csv`.** The expression is the numeric column's name, and labels map to
+column names. With `response.csv.header: false` there are no names, and
+columns are named by number from 1: `expression: "2"` reads the second
+column. A name is then refused at startup.
+
+Header and row shape:
+
+- A header that names one column twice, or leaves a column that holds values
+  unnamed, fails the scrape and names the column, so that one column never
+  silently hides the other. Rename one, or read the columns by number with
+  `header: false`. An unnamed column that is empty in every row, as a
+  delimiter at the end of each line leaves, is left out.
+- A row with more fields than the header has columns also fails the scrape
+  when any extra field holds a value, naming the line and the column: `CSV
+  line 5 has a value in column 5, which the header does not name`. The value
+  has no name to be read by, and this is the one sign that a row's values
+  are in the wrong columns, which happens with text that contains a comma
+  and no quotes, a delimiter that is not the file's, or a quoted field of
+  tab-separated values read without `trim_space`. Extra fields that are all
+  empty, as a delimiter at the end of the line leaves, are left out.
+- A row with fewer fields than the header has empty values in the columns it
+  lacks. With `header: false`, rows may have any length.
+- A response with no rows (a header alone, or nothing at all) has no value
+  for any rule, so a required rule is
+  [missing its value](#when-a-metric-cannot-be-extracted).
+
+Line ends and quotes:
+
+- A line ends at a line feed, at a carriage return followed by a line feed,
+  and at a carriage return alone, even within one file. Inside a quoted
+  field, a line feed and a carriage return alone are part of the field's
+  text, and a carriage return followed by a line feed is read as the line
+  feed alone.
+- A quote inside a field that does not start with one, as in `5" disk`, is
+  read as written. A quoted field left open, or one with a quote in it that
+  is not doubled, still fails the scrape, whatever the other rows hold,
+  instead of being read on across the following rows. The error for a field
+  left open names the line the file ends on. That is so in a file whose
+  lines end with a carriage return alone as in one with line feeds: the
+  carriage returns after the unclosed quote end lines too.
+
+Blanks and delimiters:
+
+- `response.csv.trim_space: true` trims the blanks on both sides of every
+  field, with or without a header row, and lets a quoted field begin after
+  blanks and end before them: `a,  "x, y"  ,b` is read as `a`, `x, y` and
+  `b`. Without it, blanks after a closing quote fail the scrape as a stray
+  quote does.
+- With a tab, or another blank that is not a space, as the delimiter, an
+  empty field stays where it is, and the fields after it stay in their
+  columns. A quoted field written after spaces is still a quoted field, and a
+  tab inside it is kept.
+- With a space as the delimiter, a run of spaces is one delimiter, which is
   how columns aligned with spaces are read (`web01   72  "two words"` is
-  three fields), the spaces after a closing quote being the delimiter too;
-  an empty field is written as a pair of quotes then, `web01  ""  72`, since
-  no blank can stand for it. That is under `trim_space`: without it every
-  space is a delimiter of its own, and aligned columns fail at the header,
-  for the column a run of spaces leaves unnamed. A response with no
-  rows — a header alone, or nothing at all — has no value for any rule, so a
-  required rule is [missing its value](#when-a-metric-cannot-be-extracted).
-  [Reading CSV: what to expect](#reading-csv-what-to-expect) lists what the
-  files tools write do to a rule.
-- `css`: the expression selects the HTML element whose text is numeric. Without
-  [`items`](#metrics-per-item) a metric is one value, so the expression must
-  match at most one element. Several values, and labels read from the page,
-  need `items`: select the rows with it, and the value and the labels as cells
-  of each row. A selector reads the text of the element it selects and never
-  an attribute: a value or a label that stands in one, as in `data-value` or
-  in the `datetime` of a `<time>`, is for `xpath`.
-  [The text of an HTML element](#the-text-of-an-html-element) says what that
-  text is, and [Reading HTML: what to expect](#reading-html-what-to-expect)
+  three fields). The spaces after a closing quote are the delimiter too. An
+  empty field is then written as a pair of quotes, `web01  ""  72`, because
+  no blank can stand for it. This applies under `trim_space`. Without it,
+  every space is a delimiter of its own, and aligned columns fail at the
+  header, because of the column a run of spaces leaves unnamed.
+
+[Reading CSV: what to expect](#reading-csv-what-to-expect) lists what the
+files that tools write do to a rule.
+
+**`css`.** The expression selects the HTML element whose text is numeric.
+
+- Without [`items`](#metrics-per-item) a metric is one value, so the
+  expression must match at most one element. For several values, and for
+  labels read from the page, use `items`: select the rows with it, and the
+  value and the labels as cells of each row.
+- A selector reads the text of the element it selects and never an
+  attribute. A value or a label that is in an attribute, such as
+  `data-value` or the `datetime` of a `<time>`, needs `xpath`.
+- [The text of an HTML element](#the-text-of-an-html-element) defines what
+  that text is, and
+  [Reading HTML: what to expect](#reading-html-what-to-expect) describes
   what a page does to a selector.
-- `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
-  are XPath expressions evaluated at each node, such as `../@name`, or `@name`
-  for an attribute of the node itself. An absolute path in a label starts at
-  the document, as it does in a rule's expression, wherever it stands:
-  `/status/@site`, `//status/@site`, `concat(/status/@site, '-', @id)` and
-  `../x[@ref=//y/@id]` read what they say at every node the rule selects.
-  So `//name` in a label is the first `name` of the document, the same for
-  every series; a `name` beneath the node is `.//name`, and its child `name`.
-  A label that cannot depend on the node is evaluated once for the rule and
-  the response, and every series is given its value: one that is one absolute
-  path and nothing else, as `//status/@site` or `//row[v > 1]/name`, or one
-  call of `count`, `sum`, `string`, `number`, `boolean`, `not`,
-  `normalize-space`, `string-length`, `name`, `local-name`, `round`, `floor`
-  or `ceiling` with one such path for its argument, as `count(//row)`. Every
-  other expression with an absolute path in it is evaluated at each of those
-  nodes, and walks the document from the top at each — `concat(/status/@site,
-  '-', @id)`, and also `count(//row) + 1`, `//a | //b` and `(//name)[1]`,
-  which no node changes: over thousands of nodes that is seconds of a probe,
-  so give the part that is the same everywhere a label of its own in one of
-  the two shapes, and reach what stands close by with `..` or `ancestor::`.
-  An expression is read to its end or refused at startup. The XPath engine
-  stops where one complete expression ends and says nothing of what follows,
-  so `sum(//a))` would be `sum(//a)` and `//a 'x'` would be `//a`: such an
-  expression is refused, with the place — `XPath "sum(//a))": the ")" at byte
-  9 closes nothing`, or `what stands from byte 5 on, "'x'", is no part of the
-  expression before it`. A predicate after parentheses within a path, as in
-  `//a/(b)[1]`, is refused the same way, since the engine reads none there:
-  write it inside them, after the step it is for, as `//a/(b[1])`.
-  Predicates may follow one another after an expression in parentheses, a
-  function call or a literal: `(//a)[@x][1]` is the first `a` of those with
-  an `x`. An expression longer than a few hundred bytes may be
-  refused without the place. Also refused are an expression with a NUL
-  character in it, which the engine takes for its end, and one whose
-  parentheses, predicates and function arguments stand more than 198 deep
-  within one another, the deepest that can be seen to be read to its end.
-  A rule may select attributes, as
-  `//job/@size` does: a label is then relative to the attribute, `.` its
-  value, `name()` its name and `../@name` another attribute of its element.
-  The label `text()` gives the attribute's value too, as `.` does, so the
-  series of such a rule can be told apart by it: to XPath an attribute has no
-  text beneath it, but the value is what this label has always given. Only
-  that bare label is the value. An attribute has no nodes beneath it, over
-  HTML as over XML, so on such a rule `./text()`, `text()[1]`, `node()`,
-  `self::*`, `descendant::text()`, `normalize-space(text())`,
-  `string(text())` and `substring(text(), 1, 2)` give nothing,
-  `contains(text(), '1')` is false and `count(text())` is 0: write them of
-  `.`, as in `normalize-space(.)` or `substring(., 1, 2)`.
-  This holds over HTML as over XML: `//td/@data-value` with the labels
-  `../@data-server` and `../../@id` is one series for each cell, named by its
-  cell and its row, and `//time/@datetime` with a
+
+**`xpath`.** The expression selects XML or HTML nodes whose text is numeric.
+Labels are XPath expressions evaluated at each node, such as `../@name`, or
+`@name` for an attribute of the node itself.
+
+Absolute paths in labels:
+
+- An absolute path in a label starts at the document, as it does in a rule's
+  expression, wherever it appears: `/status/@site`, `//status/@site`,
+  `concat(/status/@site, '-', @id)` and `../x[@ref=//y/@id]` read what they
+  say at every node the rule selects. So `//name` in a label is the first
+  `name` of the document, the same for every series. A `name` beneath the
+  node is `.//name`, and its child is `name`.
+- A label that cannot depend on the node is evaluated once per rule and
+  response, and every series gets its value. That covers a label that is one
+  absolute path and nothing else, such as `//status/@site` or
+  `//row[v > 1]/name`, and one call of `count`, `sum`, `string`, `number`,
+  `boolean`, `not`, `normalize-space`, `string-length`, `name`, `local-name`,
+  `round`, `floor` or `ceiling` with one such path as its argument, such as
+  `count(//row)`.
+- Every other expression that contains an absolute path is evaluated at each
+  of those nodes and walks the document from the top each time. Examples are
+  `concat(/status/@site, '-', @id)`, and also `count(//row) + 1`,
+  `//a | //b` and `(//name)[1]`, which no node changes. Over thousands of
+  nodes that costs seconds of a probe. Give the part that is the same
+  everywhere a label of its own in one of the two forms above, and reach
+  nearby nodes with `..` or `ancestor::`.
+
+Checks at startup:
+
+- An expression is read to its end or refused at startup. The XPath engine
+  stops where one complete expression ends and ignores what follows, so
+  `sum(//a))` would be read as `sum(//a)` and `//a 'x'` as `//a`. Such an
+  expression is refused, with the position: `XPath "sum(//a))": the ")" at
+  byte 9 closes nothing`, or `what stands from byte 5 on, "'x'", is no part
+  of the expression before it`.
+- A predicate after parentheses within a path, as in `//a/(b)[1]`, is
+  refused the same way, because the engine reads none there. Write it inside
+  the parentheses, after the step it applies to: `//a/(b[1])`. Predicates
+  may follow one another after an expression in parentheses, a function call
+  or a literal: `(//a)[@x][1]` is the first `a` of those with an `x`.
+- An expression longer than a few hundred bytes may be refused without the
+  position.
+- Also refused are an expression that contains a NUL character, which the
+  engine takes for its end, and one whose parentheses, predicates and
+  function arguments nest more than 198 deep, the deepest level that can be
+  verified to be read to its end.
+
+Rules that select attributes:
+
+- A rule may select attributes, as `//job/@size` does. A label is then
+  relative to the attribute: `.` is its value, `name()` its name, and
+  `../@name` another attribute of its element.
+- The label `text()` also gives the attribute's value, as `.` does, so the
+  series of such a rule can be distinguished by it. To XPath an attribute
+  has no text beneath it, but the value is what this label has always given.
+  Only that bare label is the value.
+- An attribute has no nodes beneath it, in HTML as in XML. On such a rule,
+  `./text()`, `text()[1]`, `node()`, `self::*`, `descendant::text()`,
+  `normalize-space(text())`, `string(text())` and
+  `substring(text(), 1, 2)` give nothing, `contains(text(), '1')` is false
+  and `count(text())` is 0. Write them with `.` instead, as in
+  `normalize-space(.)` or `substring(., 1, 2)`.
+- This works for HTML as for XML. `//td/@data-value` with the labels
+  `../@data-server` and `../../@id` is one series for each cell, named by
+  its cell and its row. `//time/@datetime` with a
   [`time_format`](#reading-a-date-or-a-time-as-the-value) and the label
-  `../../../td[1]` reads the moment of every row of a table. Over HTML the
-  text of a node is [the text of an HTML element](#the-text-of-an-html-element).
-  Over XML, prefixes in them mean what
-  [`response.namespaces`](#xml-namespaces) says. HTML has no namespaces: a
-  label that is `@` and one attribute name, on the node or after `../` steps,
-  is read by that name as the page writes it, a colon included, as in
-  `@xml:lang`, `@og:type`, `@v-on:click` or `../@data-id`
-  ([Attribute labels](#attribute-labels)). An expression that
-  computes a value instead of selecting nodes — `count(//job)`,
-  `sum(//job/@size)`, `string(/status/@load)`, a comparison such as
-  `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
-  `0`; a label may compute its text too, as in `normalize-space(@name)`, and
-  a number it computes is written as a jq label's is, without an exponent
-  from a millionth up to 1e21, as described below. A
-  computed value that is not a number, such as `number('n/a')`, is the rule's
-  missing value: a NaN an expression computes is the XPath engine saying it
-  could not read a number, where `NaN` written in a cell is the value the
-  source gives, and is exported
-  ([What counts as a number](#what-counts-as-a-number)). `sum()` needs every
-  node it adds up to be a number: over a cell of `n/a` or `1,234` the sum has
-  no value, and the rule is missing its value, with an error naming the text
-  ([Adding up nodes with `sum()`](#adding-up-nodes-with-sum)). A label read
-  from an element's text or from an attribute, or computed as a string,
-  is trimmed of leading and trailing whitespace, as a `css` label is, so the
-  indentation of pretty-printed XML is no part of it. The whitespace inside
-  the text is kept, line breaks and tabs included; `normalize-space(.)` makes
-  single spaces of it, which `css` has no way to. An attribute read by its
-  name on the node itself, `@title`, is trimmed like one read through a path,
-  `../@title`, and one that holds nothing but blanks gives no label.
-- `prometheus`: the expression matches source metric names; it can remap the
-  name, description, type, and selected labels. Without `type` a series keeps
-  its own. A rule that matches no metric of the response has no value, so a
-  required rule is [missing its value](#when-a-metric-cannot-be-extracted);
-  give a rule for a metric the target may leave out `required: false`. The
-  expression is a regular expression, matched anywhere in the name the
-  target gives a metric; a rule without one matches the metric its `name`
-  names. One that is nothing but blanks, such as `expression: " "`, is
-  refused at startup, as [an entry of `transform.include`](#collector-wide-labels)
-  is: it matched only the names that hold those blanks, so the rule passed
-  nothing on, and with `required: false` said nothing. The error says how a
-  pattern that does mean a blank is written, `'[ ]'` or `'\x20'` in single
-  quotes. Written `""`, the expression is the key left out. A rule needs
-  one of the two, since they are how it says which metrics it is about: one
-  with neither a `name` nor an `expression` — `- {}`, or a rule of a `type`,
-  a `description` or `labels` alone — matched no metric, was reported as
-  missing on every scrape as if the target had left a metric out, and with
-  `required: false` did nothing without a word. It is refused at startup.
-  Such a rule has no name to be named by, so the error names the collector
-  and which of its rules it is, counted from 1, as in `collector "node"
-  metrics rule 2 has neither a name nor an expression, …`, and says what to
-  write: an `expression`, a `name`, or `expression: '.*'` for a rule about
-  every metric. A pattern belongs in `expression`, never in `name`: a
-  rule's `name` is one metric's, matched whole when the rule has no
-  expression, and beside an expression the one name the series it matches
-  are exported under. So `name: 'node_.*'`, `name: '^up$'` and
-  `name: 'up|node_load1'` are refused as no metric name, and since a name
-  with a character a regular expression gives a meaning — `. * + ? ^ $ | (
-  ) [ ] { }` or a backslash — is almost surely a pattern under the wrong
-  key, the error says so: `… is not a valid Prometheus metric name; use
-  letters, digits, underscores and colons, not starting with a digit, or
-  set the collector's name_escaping to underscores or values to export it
-  escaped; a pattern to match the target's metric names by is a prometheus
-  rule's expression, not its name, so if this is one, write it as
-  expression, …`. That is under [`name_escaping`](#utf-8-names) `fail`, the
+  `../../../td[1]` reads the time of every row of a table.
+
+HTML and XML differences:
+
+- In HTML, the text of a node is
+  [the text of an HTML element](#the-text-of-an-html-element).
+- In XML, prefixes in expressions mean what
+  [`response.namespaces`](#xml-namespaces) says.
+- HTML has no namespaces. A label that is `@` and one attribute name, on the
+  node or after `../` steps, is read by that name as the page writes it,
+  including a colon, as in `@xml:lang`, `@og:type`, `@v-on:click` or
+  `../@data-id` ([Attribute labels](#attribute-labels)).
+
+Computed values:
+
+- An expression that computes a value instead of selecting nodes gives one
+  series with that value. Examples are `count(//job)`, `sum(//job/@size)`,
+  `string(/status/@load)` and a comparison such as `/status/@state = 'ok'`,
+  which gives `1` or `0`.
+- A label may compute its text too, as in `normalize-space(@name)`. A number
+  it computes is written like a jq label's: without an exponent from a
+  millionth up to 1e21, as described below.
+- A computed value that is not a number, such as `number('n/a')`, is the
+  rule's missing value. A NaN that an expression computes is the XPath
+  engine's way of saying it could not read a number. `NaN` written in a cell
+  is different: it is the value the source gives, and it is exported
+  ([What counts as a number](#what-counts-as-a-number)).
+- `sum()` needs every node it adds up to be a number. Over a cell of `n/a`
+  or `1,234` the sum has no value, and the rule is missing its value, with
+  an error that names the text
+  ([Adding up nodes with `sum()`](#adding-up-nodes-with-sum)).
+
+Whitespace in labels:
+
+- A label read from an element's text or from an attribute, or computed as a
+  string, is trimmed of leading and trailing whitespace, like a `css` label.
+  The indentation of pretty-printed XML is therefore not part of it.
+- Whitespace inside the text is kept, including line breaks and tabs.
+  `normalize-space(.)` reduces it to single spaces, which `css` cannot do.
+- An attribute read by its name on the node itself, `@title`, is trimmed
+  like one read through a path, `../@title`. An attribute that holds only
+  blanks gives no label.
+
+**`prometheus`.** The expression matches source metric names, and the rule
+can remap the name, description, type and selected labels. Without `type`, a
+series keeps its own type.
+
+- The expression is a regular expression, matched anywhere in the name the
+  target gives a metric. A rule without an expression matches the metric
+  that its `name` names.
+- A rule that matches no metric of the response has no value, so a required
+  rule is [missing its value](#when-a-metric-cannot-be-extracted). Give a
+  rule for a metric the target may leave out `required: false`.
+- An expression that is only blanks, such as `expression: " "`, is refused
+  at startup, as [an entry of `transform.include`](#collector-wide-labels)
+  is. It matched only names that contain those blanks, so the rule passed
+  nothing on and, with `required: false`, reported nothing. The error shows
+  how to write a pattern that does mean a blank: `'[ ]'` or `'\x20'` in
+  single quotes. An expression written `""` is the same as leaving the key
+  out.
+- A rule needs a `name` or an `expression`, because they are how it says
+  which metrics it is about. A rule with neither (`- {}`, or a rule with
+  only a `type`, a `description` or `labels`) matched no metric, was
+  reported as missing on every scrape as if the target had left a metric
+  out, and with `required: false` silently did nothing. It is refused at
+  startup. Such a rule has no name, so the error names the collector and the
+  rule's position, counted from 1, as in `collector "node" metrics rule 2
+  has neither a name nor an expression, …`, and says what to write: an
+  `expression`, a `name`, or `expression: '.*'` for a rule about every
+  metric.
+- A pattern belongs in `expression`, never in `name`. A rule's `name` is one
+  metric's name: it is matched whole when the rule has no expression, and
+  beside an expression it is the one name under which the matched series are
+  exported. So `name: 'node_.*'`, `name: '^up$'` and `name: 'up|node_load1'`
+  are refused as invalid metric names. A name that contains a character with
+  a meaning in regular expressions (`. * + ? ^ $ | ( ) [ ] { }` or a
+  backslash) is almost certainly a pattern under the wrong key, so the error
+  says so: `… is not a valid Prometheus metric name; use letters, digits,
+  underscores and colons, not starting with a digit, or set the collector's
+  name_escaping to underscores or values to export it escaped; a pattern to
+  match the target's metric names by is a prometheus rule's expression, not
+  its name, so if this is one, write it as expression, …`.
+- That check applies under [`name_escaping`](#utf-8-names) `fail`, the
   default. Under `underscores` and `values` a rule's name may be any name,
-  as a target's may, so `name: http.server.duration` is the metric the
-  target calls that, matched whole and exported escaped, and nothing there
-  tells a name from a pattern: `name: 'node_.*'` loads as the metric of
-  that very name, which no target has. A metric is passed on by every
-  rule that matches it, each making its series, so a rule of a `name` and a
-  rule whose expression matches that name both pass that metric on: with
-  the same labels they would make every series of it twice, and are
+  as a target's may. `name: http.server.duration` is then the metric the
+  target calls that, matched whole and exported escaped, and nothing
+  distinguishes a name from a pattern: `name: 'node_.*'` loads as the metric
+  with exactly that name, which no target has.
+- A metric is passed on by every rule that matches it, and each rule makes
+  its own series. A rule with a `name` and a rule whose expression matches
+  that name therefore both pass the metric on. With the same labels they
+  would produce every series twice, so they are
   [refused at startup](#a-name-and-a-pattern-that-matches-it).
 
 CSS remains available specifically for HTML tables and HTML status pages; it is

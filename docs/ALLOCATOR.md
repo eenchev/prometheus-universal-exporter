@@ -121,17 +121,17 @@ own checks:
   static targets lies beside the configuration. Keep collector files in a
   directory of their own, such as `collectors/*.yaml`.
 - Names beginning with `..` belong to the replica's cache directory
-  (`..data`, `..gen-<generation>`). A collector file whose path begins with
-  one is refused. So is an entry of a directory and more whose directory
-  could match one (it begins with `..`, with a pattern character, or with a
-  dot and a pattern character, as `*/x.yaml` does), because on the replica
-  it would match `..data/config.yaml` too. Begin such an entry with a
-  directory's name.
+  (`..data`, `..gen-<generation>`), and a collector file whose path begins
+  with one is refused. The same goes for an entry of a directory and more
+  whose directory could match such a name: one that begins with `..`, with a
+  pattern character, or with a dot and a pattern character, as `*/x.yaml`
+  does. On the replica it would match `..data/config.yaml` too. Begin such an
+  entry with a directory's name.
 - Files that the configuration names by path travel as paths, never as
-  content: a grpc collector's descriptor files and a `protobuf` decoder's, a
-  sql collector's `statement_file`, a rule's `value_map_file`, `otlp.tls`
-  files, `web.basic_auth` files, credential files, and the files that a
-  secret store logs in with and its `tls` files.
+  content. These are a grpc collector's descriptor files, a `protobuf`
+  decoder's, a sql collector's `statement_file`, a rule's `value_map_file`,
+  `otlp.tls` files, `web.basic_auth` files, credential files, and the files
+  that a secret store logs in with and its `tls` files.
   - They must be mounted on every replica at the same path, as without the
     allocator, and need not be mounted on the allocator: it checks the
     configuration without opening them.
@@ -186,12 +186,12 @@ none; both are 1 when left out ([Weights and capacity](#weights-and-capacity)).
 Only the allocator reads them: it takes them out of the file before the
 exporter's loader checks it, and a share carries none.
 
-A replica's share is a static target file of its own: the file's top-level
-keys (`interval`, `concurrency`) as written, and the targets of the share in
-the file's order, each with its name written out, so a target left to its
-default name, `<collector>_<index>`, keeps the name that the whole file
-gives it. Aliases and merge keys are written out as what they stand for, and
-the file's `x-` keys are left behind.
+A replica's share is a static target file of its own. It has the file's
+top-level keys (`interval`, `concurrency`) as written, and the targets of the
+share in the file's order. Each target has its name written out, so a target
+left to its default name, `<collector>_<index>`, keeps the name that the whole
+file gives it. Aliases and merge keys are written out as what they stand for,
+and the file's `x-` keys are left behind.
 
 Beside `targets`, the allocator's static target file may have
 `discovered_targets`, entries written once for every target a discovery
@@ -272,11 +272,12 @@ probe_jobs:
 - `labels` go on every target of the job; one written `""` is left out.
   `instance`, which the allocator sets, and names starting with `__` are
   refused.
-- `shard_key` is `target`, the default, which allocates each probe by its
-  target as written, or `address`, which allocates it by the host and port
-  that it reaches: for an `http` or `https` URL, its host and port, with
-  `:80` or `:443` filled in when it names none, compared without case; for
-  anything else, the target as written.
+- `shard_key` is `target` or `address`.
+  - `target`, the default, allocates each probe by its target as written.
+  - `address` allocates it by the host and port that it reaches. For an
+    `http` or `https` URL, that is its host and port, with `:80` or `:443`
+    filled in when it names none, compared without case. For anything else,
+    it is the target as written.
 - `weight` is the weight of each of the job's targets, the file's top-level
   `default_weight` when left out, and 1 without either; `weight_label`, with
   `discovery`, names a label of the sources whose value is a discovered
@@ -361,10 +362,10 @@ address escaped so that no two addresses share a name:
   `[fd00::1]:9100` makes `node__5Bfd00_3A_3A1_5D_3A9100`;
 - an address with any other character (an upper-case letter or `_`, say), or
   one whose escaped form would be longer than 128 characters, is written
-  instead as its first 48 characters, lower-cased with every character but a
-  letter or digit written `_`, then `_X` and the first 16 hex digits of its
-  SHA-256: `Web_1.example:80` makes `node_web_1_example_80_X` and 16 hex
-  digits;
+  another way. It becomes its first 48 characters, lower-cased, with every
+  character but a letter or digit written `_`, then `_X` and the first 16
+  hex digits of its SHA-256. `Web_1.example:80` makes
+  `node_web_1_example_80_X` and 16 hex digits;
 - a target whose name the file already gives to a written target takes that
   second form too.
 
@@ -431,13 +432,16 @@ HTTP service discovery does, sending `X-Prometheus-Refresh-Interval-Seconds`.
 
 **`kubernetes`** lists the `discovery.k8s.io/v1` EndpointSlices of the
 cluster that the allocator runs in, every `refresh_interval` (`30s` by
-default), with plain HTTPS requests to the API server. It connects at
-`KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`, verified with the
-service account's `ca.crt`, with its token, read again at every listing so
-that a rotated token is used, and with the `User-Agent`
-`pue-allocator/<version>`, so the API server's audit log tells the allocator
-apart. It polls instead of watching, which keeps it small and is enough for
-targets that move at the pace of a rollout.
+default), with plain HTTPS requests to the API server.
+
+- It connects at `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`, and
+  verifies the server with the service account's `ca.crt`.
+- It sends the account's token, read again at every listing so that a
+  rotated token is used.
+- Its `User-Agent` is `pue-allocator/<version>`, so the API server's audit
+  log tells the allocator apart.
+- It polls instead of watching. That keeps it small, and is enough for
+  targets that move at the pace of a rollout.
 
 - `namespaces` lists the namespaces to list, by default the allocator's own;
   `all_namespaces: true` lists them all, which needs a ClusterRole.
@@ -454,16 +458,19 @@ targets that move at the pace of a rollout.
   every namespace and every page asked for again), not each request alone.
 
 **Pages.** The slices are asked for 100 at a time, following the API
-server's `continue` token, so that a page of large slices stays within the
+server's `continue` token. This keeps a page of large slices within the
 16 MiB that an answer may hold: 100 slices of the EndpointSlice controller's
-100 endpoints are about 10 MiB. A page larger than 16 MiB, as in a cluster
-that raises `--max-endpoints-per-slice`, is asked for again, with the same
-`continue` token and half as many slices, down to one, and the rest of the
-listing keeps the smaller size. That is logged once at debug level, with the
-size that the listing fell to. Each listing starts at 100 again, so nothing
-outlives it, at the cost of the refused requests: at most seven, each read
-no further than 16 MiB. Only a single slice larger than 16 MiB cannot be
-listed, and fails the source.
+100 endpoints are about 10 MiB.
+
+- A page larger than 16 MiB, as in a cluster that raises
+  `--max-endpoints-per-slice`, is asked for again with the same `continue`
+  token and half as many slices, down to one. The rest of the listing keeps
+  the smaller size, and this is logged once at debug level with the size
+  that the listing fell to.
+- Each listing starts at 100 again, so nothing outlives it. The cost is the
+  refused requests: at most seven, each read no further than 16 MiB.
+- Only a single slice larger than 16 MiB cannot be listed, and it fails the
+  source.
 
 **Labels and permissions.** Each target has these meta labels, when they
 have a value: `__meta_kubernetes_namespace`,
@@ -535,9 +542,9 @@ Prometheus's own relabeling.
 ### Labels
 
 A probe target's group in the [service discovery answer](#service-discovery)
-has, besides the labels that the allocator sets, those that its source gave
-it: the `__meta_` labels, which Prometheus drops after relabeling, and those
-with a valid label name other than `job` and `instance`. It never has
+has the labels that the allocator sets. It also has those that its source
+gave it: the `__meta_` labels, which Prometheus drops after relabeling, and
+those with a valid label name other than `job` and `instance`. It never has
 another label starting with `__`, which would steer the probe itself. The
 job's `labels` win over them, and a label that the job writes `""` takes a
 discovered label away.
@@ -568,22 +575,22 @@ once, and one whose owner changes is handed over.
   therefore moves discovered targets with
   [handover](#members-and-allocation) instead of dropping them.
 - A source whose settings change (its `refresh_interval` or its
-  `label_selector`, say) is replaced by one with the new settings. The new
-  source starts with what the old one found when it is of the same kind,
-  has the same owner and keeps its name: the old targets stay in force until
-  the new source first answers, and a failure before then keeps them, as
+  `label_selector`, say) is replaced by one with the new settings. If the
+  new source is of the same kind, has the same owner and keeps its name, it
+  starts with what the old one found. The old targets then stay in force
+  until the new source first answers. A failure before then keeps them, as
   any failure does, and is counted.
 - A source renamed, or of another kind, starts with no targets.
 
 ### Instances with discovery
 
-If each allocator instance asked its sources on its own timer, the instances
-could hold different targets, and so different bundles and service discovery
-answers, for up to a refresh interval, and for as long as one of them cannot
-reach a source. An exporter replica heartbeats every instance and fetches its
-bundle from whichever answers, and Prometheus asks whichever instance its
-request reaches, so a replica's bundle and a job's targets would flip
-between them.
+Without peers, each allocator instance would ask its sources on its own
+timer. The instances could then hold different targets, and so different
+bundles and service discovery answers. That would last for up to a refresh
+interval, and for as long as one of them cannot reach a source. An exporter
+replica heartbeats every instance and fetches its bundle from whichever
+answers, and Prometheus asks whichever instance its request reaches. A
+replica's bundle and a job's targets would therefore flip between them.
 
 Instances with a discovery source therefore run as peers, each given
 `--peers`: the name that every instance's address resolves to (such as the
@@ -672,11 +679,11 @@ A snapshot names each source by its owner (the probe job or the
 During a rolling update that changes a source's settings, the new instances
 therefore still take the old leader's targets for it.
 
-- A source in the follower's input files that the leader's lack altogether
-  (as a new one does while a changed ConfigMap has reached the follower's
-  pod but not yet the leader's) is asked by the follower itself, as a
-  leader would, until the leader's snapshot has it. Its targets are
-  therefore not missing from the follower's bundles meanwhile.
+- Sometimes a source is in the follower's input files but not in the
+  leader's, as a new one is while a changed ConfigMap has reached the
+  follower's pod but not yet the leader's. The follower then asks that source
+  itself, as a leader would, until the leader's snapshot has it. Its targets
+  are therefore not missing from the follower's bundles meanwhile.
 - A fetch names, in `If-None-Match`, the digest of what the follower holds,
   not of the snapshot that it took last, and the leader answers `304` only
   when the two are the same. Whatever made them differ since (a changed
@@ -750,9 +757,9 @@ With `--peers.leader-only`, only the leader serves the whole of `/metrics`.
   `pue_allocator_is_leader 0`, whose sum is then 0, has no leader.
 - The allocation's series are the leader's alone, one of each. When another
   instance comes to lead, they come from it, with its `instance` and `pod`.
-  A query that leaves those labels out, or takes the `max` without them, as
-  the examples do, reads on across the change, which shows as a gap of a
-  scrape or two and a counter starting again from the new leader's count.
+  A query that leaves those labels out, or takes the `max` without them (as
+  the examples do), reads on across the change. The change shows as a gap of
+  a scrape or two, and a counter starting again from the new leader's count.
 - Before its first check, an instance counts as a follower.
 
 A follower's [status page](#status-page) is likewise short: it names the
@@ -797,13 +804,14 @@ that fails keeps the addresses that it resolved to last.
 **Late heartbeats.** A heartbeat that the replica gave up waiting for can
 still reach the allocator after a later one. Each heartbeat therefore
 carries the name of the replica's process, random and made at its start,
-and a sequence number counting that process's heartbeats from 1. The
-allocator applies a heartbeat only when its sequence is greater than that
-of the last one that it applied from the same process, so a late heartbeat
-neither undoes a later one nor puts a replica that said it is shutting down
-back among the live members. A restarted replica, a new process with the
-same id, is taken at its first heartbeat, and a late heartbeat of the
-process that it replaced is not.
+and a sequence number counting that process's heartbeats from 1.
+
+- The allocator applies a heartbeat only when its sequence is greater than
+  that of the last one that it applied from the same process.
+- A late heartbeat therefore neither undoes a later one nor puts a replica
+  that said it is shutting down back among the live members.
+- A restarted replica, a new process with the same id, is taken at its first
+  heartbeat, and a late heartbeat of the process that it replaced is not.
 
 **Live members.** The replicas heard from within the member TTL, three
 heartbeat intervals (30s by default), and not shutting down, are the live
@@ -824,15 +832,17 @@ restarted allocator has heard from every replica before it hands out
 shares. Nor does it form sooner than the longest interval that the replicas
 say in their heartbeats, counted from the first heartbeat.
 
-**Rollouts that shorten the interval.** An instance started with a shorter
-`--heartbeat.interval` than the instances before it said is heard by a
-replica first at the replica's next lookup of the instances' addresses on
-the old interval after the instance could be found, which is later than its
-start: a headless Service lists it once it is ready, and the lookups see it
-some time after that. The first heartbeat comes once a replica has found
-it. Within the old interval after the first heartbeat, every replica on the
-old interval has found it and heartbeated it at once, and the first member
-list waits that long.
+**Rollouts that shorten the interval.** Say a new instance starts with a
+shorter `--heartbeat.interval` than the instances before it said.
+
+- A replica first hears of it at the replica's next lookup of the instances'
+  addresses on the old interval, once the instance can be found. That is
+  later than its start: a headless Service lists it once it is ready, and
+  the lookups see it some time after that.
+- The first heartbeat comes once a replica has found it. Within the old
+  interval after the first heartbeat, every replica on the old interval has
+  found it and heartbeated it at once, and the first member list waits that
+  long.
 
 - A replica heartbeats every instance at the shortest interval that they
   say, so each hears it often enough, and says in its heartbeats the
@@ -846,9 +856,9 @@ list waits that long.
   balancer, therefore each keep their say, instead of the address's value
   changing at every answer.
 - While an instance from before the rollout is still found, every replica
-  says the old interval, including a replica that started after the new
-  instance was among them, and the first list waits for the replicas still
-  on it, whichever replica it hears first.
+  says the old interval. That includes a replica that started after the new
+  instance was among them. The first list waits for the replicas still on
+  the old interval, whichever replica it hears first.
 - A replica that has not been told an interval yet, as one that has just
   started, says none, because the 10s that it heartbeats at until then is no
   instance's. Its heartbeat does not change the interval waited for, though,
@@ -909,19 +919,19 @@ when its member TTL runs out, though it stays in the member list until
 
 Every target, static or probe, is placed on a member by its shard key, with
 rendezvous hashing: the first 8 bytes of the SHA-256 of the member's id, a
-NUL and the shard key, weighted by the members' capacities, and bounded so
-that no member takes much more than its share of the targets' weight
-([Weights and capacity](#weights-and-capacity)). Adding a replica moves
-about the targets that it takes, one in N+1 of the weight; removing one
-moves about its own.
+NUL and the shard key. The hashing is weighted by the members' capacities,
+and bounded so that no member takes much more than its share of the
+targets' weight ([Weights and capacity](#weights-and-capacity)). Adding a
+replica moves about the targets that it takes, one in N+1 of the weight;
+removing one moves about its own.
 
-**Handover.** A static target that moves from a replica still in the member
-list stays in that replica's share for one of the target's intervals (its
-own or the file's), while its new owner already scrapes it, so its series
-has no gap; then the old owner gives it up. That holds whether the member
-list changed or a reload of the input files moved the target, by a changed
-`shard_key`, say. A target whose old owner left has nobody to drain it, and
-one that the reload removed is in no share at once.
+**Handover.** A static target can move from a replica that is still in the
+member list. It then stays in that replica's share for one of the target's
+intervals (its own or the file's), while its new owner already scrapes it,
+so its series has no gap; then the old owner gives it up. That holds whether
+the member list changed or a reload of the input files moved the target (by
+a changed `shard_key`, say). A target whose old owner left has nobody to
+drain it, and one that the reload removed is in no share at once.
 
 Exported over OTLP with
 [`otlp.exporter_instance`](OTLP.md#the-exporter-instance), a static target's
@@ -1028,9 +1038,9 @@ separately, as draining.
 
 The balance factor is in the bundles. An instance with a factor other than
 1.25 adds `allocation.yaml`, which states it, to every bundle (the exporter
-does not read it), so two instances that place by different factors serve
-bundles of different generations, instead of shares that differ while their
-generations agree. A `collector_files` entry that would match
+does not read it). Two instances that place by different factors therefore
+serve bundles of different generations, instead of shares that differ while
+their generations agree. A `collector_files` entry that would match
 `allocation.yaml` is refused, as one matching `static-targets.yaml` is.
 
 **Corner cases.** With no member, nothing is placed, and with one member, it
@@ -1038,21 +1048,25 @@ holds everything. With two, each may take at most 1.25 times half the
 weight, so the bounds leave little room, and a unit that does not fit the
 member that its hash prefers goes to the other.
 
-A unit heavier than the fair share of the member with the largest capacity
-(the total over the members when the capacities are alike) fills the member
-it goes to, whatever the others hold. It is logged once while it stays so,
-listed in the status's `heavy`, and its member is counted in
-`pue_allocator_overloaded_members` when it goes past its bound. A member past
-its bound by less than its lightest unit is not counted: the bounds are
-rounded down and the units are whole, so at a balance factor near 1 some
-member is usually a unit over its own bound, which is the placement working,
-not a unit that is too heavy. Split such a unit, with a `shard_key` of its
-own for each target, or give it a weight nearer the others'.
+A unit can be heavier than the fair share of the member with the largest
+capacity (the total over the members, when the capacities are alike). It
+then fills the member that it goes to, whatever the others hold.
 
-**Stability.** The bound is what keeps the load even, and what costs a little
-stability: a member that joins takes the units that its hash gives it, and
-the units that it takes leave room on the others that units further on in
-the pass may move into.
+- It is logged once while it stays so, and listed in the status's `heavy`.
+- Its member is counted in `pue_allocator_overloaded_members` when it goes
+  past its bound.
+- A member past its bound by less than its lightest unit is not counted. The
+  bounds are rounded down and the units are whole, so at a balance factor
+  near 1, some member is usually a unit over its own bound. That is the
+  placement working, not a unit that is too heavy.
+
+Split such a unit, with a `shard_key` of its own for each target, or give it
+a weight nearer the others'.
+
+**Stability.** The bound is what keeps the load even, and it costs a little
+stability. A member that joins takes the units that its hash gives it. The
+units that it takes leave room on the others, and units further on in the
+pass may move into that room.
 
 - With many targets per member, the bound is far above what hashing puts on
   a member by chance, and seldom applies. A thousand targets of weight 1 over
@@ -1066,18 +1080,18 @@ the pass may move into.
   the probe targets can move a static target too, which is handed over as
   any move is.
 - Where a target drains therefore depends on the order in which the changes
-  came, not only on the targets before and after them. The leader, whose
-  sources answer one at a time, may move a static target when the first
-  answer comes and again, or back, when the second does, while a follower
+  came, not only on the targets before and after them. The leader's sources
+  answer one at a time, so the leader may move a static target when the
+  first answer comes, and again, or back, when the second does. A follower
   that takes both answers from one snapshot sees a single change, or none.
   A follower therefore takes the leader's drains of the discovered targets
   with its snapshot ([Instances with discovery](#instances-with-discovery))
-  instead of working them out, and the instances serve the same bundles once
-  it has.
-- Placing the static targets first, by their own weight, and the probes
-  after them would keep probe changes from moving static targets, but not
-  two answers of static sources from doing the same, and would balance the
-  members' loads less well. Taking the drains from the leader covers both.
+  instead of working them out. The instances then serve the same bundles.
+- Another design would place the static targets first, by their own weight,
+  and the probes after them. That would keep probe changes from moving static
+  targets, but not two answers of static sources from doing the same, and it
+  would balance the members' loads less well. Taking the drains from the
+  leader covers both.
 
 The bound applies with or without weights and capacities, one rule for all.
 `--allocation.balance-factor` 10 lets hashing place everything for up to 10
@@ -1095,13 +1109,13 @@ Plain HTTP with JSON. With `--web.token-file`, every endpoint except
 - A file that is empty or missing at the start stops the allocator; one that
   becomes empty or unreadable later refuses every request with `401` until
   it holds a token again, logged once.
-- A browser cannot send a bearer token, so `GET` and `HEAD` of the status
-  page, `/v1/status` and `/metrics`, which a person reads, also take the
-  token as the password of HTTP Basic auth, with any user name, and their
-  `401` asks for it, so the browser prompts. No other endpoint takes Basic
-  auth, because a browser sends the credentials that it was given with any
-  request to the allocator, including those from another site's page, and a
-  heartbeat must not be one of them.
+- A browser cannot send a bearer token. `GET` and `HEAD` of the status page,
+  `/v1/status` and `/metrics`, which a person reads, therefore also take the
+  token as the password of HTTP Basic auth, with any user name. Their `401`
+  asks for it, so the browser prompts. No other endpoint takes Basic auth: a
+  browser sends the credentials that it was given with any request to the
+  allocator, including those from another site's page, and a heartbeat must
+  not be one of them.
 - The token is never taken from the URL.
 
 With a token or without, a heartbeat that a browser marks as made by another
@@ -1140,23 +1154,24 @@ to 65535), `instance` (the replica process's name, of 1 to 64 bytes) and
 `sequence` (from 1) are required; anything else is answered `400`.
 
 - `static_targets_path` is the replica's `--web.static-targets-path`, which
-  the member's view links ([A member's targets](#a-members-targets)). One
-  that is not a clean absolute path of at most 256 bytes other than `/`,
-  without `?`, `#`, `%`, `\`, spaces or control characters, is dropped and
-  the heartbeat taken all the same; the member's view then links none of its
-  pages. The links are also left out when the advertised address would not
-  be the link's host alone, as one with a `/` or an `@` in it.
+  the member's view links ([A member's targets](#a-members-targets)).
+  - It must be a clean absolute path of at most 256 bytes, other than `/`,
+    without `?`, `#`, `%`, `\`, spaces or control characters. Otherwise it is
+    dropped and the heartbeat is taken all the same; the member's view then
+    links none of its pages.
+  - The links are also left out when the advertised address would not be
+    the link's host alone, as one with a `/` or an `@` in it.
 - A heartbeat whose sequence is not greater than the last one applied for
   its member and instance, or whose instance is the one that its member's
   current instance replaced, is answered as any other but changes nothing.
   A member that said it is shutting down is remembered for the member TTL
   after its last heartbeat, though not live, so a late heartbeat of it is
   still recognised.
-- A replica reports a refused bundle until it puts a later one in force, or
-  until the allocator serves again the bundle that it has in force, as it
-  does when the input files are put back as they were. The allocator logs a
-  refusal once, and again when the replica refuses a bundle after having
-  reported none.
+- A replica reports a refused bundle until it puts a later one in force. It
+  also stops when the allocator serves again the bundle that it has in
+  force, as it does when the input files are put back as they were. The
+  allocator logs a refusal once, and again when the replica refuses a bundle
+  after having reported none.
 - `interval_seconds` is the longest heartbeat interval that the allocator
   instances the replica found last said to it, which may be longer than the
   one it heartbeats at, the shortest. It is left out until an instance has
@@ -1186,26 +1201,28 @@ A bundle is a tree of files, keyed by path:
 - `config.yaml` is the configuration, and each collector file is at its path
   relative to the configuration's directory, both as written.
 - `static-targets.yaml` is the member's share, draining targets included.
-  It is left out when the share is empty (a static target file must hold a
-  target), and so for a replica that is not yet in the member list, which
-  gets the configuration alone and can answer probes while it waits.
+  It is left out when the share is empty, because a static target file must
+  hold a target. A replica that is not yet in the member list therefore gets
+  the configuration alone, and can answer probes while it waits.
 - `generation` is the digest of the files: the same files give the same
   generation, on every allocator. Discovered targets are part of the files,
   so allocators that discover agree on them by taking the leader's
   ([Instances with discovery](#instances-with-discovery)).
 
-The answer carries the generation as its `ETag`, quoted. A request whose
-`If-None-Match` names the generation the replica has is answered `304` when
-the bundle is still that one. With `wait=<duration>`, such a request waits,
-for at most `60s` however long it asks, until the bundle changes and is then
-answered at once with the new one, or with `304` when the wait runs out or
-the allocator shuts down. Until the member list has formed a bundle request
-is answered `503`, with `Retry-After`: at once without a wait, and with one
-when the wait runs out, unless the list forms first and the bundle is the
-answer. A replica
-takes the `503` as no failure: it keeps its bundle and asks again after
-`Retry-After`. Its `If-None-Match` is the generation, quoted, as the `ETag`
-is; a bare one is taken too.
+The answer carries the generation as its `ETag`, quoted.
+
+- A request whose `If-None-Match` names the generation that the replica has
+  is answered `304` when the bundle is still that one. Its `If-None-Match` is
+  the generation, quoted, as the `ETag` is; a bare one is taken too.
+- With `wait=<duration>`, such a request waits until the bundle changes, for
+  at most `60s` however long it asks. It is then answered at once with the
+  new bundle, or with `304` when the wait runs out or the allocator shuts
+  down.
+- Until the member list has formed, a bundle request is answered `503`, with
+  `Retry-After`. Without a wait that happens at once; with a wait, when the
+  wait runs out, unless the list forms first and the bundle is the answer.
+  A replica does not take the `503` as a failure: it keeps its bundle and
+  asks again after `Retry-After`.
 
 ### Service discovery
 
@@ -1280,25 +1297,31 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
   its instance ID, version and revision, when it started, how often it reads
   the input files again (`--config.watch-interval`) or that it read them
   once, and whether it is ready;
-- with `--peers`: whether it leads or follows, which instance leads, and
-  whether it runs with `--peers.leader-only`; the peers' timings (how often
-  the instances check each other and within what timeout, after how many
-  failed checks in a row an instance stops being live, and within what
-  timeout a follower fetches the leader's snapshot); every instance that its
-  peers' addresses give, itself included, with its ID, whether it is live,
-  discovers and knows its own address, when it was last checked, and the
-  checks that it failed in a row; how old the instance's snapshot is and
-  whether it holds the leader's discovered targets; and the series of the
-  peers' metrics as `/metrics` has them ([Metrics](#metrics));
-- the members: the heartbeat interval, the member TTL and `--settle`, and
-  for each member its address, how long ago its last heartbeat came (marked
-  when a heartbeat is overdue, more than one and a half intervals after the
-  last), the bundle that it has in force beside the one that it is to have,
-  a refusal that it reports, whether it is in the member list, joining,
-  silent or shutting down, its capacity, and the static targets that it
-  keeps draining. A capacity that its heartbeats changed is shown as the one
-  that the member list places it by, an arrow and the new one, until it has
-  held for `--settle`;
+- with `--peers`:
+  - whether it leads or follows, which instance leads, and whether it runs
+    with `--peers.leader-only`;
+  - the peers' timings: how often the instances check each other and within
+    what timeout, after how many failed checks in a row an instance stops
+    being live, and within what timeout a follower fetches the leader's
+    snapshot;
+  - every instance that its peers' addresses give, itself included, with its
+    ID, whether it is live, discovers and knows its own address, when it was
+    last checked, and the checks that it failed in a row;
+  - how old the instance's snapshot is, and whether it holds the leader's
+    discovered targets;
+  - the series of the peers' metrics as `/metrics` has them
+    ([Metrics](#metrics));
+- the members: the heartbeat interval, the member TTL and `--settle`, and for
+  each member:
+  - its address, and how long ago its last heartbeat came, marked when a
+    heartbeat is overdue (more than one and a half intervals after the last);
+  - the bundle that it has in force beside the one that it is to have, and a
+    refusal that it reports;
+  - whether it is in the member list, joining, silent or shutting down;
+  - its capacity. A capacity that its heartbeats changed is shown as the one
+    that the member list places it by, an arrow and the new one, until it has
+    held for `--settle`;
+  - the static targets that it keeps draining;
 - how the targets are spread. Two sentences open it:
   - what the two kinds of target are, each with its colour in the bars
     (orange and blue). A *static target* is scraped by the member that owns
@@ -1309,78 +1332,90 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     3 written in the static target file and 24 discovered by services. 25
     probe targets: 3 listed in the probe jobs and 22 discovered by sites.`
 
-  Then, for each member: under the heading *Static targets*, the static
-  targets that it owns and those that it keeps draining; under *Probe
-  targets*, the probe targets that service discovery routes to it; and the
-  total. Also its weight (what the static targets that it owns and the
-  probes routed to it weigh, which is the weight that it is placed by); the
-  weight of the targets that it keeps draining, separately, since they weigh
-  on their new owners; its capacity and its fair share, the weight times its
-  capacity over the capacity of all
-  ([Weights and capacity](#weights-and-capacity)); and a bar of its weight,
-  with a segment each for the static, the draining and the probe weight, and
-  its fair share marked on it. The legend under it names them *static
-  targets, owned*, *static targets, draining* and *probe targets, routed*.
+  Then, for each member:
+  - under the heading *Static targets*, the static targets that it owns and
+    those that it keeps draining; under *Probe targets*, the probe targets
+    that service discovery routes to it; and the total;
+  - its weight: what the static targets that it owns and the probes routed
+    to it weigh, which is the weight that it is placed by;
+  - the weight of the targets that it keeps draining, shown separately,
+    since they weigh on their new owners;
+  - its capacity and its fair share: the weight times its capacity over the
+    capacity of all ([Weights and capacity](#weights-and-capacity));
+  - a bar of its weight, with a segment each for the static, the draining
+    and the probe weight, and its fair share marked on it. The legend under
+    it names them *static targets, owned*, *static targets, draining* and
+    *probe targets, routed*.
 
-  Then come the totals, the average per member, and the imbalance: the most
-  that any member has divided by the average, `1.00×` for targets spread
-  evenly, and for the weight, the most that any member holds of its fair
-  share, which for members of one capacity is the same. The weight of an
-  overloaded member is marked: one above the balance factor times its fair
-  share by more than whole units explain, still above it without its
-  lightest unit, or filled alone by a unit above it. A sentence above the
-  table says how many are overloaded and why. A unit heavier than the fair
-  share of the member with the largest capacity (a target, or the targets of
-  one shard key) is named in a warning above the table, with its weight and
-  its member. The columns stay the same whatever the number of probe jobs;
+  Then come the totals, the average per member, and the imbalance. For
+  targets, the imbalance is the most that any member has divided by the
+  average, `1.00×` for targets spread evenly. For the weight, it is the most
+  that any member holds of its fair share, which for members of one capacity
+  is the same.
+
+  The weight of an overloaded member is marked. A member is overloaded when
+  it is above the balance factor times its fair share by more than whole
+  units explain, still above it without its lightest unit, or filled alone by
+  a unit above it. A sentence above the table says how many are overloaded
+  and why. A unit heavier than the fair share of the member with the largest
+  capacity (a target, or the targets of one shard key) is named in a warning
+  above the table, with its weight and its member. The columns stay the same
+  whatever the number of probe jobs;
 - the static targets by where they come from, under the heading *Static
-  targets*: a row for those that the static target file writes, and one for
-  each `discovered_targets` entry, in file order, the entry linking to its
-  view
+  targets*. There is a row for those that the static target file writes, and
+  one for each `discovered_targets` entry, in file order, the entry linking
+  to its view
   ([A discovered_targets entry's targets](#a-discovered_targets-entrys-targets)).
-  Each row has its targets, what they weigh together, the members of the
-  member list, the fewest, the average and the most of the row's targets
-  that a member owns, the imbalance, marked as a probe job's is below, and
+  Each row has its targets and what they weigh together; the members of the
+  member list; the fewest, the average and the most of the row's targets
+  that a member owns; the imbalance, marked as a probe job's is below; and
   its discovery sources with their result;
-- the probe jobs, under the heading *Probe jobs*, a row each: the job,
-  which links to its view ([A probe job's targets](#a-probe-jobs-targets)),
-  its collector, its targets, what they weigh together, the members that it
-  is routed among, the fewest, the average and the most targets of the job
-  that a member of them has, the imbalance (the most divided by the
-  average), and its discovery sources with their result, or `listed` for a
-  job whose file lists every target.
+- the probe jobs, under the heading *Probe jobs*, a row each. A row has the
+  job, which links to its view ([A probe job's targets](#a-probe-jobs-targets)),
+  its collector, its targets and what they weigh together. It also has the
+  members that the job is routed among, and the fewest, the average and the
+  most targets of the job that one of them has; the imbalance (the most
+  divided by the average); and its discovery sources with their result, or
+  `listed` for a job whose file lists every target.
   - The members that a job is routed among are those that service discovery
     may route its targets to ([Service discovery](#service-discovery)), so a
     member given none of its targets counts, with 0, and Min shows it.
   - The imbalance is marked where the most is further above the average
     than hashing puts a member's targets by chance: by 3 targets or more,
     and by 3 or more standard deviations of a member's count,
-    √(targets × (1 − 1/members) ÷ members). Hashing spreads a few targets
-    unevenly as often as not (3 over 3 members all on one in one placement
-    of nine), so the imbalance alone says little about a small job. Of
-    random placements, the mark falls on none of 2 targets over 2 members or
-    3 over 3, on 1.6% of 4 over 4, 1.7% of 8 over 4, 0.4% of 6 over 3, 1.6%
-    of 20 over 4, 1.1% of 100 over 4 and 1.8% of 1000 over 10. It never
-    falls on a member only one or two over the most even split (the targets
-    divided by the members and rounded up), and always on a job of 4
-    targets or more over 4 members that has all of them on one.
+    √(targets × (1 − 1/members) ÷ members).
+
+    Hashing spreads a few targets unevenly as often as not (3 targets over 3
+    members land all on one in one placement of nine), so the imbalance alone
+    says little about a small job. Of random placements, the mark falls on:
+    none of 2 targets over 2 members or 3 over 3; 1.6% of 4 over 4; 1.7% of 8
+    over 4; 0.4% of 6 over 3; 1.6% of 20 over 4; 1.1% of 100 over 4; and 1.8%
+    of 1000 over 10. It never falls on a member only one or two over the
+    most even split (the targets divided by the members and rounded up). It
+    always falls on a job of 4 targets or more over 4 members that has all of
+    them on one.
   - A click on a column's heading sorts the table by it, and a second click
-    the other way: numbers by their value, and text in any case, with the
-    numbers in it by their value, so `job2` comes before `job10`. A filter
-    box above it hides, as it is typed, the jobs whose name, collector and
-    sources' names do not contain its text, in any case. A refresh keeps the
-    order, the filter and the caret. Without JavaScript, the headings are
-    plain, as nothing sorts the table then;
-- the discovery sources: each one's kind; what it feeds (*probe targets of
-  the job* and the job, linked to its view, or *static targets of the entry*
-  and the `discovered_targets` entry, linked to its view), each with its
-  kind's colour; its result, with the error while it fails and how many of
-  its targets' weights fell back on their owner's because their
-  `weight_label` gave none; its targets; how often it is asked (its
-  `refresh_interval`, or the default that it takes); when it was last
-  refreshed; and whether what it holds is this instance's own discovery or
-  the leader's snapshot. A long name of a source or of its owner wraps
-  instead of pushing the table past the page's edge.
+    sorts it the other way. Numbers sort by their value; text sorts in any
+    case, with the numbers in it by their value, so `job2` comes before
+    `job10`. A filter box above the table hides, as it is typed, the jobs
+    whose name, collector and sources' names do not contain its text, in any
+    case. A refresh keeps the order, the filter and the caret. Without
+    JavaScript, the headings are plain, since nothing sorts the table then;
+- the discovery sources, each with:
+  - its kind;
+  - what it feeds, in its kind's colour: *probe targets of the job* and the
+    job, or *static targets of the entry* and the `discovered_targets`
+    entry, each linked to its view;
+  - its result, with the error while it fails, and how many of its targets'
+    weights fell back on their owner's because their `weight_label` gave
+    none;
+  - its targets, how often it is asked (its `refresh_interval`, or the
+    default that it takes), and when it was last refreshed;
+  - whether what it holds is this instance's own discovery or the leader's
+    snapshot.
+
+  A long name of a source or of its owner wraps instead of pushing the table
+  past the page's edge.
 
 The page writes a duration, an interval or an age, as the exporter's pages
 do: Go's form with every unit that is zero left out, `1m`, `1m30s`, `2h`
@@ -1390,14 +1425,14 @@ interval configured keeps its fraction, a `--config.watch-interval` of
 ago something was, is in whole seconds. The JSON keeps its values: seconds
 as numbers, and a static target's `interval` as Go writes it, `1m0s`.
 
-The page refreshes itself as the exporter's status page does: Refresh, and
-an auto-refresh of Off, 5s, 10s, 30s, 1m and on, kept in the URL as
-`?refresh=30s`, fetching the page's content again (`?format=fragment`) and
-skipping its turn while the tab is hidden. A refresh asked while one waits
-for the same URL is left to that one; one asked after the URL changed
-aborts the one waiting and asks again, so the latest wins. It has the
-exporter's pages' bar, with their theme picker, and needs nothing from
-outside the allocator.
+The page refreshes itself as the exporter's status page does. It has Refresh
+and an auto-refresh of Off, 5s, 10s, 30s, 1m and so on, kept in the URL as
+`?refresh=30s`. A refresh fetches the page's content again
+(`?format=fragment`), and skips its turn while the tab is hidden. A refresh
+asked for while one waits for the same URL is left to that one. One asked
+for after the URL changed aborts the one waiting and asks again, so the
+latest wins. The page has the exporter's pages' bar, with their theme
+picker, and needs nothing from outside the allocator.
 
 `GET /v1/status` answers the same as JSON. Times are RFC 3339 in UTC, each
 with its age in seconds beside it. The fields are:
@@ -1476,10 +1511,10 @@ a link to its own [status page](STATIC-TARGETS.md#status-page),
 - the static targets it owns, by name, each name linking the series the
   member serves of it, `http://<address><static targets path>?targets=<name>`,
   each with its target, collector, labels, interval and weight;
-- the static targets it keeps draining, each name linking its series on the
-  member as an owned one's does, each with the member it moved to,
-  which links to that member's view, how much longer it drains and its
-  weight;
+- the static targets that it keeps draining. Each name links to its series
+  on the member, as an owned target's does, and each has the member that it
+  moved to (linking to that member's view), how much longer it drains, and
+  its weight;
 - the probe targets service discovery routes to it, counted and weighed by
   probe job, then each with its job, collector and weight.
 
@@ -1492,18 +1527,18 @@ open the same path on the forwarded port.
 The counts are the spread's for the member.
 
 - A target is shown as the exporter's pages show it, with its credentials
-  withheld: a URL's user and password as `redacted`, and the values of query
-  and path parameters whose names read as credentials', such as `token` or
-  `access_token`, as `<redacted>`. A static target's `params` and `request`
-  block are not shown at all.
+  withheld. A URL's user and password are shown as `redacted`. The values of
+  query and path parameters whose names read as credentials', such as
+  `token` or `access_token`, are shown as `<redacted>`. A static target's
+  `params` and `request` block are not shown at all.
 - A filter box above the lists hides, as it is typed, the rows that do not
-  contain its text, in any case, in their name, target, collector, a label
-  as `name=value`, job, or the member that they moved to, each on its own.
-  Text running across two of them, or in another column such as an
-  interval, matches nothing. This needs no page load. Search all, or Enter,
-  asks the allocator with `?filter=<text>`, which applies the same match to
-  every target of the member before the bound below. A filter of spaces
-  alone is no filter.
+  contain its text, in any case. It matches the row's name, target,
+  collector, a label as `name=value`, job, or the member that it moved to,
+  each on its own. Text running across two of them, or in another column
+  such as an interval, matches nothing. This needs no page load. Search all,
+  or Enter, asks the allocator with `?filter=<text>`, which applies the same
+  match to every target of the member before the bound below. A filter of
+  spaces alone is no filter.
 - On a phone, each row's cells stack, each beside its name, which stays on
   the first line of the value, even for a label that wraps.
 - Each list holds at most 1000 targets, so a member with a share of tens of
@@ -1521,11 +1556,11 @@ Its bar's JSON link is `GET /v1/status?member=<id>`, the same as JSON:
 `collector`, `target` and `weight`).
 
 A member that the allocator does not know is answered `404` as JSON, while
-the page and its fragment say so with `200`, so a view left open and
-refreshing itself, of a member that has gone, shows that it has, with its
+the page and its fragment say so with `200`. A view left open and refreshing
+itself, of a member that has gone, therefore shows that it has, with its
 filter box hidden. `?member=` without an id is answered `400`. Under
 `--peers.leader-only`, a follower serves no member's view, as it serves no
-members: the page names the leader, whose page has it, and the JSON is
+members. The page names the leader, whose page has it, and the JSON is
 `partial`, with the leader's address. A probe job's name in the member's
 view links to the job's view.
 
@@ -1535,16 +1570,16 @@ A probe job's name in the probe jobs table links to its view,
 `GET /?job=<name>`: where that job's targets go, to answer "which pod probes
 this site?" without asking service discovery. It shows
 
-- the job: its collector, its targets, listed and discovered, their weight
-  together with the job's weight (or its `weight_label` and the weight that
-  a target falls back on), its shard key, its labels (a label written `""`
-  left out), its params, and its discovery sources, each with its kind,
-  result and how often it is asked, and, while it fails, its error, on a
-  line of its own, or none;
-- the members that it is routed among, each linking to its view, with the
-  targets of the job that it has, their weight and a bar of them, the most
-  first, with the fewest, the most and the average above them, and the
-  imbalance marked as in the probe jobs table;
+- the job: its collector, its targets (listed and discovered), and their
+  weight together with the job's weight, or its `weight_label` and the
+  weight that a target falls back on. Also its shard key, its labels (a
+  label written `""` left out), its params, and its discovery sources. Each
+  source has its kind, its result and how often it is asked, and, while it
+  fails, its error on a line of its own;
+- the members that it is routed among, each linking to its view. Each has the
+  targets of the job that it has, their weight, and a bar of them, the most
+  first, with the fewest, the most and the average above them. The imbalance
+  is marked as in the probe jobs table;
 - its targets, by target, each with the member service discovery routes
   it to, which links to that member's view, the labels its discovery
   source gave it, but those the job's own labels set or take away, and its
@@ -1564,11 +1599,11 @@ labels shown: while the source labels are left out, `__meta_zone=ams`
 matches nothing.
 
 The counts are the spread's for the job. A target is shown with its
-credentials withheld as on a member's view, and a param whose name reads as
-a credential's, such as `api_key` or `token`, as `<redacted>`; any other
-param is shown as written, with anything in its value that reads as a
+credentials withheld, as on a member's view. A param whose name reads as a
+credential's, such as `api_key` or `token`, is shown as `<redacted>`. Any
+other param is shown as written, with anything in its value that reads as a
 credential masked. The filter box, Search all (`?filter=<text>`), the bound
-of 1000 targets and the refresh work as on a member's view; the filter
+of 1000 targets and the refresh work as on a member's view. The filter
 matches a target, its member, and its labels shown as `name=value`.
 
 Its bar's JSON link is `GET /v1/status?job=<name>`, the same as JSON, with
@@ -1582,8 +1617,8 @@ first), `shard_key`, `job_weight` and `weight_label`, `labels`, `params`,
 
 A job that the probe targets file does not have is answered `404` as JSON,
 while the page and its fragment say so with `200`, with the filter box
-hidden, so a view left open over a reload that renamed the job shows it.
-`?job=` without a name is answered `400`. Under `--peers.leader-only`, a
+hidden. A view left open over a reload that renamed the job therefore shows
+it. `?job=` without a name is answered `400`. Under `--peers.leader-only`, a
 follower serves no job's view: the page names the leader, and the JSON is
 `partial`, with the leader's address.
 
@@ -1591,16 +1626,17 @@ follower serves no job's view: the page names the leader, and the JSON is
 
 A `discovered_targets` entry's name in the static targets table, and in the
 discovery sources table's Feeds column, links to its view,
-`GET /?entry=<name>`: where the static targets the entry makes of what its
-sources find go, to answer "which pod scrapes this node?". It shows
+`GET /?entry=<name>`. The view shows where the static targets that the entry
+makes from its sources' findings go, to answer "which pod scrapes this
+node?". It shows
 
 - the entry: its targets and their weight, its shard key, its labels, a
   label written `""` left out, and its discovery sources, each with its
   kind, result and how often it is asked, and its error while it fails;
-- the members of the member list, each linking to its view, with the
-  entry's targets that it owns, their weight and a bar of them, the most
-  first, with the fewest, the most and the average above them, and the
-  imbalance marked as in the static targets table;
+- the members of the member list, each linking to its view. Each has the
+  entry's targets that it owns, their weight, and a bar of them, the most
+  first, with the fewest, the most and the average above them. The imbalance
+  is marked as in the static targets table;
 - its static targets, by name, each with its target, its credentials
   withheld as on a member's view, its collector, the member that owns it,
   linked to its view, its labels and its weight.
@@ -1675,8 +1711,8 @@ in the chart README.
   address that the Service's name resolves to, so for the members and the
   allocation they need no leader.
 - **Peers.** With a discovery source, in a probe job or in the static
-  targets, each allocator is run with `--peers` naming that Service and
-  `--peers.self` set to its pod's IP, so the pods are peers and only the
+  targets, each allocator is run with `--peers` naming that Service, and with
+  `--peers.self` set to its pod's IP. The pods are then peers, and only the
   leader asks the sources
   ([Instances with discovery](#instances-with-discovery)). The allocator's
   NetworkPolicy admits the allocator's own pods.
@@ -1718,10 +1754,10 @@ in the chart README.
   `ScrapeConfig` reading `/v1/sd/<job>`.
 - **Kubernetes discovery.** A `kubernetes` discovery source, in a probe job
   or in the static targets, gives the allocator a ServiceAccount of its own,
-  with its token mounted, and a Role in each namespace that it lists, or a
-  ClusterRole for `all_namespaces`, allowing `list` on EndpointSlices.
-  `allocator.serviceAccount.name` runs the allocator as an existing account
-  instead, to which those Roles are bound.
+  with its token mounted. It also gets a Role in each namespace that it
+  lists, or a ClusterRole for `all_namespaces`, allowing `list` on
+  EndpointSlices. `allocator.serviceAccount.name` runs the allocator as an
+  existing account instead, to which those Roles are bound.
 
 The files a `file_sd` source reads, and an `http_sd` source's
 `bearer_token_file` and `tls` files, must be in the allocator's pod:

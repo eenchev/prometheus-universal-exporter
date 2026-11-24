@@ -21,14 +21,13 @@ The [`tcp` type](TCP.md) can hold the same conversation as `steps` of text;
 this type knows the protocol, so the answers come as numbers and labels,
 and it can log in.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with smtp](#building-with-smtp)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with smtp](#building-with-smtp)).
 
 ## Building with smtp
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=smtp              # bin/prometheus-universal-exporter
@@ -36,10 +35,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=smtp -t exporter:smtp .
 go build -tags "$(sh tools/request-type-tags.sh '' '' smtp)" .
 ```
 
-The tag is `request_type_smtp`. A configuration with an `smtp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_smtp`. A build without the type refuses a
+configuration with an `smtp` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -100,7 +99,10 @@ A probe takes `timeout` and `param_<name>` parameters, which fill the
 placeholders of `mail_from`, `rcpt_to` and the collector's
 [label values](REQUESTS.md#in-label-values). A value written into an address
 may hold no blank, angle bracket or control character, so a probe adds no
-command. The decoder is `json`; use `jq`, `yq` or `python`.
+command. The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 A password or a token is never sent over a connection that is not TLS: a
 server that offers no `STARTTLS` fails the scrape before `AUTH`, unless

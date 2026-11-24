@@ -90,9 +90,10 @@ key applies, and setting one is a startup error. A probe takes `timeout` and
 [label values](REQUESTS.md#in-label-values); a static target's request block
 takes `timeout`.
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The target
 

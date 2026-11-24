@@ -22,14 +22,13 @@ It needs the account's name and password, or an OAuth token where the
 server takes nothing else ([Gmail](#gmail)). The
 [`smtp` type](SMTP.md) watches the sending side of the same server.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with imap](#building-with-imap)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with imap](#building-with-imap)).
 
 ## Building with imap
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=imap              # bin/prometheus-universal-exporter
@@ -37,10 +36,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=imap -t exporter:imap .
 go build -tags "$(sh tools/request-type-tags.sh '' '' imap)" .
 ```
 
-The tag is `request_type_imap`. A configuration with an `imap` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_imap`. A build without the type refuses a
+configuration with an `imap` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -97,7 +96,10 @@ A probe takes `timeout` and `param_<name>` parameters, which fill the
 placeholders of `mailboxes`, `counts` and the collector's
 [label values](REQUESTS.md#in-label-values). A value written into a
 mailbox's name may hold no control character, so a probe adds no command.
-The decoder is `json`; use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 Without `auth`, the login is `AUTHENTICATE PLAIN` where the server offers
 it and `LOGIN` otherwise. A password or a token is never sent over a

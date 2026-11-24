@@ -16,14 +16,13 @@ A server that also speaks IMAP says more to the [`imap` type](IMAP.md):
 each folder's counts, unread messages and searches. POP3 knows one mailbox
 and two numbers.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with pop3](#building-with-pop3)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with pop3](#building-with-pop3)).
 
 ## Building with pop3
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=pop3              # bin/prometheus-universal-exporter
@@ -31,10 +30,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=pop3 -t exporter:pop3 .
 go build -tags "$(sh tools/request-type-tags.sh '' '' pop3)" .
 ```
 
-The tag is `request_type_pop3`. A configuration with a `pop3` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_pop3`. A build without the type refuses a
+configuration with a `pop3` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -73,8 +72,10 @@ collectors:
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets). |
 
 A probe takes `timeout` and `param_<name>` parameters, which fill the
-collector's [label values](REQUESTS.md#in-label-values). The decoder is
-`json`; use `jq`, `yq` or `python`.
+collector's [label values](REQUESTS.md#in-label-values). The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## Logging in
 

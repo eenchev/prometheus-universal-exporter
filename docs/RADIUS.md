@@ -11,14 +11,13 @@ to be sent. Use it to watch, from where the exporter runs:
   behind it, with an account kept for the purpose;
 - that a server is alive without any account, with `mode: status-server`.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with radius](#building-with-radius)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with radius](#building-with-radius)).
 
 ## Building with radius
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=radius              # bin/prometheus-universal-exporter
@@ -26,9 +25,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=radius -t exporter:radius .
 go build -tags "$(sh tools/request-type-tags.sh '' '' radius)" .
 ```
 
-The tag is `request_type_radius`. A configuration with a `radius` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_radius`. A build without the type refuses a
+configuration with a `radius` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -80,9 +80,10 @@ sends from to the server's clients, with the secret of `secret_file`. A
 server ignores a request from a client it does not know, which reads here as
 no reply.
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The mode
 

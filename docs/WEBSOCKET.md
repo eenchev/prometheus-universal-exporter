@@ -10,14 +10,13 @@ ticker, a GraphQL subscription's first result.
 It stays a pull: a scrape connects, reads and closes, and no connection
 outlives it.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with websocket](#building-with-websocket)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with websocket](#building-with-websocket)).
 
 ## Building with websocket
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=websocket              # bin/prometheus-universal-exporter
@@ -25,10 +24,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=websocket -t exporter:websocket .
 go build -tags "$(sh tools/request-type-tags.sh '' '' websocket)" .
 ```
 
-The tag is `request_type_websocket`. A configuration with an `websocket` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_websocket`. A build without the type refuses a
+configuration with a `websocket` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 

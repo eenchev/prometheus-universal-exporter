@@ -2,19 +2,20 @@
 
 The `sql` request type runs a statement on a database, or several in order
 ([Several statements](#several-statements)), and turns the rows they return
-into metrics. Use it for what a database knows that no exporter of its
-own shows:
+into metrics. Use it for what a database knows that no dedicated exporter
+shows:
 
 - the jobs of a queue table by state, the age of the oldest unprocessed row;
 - the time of the last successful import, written by the importer itself;
-- the counts a business dashboard shows, from the application's own tables.
+- the counts that a business dashboard shows, from the application's own
+  tables.
 
 Three drivers are built in with the type: `mysql` (MySQL and MariaDB),
 `postgres` (PostgreSQL and the databases that speak its protocol) and
-`sqlserver` (Microsoft SQL Server and Azure SQL). Four more — `oracle`,
-`clickhouse`, `snowflake` and `vertica` — are in a build that asks for them,
-since they bring large dependencies of their own (see [Building with more
-drivers](#building-with-more-drivers)).
+`sqlserver` (Microsoft SQL Server and Azure SQL). Four more, `oracle`,
+`clickhouse`, `snowflake` and `vertica`, are only in a build that asks for
+them, because they bring large dependencies (see
+[Building with more drivers](#building-with-more-drivers)).
 
 ## A collector
 
@@ -65,24 +66,24 @@ collectors:
 | `connections` | — | How connections to a target are kept (see [Connections](#connections)). |
 | `allowed_targets`, `denied_targets` | — | The servers the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on every connection. |
 
-No other request key applies, and setting one — `method`, `headers`, `retry`,
-`passphrase_file` — is a startup error. The file keys name files on the
-exporter's own filesystem, such as a mounted Secret, and take no placeholders.
-They are read each time a connection is made, not when the configuration
-loads: a password replaced on disk is what the next connection sends, and a
-file that is missing or empty fails the scrape, naming it.
-[`--dry-run`](CONFIGURATION.md#dry-run) reads them, as a connection would, and
-warns of each a scrape would fail on now.
+No other request key applies, and setting one (`method`, `headers`,
+`retry`, `passphrase_file`) is a startup error. The file keys name files on
+the exporter's own filesystem, such as a mounted Secret, and take no
+placeholders. They are read each time a connection is made, not when the
+configuration loads: the next connection sends a password replaced on disk,
+and a file that is missing or empty fails the scrape with an error that
+names it. [`--dry-run`](CONFIGURATION.md#dry-run) reads them as a connection
+would, and warns about each one that a scrape would fail on now.
 
 ## The target
 
 A probe's target, and a static target's, is the database server: `host` or
-`host:port`, an IPv6 address in brackets (`[2001:db8::1]:5432`), the driver's
-port when it names none. A target that ends in a colon with no port after it,
-`db1.example.com:` or `[::1]:`, is refused, a static target's when the file
-loads and a probe's on the scrape: `target "db1.example.com:" ends in a colon
-with no port after it; write the port after the colon, or leave the colon out
-for the driver's port`.
+`host:port`, or an IPv6 address in brackets (`[2001:db8::1]:5432`). Without
+a port, the driver's default port is used. A target that ends in a colon
+with no port after it, `db1.example.com:` or `[::1]:`, is refused (a static
+target's when the file loads, a probe's on the scrape): `target
+"db1.example.com:" ends in a colon with no port after it; write the port
+after the colon, or leave the colon out for the driver's port`.
 
 | Driver | Port |
 | --- | --- |
@@ -94,19 +95,20 @@ for the driver's port`.
 | `vertica` | 5433 |
 | `snowflake` | — the target is the account identifier |
 
-A `snowflake` target is the account identifier, `myorg-myaccount` or a locator
-such as `xy12345.eu-west-1`, reached at `<account>.snowflakecomputing.com`
-over HTTPS. A connection to it that the target lists refuse fails the scrape
-at once with their refusal, as with every driver, where the driver itself
-would retry it until the scrape's deadline.
+A `snowflake` target is the account identifier, `myorg-myaccount` or a
+locator such as `xy12345.eu-west-1`, reached at
+`<account>.snowflakecomputing.com` over HTTPS. A connection to it that the
+target lists refuse fails the scrape immediately with their refusal, as with
+every driver, where the driver itself would retry it until the scrape's
+deadline.
 
 Nothing else may come with a target: no scheme, no user, no database, no
-options — `postgres://u:p@db/app?sslmode=disable` is answered `400`. They are
-the collector's keys, so a probe can reach only the databases and accounts the
-configuration names. A collector's `allowed_targets` and `denied_targets` hold
-the server's name, and every address a connection reaches, which the
-exporter's own dialer checks for every driver but `vertica` (see
-[Limitations](#limitations)).
+options. `postgres://u:p@db/app?sslmode=disable` is answered `400`. These
+are the collector's keys, so a probe can reach only the databases and
+accounts that the configuration names. A collector's `allowed_targets` and
+`denied_targets` apply to the server's name and to every address that a
+connection reaches, which the exporter's own dialer checks for every driver
+except `vertica` (see [Limitations](#limitations)).
 
 ## The statement
 
@@ -120,35 +122,36 @@ driver's own placeholders for the values in `args`:
 | `sqlserver` | `@p1`, `@p2`, … |
 | `oracle` | `:1`, `:2`, … |
 
-`args` are sent to the database as values, never as SQL: `postgres`,
+`args` are sent to the database as values, never as SQL. `postgres`,
 `mysql`, `sqlserver`, `oracle`, `snowflake` and `vertica` bind them to the
-placeholders at the server, while `clickhouse`'s driver writes each into the
-statement before sending it, quoted as a literal of its type. Either way a
-probe parameter in one cannot change the statement, whatever it holds. A
-placeholder in `statement` itself is a startup error: a value from the probe
-goes in `args`.
+placeholders at the server, while the `clickhouse` driver writes each into
+the statement before sending it, quoted as a literal of its type. Either
+way, a probe parameter in one cannot change the statement, whatever it
+holds. A placeholder in `statement` itself is a startup error: a value from
+the probe goes in `args`.
 
-`vertica`'s driver writes the values into the text, too, of a statement it
-does not prepare, doubling a `'` but leaving a `\` as it is — which, in an
-`E'...'` or with `standard_conforming_strings` off, escapes the quote that
-closes the value, so a value ending in `\` would end the string at the next
-quote and the rest would be SQL. So a `vertica` statement the driver would
-not prepare is a startup error:
+`vertica`'s driver also writes the values into the text of a statement that
+it does not prepare, doubling a `'` but leaving a `\` as it is. In an
+`E'...'`, or with `standard_conforming_strings` off, that `\` escapes the
+closing quote, so a value ending in `\` would end the string at the next
+quote and the rest would be SQL. A `vertica` statement that the driver
+would not prepare is therefore a startup error:
 
-- any `COPY`. A `COPY ... FROM LOCAL` is the one the driver sends
+- any `COPY`. A `COPY ... FROM LOCAL` is the one that the driver sends
   unprepared, and it would read a file of the exporter's host into the
-  database at every scrape; every `COPY` loads rows into a table, which no
+  database at every scrape. Every `COPY` loads rows into a table, which no
   metrics query does and the read-only transaction is there to refuse. The
-  exporter finds the `COPY` as the driver does — the first word outside
-  quotes, comments and dollar quotes, block comments not nested, so that
+  exporter finds the `COPY` as the driver does (the first word outside
+  quotes, comments and dollar quotes, with block comments not nested, so that
   `/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?` is a `COPY ... FROM LOCAL` to
-  it, though a `SELECT` to the server — and as the server does, in any case;
-- a function's DDL or an `EXECUTE` grant on one — `CREATE`, `ALTER` or
-  `DROP FUNCTION`, `GRANT` or `REVOKE EXECUTE ON FUNCTION` — which the driver
-  sends unprepared, with no value bound.
+  it, although it is a `SELECT` to the server) and as the server does, in
+  any letter case;
+- a function's DDL or an `EXECUTE` grant on one (`CREATE`, `ALTER` or
+  `DROP FUNCTION`, `GRANT` or `REVOKE EXECUTE ON FUNCTION`), which the
+  driver sends unprepared, with no value bound.
 
-Every other statement is prepared at the server, the exporter setting the
-driver's `use_prepared_statements=1`, and its values are bound to it.
+Every other statement is prepared at the server, with the exporter setting
+the driver's `use_prepared_statements=1`, and its values are bound to it.
 
 **Read-only.** The statement runs read-only where the database can make it
 so:
@@ -165,87 +168,99 @@ so:
 
 Snowflake has no read-only transaction either: the statement runs as it is.
 Give every collector an account that can read what its statements read and
-nothing more, whatever its database, SQL Server's and Snowflake's above all:
-read-only is a second line, not the first.
+nothing more, whatever the database, and above all for SQL Server and
+Snowflake: read-only is a second line of defence, not the first.
 
 **One statement.** `postgres` sends every statement with the extended
-protocol, bound even without `args`, so the server refuses two joined with
-`;`; `mysql` never allows several statements in one. `vertica`'s driver would
-split a statement at each `;` and run the parts one after another, a `COMMIT`
-among them ending the read-only transaction, so a `vertica` statement of
-several parts — a `;` followed by anything but blanks and comments, outside
-quotes, quoted identifiers, comments and dollar quotes — is a startup error.
-The exporter decides this itself as well as by the driver's own splitting:
-since vertica-sql-go 1.3.9 the driver does not split at a `;` it takes to
-stand inside a `BEGIN ... END`, `CASE`, `IF`, `LOOP` or `WHILE` block, and
-sends such text to the server whole, which runs every statement in it — even
-`SELECT 1 AS begin; COMMIT`. A `//` is not a comment to either, so a `;`
-followed by `// ...` is refused too. The exporter reads the text every way
-the server may, which is not always the driver's way, and refuses it if any
-reading finds several statements: a `$` inside a word is part of it, not a
-dollar quote (`SELECT a$b$; COMMIT; SELECT $b$x$b$` is three statements); a
-`\` escapes the next character in an `E'...'`, and in every `'...'` where
-`standard_conforming_strings` is off (`SELECT E'\''; COMMIT; --'` is two);
-block comments may nest; and only ASCII white space is blank. A statement
-the driver's lexer fails on — a `?` right after a quote at the start of the
-text or of a line after a `--` comment, as in `'?'` — is a startup error
-too, since the driver would fail on it at every scrape.
-The other drivers send what is written, and a statement of several parts is the database's to run
-or refuse: another reason for an account that can only read.
+protocol, bound even without `args`, so the server refuses two statements
+joined with `;`. `mysql` never allows several statements in one.
+
+`vertica`'s driver would split a statement at each `;` and run the parts one
+after another, and a `COMMIT` among them would end the read-only
+transaction. A `vertica` statement of several parts (a `;` followed by
+anything other than blanks and comments, outside quotes, quoted identifiers,
+comments and dollar quotes) is therefore a startup error.
+
+- The exporter decides this itself as well as by the driver's own splitting.
+  Since vertica-sql-go 1.3.9, the driver does not split at a `;` that it
+  considers to be inside a `BEGIN ... END`, `CASE`, `IF`, `LOOP` or `WHILE`
+  block, and sends such text to the server whole, which runs every statement
+  in it, even `SELECT 1 AS begin; COMMIT`.
+- A `//` is not a comment to either, so a `;` followed by `// ...` is
+  refused too.
+- The exporter reads the text in every way that the server may, which is not
+  always the driver's way, and refuses it if any reading finds several
+  statements: a `$` inside a word is part of the word, not a dollar quote
+  (`SELECT a$b$; COMMIT; SELECT $b$x$b$` is three statements); a `\` escapes
+  the next character in an `E'...'`, and in every `'...'` where
+  `standard_conforming_strings` is off (`SELECT E'\''; COMMIT; --'` is two);
+  block comments may nest; and only ASCII white space counts as blank.
+- A statement that the driver's lexer fails on (a `?` right after a quote at
+  the start of the text, or of a line after a `--` comment, as in `'?'`) is a
+  startup error too, because the driver would fail on it at every scrape.
+
+The other drivers send what is written, and a statement of several parts is
+for the database to run or refuse: another reason for an account that can
+only read.
 
 **Deadlines.** The statement runs within the probe's deadline, its `timeout`
-parameter or Prometheus's scrape timeout (see [Probe
-deadlines](CONFIGURATION.md#probe-deadlines)), connecting included. When the
-deadline comes the scrape fails, `running the statement: the scrape's
-deadline came first`, and the driver stops the statement: `postgres` and
-`sqlserver` ask the server to cancel it, `clickhouse` and `snowflake` abort
-it, `oracle` breaks it off, and `mysql` closes the connection, whose statement
-the server ends when it notices. `clickhouse` on `http` aborts it by ending
-its request, and sends every request with the setting
-`cancel_http_readonly_queries_on_client_close=1`, which has the server stop
-the statement then. `vertica`'s connection is given up at the deadline, and
-the server is not asked to stop the statement (see
-[Limitations](#limitations)). The server is also told the time the scrape
-has left, in the transaction before the statement, so that it ends a
-statement nobody waits for even if the cancel is lost, or, with `mysql`,
-never sent:
+parameter or Prometheus's scrape timeout (see
+[Probe deadlines](CONFIGURATION.md#probe-deadlines)), including the
+connection. When the deadline comes, the scrape fails with `running the
+statement: the scrape's deadline came first`, and the driver stops the
+statement:
 
-- `postgres`: `SET LOCAL statement_timeout`, in milliseconds;
+- `postgres` and `sqlserver` ask the server to cancel it;
+- `clickhouse` and `snowflake` abort it, and `oracle` breaks it off;
+- `mysql` closes the connection, and the server ends its statement when it
+  notices;
+- `clickhouse` on `http` aborts it by ending its request, and sends every
+  request with the setting `cancel_http_readonly_queries_on_client_close=1`,
+  which makes the server stop the statement then;
+- `vertica`'s connection is given up at the deadline, and the server is not
+  asked to stop the statement (see [Limitations](#limitations)).
+
+The server is also told how much time the scrape has left, in the
+transaction before the statement, so that it ends a statement that nobody is
+waiting for even if the cancel is lost, or, with `mysql`, never sent:
+
+- `postgres`: `SET LOCAL statement_timeout`, in milliseconds.
 - `mysql`: `SET SESSION max_execution_time`, in milliseconds, on MySQL 5.7.8
-  and later, where it bounds a `SELECT`, and `SET SESSION
-  max_statement_time`, in seconds, on MariaDB 10.1.1 and later. Which the
-  server is, and its version, is asked once on each connection, `SELECT
-  VERSION()`, when its first statement runs; a server older than its
-  variable, or whose version reads as neither MySQL's nor MariaDB's, is set
-  nothing, rather than have every scrape refused over a variable it does
-  not know; and one that gives a version with the variable and then refuses
-  it as unknown (error 1193), as a proxy speaking for another server may,
-  has the statement run without it, and is set it no more on that
-  connection;
-- `sqlserver`: `SET LOCK_TIMEOUT`, in milliseconds, which bounds how long
-  the statement waits on a lock another session holds, where most of a
-  metrics query's waiting is; the cancel at the deadline bounds the rest.
+  and later, where it bounds a `SELECT`, and
+  `SET SESSION max_statement_time`, in seconds, on MariaDB 10.1.1 and later.
+  The server's kind and version are queried once per connection,
+  `SELECT VERSION()`, when its first statement runs.
+  - A server older than its variable, or whose version reads as neither
+    MySQL's nor MariaDB's, is set nothing, instead of having every scrape
+    refused over a variable it does not know.
+  - A server that reports a version with the variable and then refuses it as
+    unknown (error 1193), as a proxy speaking for another server may, has the
+    statement run without it, and is not set it again on that connection.
+- `sqlserver`: `SET LOCK_TIMEOUT`, in milliseconds, which bounds how long the
+  statement waits for a lock that another session holds, where most of a
+  metrics query's waiting happens; the cancel at the deadline bounds the
+  rest.
 
-A statement the server ends at that limit fails as one the deadline ended,
-`running the statement: the scrape's deadline came first`, though the
-server's clock may end it a moment before the scrape's context ends. For
-the others, an account with a limit of its own
-(`STATEMENT_TIMEOUT_IN_SECONDS` in Snowflake, a resource pool's
-`RUNTIMECAP` in Vertica, `max_execution_time` in ClickHouse's profile) is
-the server's side of the same bound.
+A statement that the server ends at that limit fails like one that the
+deadline ended, `running the statement: the scrape's deadline came first`,
+although the server's clock may end it a moment before the scrape's context
+ends. For the other drivers, an account with its own limit
+(`STATEMENT_TIMEOUT_IN_SECONDS` in Snowflake, a resource pool's `RUNTIMECAP`
+in Vertica, `max_execution_time` in ClickHouse's profile) is the server's
+side of the same bound.
 
-A driver that fails on what a server sends — a panic, on an answer it reads
-without checking — fails the connection, the statement or the keepalive ping
-it was on, never the exporter, and the connection is closed. That holds
-outside any scrape too: for a driver that fails so closing a connection past
-its `max_lifetime` or `idle_timeout`, or rolling back the transaction of a
-scrape whose deadline came. One that fails so while connecting holds no
-place at `max_per_target` after it.
+A driver that fails on what a server sends (a panic, on an answer it reads
+without checking) fails the connection, the statement or the keepalive ping
+that it was on, never the exporter, and the connection is closed. That also
+holds outside any scrape: for a driver that fails in this way while closing
+a connection past its `max_lifetime` or `idle_timeout`, or while rolling back
+the transaction of a scrape whose deadline came. One that fails in this way
+while connecting holds no place at `max_per_target` afterwards.
 
 ### A statement in a file
 
-A long statement reads better, and is reviewed better, in a file of its
-own. `statement_file` names it, in place of `statement`:
+A long statement reads, and is reviewed, better in its own file.
+`statement_file` names the file, instead of `statement`:
 
 ```yaml
     request:
@@ -257,50 +272,52 @@ own. `statement_file` names it, in place of `statement`:
       args: ["{{param_queue:default}}"]
 ```
 
-The file is read when the configuration loads, and again at each reload;
-with [`--config.watch`](CONFIGURATION.md#watching-the-configuration), an edit of
-it reloads at the next tick, as an edit of the configuration does, so the
+The file is read when the configuration loads, and again at each reload.
+With [`--config.watch`](CONFIGURATION.md#watching-the-configuration), an edit
+of it reloads at the next tick, as an edit of the configuration does, so the
 statement in force is always the one on disk that the configuration was
-checked with. A collector whose statement file changed counts as changed
-in the reload's log line and its [cached results](CONFIGURATION.md#response-caching)
-are not reused. What the file must be is checked as the configuration
-loads, and a file that is not refuses the load, or the reload, saying why:
+checked with. A collector whose statement file changed counts as changed in
+the reload's log line, and its
+[cached results](CONFIGURATION.md#response-caching) are not reused. The file
+is checked as the configuration loads, and a file that does not meet these
+rules fails the load or the reload, with the reason:
 
 - `statement_file` is an absolute path, written as it is: no blanks around
-  it, no placeholder, which nothing fills in a path read at the load. A
+  it, and no placeholder, which nothing fills in a path read at load time. A
   relative path would be read from whatever directory the exporter started
-  in;
-- the file is there, readable by the exporter, and a regular file: a
+  in.
+- The file exists, is readable by the exporter, and is a regular file. A
   directory, a named pipe (which would hold the load until something wrote
   to it, so it is refused without being opened), a device or a socket is
-  refused. A symbolic link to a file is followed, as a mounted ConfigMap's
-  files are reached;
-- it is at most 1 MiB, and UTF-8 text with no NUL byte;
-- it holds a statement: a UTF-8 byte order mark at its start and the blanks
-  around the statement are taken off, and a file of blanks alone is
-  refused;
-- the statement has no `{{param_...}}` placeholder, as a statement written in
-  place may not: a probe's values go in `args`;
-- it is held to what a statement written in place is held to: one
-  statement, and for `vertica` one its driver prepares.
+  refused. A symbolic link to a file is followed, which is how a mounted
+  ConfigMap's files are reached.
+- It is at most 1 MiB, and UTF-8 text with no NUL byte.
+- It holds a statement. A UTF-8 byte order mark at its start and the blanks
+  around the statement are removed, and a file of only blanks is refused.
+- The statement has no `{{param_...}}` placeholder, as a statement written
+  in place may not: a probe's values go in `args`.
+- It is held to the same rules as a statement written in place: one
+  statement, and for `vertica` one that its driver prepares.
 
 `statement` and `statement_file` are not written together; a `statement`
-written `""` is the key left out, as for every key. A static target
-uses its collector's statement and sets no file of its own. The [target
-allocator](ALLOCATOR.md) checks the key but does not open the file, which
-travels as a path: mount it on every replica at the same path, where each
-reads and checks it when it loads the bundle. The [debug page's
-playground](CONFIGURATION.md#debugging-collectors) reads no file of the
-server's, and a copy of a collector with a statement file leaves the key
-out.
+written `""` is the same as leaving the key out, as for every key.
+
+- A static target uses its collector's statement and sets no file of its
+  own.
+- The [target allocator](ALLOCATOR.md) checks the key but does not open the
+  file, which travels as a path. Mount it on every replica at the same path,
+  where each reads and checks it when it loads the bundle.
+- The [debug page's playground](CONFIGURATION.md#debugging-collectors) reads
+  no file of the server's, and a copy of a collector with a statement file
+  leaves the key out.
 
 ### Typed args
 
 An arg is bound as text, which most databases convert where the statement
-needs a number: PostgreSQL by the type the placeholder takes. Where they do
-not — MySQL's `LIMIT ?`, which MySQL versions before 8.0.22 refuse text
-for, or a comparison of a number with text that compares them as text —
-`arg_types` binds it as its type:
+needs a number; PostgreSQL converts it by the type that the placeholder
+takes. Where a database does not (MySQL's `LIMIT ?`, for which MySQL
+versions before 8.0.22 refuse text, or a comparison of a number with text
+that compares them as text), `arg_types` binds the arg as its type:
 
 ```yaml
       statement: SELECT id, state FROM jobs WHERE priority >= ? AND paused = ? ORDER BY id LIMIT ?
@@ -315,22 +332,25 @@ for, or a comparison of a number with text that compares them as text —
 | `float` | a finite decimal number: `0.25`, `1e-3`, `.5` — no `Inf`, `NaN`, hexadecimal float (`0x1p-2`) or `_` | a 64-bit floating-point number |
 | `bool` | `true` or `false`, in any case | a boolean |
 
-`arg_types` gives a type for every arg, by its place, `text` for one bound
-as text; another count, or a type other than these four in lower case, is
-a startup error. An arg that is not of its type fails as early as it can
-be known: one with no placeholder, or whose placeholders all have
-defaults, when the configuration loads, filled with the defaults; one a
-probe fills, before the server is asked, answered `400`,
-`request.args[2] is "ten", which is no whole number …`; and one a static
-target's `params` fill, when the target file loads. A parameter left empty
-is one not given, which the default fills. A database without a boolean
-type, as Oracle before 23ai, may refuse a `bool`: bind `1` or `0` as an
-`int` there.
+`arg_types` gives a type for every arg, by position, with `text` for one
+bound as text. Another count, or a type other than these four in lower
+case, is a startup error. An arg that does not match its type fails as early
+as possible:
+
+- one with no placeholder, or whose placeholders all have defaults, when the
+  configuration loads, filled with the defaults;
+- one that a probe fills, before the server is asked, answered `400`:
+  `request.args[2] is "ten", which is no whole number …`;
+- one that a static target's `params` fill, when the target file loads.
+
+A parameter left empty counts as not given, so the default fills it. A
+database without a boolean type, such as Oracle before 23ai, may refuse a
+`bool`: bind `1` or `0` as an `int` there.
 
 ### Several statements
 
-A collector runs one statement, so five related metrics of a database are
-five collectors, five logins and five round trips a scrape. `statements`
+A collector runs one statement, so five related metrics of a database need
+five collectors, five logins and five round trips per scrape. `statements`
 runs several, each with a name, in order, on one connection, and the
 document holds each one's rows under its name:
 
@@ -369,46 +389,47 @@ document holds each one's rows under its name:
 ```
 
 `busy` is a boolean column, which the rows hold as `1` or `0`
-([The rows](#the-rows)): compare it, since jq takes `0` for true, and
+([The rows](#the-rows)). Compare it explicitly: jq treats `0` as true, so
 `select(.busy)` would keep every row.
 
-- Each entry has a `name`, letters, digits and `_`, not beginning with a
-  digit and unique among the collector's, which a rule reads its rows by,
-  `.jobs`; its `statement`, written as `statement` is, the driver's
-  placeholders for its own `args`; and its `args` and `arg_types`, as
-  [Typed args](#typed-args) has them, each with placeholders of its own. At
-  most 16 entries; `statement`, `statement_file`, `args` and `arg_types` are
-  then refused beside them.
-- They run in the order written, on one connection of the pool, each in a
-  transaction of its own, rolled back, with its own time limits, as the
-  one statement is ([The statement](#the-statement)): each sees the
-  database as it is when it begins.
-- `max_rows` holds each statement; the response limit holds their rows
-  together. The first statement that fails fails the scrape, naming it,
-  `request.statements[1], oldest: …`, and those after it do not run.
+- Each entry has a `name` (letters, digits and `_`, not beginning with a
+  digit, and unique in the collector), by which a rule reads its rows,
+  `.jobs`. It also has its `statement`, written like `statement`, with the
+  driver's placeholders for its own `args`, and its `args` and `arg_types`,
+  as in [Typed args](#typed-args), each with its own placeholders. There are
+  at most 16 entries, and `statement`, `statement_file`, `args` and
+  `arg_types` are refused beside them.
+- They run in the order written, on one connection of the pool, each in its
+  own transaction, rolled back, with its own time limits, like a single
+  statement ([The statement](#the-statement)). Each sees the database as it
+  is when it begins.
+- `max_rows` applies to each statement; the response limit applies to their
+  rows together. The first statement that fails fails the scrape, with an
+  error that names it, `request.statements[1], oldest: …`, and the
+  statements after it do not run.
 - The document is an object, which `jq`, `yq` and `python` (`data["jobs"]`)
-  read; a `csv` transform, which reads one statement's rows by column, is
+  read. A `csv` transform, which reads one statement's rows by column, is
   refused at load. `http_exporter_sql_rows` counts the rows of all of them.
-- A debug probe shows each statement as a request of its own, its name in
-  `Sql-Statement`, the first on the connection as it was got and the rest
-  on it `reused`.
+- A debug probe shows each statement as its own request, with its name in
+  `Sql-Statement`: the first on the connection as it was obtained, and the
+  rest on it as `reused`.
 
 ## The rows
 
-The rows reach the transforms as a list of objects, one a row, of its columns
-by name:
+The rows reach the transforms as a list of objects, one per row, with its
+columns by name:
 
 ```json
 [{"state": "open", "jobs": 3}, {"state": "done", "jobs": 40}]
 ```
 
-- A `csv` transform reads a column by its name, one series a row, as it reads
-  the columns of a CSV file with a header: `expression: jobs` above.
+- A `csv` transform reads a column by its name, one series per row, as it
+  reads the columns of a CSV file with a header: `expression: jobs` above.
 - `jq` and `yq` read the list: `items: .[]` and `expression: .jobs`.
-- `python` is handed the list as `data`.
+- `python` receives the list as `data`.
 
-No other transform reads rows, and `decoder.type` and the `response` block do
-not apply: the driver reads the values, and there is no body to decode.
+No other transform reads rows, and `decoder.type` and the `response` block
+do not apply: the driver reads the values, and there is no body to decode.
 
 | The column holds | The transforms see |
 | --- | --- |
@@ -421,45 +442,49 @@ not apply: the driver reads the values, and there is no body to decode.
 | binary data | its text when it is UTF-8; otherwise the scrape fails, naming the column |
 | `NULL` | nothing: the column is left out of its row |
 
-A `NULL` is a value the row does not have: a `jq` rule finds no key, and a
-`csv` rule reading the column has no value in that row — a label read from it
-is left off that row's series — which its `error_mode` decides for a value. A
-column `NULL` in every row is still one the statement returned: a `csv` rule
-reads it as it reads one `NULL` in some rows, not as a column the response
-lacks (see [When a metric cannot be extracted](CONFIGURATION.md#when-a-metric-cannot-be-extracted)). A
-column without a name — `SELECT count(*) FROM jobs` in SQL Server — and two
-columns of one name fail the scrape: name each with `AS`. A statement that
-returns no row leaves every rule without a value, as a response with no item
-does.
+A `NULL` is a value that the row does not have. A `jq` rule finds no key, and
+a `csv` rule reading the column has no value in that row (a label read from
+it is left off that row's series), which its `error_mode` decides for a
+value.
+
+- A column that is `NULL` in every row is still a column that the statement
+  returned: a `csv` rule reads it as it reads one `NULL` in some rows, not as
+  a column that the response lacks (see
+  [When a metric cannot be extracted](CONFIGURATION.md#when-a-metric-cannot-be-extracted)).
+- A column without a name (`SELECT count(*) FROM jobs` in SQL Server) and two
+  columns with one name fail the scrape: name each with `AS`.
+- A statement that returns no row leaves every rule without a value, like a
+  response with no item.
 
 ## Authentication
 
-The account is `username`, its password the content of `password_file`, its
-blanks around it taken off, as every credential file's are. A password file
-that is empty, or holds a line break inside the password, fails the scrape.
-The account and the password reach the driver as written, whatever they
-hold: `:`, `@`, `/`, `%` and blanks are theirs, not a separator.
+The account is `username`, and its password is the content of
+`password_file`, with surrounding blanks removed, as for every credential
+file. A password file that is empty, or that holds a line break inside the
+password, fails the scrape. The account and the password reach the driver
+as written, whatever they hold: `:`, `@`, `/`, `%` and blanks are part of
+them, not separators.
 
-`snowflake` also takes key-pair authentication: `private_key_file` names an
-RSA private key in PKCS#8 (`-----BEGIN PRIVATE KEY-----`) or PKCS#1, not
-encrypted, whose public key is set on the Snowflake user. The exporter cannot
-read an encrypted key: write it unencrypted, `openssl pkcs8 -topk8 -nocrypt
--in rsa_key.p8 -out rsa_key_plain.p8`, and keep the file readable by the
-exporter alone. A `snowflake` collector needs `password_file` or
-`private_key_file`, and not both.
+`snowflake` also supports key-pair authentication: `private_key_file` names
+an unencrypted RSA private key in PKCS#8 (`-----BEGIN PRIVATE KEY-----`) or
+PKCS#1, whose public key is set on the Snowflake user. The exporter cannot
+read an encrypted key, so write it unencrypted
+(`openssl pkcs8 -topk8 -nocrypt -in rsa_key.p8 -out rsa_key_plain.p8`) and
+keep the file readable only by the exporter. A `snowflake` collector needs
+`password_file` or `private_key_file`, and not both.
 
 No other authentication is offered: a password is never written in the
 configuration itself, and Kerberos, IAM and Azure AD tokens are not used.
 
 ## Drivers
 
-Each driver takes a short list of `options`, and the option that switches its
-TLS. With that option left out, a collector that writes a `tls` block has
-TLS, the server's certificate verified against `tls.server_name` or the
-target's host, and one that writes none has no TLS. A `tls` block, even an
-empty one, counts: `tls: {}` asks for TLS verified against the system's
-roots, and beside an option that switches TLS off it is refused like any
-other.
+Each driver takes a short list of `options`, including the option that
+switches its TLS. With that option left out, a collector that writes a `tls`
+block uses TLS, with the server's certificate verified against
+`tls.server_name` or the target's host, and one that writes none uses no
+TLS. A `tls` block counts even when empty: `tls: {}` requests TLS verified
+against the system's roots, and beside an option that switches TLS off it is
+refused like any other.
 
 | Driver | Options | TLS |
 | --- | --- | --- |
@@ -471,60 +496,66 @@ other.
 | `snowflake` | `warehouse`, `role`, `schema` | always TLS, verified |
 | `vertica` | `tlsmode`: `none`, `server` (TLS, the certificate not verified) or `server-strict` | `tlsmode` |
 
-A `tls` key beside a TLS option that switches TLS off is a startup error:
-it would be ignored. So are `tls.ca_file` and `tls.server_name`, which say how
-the server's certificate is verified, beside a value that does not verify it
-(`sslmode: require`, `tls: skip-verify`, `tlsmode: server`): use the
-verifying value (`verify-full`, `true`, `server-strict`), or leave them out;
-a client certificate, `cert_file` and `key_file`, is presented either way.
-The TLS files are read each time a connection is made, and that connection
-uses what was read for it, so a file replaced is used from the next
-connection on; `vertica`'s driver, which takes its TLS settings by a name
-registered with it and keeps every name for good, is given one name for
-each connection being made at once, used again by later ones, so it keeps
-no more than that however often the files change.
-SQL Server encrypts the login alone with a certificate
-it makes itself unless given one, and its own tools do not verify that
-certificate: neither does the exporter, with `encrypt: false` or left out,
-unless a `tls` block says how to (`ca_file`, `server_name`, or none for the
-system's roots). Unless `encrypt` is
-`disable`, the login is never sent unencrypted: a server that answers it does
-not support encryption fails the scrape, `the server answered that it does
-not support encryption, so the login would be sent unencrypted`; enable
-encryption on the server, or write `encrypt: disable`; and a prelogin answer
-with an empty `ENCRYPTION` option, which no SQL Server sends, fails the
-connection whatever `encrypt` is. `oracle` with `ssl: true` makes every
-connection TLS: a listener that redirects the connection to an address with
-`PROTOCOL=TCP` has it fail, `the oracle driver began a connection without
-TLS`, before anything is sent on it; have the listener redirect to a `TCPS`
-address. `clickhouse` with
-`secure: true` makes the TLS handshake before anything else on the native
-protocol as on `http`. Each connection is configured from the collector alone:
-the `PG*` environment variables and `.pgpass` file `postgres` would read,
-for one, change nothing — but `PGSERVICE`, which the driver reads whatever
-it is told, and which fails every `postgres` connection until it is unset —
-nor do `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`:
-every driver, `clickhouse` on `http` and `snowflake` too, connects to the
-server directly, never through a [proxy](REQUESTS.md#proxies). SQL Server's named instances are reached by their
-port, not by name: finding one by name would ask the SQL Server Browser over
-UDP, and the exporter's dialer makes TCP connections alone, refusing the
-driver's `udp` connection with `the driver asked for a udp connection`.
+**TLS options and blocks.** A `tls` key beside a TLS option that switches
+TLS off is a startup error, because it would be ignored. So are
+`tls.ca_file` and `tls.server_name`, which say how the server's certificate
+is verified, beside a value that does not verify it (`sslmode: require`,
+`tls: skip-verify`, `tlsmode: server`): use the verifying value
+(`verify-full`, `true`, `server-strict`), or leave them out. A client
+certificate, `cert_file` and `key_file`, is presented either way.
+
+- The TLS files are read each time a connection is made, and that connection
+  uses what was read for it, so a replaced file is used from the next
+  connection on. `vertica`'s driver takes its TLS settings by a name
+  registered with it and keeps every name forever, so it is given one name
+  for each connection being made at once, reused by later ones; it therefore
+  keeps no more than that, however often the files change.
+- SQL Server encrypts only the login, with a certificate that it creates
+  itself unless given one, and its own tools do not verify that certificate.
+  Neither does the exporter, with `encrypt: false` or left out, unless a
+  `tls` block says how (`ca_file`, `server_name`, or neither for the system's
+  roots).
+- Unless `encrypt` is `disable`, the login is never sent unencrypted. A
+  server that answers that it does not support encryption fails the scrape,
+  `the server answered that it does not support encryption, so the login
+  would be sent unencrypted`; enable encryption on the server, or write
+  `encrypt: disable`. A prelogin answer with an empty `ENCRYPTION` option,
+  which no SQL Server sends, fails the connection whatever `encrypt` is.
+- `oracle` with `ssl: true` makes every connection TLS. A listener that
+  redirects the connection to an address with `PROTOCOL=TCP` makes it fail,
+  `the oracle driver began a connection without TLS`, before anything is sent
+  on it; have the listener redirect to a `TCPS` address.
+- `clickhouse` with `secure: true` makes the TLS handshake before anything
+  else, on the native protocol as on `http`.
+
+**No environment.** Each connection is configured from the collector alone.
+The `PG*` environment variables and the `.pgpass` file that `postgres` would
+read change nothing, except `PGSERVICE`, which the driver reads regardless
+and which fails every `postgres` connection until it is unset. Neither do
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`: every driver, including
+`clickhouse` on `http` and `snowflake`, connects to the server directly,
+never through a [proxy](REQUESTS.md#proxies).
+
+SQL Server's named instances are reached by their port, not by name: finding
+one by name would query the SQL Server Browser over UDP, and the exporter's
+dialer makes only TCP connections, refusing the driver's `udp` connection
+with `the driver asked for a udp connection`.
 
 ## Connections
 
 A collector keeps its connections to a target in a pool, one for each target
-and each set of connection settings — account, credential files, database,
-options, TLS settings, `connections`, target lists — shared by its scrapes of
-the target and with no other collector. A connection is made at the first
+and each set of connection settings (account, credential files, database,
+options, TLS settings, `connections`, target lists), shared by its scrapes
+of the target and with no other collector. A connection is made at the first
 scrape that needs one and kept for the next.
 
-The limits are of targets, not pools. A target is the server, `host:port`, or
-the Snowflake account, with the collector's connection settings: the pools of
-the databases and accounts a collector reaches on one server are one target's,
-counted once in `max_targets` and together in `max_per_target`. A [static
-target](#static-targets) whose `connections` give it other settings is a
-target of its own, with its own limits, though it names a server the probes
-reach.
+The limits apply to targets, not pools. A target is the server, `host:port`,
+or the Snowflake account, with the collector's connection settings: the
+pools of the databases and accounts that a collector reaches on one server
+belong to one target, counted once in `max_targets` and together in
+`max_per_target`. A [static target](#static-targets) whose `connections`
+give it other settings is a target of its own, with its own limits, even
+though it names a server that the probes reach.
 
 ```yaml
     request:
@@ -549,53 +580,59 @@ reach.
 | `keepalive.interval` | `30s` | How often a kept connection is checked; at least `1s`, `0` checks none. |
 | `keepalive.check` | `tcp` | `tcp`: TCP keepalives on every connection at the interval, so one a firewall or a dead host dropped is found broken. `ping`: every interval, each idle connection of the pool is pinged, and a connection the driver then reports broken is closed. Each ping takes one of the target's places at `max_per_target`, without waiting, so that no more connections are pinged than there are places free: when the scrapes hold every place the pings are skipped for that interval. They never make a connection, and are given the interval to answer in: one that does not answer by then fails, counted, and frees its place; the connections have no TCP keepalives, as with an interval of `0`, even with a driver that would switch them on (`mysql`). |
 
-A connection that broke is found by the scrape that takes it, or by a
-keepalive, and made again. So is one the server ended while it was kept
-idle, by PostgreSQL's `idle_session_timeout` or an administrator's
-`pg_terminate_backend`, or MySQL's `wait_timeout`: the scrape that finds it
-closes it and connects anew, since nothing of its statement was sent, and
-fails only if the new connection does. A server that ends idle sessions
-sooner than the scrape interval costs a connection every scrape; give the
-account a longer timeout, or set `max_idle_per_target: 0`. A reload that removes a collector, or changes any
-of its connection settings, closes its pools: the next scrape makes a pool of
-the new settings, while the scrapes using an old pool then — a statement
-still running, a scrape waiting at `max_per_target` — finish on it, and it is
-closed when the last is done; their connections are counted as the
-collector's while it is configured, and no longer once a reload removes it.
-The exporter's shutdown closes every pool the same way.
+**Broken connections.** A connection that broke is detected by the scrape
+that takes it, or by a keepalive, and made again. So is one that the server
+ended while it was idle, through PostgreSQL's `idle_session_timeout`, an
+administrator's `pg_terminate_backend`, or MySQL's `wait_timeout`: the scrape
+that finds it closes it and connects again, because nothing of its statement
+was sent, and fails only if the new connection does. A server that ends idle
+sessions sooner than the scrape interval costs a connection every scrape;
+give the account a longer timeout, or set `max_idle_per_target: 0`.
 
-The end of a statement, closing its rows and rolling its transaction back, is
-bounded by the scrape's deadline (or a tenth of a second when the deadline
-has passed by then): a driver may wait on it without a deadline of its own,
-as `mysql`'s rollback waits for the server's answer. When the deadline comes
-first, the scrape answers the rows it has read, the connection's network
-connection is closed, and the connection is closed, never kept; it holds its
-place at `max_per_target` until it is closed. A `vertica` connection, which
-the driver dials by itself, cannot be closed under the driver: it holds its
-place until the driver's end returns.
+**Reloads.** A reload that removes a collector, or changes any of its
+connection settings, closes its pools. The next scrape makes a pool with the
+new settings, while the scrapes that are using an old pool at that moment (a
+statement still running, a scrape waiting at `max_per_target`) finish on it,
+and it is closed when the last one is done. Their connections count as the
+collector's while it is configured, and no longer once a reload removes it.
+The exporter's shutdown closes every pool in the same way.
+
+**The end of a statement.** Closing a statement's rows and rolling back its
+transaction is bounded by the scrape's deadline (or a tenth of a second when
+the deadline has already passed), because a driver may wait on it without a
+deadline of its own, as `mysql`'s rollback waits for the server's answer.
+When the deadline comes first, the scrape answers with the rows it has read,
+and the connection's network connection is closed and the connection
+discarded, never kept; it holds its place at `max_per_target` until it is
+closed. A `vertica` connection, which the driver dials itself, cannot be
+closed under the driver: it holds its place until the driver's end returns.
 
 A transaction is rolled back by the scrape, at the statement's end, even
-when the deadline comes while it is open: never by Go's `database/sql` on
-its own the moment the deadline comes, which would close the connection
+when the deadline comes while it is open, and never by Go's `database/sql`
+on its own the moment the deadline comes, which would close the connection
 while the scrape still has it. A connection whose transaction was still open
-when the deadline came, or when the statement was ended before its rows were
-all read, is then closed rather than kept, unless its driver resets the
-connection's session and says whether it is still usable, as `postgres` and
-`mysql` do.
+when the deadline came, or whose statement was ended before all its rows
+were read, is then closed instead of kept, unless its driver resets the
+connection's session and reports whether it is still usable, as `postgres`
+and `mysql` do.
 
 ## Static targets
 
-A [static target](STATIC-TARGETS.md) of a `sql` collector names the server as
-its `target`, and may set under its `request` its `timeout`, its own account
-and credential file — `username`, and `password_file` or, for `snowflake`,
-`private_key_file`, either replacing the collector's credential file, and
-none of them holding a placeholder, which is refused when the file loads
-since no probe fills it — its own `tls` block, and
-`connections`, whose keys each replace the collector's but `max_targets`,
-which is the collector's across its targets; a target whose `connections`
-change a setting is a target of its own for the limits, counted once more in
-`max_targets`. `params` fills the collector's
-placeholders, in `args` and `database`:
+A [static target](STATIC-TARGETS.md) of a `sql` collector names the server
+as its `target`, and may set under its `request`:
+
+- its `timeout`;
+- its own account and credential file: `username`, and `password_file` or,
+  for `snowflake`, `private_key_file`, either one replacing the collector's
+  credential file. None of them may hold a placeholder, which is refused
+  when the file loads because no probe fills it;
+- its own `tls` block;
+- `connections`, whose keys each replace the collector's, except
+  `max_targets`, which applies to the collector across its targets. A target
+  whose `connections` change a setting is a separate target for the limits,
+  counted once more in `max_targets`.
+
+`params` fills the collector's placeholders, in `args` and `database`:
 
 ```yaml
 interval: 1m
@@ -617,52 +654,54 @@ targets:
         max_per_target: 1
 ```
 
-A target's `tls` replaces the collector's whole block for that target, a key
-it leaves out not being taken from the collector's, and is held when the
-file loads to what the driver can honour with the collector's `options`, as
-the collector's is: a block beside an option that switches TLS off, or a
-`ca_file` or `server_name` beside one that verifies nothing, is refused.
-Written, even as `tls: {}`, it asks for TLS as the collector's would; a
-target cannot turn off the TLS its collector asks for. Its files are read
-when a connection is made, and by [`--dry-run`](CONFIGURATION.md#dry-run),
-under the target's name. A target's account, credential files and block are
-part of the key of its [pool](#connections) and of its
+A target's `tls` replaces the collector's whole block for that target; a
+key that it leaves out is not taken from the collector's. When the file
+loads, it is checked against what the driver can honour with the
+collector's `options`, as the collector's block is: a block beside an option
+that switches TLS off, or a `ca_file` or `server_name` beside one that
+verifies nothing, is refused. A written block, even `tls: {}`, requests TLS
+as the collector's would; a target cannot turn off the TLS that its
+collector requests. Its files are read when a connection is made, and by
+[`--dry-run`](CONFIGURATION.md#dry-run), under the target's name. A target's
+account, credential files and block are part of the key of its
+[pool](#connections) and of its
 [cache key](CONFIGURATION.md#response-caching), so targets that connect
 differently share no connection and no answer.
 
 ## Errors and self-metrics
 
-A failed statement is reported in the `sql` stage and follows
-`error_handling.on_fetch_error`, and names the server unless its error does:
-`running the statement: ERROR: relation "jobs" does not exist (SQLSTATE 42P01)
-(on db1.example.com:5432)`. A statement over `max_rows`, or rows over the
-response limit, count in `http_exporter_series_limit_exceeded_total`; a server
-the target lists refuse counts in `http_exporter_targets_refused_total`,
-answered `403`.
+A failed statement is reported in the `sql` stage, follows
+`error_handling.on_fetch_error`, and names the server unless its error
+already does: `running the statement: ERROR: relation "jobs" does not exist
+(SQLSTATE 42P01) (on db1.example.com:5432)`. A statement over `max_rows`, or
+rows over the response limit, count in
+`http_exporter_series_limit_exceeded_total`. A server that the target lists
+refuse counts in `http_exporter_targets_refused_total`, and is answered
+`403`.
 
-An error the database itself answered — a login it refused, a transaction it
-would not begin, a statement it failed, an error in the middle of the rows —
-is the operator's: its message may quote a value of a row, the statement,
-the account and the address the exporter connected from, or the names of a
-schema. The exporter's log shows the whole message, and with
-`--web.debug=full` so do a debug probe's report and the
-[status page](ENDPOINTS.md#status-page). The caller of `/probe` is answered
-what the exporter was doing and the server's error code, as the database
-documents it — `SQLSTATE` for `postgres` and `vertica`, the error number for
-`mysql` (with its `SQLSTATE`), `sqlserver` and `snowflake` (with its
-`SQLSTATE`), the code for `clickhouse`, the `ORA-` number for `oracle`:
+An error that the database itself returned (a refused login, a transaction it
+would not begin, a failed statement, an error in the middle of the rows) is
+for the operator only. Its message may quote a value of a row, the
+statement, the account and the address that the exporter connected from, or
+the names of a schema. The exporter's log shows the whole message, and so,
+with `--web.debug=full`, do a debug probe's report and the
+[status page](ENDPOINTS.md#status-page). The caller of `/probe` gets what the
+exporter was doing and the server's error code as the database documents it:
+`SQLSTATE` for `postgres` and `vertica`; the error number for `mysql` (with
+its `SQLSTATE`), `sqlserver` and `snowflake` (with its `SQLSTATE`); the code
+for `clickhouse`; and the `ORA-` number for `oracle`:
 
 ```text
 collector jobs sql failed: running the statement: the database answered SQLSTATE 42P01; its message is in the exporter's log (on db1.example.com:5432)
 collector jobs sql failed: connecting: connecting to mysql at db1.example.com:3306: the database answered error 1045 (SQLSTATE 28000); its message is in the exporter's log
 ```
 
-A failure that is not the database's answer, such as a connection refused, a
-TLS handshake that failed or the scrape's deadline, is answered as it is;
-so is a failure of `snowflake`'s driver itself, whose errors are numbered
-from 260000.
+A failure that is not the database's answer, such as a refused connection, a
+failed TLS handshake or the scrape's deadline, is reported as it is, and so
+is a failure of `snowflake`'s driver itself, whose errors are numbered from
+260000.
 
-Each `sql` collector has, with no per-request series (see
+Each `sql` collector has these self-metrics, and no per-request series (see
 [Self-metrics](SELF-METRICS.md)):
 
 | Family | Type | What |
@@ -677,9 +716,9 @@ Each `sql` collector has, with no per-request series (see
 | `http_exporter_sql_rows` | gauge | Rows its last successful statement returned. |
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows the statement in its
-request section — the driver, the server and the database, the account,
+request section (the driver, the server and the database, the account,
 whether the connection was made for the probe or kept, and how many values
-were bound — and never the password, the values or the statement's text; its
+were bound), never the password, the values or the statement's text. Its
 response section shows the rows as the JSON above:
 
 ```text
@@ -693,60 +732,95 @@ Requests
 ```
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)
-a statement is labelled with that `driver://host:port/database` URL, the
-database's placeholders kept as they are, and `http_method="QUERY"`.
+a statement is labelled with that `driver://host:port/database` URL, with
+the database's placeholders kept as they are, and `http_method="QUERY"`.
 
 ## Building with more drivers
 
-The default build and the image carry `mysql`, `postgres` and `sqlserver`.
-`oracle`, `clickhouse`, `snowflake` and `vertica` are built in when asked for,
-by `SQL_DRIVERS`, a comma-separated list:
+The default build and the image include `mysql`, `postgres` and
+`sqlserver`. `oracle`, `clickhouse`, `snowflake` and `vertica` are built in
+when requested with `SQL_DRIVERS`, a comma-separated list:
 
 ```sh
 make build SQL_DRIVERS=oracle,snowflake            # bin/prometheus-universal-exporter
 docker build --build-arg SQL_DRIVERS=clickhouse .
 ```
 
-`SQL_DRIVERS` goes with `REQUEST_TYPES` (see [Choosing request types at build
-time](CONFIGURATION.md#choosing-request-types-at-build-time)) when that names
-`sql`, and is refused with a `REQUEST_TYPES` that leaves `sql` out. A build
-without the `sql` type links no driver at all. The drivers are most of the
-type's size: built with `-trimpath -ldflags="-s -w"`, as the image is, the
-exporter is 23.7 MB without `sql`, 29.8 MB with its three default drivers and
-76.0 MB with all seven, Snowflake's the largest by far. A collector naming a driver the
-build does not have is refused when the configuration loads:
+`SQL_DRIVERS` goes with `REQUEST_TYPES` (see
+[Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time))
+when that names `sql`, and is refused with a `REQUEST_TYPES` that leaves out
+`sql`. A build without the `sql` type links no driver at all. The drivers
+are most of the type's size: built with `-trimpath -ldflags="-s -w"`, as the
+image is, the exporter is 23.7 MB without `sql`, 29.8 MB with its three
+default drivers and 76.0 MB with all seven, Snowflake's being by far the
+largest. A collector that names a driver the build does not have is refused
+when the configuration loads:
 
 ```text
 collector "warehouse" uses sql driver "snowflake", which this build does not include; it was built with: mysql, postgres, sqlserver. Build with SQL_DRIVERS=snowflake (make build SQL_DRIVERS=snowflake, or the image's SQL_DRIVERS build argument)
 ```
 
-`--version`, the startup log and `http_exporter_build_info`'s `sql_drivers`
-label name the drivers a build has; of a build without the `sql` type,
-`--version` and the label say nothing of drivers.
+`--version`, the startup log and the `sql_drivers` label of
+`http_exporter_build_info` name the drivers that a build has. For a build
+without the `sql` type, `--version` and the label say nothing about drivers.
 
 ## Limitations
 
 - **SQL Server and Snowflake have no read-only transaction.** SQL Server's
-  statement runs in a transaction rolled back after it, which undoes no
-  `COMMIT` the statement makes itself, and Snowflake's runs as it is; their
-  accounts must be ones that can only read.
+  statement runs in a transaction that is rolled back after it, which does
+  not undo a `COMMIT` that the statement makes itself, and Snowflake's runs
+  as it is. Their accounts must be able only to read.
 - **A Snowflake result must come in one chunk.** Snowflake sends the first
-  part of a result with the answer and leaves a larger result's other chunks
-  at presigned cloud storage URLs, which the exporter does not connect to:
-  they are not the account's host, and the target lists cannot allow them.
-  Such a statement fails at once — `running the statement: the statement's
-  result came from Snowflake in more than one chunk, ...; return fewer rows
-  or columns, with WHERE, GROUP BY or LIMIT, so that the whole result comes
-  in one chunk` — rather than at the scrape's deadline. Aggregate in the
-  statement, so that it returns the few rows a metric needs. The exporter
-  fails it when the answer naming the chunks comes, before gosnowflake sees
-  it, so that the driver never starts fetching them: gosnowflake (v1.19.1)
-  can miss the signal of a chunk download that failed and wait for the chunk
-  forever, past the scrape's deadline, holding the statement's connection
-  and its place at `max_per_target`. To tell, the exporter reads each answer
-  to a statement whole before the driver does, the result's first chunk
-  with it, which is held twice for a moment: the exporter's copy and the
-  driver's. That read is held to the response limit (below).
+  part of a result with the answer and leaves the other chunks of a larger
+  result at presigned cloud storage URLs, which the exporter does not
+  connect to: they are not the account's host, and the target lists cannot
+  allow them.
+  - Such a statement fails immediately, instead of at the scrape's deadline:
+    `running the statement: the statement's result came from Snowflake in
+    more than one chunk, ...; return fewer rows or columns, with WHERE, GROUP
+    BY or LIMIT, so that the whole result comes in one chunk`. Aggregate in
+    the statement, so that it returns the few rows that a metric needs.
+  - The exporter fails it when the answer naming the chunks arrives, before
+    gosnowflake sees it, so that the driver never starts fetching them:
+    gosnowflake (v1.19.1) can miss the signal of a failed chunk download and
+    wait for the chunk forever, past the scrape's deadline, holding the
+    statement's connection and its place at `max_per_target`.
+  - To detect this, the exporter reads each answer to a statement whole,
+    including the result's first chunk, before the driver does, so it is
+    briefly held twice: the exporter's copy and the driver's. That read is
+    held to the response limit (below).
+- **gosnowflake's own behaviour.** Its platform detection, which would ask
+  the cloud metadata services and AWS STS which platform it runs on, is
+  turned off (`SNOWFLAKE_DISABLE_PLATFORM_DETECTION=true`, set by the
+  exporter). The build leaves out its native "minicore" library
+  (`minicore_disabled`, which `SQL_DRIVERS=snowflake` adds), so it writes no
+  library to a temporary directory or to `~/.cache/snowflake/minicore` at
+  start. What remains is the driver's own behaviour: at start it creates an
+  empty `~/.cache/snowflake` (or `$XDG_CACHE_DIR/snowflake`, or
+  `$SF_TEMPORARY_CREDENTIAL_CACHE_DIR`) where it can, and stores nothing in
+  it, because the exporter keeps no credential there. At the first
+  connection it looks for an `sf_client_config.json` next to the executable
+  and in the home directory, or at `$SF_CLIENT_CONFIG_FILE`, and logs as
+  that file says.
+- **Vertica's driver dials by itself**, taking neither a dialer nor a
+  context.
+  - The target's name and every address it resolves to are checked against
+    the target lists before the connection, not the connection's address
+    after it. A name that the exporter cannot look up fails the scrape then,
+    `has to be looked up here to hold its addresses to the target lists
+    before the driver, which dials by itself, connects`, because the driver
+    would look it up itself.
+  - Its TCP keepalives are the driver's own, and a connection that is not
+    made by the scrape's deadline is left to finish and then closed.
+  - The driver reads with no deadline, and would stop a statement only by a
+    cancel request sent over a connection that it dials itself, after its own
+    lookup, with no timeout, bypassing the target lists, and unencrypted
+    whatever `tlsmode` says. The exporter therefore never lets it send one:
+    at the scrape's deadline the scrape fails, `the vertica server had not
+    answered when the scrape's deadline came`, and the connection is given
+    up and closed when the driver's call returns, while the server runs the
+    statement to its end. Bound it at the server, with the resource pool's
+    `RUNTIMECAP`.
 - **gosnowflake's own behaviour.** Its platform detection, which would ask
   the cloud metadata services and AWS STS which platform it runs on, is
   turned off (`SNOWFLAKE_DISABLE_PLATFORM_DETECTION=true`, set by the
@@ -777,19 +851,46 @@ label name the drivers a build has; of a build without the `sql` type,
   the server, with the resource pool's `RUNTIMECAP`.
 - **Vertica's driver does what the server asks of the exporter's files.**
   vertica-sql-go answers the server's file-transfer requests on any
-  statement, prepared or not, and the exporter cannot stop it, the driver
-  dialing by itself and taking no connection the exporter could watch: a
-  request to load a file makes it open whatever path the server names and
-  send its contents, a request to check files makes it say which paths exist
-  and how large they are, and a request to load from standard input makes it
-  read the exporter's. So a server that answers at a `vertica` target can
-  read any file the exporter's process can read — its credential files, a
-  Kubernetes service account token, its configuration. Point `vertica`
-  collectors only at servers you trust, in `allowed_targets` (see
-  [Restricting targets](REQUESTS.md#restricting-targets)), never at targets a
-  probe's caller may choose freely, and run the exporter with no more files
-  readable than it needs. The type is opt-in (`SQL_DRIVERS=vertica`), so a
-  build without it has no such driver.
+  statement, prepared or not, and the exporter cannot stop it, because the
+  driver dials by itself and takes no connection that the exporter could
+  watch. A request to load a file makes it open whatever path the server
+  names and send its contents; a request to check files makes it report
+  which paths exist and how large they are; and a request to load from
+  standard input makes it read the exporter's. As a result, a server that
+  answers at a `vertica` target can read any file the exporter's process can
+  read: its credential files, a Kubernetes service account token, its
+  configuration. Point `vertica` collectors only at servers you trust, in
+  `allowed_targets` (see
+  [Restricting targets](REQUESTS.md#restricting-targets)), never at targets
+  that a probe's caller may choose freely, and run the exporter with no more
+  files readable than it needs. The driver is opt-in
+  (`SQL_DRIVERS=vertica`), so a build without it has no such driver.
+- **SQL Server routing is refused.** A server that answers the login by
+  redirecting the connection to another server (Azure SQL's `Redirect`
+  connection policy, read-only routing in an availability group) names a
+  host that the target is not, and the exporter's dialer refuses the
+  connection to it: the scrape fails with `the connection is to a host the
+  request did not check`. Use Azure SQL's `Proxy` connection policy, or make
+  the server that the connection is routed to the target.
+- **Vertica's driver logs by itself.** Its warnings and errors go into the
+  exporter's log, as lines with `sql_driver` `vertica`, at their own level,
+  not to stdout or to the file that `VERTICA_SQL_GO_LOG_FILE` names.
+  `VERTICA_SQL_GO_LOG_LEVEL` still sets how much it logs.
+- **Snowflake's driver logs by itself** too. Its errors go into the
+  exporter's log, as lines with `sql_driver` `snowflake`, at their own level
+  and with the passwords and tokens it masks masked, not to stderr; an
+  `sf_client_config.json` that it finds (above) redirects them as it says.
+  Two errors that it logs are logged at debug level, because the scrape's
+  own failure explains what happened: the one for a statement whose result
+  came in more than one chunk, which the exporter fails (above), `error:
+  262000 (08006): the statement's result came from Snowflake in more than
+  one chunk, ...`, and the one for an answer larger than the response limit
+  (below), `error: 262000 (08006): the statement's result came from
+  Snowflake larger than the exporter's response limit`.
+- **A row is read before `max_response_bytes` sees it.** The limit counts the
+  values as a driver hands them on, and a driver reads at least a whole row
+  before it hands any of it on. Where a driver can be told, the exporter
+  bounds what it reads by the limit:
 - **SQL Server routing is refused.** A server that answers the login by
   sending the connection to another server — Azure SQL's `Redirect`
   connection policy, read-only routing in an availability group — names a
@@ -816,55 +917,55 @@ label name the drivers a build has; of a build without the `sql` type,
   the values as a driver hands them on, and a driver reads a row, at least,
   whole before it hands any of it on. Where a driver can be told, the
   exporter bounds what it reads by the limit:
-  - `postgres` refuses a message from the server, a row with all its values
-    among them, that is larger than the limit and 1 MiB beside it (for a
-    row's lengths and `NULL`s, a wide result's description and a long error
-    message) from its length alone, before reading it, and closes the
+  - `postgres` refuses a message from the server that is larger than the
+    limit plus 1 MiB (for a row's lengths and `NULL`s, a wide result's
+    description and a long error message), including a row with all its
+    values, by its length alone, before reading it, and closes the
     connection: `the server sent a message larger than the response limit
     of 1048576 bytes and the 1048576 bytes the protocol is allowed beside
     it, as a row too large for the limit is; return smaller values, or raise
     request.max_response_bytes or limits.max_response_bytes`. Unbounded,
     pgx would read a message of up to 1 GiB.
-  - `sqlserver` sets `TEXTSIZE` to twice the limit and two bytes on each
-    connection, when it is made and before each use of it, which costs a
-    round trip: the server cuts a longer `varchar(max)`, `nvarchar(max)`,
-    `varbinary(max)`, `text`, `ntext` or `image` value there, and since a cut
-    value is still over the limit as the exporter reads it (`nvarchar` text
-    is two bytes a character as sent), the scrape fails by the limit and
-    never hands a cut value on. Other values are 8000 bytes at most, but `xml`
-    and CLR types such as `geography`, which `TEXTSIZE` does not cover, and
+  - `sqlserver` sets `TEXTSIZE` to twice the limit plus two bytes on each
+    connection, when it is made and before each use, which costs a round
+    trip. The server cuts a longer `varchar(max)`, `nvarchar(max)`,
+    `varbinary(max)`, `text`, `ntext` or `image` value there. A cut value is
+    still over the limit as the exporter reads it (`nvarchar` text is two
+    bytes per character as sent), so the scrape fails by the limit and never
+    hands on a cut value. Other values are at most 8000 bytes, except `xml`
+    and CLR types such as `geography`, which `TEXTSIZE` does not cover and
     which the driver reads whole.
   - `mysql` reads a row whole, as long as the server sends it, which the
-    server's `max_allowed_packet` bounds (64 MiB by default, 1 GiB at most);
-    the driver cannot be told less, its own `maxAllowedPacket` bounding what
-    it sends alone. Nor can the exporter read the packets' lengths on the
-    connection it hands the driver, as it does `postgres`'s messages: with
-    `tls`, the driver starts TLS itself on that connection, and the packets
-    are inside it, where only the driver sees them; a bound that held without
-    TLS and not with it is not given.
+    server's `max_allowed_packet` bounds (64 MiB by default, 1 GiB at most).
+    The driver cannot be told less: its own `maxAllowedPacket` bounds only
+    what it sends. Nor can the exporter read the packets' lengths on the
+    connection it gives the driver, as it does for `postgres`'s messages:
+    with `tls`, the driver starts TLS itself on that connection, and the
+    packets are inside it, where only the driver sees them. A bound that
+    held without TLS but not with it is not offered.
   - `snowflake`'s answer to a statement, which holds the result's first
-    chunk, the only one the exporter takes (above), is read by the exporter
-    before the driver sees it, and that read is held to the limit: an answer
-    whose `Content-Length` passes the limit is refused unread, one without
-    a `Content-Length` once a byte past the limit has been read, and a
-    gzipped one, however small, once a byte past the limit has been
-    decompressed, without decompressing further, so that a gzip bomb costs
-    no more than the limit. The scrape fails at once, as a limit, not the
-    driver's error, and the driver does not retry it: `running the
+    chunk (the only one the exporter takes, above), is read by the exporter
+    before the driver sees it, and that read is held to the limit. An answer
+    whose `Content-Length` exceeds the limit is refused unread; one without a
+    `Content-Length` once a byte beyond the limit has been read; and a
+    gzipped one, however small, once a byte beyond the limit has been
+    decompressed, without decompressing further, so that a gzip bomb costs no
+    more than the limit. The scrape fails immediately, as a limit, not with
+    the driver's error, and the driver does not retry it: `running the
     statement: the statement's answer from Snowflake was larger than the
     response limit of 1048576 bytes (decompressed, when it came gzipped),
     and was refused; return fewer rows or columns, with WHERE, GROUP BY or
     LIMIT, or raise request.max_response_bytes or limits.max_response_bytes`.
-    A gzipped answer within the limit is handed to the driver decompressed,
-    in place of the gzipped one. So the exporter holds one copy of an answer
-    of at most the limit, and the driver another while it decodes it: what
-    the driver builds of that copy as it decodes it (its rows, a string for
-    each value) is the driver's, and the limit on the rows' values then
-    applies as for every driver. The login and the driver's other requests,
-    whose answers are not results, are not bounded.
+    A gzipped answer within the limit is passed to the driver decompressed.
+    The exporter therefore holds one copy of an answer of at most the limit,
+    and the driver another while it decodes it. What the driver builds from
+    that copy as it decodes it (its rows, a string for each value) is the
+    driver's, and the limit on the rows' values then applies as for every
+    driver. The login and the driver's other requests, whose answers are not
+    results, are not bounded.
   - `clickhouse` and `vertica` read a row, or a block of rows as their
-    protocol sends it (`clickhouse`'s blocks), whole, with no bound the
-    exporter sets.
+    protocol sends it (`clickhouse`'s blocks), whole, with no bound set by
+    the exporter.
 - **No connection string.** A setting a driver has that no key or option
   above names cannot be set.
 

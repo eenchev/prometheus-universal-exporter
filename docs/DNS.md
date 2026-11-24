@@ -69,9 +69,9 @@ takes `timeout` and `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values); a static target's request block
 takes `timeout`.
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
 other decoder, and a transform that does not read JSON (`regex`, `csv`,
-`css`, `prometheus`), is refused when the configuration loads. Use `jq`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
 `yq` or `python`.
 
 ## The target

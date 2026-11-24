@@ -6,14 +6,13 @@ when the registration expires, its registrar, its status and its name
 servers. Use it to alert before a domain expires, and to see a registrar or
 a name server change.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with whois](#building-with-whois)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with whois](#building-with-whois)).
 
 ## Building with whois
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=whois              # bin/prometheus-universal-exporter
@@ -21,9 +20,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=whois -t exporter:whois .
 go build -tags "$(sh tools/request-type-tags.sh '' '' whois)" .
 ```
 
-The tag is `request_type_whois`. A configuration with a `whois` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_whois`. A build without the type refuses a
+configuration with a `whois` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -70,9 +70,10 @@ No other request key applies, and setting one is a startup error. A probe
 takes `timeout` and `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The target
 

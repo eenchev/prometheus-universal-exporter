@@ -10,14 +10,13 @@ It only reads: the commands that store, rename or delete are not in the
 code. Plaintext FTP, explicit TLS (`AUTH TLS`) and TLS from the first byte
 are spoken.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with ftp](#building-with-ftp)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with ftp](#building-with-ftp)).
 
 ## Building with ftp
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=ftp              # bin/prometheus-universal-exporter
@@ -25,10 +24,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=ftp -t exporter:ftp .
 go build -tags "$(sh tools/request-type-tags.sh '' '' ftp)" .
 ```
 
-The tag is `request_type_ftp`. A configuration with an `ftp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_ftp`. A build without the type refuses a
+configuration with an `ftp` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 

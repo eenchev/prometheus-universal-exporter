@@ -27,6 +27,8 @@ that does it, usually with an example to copy. New here? Start with
 | Search an LDAP directory | [LDAP directories](LDAP.md) |
 | Call a gRPC method | [gRPC](GRPC.md) |
 | Read an HTTP answer that is a protobuf message | [Protobuf responses](CONFIGURATION.md#protobuf-responses) |
+| Read an AWS API, such as an SQS queue's depth or a CloudWatch statistic | [Signing requests for AWS](AUTHENTICATION.md#signing-requests-for-aws) |
+| Call an API that wants each request signed with a secret | [Signing requests](AUTHENTICATION.md#signing-requests) |
 | Read a Google API with a service account, or the GitHub API as an App | [A service account's key](AUTHENTICATION.md#a-service-accounts-key) |
 | Read InfluxDB line protocol, as Telegraf writes it to a file | [InfluxDB line protocol](CONFIGURATION.md#influxdb-line-protocol) |
 | Check that a SIP server or PBX answers | [SIP](SIP.md), in a build with the opt-in type |

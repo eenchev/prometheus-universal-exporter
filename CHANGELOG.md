@@ -259,6 +259,16 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Ed25519, or a Google service account's JSON key file, and exchanges it
   for a token. It opens Google's APIs, such as Sheets, Analytics and
   BigQuery, and GitHub Apps to an `http` collector.
+- **[Signed requests](docs/AUTHENTICATION.md#signing-requests)**:
+  `request.signature` signs each request of an `http` collector with an
+  HMAC of a shared secret over a payload made of the request, its query,
+  body, path or headers, sent in a header or a query parameter, as
+  exchanges and payment APIs ask.
+- **[AWS APIs](docs/AUTHENTICATION.md#signing-requests-for-aws)**:
+  `request.aws_sigv4` signs each request of an `http` collector with AWS
+  Signature Version 4, with the credentials the SDK's chain finds or a
+  static access key, so a collector reads CloudWatch, SQS, Cost Explorer
+  and the rest. In the builds that have `s3file`.
 
 ### Fixed
 

@@ -56,6 +56,14 @@ var derivedBy = strings.Replace(derivedCollector, "        sum: [v, v]\n", "    
 // paginatedCollector is jqCollector fetching its pages by page number.
 var paginatedCollector = strings.Replace(jqCollector, "      # request\n", "      pagination:\n        type: page\n        param: page\n        items: .items\n", 1)
 
+// signedCollector and awsSignedCollector are configurations of one collector
+// that signs its requests, with an HMAC and for AWS, with a comment where a
+// row writes a key of the block.
+var (
+	signedCollector    = strings.Replace(jqCollector, "      # request\n", "      signature:\n        secret_file: /s\n        payload: \"{{query}}\"\n        header: X-Signature\n        # signature\n", 1)
+	awsSignedCollector = strings.Replace(jqCollector, "      # request\n", "      aws_sigv4:\n        service: sqs\n        # aws_sigv4\n", 1)
+)
+
 // escapingNames is a configuration of one collector with its name_escaping
 // set.
 func escapingNames(configuration, escaping string) string {
@@ -154,6 +162,14 @@ func httpSchemaKeys() []schemaKey {
 		// The keys request.pagination requires: written "", each is as
 		// missing as left out, to both, and items of blanks alone, which
 		// names no array, both refuse.
+		// request.signature and request.aws_sigv4: an enum's "" is the
+		// key left out; a service is required and a name, a region a name
+		// or left out.
+		{key: "collectors[].request.signature.algorithm", document: signedCollector, at: "        # signature\n", setting: "        algorithm: %s\n", valid: "hmac-sha512", invalid: "md5", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.signature.encoding", document: signedCollector, at: "        # signature\n", setting: "        encoding: %s\n", valid: "base64", invalid: "binary", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.signature.secret_encoding", document: signedCollector, at: "        # signature\n", setting: "        secret_encoding: %s\n", valid: "hex", invalid: "base32", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].request.aws_sigv4.service", document: awsSignedCollector, at: "        service: sqs\n", setting: "        service: %s\n", valid: "monitoring", invalid: "SQS"},
+		{key: "collectors[].request.aws_sigv4.region", document: awsSignedCollector, at: "        # aws_sigv4\n", setting: "        region: %s\n", valid: "eu-west-1", invalid: `"EU West"`, absent: true, empty: true},
 		{key: "collectors[].request.pagination.type", document: paginatedCollector, at: "        type: page\n", setting: "        type: %s\n", valid: "offset", invalid: "pages"},
 		{key: "collectors[].request.pagination.items", document: paginatedCollector, at: "        items: .items\n", setting: "        items: %s\n", valid: ".data.results", invalid: `"  "`, booleanAlone: `request.pagination.items "true" is not a path`, numberAlone: `request.pagination.items "1" is not a path`},
 		// Optional, with allowed values or a pattern: "" is the default.

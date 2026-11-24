@@ -11189,6 +11189,43 @@ values from its answer, and send the value `token` names as the token.
   The states of a login MUST be dropped as its tokens are (§ 42.6a), and at
   most 1000 kept.
 
+## 42.6d Signed requests
+
+An `http` collector MAY sign its requests, with `request.signature` or with
+`request.aws_sigv4`, and not with both. Every request of a trip MUST be
+signed, a retry and each page of a paginated answer its own, last, over the
+request as it is sent; a request that cannot be signed MUST NOT be sent,
+and its failure MUST NOT hold the secret.
+
+- `request.signature` MUST sign with an HMAC, `algorithm` `hmac-sha256`
+  unless set to `hmac-sha1`, `hmac-sha384` or `hmac-sha512`, of the secret
+  of `secret_file`, read at each request as a credential file is and
+  written as `secret_encoding` says, `text` unless `base64` or `hex`, over
+  `payload`: its text with `{{method}}`, `{{path}}`, the path as the URL
+  writes it, `{{query}}`, the query as the URL writes it, `{{body}}`,
+  `{{host}}`, `{{url}}` and `{{header:Name}}`, the request's header of that
+  name or nothing, each as it is sent. The signature, written as `encoding`
+  says, `hex` unless `base64` or `base64url`, MUST be set in `header` after
+  `prefix`, or added to the query as `query_param` after every other
+  parameter, so that `{{query}}` is the query without it. `secret_file` and
+  `payload` are required, and exactly one of `header` and `query_param`; a
+  payload with another `{{`, a `prefix` beside `query_param`, and a
+  signature sent in `Authorization` beside a credential or a login sent
+  there MUST be refused at load.
+- `request.aws_sigv4` MUST sign with AWS Signature Version 4 for `service`,
+  which is required, and `region`, the AWS SDK's own configuration's when
+  left out, over the request's method, path, query, headers and body, with
+  the static access key of `access_key_id_file` and
+  `secret_access_key_file`, and the session token of `session_token_file`,
+  when they are set, both or neither, and otherwise the credentials the AWS
+  SDK's default chain finds. It MUST be refused at load beside
+  `basic_auth`, `bearer_token`, `forward_authorization`, a login sent in
+  `Authorization`, and `Authorization`, `X-Amz-Date` or
+  `X-Amz-Security-Token` among `request.headers`. It MUST be in the builds
+  that have the `s3file` request type and no other, linking no module that
+  type does not, and a build without it MUST refuse the key at load, saying
+  which type brings it.
+
 ## 42.6c Secret stores
 
 `secret_stores` lists stores a credential MAY be read from in place of a

@@ -139,6 +139,116 @@ once. Exporter-side Basic Auth is mutually exclusive with `request.forward_autho
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 
+## Signing requests
+
+Some APIs take neither a password nor a token: each request is signed with
+a secret the two sides share, and the server works out the same signature
+to know the request is the account's and was not changed on its way. An
+`http` collector signs its requests with `request.signature`, an HMAC:
+
+```yaml
+collectors:
+  - name: exchange_balance
+    request:
+      type: http
+      path: /api/v3/account
+      query:
+        recvWindow: "5000"
+        timestamp: "{{unix_ms}}"
+      signature:
+        secret_file: /var/run/secrets/exchange/api-secret
+        payload: "{{query}}"
+        query_param: signature
+    transform:
+      type: jq
+    metrics:
+      - name: exchange_balances
+        expression: .balances | length
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `secret_file` | — | **Required.** The file of the secret, read at each request. It may be a reference to a [secret store](#secret-stores). |
+| `secret_encoding` | `text` | How the file writes the secret: `text`, `base64` or `hex`. |
+| `algorithm` | `hmac-sha256` | `hmac-sha256`, `hmac-sha1`, `hmac-sha384` or `hmac-sha512`. |
+| `payload` | — | **Required.** What is signed (see below). |
+| `encoding` | `hex` | How the signature is written: `hex`, `base64` or `base64url`. |
+| `header` | — | The header the signature is sent in, after `prefix`. |
+| `prefix` | — | What goes before the signature in its header, such as `sha256=`. |
+| `query_param` | — | The query parameter the signature is sent in. Exactly one of `header` and `query_param`. |
+
+`payload` is text with the parts of the request in it, each as it is sent:
+`{{method}}`, `{{path}}`, the path as the URL writes it, `{{query}}`, the
+query without its `?`, `{{body}}`, `{{host}}`, `{{url}}` and
+`{{header:Name}}`, the value of a header of the request, empty when it has
+none. Anything else in it is signed as it is written.
+
+- A signature in `query_param` is added after every other parameter, so
+  `{{query}}` is the query before it, which is what such APIs sign.
+- A timestamp an API wants signed is a [clock
+  placeholder](REQUESTS.md#dates-and-times) in a header or the query,
+  `"{{unix_ms}}"`, and the payload holds it as part of them:
+  `"{{header:X-Timestamp}}{{method}}{{path}}{{body}}"`.
+- Every request of a trip is signed, a retry and each page of a
+  [paginated](REQUESTS.md#pagination) answer its own. A redirect that is
+  followed is not signed again.
+- A secret that cannot be read, or is not written as `secret_encoding`
+  says, fails the scrape before anything is sent. The signature is not a
+  secret, and a [debug probe](CONFIGURATION.md#debug-probes) shows it with
+  the request.
+
+### Signing requests for AWS
+
+`request.aws_sigv4` signs each request with AWS Signature Version 4, so an
+`http` collector reads an AWS API as it reads any other, the depth of an
+SQS queue here:
+
+```yaml
+collectors:
+  - name: sqs_depth
+    request:
+      type: http
+      method: POST
+      headers:
+        Content-Type: application/x-amz-json-1.0
+        X-Amz-Target: AmazonSQS.GetQueueAttributes
+      body: '{"QueueUrl": "{{param_queue_url|json}}", "AttributeNames": ["ApproximateNumberOfMessages"]}'
+      aws_sigv4:
+        service: sqs
+        region: eu-west-1
+    transform:
+      type: jq
+    metrics:
+      - name: sqs_messages
+        expression: .Attributes.ApproximateNumberOfMessages
+```
+
+```text
+/probe?collector=sqs_depth&target=https://sqs.eu-west-1.amazonaws.com&param_queue_url=https://sqs.eu-west-1.amazonaws.com/123456789012/jobs
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `service` | — | **Required.** The name the API signs under: `sqs`, `monitoring` (CloudWatch), `ce` (Cost Explorer), `ecs`, `lambda`, `execute-api` (API Gateway) and so on. |
+| `region` | the SDK's, such as `AWS_REGION` | The region signed for. |
+| `access_key_id_file`, `secret_access_key_file` | — | A static access key's files, read at each request, in place of the SDK's chain; both or neither. |
+| `session_token_file` | — | A temporary access key's session token, with the other two. |
+
+The credentials are those the AWS SDK's default chain finds, as for an
+[`s3file`](S3FILE.md) collector: a role for the service account (IRSA), EKS
+Pod Identity, the instance's role or the environment. The role needs the
+API's own permission, `sqs:GetQueueAttributes` here. The signing sets
+`Authorization`, `X-Amz-Date` and, of temporary credentials,
+`X-Amz-Security-Token`, so it is refused beside `basic_auth`,
+`bearer_token`, a login sent in `Authorization` and those headers written
+in `request.headers`, and beside `request.signature`.
+
+The key is in the builds that have both the `http` and the `s3file` request
+type, the default build among them, since it signs with the SDK `s3file`
+links; another build refuses it, saying so. Which headers and body an API
+wants is the API's: its reference says the `X-Amz-Target` and the JSON, or
+the query, of each call.
+
 ## Logging in to a target
 
 Some targets take no credential the operator can put in a file: they hand

@@ -3064,7 +3064,9 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
-| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's; `type: steps` makes a list of requests, each reading values from its answer for the steps after it, one of them the token, with `refresh_steps` and `keep_file` for a sign-in made seldom. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401`, or a status of `relogin_on`, makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
+| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's; `type: jwt` signs a JWT with a service account's key and exchanges it for a token, for Google's APIs and GitHub Apps; `type: steps` makes a list of requests, each reading values from its answer for the steps after it, one of them the token, with `refresh_steps` and `keep_file` for a sign-in made seldom. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401`, or a status of `relogin_on`, makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
+| `signature` | — | `http` alone: sign each request with an HMAC of a shared secret, sent in a header or a query parameter; see [Signing requests](AUTHENTICATION.md#signing-requests). |
+| `aws_sigv4` | — | `http` alone: sign each request with AWS Signature Version 4, to read an AWS API; see [Signing requests for AWS](AUTHENTICATION.md#signing-requests-for-aws). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
@@ -3409,10 +3411,11 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `make build` writes the binary to `bin/prometheus-universal-exporter`; plain
 `go build .` writes it to the current directory.
 
-Two things that are no request types come with one, for the libraries they
+Three things that are no request types come with one, for the libraries they
 share with it: the [`protobuf` decoder](#protobuf-responses) is in the
 builds that have `grpc`, and the `aws`
-[secret store](AUTHENTICATION.md#secret-stores) in those that have
+[secret store](AUTHENTICATION.md#secret-stores) and an `http` collector's
+[`aws_sigv4`](AUTHENTICATION.md#signing-requests-for-aws) in those that have
 `s3file`. A build without the type refuses a configuration that uses them,
 saying which type to build with.
 

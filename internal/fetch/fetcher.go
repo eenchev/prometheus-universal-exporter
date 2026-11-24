@@ -991,6 +991,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, err
 		}
 		span := propagateTrace(requestContext, req.Header, false)
+		// Signed last, over the request as it is sent (httpsign.go).
+		if signHTTPRequest != nil {
+			if err := signHTTPRequest(requestContext, c, req, requestBody); err != nil {
+				return nil, err
+			}
+		}
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
 		traceSpanID(requestContext, span)
 		traceAttempt(requestContext, attempt)
@@ -1352,6 +1358,11 @@ func waitRetry(ctx context.Context, backoff time.Duration) error {
 		return nil
 	}
 }
+
+// signHTTPRequest signs a request of a collector that signs its requests,
+// whose body is body, before it is sent; the http request type sets it
+// (httpsign.go), and a build without the type signs none.
+var signHTTPRequest func(ctx context.Context, c *model.Collector, req *http.Request, body string) error
 
 // ReadCredentialFile reads a credential from the file at path, without the
 // surrounding whitespace an editor or a Secret mount may leave. A path

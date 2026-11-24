@@ -2850,6 +2850,50 @@
                 ],
                 "type": "string"
               },
+              "aws_sigv4": {
+                "additionalProperties": false,
+                "description": "http: sign each request with AWS Signature Version 4, with the credentials the AWS SDK's default chain finds, so the collector reads an AWS API. In the builds that have the s3file request type. See docs/AUTHENTICATION.md#signing-requests-for-aws.",
+                "properties": {
+                  "access_key_id_file": {
+                    "description": "The file of a static access key's id, with secret_access_key_file, in place of the credentials the AWS SDK's default chain finds.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "region": {
+                    "description": "The region signed for, such as eu-west-1; the AWS SDK's configuration, such as AWS_REGION, says it when left out.",
+                    "pattern": "^([a-z0-9][a-z0-9-]*)?$",
+                    "type": "string"
+                  },
+                  "secret_access_key_file": {
+                    "description": "The file of a static access key's secret, with access_key_id_file.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "service": {
+                    "description": "Required. The name the API signs under, such as sqs, monitoring (CloudWatch), ce (Cost Explorer), ecs, lambda or execute-api.",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$",
+                    "type": "string"
+                  },
+                  "session_token_file": {
+                    "description": "The file of a temporary access key's session token, with the other two.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "service"
+                ],
+                "type": "object"
+              },
               "basic_auth": {
                 "additionalProperties": false,
                 "properties": {
@@ -6713,6 +6757,87 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "signature": {
+                "additionalProperties": false,
+                "description": "http: sign each request with an HMAC of a shared secret, sent in a header or a query parameter, as APIs that take no token ask. See docs/AUTHENTICATION.md#signing-requests.",
+                "properties": {
+                  "algorithm": {
+                    "description": "The HMAC's hash: hmac-sha256, the default, hmac-sha1, hmac-sha384 or hmac-sha512.",
+                    "enum": [
+                      "hmac-sha256",
+                      "hmac-sha1",
+                      "hmac-sha384",
+                      "hmac-sha512",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "description": "How the signature is written: hex, the default, base64 or base64url.",
+                    "enum": [
+                      "hex",
+                      "base64",
+                      "base64url",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "header": {
+                    "description": "The header the signature is sent in. Exactly one of header and query_param.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "payload": {
+                    "description": "Required. What is signed, of the request as it is sent: text with {{method}}, {{path}}, {{query}}, {{body}}, {{host}}, {{url}} and {{header:Name}} in it, such as \"{{query}}\" or \"{{header:X-Timestamp}}{{method}}{{path}}{{body}}\".",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "prefix": {
+                    "description": "What the signature is sent after in its header, such as \"sha256=\".",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "query_param": {
+                    "description": "The query parameter the signature is sent in, added after every other, so the payload's {{query}} is the query before it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "secret_encoding": {
+                    "description": "How the file writes the secret: text, the default, base64 or hex.",
+                    "enum": [
+                      "text",
+                      "base64",
+                      "hex",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "secret_file": {
+                    "description": "Required. The file of the secret the requests are signed with, read at each request.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "payload"
+                ],
+                "type": "object"
               },
               "sip_transport": {
                 "description": "sip: what the request is sent over: udp, the default, where it is sent again while no response comes; tcp; or tls, verified as request.tls says. See docs/SIP.md#the-transport.",

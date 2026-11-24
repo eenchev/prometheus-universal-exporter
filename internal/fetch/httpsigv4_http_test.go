@@ -37,7 +37,10 @@ func sigV4Expected(r *http.Request, body []byte, signedHeaders, secret, region, 
 		if name == "host" {
 			value = r.Host
 		}
-		headers.WriteString(name + ":" + strings.TrimSpace(value) + "\n")
+		headers.WriteString(name)
+		headers.WriteString(":")
+		headers.WriteString(strings.TrimSpace(value))
+		headers.WriteString("\n")
 	}
 	canonical := strings.Join([]string{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, headers.String(), signedHeaders, sum(body)}, "\n")
 	date := r.Header.Get("X-Amz-Date")

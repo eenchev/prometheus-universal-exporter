@@ -36,13 +36,13 @@ var (
 // SD is the service discovery answer for the probe job named job: a group
 // per target, at the replica it is routed to.
 //
-// A probe is routed among the effective members that are live, or, when
-// none is, among all live members; and among those, to the members whose
+// A probe is routed among the effective members that are live, or among all
+// live members when none is. Among those, it goes to the members whose
 // heartbeat reports a bundle whose configuration has the job's collector,
-// when any does, so a collector just added draws no "unknown collector"
+// when any does. So a collector just added draws no "unknown collector"
 // answers while its bundle spreads. The member is the one the placement
-// gives the target's shard key (placement.go), when it is among them, and
-// else the one of them routeJob places the key on.
+// gives the target's shard key (placement.go) when it is among them, and
+// otherwise the one of them that routeJob places the key on.
 func (a *Allocator) SD(job string) ([]SDGroup, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

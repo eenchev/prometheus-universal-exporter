@@ -24,21 +24,22 @@ import (
 // directory of their own.
 var serviceAccountDir = kubeapi.ServiceAccountDir
 
-// kubernetesPageSize is how many EndpointSlices one listing request asks
-// for at first; the rest follow with the answer's continue token. A page
-// should fit in maxDiscoveryAnswerBytes, 16 MiB: one that does not is asked
-// for again with half as many slices (internal/kubeapi), which costs a
-// refused request of up to 16 MiB at every refresh.
-// The API server sends whole slices: the EndpointSlice controller puts up
-// to 100 endpoints in one (its --max-endpoints-per-slice default), and an
-// endpoint with names of their longest, a 253-byte pod and node name, a
-// 63-byte namespace and hostname, an IPv6 address, its uid, zone, hints and
-// conditions, is about 1 KiB of JSON, so a full slice with its metadata,
+// kubernetesPageSize is how many EndpointSlices one listing request asks for
+// at first. The rest follow with the answer's continue token. A page should
+// fit in maxDiscoveryAnswerBytes, 16 MiB. A page that does not is asked for
+// again with half as many slices (internal/kubeapi), which costs a refused
+// request of up to 16 MiB at every refresh.
+//
+// The API server sends whole slices. The EndpointSlice controller puts up to
+// 100 endpoints in one (its --max-endpoints-per-slice default). An endpoint
+// with names of their longest (a 253-byte pod and node name, a 63-byte
+// namespace and hostname), an IPv6 address, its uid, zone, hints and
+// conditions is about 1 KiB of JSON. So a full slice with its metadata,
 // copied Service labels and managed fields is about 100 KiB. 100 of them are
 // about 10 MiB, which fits with room to spare; 500 were about 50 MiB, which
 // a large cluster's listing reached. TestAKubernetesPageOfTheWorstCaseFits
 // builds such a page. A cluster that raises --max-endpoints-per-slice makes
-// larger slices, whose listing falls to smaller pages; only a single slice
+// larger slices, whose listing falls to smaller pages. Only a single slice
 // over 16 MiB, some 16000 endpoints, cannot be listed.
 const kubernetesPageSize = kubeapi.PageSize
 
@@ -80,12 +81,12 @@ type endpointSlice struct {
 const serviceNameLabel = "kubernetes.io/service-name"
 
 // refreshKubernetes lists the EndpointSlices k selects from the API server
-// of the cluster the allocator runs in, with the pod's service account: its
-// token, read again at every listing so a rotated one is used, and the
-// cluster's CA, which the API server's certificate must be signed by. The
-// whole listing, every page of every namespace, takes at most timeout. A
-// listing that falls to smaller pages is logged at debug level, once, with
-// the page size it fell to.
+// of the cluster the allocator runs in, with the pod's service account. It
+// uses the account's token, read again at every listing so a rotated one is
+// used, and the cluster's CA, which must have signed the API server's
+// certificate. The whole listing, every page of every namespace, takes at
+// most timeout. A listing that falls to smaller pages is logged once at
+// debug level, with the page size it fell to.
 func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[string]string, limit int, timeout time.Duration, logger *slog.Logger) ([]discovered, error) {
 	// The client's own timeout bounds one request alone; a listing of many
 	// pages could take many times it.

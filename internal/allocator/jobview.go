@@ -14,24 +14,24 @@ import (
 )
 
 // A probe job's view, at /?job=<name> and as JSON at StatusPath?job=<name>,
-// is what one probe job is and where its targets go: its collector, its
+// shows what one probe job is and where its targets go: its collector, its
 // labels and params, its discovery sources, how many of its targets each
 // member it is routed among has, and each target with the member it is
-// routed to. It mirrors a member's view (memberview.go): it is worked out
-// as the status's spread is, so its counts are the spread's for the job,
-// its list is bounded by MemberViewLimit and cut to a filter, and a target
-// is shown as the exporter shows it (fetch.DisplayTarget). A param whose
-// name reads as a credential's is withheld, and any other has what reads
-// as one in its value masked (fetch.RedactText), as the exporter's status
-// page shows a probe's params: a probe targets file may carry an API key
-// as a param.
+// routed to. It mirrors a member's view (memberview.go). It is worked out as
+// the status's spread is, so its counts are the spread's for the job. Its
+// list is bounded by MemberViewLimit and cut to a filter. A target is shown
+// as the exporter shows it (fetch.DisplayTarget). A param whose name reads
+// as a credential's is withheld. Any other param has what reads as one in
+// its value masked (fetch.RedactText), as the exporter's status page shows
+// a probe's params, since a probe targets file may carry an API key as a
+// param.
 //
 // A discovered target carries its source's labels whose names start with
-// __, as __meta_kubernetes_namespace, for the job's relabeling: a dozen or
-// more a target, they bury the labels the target is shown with. The page
-// leaves them out unless asked for them, ?meta=1, and its filter then
-// matches only the labels shown, as a row's data-match does; the JSON
-// keeps them all.
+// __, such as __meta_kubernetes_namespace, for the job's relabeling. There
+// are a dozen or more per target, and they bury the labels the target is
+// shown with. The page leaves them out unless asked for them (?meta=1). Its
+// filter then matches only the labels shown, as a row's data-match does.
+// The JSON keeps them all.
 
 // JobView is the answer at StatusPath?job=<name>.
 type JobView struct {
@@ -82,8 +82,8 @@ type JobTarget struct {
 	Target string `json:"target"`
 	// Member is the member it is routed to, "" while there is none.
 	Member string `json:"member"`
-	// Labels are those its discovery source gave it, but those the job
-	// sets or takes away: the job's own are the view's Labels. Those whose
+	// Labels are those its discovery source gave it, except those the job
+	// sets or takes away; the job's own are the view's Labels. Those whose
 	// names start with __, its source labels, are left out of the page's
 	// view unless asked for (JobView).
 	Labels map[string]string `json:"labels,omitempty"`
@@ -92,11 +92,12 @@ type JobTarget struct {
 	Weight float64 `json:"weight"`
 }
 
-// JobView is the view of the probe job named job, its targets cut to
-// filter, with their source labels, those whose names start with __, when
-// sourceLabels is set and else without them, the filter then not matching
-// them either; known is false when the probe targets file has no such job,
-// and the instance is not a follower leaving the members to its leader.
+// JobView is the view of the probe job named job, with its targets cut to
+// filter. When sourceLabels is set, the targets carry their source labels
+// (those whose names start with __). Otherwise they carry none, and the
+// filter does not match them either. known is false when the probe targets
+// file has no such job and the instance is not a follower leaving the
+// members to its leader.
 func (a *Allocator) JobView(job, filter string, sourceLabels bool) (view JobView, known bool) {
 	filter = strings.TrimSpace(filter)
 	now := a.clock.Now()

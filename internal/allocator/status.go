@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// The status of an allocator instance, for people who have no Prometheus to
-// ask or want it all on one page: the instance itself, its peers and the
-// leader, the members, how the targets are spread over them, and the
-// discovery sources. StatusPath serves it as JSON, and the status page
-// (statuspage.go) renders the same. It is built from what the allocator
+// The status of an allocator instance is for people who have no Prometheus
+// to ask, or who want it all on one page. It covers the instance itself, its
+// peers and the leader, the members, how the targets are spread over them,
+// and the discovery sources. StatusPath serves it as JSON, and the status
+// page (statuspage.go) renders the same. It is built from what the allocator
 // already keeps for its work and its metrics, so the page and /metrics never
 // disagree.
 
@@ -78,9 +78,9 @@ type PeersStatus struct {
 	// LiveInstances are the live instances, this one included.
 	LiveInstances int    `json:"live_instances"`
 	LeaderChanges uint64 `json:"leader_changes"`
-	// SnapshotAgeSeconds is pue_allocator_snapshot_age_seconds;
-	// SnapshotTaken says the instance has fetched a snapshot, and
-	// HoldsLeaderState that it leads, or held what the leader's snapshot
+	// SnapshotAgeSeconds is pue_allocator_snapshot_age_seconds.
+	// SnapshotTaken says the instance has fetched a snapshot.
+	// HoldsLeaderState says it leads, or held what the leader's snapshot
 	// holds after its last fetch.
 	SnapshotAgeSeconds float64 `json:"snapshot_age_seconds"`
 	SnapshotTaken      bool    `json:"snapshot_taken"`
@@ -183,9 +183,9 @@ type MemberStatus struct {
 	// after they moved to another member.
 	Draining int `json:"draining"`
 	// Capacity is the capacity its last heartbeat said, within the bounds
-	// the allocator holds it to, and CapacityInList the one the member list
-	// places by, which a changed capacity becomes once it has held for the
-	// settle time; 0 for a member not in the list.
+	// the allocator holds it to. CapacityInList is the one the member list
+	// places by. A changed capacity becomes CapacityInList once it has held
+	// for the settle time. It is 0 for a member not in the list.
 	Capacity       float64 `json:"capacity"`
 	CapacityInList float64 `json:"capacity_in_list,omitempty"`
 }
@@ -202,10 +202,10 @@ type SpreadStatus struct {
 	Average   SpreadCounts `json:"average"`
 	Imbalance SpreadCounts `json:"imbalance"`
 	// TotalWeight is the members' weights added up, as Total adds up their
-	// targets, and Capacity their capacities. BalanceFactor is
-	// --allocation.balance-factor. MaxLoadRatio is the highest LoadRatio of
-	// a member, 1 for weight spread in proportion to capacity, 0 when there
-	// is none, and Overloaded counts the members that are.
+	// targets, and Capacity is their capacities added up. BalanceFactor is
+	// --allocation.balance-factor. MaxLoadRatio is the highest LoadRatio of a
+	// member: 1 for weight spread in proportion to capacity, 0 when there is
+	// none. Overloaded counts the members that are overloaded.
 	TotalWeight   SpreadCounts `json:"total_weight"`
 	Capacity      float64      `json:"capacity"`
 	BalanceFactor float64      `json:"balance_factor"`
@@ -219,11 +219,11 @@ type SpreadStatus struct {
 	// are spread: one column of the members' table each would not fit a
 	// page beside a few jobs.
 	Jobs []JobSpread `json:"jobs"`
-	// Static are the static targets by where they came from, the targets
-	// the file writes first and then each discovered_targets entry's, in
-	// file order, each with how its targets are spread over the member
-	// list, as Jobs are: a static target and a probe target are told
-	// apart by where each is, and a static target's origin by its row.
+	// Static are the static targets grouped by where they came from: first
+	// the targets the file writes, then each discovered_targets entry's, in
+	// file order. Each group has how its targets are spread over the member
+	// list, as Jobs do. A static target and a probe target are told apart by
+	// where each is, and a static target's origin by its row.
 	Static []StaticSpread `json:"static"`
 	// The targets of each kind, by whether the files write them or a
 	// discovery source found them, and the sources that found them.
@@ -236,8 +236,8 @@ type SpreadStatus struct {
 }
 
 // StaticSpread is the static targets of one origin and how they are spread
-// over the member list: Entry is the discovered_targets entry that made
-// them, "" for those the file writes, and the rest is as a JobSpread's,
+// over the member list. Entry is the discovered_targets entry that made them,
+// or "" for those the file writes. The rest is as in a JobSpread, with
 // Members counting the targets each member owns.
 type StaticSpread struct {
 	Entry     string      `json:"entry"`
@@ -264,12 +264,12 @@ type SpreadMember struct {
 	// target that moved weighs on its new owner, and on the member that
 	// keeps it draining only in Draining.
 	Weight SpreadCounts `json:"weight"`
-	// FairShare is the weight it would have were the static and probe
-	// weight of every member spread in proportion to capacity: that weight
+	// FairShare is the weight it would have if the static and probe weight
+	// of every member were spread in proportion to capacity: that weight
 	// times its capacity over theirs. LoadRatio is its static and probe
-	// weight over FairShare, 0 when FairShare is; Overloaded says it is
-	// above BalanceFactor, which only a unit too heavy for any member's
-	// room puts it.
+	// weight over FairShare, or 0 when FairShare is 0. Overloaded says it is
+	// above BalanceFactor, which only a unit too heavy for any member's room
+	// causes.
 	FairShare  float64 `json:"fair_share"`
 	LoadRatio  float64 `json:"load_ratio"`
 	Overloaded bool    `json:"overloaded"`
@@ -284,9 +284,9 @@ type HeavyUnit struct {
 }
 
 // SpreadCounts count a member's targets, or a sum, an average or an
-// imbalance of them: Static, the static targets it owns, Draining those it
-// keeps draining, Probe the probe targets service discovery routes to it,
-// and Total all of them.
+// imbalance of them. Static is the static targets it owns, Draining those it
+// keeps draining, Probe the probe targets service discovery routes to it, and
+// Total all of them.
 type SpreadCounts struct {
 	Static   float64 `json:"static"`
 	Draining float64 `json:"draining"`
@@ -294,10 +294,10 @@ type SpreadCounts struct {
 	Total    float64 `json:"total"`
 }
 
-// JobSpread is how one probe job's targets are spread over the members
-// its probes are routed among (routing): those are the members a target
-// of the job can go to, so one of them given none of its targets counts,
-// with 0, where a member outside them would not.
+// JobSpread is how one probe job's targets are spread over the members its
+// probes are routed among (routing). Those are the members a target of the
+// job can go to. So a member among them that gets none of the job's targets
+// counts, with 0, where a member outside them would not.
 type JobSpread struct {
 	Job       string `json:"job"`
 	Collector string `json:"collector"`
@@ -340,21 +340,23 @@ type JobSource struct {
 	Result string `json:"result"`
 }
 
-// uneven is whether most, the most targets of a job a member has, of
-// routed targets over members, is further above the average than hashing
-// puts a member's targets by chance: by unevenTargets or more, and by
-// unevenDeviations or more standard deviations of a member's count, which
-// is binomial, √(routed × p × (1 − p)) with p = 1/members. Hashing spreads
-// a few targets unevenly as often as not, 3 over 3 members all on one
-// member in one placement of nine, so a rule of the evenest split alone,
-// as Max half again as many as the targets over the members rounded up,
-// marked 78% of random placements of 3 over 3 and 96% of 8 over 4. Of
-// random placements, this rule marks none of 2 over 2 or 3 over 3, where no
-// member can be 3 above the average, 1.6% of 4 over 4, 1.7% of 8 over 4,
-// 0.4% of 6 over 3, 1.6% of 20 over 4, 1.1% of 100 over 4 and 1.8% of 1000
-// over 10, and never a member only one or two over the evenest split, the
-// average rounded up being less than one above the average; and it marks
-// every job of 4 targets or more over 4 members that has all of them on
+// uneven reports whether most, the most targets of a job that a member has,
+// is further above the average of routed targets over members than hashing
+// puts a member's targets by chance. It must be above by unevenTargets or
+// more, and by unevenDeviations or more standard deviations of a member's
+// count, which is binomial: √(routed × p × (1 − p)) with p = 1/members.
+//
+// Hashing spreads a few targets unevenly as often as not: 3 over 3 members
+// are all on one member in one placement of nine. So a rule of the evenest
+// split alone (Max half again as many as the targets over the members rounded
+// up) marked 78% of random placements of 3 over 3 and 96% of 8 over 4.
+//
+// Of random placements, this rule marks none of 2 over 2 or 3 over 3, where
+// no member can be 3 above the average. It marks 1.6% of 4 over 4, 1.7% of 8
+// over 4, 0.4% of 6 over 3, 1.6% of 20 over 4, 1.1% of 100 over 4 and 1.8% of
+// 1000 over 10. It never marks a member only one or two over the evenest
+// split, since the average rounded up is less than one above the average. It
+// marks every job of 4 targets or more over 4 members that has all of them on
 // one member.
 func uneven(most, routed, members int) bool {
 	if members == 0 {
@@ -388,10 +390,10 @@ type SourceStatus struct {
 	Error  string `json:"error,omitempty"`
 	// Targets are those of its last good answer.
 	Targets int `json:"targets"`
-	// RefreshIntervalSeconds is how often it is asked: its
-	// refresh_interval, or --discovery.refresh-interval for a source that
-	// sets none, or its kind's default; for what a follower took from the
-	// leader's snapshot (From snapshot), the leader's, who asks it.
+	// RefreshIntervalSeconds is how often it is asked: its refresh_interval,
+	// or --discovery.refresh-interval for a source that sets none, or its
+	// kind's default. For what a follower took from the leader's snapshot
+	// (From snapshot), it is the leader's, since the leader asks it.
 	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds"`
 	// LastRefresh is when it was last asked or taken from the leader's
 	// snapshot, LastSuccess when that last succeeded, RFC 3339 in UTC, ""
@@ -497,10 +499,10 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// spreadLocked is how the targets are spread over the members: a static
-// target to its owner in the member list, and a probe target to the member
-// service discovery routes it to, as /metrics counts them, and their
-// weights alike. Called under a.mu.
+// spreadLocked is how the targets are spread over the members, as /metrics
+// counts them, and their weights alike. A static target counts for its
+// owner in the member list, and a probe target for the member service
+// discovery routes it to. Called under a.mu.
 func (a *Allocator) spreadLocked() *SpreadStatus {
 	out := &SpreadStatus{Members: []SpreadMember{}, Jobs: []JobSpread{}, Heavy: []HeavyUnit{}, BalanceFactor: float64(a.balanceFactor) / milli, StaticSources: []string{}, ProbeSources: []string{}}
 	loads := a.loadsLocked()
@@ -578,18 +580,18 @@ func (a *Allocator) spreadLocked() *SpreadStatus {
 }
 
 // memberLoad is one member's targets and their weight, in thousandths: those
-// it owns, those it keeps draining and the probes routed to it; its
-// capacity, its fair share of the static and probe weight of every member,
-// and whether that weight is above the balance factor times it.
+// it owns, those it keeps draining, and the probes routed to it. It also has
+// its capacity, its fair share of the static and probe weight of every
+// member, and whether that weight is above the balance factor times it.
 type memberLoad struct {
 	static, draining, probe                   int
 	staticWeight, drainingWeight, probeWeight int64
 	capacity, fair                            int64
 	overloaded                                bool
-	// units are the weights of the units it holds, owned or routed to
-	// it, by shard key: what tells a member over its bound by more than
-	// whole units explain (overloaded) from one that holds a unit too
-	// heavy for any member's room.
+	// units are the weights of the units it holds, owned or routed to it,
+	// by shard key. They tell a member over its bound by more than whole
+	// units explain (overloaded) from one that holds a unit too heavy for
+	// any member's room.
 	units map[string]int64
 }
 
@@ -759,10 +761,10 @@ func sourcesOfJobs(sp *SpreadStatus, sources []SourceStatus) {
 	}
 }
 
-// staticSpreadLocked is the static targets of the inputs in force by
-// origin, each origin's spread over the member list as the placement owns
-// them; the targets the file writes first, then each entry's in file
-// order, an entry that found none left out. Called under a.mu.
+// staticSpreadLocked is the static targets of the inputs in force, by
+// origin, with each origin's spread over the member list as the placement
+// owns them. The targets the file writes come first, then each entry's in
+// file order. An entry that found none is left out. Called under a.mu.
 func (a *Allocator) staticSpreadLocked() []StaticSpread {
 	in := a.inputs
 	if in == nil || in.Targets == nil {
@@ -980,12 +982,13 @@ func writePeerFamilies(b *strings.Builder, family func(name, kind, help string),
 }
 
 // isOverloaded reports whether a member of load, holding units, is over its
-// bound because a unit is too heavy for the room any member has left, not
-// because the weight comes in whole units: a member a unit too heavy for any
-// member fills alone, or one still over its bound without its lightest unit.
-// A bound is rounded down and units are whole, so the members' bounds add up
-// to less than the weight at a balance factor of 1, and a member a little
-// over its own, by less than a unit, is the placement working.
+// bound because a unit is too heavy for the room any member has left, and
+// not because the weight comes in whole units. That is a member that a unit
+// too heavy for any member fills alone, or one still over its bound without
+// its lightest unit. A bound is rounded down and units are whole, so at a
+// balance factor of 1 the members' bounds add up to less than the weight. A
+// member a little over its own bound, by less than a unit, is the placement
+// working.
 func isOverloaded(load, bound int64, units map[string]int64) bool {
 	if load <= bound {
 		return false

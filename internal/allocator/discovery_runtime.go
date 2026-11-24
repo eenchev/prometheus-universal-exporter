@@ -37,10 +37,10 @@ type sourceState struct {
 	leaderRefresh time.Duration
 }
 
-// interval is how often what the source holds is renewed: the leader's
-// interval of it when it came from the leader's snapshot and the snapshot
-// said one, as the leader is who asks it then, whatever this instance's
-// own settings of it say, and the source's own otherwise.
+// interval is how often what the source holds is renewed. When it came from
+// the leader's snapshot and the snapshot said one, it is the leader's
+// interval, since the leader is who asks it then, whatever this instance's
+// own settings of it say. Otherwise it is the source's own.
 func (s *sourceState) interval() time.Duration {
 	if s.fromSnapshot && s.leaderRefresh > 0 {
 		return s.leaderRefresh
@@ -71,14 +71,14 @@ func (s *sourceState) fetch(ctx context.Context, logger *slog.Logger) ([]discove
 	}
 }
 
-// syncSources makes the sources run those of in: a source whose owner and
-// configuration stay keeps running, with what it found; one in no longer
-// stops, and a new one starts. A new source that replaces one of the same
-// kinds, owner and name, a source whose settings a reload changed, starts
-// with what the old one found, and with its counts, so its targets stay in
-// force until it answers itself rather than leaving every share and coming
-// back a refresh later; any other new source starts with nothing found.
-// Called under reloadMu.
+// syncSources makes the sources run those of in. A source whose owner and
+// configuration stay keeps running, with what it found. One no longer in in
+// stops, and a new one starts. A new source may replace one of the same
+// kinds, owner and name, a source whose settings a reload changed. It then
+// starts with what the old one found, and with its counts. So its targets
+// stay in force until it answers itself, rather than leaving every share
+// and coming back a refresh later. Any other new source starts with nothing
+// found. Called under reloadMu.
 func (a *Allocator) syncSources(in *Inputs) {
 	a.dmu.Lock()
 	defer a.dmu.Unlock()
@@ -133,8 +133,8 @@ func (s sourceSpec) identity() string {
 func (a *Allocator) StartDiscovery() { a.setDiscovering(true) }
 
 // setDiscovering starts the refresh loops, or stops them, keeping what the
-// sources found; stopping them stops those a follower runs of sources the
-// leader lacks too, which its next snapshot starts again. After
+// sources found. Stopping them also stops the loops a follower runs of
+// sources the leader lacks; its next snapshot starts them again. After
 // BeginShutdown it does nothing.
 func (a *Allocator) setDiscovering(on bool) {
 	a.dmu.Lock()
@@ -300,11 +300,11 @@ func (a *Allocator) currentInputs() *Inputs {
 }
 
 // putInForce puts base, with what the sources found added, in force, as a
-// reload does: a static target that moves to another member is handed
+// reload does. A static target that moves to another member is handed
 // over, and one no longer there leaves every share at once. discovered says
-// the change is one of the discovered targets. leader, when not nil, are
-// the drains of the leader's snapshot the discovered targets come from,
-// which are put in force in place of those the change would make here
+// the change is one of the discovered targets. leader, when not nil, holds
+// the drains of the leader's snapshot that the discovered targets come
+// from. They are put in force in place of those the change would make here
 // (takeDrains), even when the targets stay the same. It reports whether the
 // inputs in force changed. Called under reloadMu.
 func (a *Allocator) putInForce(base *Inputs, discovered bool, leader *peerSnapshot) bool {

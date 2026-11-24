@@ -15,22 +15,22 @@ import (
 )
 
 // Weighted placement (docs/ALLOCATOR.md, "Weights and capacity"). Every
-// target weighs something, 1 unless its file says otherwise, and every
-// member has a capacity, 1 unless its heartbeat says otherwise. The
-// targets that share a shard key, static or probe, are one unit, which
-// weighs what they weigh together and goes to one member. The units are
-// taken in the order of a hash of their keys, and each goes to the member
-// of the highest weighted rendezvous score for its key that has room for
-// it: whose load with the unit stays within the balance factor times its
-// fair share, the total weight times its part of the total capacity. When
-// no member has room, the unit goes to the member that is least loaded for
-// its capacity. No unit is ever left out.
+// target weighs something, 1 unless its file says otherwise. Every member
+// has a capacity, 1 unless its heartbeat says otherwise. The targets that
+// share a shard key, static or probe, are one unit. A unit weighs what its
+// targets weigh together and goes to one member. The units are taken in the
+// order of a hash of their keys. Each goes to the member with the highest
+// weighted rendezvous score for its key that has room for it. A member has
+// room when its load with the unit stays within the balance factor times its
+// fair share: the total weight times its part of the total capacity. When no
+// member has room, the unit goes to the member that is least loaded for its
+// capacity. No unit is ever left out.
 //
 // Weights, capacities and the balance factor are integer thousandths
-// (milli-units), every sum and comparison is integer arithmetic, and every
-// tie is broken by a hash and then a name, never by the order of a map:
-// every instance of the allocator places the same inputs and the same
-// members alike, whatever machine it runs on.
+// (milli-units). Every sum and comparison is integer arithmetic. Every tie is
+// broken by a hash and then a name, never by the order of a map. So every
+// instance of the allocator places the same inputs and the same members
+// alike, whatever machine it runs on.
 
 // The bounds of a weight, in the files and from a discovery label.
 const (
@@ -40,12 +40,12 @@ const (
 	milli = 1000
 )
 
-// The balance factor, --allocation.balance-factor: how far above its fair
+// The balance factor, --allocation.balance-factor, is how far above its fair
 // share a member's load may go before a unit that prefers it goes to the
 // next member. 1 holds every member to its fair share, as near as whole
-// units allow, and moves the most units when the members change; 10 lets
-// a member of a list of 10 or fewer take everything its hash gives it,
-// which is rendezvous hashing weighted by capacity alone.
+// units allow, and moves the most units when the members change. 10 lets a
+// member of a list of 10 or fewer take everything its hash gives it, which
+// is rendezvous hashing weighted by capacity alone.
 const (
 	DefaultBalanceFactor = 1.25
 	MinBalanceFactor     = 1.0
@@ -275,11 +275,11 @@ func lessLoaded(la, ca, lb, cb int64) bool {
 }
 
 // memberScore is a member's weighted rendezvous score for a unit: its
-// capacity over -ln h, h in (0, 1) the member's rendezvous hash for the
-// unit's key (allocapi.Score) as a fraction. Of members of one capacity
-// the one of the higher hash has the higher score, so with every capacity
-// alike the order is allocapi.Owner's; a higher capacity wins more keys,
-// in proportion to it.
+// capacity over -ln h. h, in (0, 1), is the member's rendezvous hash for the
+// unit's key (allocapi.Score) as a fraction. Among members of one capacity,
+// the one with the higher hash has the higher score. So with every capacity
+// alike the order is allocapi.Owner's. A higher capacity wins more keys, in
+// proportion to it.
 type memberScore struct {
 	name     string
 	hash     uint64
@@ -291,9 +291,9 @@ type memberScore struct {
 }
 
 // better reports whether s ranks above o: the higher score, then the higher
-// hash, then the lower name. Scores are compared as fractions, capacity
-// over -log2 h, crossed into products of integers, so the comparison is
-// exact for the logarithms as computed, and the same on every machine.
+// hash, then the lower name. Scores are compared as fractions, capacity over
+// -log2 h, crossed into products of integers. So the comparison is exact for
+// the logarithms as computed, and the same on every machine.
 func (s *memberScore) better(o *memberScore) bool {
 	if s.capacity != o.capacity {
 		ls, lo := s.negLog(), o.negLog()
@@ -385,11 +385,11 @@ func (a *Allocator) noteHeavy(p *placement) {
 	a.heavy = now
 }
 
-// routeJob is the member each target of j is routed to, by target: the
-// member of the placement when it is among the members j is routed among
-// (routing), and otherwise one of those, the targets of each shard key
-// placed as a unit, in order, over the loads of the placement, as the
-// placement places them. A probe so goes elsewhere only while the member
+// routeJob is, by target, the member each target of j is routed to. That is
+// the member of the placement when it is among the members j is routed among
+// (routing). Otherwise it is one of those members: the targets of each shard
+// key are placed as a unit, in order, over the loads of the placement, as the
+// placement places them. So a probe goes elsewhere only while the member
 // placed for it is not live or has no bundle with the job's collector yet.
 // Empty while j is routed among none. Called under a.mu.
 func (a *Allocator) routeJob(j *ProbeJob) map[string]string {

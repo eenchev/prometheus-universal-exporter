@@ -15,19 +15,19 @@ import (
 )
 
 // A member's view, at /?member=<id> and as JSON at StatusPath?member=<id>,
-// is what one member has: the static targets it owns, those it keeps
-// draining and the member each moved to, and the probe targets service
+// shows what one member has: the static targets it owns, those it keeps
+// draining with the member each moved to, and the probe targets service
 // discovery routes to it, by job. It is worked out as the status's spread
 // is, so its counts are the spread's for the member. A target is shown as
-// the exporter shows it (fetch.DisplayTarget), credentials withheld, since
-// a static target may carry them in its URL; its params and request block,
-// which may hold them too, are not shown at all.
+// the exporter shows it (fetch.DisplayTarget), with credentials withheld,
+// since a static target may carry them in its URL. Its params and request
+// block, which may hold them too, are not shown at all.
 
-// MemberViewLimit bounds each list of a member's view: a member of a large
-// share can own tens of thousands of targets, more than a page that
-// refreshes itself can draw or a person can read. Each list says how many
-// it holds and how many match the filter, so what is left out is counted;
-// the filter, applied before the bound, finds any of them.
+// MemberViewLimit bounds each list of a member's view. A member with a large
+// share can own tens of thousands of targets, more than a self-refreshing
+// page can draw or a person can read. Each list says how many targets it
+// holds and how many match the filter, so what is left out is counted. The
+// filter is applied before the bound, so it finds any of them.
 const MemberViewLimit = 1000
 
 // MemberView is the answer at StatusPath?member=<id>.
@@ -40,10 +40,9 @@ type MemberView struct {
 	// Probes are nil.
 	Partial bool   `json:"partial"`
 	Leader  string `json:"leader,omitempty"`
-	// Filter is the filter asked for, which every list is cut to: a
-	// target is in when its name, target, collector, a label as
-	// name=value, its job or the member it moved to holds the text, in
-	// any case.
+	// Filter is the filter asked for, and every list is cut to it. A target
+	// is in when its name, target, collector, a label as name=value, its job
+	// or the member it moved to holds the text, in any case.
 	Filter string `json:"filter,omitempty"`
 	// Limit is MemberViewLimit, the most entries of each list.
 	Limit int `json:"limit"`
@@ -259,12 +258,12 @@ func (t *MemberStaticTarget) matchTexts() []string {
 // its target, job and collector.
 func (t *MemberProbeTarget) matchTexts() []string { return []string{t.Target, t.Job, t.Collector} }
 
-// matchText is a row's data-match, which the filter box matches as it is
-// typed: the texts the allocator's filter matches of the row's target,
-// joined by line feeds. A search input drops line breaks from what is
-// typed, so the box matches no text running across two of them, and it
-// matches what the allocator matches and nothing else, an interval or
-// a drain time not among them.
+// matchText is a row's data-match, which the filter box matches as text is
+// typed. It holds the texts of the row's target that the allocator's filter
+// matches, joined by line feeds. A search input drops line breaks from what
+// is typed, so the box matches no text that runs across two of them. It
+// matches what the allocator matches and nothing else; an interval or a
+// drain time is not among them.
 func matchText(target any) string {
 	switch t := target.(type) {
 	case MemberStaticTarget:
@@ -312,17 +311,17 @@ type memberPage struct {
 	Known bool
 }
 
-// memberStyle is the member view's own style, after statusStyle: its way
-// back and its filter, and the target tables, which on a phone stack each
-// row's cells under one another, each named, rather than scroll sideways,
-// so a long target wraps in the width there is. A named cell is then two
-// columns, its name and its value (span.v), so the value starts on the
-// name's line however long its first unbreakable run, and its lines wrap
-// in its own column; a hanging indent would move a run longer than the
-// line's rest to the line below. The name sits on the value's first
-// baseline, so a label (span.label) is an inline flex box, whose baseline
-// is its first line's: an inline block's is its last line's, and a label
-// that wraps would put the name beside its second line.
+// memberStyle is the member view's own style, after statusStyle. It styles
+// its way back, its filter, and the target tables. On a phone, the tables
+// stack each row's cells under one another, each named, rather than scroll
+// sideways, so a long target wraps in the width there is. A named cell is
+// then two columns: its name and its value (span.v). So the value starts on
+// the name's line however long its first unbreakable run is, and its lines
+// wrap in its own column. A hanging indent would move a run longer than the
+// rest of the line to the line below. The name sits on the value's first
+// baseline, so a label (span.label) is an inline flex box, whose baseline is
+// its first line's. An inline block's baseline is its last line's, and a
+// label that wraps would put the name beside its second line.
 const memberStyle = `
 p.back { margin: 0 0 4px; font-size: 14px; }
 .member-id { overflow-wrap: anywhere; }
@@ -447,11 +446,11 @@ const memberContent = `{{define "content"}}
 {{end}}`
 
 // exporterStatus is the status page of the member m, as its heartbeats
-// advertise it, and exporterSeries the series it serves of its static
-// target name: the exporter serves its pages over plain HTTP at the
-// address it advertises, its static targets at the path its heartbeats say
-// and its status page at that path followed by /status. Each is "" for a
-// member whose heartbeats say no path.
+// advertise it, and exporterSeries is the series it serves of its static
+// target name. The exporter serves its pages over plain HTTP at the address
+// it advertises: its static targets at the path its heartbeats say, and its
+// status page at that path followed by /status. Each is "" for a member
+// whose heartbeats say no path.
 func exporterStatus(m *MemberStatus) string {
 	if base := exporterBase(m); base != "" {
 		return base + "/status"
@@ -466,10 +465,10 @@ func exporterSeries(m *MemberStatus, name string) string {
 	return ""
 }
 
-// exporterBase is the member's static targets endpoint, "" without a path
-// or when its address, which a heartbeat takes as any host:port, would not
-// be the host of the URL alone: one with a / or an @ in its host would
-// send the link elsewhere.
+// exporterBase is the member's static targets endpoint, or "" without a
+// path. It is also "" when its address, which a heartbeat takes as any
+// host:port, would not be the host of the URL alone: an address with a / or
+// an @ in its host would send the link elsewhere.
 func exporterBase(m *MemberStatus) string {
 	if m == nil || m.StaticTargetsPath == "" {
 		return ""

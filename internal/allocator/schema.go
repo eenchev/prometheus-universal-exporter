@@ -10,18 +10,18 @@ import (
 )
 
 // The allocator's own files have JSON Schemas of their own, for editors, as
-// the exporter's files have: configs/allocator-static-targets.schema.json,
-// the static target file the allocator reads, which is the exporter's with
-// discovered_targets beside targets, and configs/probe-targets.schema.json,
-// the probe targets file. Each is generated from the structs the allocator
-// decodes, with rules by path adding what a struct cannot say, printed by
-// pue-allocator --static-targets-file-schema and --probe-targets-file-schema
-// and written by make schemas; a test fails when a committed file and its
-// generation differ, and another when a schema's keys and the decoder's do.
-// The exporter's own static target schema keeps refusing discovered_targets,
-// as the exporter does. As for the exporter's, the allocator's checks at load
-// remain the authority: they also check what no schema can, such as that a
-// collector is the configuration's.
+// the exporter's files do. configs/allocator-static-targets.schema.json is
+// for the static target file the allocator reads, which is the exporter's
+// with discovered_targets beside targets. configs/probe-targets.schema.json
+// is for the probe targets file. Each is generated from the structs the
+// allocator decodes, with rules by path adding what a struct cannot say.
+// They are printed by pue-allocator --static-targets-file-schema and
+// --probe-targets-file-schema and written by make schemas. A test fails when
+// a committed file and its generation differ, and another when a schema's
+// keys and the decoder's differ. The exporter's own static target schema
+// keeps refusing discovered_targets, as the exporter does. As with the
+// exporter's, the allocator's checks at load remain the authority: they also
+// check what no schema can, such as that a collector is the configuration's.
 
 // The published schemas' file names, in configs.
 const (
@@ -75,10 +75,10 @@ func staticTargetsSchema() map[string]any {
 }
 
 // discoveredEntrySchema describes a discovered_targets entry from target,
-// the schema of a static target: its keys but target, whose value discovery
-// finds, and the keys the entry reads itself (readDiscoveredEntry): name,
-// required, discovery, target_template and shard_key, which allocates a
-// target by its address.
+// the schema of a static target. It has the target's keys except target,
+// whose value discovery finds, and the keys the entry reads itself
+// (readDiscoveredEntry): name, required, discovery, target_template and
+// shard_key, which allocates a target by its address.
 func discoveredEntrySchema(target map[string]any) map[string]any {
 	// The copies are of the two maps changed here: the rest is shared with
 	// targets, and left as it is.
@@ -156,9 +156,9 @@ func probeTargetsSchemaRules() map[string]map[string]any {
 
 // weightSchema describes a weight (weightMilli): a number above 0 and at
 // most MaxWeight. That it has at most three decimals is checked at load
-// alone: a schema's multipleOf of 0.001 is worked out in floating point by
-// the validators of editors, which then refuse 0.3, 0.3 / 0.001 not being
-// a whole number in binary.
+// alone. Editors' validators work out a schema's multipleOf of 0.001 in
+// floating point, and then refuse 0.3, since 0.3 / 0.001 is not a whole
+// number in binary.
 func weightSchema(description string) map[string]any {
 	return map[string]any{
 		"type":             "number",

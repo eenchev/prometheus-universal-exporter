@@ -15,13 +15,13 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
-// The status page, at /, renders Status for a person, framed and styled as
-// the exporter's pages are (pagekit): the same bar with its theme picker,
-// the same icon, and the same refresh controls, which fetch the page's
-// content again, ?format=fragment, and swap it in. Every value is escaped by
-// html/template, and the script writes text with textContent alone. With
+// The status page, at /, renders Status for a person. It is framed and styled
+// like the exporter's pages (pagekit): the same bar with its theme picker, the
+// same icon, and the same refresh controls. The controls fetch the page's
+// content again (?format=fragment) and swap it in. html/template escapes
+// every value, and the script writes text with textContent alone. With
 // ?member=<id> it is that member's view instead (memberview.go), and with
-// ?job=<name> that probe job's (jobview.go), in the same frame.
+// ?job=<name> that probe job's view (jobview.go), in the same frame.
 
 // StatusPath is where the status is served as JSON.
 const StatusPath = "/v1/status"
@@ -78,11 +78,11 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the member parameter names a member; / without it is the whole status", http.StatusBadRequest)
 			return
 		}
-		// A member the allocator does not know is a page that says so,
-		// answered 200 as its fragment is: a view left open, refreshing
-		// itself, of a member that has gone then shows that it has, where
-		// a 404 would be a failed refresh over the gone member's targets.
-		// The JSON answers 404.
+		// A member the allocator does not know gets a page that says so,
+		// answered 200 as its fragment is. Then a view left open, refreshing
+		// itself, on a member that has gone shows that it has gone. A 404
+		// would be a failed refresh over the gone member's targets. The JSON
+		// answers 404.
 		view, known := a.MemberView(member, query.Get("filter"))
 		frame.Member = &memberPage{MemberView: view, Known: known}
 		frame.Content = frame.Member
@@ -97,11 +97,11 @@ func (a *Allocator) serveStatusPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the job parameter names a probe job; / without it is the whole status", http.StatusBadRequest)
 			return
 		}
-		// A job the probe targets file does not have is a page that says
-		// so, answered 200, as a gone member's is: a view left open over a
-		// reload that renamed the job then shows it. The JSON answers 404.
-		// ?meta=1 shows the targets' source labels, which the page leaves
-		// out otherwise (jobview.go); the URL keeps it, so a refresh, which
+		// A job the probe targets file does not have gets a page that says
+		// so, answered 200, as a gone member's is. Then a view left open over
+		// a reload that renamed the job shows it. The JSON answers 404.
+		// ?meta=1 shows the targets' source labels, which the page leaves out
+		// otherwise (jobview.go). The URL keeps it, so a refresh, which
 		// fetches the URL's fragment, keeps it too.
 		sourceLabels := query.Get("meta") == "1"
 		view, known := a.JobView(job, query.Get("filter"), sourceLabels)
@@ -180,13 +180,13 @@ type pageFrame struct {
 	Content any
 }
 
-// filterForm is a view's filter: outside the content, so a refresh keeps
-// what is typed, and sent with the view's own parameter, Param=Value, member
-// or job. Text is the filter in force, Limit the bound of a list, and
-// Hidden hides the form while the allocator knows no such member or job.
-// SourceLabelsBox puts a Show source labels box in the form, on the view
-// of a job with discovery sources alone, and SourceLabels ticks it
-// (?meta=1).
+// filterForm is a view's filter. It is outside the content, so a refresh
+// keeps what is typed. It is sent with the view's own parameter,
+// Param=Value (member or job). Text is the filter in force, Limit the bound
+// of a list, and Hidden hides the form while the allocator knows no such
+// member or job. SourceLabelsBox puts a Show source labels box in the form,
+// only on the view of a job with discovery sources, and SourceLabels ticks
+// it (?meta=1).
 type filterForm struct {
 	Param, Value, Text            string
 	Limit                         int
@@ -201,11 +201,11 @@ type statusPage struct {
 	View spreadView
 }
 
-// spreadView is the spread as the table shows it: a row of each member,
-// with its bar, and rows of the total, the average and the imbalance. The
-// probe jobs have a table of their own, a row each. FairShareMost is the
-// fair share of the member of the largest capacity, which a heavy unit
-// weighs more than.
+// spreadView is the spread as the table shows it: a row for each member,
+// with its bar, and rows for the total, the average and the imbalance. The
+// probe jobs have a table of their own, with a row each. FairShareMost is
+// the fair share of the member with the largest capacity, which a heavy
+// unit weighs more than.
 type spreadView struct {
 	Members                   []spreadRow
 	Total, Average, Imbalance spreadRow
@@ -214,12 +214,12 @@ type spreadView struct {
 }
 
 // spreadRow is a member's row, or the total's, the average's or the
-// imbalance's: its targets, and their weight. Weight is what it owns and
-// has routed, the weight it is placed by, and DrainingWeight what it keeps
+// imbalance's: its targets and their weight. Weight is what it owns and has
+// routed, the weight it is placed by. DrainingWeight is what it keeps
 // draining, which weighs on the targets' new owners. The bar runs on the
-// weight, StaticPct, DrainingPct and ProbePct its segments' widths and
-// FairPct where the member's fair share falls, from 0 to the most a
-// member weighs or a fair share comes to.
+// weight. StaticPct, DrainingPct and ProbePct are its segments' widths, and
+// FairPct is where the member's fair share falls. All run from 0 to the most
+// a member weighs or a fair share comes to.
 type spreadRow struct {
 	Member                              string
 	Static, Draining, Probe, Total      float64
@@ -300,10 +300,10 @@ func weight(n float64) string {
 	return strconv.FormatFloat(math.Round(n*milli)/milli, 'f', -1, 64)
 }
 
-// age writes seconds of an age, how long ago something was, in whole
+// age writes seconds of an age (how long ago something was) in whole
 // seconds, minutes and hours, as the pages write a duration
 // (pagekit.Duration): 1m, not 1m0s. The fraction of an age that has run on
-// since is no news; an interval configured is written by interval.
+// since is no news. An interval configured is written by interval.
 func age(s float64) string {
 	d := time.Duration(s * float64(time.Second)).Truncate(time.Second)
 	if d < time.Second {
@@ -312,10 +312,10 @@ func age(s float64) string {
 	return pagekit.Duration(d)
 }
 
-// interval writes seconds of an interval configured, as the heartbeat
-// interval or a source's refresh interval, as it was given, its fraction
-// kept (pagekit.Duration): a watch interval of 500ms is 500ms, and a
-// settle time of 1500ms is 1.5s, where age would write 0s and 1s. The
+// interval writes seconds of a configured interval, such as the heartbeat
+// interval or a source's refresh interval, as it was given, with its
+// fraction kept (pagekit.Duration). A watch interval of 500ms is 500ms, and
+// a settle time of 1500ms is 1.5s, where age would write 0s and 1s. The
 // seconds are rounded to the nanosecond, a duration's own unit, which is
 // what the float of the JSON came from.
 func interval(s float64) string {

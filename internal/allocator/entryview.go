@@ -12,14 +12,15 @@ import (
 )
 
 // A discovered_targets entry's view, at /?entry=<name> and as JSON at
-// StatusPath?entry=<name>, is what a probe job's view is for a job
-// (jobview.go), for the static targets an entry of the static target file
-// makes of what its discovery sources find: its sources, how many of its
-// targets each member owns, and each target with the member that owns it.
-// Its counts are the status's static spread's for the entry, its list is
-// bounded by MemberViewLimit and cut to a filter, and a target is shown as
-// a member's view shows a static target: its target as the exporter shows
-// it, credentials withheld, its params and request block not at all.
+// StatusPath?entry=<name>, is what a probe job's view (jobview.go) is for a
+// job, but for the static targets that an entry of the static target file
+// makes of what its discovery sources find. It shows its sources, how many
+// of its targets each member owns, and each target with the member that
+// owns it. Its counts are the status's static spread's for the entry. Its
+// list is bounded by MemberViewLimit and cut to a filter. A target is shown
+// as a member's view shows a static target: its target as the exporter
+// shows it, with credentials withheld, and its params and request block not
+// at all.
 
 // EntryView is the answer at StatusPath?entry=<name>.
 type EntryView struct {
@@ -72,9 +73,9 @@ func (t *EntryTarget) matchTexts() []string {
 	return append(t.MemberStaticTarget.matchTexts(), t.Member)
 }
 
-// EntryView is the view of the discovered_targets entry named entry, its
-// targets cut to filter; known is false when the static target file has
-// no such entry, and the instance is not a follower leaving the members to
+// EntryView is the view of the discovered_targets entry named entry, with
+// its targets cut to filter. known is false when the static target file has
+// no such entry and the instance is not a follower leaving the members to
 // its leader.
 func (a *Allocator) EntryView(entry, filter string) (view EntryView, known bool) {
 	filter = strings.TrimSpace(filter)

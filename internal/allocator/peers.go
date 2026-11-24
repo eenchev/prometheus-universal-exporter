@@ -22,14 +22,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Instances of the allocator that discover run as peers (--peers): they find
-// each other by a DNS name or a list, take the live instance of the lowest
-// address for their leader, and only the leader asks the discovery sources.
-// Every other instance, a follower, takes what the leader found from its
-// snapshot (SnapshotPath) in place of asking the sources itself, so every
-// instance expands the same input files with the same discovered targets, and
-// serves the same bundles, of the same generations, and the same service
-// discovery answers. See "Instances with discovery" in docs/ALLOCATOR.md.
+// Instances of the allocator that discover run as peers (--peers). They find
+// each other by a DNS name or a list and take the live instance of the lowest
+// address as their leader. Only the leader asks the discovery sources. Every
+// other instance (a follower) takes what the leader found from its snapshot
+// (SnapshotPath) instead of asking the sources itself. So every instance
+// expands the same input files with the same discovered targets, and serves
+// the same bundles, of the same generations, and the same service discovery
+// answers. See "Instances with discovery" in docs/ALLOCATOR.md.
 
 // The paths instances ask each other on, under the API's token.
 const (
@@ -39,24 +39,26 @@ const (
 	SnapshotPath = "/v1/peer/snapshot"
 )
 
-// The timings of the peers, PeerOptions' CheckInterval, CheckTimeout,
+// The timings of the peers are PeerOptions' CheckInterval, CheckTimeout,
 // SnapshotTimeout and FailureThreshold, from --peers.check-interval,
 // --peers.check-timeout, --peers.snapshot-timeout and
-// --peers.failure-threshold. Every check interval an instance resolves its
-// peers, asks each at PeerPath within the check timeout and, as a follower,
-// fetches the leader's snapshot within the snapshot timeout: a snapshot
-// holds what every source found, which may be megabytes where a check is a
-// few bytes, and a fetch cut short would leave the follower on its last
-// snapshot for as long as the snapshot stays that large. The fetch runs
-// beside the rounds, one at a time (snapshotFetch), so a leader that hangs
-// while it writes its snapshot delays no check: the follower goes on
-// checking every check interval, and leads, or follows another instance, as
-// soon as the checks say so, which cancels the fetch. An instance that
-// answered stays live until the failure threshold's checks in a row have
-// failed, so one slow answer does not move the leader; one that answers it
-// is shutting down stops being live at once. A follower whose snapshot
-// fetches fail as many times in a row says so, once, and keeps serving the
-// snapshot it fetched last.
+// --peers.failure-threshold.
+//
+// Every check interval, an instance resolves its peers and asks each at
+// PeerPath within the check timeout. A follower also fetches the leader's
+// snapshot within the snapshot timeout. A snapshot holds what every source
+// found and may be megabytes, while a check is a few bytes. A fetch cut short
+// would leave the follower on its last snapshot for as long as the snapshot
+// stays that large. The fetch runs beside the rounds, one at a time
+// (snapshotFetch), so a leader that hangs while it writes its snapshot delays
+// no check. The follower keeps checking every check interval. As soon as the
+// checks say so, it leads or follows another instance, which cancels the fetch.
+//
+// An instance that answered stays live until FailureThreshold checks in a row
+// have failed, so one slow answer does not move the leader. An instance that
+// answers that it is shutting down stops being live at once. A follower whose
+// snapshot fetches fail as many times in a row says so once, and keeps
+// serving the snapshot it fetched last.
 const (
 	DefaultPeerCheckInterval    = 2 * time.Second
 	DefaultPeerCheckTimeout     = time.Second
@@ -64,21 +66,23 @@ const (
 	DefaultPeerFailureThreshold = 3
 )
 
-// The bounds of the peers' timings, which the command line holds them to.
-// A check interval of at least 500ms keeps the rounds, each a lookup of
-// every --peers name and a request to every peer, and a follower's
-// snapshot requests from loading the instances and their DNS; one of at
-// most 1m keeps a failover, the failure threshold's intervals, within
-// minutes, and the shutdown delay, an interval and a check timeout, under
-// 2m, which the chart's allocator pods' grace period covers. A check
-// timeout of at least 100ms leaves a check across a cluster's network
-// room to answer, and one below the interval keeps a round, which waits
-// for its checks, shorter than the wait between two rounds. The failure
-// threshold is from 1, where one failed check moves the leader, to 20,
-// where a leader that stopped answering leads on for 20 intervals. The
-// snapshot timeout is at least the check timeout, a snapshot being at
-// least as large as a check's answer, and at most 5m, how long one fetch
-// from a leader that hangs keeps a follower from fetching again.
+// The bounds of the peers' timings. The command line holds the timings to them.
+//   - A check interval of at least 500ms keeps the rounds and a follower's
+//     snapshot requests from loading the instances and their DNS. Each round
+//     is a lookup of every --peers name and a request to every peer.
+//   - A check interval of at most 1m keeps a failover (the failure
+//     threshold's intervals) within minutes. It also keeps the shutdown delay
+//     (an interval plus a check timeout) under 2m, which the grace period of
+//     the chart's allocator pods covers.
+//   - A check timeout of at least 100ms gives a check across a cluster's
+//     network room to answer. A check timeout below the interval keeps a
+//     round, which waits for its checks, shorter than the wait between rounds.
+//   - The failure threshold is from 1, where one failed check moves the
+//     leader, to 20, where a leader that stopped answering leads on for 20
+//     intervals.
+//   - The snapshot timeout is at least the check timeout, since a snapshot is
+//     at least as large as a check's answer. It is at most 5m: how long one
+//     fetch from a hanging leader keeps a follower from fetching again.
 const (
 	MinPeerCheckInterval    = 500 * time.Millisecond
 	MaxPeerCheckInterval    = time.Minute
@@ -88,10 +92,10 @@ const (
 )
 
 // ShutdownDelay is how long an instance among peers keeps serving after
-// BeginShutdown, its PeerPath answering 503, before its server stops: a
-// round of every peer and its check, the check interval and the check
-// timeout, so each peer sees it is shutting down and the next instance
-// leads at once.
+// BeginShutdown, with its PeerPath answering 503, before its server stops.
+// It covers one round of every peer and its check: the check interval plus
+// the check timeout. So each peer sees that it is shutting down, and the next
+// instance leads at once.
 func (o PeerOptions) ShutdownDelay() time.Duration {
 	o = o.withDefaults()
 	return o.CheckInterval + o.CheckTimeout
@@ -139,20 +143,20 @@ type PeerOptions struct {
 	// Resolve looks a peer's host name up; net.DefaultResolver.LookupHost
 	// when nil.
 	Resolve func(ctx context.Context, host string) ([]string, error)
-	// LeaderOnly is --peers.leader-only: only the leader serves the whole of
-	// /metrics and of the status; a follower serves the peers' part of each
-	// alone, so the instances' allocation is in one instance's metrics, not
-	// in every instance's.
+	// LeaderOnly is --peers.leader-only. Only the leader serves all of
+	// /metrics and of the status. A follower serves only the peers' part of
+	// each. So the instances' allocation is in one instance's metrics, not in
+	// every instance's.
 	LeaderOnly bool
-	// Client asks the peers; one of no proxy when nil. Each request is
-	// bounded by CheckTimeout, or SnapshotTimeout for a snapshot, through
-	// its context, so Client needs no timeout of its own, which would cut
-	// a snapshot short.
+	// Client asks the peers. When nil, a client with no proxy is used. Each
+	// request is bounded through its context by CheckTimeout, or by
+	// SnapshotTimeout for a snapshot. So Client needs no timeout of its own,
+	// which would cut a snapshot short.
 	Client *http.Client
 	// CheckInterval, CheckTimeout, SnapshotTimeout and FailureThreshold are
-	// the peers' timings, --peers.check-interval, --peers.check-timeout,
-	// --peers.snapshot-timeout and --peers.failure-threshold; each left
-	// zero is its default (DefaultPeerCheckInterval, ...). The command line
+	// the peers' timings: --peers.check-interval, --peers.check-timeout,
+	// --peers.snapshot-timeout and --peers.failure-threshold. Each one left
+	// zero takes its default (DefaultPeerCheckInterval, ...). The command line
 	// holds them to their bounds (MinPeerCheckInterval, ...).
 	CheckInterval    time.Duration
 	CheckTimeout     time.Duration
@@ -193,11 +197,11 @@ func ParseSelf(raw, listenAddress string) (netip.AddrPort, error) {
 	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), nil
 }
 
-// comparePeers orders the instances' addresses, the leader being the live
-// instance of the lowest: IPv4 addresses before IPv6, each by its bytes, then
-// by port. The order is total and every instance computes it alike from the
-// same addresses, so instances that see the same live peers agree on their
-// leader.
+// comparePeers orders the instances' addresses. The leader is the live
+// instance with the lowest address. IPv4 addresses come before IPv6, each
+// ordered by its bytes, then by port. The order is total, and every instance
+// computes it the same way from the same addresses. So instances that see the
+// same live peers agree on their leader.
 func comparePeers(a, b netip.AddrPort) int { return a.Compare(b) }
 
 // livePeer is a live peer and its last answer at PeerPath.
@@ -206,21 +210,22 @@ type livePeer struct {
 	answer peerAnswer
 }
 
-// chooseLeader is the leader among this instance, of the address self, its
-// process id, discovering while it does, and the live peers others, in
-// order. leading says the leader is this instance.
+// chooseLeader picks the leader among this instance and the live peers
+// others, in order. self is this instance's address, id its process id, and
+// discovering says whether it is discovering. leading says the leader is
+// this instance.
 //
 // An instance that knows its address takes the lowest of its own and the
-// others'. One that does not cannot place itself among them, as when
-// --peers leaves its own address out or it cannot reach itself; were it
-// to follow the lowest other, two such instances would follow each other
-// and neither would discover. It follows only an instance that discovers,
-// the lowest that knows its own address, which leads by the order alone,
-// and else the one of the lowest id among those that do not, keeping on
-// leading itself when its own id is lower still; with no instance
-// discovering it leads. Two instances of unknown addresses so settle on
-// one leader, the one of the lower id, even when both begin to lead in the
-// same round.
+// others' addresses. An instance that does not cannot place itself among
+// them, for example when --peers leaves its own address out or it cannot
+// reach itself. If it followed the lowest other, two such instances would
+// follow each other and neither would discover. So it follows only an
+// instance that discovers: first the lowest one that knows its own address,
+// which leads by the order alone. Otherwise it follows the one with the
+// lowest id among those that do not, but keeps leading itself when its own
+// id is lower still. With no instance discovering, it leads. So two
+// instances with unknown addresses settle on one leader, the one with the
+// lower id, even when both begin to lead in the same round.
 func chooseLeader(self netip.AddrPort, id string, discovering bool, others []livePeer) (leader netip.AddrPort, leading bool) {
 	if self.IsValid() {
 		if len(others) == 0 || comparePeers(self, others[0].addr) < 0 {
@@ -303,10 +308,10 @@ type peers struct {
 	checkFailures, snapshotFailures, leaderChanges uint64
 }
 
-// UsePeers makes the allocator an instance among peers: RunPeers then decides
-// whether it asks its discovery sources or takes the leader's snapshot.
-// Called before RunPeers and before the API is served; StartDiscovery is
-// not called then.
+// UsePeers makes the allocator an instance among peers. RunPeers then decides
+// whether it asks its discovery sources or takes the leader's snapshot. It is
+// called before RunPeers and before the API is served. StartDiscovery is not
+// called then.
 func (a *Allocator) UsePeers(o PeerOptions) {
 	if o.Resolve == nil {
 		o.Resolve = net.DefaultResolver.LookupHost
@@ -411,10 +416,10 @@ type peerAnswer struct {
 	// Discovering says the instance asks its discovery sources itself: it
 	// leads, or runs without peers.
 	Discovering bool `json:"discovering"`
-	// AddressKnown says the instance knows its own address, and so leads by
-	// the order of the addresses alone, or runs without peers and never
-	// follows: an instance that does not know its own follows such an
-	// instance first (chooseLeader).
+	// AddressKnown says the instance knows its own address, so it leads by
+	// the order of the addresses alone, or it runs without peers and never
+	// follows. An instance that does not know its own address follows such
+	// an instance first (chooseLeader).
 	AddressKnown bool `json:"address_known"`
 }
 
@@ -592,10 +597,10 @@ func (p *peers) round(ctx context.Context) {
 	}
 	if leading {
 		if !wasLeading && !hadSnapshot && len(others) > 0 {
-			// An instance that leads before it ever followed, as a new
-			// instance of the lowest address does, starts from what another
-			// instance has, so its discovered targets do not leave the
-			// bundles until its sources first answer; it asks them once the
+			// An instance that leads before it ever followed (as a new
+			// instance with the lowest address does) starts from what another
+			// instance has. So its discovered targets do not leave the bundles
+			// until its sources first answer. It asks its sources once the
 			// fetch ends, whether it took the snapshot or not.
 			p.stopFetch()
 			p.startFetch(ctx, others[0].addr, true)
@@ -618,10 +623,10 @@ func (p *peers) round(ctx context.Context) {
 	p.startFetch(ctx, leader, false)
 }
 
-// snapshotFetch is a fetch of a peer's snapshot, which runs beside the
-// rounds so that a peer slow to write it, or hanging, delays no check.
-// seed says it is the fetch of an instance coming to lead (round), which asks
-// its sources once it ends.
+// snapshotFetch is a fetch of a peer's snapshot. It runs beside the rounds,
+// so a peer that is slow to write it, or hangs, delays no check. seed says
+// it is the fetch of an instance coming to lead (round), which asks its
+// sources once the fetch ends.
 type snapshotFetch struct {
 	addr   netip.AddrPort
 	seed   bool
@@ -699,11 +704,11 @@ func addrText(addr netip.AddrPort) string {
 	return addr.String()
 }
 
-// peerSnapshot is the answer at SnapshotPath: every source of the instance's
-// input files, by its identity (sourceSpec.identity), with what it found.
-// The identity leaves the source's settings out, so instances whose input
-// files differ only in a source's settings, as old and new pods during a
-// rolling update do, still take each other's targets of it.
+// peerSnapshot is the answer at SnapshotPath. It holds every source of the
+// instance's input files, by its identity (sourceSpec.identity), with what it
+// found. The identity leaves out the source's settings. So instances whose
+// input files differ only in a source's settings (as old and new pods do
+// during a rolling update) still take each other's targets of it.
 type peerSnapshot struct {
 	ID          string                    `json:"id"`
 	Discovering bool                      `json:"discovering"`
@@ -722,30 +727,29 @@ type snapshotDrain struct {
 	Seconds float64 `json:"seconds"`
 }
 
-// snapshotSource is one source in a snapshot: whether it has answered,
-// and what its last good answer found, as target groups (groupsOf): a
-// group's labels are written once, as the source's answer has them, not
-// once for each of its targets, which for a file_sd file of one group of
-// thousands of targets, each with kilobytes of labels, would make a
-// snapshot of a few hundred kilobytes one of tens of megabytes.
+// snapshotSource is one source in a snapshot: whether it has answered, and
+// what its last good answer found, as target groups (groupsOf). A group's
+// labels are written once, as the source's answer has them, not once for each
+// of its targets. Otherwise a file_sd file with one group of thousands of
+// targets, each with kilobytes of labels, would turn a snapshot of a few
+// hundred kilobytes into one of tens of megabytes.
 type snapshotSource struct {
 	Answered bool          `json:"answered"`
 	Groups   []TargetGroup `json:"groups,omitempty"`
 	// RefreshIntervalSeconds is how often the source is asked
-	// (sourceState.interval), which a follower shows for what it took of
-	// it. It is part of the digest: a follower names the leader's interval
-	// it took, so it is told of a change of it, as of the targets.
+	// (sourceState.interval). A follower shows it for what it took of the
+	// source. It is part of the digest: a follower names the leader's
+	// interval it took, so it is told of a change to it, as of the targets.
 	RefreshIntervalSeconds float64 `json:"refresh_interval_seconds,omitempty"`
 }
 
 // fetchSnapshot takes addr's snapshot and puts what it found in force
-// (takeSnapshot). The fetch names in
-// If-None-Match the digest of what this instance holds, not of the snapshot it
-// took last, so a 304 says the instance holds what the leader does: whatever
-// made the two differ since, a reload that came to one first or the
-// instance's own sources answering while it led, the next fetch is answered
-// with the snapshot and corrects it. agreed says the instance holds what the
-// snapshot holds once it is taken.
+// (takeSnapshot). In If-None-Match, the fetch names the digest of what this
+// instance holds, not of the snapshot it took last. So a 304 says the
+// instance holds what the leader does. If anything made the two differ since
+// (a reload that reached one first, or the instance's own sources answering
+// while it led), the next fetch is answered with the snapshot and corrects
+// it. agreed says the instance holds what the snapshot holds once it is taken.
 func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed bool, err error) {
 	_, held := p.a.snapshotOf()
 	resp, err := p.get(ctx, addr, SnapshotPath, held, p.o.SnapshotTimeout)
@@ -782,12 +786,13 @@ func (p *peers) fetchSnapshot(ctx context.Context, addr netip.AddrPort) (agreed 
 	return held == etagValue(resp.Header.Get("ETag")), nil
 }
 
-// fetched notes a snapshot fetched from the leader addr, after which the
-// instance holds what it holds when agreed. Only then is the snapshot's age
-// reset: an instance whose input files have a source the leader's lack, or
-// lack one the leader's have, as while a changed ConfigMap reaches one
-// pod before the other, holds other targets, and its age grows, and is
-// logged once after FailureThreshold fetches in a row, until the two agree.
+// fetched notes a snapshot fetched from the leader addr. After it, the
+// instance holds what the leader holds when agreed. Only then is the
+// snapshot's age reset. An instance whose input files have a source the
+// leader's lack, or lack one the leader's have (as while a changed ConfigMap
+// reaches one pod before the other), holds other targets. Until the two
+// agree, its age grows, and this is logged once after FailureThreshold
+// fetches in a row.
 func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -813,19 +818,21 @@ func (p *peers) fetched(addr netip.AddrPort, agreed bool) {
 	}
 }
 
-// takeSnapshot puts what the leader's snapshot holds of each source in
-// force in place of what the source found here, as an answer of the source
-// would be. A source the leader has that has not answered there keeps what
-// this instance holds, so a leader that has not yet heard from a source does
-// not take its targets away. A source the snapshot does not have at all,
-// one the leader's input files lack, as a new source does while a changed
-// ConfigMap has not yet reached the leader's pod, is asked by this instance
-// itself, from a refresh loop of its own, until the snapshot has it:
-// taking nothing of it would leave its targets out of this instance's bundles
-// meanwhile. The static targets the leader drains because a change of the
-// discovered targets moved them drain here too, for what is left of their
-// intervals there, in place of those the change would drain here
-// (takeDrains), even when the discovered targets stay the same.
+// takeSnapshot puts in force what the leader's snapshot holds of each source,
+// in place of what the source found here, as an answer of the source would.
+//   - A source the leader has that has not answered there keeps what this
+//     instance holds. So a leader that has not yet heard from a source does
+//     not take its targets away.
+//   - A source the snapshot does not have at all is one the leader's input
+//     files lack, as a new source is while a changed ConfigMap has not yet
+//     reached the leader's pod. This instance asks it itself, from a refresh
+//     loop of its own, until the snapshot has it. Taking nothing of it would
+//     leave its targets out of this instance's bundles meanwhile.
+//   - Static targets that the leader drains because a change of the
+//     discovered targets moved them drain here too, for what is left of
+//     their intervals there. They replace those the change would drain here
+//     (takeDrains), even when the discovered targets stay the same.
+//
 // A nil snap stands for a snapshot of what this instance holds.
 func (a *Allocator) takeSnapshot(snap *peerSnapshot) {
 	a.reloadMu.Lock()
@@ -894,17 +901,17 @@ func (a *Allocator) takeSnapshot(snap *peerSnapshot) {
 	}
 }
 
-// takeDrains puts the drains of the leader's snapshot, list, in force in
-// place of the drains this instance's own changes of the discovered targets
-// made, each for what is left of it at the leader, and reports whether the
-// targets that drain changed. A target this instance drains for another
-// reason, a member list or input files that changed, keeps draining, for
-// the longer of the two, and is listed in this instance's snapshot as the
-// leader's, so the two snapshots' digests agree; its own drain takes over
-// once the leader's leaves the snapshot. A drain on a member not in this
-// instance's member list, or of a target it does not have or that member
-// owns here, is left out: the two instances hold other member lists or
-// input files for the moment, and serve other bundles anyway. Called under mu.
+// takeDrains puts the drains of the leader's snapshot, list, in force. They
+// replace the drains made by this instance's own changes of the discovered
+// targets, each for what is left of it at the leader. It reports whether the
+// draining targets changed. A target this instance drains for another reason
+// (a member list or input files that changed) keeps draining, for the longer
+// of the two. This instance's snapshot lists it as the leader's, so the two
+// snapshots' digests agree. Its own drain takes over once the leader's leaves
+// the snapshot. A drain is left out if it is on a member not in this
+// instance's member list, or of a target it does not have or that member owns
+// here: the two instances hold other member lists or input files for the
+// moment, and serve other bundles anyway. Called under mu.
 func (a *Allocator) takeDrains(list []snapshotDrain, now time.Time) bool {
 	before := make(map[drainKey]bool, len(a.draining))
 	for key, d := range a.draining {
@@ -965,12 +972,12 @@ func (a *Allocator) discoveredDrains(now time.Time) []snapshotDrain {
 	return out
 }
 
-// snapshotOf is the allocator's snapshot and its digest, the ETag it is
-// served with and the If-None-Match a follower names: instances that hold the
-// same discovered targets, and drain the same of the static targets their
-// changes moved, have the same digest. It is taken under reloadMu, under
-// which an answer of a source is put in force with the drains it makes, so
-// the snapshot never holds an answer without them.
+// snapshotOf returns the allocator's snapshot and its digest. The digest is
+// the ETag the snapshot is served with and the If-None-Match a follower
+// names. Instances that hold the same discovered targets, and drain the same
+// static targets moved by their changes, have the same digest. It is taken
+// under reloadMu, under which a source's answer is put in force with the
+// drains it makes. So the snapshot never holds an answer without them.
 func (a *Allocator) snapshotOf() (peerSnapshot, string) {
 	a.reloadMu.Lock()
 	defer a.reloadMu.Unlock()

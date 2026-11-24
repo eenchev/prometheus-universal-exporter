@@ -1,12 +1,12 @@
-// Package allocator is the target allocator, cmd/pue-allocator: it serves
-// every exporter replica in allocator mode its configuration and its share
-// of the static targets as one bundle, and Prometheus the probe targets
-// already pointed at a replica, through HTTP service discovery.
+// Package allocator is the target allocator, cmd/pue-allocator. It serves
+// every exporter replica in allocator mode its configuration and its share of
+// the static targets as one bundle. Through HTTP service discovery, it serves
+// Prometheus the probe targets already pointed at a replica.
 //
 // Replicas make themselves known with heartbeats (allocapi.Heartbeat). The
 // members whose heartbeats keep coming form the member list, which takes
-// effect once it has held for the settle time, and every target is placed
-// on one member of it by its weight and the members' capacities, by
+// effect once it has held for the settle time. Every target is placed on one
+// member of it by its weight and the members' capacities. The placement is
 // rendezvous hashing weighted by capacity with bounded loads (placement.go),
 // which with every weight and capacity alike is allocapi.Owner's. The
 // allocator keeps nothing on disk: the same input files and the same
@@ -51,19 +51,19 @@ type Options struct {
 	// Clock is the allocator's time; the wall clock when nil. Tests give
 	// one of their own.
 	Clock Clock
-	// HeartbeatInterval is how often the replicas are to heartbeat, which
-	// every heartbeat reply says; a member not heard from for
+	// HeartbeatInterval is how often the replicas are to heartbeat. Every
+	// heartbeat reply says it. A member not heard from for
 	// allocapi.MemberTTL of it is dropped. 0 takes
-	// allocapi.DefaultHeartbeatInterval; the command line keeps it within
+	// allocapi.DefaultHeartbeatInterval. The command line keeps it within
 	// allocapi's bounds.
 	HeartbeatInterval time.Duration
 	// MaxDiscoveredTargets bounds the targets of one discovery source's
 	// answer, for a source that sets no max_targets; 0 takes
 	// DefaultMaxDiscoveredTargets.
 	MaxDiscoveredTargets int
-	// Address is --web.listen-address, Version and Revision the build's,
-	// and WatchInterval --config.watch-interval, 0 for files read once,
-	// which the status shows (Status): the watch itself is the command's
+	// Address is --web.listen-address, Version and Revision are the build's,
+	// and WatchInterval is --config.watch-interval (0 for files read once).
+	// The status shows them (Status). The watch itself is the command's
 	// (WatchLoop).
 	Address, Version, Revision string
 	WatchInterval              time.Duration
@@ -85,9 +85,10 @@ type Allocator struct {
 	// member TTL of it.
 	heartbeatInterval, memberTTL time.Duration
 	// longestHeard is the longest interval a heartbeat said
-	// (allocapi.Heartbeat.IntervalSeconds), the longest the instances its
-	// replica finds told it, before the first member list formed, kept within
-	// allocapi's bounds; a heartbeat that says none is no say (firstSettle).
+	// (allocapi.Heartbeat.IntervalSeconds) before the first member list
+	// formed: the longest that the instances its replica finds told it. It is
+	// kept within allocapi's bounds. A heartbeat that says none has no say
+	// (firstSettle).
 	longestHeard time.Duration
 	// firstHeard is when the first heartbeat came, the zero time before:
 	// the instance had been found by then (firstSettle).
@@ -103,32 +104,31 @@ type Allocator struct {
 	started time.Time
 	inputs  *Inputs
 	members map[string]*member
-	// proposed are the live members, sorted, and proposedAt when they last
-	// changed; effective is the member list allocation uses, which becomes
+	// proposed are the live members, sorted, and proposedAt is when they last
+	// changed. effective is the member list that allocation uses. It becomes
 	// proposed once proposed has held for the settle time. settled says it
-	// has been formed at least once: before that the allocator knows
-	// nothing to answer with.
+	// has been formed at least once; before that the allocator knows nothing
+	// to answer with.
 	proposed   []string
 	proposedAt time.Time
 	effective  []string
 	settled    bool
 	// proposedCaps and effectiveCaps are the capacities of the members of
-	// proposed and of effective, in their order, in thousandths: a
-	// capacity is part of the member list, and a change of one takes
-	// effect, as a member's coming or going does, once it has held for the
-	// settle time.
+	// proposed and of effective, in their order, in thousandths. A capacity
+	// is part of the member list. A change of one takes effect once it has
+	// held for the settle time, as a member's coming or going does.
 	proposedCaps, effectiveCaps []int64
-	// balanceFactor is Options.BalanceFactor in thousandths, and plan the
-	// placement made last (planFor). heavy are the units heavier than a
-	// fair share the last placement found, by key, logged once while they
-	// stay so.
+	// balanceFactor is Options.BalanceFactor in thousandths, and plan is the
+	// placement made last (planFor). heavy are the units, by key, that the
+	// last placement found heavier than a fair share. They are logged once
+	// while they stay so.
 	balanceFactor int64
 	plan          *placement
 	heavy         map[string]bool
 	// fallbacksTotal counts the discovered targets whose weight_label gave
-	// no weight, as they begin to fall back; fallingBack are those of the
-	// inputs in force, and fallbackLogged the sources and reasons logged,
-	// once while any target of them falls back. The last two change under
+	// no weight, as they begin to fall back. fallingBack are those of the
+	// inputs in force. fallbackLogged are the sources and reasons logged, once
+	// while any of their targets falls back. The last two change under
 	// reloadMu, the counts under mu.
 	fallbacksTotal map[fallbackKey]uint64
 	fallingBack    map[weightFallback]bool
@@ -141,10 +141,10 @@ type Allocator struct {
 	// targets.
 	bundles map[string]*allocapi.Bundle
 	joining *allocapi.Bundle
-	// collectorsOf are the collectors of the configuration each recent
-	// bundle generation carries, for service discovery to route a probe
-	// only to a member whose bundle has its collector. Kept are the
-	// generations of the bundles held and those live members report.
+	// collectorsOf are the collectors of the configuration that each recent
+	// bundle generation carries. Service discovery uses them to route a probe
+	// only to a member whose bundle has its collector. The generations kept
+	// are those of the bundles held and those that live members report.
 	collectorsOf map[string]map[string]bool
 	// changed is closed, and replaced, whenever a bundle changes, which
 	// wakes the long polls waiting for one.
@@ -164,11 +164,11 @@ type Allocator struct {
 	// same refusal at every check is logged and counted once.
 	reloadMu    sync.Mutex
 	lastRefusal string
-	// base are the input files in force, as read; inputs are base with
-	// the discovered targets added (Inputs.expand). checked are the
-	// discovered static targets last checked, and lastSkipped what the
-	// last expansion left out, logged once while it stays the same. All
-	// three change under reloadMu.
+	// base are the input files in force, as read. inputs are base with the
+	// discovered targets added (Inputs.expand). checked are the discovered
+	// static targets last checked. lastSkipped is what the last expansion
+	// left out, logged once while it stays the same. All three change under
+	// reloadMu.
 	base        *Inputs
 	checked     map[string]checkedTarget
 	lastSkipped string
@@ -203,38 +203,40 @@ type member struct {
 	// retired the instance before it, so a late heartbeat is known.
 	instance, retired string
 	sequence          uint64
-	// retiredAt is when the process before the current one was replaced,
-	// and twiceAt when a heartbeat of it last came long enough after that
-	// to be no late one (twice): two processes then heartbeat under the
-	// one name. twiceLogged says so was logged, once while it lasts.
+	// retiredAt is when the process before the current one was replaced.
+	// twiceAt is when a heartbeat of that process last came long enough
+	// after that to be no late one (twice); two processes then heartbeat
+	// under the one name. twiceLogged says this was logged, once while it lasts.
 	retiredAt, twiceAt time.Time
 	twiceLogged        bool
 }
 
-// twice reports whether two processes heartbeat as m: one of the process the
-// current one replaced came within the last member TTL, and more than a
-// member TTL after it was replaced, which no heartbeat that was merely late
-// is. Each of the two has the member's bundle and scrapes its share.
+// twice reports whether two processes heartbeat as m. That is so when a
+// heartbeat of the process the current one replaced came within the last
+// member TTL, and more than a member TTL after it was replaced. No merely
+// late heartbeat does that. Each of the two has the member's bundle and
+// scrapes its share.
 func (a *Allocator) twice(m *member, now time.Time) bool {
 	return !m.twiceAt.IsZero() && now.Sub(m.twiceAt) <= a.memberTTL
 }
 
 type drainKey struct{ target, member string }
 
-// drain is how long a member keeps a static target it has lost, and
-// whether a change of the discovered targets moved it. Those are the drains
-// a follower takes from the leader's snapshot (takeDrains) rather than
-// works out: the leader puts the answers of its sources in force one at a
-// time, as they come, and a target one answer moves it drains, where a
-// follower that takes several answers at once would not see the target
-// move at all, or see it move from elsewhere.
+// drain is how long a member keeps a static target it has lost, and whether
+// a change of the discovered targets moved it. A follower takes these drains
+// from the leader's snapshot (takeDrains) rather than working them out. The
+// leader puts its sources' answers in force one at a time, as they come, and
+// a target that one answer moves drains. A follower that takes several
+// answers at once would not see the target move at all, or would see it move
+// from elsewhere.
 type drain struct {
 	until      time.Time
 	discovered bool
-	// own, on a drain of the leader's snapshot that this instance drained
-	// for a reason of its own too, is when its own would end: the drain is
-	// the leader's, which the snapshot and its digest list as the leader's
-	// do, and its own takes over when the leader's leaves the snapshot.
+	// own is set on a drain of the leader's snapshot that this instance also
+	// drained for a reason of its own. It is when its own drain would end.
+	// The drain is the leader's, and the snapshot and its digest list it as
+	// the leader's. Its own drain takes over when the leader's leaves the
+	// snapshot.
 	own time.Time
 }
 
@@ -304,10 +306,10 @@ var ErrBadHeartbeat = errors.New("a heartbeat names its member, the host:port Pr
 var ErrTooManyMembers = errors.New("the allocator has as many live members as --members.max allows")
 
 // Heartbeat records hb and answers with the generation of the bundle the
-// member is to have, "" while the member list has not been formed. A
-// heartbeat older than the last applied of its member (allocapi.Heartbeat's
-// Instance and Sequence), or of a member shutting down that the allocator
-// does not hold, is answered the same but changes nothing.
+// member is to have, or "" while the member list has not been formed. Some
+// heartbeats are answered the same but change nothing: one older than the
+// last applied of its member (allocapi.Heartbeat's Instance and Sequence),
+// and one of a member shutting down that the allocator does not hold.
 func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, error) {
 	if err := checkHeartbeat(hb); err != nil {
 		return allocapi.HeartbeatReply{}, err
@@ -323,12 +325,12 @@ func (a *Allocator) Heartbeat(hb allocapi.Heartbeat) (allocapi.HeartbeatReply, e
 	m := a.members[hb.Member]
 	if (m != nil && m.stale(hb)) || (m == nil && hb.ShuttingDown) {
 		reply := a.replyLocked(hb.Member)
-		// A heartbeat of the process the member's current one replaced is
-		// a late one for as long as a heartbeat may be on its way, and the
-		// member TTL is longer than that. After it the process is alive:
-		// two exporters run under one name, as two hosts of one host name
-		// or a copied --allocator.member do, each with the member's bundle
-		// and each scraping its share. Both are told, and it is logged
+		// A heartbeat of the process that the member's current one replaced
+		// is a late one for as long as a heartbeat may be on its way, and
+		// the member TTL is longer than that. After that, the process is
+		// alive: two exporters run under one name (as with two hosts of one
+		// host name or a copied --allocator.member), each with the member's
+		// bundle and each scraping its share. Both are told, and it is logged
 		// once while it lasts.
 		if now := a.clock.Now(); m != nil && hb.Instance == m.retired && !hb.ShuttingDown && now.Sub(m.retiredAt) > a.memberTTL {
 			if !a.twice(m, now) {
@@ -525,30 +527,34 @@ func (a *Allocator) settleDue(now time.Time) bool {
 	return !now.Before(a.proposedAt.Add(a.settle))
 }
 
-// firstSettle is the earliest the first member list takes effect: the settle
-// time or the instance's own heartbeat interval after the start, whichever is
-// longer, and no sooner than the longest interval a replica heard from said
-// after the first heartbeat came. An instance started with an interval
-// shorter than the instances before it is heard by each replica only at the
-// replica's next lookup of the instances' addresses on the old interval after
-// the instance could be found, which is later than its start: a headless
-// Service lists it once it is ready, and the lookups see it later still. The
-// first heartbeat comes once a replica found it, so by the old interval after
-// that every replica on the old interval has found it, and heartbeated it at
-// once. A replica says the longest interval the instances it finds said, not
-// the shorter one it heartbeats at, so while an instance from before is
-// found every replica says the old interval, one that started after this
-// instance too, and the first list waits for the others rather than forming
-// of those that happened to come first and changing as each of the rest
-// arrives. A replica not told an interval yet, one that has just started,
-// says none: the default it heartbeats at is no instance's, and says nothing
-// of how long the others take, so it does not count for the interval, though
-// its heartbeat, as any, says the instance can be found; it heartbeats again
-// at once when the instances' answers tell it one. Replicas that started once
-// no instance from before is found have none to learn the old interval from:
-// heard alone before this instance's own interval and the settle time have
-// passed, they form the first list alone, and it changes as the others
-// arrive.
+// firstSettle is the earliest time the first member list takes effect: the
+// settle time or the instance's own heartbeat interval after the start,
+// whichever is longer. It is also no sooner than the longest interval a
+// replica heard from said, after the first heartbeat came.
+//
+// Suppose an instance starts with an interval shorter than the instances
+// before it. Each replica hears it only at the replica's next lookup of the
+// instances' addresses on the old interval after the instance could be
+// found, which is later than its start. A headless Service lists it once it
+// is ready, and the lookups see it later still. The first heartbeat comes
+// once a replica found it. So by the old interval after that, every replica
+// on the old interval has found it and heartbeated it at once.
+//
+// A replica says the longest interval the instances it finds said, not the
+// shorter one it heartbeats at. So while an instance from before is found,
+// every replica says the old interval, even one that started after this
+// instance. The first list then waits for the others, rather than forming
+// from those that happened to come first and changing as each of the rest
+// arrives.
+//
+// A replica not told an interval yet (one that has just started) says none.
+// The default it heartbeats at is no instance's and says nothing of how long
+// the others take, so it does not count for the interval. Its heartbeat, like
+// any, still says the instance can be found. It heartbeats again at once when
+// the instances' answers tell it one. Replicas that started once no instance
+// from before is found have none to learn the old interval from. Heard alone
+// before this instance's own interval and the settle time have passed, they
+// form the first list alone, and it changes as the others arrive.
 func (a *Allocator) firstSettle() time.Time {
 	at := a.started.Add(max(a.settle, a.heartbeatInterval))
 	if !a.firstHeard.IsZero() && a.firstHeard.Add(a.longestHeard).After(at) {
@@ -598,13 +604,13 @@ func (a *Allocator) takeEffect(now time.Time) {
 	a.logger.Info("member list changed", "members", after, "added", added, "removed", removed, "draining", len(a.draining))
 }
 
-// handOver keeps, for one of its intervals, a static target the reload
-// from old to the inputs in force moves to another member, in the share of
-// the member that had it, as takeEffect does for a change of the member
-// list: a changed shard_key moves a target as surely as a new member does.
-// A target the new inputs no longer have drains nowhere, nor does one that
-// is back with the member draining it. discovered says the change is one of
-// the discovered targets.
+// handOver handles a reload from old to the inputs in force. A static target
+// that the reload moves to another member stays, for one of its intervals,
+// in the share of the member that had it, as takeEffect does for a change of
+// the member list: a changed shard_key moves a target as surely as a new
+// member does. A target the new inputs no longer have drains nowhere, and
+// neither does one that is back with the member draining it. discovered says
+// the change is one of the discovered targets.
 func (a *Allocator) handOver(old *Inputs, now time.Time, discovered bool) {
 	in := a.inputs
 	if a.settled && old != nil && old.Targets != nil && in.Targets != nil && len(a.effective) > 0 {

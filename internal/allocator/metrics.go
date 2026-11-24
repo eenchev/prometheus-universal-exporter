@@ -12,11 +12,11 @@ import (
 // format, every name prefixed pue_allocator_.
 //
 // A follower under --peers.leader-only writes the peers' families alone
-// (writePeerMetrics): is_leader 0, the leader, the peers and their
-// liveness, the snapshot's age and the failures, so it stays observable and
-// a cluster without a leader shows, while the allocation, the members and
-// the discovery sources are in the leader's metrics only, and a Prometheus
-// scraping every instance keeps one series of each.
+// (writePeerMetrics): is_leader 0, the leader, the peers and their liveness,
+// the snapshot's age and the failures. So it stays observable, and a cluster
+// without a leader shows. The allocation, the members and the discovery
+// sources are in the leader's metrics only, so a Prometheus scraping every
+// instance keeps one series of each.
 func (a *Allocator) WriteMetrics(w io.Writer) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -78,9 +78,9 @@ func (a *Allocator) WriteMetrics(w io.Writer) error {
 	family("pue_allocator_overloaded_members", "gauge", "Members whose static and probe weight is above --allocation.balance-factor times their fair share because a target, or the targets of one shard key, weigh too much for any member's room: still above it without their lightest unit, or filled by one unit above it alone.")
 	fmt.Fprintf(&b, "pue_allocator_overloaded_members %d\n", overloaded)
 
-	// The average is what one more member would take off each: the figure to
-	// scale the exporter's replicas by when it is to keep so many targets
-	// each. A member list that is empty has no average, and shows 0, as it
+	// The average is what one more member would take off each. It is the
+	// figure to scale the exporter's replicas by when each is to keep so
+	// many targets. An empty member list has no average and shows 0, as it
 	// shows no member assigned anything.
 	family("pue_allocator_targets_per_member", "gauge", "Targets allocated to the members of the member list, by kind, divided by the number of members: static targets and probe targets per member on average; 0 with no member.")
 	var allStatic, allProbe int

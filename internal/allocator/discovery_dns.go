@@ -21,19 +21,21 @@ const (
 	dnsSRVPortLabel   = "__meta_dns_srv_record_port"
 )
 
-// refreshDNSSD looks each of n's names up, in their order, all within
+// refreshDNSSD looks up each of n's names, in their order, all within
 // timeout, and gives a target for each record: an SRV record's target host
-// and port, an A or AAAA record's address at n's port. A name that does not
-// exist, or has no records of the type, gives no targets and is no failure,
-// as Prometheus has it, so one service of several being gone leaves the
-// others in force; any other failure of any name fails the whole answer,
-// which then keeps the last good one, as every source's failure does, rather
-// than dropping the targets of the name that could not be asked. A target
-// found under several names, or twice under one, is taken once, with the
-// labels of the first name in the list that gives it. The targets are sorted
-// by address, so that the same records give the same answer whatever order
-// the server, or the resolver, which shuffles SRV records of one priority,
-// gives them in.
+// and port, or an A or AAAA record's address at n's port.
+//   - A name that does not exist, or has no records of the type, gives no
+//     targets and is no failure, as Prometheus has it. So one service of
+//     several being gone leaves the others in force.
+//   - Any other failure of any name fails the whole answer. The last good
+//     answer is then kept, as on every source's failure, rather than
+//     dropping the targets of the name that could not be asked.
+//   - A target found under several names, or twice under one, is taken once,
+//     with the labels of the first name in the list that gives it.
+//
+// The targets are sorted by address, so the same records give the same
+// answer whatever order the server or the resolver gives them in (the
+// resolver shuffles SRV records of one priority).
 func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string, limit int, timeout time.Duration) ([]discovered, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -77,10 +79,10 @@ func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string
 	return out, nil
 }
 
-// lookupDNSSD asks for the records of n's type of name, absolute so that
-// the system's search domains are never appended, and makes a target of
-// each. The resolver leaves out a record with a malformed name and gives
-// the others with an error, which is taken as an answer of those, as the
+// lookupDNSSD asks for the records of n's type of name, made absolute so the
+// system's search domains are never appended, and makes a target of each.
+// The resolver leaves out a record with a malformed name and gives the
+// others with an error. That is taken as an answer of those others, as the
 // dns request type takes it.
 func lookupDNSSD(ctx context.Context, resolver *net.Resolver, n *DNSSDConfig, name string) ([]discovered, error) {
 	absolute := name + "."

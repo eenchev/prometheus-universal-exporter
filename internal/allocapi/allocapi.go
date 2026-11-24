@@ -1,16 +1,17 @@
-// Package allocapi is what the target allocator (cmd/pue-allocator) and an
-// exporter in allocator mode say to each other: the heartbeat a replica sends,
-// the bundle of configuration files it is served, the paths they travel on,
-// and the rendezvous hash that decides which replica owns a target. Both
-// sides import it, so the two cannot disagree on a field or on an owner.
+// Package allocapi is the protocol between the target allocator
+// (cmd/pue-allocator) and an exporter in allocator mode: the heartbeat that
+// a replica sends, the bundle of configuration files that it is served, the
+// paths they travel on, and the rendezvous hash that decides which replica
+// owns a target. Both sides import it, so they cannot disagree on a field or
+// on an owner.
 //
 // A bundle is a small tree of files, keyed by their path relative to the
 // bundle's root: the main configuration at ConfigFile, its collector files
-// beside it at the relative paths its collector_files entries name, and this
-// replica's share of the static targets at StaticTargetsFile. The replica
-// writes the tree into its cache directory and loads it there exactly as it
-// loads mounted files, so a bundle is checked by the same loader, and the
-// cache directory is what a restart resumes from.
+// beside it at the relative paths that its collector_files entries name,
+// and this replica's share of the static targets at StaticTargetsFile. The
+// replica writes the tree into its cache directory and loads it there just
+// as it loads mounted files, so a bundle is checked by the same loader, and
+// a restart resumes from the cache directory.
 package allocapi
 
 import (
@@ -34,21 +35,21 @@ const (
 	SDPathPrefix = "/v1/sd/"
 )
 
-// The timings both sides keep to. The allocator has one heartbeat interval,
-// its --heartbeat.interval, DefaultHeartbeatInterval unless set, and says it
-// in every HeartbeatReply; a replica heartbeats at the interval it was last
-// told, DefaultHeartbeatInterval until then. The allocator drops a member it
-// has not heard from for MemberTTL of its interval, TTLIntervals intervals,
-// so a member outlives two heartbeats lost in a row. The interval is one
-// setting, the allocator's, so the replicas cannot heartbeat more slowly
-// than the allocator expects.
+// The timings that both sides follow. The allocator has one heartbeat
+// interval, its --heartbeat.interval (DefaultHeartbeatInterval unless set),
+// and states it in every HeartbeatReply. A replica heartbeats at the
+// interval it was last told, DefaultHeartbeatInterval until then. The
+// allocator drops a member that it has not heard from for MemberTTL of its
+// interval (TTLIntervals intervals), so a member survives two lost
+// heartbeats in a row. The interval is a single setting, the allocator's, so
+// the replicas cannot heartbeat more slowly than the allocator expects.
 const (
 	DefaultHeartbeatInterval = 10 * time.Second
-	// MinHeartbeatInterval and MaxHeartbeatInterval bound the interval:
-	// the allocator refuses one outside them, and a replica takes an
-	// announced one outside them as the nearest bound, so a bogus answer
-	// can neither make it heartbeat without pause nor fall silent for
-	// longer than any allocator waits.
+	// MinHeartbeatInterval and MaxHeartbeatInterval bound the interval. The
+	// allocator refuses one outside them, and a replica takes an announced
+	// one outside them as the nearest bound, so a bogus answer can neither
+	// make it heartbeat without pause nor fall silent for longer than any
+	// allocator waits.
 	MinHeartbeatInterval = time.Second
 	MaxHeartbeatInterval = 2 * time.Minute
 	TTLIntervals         = 3
@@ -72,11 +73,11 @@ func ClampHeartbeatInterval(seconds float64) time.Duration {
 }
 
 // The files of a bundle that have a fixed place. AllocationFile holds the
-// settings the share was placed with that are not the allocator's defaults,
-// --allocation.balance-factor, and is left out with the defaults: it is
-// in the bundle so that two instances of the allocator that place by other
-// settings serve bundles of other generations, rather than shares that
-// differ while their generations say they are the same. The exporter does
+// placement settings that differ from the allocator's defaults
+// (--allocation.balance-factor), and is left out with the defaults. It is in
+// the bundle so that two allocator instances that place with different
+// settings serve bundles of different generations, instead of shares that
+// differ while their generations claim to be the same. The exporter does
 // not read it.
 const (
 	ConfigFile        = "config.yaml"
@@ -85,12 +86,12 @@ const (
 )
 
 // A replica's capacity (--allocator.capacity) is its share of the targets'
-// weight against the other members': a member of capacity 2 is given about
+// weight relative to the other members: a member of capacity 2 gets about
 // twice the weight of one of capacity 1. The exporter refuses a capacity
-// outside MinCapacity and MaxCapacity at its command line, and the
-// allocator takes a heartbeat's outside them as the nearest bound, so no
-// heartbeat can claim nearly every target, and one that says none as
-// DefaultCapacity.
+// outside MinCapacity and MaxCapacity on its command line, and the
+// allocator clamps a heartbeat's capacity to the nearest bound, so no
+// heartbeat can claim nearly every target. A heartbeat that states none
+// gets DefaultCapacity.
 const (
 	DefaultCapacity = 1.0
 	MinCapacity     = 0.1
@@ -98,9 +99,9 @@ const (
 )
 
 // CapacityMilli is a heartbeat's capacity in thousandths, as the allocator
-// places by it: 0, a heartbeat that says none, is DefaultCapacity; one
-// below MinCapacity, NaN included, is MinCapacity, and one above
-// MaxCapacity is MaxCapacity; any other is rounded to the thousandth.
+// places by it: 0 (no capacity stated) is DefaultCapacity, anything below
+// MinCapacity, NaN included, is MinCapacity, anything above MaxCapacity is
+// MaxCapacity, and any other value is rounded to the thousandth.
 func CapacityMilli(capacity float64) int64 {
 	switch {
 	case capacity == 0:
@@ -120,25 +121,26 @@ type Heartbeat struct {
 	Member string `json:"member"`
 	// Advertise is host:port Prometheus should send this replica's probes to.
 	Advertise string `json:"advertise"`
-	// Instance names the replica's process: random, made at its start, so
-	// a restarted replica of the same Member is told from the one before.
-	// Sequence counts the process's heartbeats from 1, one more for each,
-	// in the order they are built. A heartbeat can reach the allocator
-	// after a later one, when the replica gave up waiting for it and sent
-	// the next: the allocator applies a heartbeat only when its Sequence is
-	// greater than that of the last it applied of the same Instance, so a
-	// late one cannot undo a later one, and a member shutting down is not
-	// made live again by a heartbeat it sent before. A heartbeat of another
-	// Instance is applied whatever its Sequence, as a restarted replica
-	// counts from 1 again, but not one of the Instance it replaced, which
-	// has ended.
+	// Instance names the replica's process. It is random and made at
+	// startup, so a restarted replica of the same Member can be told apart
+	// from the previous one.
+	//
+	// Sequence counts the process's heartbeats from 1, in the order they
+	// are built. A heartbeat can reach the allocator after a later one, when
+	// the replica gave up waiting for it and sent the next. The allocator
+	// applies a heartbeat only when its Sequence is greater than the last
+	// one applied for the same Instance, so a late heartbeat cannot undo a
+	// later one, and a member shutting down is not made live again by an
+	// earlier heartbeat. A heartbeat of another Instance is applied whatever
+	// its Sequence, since a restarted replica counts from 1 again, except
+	// one of the Instance that it replaced, which has ended.
 	Instance string `json:"instance"`
 	Sequence uint64 `json:"sequence"`
-	// ShuttingDown is set from the first signal on: the replica stops being
-	// live at once rather than a member TTL after its heartbeats stop, so no
-	// probe is routed to it any more, and it leaves the member list, and
-	// its static targets move, once the live members have held for the
-	// allocator's settle time.
+	// ShuttingDown is set from the first signal on. The replica stops being
+	// live at once, not a member TTL after its heartbeats stop, so no probe
+	// is routed to it any more. It leaves the member list, and its static
+	// targets move, once the live members have held for the allocator's
+	// settle time.
 	ShuttingDown bool `json:"shutting_down,omitempty"`
 	// Generation is the generation of the bundle the replica has in force,
 	// empty before its first.
@@ -146,15 +148,15 @@ type Heartbeat struct {
 	// Refused names the bundle generation the replica could not load, and
 	// why; its last good bundle stays in force.
 	Refused *Refusal `json:"refused,omitempty"`
-	// IntervalSeconds is, in seconds, the longest heartbeat interval the
-	// instances of the allocator the replica finds said in their last
-	// answers, once one has said one, and left out before: the default a
-	// replica starts with is no instance's. The replica heartbeats at the
-	// shortest of them, so this may be longer. An instance of the allocator
-	// that has just started, with an interval shorter than the instances
-	// before it said, learns from it how long the replicas it has not heard
-	// from yet, still on the older interval, may take to reach it, and forms
-	// its first member list no sooner.
+	// IntervalSeconds is the longest heartbeat interval, in seconds, that
+	// the allocator instances found by the replica stated in their last
+	// answers. It is left out until one has stated an interval, because the
+	// replica's starting default belongs to no instance. The replica
+	// heartbeats at the shortest of them, so this may be longer. A newly
+	// started allocator instance with a shorter interval than the earlier
+	// instances learns from it how long the replicas still on the older
+	// interval may take to reach it, and forms its first member list no
+	// sooner.
 	IntervalSeconds float64 `json:"interval_seconds,omitempty"`
 	// Capacity is the replica's --allocator.capacity, its share of the
 	// targets' weight against the other members'; left out, the allocator
@@ -178,19 +180,18 @@ type HeartbeatReply struct {
 	// for the member; a replica whose bundle differs fetches it.
 	Generation string `json:"generation"`
 	// HeartbeatIntervalSeconds is the allocator's heartbeat interval, in
-	// seconds, which the replica heartbeats at from its next heartbeat on.
-	// A replica that hears it from several instances of the allocator takes
-	// the shortest, so it is heard often enough by each; one that hears
-	// none, from an allocator that does not say it, keeps the interval it
-	// has.
+	// seconds, which the replica uses from its next heartbeat on. A replica
+	// that hears it from several allocator instances takes the shortest, so
+	// each instance hears it often enough. One that hears none, from an
+	// allocator that does not state it, keeps its current interval.
 	HeartbeatIntervalSeconds float64 `json:"heartbeat_interval_seconds,omitempty"`
-	// Instance names the allocator's process that answered. A replica keys
-	// what each instance said by it, not by the address it reached the
-	// instance at: behind one address, a Service's ClusterIP or a load
-	// balancer, several instances may answer in turn, and with different
-	// intervals during a rollout; keyed by the address, what the address
-	// said would change at every answer. A reply without one is keyed by
-	// its address.
+	// Instance names the allocator process that answered. A replica keys
+	// what each instance said by this name, not by the address it reached
+	// the instance at. Behind one address (a Service's ClusterIP or a load
+	// balancer), several instances may answer in turn, with different
+	// intervals during a rollout; keyed by address, the stored value would
+	// change at every answer. A reply without a name is keyed by its
+	// address.
 	Instance string `json:"instance,omitempty"`
 	// SameName says the allocator hears another process heartbeat under
 	// the replica's member name: two exporters were given one name, each
@@ -228,10 +229,10 @@ func Generation(files map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-// CheckFiles refuses a bundle whose file paths could reach outside the
-// directory it is written into, that names a file also as a directory of
-// another, such as a and a/b, which no directory can hold, or that has no
-// main configuration.
+// CheckFiles refuses a bundle that has no main configuration, whose file
+// paths could reach outside the directory it is written into, or that names
+// a file also as a directory of another file (such as a and a/b), which no
+// directory can hold.
 func CheckFiles(files map[string]string) error {
 	if _, ok := files[ConfigFile]; !ok {
 		return fmt.Errorf("the bundle has no %s", ConfigFile)
@@ -269,13 +270,14 @@ func Score(member, key string) uint64 {
 	return binary.BigEndian.Uint64(sum[:8])
 }
 
-// Owner is the member with the highest Score for key, the lower name on a
-// tie: plain rendezvous hashing. Adding a member moves only the keys it now
-// wins; removing one moves only its own. The allocator does not call it: it
-// places a target by its weight and the members' capacities, rendezvous
-// hashing weighted by capacity with bounded loads, which ranks members of
-// one capacity by Score and, with every weight and capacity alike and room
-// enough, chooses Owner's member; Owner is what its tests hold it to.
+// Owner is the member with the highest Score for key, the lower name winning
+// a tie: plain rendezvous hashing. Adding a member moves only the keys that
+// it now wins; removing one moves only its own keys. The allocator does not
+// call it. It places a target by its weight and the members' capacities,
+// using capacity-weighted rendezvous hashing with bounded loads, which ranks
+// members of one capacity by Score and, with every weight and capacity
+// equal and enough room, picks Owner's member. Owner is what its tests check
+// against.
 func Owner(members []string, key string) (string, error) {
 	if len(members) == 0 {
 		return "", ErrNoMembers

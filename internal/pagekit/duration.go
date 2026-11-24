@@ -5,18 +5,18 @@ import (
 	"time"
 )
 
-// Duration is d as the pages write a duration, an interval configured or
-// an age: Go's form with every unit that is zero left out, so 1m, 2h and
-// 1h30s rather than 1m0s, 2h0m0s and 1h0m30s, the zeros of which only make
-// it longer to read. Seconds that are not whole keep their fraction, 1m0.5s.
-// A duration under a second is written as Go writes it, 500ms or 1.5µs,
-// and 0 is 0s. Hours are not carried into days: a day is 24h.
+// Duration is d as the pages write a duration, such as a configured
+// interval or an age: Go's form with every zero unit left out, so 1m, 2h and
+// 1h30s instead of 1m0s, 2h0m0s and 1h0m30s, whose zeros only make them
+// longer to read. Seconds that are not whole keep their fraction, as in
+// 1m0.5s. A duration under a second is written as Go writes it, 500ms or
+// 1.5µs, and 0 is 0s. Hours are not carried into days: a day is 24h.
 func Duration(d time.Duration) string {
 	s := d.String()
-	// Go writes the minutes and seconds of a duration of a minute or more
-	// whatever they are, and nothing smaller than seconds then, so a zero
-	// seconds is its last two characters after a unit, and a zero minutes
-	// follows the hours.
+	// For a duration of a minute or more, Go always writes the minutes and
+	// seconds, and nothing smaller than seconds. Zero seconds are therefore
+	// the last two characters after a unit, and zero minutes follow the
+	// hours.
 	if d <= -time.Minute || d >= time.Minute {
 		s = strings.TrimSuffix(s, "m0s")
 		if !strings.HasSuffix(s, "s") {

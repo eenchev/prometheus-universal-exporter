@@ -1,17 +1,16 @@
 // Package kubeapi lists objects from a Kubernetes API server over its REST
-// API, with nothing but the standard library: the target allocator's
-// kubernetes discovery lists EndpointSlices with it, and the exporter's
-// kubernetes request type lists objects of any kind. There is no client
-// library behind it, and none is needed: a listing is a GET of a path,
-// authenticated with a bearer token, answered with a JSON list whose
-// metadata.continue names the next page.
+// API, using only the standard library. The target allocator's kubernetes
+// discovery lists EndpointSlices with it, and the exporter's kubernetes
+// request type lists objects of any kind. No client library is needed: a
+// listing is a GET of a path, authenticated with a bearer token, and
+// answered with a JSON list whose metadata.continue names the next page.
 //
-// It reads what a pod is given to reach the API server of its cluster: the
+// It reads what a pod is given to reach its cluster's API server: the
 // address in KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT, and the
-// service account's token, CA and namespace in the files Kubernetes mounts.
-// The token is read again at every listing, so a rotated one is used; the
-// caller builds the HTTP client, which verifies the server against the CA,
-// so this package has no TLS settings of its own.
+// service account's token, CA and namespace in the files that Kubernetes
+// mounts. The token is read again at every listing, so a rotated token is
+// used. The caller builds the HTTP client, which verifies the server against
+// the CA, so this package has no TLS settings of its own.
 package kubeapi
 
 import (
@@ -42,28 +41,28 @@ const (
 	NamespaceFile = "namespace"
 )
 
-// UserAgent is the User-Agent every request is sent with, so the API
-// server's audit log, and a FlowSchema of its priority and fairness, can
+// UserAgent is the User-Agent that every request is sent with, so that the
+// API server's audit log, and a FlowSchema of its priority and fairness, can
 // tell the program apart from other clients of its service account. Each
-// program sets it to its name and version as it starts; a test's requests
-// are sent with the name alone.
+// program sets it to its name and version at startup; a test's requests are
+// sent with the name alone.
 var UserAgent = "prometheus-universal-exporter"
 
-// The Accept of a listing: JSON, or, with metadata alone, the
-// PartialObjectMetadataList the API server answers in place of the objects,
-// with no fallback, so a server that cannot answer it refuses (406) rather
-// than sending the objects whole.
+// The Accept header of a listing: JSON or, for metadata alone, the
+// PartialObjectMetadataList that the API server answers instead of the
+// objects. There is no fallback, so a server that cannot answer it refuses
+// with 406 instead of sending the whole objects.
 const (
 	AcceptJSON         = "application/json"
 	AcceptMetadataList = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
 )
 
-// PageSize is how many objects one request of a listing asks for at first;
-// the rest follow with the answer's continue token. 100 keeps a page of the
-// largest objects a listing commonly meets, EndpointSlices of 100
+// PageSize is how many objects the first request of a listing asks for; the
+// rest follow with the answer's continue token. 100 keeps a page of the
+// largest objects that a listing commonly meets, EndpointSlices of 100
 // endpoints, at about 10 MiB. A page over the listing's bound is asked for
 // again with half as many objects, so larger objects make smaller pages
-// rather than a failed listing.
+// instead of a failed listing.
 const PageSize = 100
 
 // InClusterServer is the URL of the API server of the cluster the process
@@ -127,27 +126,28 @@ type Listing struct {
 	// PageSize is the limit asked for the first page; 0 is PageSize.
 	PageSize int
 	// MaxPageBytes bounds the body of each page. A page over it is asked
-	// for again, with the same continue token, with half the limit, down
-	// to 1, and the rest of the listing keeps the smaller limit; a page of
-	// one object over it fails the listing with an error that is
+	// for again, with the same continue token and half the limit, down to
+	// 1, and the rest of the listing keeps the smaller limit. A page of one
+	// object over it fails the listing with an error that is
 	// ErrPageTooLarge.
 	MaxPageBytes int64
 	// Prepare, when set, is given each page's request before it is sent, a
 	// page asked for again included, and returns the request to send, which
 	// may carry a context of its own, and what to tell of how it ended.
 	Prepare func(req *http.Request) (*http.Request, Sent)
-	// Retry, when set, is asked of every answer other than 200 OK, with the
-	// number of times the page was asked for again so far, whether to ask
-	// for it again, and after how long: it may, for an API server's 429 of
-	// its priority and fairness, wait as its Retry-After asks. The wait is
-	// bounded by the listing's context.
+	// Retry, when set, is called for every answer other than 200 OK, with
+	// the number of times that the page was asked for again so far. It says
+	// whether to ask again, and after how long; for the 429 of an API
+	// server's priority and fairness, it may wait as Retry-After asks. The
+	// wait is bounded by the listing's context.
 	Retry func(ctx context.Context, answer *StatusError, header http.Header, retried int) (wait time.Duration, again bool)
-	// ResumeExpired has a listing whose continue token the API server no
-	// longer has, its 410 Expired, go on: with the token the Status
-	// carries for the rest of the listing as it is now (an inconsistent
-	// continue), or, the Status carrying none, from the first page again,
-	// once, Restart told first, so what the pages before were handed is
-	// put away. A listing that expires again fails.
+	// ResumeExpired makes a listing whose continue token the API server no
+	// longer has (410 Expired) go on. It continues with the token that the
+	// Status carries for the rest of the listing as it is now (an
+	// inconsistent continue) or, when the Status carries none, starts from
+	// the first page again, once, telling Restart first so that what the
+	// earlier pages were handed can be discarded. A listing that expires
+	// again fails.
 	ResumeExpired bool
 	Restart       func()
 	// Smaller, when set, is told of each smaller limit the listing falls
@@ -155,10 +155,10 @@ type Listing struct {
 	Smaller func(size int)
 }
 
-// Sent is what a request's Prepare is told of it: Answered of how it ended,
-// the status line, the status line and that the page was over the bound,
-// or the error; and Waiting of the wait before it is asked for again
-// (Listing.Retry), with why. Either may be nil.
+// Sent is what a request's Prepare is told about it. Answered says how it
+// ended: the status line, the status line and that the page was over the
+// bound, or the error. Waiting says how long it waits before being asked for
+// again (Listing.Retry), and why. Either may be nil.
 type Sent struct {
 	Answered func(outcome string)
 	Waiting  func(wait time.Duration, why string)
@@ -220,20 +220,21 @@ func (e *tooLarge) Error() string {
 func (e *tooLarge) Is(target error) bool { return target == ErrTooLarge }
 
 // List asks for every page of the listing in turn, handing each page's body
-// to page, which returns the page's continue token, "" after the last.
+// to page, which returns the page's continue token, or "" after the last
+// page.
 //
-// A page over MaxPageBytes is not handed to page, so what page counts, the
-// objects and their bytes, counts each object once; the same page is asked
-// for again with half the limit. The API server sends whole objects, and
-// how large they are is up to the cluster: EndpointSlices of a raised
+// A page over MaxPageBytes is not handed to page, so what page counts (the
+// objects and their bytes) counts each object once; the same page is asked
+// for again with half the limit. The API server sends whole objects, and how
+// large they are depends on the cluster: EndpointSlices with a raised
 // --max-endpoints-per-slice, or custom resources with large specs, make a
 // page of PageSize larger than a bound that fits the common case, and
 // failing such a listing would fail it at every refresh. The smaller limit
-// is kept for the rest of the listing, the following objects being likely
-// as large, and not remembered for the next: a listing starts at PageSize
-// again, so no state outlives it, at the cost of at most seven refused
-// requests (100, 50, 25, 12, 6, 3, 1) each read no further than the bound.
-// Every request, the ones asked again included, is bounded by ctx.
+// is kept for the rest of the listing, since the following objects are
+// likely as large, but not for the next listing: each listing starts at
+// PageSize again, so no state outlives it, at the cost of at most seven
+// refused requests (100, 50, 25, 12, 6, 3, 1), each read no further than
+// the bound. Every request, including those asked again, is bounded by ctx.
 func (l *Listing) List(ctx context.Context, page func(raw []byte) (next string, err error)) error {
 	size := l.PageSize
 	if size <= 0 {

@@ -1,25 +1,25 @@
 package pagekit
 
 // LocalTimesScript defines localTimes(root). The pages write a moment one
-// way: as a <time datetime="…"> of RFC 3339 in UTC, which a page without
-// JavaScript shows as it is, and a page's script calls localTimes on its
-// content, after each refresh too, so every moment reads alike:
+// way, as a <time datetime="…"> in RFC 3339 UTC, which a page without
+// JavaScript shows as it is. A page's script calls localTimes on its
+// content, after each refresh too, so that every moment reads the same way:
 //
-//   - a <time> whose text is the moment is shown in the browser's time, the
-//     time of day alone when it is today and the date with it otherwise,
-//     its tooltip the moment in UTC and how long ago it is, or how long
-//     until it, from now;
+//   - a <time> whose text is the moment is shown in the browser's time: the
+//     time of day alone when it is today, and with the date otherwise. Its
+//     tooltip gives the moment in UTC and how long ago it is, or how long
+//     until it;
 //   - a <time class="ago">, whose text says how long ago the moment was, as
-//     the server wrote it, keeps its text, its tooltip the moment in the
-//     browser's time and in UTC, after its data-note when it has one;
+//     the server wrote it, keeps its text. Its tooltip gives the moment in
+//     the browser's time and in UTC, after its data-note when it has one;
 //   - an element with data-at, a strip's mark, has the moment that begins
-//     its tooltip written in the browser's time, UTC after it.
+//     its tooltip written in the browser's time, followed by UTC.
 //
 // How long ago is written as the pages write a duration (Duration): whole
-// seconds, minutes and hours, 1h2m, 0s for none.
+// seconds, minutes and hours, such as 1h2m, and 0s for none.
 //
-// It is text for a page's own script, inside the function that script runs
-// in, so it adds nothing to the page's global names.
+// It is text for a page's own script, inside the function that the script
+// runs in, so it adds nothing to the page's global names.
 const LocalTimesScript = `
   function localTimes(root) {
     const now = Date.now(), today = new Date(now).toDateString();

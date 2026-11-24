@@ -1,9 +1,9 @@
 # TLS certificates
 
 The `tlscert` request type makes a TLS handshake with a server and hands the
-certificates it presents to the transforms as a JSON document: for each, its
-subject, names, issuer, serial and validity, and for the chain whether it
-verifies. Use it to know before a certificate expires:
+certificates that it presents to the transforms as a JSON document: for each
+certificate, its subject, names, issuer, serial and validity, and for the
+chain, whether it verifies. Use it to know before a certificate expires:
 
 - the certificate of a web server, an API or an ingress, however it was
   issued and wherever it is installed;
@@ -77,18 +77,20 @@ collectors:
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets), checked on the connection. |
 
 The `tls` block is the one `http`, `graphite`, `grpc`, `sql`, `redis`, `tcp`, `ldap`, the opt-in `smtp`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`, `sip`, with `sip_transport: tls`, `amqp` and `nats`, `dns`, with `transport: tls`, and,
-with `api_server`, `kubernetes` take ([TLS](REQUESTS.md#tls)), read by the same
-code, but for
-`insecure_skip_verify`, which is refused, by the exporter and by the
-configuration's schema: no certificate is refused anyway.
-Its files are read at every handshake, so a Secret mounted after the
-exporter starts is used, and [`--dry-run`](CONFIGURATION.md#dry-run) reads
-them as a handshake would, warning of a CA file that is missing or holds no
-certificate and a client certificate that does not load. No other request
-key applies, and setting one is a startup error. A probe takes `timeout` and
-`param_<name>` parameters for the collector's
-[label values](REQUESTS.md#in-label-values); a static target's request block
-takes `timeout`.
+with `api_server`, `kubernetes` take ([TLS](REQUESTS.md#tls)), read by the
+same code. The exception is `insecure_skip_verify`, which both the exporter
+and the configuration's schema refuse, because no certificate is refused
+anyway.
+
+- Its files are read at every handshake, so a Secret mounted after the
+  exporter starts is used.
+- [`--dry-run`](CONFIGURATION.md#dry-run) reads them as a handshake would,
+  and warns about a CA file that is missing or holds no certificate, and
+  about a client certificate that does not load.
+- No other request key applies, and setting one is a startup error.
+- A probe takes `timeout` and `param_<name>` parameters for the collector's
+  [label values](REQUESTS.md#in-label-values); a static target's request
+  block takes `timeout`.
 
 The decoder is `json`, whether `decoder.type` is left out or set to it. Any
 other decoder, and a transform that does not read JSON (`regex`, `csv`,
@@ -131,32 +133,33 @@ same key and values:
   MX; write `:587` for submission, where users' clients send theirs, which
   is often another certificate.
 - The greeting is read over several lines for SMTP and FTP, and must begin
-  as the table says: anything else, an SMTP server's `554`, or an IMAP
-  server's `* PREAUTH`, which has no `STARTTLS` to offer, fails the scrape
-  before anything is sent. An FTP server may first say when it will be
-  ready, `120`, in one reply or several, as RFC 959 allows: those are read
-  past, held to the limit and the deadline with the greeting, and the
-  greeting is the `220` after them. A debug probe's report shows them.
+  as the table says. Anything else, such as an SMTP server's `554` or an
+  IMAP server's `* PREAUTH` (which has no `STARTTLS` to offer), fails the
+  scrape before anything is sent.
+- An FTP server may first say when it will be ready, with `120`, in one
+  reply or several, as RFC 959 allows. Those replies are read past, held to
+  the limit and the deadline with the greeting, and the greeting is the
+  `220` after them. A debug probe's report shows them.
 - An SMTP client names itself in `EHLO`; the exporter gives its own address
   on the connection, `[10.1.2.3]` or `[IPv6:2001:db8::7]`, as RFC 5321 has
   a client without a name the server can look up do. The answer must be
   `250` and list `STARTTLS` on one of the lines after the first, which
   names the server, in any case.
 - IMAP tags are case-sensitive, but a server that answers `A1 OK` for `a1`
-  has answered the command: the tag is matched in any case, rather than the
-  answer being taken for an untagged line and the scrape waiting for
+  has answered the command, so the tag is matched in any case. Otherwise the
+  answer would be taken for an untagged line, and the scrape would wait for
   another until its deadline.
 - Nothing but the commands of the table is written, and nothing at all over
   TLS: once the handshake is over the connection is closed, without `QUIT`.
-- A server that does not list `STARTTLS`, refuses it — SMTP's `454`, IMAP's
-  `NO`, POP3's `-ERR`, FTP's `534` — or answers anything else fails the
-  scrape in the `tls` stage, naming the step and quoting the server's
-  answer, which a probe's caller is told
-  [withheld](CONFIGURATION.md#what-a-failed-probes-caller-is-told), and the
-  log and a debug probe's report show. The scrape never goes on in
-  plaintext, and a server that writes more after its yes, before the
-  handshake, fails it, since those bytes came in plaintext, where anything
-  on the way could have written them.
+- A server that does not list `STARTTLS`, refuses it (SMTP's `454`, IMAP's
+  `NO`, POP3's `-ERR`, FTP's `534`) or answers anything else fails the
+  scrape in the `tls` stage. The error names the step and quotes the
+  server's answer, which a probe's caller is told
+  [withheld](CONFIGURATION.md#what-a-failed-probes-caller-is-told) and the
+  log and a debug probe's report show.
+- The scrape never goes on in plaintext. A server that writes more after its
+  yes, before the handshake, fails it, because those bytes came in
+  plaintext, where anything on the way could have written them.
 - The greeting and each answer are held to `limits.max_response_bytes` and
   the scrape's deadline, which bounds the handshake too.
 - The handshake is the one without `starttls`: the `tls` block's settings,
@@ -165,9 +168,9 @@ same key and values:
   document's `starttls` names the protocol.
 - `starttls` is the collector's alone: no static target or probe sets it.
 
-The certificates of a mail server: its MX on 25 and its submission port,
-587, through one collector, IMAP on 143 and POP3 on 110, each with the days
-left and an alert-ready flag for one that expires within 14 days:
+The certificates of a mail server, through one collector: its MX on 25, its
+submission port 587, IMAP on 143 and POP3 on 110. Each has the days left and
+an alert-ready flag for a certificate that expires within 14 days:
 
 ```yaml
   - name: smtp_certificate
@@ -264,21 +267,25 @@ left and an alert-ready flag for one that expires within 14 days:
 - `not_after` and `seconds_until_expiry` at the top are the first
   certificate's, the server's own, for the rule that wants nothing else.
 - `chain.length` is how many certificates were presented.
-  `chain.earliest_not_after` and `seconds_until_earliest_expiry` are when
-  the chain stops verifying. Of a chain that verifies, they are of the
-  chains it verifies by, each from the server's certificate to a trusted
-  root and ending when the first of its certificates expires, the root
-  included: a client trusts the server while any one of them holds, so it
-  is the latest of those ends. A certificate the server sends that no
-  client needs is left out, such as an expired cross-signed root (Let's
-  Encrypt's servers sent DST Root CA X3 long after it expired), which would
-  otherwise hold the expiry in the past and an alert on it firing for good.
-  Of a chain that does not verify, they are of the first of the presented
-  certificates to expire. `chain.earliest_from` says which: `verified` or
-  `presented`. `certificates` is the presented chain either way.
+- `chain.earliest_not_after` and `seconds_until_earliest_expiry` are when
+  the chain stops verifying.
+  - For a chain that verifies, they come from the chains that it verifies
+    by. Each runs from the server's certificate to a trusted root and ends
+    when the first of its certificates expires, the root included. A client
+    trusts the server while any one of those chains holds, so the value is
+    the latest of those ends. A certificate that the server sends but no
+    client needs is left out, such as an expired cross-signed root (Let's
+    Encrypt's servers sent DST Root CA X3 long after it expired). Otherwise
+    it would keep the expiry in the past, and an alert on it would fire for
+    good.
+  - For a chain that does not verify, they come from the first of the
+    presented certificates to expire.
+
+  `chain.earliest_from` says which: `verified` or `presented`.
+  `certificates` is the presented chain either way.
 - `verified` says whether the chain verifies as a TLS client would verify
-  it: the server's certificate for `server_name`, or the target's host, the
-  others as intermediates, up to the system's roots and those of
+  it: the server's certificate for `server_name` or the target's host, with
+  the others as intermediates, up to the system's roots and those of
   `tls.ca_file`, at the time of the scrape. `verify_error` says why not:
   `x509: certificate signed by unknown authority`, `x509: certificate has
   expired or is not yet valid: ...`, `x509: certificate is valid for
@@ -314,13 +321,16 @@ left and an alert-ready flag for one that expires within 14 days:
   and with `starttls` the greeting and the request for TLS before it.
 
 **A chain that does not verify does not fail the scrape.** The expiry of a
-certificate nobody trusts is still worth knowing, so the document is
+certificate that nobody trusts is still worth knowing, so the document is
 answered with `verified` false and the reason. What fails the scrape, in the
-`tls` stage, is a handshake that does not happen: nothing listening, a
-server that does not answer within the deadline, one that speaks no TLS, or
-one that refuses the handshake, as one that requires a client certificate
-the collector does not have may; with `starttls`, a server that does not
-begin TLS ([STARTTLS](#starttls)).
+`tls` stage, is a handshake that does not happen:
+
+- nothing listening;
+- a server that does not answer within the deadline;
+- a server that speaks no TLS;
+- a server that refuses the handshake, as one that requires a client
+  certificate that the collector does not have may;
+- with `starttls`, a server that does not begin TLS ([STARTTLS](#starttls)).
 
 ## Examples
 

@@ -50,13 +50,88 @@ var grpcJSON = protojson.MarshalOptions{EmitUnpopulated: true, UseProtoNames: tr
 
 // callGRPC makes one scrape's call, with its retries.
 func callGRPC(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-	address, err := parseGRPCTarget(target)
+	call := &grpcCall{target: target, c: c, overrides: overrides}
+	if err := call.connectTo(ctx); err != nil {
+		return nil, err
+	}
+	entry, err := grpcConns.get(call.key, time.Now())
 	if err != nil {
 		return nil, err
 	}
-	secure, err := address.useTLS(c)
-	if err != nil {
+	defer grpcConns.release(entry)
+	call.entry = entry
+	if overrides.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
+		defer cancel()
+	}
+	call.ctx = ctx
+	reconnectNow(ctx, entry.conn)
+	if err := call.prepare(forwarded); err != nil {
 		return nil, err
+	}
+	call.start = time.Now()
+	for call.attempt = 0; ; call.attempt++ {
+		if !call.resolved {
+			retry, err := call.resolve()
+			if err != nil {
+				return nil, err
+			}
+			if retry {
+				continue
+			}
+		}
+		if answer, err := call.send(); answer != nil || err != nil {
+			return answer, err
+		}
+	}
+}
+
+// grpcCall is one scrape's call of a grpc collector, with its retries.
+type grpcCall struct {
+	ctx       context.Context
+	target    string
+	c         *model.Collector
+	overrides RequestOverrides
+	address   grpcAddress
+	secure    bool
+	key       grpcConnKey
+	entry     *grpcConnEntry
+	// md is the call's metadata, and callCtx the context that carries it.
+	md      metadata.MD
+	callCtx context.Context
+	// operatorTrace says request.metadata or a forwarded header gives the
+	// traceparent.
+	operatorTrace bool
+	message       string
+	attempts      int
+	backoff       time.Duration
+	retried       []string
+	accepted      []string
+	limit         int64
+	reflection    reflectedKey
+	start         time.Time
+
+	// attempt counts the attempts made.
+	attempt int
+	m       grpcMethod
+	in      *dynamicpb.Message
+	// resolved says m and in are the method and the encoded message;
+	// with reflection they are asked for again after a schema change.
+	resolved  bool
+	refreshed bool
+}
+
+// connectTo reads the call's target, checks it against the collector's
+// target policy, and sets the key of the connection the call is made on.
+func (call *grpcCall) connectTo(ctx context.Context) error {
+	c := call.c
+	var err error
+	if call.address, err = parseGRPCTarget(call.target); err != nil {
+		return err
+	}
+	if call.secure, err = call.address.useTLS(c); err != nil {
+		return err
 	}
 	// The collector's allowed_targets and denied_targets: the server's name
 	// and addresses now, and each connection's address when it is made.
@@ -67,266 +142,274 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// for http, the server's name is looked up here only behind a
 		// proxy. Otherwise its connections are checked as they are made,
 		// and a refused one is reported as the refusal (refusal below).
-		proxied = viaProxy(http.ProxyFromEnvironment, &url.URL{Scheme: "https", Host: address.hostPort})
-		host, _, _ := net.SplitHostPort(address.hostPort)
+		proxied = viaProxy(http.ProxyFromEnvironment, &url.URL{Scheme: "https", Host: call.address.hostPort})
+		host, _, _ := net.SplitHostPort(call.address.hostPort)
 		if _, err := policy.check(ctx, host, proxied); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	key := grpcConnKey{dial: address.hostPort, tls: secure, policy: policy, proxied: proxied}
-	if secure {
-		key.settings = c.Request.TLS
-		if overrides.InsecureSkipVerify != nil {
-			key.settings.InsecureSkipVerify = *overrides.InsecureSkipVerify
+	call.key = grpcConnKey{dial: call.address.hostPort, tls: call.secure, policy: policy, proxied: proxied}
+	if call.secure {
+		call.key.settings = c.Request.TLS
+		if call.overrides.InsecureSkipVerify != nil {
+			call.key.settings.InsecureSkipVerify = *call.overrides.InsecureSkipVerify
 		}
 	}
-	entry, err := grpcConns.get(key, time.Now())
-	if err != nil {
-		return nil, err
-	}
-	defer grpcConns.release(entry)
-	conn, refusal := entry.conn, entry.refusal
-	if overrides.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
-		defer cancel()
-	}
-	reconnectNow(ctx, conn)
-	message, err := grpcMessage(c, overrides)
-	if err != nil {
-		return nil, err
-	}
-	md, err := grpcOutgoing(c, overrides, forwarded)
-	if err != nil {
-		return nil, err
-	}
-	attempts := c.Request.Retry.Attempts
-	if overrides.RetryAttempts != nil {
-		attempts = *overrides.RetryAttempts
-	}
-	backoff := time.Duration(c.Request.Retry.Backoff)
-	if overrides.RetryBackoff != nil {
-		backoff = *overrides.RetryBackoff
-	}
-	retried := c.Request.Retry.Codes
-	if overrides.RetryCodes != nil {
-		retried = overrides.RetryCodes
-	}
-	if retried == nil {
-		retried = grpcDefaultRetryCodes
-	}
-	accepted := grpcRequest(c).AcceptCodes
-	if overrides.AcceptCodes != nil {
-		accepted = overrides.AcceptCodes
-	}
-	limit := responseLimit(c)
+	return nil
+}
 
-	reflection := reflectedKey{conn: key, service: strings.SplitN(grpcRequest(c).RPC, "/", 2)[0]}
-	method := func() (grpcMethod, error) {
-		if grpcRequest(c).Descriptors != descriptorsReflection {
-			return staticMethod(c)
-		}
-		// The reflection question carries the call's metadata, credentials
-		// included: a server that authenticates every RPC authenticates it
-		// too.
-		files, err := reflectionAnswers.files(metadata.NewOutgoingContext(ctx, md), entry, reflection, reflectionLimit(c), time.Now())
-		if err != nil {
-			return grpcMethod{}, reflectionError(ctx, err)
-		}
-		return findMethod(files, grpcRequest(c).RPC, "the server's reflection answer", grpcRequest(c).StreamMessages > 0)
+// prepare settles the call's message, metadata, retries and the statuses it
+// accepts.
+func (call *grpcCall) prepare(forwarded http.Header) error {
+	c, overrides := call.c, call.overrides
+	var err error
+	if call.message, err = grpcMessage(c, overrides); err != nil {
+		return err
 	}
-	encode := func() (grpcMethod, *dynamicpb.Message, error) {
-		m, err := method()
-		if err != nil {
-			return grpcMethod{}, nil, err
-		}
-		in, err := m.encode(message)
-		if err != nil {
-			return grpcMethod{}, nil, &StageError{Stage: "message", Err: fmt.Errorf("request.message does not fit %s: %w", m.input(), err)}
-		}
-		return m, in, nil
+	if call.md, err = grpcOutgoing(c, overrides, forwarded); err != nil {
+		return err
 	}
-	// again says whether a failed attempt is followed by another. That
-	// happens when its status is listed in retry.codes and both an attempt
-	// and time are left. It waits the backoff, then ends the connection's own
-	// wait. An attempt that found no connection leaves the channel backing
-	// off, and grpc-go then fails every call at once without dialing. So all
-	// retries of a refused connection would get the first refusal. With the
-	// wait ended, the retry connects and reaches a server that came back.
-	again := func(attempt int, code string, failure error) (bool, error) {
-		if attempt >= attempts || !slices.Contains(retried, code) || ctx.Err() != nil {
-			return false, failure
-		}
-		if waitErr := waitRetry(ctx, backoff); waitErr != nil {
-			return false, fmt.Errorf("%w (the wait before retrying was cut short: %w)", failure, waitErr)
-		}
-		reconnectNow(ctx, conn)
-		if waitErr := ctx.Err(); waitErr != nil {
-			return false, fmt.Errorf("%w (connecting again before retrying was cut short: %w)", failure, waitErr)
-		}
-		return true, nil
+	call.attempts = c.Request.Retry.Attempts
+	if overrides.RetryAttempts != nil {
+		call.attempts = *overrides.RetryAttempts
 	}
-	// silent drops a connection that has stopped answering without an
-	// error: the probe's own deadline ended the wait, but grpc-go still
-	// reports the connection as ready. A connection that is still
-	// connecting, or waiting to, is kept. It is already rebuilding itself,
-	// and dropping it would restart a slow handshake at every probe.
-	silent := func() {
-		if conn.GetState() == connectivity.Ready {
-			grpcConns.drop(key, entry)
-		}
+	call.backoff = time.Duration(c.Request.Retry.Backoff)
+	if overrides.RetryBackoff != nil {
+		call.backoff = *overrides.RetryBackoff
 	}
-	callCtx := metadata.NewOutgoingContext(ctx, md)
+	call.retried = c.Request.Retry.Codes
+	if overrides.RetryCodes != nil {
+		call.retried = overrides.RetryCodes
+	}
+	if call.retried == nil {
+		call.retried = grpcDefaultRetryCodes
+	}
+	call.accepted = grpcRequest(c).AcceptCodes
+	if overrides.AcceptCodes != nil {
+		call.accepted = overrides.AcceptCodes
+	}
+	call.limit = responseLimit(c)
+	call.reflection = reflectedKey{conn: call.key, service: strings.SplitN(grpcRequest(c).RPC, "/", 2)[0]}
+	call.callCtx = metadata.NewOutgoingContext(call.ctx, call.md)
 	// An operator's traceparent, in request.metadata or forwarded, is sent
 	// unchanged (tracepropagation.go). Otherwise each attempt sets the
 	// trip's own traceparent, under a span id for that attempt, in md (the
 	// map callCtx carries).
-	operatorTrace := len(md.Get("traceparent")) > 0
-	start := time.Now()
-	var (
-		m  grpcMethod
-		in *dynamicpb.Message
-		// resolved says m and in are the method and the encoded message;
-		// with reflection they are asked for again after a schema change.
-		resolved  bool
-		refreshed bool
-	)
-	for attempt := 0; ; attempt++ {
-		if !resolved {
-			// With reflection this asks the server, on the same connection as
-			// the call: a question that ends with a status fails as a call
-			// with that status does, and is retried as one.
-			if m, in, err = encode(); err != nil {
-				// A connection the policy refused reaches the question as
-				// UNAVAILABLE; it is the refusal, and not retried.
-				if r := refusal.Load(); r != nil && unavailable(err) {
-					return nil, r
-				}
-				var failed *CallStatusError
-				answered := errors.As(err, &failed)
-				// The probe's deadline ended the wait for the answer, or the
-				// question's own did (reflectionQuestionTimeout).
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) || answered && failed.Code == int(codes.DeadlineExceeded) {
-					silent()
-				}
-				// Headers over the bound are over it on every attempt.
-				if answered && !errors.Is(err, model.ErrLimitExceeded) {
-					retry, failure := again(attempt, failed.CodeName, err)
-					if retry {
-						continue
-					}
-					return nil, failure
-				}
-				return nil, err
+	call.operatorTrace = len(call.md.Get("traceparent")) > 0
+	return nil
+}
+
+// method is the method the call calls.
+func (call *grpcCall) method() (grpcMethod, error) {
+	c := call.c
+	if grpcRequest(c).Descriptors != descriptorsReflection {
+		return staticMethod(c)
+	}
+	// The reflection question carries the call's metadata, credentials
+	// included: a server that authenticates every RPC authenticates it too.
+	files, err := reflectionAnswers.files(metadata.NewOutgoingContext(call.ctx, call.md), call.entry, call.reflection, reflectionLimit(c), time.Now())
+	if err != nil {
+		return grpcMethod{}, reflectionError(call.ctx, err)
+	}
+	return findMethod(files, grpcRequest(c).RPC, "the server's reflection answer", grpcRequest(c).StreamMessages > 0)
+}
+
+// encode is the call's method, and its message encoded for it.
+func (call *grpcCall) encode() (grpcMethod, *dynamicpb.Message, error) {
+	m, err := call.method()
+	if err != nil {
+		return grpcMethod{}, nil, err
+	}
+	in, err := m.encode(call.message)
+	if err != nil {
+		return grpcMethod{}, nil, &StageError{Stage: "message", Err: fmt.Errorf("request.message does not fit %s: %w", m.input(), err)}
+	}
+	return m, in, nil
+}
+
+// again says whether a failed attempt is followed by another. That happens
+// when its status is listed in retry.codes and both an attempt and time are
+// left. It waits the backoff, then ends the connection's own wait. An
+// attempt that found no connection leaves the channel backing off, and
+// grpc-go then fails every call at once without dialing. So all retries of a
+// refused connection would get the first refusal. With the wait ended, the
+// retry connects and reaches a server that came back.
+func (call *grpcCall) again(code string, failure error) (bool, error) {
+	ctx := call.ctx
+	if call.attempt >= call.attempts || !slices.Contains(call.retried, code) || ctx.Err() != nil {
+		return false, failure
+	}
+	if waitErr := waitRetry(ctx, call.backoff); waitErr != nil {
+		return false, fmt.Errorf("%w (the wait before retrying was cut short: %w)", failure, waitErr)
+	}
+	reconnectNow(ctx, call.entry.conn)
+	if waitErr := ctx.Err(); waitErr != nil {
+		return false, fmt.Errorf("%w (connecting again before retrying was cut short: %w)", failure, waitErr)
+	}
+	return true, nil
+}
+
+// silent drops a connection that has stopped answering without an error:
+// the probe's own deadline ended the wait, but grpc-go still reports the
+// connection as ready. A connection that is still connecting, or waiting to,
+// is kept. It is already rebuilding itself, and dropping it would restart a
+// slow handshake at every probe.
+func (call *grpcCall) silent() {
+	if call.entry.conn.GetState() == connectivity.Ready {
+		grpcConns.drop(call.key, call.entry)
+	}
+}
+
+// resolve finds the call's method and encodes its message. With reflection
+// this asks the server, on the same connection as the call: a question that
+// ends with a status fails as a call with that status does, and is retried
+// as one, which retry says.
+func (call *grpcCall) resolve() (retry bool, err error) {
+	m, in, err := call.encode()
+	if err != nil {
+		return call.unresolved(err)
+	}
+	call.m, call.in, call.resolved = m, in, true
+	return false, nil
+}
+
+// unresolved handles err, which ended the search for the call's method or the
+// encoding of its message.
+func (call *grpcCall) unresolved(err error) (retry bool, failure error) {
+	// A connection the policy refused reaches the question as UNAVAILABLE;
+	// it is the refusal, and not retried.
+	if r := call.entry.refusal.Load(); r != nil && unavailable(err) {
+		return false, r
+	}
+	var failed *CallStatusError
+	answered := errors.As(err, &failed)
+	// The probe's deadline ended the wait for the answer, or the question's
+	// own did (reflectionQuestionTimeout).
+	if errors.Is(call.ctx.Err(), context.DeadlineExceeded) || answered && failed.Code == int(codes.DeadlineExceeded) {
+		call.silent()
+	}
+	// Headers over the bound are over it on every attempt.
+	if answered && !errors.Is(err, model.ErrLimitExceeded) {
+		return call.again(failed.CodeName, err)
+	}
+	return false, err
+}
+
+// send makes an attempt of the call. It returns the call's answer or its
+// error, or neither when another attempt is to be made.
+func (call *grpcCall) send() (*HTTPResponse, error) {
+	ctx, c, m := call.ctx, call.c, call.m
+	var header, trailer metadata.MD
+	var span [8]byte
+	if !call.operatorTrace {
+		span = propagateGRPC(ctx, call.md)
+	}
+	traceRequest(ctx, "POST", grpcTraceScheme(call.secure)+call.address.hostPort+m.path(), grpcTraceHeader(call.md), "", false)
+	traceSpanID(ctx, span)
+	// The answer's JSON is counted before the answer is decoded, and one
+	// whose JSON is surely over the limit is refused unread (answerCodec).
+	codec := &answerCodec{limit: call.limit, resolver: answerResolver(m.types)}
+	options := []grpc.CallOption{grpc.MaxCallRecvMsgSize(int(min(call.limit, math.MaxInt32))), grpc.ForceCodecV2(codec)}
+	var body []byte
+	var messages int
+	var err error
+	if m.desc.IsStreamingServer() {
+		// A stream's headers and trailers are read from it, not set by call
+		// options, which grpc-go writes when the stream ends, after the call
+		// has cut it.
+		body, messages, header, trailer, err = grpcReadStream(call.callCtx, call.entry.conn, m, call.in, codec, grpcRequest(c).StreamMessages, options)
+	} else {
+		out := dynamicpb.NewMessage(m.desc.Output())
+		err = call.entry.conn.Invoke(call.callCtx, m.path(), call.in, out, append(options, grpc.Header(&header), grpc.Trailer(&trailer))...)
+		if err == nil && codec.over == nil {
+			if body, err = renderAnswer(out, m.types); err != nil {
+				return nil, &CallAnswerError{Err: err}
 			}
-			resolved = true
 		}
-		var header, trailer metadata.MD
-		var span [8]byte
-		if !operatorTrace {
-			span = propagateGRPC(ctx, md)
+	}
+	// A connection grpc-go made for the call: its dial and handshake, not
+	// one it made before the call began, reconnecting on its own.
+	traceAddPhases(ctx, call.entry.phases.take(call.start))
+	if codec.over != nil {
+		// The call was answered OK; the answer is over the limit.
+		traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
+		traceFacts(ctx, intFact("rpc.grpc.status_code", int(codes.OK)))
+		return nil, &CallAnswerError{Err: codec.over}
+	}
+	var answerErr *CallAnswerError
+	if errors.As(err, &answerErr) {
+		return nil, err
+	}
+	outcome := "grpc " + grpcCodeName(status.Code(err))
+	if m.desc.IsStreamingServer() && err == nil {
+		outcome += fmt.Sprintf(", %d messages", messages)
+	}
+	traceOutcome(ctx, outcome)
+	// The code as OpenTelemetry's conventions have it, a number; its name is
+	// the stage's, and the message, the server's text, is none of the
+	// span's.
+	traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
+	if err == nil {
+		// The limit applies both to the message as it arrived and to the
+		// JSON made from it. Writing every zero value can make the JSON much
+		// larger, so the count before decoding can fall short of the JSON's
+		// size.
+		if int64(len(body)) > call.limit {
+			return nil, &CallAnswerError{Err: model.MarkError(model.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", model.Size(len(body)), call.limit), model.ErrLimitExceeded)}
 		}
-		traceRequest(ctx, "POST", grpcTraceScheme(secure)+address.hostPort+m.path(), grpcTraceHeader(md), "", false)
-		traceSpanID(ctx, span)
-		// The answer's JSON is counted before the answer is decoded, and
-		// one whose JSON is surely over the limit is refused unread
-		// (answerCodec).
-		codec := &answerCodec{limit: limit, resolver: answerResolver(m.types)}
-		options := []grpc.CallOption{grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))), grpc.ForceCodecV2(codec)}
-		var body []byte
-		var messages int
-		if m.desc.IsStreamingServer() {
-			// A stream's headers and trailers are read from it, not set by
-			// call options, which grpc-go writes when the stream ends, after
-			// the call has cut it.
-			body, messages, header, trailer, err = grpcReadStream(callCtx, conn, m, in, codec, grpcRequest(c).StreamMessages, options)
-		} else {
-			out := dynamicpb.NewMessage(m.desc.Output())
-			err = conn.Invoke(callCtx, m.path(), in, out, append(options, grpc.Header(&header), grpc.Trailer(&trailer))...)
-			if err == nil && codec.over == nil {
-				if body, err = renderAnswer(out, m.types); err != nil {
-					return nil, &CallAnswerError{Err: err}
-				}
-			}
+		ok := 0
+		return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &ok, Headers: grpcHeaders(header, trailer), Body: body, Target: call.target, Collector: c.Name, Duration: time.Since(call.start)}, nil
+	}
+	return call.failed(status.Convert(err), header, trailer)
+}
+
+// failed handles an attempt that ended with the status st. It returns the
+// call's answer when the collector accepts st, the call's error, or neither
+// when another attempt is to be made.
+func (call *grpcCall) failed(st *status.Status, header, trailer metadata.MD) (*HTTPResponse, error) {
+	ctx, c := call.ctx, call.c
+	if st.Code() == codes.Unavailable {
+		if r := call.entry.refusal.Load(); r != nil {
+			return nil, r
 		}
-		// A connection grpc-go made for the call: its dial and handshake,
-		// not one it made before the call began, reconnecting on its own.
-		traceAddPhases(ctx, entry.phases.take(start))
-		if codec.over != nil {
-			// The call was answered OK; the answer is over the limit.
-			traceOutcome(ctx, "grpc "+grpcCodeName(codes.OK))
-			traceFacts(ctx, intFact("rpc.grpc.status_code", int(codes.OK)))
-			return nil, &CallAnswerError{Err: codec.over}
-		}
-		var answerErr *CallAnswerError
-		if errors.As(err, &answerErr) {
-			return nil, err
-		}
-		outcome := "grpc " + grpcCodeName(status.Code(err))
-		if m.desc.IsStreamingServer() && err == nil {
-			outcome += fmt.Sprintf(", %d messages", messages)
-		}
-		traceOutcome(ctx, outcome)
-		// The code as OpenTelemetry's conventions have it, a number; its
-		// name is the stage's, and the message, the server's text, is
-		// none of the span's.
-		traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
-		if err == nil {
-			// The limit applies both to the message as it arrived and to the
-			// JSON made from it. Writing every zero value can make the JSON
-			// much larger, so the count before decoding can fall short of the
-			// JSON's size.
-			if int64(len(body)) > limit {
-				return nil, &CallAnswerError{Err: model.MarkError(model.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", model.Size(len(body)), limit), model.ErrLimitExceeded)}
-			}
-			ok := 0
-			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &ok, Headers: grpcHeaders(header, trailer), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
-		}
-		st := status.Convert(err)
-		if st.Code() == codes.Unavailable {
-			if r := refusal.Load(); r != nil {
-				return nil, r
-			}
-		}
-		// If an answer's headers or trailers are over the bound, they are
-		// over it on every attempt, whatever the collector accepts. The fault
-		// is the answer's, as for an http answer with headers over the bound.
-		// It is not a status the server sent.
-		if headerListTooLarge(st) {
-			return nil, headerListError("")
-		}
-		// The deadline that ended the call is the probe's own, not a status
-		// the server sent while it still had time.
-		if st.Code() == codes.DeadlineExceeded && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			silent()
-		}
-		// A status the collector accepts is its answer, with no message:
-		// the rules read it as $status, and its message as
-		// $headers["grpc-message"], against an empty object.
-		if slices.Contains(accepted, grpcCodeName(st.Code())) {
-			code := int(st.Code())
-			headers := grpcHeaders(header, trailer)
-			headers.Set("grpc-status", strconv.Itoa(code))
-			headers.Set("grpc-message", st.Message())
-			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &code, Headers: headers, Body: []byte("{}"), Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
-		}
-		// With reflection, an unknown method or an answer that does not
-		// decode may mean the server's schema changed since it was asked.
-		// The server is then asked again, once, and the call is made again.
-		// This does not count as one of the retries.
-		if grpcRequest(c).Descriptors == descriptorsReflection && !refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
-			refreshed = true
-			reflectionAnswers.forget(reflection)
-			resolved = false
-			attempt--
-			continue
-		}
-		retry, failure := again(attempt, grpcCodeName(st.Code()), callStatusError(ctx, st))
-		if retry {
-			continue
-		}
+	}
+	// If an answer's headers or trailers are over the bound, they are over
+	// it on every attempt, whatever the collector accepts. The fault is the
+	// answer's, as for an http answer with headers over the bound. It is not
+	// a status the server sent.
+	if headerListTooLarge(st) {
+		return nil, headerListError("")
+	}
+	// The deadline that ended the call is the probe's own, not a status the
+	// server sent while it still had time.
+	if st.Code() == codes.DeadlineExceeded && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		call.silent()
+	}
+	// A status the collector accepts is its answer, with no message: the
+	// rules read it as $status, and its message as $headers["grpc-message"],
+	// against an empty object.
+	if slices.Contains(call.accepted, grpcCodeName(st.Code())) {
+		code := int(st.Code())
+		headers := grpcHeaders(header, trailer)
+		headers.Set("grpc-status", strconv.Itoa(code))
+		headers.Set("grpc-message", st.Message())
+		return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &code, Headers: headers, Body: []byte("{}"), Target: call.target, Collector: c.Name, Duration: time.Since(call.start)}, nil
+	}
+	// With reflection, an unknown method or an answer that does not decode
+	// may mean the server's schema changed since it was asked. The server is
+	// then asked again, once, and the call is made again. This does not
+	// count as one of the retries.
+	if grpcRequest(c).Descriptors == descriptorsReflection && !call.refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
+		call.refreshed = true
+		reflectionAnswers.forget(call.reflection)
+		call.resolved = false
+		call.attempt--
+		return nil, nil
+	}
+	if retry, failure := call.again(grpcCodeName(st.Code()), callStatusError(ctx, st)); !retry {
 		return nil, failure
 	}
+	return nil, nil
 }
 
 // grpcStreamAnswer is a server streaming call's answer: each message read,

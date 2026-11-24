@@ -15,16 +15,17 @@ import (
 // The formats @base32 and @base32d are added beside them (jqFormats).
 var JQAdded = []string{"debug", "stderr", "input_line_number", "input_filename", "toarray", "have_literal_numbers", "have_decnum"}
 
-// jqAddedFunctions registers JQAdded with a jq program, and the functions
-// the added formats are rewritten into. debug and stderr hand their input on
-// and, in a program every scrape runs, write nothing: an exporter has no
-// terminal to write a message to, and what a target answered is not for its
-// log. A debug probe's programs are compiled with functions that tell its
-// report (CompileJQTold). A program has one input, which
-// is of no file, so its line number is 0 and its file's name null, as jq's
-// are before anything was read. A whole number keeps every digit
-// (model.Normalize), which is what have_literal_numbers asks after, and
-// there are no decimal numbers.
+// jqAddedFunctions registers JQAdded with a jq program, together with the
+// functions that the added formats are rewritten into.
+//   - debug and stderr pass their input on and, in a program that every
+//     scrape runs, write nothing: an exporter has no terminal to write a
+//     message to, and what a target answered is not for its log. A debug
+//     probe's programs are compiled with functions that write to its report
+//     instead (CompileJQTold).
+//   - A program has one input, which comes from no file, so its line number
+//     is 0 and its file name null, as jq's are before anything was read.
+//   - A whole number keeps every digit (model.Normalize), which is what
+//     have_literal_numbers asks about, and there are no decimal numbers.
 var jqAddedFunctions = []gojq.CompilerOption{
 	gojq.WithFunction("input_line_number", 0, 0, func(any, []any) any { return 0 }),
 	gojq.WithFunction("input_filename", 0, 0, func(any, []any) any { return nil }),

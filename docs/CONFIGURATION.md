@@ -1207,8 +1207,7 @@ series keeps its own type.
   would produce every series twice, so they are
   [refused at startup](#a-name-and-a-pattern-that-matches-it).
 
-CSS remains available specifically for HTML tables and HTML status pages; it is
-not used for CSV.
+CSS is for HTML tables and HTML status pages. It is not used for CSV.
 
 Each label sets one of two keys. `expression` reads the label from the
 response, and `value` gives a static label, exported exactly as written:
@@ -1221,49 +1220,57 @@ labels:
     value: production        # static, on this metric only
 ```
 
-A label setting both, or neither, is refused at startup. So is one whose
-`expression` is nothing but blanks, such as `expression: " "`, with a `value`
-beside it or without: blanks are not the key left out, as `""` is, and they
-read nothing, so the error says to write the expression or, for a constant,
-to set `value` and leave `expression` out. A `value` of blanks is a constant
-like any other, exported as written. For a static label on
-every metric of a collector, use [`transform.labels`](#collector-wide-labels)
-instead.
+A label that sets both, or neither, is refused at startup. So is a label
+whose `expression` is only blanks, such as `expression: " "`, with or without
+a `value`. Blanks are not the same as leaving the key out, as `""` is, and
+they read nothing. The error says to write the expression or, for a
+constant, to set `value` and leave `expression` out. A `value` of blanks is a
+constant like any other and is exported as written. For a static label on
+every metric of a collector, use
+[`transform.labels`](#collector-wide-labels) instead.
 
-A `value` may hold `{{param_<name>}}` placeholders, which the probe's
+A `value` may contain `{{param_<name>}}` placeholders, which the probe's
 parameters fill as they fill the request's: `value: "api-{{param_tenant}}"`
 is `api-acme` on the series of a probe with `&param_tenant=acme`. See
 [In label values](REQUESTS.md#in-label-values) for the rules.
 
 Label expressions use the same transform-specific language as the metric
-expression. For CSV, each row produces a metric and `expression: server`
+expression. For CSV, each row produces a metric, and `expression: server`
 selects that row's `server` column.
 
-A jq or yq label is the text of the value its expression gives. A number reads
-as it is written, without an exponent from a millionth up to 1e21, so an ID of
-`1234567` is the label `1234567` and a ratio of `0.5` is `0.5`; booleans are
-`true` and `false`. A label is one value, so an object or an array fails the
-metric, handled by its [`error_mode`](#when-a-metric-cannot-be-extracted):
-select one of its fields, or make one value of an array with
-`.tags | join(",")`.
-An XPath label that computes a number, rather than selecting a node, writes
-it the same way: `count(//item) * 2000000` is the label `4000000`, as `2 *
-2000000` is from jq, and `sum(//item/@n)` over `1234567` and `0.5` is
-`1234567.5`. A label that selects a node, as every css label does, is the
-node's text as the response writes it.
+**How a label's value is written.**
 
-A label expression that gives a series no value — a selector or path that
-matches nothing, a missing attribute or capture group, an empty CSV cell, a
-null — leaves the label off that series, as does an empty value, which
-Prometheus treats the same way; a label a [Python script](PYTHON.md) gives
-as `None` or as the empty string is left off alike, and so is one a target's
-own exposition writes as `l=""` under a `prometheus` transform. A `csv` label that names a column the
-response does not have at all is not that: no row could give it, so the rule
-fails, once for the response and whether the rule or the label is `required`
-or not, as its [`error_mode`](#when-a-metric-cannot-be-extracted) says, with
-the label, the column and the columns the response does have
-([Reading CSV: what to expect](#reading-csv-what-to-expect)). When a series
-is wrong without the label, mark it `required`:
+- A jq or yq label is the text of the value its expression gives. A number
+  is written as it reads, without an exponent from a millionth up to 1e21,
+  so an ID of `1234567` is the label `1234567` and a ratio of `0.5` is
+  `0.5`. Booleans are `true` and `false`.
+- A label is one value, so an object or an array fails the metric, which its
+  [`error_mode`](#when-a-metric-cannot-be-extracted) handles. Select one of
+  the object's fields, or join an array into one value with
+  `.tags | join(",")`.
+- An XPath label that computes a number, instead of selecting a node, writes
+  it the same way: `count(//item) * 2000000` is the label `4000000`, as
+  `2 * 2000000` is from jq, and `sum(//item/@n)` over `1234567` and `0.5` is
+  `1234567.5`.
+- A label that selects a node, as every css label does, is the node's text
+  as the response writes it.
+
+**Labels without a value.** A label expression that gives a series no value
+leaves the label off that series. That covers a selector or path that
+matches nothing, a missing attribute or capture group, an empty CSV cell and
+a null. An empty value has the same effect, because Prometheus treats it the
+same way. A label that a [Python script](PYTHON.md) gives as `None` or as
+the empty string is left off too, and so is one that a target's own
+exposition writes as `l=""` under a `prometheus` transform.
+
+A `csv` label that names a column the response does not have at all is a
+different case. No row could supply it, so the rule fails once for the
+response, whether or not the rule or the label is `required`, as its
+[`error_mode`](#when-a-metric-cannot-be-extracted) says. The error gives the
+label, the column and the columns the response does have
+([Reading CSV: what to expect](#reading-csv-what-to-expect)).
+
+When a series is wrong without the label, mark the label `required`:
 
 ```yaml
 labels:
@@ -1272,19 +1279,20 @@ labels:
     required: true    # a row without a name is an error, not an unlabelled series
 ```
 
-A series missing a required label is a missing value of its metric, handled by
-the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
-`log` drop that one series and keep the rest, `fail` fails the probe with an
-error naming the label. It is counted in `http_exporter_missing_keys_total`
-and, under `ignore` and `log`, in `http_exporter_rule_failures_total`, and it
-applies whatever `required` and `error_handling.allow_missing_keys` say
-about the value. `required` applies to `expression` labels, and not to
-the python transform, whose labels come from its script.
+A series that lacks a required label is a missing value of its metric,
+handled by the metric's [`error_mode`](#when-a-metric-cannot-be-extracted):
+`ignore` and `log` drop that one series and keep the rest, and `fail` fails
+the probe with an error that names the label. The series is counted in
+`http_exporter_missing_keys_total` and, under `ignore` and `log`, in
+`http_exporter_rule_failures_total`. This applies whatever `required` and
+`error_handling.allow_missing_keys` say about the value. `required` applies
+to `expression` labels, and not to the python transform, whose labels come
+from its script.
 
 ### Reading CSV: what to expect
 
-CSV is written by spreadsheets, databases and scripts, each in its own way.
-What a `csv` rule makes of the shapes that are not the plain one:
+Spreadsheets, databases and scripts each write CSV in their own way. This
+table shows what a `csv` rule does with the variants:
 
 | The file | What happens | What to do |
 | --- | --- | --- |
@@ -1299,56 +1307,66 @@ What a `csv` rule makes of the shapes that are not the plain one:
 | Has columns aligned with spaces | With `delimiter: " "` alone every space is a delimiter and the header fails as an unnamed column. | `trim_space: true`, which makes one delimiter of a run of spaces; an empty field is then written `""`. |
 | Writes numbers for people: `1,5`, `85%`, `yes` | Text that is no number fails its rule. | [What counts as a number](#what-counts-as-a-number). |
 
-A column the response does not have is one no row has: with a header row,
-one the header does not name; with `header: false`, a number past the end of
-the longest row; and of the rows a `pre_script` left, a key none of them
-has. A row that lacks a column other rows have holds an empty cell there. A
-column the header does not have is the one to look into, since nothing is
-wrong with the rule: the header was split by another delimiter than
-`response.csv.delimiter`; it is written `host, used` and read without
-`trim_space`, so the column is named ` used`; the name is in another case
-(`Used`); the file starts with a `sep=;` line, which is then the header; or
-the file is in an encoding nothing declares, so the names are not the text
-the rule has ([Character encodings](#character-encodings)). The message
-lists the columns the response does have, the first twelve of them, in order
-of their names but for a name that is the rule's in another case or with
-blanks around it, which comes first, so that a table of fifty columns shows
-it too; and they show which it is: one column named
-`host;used`, a name with a blank before it, `Used`, `sep=;`. A value's
-column that is not there is the rule's missing value, so `required: false`
-silences it, whatever the cause. A label's is not: the rule fails, required
-or not, since every series of it would lack the label.
+**A column the response does not have** is one that no row has: with a header
+row, one the header does not name; with `header: false`, a number past the
+end of the longest row; and, for the rows a `pre_script` left, a key that
+none of them has. A row that lacks a column other rows have holds an empty
+cell there.
 
-The rows of a CSV answer cost the memory of the cells its lines hold. The
-empty cells of the columns a short row lacks are what a rule and a script
-read there, not cells kept in every row, so a header of thousands of columns
-over lines of one field costs what its bytes do: a header of 2,000 columns
-over 2,000 lines of `1`, 15 kB, decodes in under a megabyte. The rows of a
-plain file hold some times its size while it is scraped, the most for the
-shortest lines: about 23 times for lines of one character, 3.5 times for ten
-columns of a monitoring export. That is before `limits.max_metrics` is
-looked at; `max_response_bytes` is what bounds it.
+When the header lacks a column, look at the file, because nothing is wrong
+with the rule. The usual causes are:
 
-A `pre_script` of a `csv` transform is given the rows and leaves the rows:
-`data` is a list, each row a dict by the header's names, or with
-`header: false` a list of the row's fields. It may drop rows, change cells
-and add columns. Anything else it leaves in `data`, and a row that is
-neither a dict nor a list, fails the scrape with a message that says what
-the script left ([Python](PYTHON.md#what-data-is)), counted as a script
-error in `http_exporter_script_errors_total`.
+- the header was split by a delimiter other than `response.csv.delimiter`;
+- the header is written `host, used` and read without `trim_space`, so the
+  column is named ` used`;
+- the name is in another letter case (`Used`);
+- the file starts with a `sep=;` line, which is then the header;
+- the file is in an encoding that nothing declares, so the names are not the
+  text the rule has ([Character encodings](#character-encodings)).
+
+The message lists the first twelve columns the response does have, in order
+of their names. A name that is the rule's in another letter case or with
+blanks around it comes first, so that a table of fifty columns shows it too.
+The list shows which cause applies: one column named `host;used`, a name
+with a blank before it, `Used`, or `sep=;`.
+
+A missing column for a value is the rule's missing value, so
+`required: false` silences it, whatever the cause. A missing column for a
+label is not: the rule fails, required or not, because every series would
+lack the label.
+
+**Memory.** The rows of a CSV answer cost the memory of the cells their
+lines hold. The empty cells of the columns a short row lacks are what a rule
+and a script read there; they are not stored in every row. A header of
+thousands of columns over lines of one field therefore costs what its bytes
+do: a header of 2,000 columns over 2,000 lines of `1`, 15 kB in total,
+decodes in under a megabyte. While it is scraped, the rows of a plain file
+take several times its size, most for the shortest lines: about 23 times for
+lines of one character, and 3.5 times for ten columns of a monitoring
+export. This memory is used before `limits.max_metrics` is checked;
+`max_response_bytes` is what bounds it.
+
+**Pre-scripts.** A `pre_script` of a `csv` transform receives the rows and
+must leave rows. `data` is a list in which each row is a dict keyed by the
+header's names or, with `header: false`, a list of the row's fields. The
+script may drop rows, change cells and add columns. Anything else left in
+`data`, and a row that is neither a dict nor a list, fails the scrape with a
+message that says what the script left ([Python](PYTHON.md#what-data-is)),
+counted as a script error in `http_exporter_script_errors_total`.
 
 ### XML namespaces
 
-In an XPath expression a name without a prefix, such as `entry` or `@unit`,
-matches what the document writes without a prefix. A name with one, such as
-`m:size`, is matched against the prefixes as the document writes them, which
-works until the target picks another prefix for the same namespace, and
-cannot tell an `entry` in one default namespace from an `entry` in another.
+In an XPath expression, a name without a prefix, such as `entry` or `@unit`,
+matches what the document writes without a prefix. A name with a prefix,
+such as `m:size`, is matched against the prefixes as the document writes
+them. That works until the target picks another prefix for the same
+namespace, and it cannot distinguish an `entry` in one default namespace
+from an `entry` in another.
 
-`response.namespaces` maps prefixes of your choosing to namespace URIs, for
-all of the collector's XPath expressions, the metrics' and the labels' alike.
-A prefixed name then matches by the URI, whatever prefix the document uses
-for it, or none:
+`response.namespaces` maps prefixes of your choice to namespace URIs, for all
+of the collector's XPath expressions, in metrics and labels alike. A prefixed
+name then matches by the URI, whatever prefix the document uses for it, or
+none:
 
 ```xml
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:m="urn:example:metrics">
@@ -1385,64 +1403,70 @@ entry_size{entry="db01",unit="bytes"} 5120
 `x` finds what the document writes as `m:`, and `a:entry` finds the `entry`
 of the Atom namespace, which the document writes without a prefix, and no
 other. Once `response.namespaces` is set, the prefixes in the collector's
-expressions are its own: one it does not map, the document's `m` here, is
-refused when the configuration loads, rather than matching nothing on every
-scrape.
+expressions are the map's own. A prefix it does not map, such as the
+document's `m` here, is refused when the configuration loads, instead of
+matching nothing on every scrape.
 
-The prefix `xml` needs no mapping and takes none: XML reserves it for
+The prefix `xml` needs no mapping and accepts none. XML reserves it for
 `http://www.w3.org/XML/1998/namespace`, which no document declares, so
-`@xml:lang`, `../@xml:lang` and `//entry[@xml:lang='en']` work with
-`response.namespaces` set or not, whatever the map holds for `xml`.
+`@xml:lang`, `../@xml:lang` and `//entry[@xml:lang='en']` work with or
+without `response.namespaces`, whatever the map holds for `xml`.
 
 #### Attribute labels
 
 A label that is `@` and the name of one attribute of the node is read
-straight from the node, by the name as the document writes it:
+directly from the node, by the name as the document writes it:
 
-- **In XML**, a plain name — `@name`, `@data-id`: letters, digits, `_`, `.`
-  and `-`, not starting with a digit, `.` or `-` — always. A prefixed name,
-  `@m:unit`, is read that way too while `response.namespaces` is not set: the
-  prefix is then the document's own, as it was before there were namespaces
-  to set. With `response.namespaces` set, a prefixed attribute is XPath: its
-  prefix means what the map says, `@x:unit` above, and one the map does not
-  have, other than `xml`, is refused when the configuration loads.
-- **In HTML**, which has no namespaces, any name at all: `@xml:lang`,
+- **In XML**, a plain name (`@name`, `@data-id`: letters, digits, `_`, `.`
+  and `-`, not starting with a digit, `.` or `-`) is always read this way. A
+  prefixed name, `@m:unit`, is read this way too while `response.namespaces`
+  is not set: the prefix is then the document's own, as it was before
+  namespaces could be configured. With `response.namespaces` set, a prefixed
+  attribute is XPath: its prefix means what the map says (`@x:unit` above),
+  and a prefix the map does not have, other than `xml`, is refused when the
+  configuration loads.
+- **In HTML**, which has no namespaces, any name works: `@xml:lang`,
   `@og:type`, `@v-on:click`, `@x-on:click.prevent`, `@:href`, `@@click` for
   the attribute `@click`, `@2x`. A colon is a character of the name, and
   `response.namespaces` plays no part. An attribute of a parent is read the
   same way, `../@og:type`, also where the rule selects text nodes, as
-  `//td/text()` does, and so is one HTML gives a namespace inside `svg`
-  or `math`, `@xlink:href`. Names are as the HTML parser keeps them: in
-  lower case, whatever the page wrote, except inside `svg` and `math`, where
-  the parser keeps the capitals those languages have, as in `@viewBox`
+  `//td/text()` does. So is an attribute to which HTML gives a namespace
+  inside `svg` or `math`, such as `@xlink:href`. Names are as the HTML
+  parser keeps them: in lower case, whatever the page wrote, except inside
+  `svg` and `math`, where the parser keeps the capitals those languages
+  have, as in `@viewBox`
   ([Reading HTML: what to expect](#reading-html-what-to-expect)). Deeper in
-  an expression XPath cannot say such a name; write `@*[name()='og:type']`
-  there.
+  an expression, XPath cannot express such a name; write
+  `@*[name()='og:type']` there.
 
-A name is everything after the `@` when it holds nothing XPath takes for an
-operator: no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`, `+`, `*`, `,`,
-`$`, quote or blank. Anything else that starts with `@` is XPath like every
-other label, and is checked when the configuration loads: `@id | @name` for
-the first of two attributes that is there, `@state = 'ok'` for `true` or
-`false`; one that is neither a name nor XPath, such as `@[attr]`, is refused
-there. With `decoder.type` left unset or at `auto` a label is accepted when
-either kind of document would read it. If the answer is then of the kind that
-cannot — XML, for a label like `@2x` or `@:href`, names only HTML can
-have — the label is not left off: the metric fails, by its
-[`error_mode`](#when-a-metric-cannot-be-extracted), saying which label cannot
-be read in which kind of document. Setting `response.namespaces` says the
-collector reads XML: its labels are then checked as with `decoder.type: xml`
-even while the decoder is unset or `auto`, so a prefix the map does not
-have, as in `@m:unit` or `../@m:kind`, is refused when the configuration
-loads, and so is a name only HTML can have; the error says to set
-`decoder.type: html` if the target answers HTML, where such a label is an
-attribute's name as written and `response.namespaces` plays no part.
+A name is everything after the `@`, provided it contains nothing XPath
+treats as an operator: no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`,
+`+`, `*`, `,`, `$`, quote or blank. Anything else that starts with `@` is
+XPath like every other label and is checked when the configuration loads:
+`@id | @name` gives the first of two attributes that is present, and
+`@state = 'ok'` gives `true` or `false`. A label that is neither a name nor
+XPath, such as `@[attr]`, is refused at load.
+
+- With `decoder.type` unset or `auto`, a label is accepted when either kind
+  of document could read it. If the answer is then of the kind that cannot
+  (XML, for a label like `@2x` or `@:href`, names only HTML can have), the
+  label is not left off. The metric fails, as its
+  [`error_mode`](#when-a-metric-cannot-be-extracted) says, with a message
+  that says which label cannot be read in which kind of document.
+- Setting `response.namespaces` declares that the collector reads XML. Its
+  labels are then checked as with `decoder.type: xml`, even while the
+  decoder is unset or `auto`. A prefix the map does not have, as in
+  `@m:unit` or `../@m:kind`, is refused when the configuration loads, and so
+  is a name only HTML can have. The error says to set `decoder.type: html`
+  if the target answers HTML, where such a label is an attribute's name as
+  written and `response.namespaces` plays no part.
 
 ### Collector-wide labels
 
 Three `transform` settings change the labels of every metric a collector
-exports, whatever its transform — jq, CSS, XPath, CSV, regex, Python or a
-Prometheus passthrough — after its metric rules, in this order:
+exports, whatever its transform (jq, CSS, XPath, CSV, regex, Python or a
+Prometheus passthrough). They are applied after the metric rules, in this
+order:
 
 ```yaml
 transform:
@@ -1455,21 +1479,22 @@ transform:
     host: instance
 ```
 
-Renames are made at once, from the labels as they were before any of them, so
-they never chain: with `a: b` and `b: c`, `b` gets the value `a` had and `c`
-the value `b` had. Two renames to the same label are refused at startup.
+All renames are applied at once, from the labels as they were before any
+rename, so they never chain: with `a: b` and `b: c`, `b` gets the value `a`
+had and `c` the value `b` had. Two renames to the same label are refused at
+startup.
 
 A `transform.labels` value replaces a label of the same name that a rule, a
 script or the target gave a series: with `labels: {site: dc1}`, a series a
 rule labelled `site="rack1"` is exported with `site="dc1"`. A value written
-`""` is the label left out, as a key written `""` is the key left out
-([Editor support](#editor-support)): `labels: {site: ""}` adds no label,
-where it used to export `site=""`, and a series that has a `site` of its own
-keeps it.
+`""` means the label is left out, as a key written `""` means the key is
+left out ([Editor support](#editor-support)). `labels: {site: ""}` therefore
+adds no label, where it used to export `site=""`, and a series that has its
+own `site` keeps it.
 
-A `transform.labels` value may hold `{{param_<name>}}` placeholders, which
-the probe's parameters fill as they fill the request's, so one collector
-labels its series with a value only the scrape knows:
+A `transform.labels` value may contain `{{param_<name>}}` placeholders, which
+the probe's parameters fill as they fill the request's. One collector can
+then label its series with a value only the scrape knows:
 
 ```yaml
 transform:
@@ -1479,31 +1504,39 @@ transform:
     region: "{{param_region:eu}}"   # eu unless the probe says otherwise
 ```
 
-A probe that leaves out a parameter without a default is answered `400`
-before the target is contacted, and a value filled to nothing — an empty
-default the probe does not replace — is the label left out, as `""` is. The
-rules are in [In label values](REQUESTS.md#in-label-values).
+A probe that omits a parameter without a default is answered `400` before
+the target is contacted. A value filled with nothing (an empty default the
+probe does not replace) means the label is left out, as `""` does. The rules
+are in [In label values](REQUESTS.md#in-label-values).
 
-A `prometheus` transform passing metrics through without `metrics` rules can
-also pick and rename them: `include` and `exclude` are patterns a metric name
-must, or must not, match, and `rename` maps source names to new ones. With
-`metrics` rules, the rules choose and name the metrics, so these three are
-refused at startup there, as on any other transform, rather than ignored.
+A `prometheus` transform that passes metrics through without `metrics` rules
+can also select and rename them: `include` and `exclude` are patterns a
+metric name must, or must not, match, and `rename` maps source names to new
+ones. With `metrics` rules, the rules select and name the metrics, so these
+three keys are refused at startup there, as on any other transform, instead
+of being ignored.
 
 An entry of `include` or `exclude` is a regular expression, matched anywhere
 in the name the target gives the metric, before `rename` and
-`metrics_prefix`: `^node_` picks the names that start with `node_`, and
-`load` those that have `load` in them. An entry that is the empty string, or
-nothing but blanks, is refused at startup, naming the collector and the key.
-The empty pattern matches every name, so `exclude: [""]` dropped every series
-and `include: [""]` kept every one; a pattern of blanks matches only the
-names that hold those blanks, so `include: ["  "]` exported nothing, with no
-error. Neither is what such an entry was written for — an empty string, or
-one that picked up spaces, a template that filled in nothing. To match every
-name write `'.*'`, and to filter nothing leave the key out; a pattern that
-does mean a blank, which a [UTF-8 name](#utf-8-names) may hold, is written
-`'[ ]'` or `'\x20'`, in single quotes, where YAML leaves the backslash to the
-regular expression.
+`metrics_prefix`: `^node_` selects the names that start with `node_`, and
+`load` those that contain `load`.
+
+An entry that is the empty string, or only blanks, is refused at startup,
+with an error that names the collector and the key. The empty pattern
+matches every name, so `exclude: [""]` dropped every series and
+`include: [""]` kept every one. A pattern of blanks matches only names that
+contain those blanks, so `include: ["  "]` exported nothing, without an
+error. Neither is what such an entry is meant to do; it is usually an empty
+string, a string that picked up spaces, or a template that filled in
+nothing. To match every name write `'.*'`, and to filter nothing leave the
+key out. A pattern that does mean a blank, which a
+[UTF-8 name](#utf-8-names) may contain, is written `'[ ]'` or `'\x20'` in
+single quotes, where YAML leaves the backslash to the regular expression.
+
+### Prefixing a collector's metrics
+
+`metrics_prefix` puts a namespace in front of everything a collector exports.
+The exporter joins it with `_`, so this collector
 
 ### Prefixing a collector's metrics
 
@@ -1519,20 +1552,20 @@ collectors:
       - name: statuspage_status
 ```
 
-exports `grafana_statuspage_status`. It is optional; without it, names are
-exactly as declared.
+exports `grafana_statuspage_status`. The key is optional. Without it, names
+are exactly as declared.
 
 ### UTF-8 names
 
-Prometheus 3 lets a target name a metric or a label in any UTF-8 —
-`http.server.duration`, `{service.name="api"}` — as OpenTelemetry names do.
+Prometheus 3 lets a target name a metric or a label in any UTF-8, such as
+`http.server.duration` or `{service.name="api"}`, as OpenTelemetry names do.
 The exporter answers in the classic text format or OpenMetrics (see
-[OpenMetrics](#openmetrics)), whose names are limited to
-letters, digits, `_` and, for metrics, `:`, as are the names older
-Prometheus servers, recording rules and dashboards expect. A name outside
-that can come from a `prometheus` transform passing a target through, a Python
-script or a pre-script, or be written in the collector itself, as a rule's
-name. `name_escaping` says what happens to it:
+[OpenMetrics](#openmetrics)). Their names are limited to letters, digits,
+`_` and, for metrics, `:`, which is also what older Prometheus servers,
+recording rules and dashboards expect. A name outside that set can come from
+a `prometheus` transform that passes a target through, from a Python script
+or a pre-script, or from the collector itself, as a rule's name.
+`name_escaping` decides what happens to it:
 
 ```yaml
 collectors:
@@ -1548,35 +1581,46 @@ collectors:
 | `underscores` | `http_server_duration{service_name="api"} 0.25` |
 | `values` | `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25` |
 
-`underscores` replaces every character a classic name may not have with `_`,
-and a leading digit too, which reads naturally but cannot be undone.
-`values` is Prometheus's reversible encoding: `U__`, then the name with `_`
-doubled and every other character written as `_` + its hexadecimal code
-point + `_`. Prometheus 3 and its client libraries can turn it back into the
-original name. They are the escaping schemes of the same names Prometheus
-negotiates with its targets; the third, `dots`, is not offered, because it
-rewrites every name that has an underscore, classic ones included.
+- `underscores` replaces every character a classic name cannot have with
+  `_`, and a leading digit too. The result reads naturally but cannot be
+  reversed.
+- `values` is Prometheus's reversible encoding: `U__`, then the name with
+  `_` doubled and every other character written as `_` + its hexadecimal
+  code point + `_`. Prometheus 3 and its client libraries can turn it back
+  into the original name.
 
-With either scheme a classic name is never changed, and label values are never
-escaped, since they may hold any UTF-8. `metrics_prefix` is joined first, so a
-prefixed `values` name still starts with `U__`: `metrics_prefix: otel` gives
-`U__otel__http_2e_server_2e_duration`. Two names that escape to the same name
-— `a.b` and `a_b` with `underscores` — are not merged: two such metrics are a
-duplicate series, and two such labels of one series fail the scrape naming
-both. The default is `fail` so a name never changes without someone having
-asked for it.
+These are the escaping schemes of the same names that Prometheus negotiates
+with its targets. The third, `dots`, is not offered, because it rewrites
+every name that has an underscore, including classic ones.
 
-A name the collector writes itself is held to the same, when the
+With either scheme:
+
+- A classic name is never changed, and label values are never escaped,
+  because they may hold any UTF-8.
+- `metrics_prefix` is joined first, so a prefixed `values` name still starts
+  with `U__`: `metrics_prefix: otel` gives
+  `U__otel__http_2e_server_2e_duration`.
+- Two names that escape to the same name (`a.b` and `a_b` with
+  `underscores`) are not merged. Two such metrics are a duplicate series,
+  and two such labels of one series fail the scrape with an error that names
+  both.
+
+The default is `fail`, so that a name never changes unless someone asked for
+it.
+
+The names a collector writes itself are checked the same way when the
 configuration loads: a rule's `name` and the `name` of each of its labels,
-under every transform, the keys of `transform.labels`, and what
+under every transform; the keys of `transform.labels`; and the names that
 `transform.rename` and `transform.rename_labels` rename to. Each leaves the
-transform beside the names the response gave and is escaped with them. A
-rule's label or a key of `transform.labels` that `transform.rename_labels`
-renames or `transform.remove_labels` removes is the exception: the renames
-and removals come before the names are escaped and the series validated, so
-such a name is never exported, and it loads whatever its characters, `a.b`
-under `fail` or `__tmp` alike, unless it is nothing but blanks; the name it
-is renamed to is held to everything here.
+transform together with the names the response gave and is escaped with
+them.
+
+The exception is a rule's label, or a key of `transform.labels`, that
+`transform.rename_labels` renames or `transform.remove_labels` removes. The
+renames and removals happen before the names are escaped and the series
+validated, so such a name is never exported. It loads whatever its
+characters, `a.b` under `fail` or `__tmp` alike, unless it is only blanks.
+The name it is renamed to is subject to every rule here.
 
 ```yaml
 collectors:
@@ -1601,36 +1645,40 @@ collectors:
 | `values` | loads, and exports `U__http_2e_server_2e_duration{U__service_2e_name="api"}` |
 
 A `prometheus` rule's `name` without an `expression` is the target's metric
-of that name, matched whole as it is written, so under `underscores` or
-`values` `name: http.server.duration` passes that metric on; a `python`
-rule's `name` and its labels' names are the script's, as the script gives
-them. What a rule says of its series finds them by the names as written,
+of that name, matched whole as written, so under `underscores` or `values`,
+`name: http.server.duration` passes that metric on. A `python` rule's `name`
+and its labels' names are the script's, as the script gives them.
+
+Settings that refer to a rule's series find them by the names as written,
 before they are escaped: a label's `value_map`, `truncate: true`,
 `transform.remove_labels` and the names `rename_labels` renames. Logs, probe
 errors and the rule's failures in the self-metrics name the rule as it is
 written.
 
-Three things hold whatever `name_escaping` is. A name of nothing but blanks
-is no name. A name is not exported beginning with `__`, which Prometheus
-reserves: `__up` is refused as written, and under `underscores` so is a
-name that it would turn into one, such as `1_min.load`, whose leading digit
-becomes `_`, with an error naming both; `values`, which writes `U__` before
-every name it escapes, takes it. And a
-[static target](STATIC-TARGETS.md)'s `labels` are classic names: they are
-added to what the collector exported, after its names were escaped. Two
-rules whose names differ as written and are one name once escaped, `a.b`
-and `a_b` under `underscores`, load, since the load compares what is
-written, and fail each scrape that has both as the duplicate series, or the
-metric of two types, that two such names of a target are.
+Three things hold whatever `name_escaping` is:
+
+- A name of only blanks is not a name.
+- A name is never exported beginning with `__`, which Prometheus reserves.
+  `__up` is refused as written. Under `underscores`, so is a name that the
+  scheme would turn into one, such as `1_min.load`, whose leading digit
+  becomes `_`; the error names both. `values`, which writes `U__` before
+  every name it escapes, accepts it.
+- A [static target](STATIC-TARGETS.md)'s `labels` are classic names. They are
+  added to what the collector exported, after its names were escaped.
+
+Two rules whose names differ as written but are one name once escaped, such
+as `a.b` and `a_b` under `underscores`, load, because the load compares what
+is written. Each scrape that has both then fails, for the duplicate series,
+or the metric of two types, that two such names of a target are.
 
 #### Keeping UTF-8 names
 
-`name_escaping` escapes a name once, for every scraper. A Prometheus 3 can
-take the name as it is, and says so in its `Accept` header; an older one, or
-a dashboard written for escaped names, asks for an escaping. With
-`metric_name_validation_scheme: utf8`, Prometheus's setting of the same
-name, a collector keeps every name as it is and each answer writes it as its
-scraper asks:
+`name_escaping` escapes a name once, for every scraper. Prometheus 3 can
+take the name as it is and says so in its `Accept` header, while an older
+server, or a dashboard written for escaped names, asks for an escaping. With
+`metric_name_validation_scheme: utf8`, which is Prometheus's setting of the
+same name, a collector keeps every name as it is, and each answer writes it
+as its scraper asks:
 
 ```yaml
 collectors:
@@ -1647,56 +1695,68 @@ collectors:
 | `escaping=dots` | `http_dot_server_dot_duration{service_dot_name="api"} 0.25` |
 | `escaping=values` | `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25` |
 
-These are Prometheus's own escaping schemes, as its Go client writes them:
-`underscores` and `values` as under `name_escaping`, and `dots` writing a dot
-as `_dot_`, an underscore as `__` and anything else a classic name may not
-have as `__`, so that the name can be read back. A classic name is written
-as it is under all four, `dots` too, and so is every label value. The quoted
-form is written in OpenMetrics as in the text format, and a histogram's
-`_bucket`, `_sum` and `_count` follow its family's name: `{"my.latency_bucket",le="0.1"}`
-quoted, `my_latency_bucket` under `underscores`. The answer's `Content-Type`
-ends with the escaping it was written with, such as
-`text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8`. An answer
-whose names are all classic — any answer of a `legacy` collector, and the
-self-metrics — is written and typed as it always was, without an escaping.
-A static target's result scraped under `utf8` keeps its names through a
-reload that takes the collector back to `legacy`, until the target is
-scraped again, and the static targets endpoint writes them as the scraper
-asks meanwhile.
+These are Prometheus's own escaping schemes, as its Go client writes them.
+`underscores` and `values` work as under `name_escaping`. `dots` writes a dot
+as `_dot_`, an underscore as `__`, and any other character a classic name
+cannot have as `__`, so that the name can be read back.
 
-Under `utf8` a rule's name, its labels' names, the keys of `transform.labels`
-and the names `rename` and `rename_labels` give load whatever their UTF-8,
-as under `name_escaping` `underscores` and `values`; a name of blanks alone,
-one beginning with `__` and the length limits are held to as ever.
-`name_escaping` still applies first: `underscores` or `values` escape a name
-for every scraper, which then finds nothing to escape, and `fail`, the
-default, fails nothing under `utf8`. The default is `legacy`, as before, so
-that a name never changes without someone having asked for it.
+- A classic name is written unchanged under all four schemes, including
+  `dots`, and so is every label value.
+- The quoted form is written in OpenMetrics as in the text format. A
+  histogram's `_bucket`, `_sum` and `_count` follow its family's name:
+  `{"my.latency_bucket",le="0.1"}` quoted, `my_latency_bucket` under
+  `underscores`.
+- The answer's `Content-Type` ends with the escaping it was written with,
+  such as `text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8`.
+- An answer whose names are all classic, which includes any answer of a
+  `legacy` collector and the self-metrics, is written and typed as it always
+  was, without an escaping.
+- A static target's result scraped under `utf8` keeps its names through a
+  reload that returns the collector to `legacy`, until the target is scraped
+  again. Until then the static targets endpoint writes them as the scraper
+  asks.
 
-A target that escapes its names unless asked, as Prometheus' Go client does,
-has to be asked: give the collector's request the header
-`Accept: text/plain;version=1.0.0;escaping=allow-utf-8`. Over
-[OTLP](OTLP.md) a name is sent as it is, since OTLP names are free text;
-`otlp.metric_names: otel` moves a unit suffix such as `_seconds` into the
-metric's unit as it does of a classic name. Two names that differ only in
-characters an escaping replaces, `a.b` and `a_b`, are one name to a scraper
-that asks for it: two such metrics reach it as a duplicate series, and two
-such labels of one series as one label, with the classic name's value, `a_b`'s
-(of two names escaped, the first in order). Keep such names apart, or escape
-them once with `name_escaping`, which refuses them.
+Under `utf8`, a rule's name, its labels' names, the keys of
+`transform.labels` and the names that `rename` and `rename_labels` produce
+load whatever their UTF-8, as under `name_escaping` `underscores` and
+`values`. A name of only blanks, a name beginning with `__` and the length
+limits are still refused. `name_escaping` still applies first: `underscores`
+or `values` escape a name for every scraper, which then finds nothing to
+escape, and `fail`, the default, fails nothing under `utf8`. The default is
+`legacy`, as before, so that a name never changes unless someone asked for
+it.
 
-The prefix applies to every metric the collector produces, whatever the
-transform: declared metrics, the names a Python script passes to `metric(...)`,
-and the source names a `prometheus` transform passes through or renames. A
-histogram or summary keeps its family, so `_bucket`, `_sum` and `_count` follow
-the prefixed name. Those names are the family's: a metric of its own named
-`foo_count` next to a histogram or summary `foo`, as a `rename` can make,
-fails the scrape naming both, since the exposition would hold two families
-of that name. /probe, OTLP export and static targets all see the same
-prefixed names, and the response cache is keyed by the collector's definition,
-so a changed prefix never serves metrics cached under the old names. The
-exporter's own `http_exporter_*` metrics, including a static target's health
-metrics, describe the exporter rather than the target and are never prefixed.
+Further points:
+
+- A target that escapes its names unless asked, as Prometheus' Go client
+  does, has to be asked. Give the collector's request the header
+  `Accept: text/plain;version=1.0.0;escaping=allow-utf-8`.
+- Over [OTLP](OTLP.md) a name is sent as it is, because OTLP names are free
+  text. `otlp.metric_names: otel` moves a unit suffix such as `_seconds`
+  into the metric's unit, as it does for a classic name.
+- Two names that differ only in characters an escaping replaces, such as
+  `a.b` and `a_b`, are one name to a scraper that asks for that escaping.
+  Two such metrics reach it as a duplicate series. Two such labels of one
+  series reach it as one label, with the value of the classic name, `a_b`
+  (when both names are escaped, the first in order wins). Keep such names
+  distinct, or escape them once with `name_escaping`, which refuses them.
+
+**What the prefix applies to.** `metrics_prefix` applies to every metric the
+collector produces, whatever the transform: declared metrics, the names a
+Python script passes to `metric(...)`, and the source names a `prometheus`
+transform passes through or renames.
+
+- A histogram or summary keeps its family, so `_bucket`, `_sum` and `_count`
+  follow the prefixed name. Those names belong to the family. A separate
+  metric named `foo_count` next to a histogram or summary `foo`, as a
+  `rename` can produce, fails the scrape with an error that names both,
+  because the exposition would hold two families of that name.
+- `/probe`, OTLP export and static targets all see the same prefixed names.
+  The response cache is keyed by the collector's definition, so a changed
+  prefix never serves metrics cached under the old names.
+- The exporter's own `http_exporter_*` metrics, including a static target's
+  health metrics, describe the exporter, not the target, and are never
+  prefixed.
 
 A prefix must match `^[a-zA-Z][a-zA-Z0-9]*(_[a-zA-Z0-9]+)*$`: a letter first,
 then letters and digits, in parts joined by single underscores.
@@ -1709,26 +1769,26 @@ then letters and digits, in parts joined by single underscores.
 | `grafana:cloud` | Invalid: `:` is reserved for recording rules |
 | `1grafana`, `graf-ana` | Invalid: not a metric name |
 
-An invalid prefix stops the exporter at startup, and `--dry-run` reports it,
-naming the collector. So does a declared metric whose prefixed name would be
-longer than `limits.max_metric_name_length` (200 by default), as does a rule's
-name over it without a prefix
-([Checked when the configuration loads](#checked-when-the-configuration-loads));
-a name produced at scrape time, by a Python script or a `prometheus`
+An invalid prefix stops the exporter at startup, and `--dry-run` reports it
+and names the collector. The same happens for a declared metric whose
+prefixed name would be longer than `limits.max_metric_name_length` (200 by
+default), and for a rule's name that exceeds the limit without a prefix
+([Checked when the configuration loads](#checked-when-the-configuration-loads)).
+A name produced at scrape time, by a Python script or a `prometheus`
 transform, is checked against the same limit when the scrape happens.
 
 Log lines and probe errors name a metric rule as it is written in the
-configuration, without the prefix, so it can be found in the file. The prefix is
-added blindly: a rule already called `grafana_status` becomes
-`grafana_grafana_status`, so drop it from the rule names when adding it to the
-collector.
+configuration, without the prefix, so that it can be found in the file. The
+prefix is added unconditionally: a rule already called `grafana_status`
+becomes `grafana_grafana_status`. Remove the prefix from the rule names when
+you add it to the collector.
 
 ### Metrics per item
 
-A jq or yq metric can set `items`, which selects the things the metric is about
-— servers, rows, components. The value and every label are then evaluated once
-per item, against that item as `.`, with the whole document available as
-`$root`:
+A jq or yq metric can set `items`, which selects the things the metric is
+about, such as servers, rows or components. The value and every label are
+then evaluated once per item, with that item as `.` and the whole document
+available as `$root`:
 
 ```yaml
 metrics:
@@ -1744,52 +1804,61 @@ metrics:
         expression: $root.site
 ```
 
-Without `items`, the value expression and each label expression run over the
-whole document and are paired by position: the third value gets the third
-label value. A label that yields one value applies it to every series, and one
-that yields none leaves the label off. Any other count than one per series
-means values would land on the wrong series — a label that yields nothing for
-one server would shift every later label along — so the metric fails under its
-`error_mode` instead, the error saying how many values the label gave for how
-many series. The metric then fails as a whole, once: none of its series is
-exported, one failure is counted and logged for it — the label's, not one
-for each value that could not be read as well — and under `fail` the scrape's
-error names the pairing mistake. The same holds for whatever else fails the
-metric as a whole: its expression failing at any of its values, a label
-expression failing, or a label value that is an object or a list. With
-`items` there is nothing to pair: a label that yields nothing
-for an item is simply absent on that series.
+**Without `items`**, the value expression and each label expression run over
+the whole document and are paired by position: the third value gets the
+third label value. A label that yields one value applies it to every series,
+and one that yields none leaves the label off.
 
-Per item, the value and each label must yield at most one value; two is an
-error, since there is no telling which belongs to the series. A value that is
-missing or null for one item is that item's missing metric, handled by
-`required` and `error_mode` like any other: `log` drops that one series and keeps
-the rest. `items` selecting nothing is a missing metric when the metric is
-required, and produces nothing when it is not. `$root` works without `items`
-too, where it is the same document as `.`. Every jq and yq expression also
-has `$status`, the response's HTTP status, and `$headers`, its headers by
-lower-case name, for a target whose status or headers say something the body
-does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses));
-`$timings`, how long the phases of an `http` or `graphite` collector's
-request took, `$tls`, the TLS connection it was sent on, `$url`, where its
-redirects led, `$redirects`, how many there were, `$http_version`, the
-version of HTTP the answer came in, and `$remote_ip`, the address its
-connection was made to, each `null` for other types (see [Timings, TLS and the final
-URL](REQUESTS.md#timings-tls-and-the-final-url)); `$params`, the
-[probe's parameters](REQUESTS.md#in-expressions) by name; and
-`$scrape_time` and `$last_success`, when the scrape began and when the last
-one of the same target and parameters that succeeded did, in seconds since
-the epoch, `$last_success` being `null` while there is none
-([What a script has](PYTHON.md#what-a-script-has)), so that
-`$scrape_time - $last_success` is how long ago that was.
+Any other count would put values on the wrong series; for example, a label
+that yields nothing for one server would shift every later label. The metric
+therefore fails under its `error_mode`, with an error that says how many
+values the label gave for how many series. The metric fails as a whole,
+once: none of its series is exported, and one failure is counted and logged
+for it (the label's, not an additional one for each value that could not be
+read). Under `fail`, the scrape's error names the pairing mistake. The same
+applies to anything else that fails the metric as a whole: its expression
+failing at any of its values, a label expression failing, or a label value
+that is an object or a list.
+
+**With `items`** there is nothing to pair. A label that yields nothing for an
+item is simply absent on that series.
+
+- Per item, the value and each label must yield at most one value. Two is an
+  error, because there is no way to tell which belongs to the series.
+- A value that is missing or null for one item is that item's missing
+  metric, handled by `required` and `error_mode` like any other: `log` drops
+  that one series and keeps the rest.
+- `items` that selects nothing is a missing metric when the metric is
+  required, and produces nothing when it is not.
+
+**Variables.** Every jq and yq expression has these variables:
+
+- `$root`: the whole document. It works without `items` too, where it is the
+  same document as `.`.
+- `$status` and `$headers`: the response's HTTP status, and its headers by
+  lower-case name, for a target whose status or headers say something the
+  body does not (see
+  [Accepting other statuses](REQUESTS.md#accepting-other-statuses)).
+- `$timings`, `$tls`, `$url`, `$redirects`, `$http_version` and
+  `$remote_ip`: how long the phases of an `http` or `graphite` collector's
+  request took, the TLS connection it was sent on, where its redirects led,
+  how many redirects there were, the version of HTTP the answer came in, and
+  the address its connection was made to. Each is `null` for other types
+  (see [Timings, TLS and the final URL](REQUESTS.md#timings-tls-and-the-final-url)).
+- `$params`: the [probe's parameters](REQUESTS.md#in-expressions) by name.
+- `$scrape_time` and `$last_success`: when the scrape began, and when the
+  last successful scrape of the same target and parameters began, in seconds
+  since the epoch. `$last_success` is `null` while there is none
+  ([What a script has](PYTHON.md#what-a-script-has)), so
+  `$scrape_time - $last_success` is how long ago that was.
 
 ### Labels from an object
 
-A rule can take its labels from an object of the response, as the labels
-of a Kubernetes object are, where the names are the target's and no list
-of them can be written beforehand. `labels_from` is an expression that
-gives the object; each key becomes a label, with the key's value as its
-value. With `items` it is read of each item, for that item's series:
+A rule can take its labels from an object of the response, such as the
+labels of a Kubernetes object, where the names are the target's and cannot
+be listed in advance. `labels_from` is an expression that gives the object.
+Each key becomes a label, with the key's value as its value. With `items`,
+the expression is evaluated for each item, for that item's series:
 
 ```yaml
 name_escaping: underscores        # app.kubernetes.io/name -> app_kubernetes_io_name
@@ -1803,37 +1872,43 @@ metrics:
         expression: .metadata.name
 ```
 
-A value is written as a label expression's is, a number or a boolean as its
-text. A key whose value is `null` or empty leaves no label, and so does an
-item without the object; anything else that is no object, and a value that
-is an object or a list, is that item's failure, handled by the rule's
-`error_mode`. A label of the rule's `labels` replaces a key of its name. The
-names are held to [`name_escaping`](#utf-8-names) as every
-label name is, so a name with a dot or a slash needs `underscores` or
-`values`. The expression can shape the object first, to give the names a
-prefix or keep some of them:
+- A value is written as a label expression's value is: a number or a boolean
+  as its text.
+- A key whose value is `null` or empty produces no label, and neither does an
+  item without the object. Anything else that is not an object, and a value
+  that is an object or a list, is that item's failure, handled by the rule's
+  `error_mode`.
+- A label in the rule's `labels` replaces a key of the same name.
+- The names are subject to [`name_escaping`](#utf-8-names) like every label
+  name, so a name with a dot or a slash needs `underscores` or `values`.
+
+The expression can reshape the object first, to give the names a prefix or
+keep only some of them:
 
 ```yaml
 labels_from: '.metadata.labels | with_entries(.key |= "label_" + .)'
 labels_from: '.metadata.labels | with_entries(select(.key | startswith("app.")))'
 ```
 
-Without `items` the expression is read of the whole document, once, and
-its keys are labels of every series of the rule; what it reads that is no
-object of single values then fails the rule as a whole.
+Without `items`, the expression is evaluated once for the whole document,
+and its keys are labels of every series of the rule. If it yields anything
+other than an object of single values, the rule fails as a whole.
 
-Every key is a label, so the number of series a metric has is the target's
-to decide: keep to objects whose keys are few and steady.
+Every key is a label, so the target decides how many series a metric has.
+Use `labels_from` only with objects whose keys are few and stable.
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
-row. Items may be nested, `items: li` over nested lists: each selector is
-matched once for all the items, so a deep nesting costs what its size does.
-Without `items`, the metric is one series: the value is the whole text of the
-one element the expression selects, and an expression matching several is a
-failure of the rule, handled by its `error_mode`, with an error pointing at
-`items`. Its labels can only be static `value` labels: a label reading the page
-needs `items`, and is refused at startup without it.
+row. Items may be nested, as with `items: li` over nested lists. Each
+selector is matched once for all the items, so deep nesting costs only what
+its size does.
+
+Without `items`, the metric is one series. The value is the whole text of
+the one element the expression selects, and an expression that matches
+several elements is a failure of the rule, handled by its `error_mode`, with
+an error that points to `items`. Its labels can only be static `value`
+labels: a label that reads the page needs `items` and is refused at startup
+without it.
 
 ```yaml
 transform:
@@ -1847,60 +1922,66 @@ metrics:
         expression: td:nth-child(1)
 ```
 
-The rules are the same as for jq: within a row, the value and each label
-selector must match at most one element, a row without the value cell is that
-row's missing metric, and a label selector matching nothing leaves the label
-off.
+The rules are the same as for jq. Within a row, the value and each label
+selector must match at most one element. A row without the value cell is
+that row's missing metric, and a label selector that matches nothing leaves
+the label off.
 
-Write a selector that holds a `#` in quotes, as above. In YAML a `#` after a
-blank starts a comment, so `expression: body #proxy` without them is the
-selector `body`, which loads and reads the whole page, and `expression:
-#proxy` is no expression at all: the key has nothing after its colon, and
-is refused as such.
+Quote a selector that contains a `#`, as above. In YAML, a `#` after a blank
+starts a comment. Without quotes, `expression: body #proxy` is the selector
+`body`, which loads and reads the whole page, and `expression: #proxy` is
+not an expression at all: the key has nothing after its colon and is refused
+for that reason.
 
 #### The text of an HTML element
 
 Rules over HTML are written against what a browser's inspector shows, and
-`css` and `xpath` read the text of an element accordingly. It is the text of
-everything inside the element, comments left out, trimmed of the whitespace
-around it, with two exceptions:
+`css` and `xpath` read the text of an element accordingly. The text is the
+text of everything inside the element, without comments and trimmed of
+surrounding whitespace, with two exceptions:
 
-- **Scripts and styles.** Text inside a `<script>` or a `<style>` is no part
+- **Scripts and styles.** Text inside a `<script>` or a `<style>` is not part
   of the text of an element around it: `<td>6<script>track(6)</script></td>`
   reads `6`. A rule or a label that selects the `<script>` or the `<style>`
   itself, or a text node inside one, reads its text, so `script#state` and
   `//script[@type='application/ld+json']` still give the data a page keeps in
   a script.
 - **Templates.** The content of a `<template>` is not part of the document,
-  as it is not in a browser: selectors, `items`, XPath expressions and labels
-  match nothing inside one, so a placeholder row such as
-  `<tr><td>{{name}}</td></tr>` is no row of its table. The `template` element
-  itself is there, empty. A declarative shadow root is the exception: a
-  browser renders the content of a `<template>` that has a `shadowrootmode`
-  attribute (or the older `shadowroot`), so it is kept, and read as ordinary
-  elements inside the `template` element, which `p.shadow` and `//p` find.
+  as in a browser. Selectors, `items`, XPath expressions and labels match
+  nothing inside one, so a placeholder row such as
+  `<tr><td>{{name}}</td></tr>` is not a row of its table. The `template`
+  element itself is present, and empty. A declarative shadow root is the
+  exception: a browser renders the content of a `<template>` that has a
+  `shadowrootmode` attribute (or the older `shadowroot`), so that content is
+  kept and read as ordinary elements inside the `template` element, which
+  `p.shadow` and `//p` find.
 
-Everything else in a page is read as it is written: an element hidden by an
-attribute or a style is in the document and has its text, the markup inside
-`<noscript>` and `<iframe>` is their text and holds no elements to select,
-the fallback inside an `<object>` is elements like any other, and `<pre>`
-and `<textarea>` keep their text. Leave out what a rule should not read with
-the selector, as in `tr:not([hidden])` or `//tr[not(@hidden)]`.
+Everything else in a page is read as written:
 
-This is the exporter's reading of the node a rule or a label selects. What an
-expression itself asks of the library is the library's: the XPath functions
-and comparisons — `string(.)`, `normalize-space(.)`, `sum(//td)`,
-`td = '6'` — work on XPath's string value, and `:contains()` looks in all the
-text of an element, a script's and a style's included: to `sum(//td)` the
-cell above is `6track(6)`, which is no number, and the sum has
-[no value](#adding-up-nodes-with-sum). An XML document has no
-scripts, styles or templates, only elements of those names, which are read
-like any other.
+- An element hidden by an attribute or a style is in the document and has
+  its text.
+- The markup inside `<noscript>` and `<iframe>` is their text and contains
+  no elements to select.
+- The fallback inside an `<object>` consists of ordinary elements.
+- `<pre>` and `<textarea>` keep their text.
+
+Use the selector to exclude what a rule should not read, as in
+`tr:not([hidden])` or `//tr[not(@hidden)]`.
+
+This describes how the exporter reads the node that a rule or a label
+selects. What an expression itself asks of the library follows the library's
+rules. The XPath functions and comparisons (`string(.)`,
+`normalize-space(.)`, `sum(//td)`, `td = '6'`) work on XPath's string value,
+and `:contains()` searches all the text of an element, including a script's
+and a style's. To `sum(//td)` the cell above is `6track(6)`, which is not a
+number, so the sum has [no value](#adding-up-nodes-with-sum). An XML document
+has no scripts, styles or templates, only elements with those names, which
+are read like any other.
 
 #### Reading HTML: what to expect
 
-A page is read as a browser's parser builds it, which is not always as its
-source reads, and `css` and `xpath` differ in what they can say:
+A page is read as a browser's parser builds it, which is not always how its
+source reads, and `css` and `xpath` differ in what they can express:
 
 | The page, or the rule | What happens | What to do |
 | --- | --- | --- |
@@ -1914,18 +1995,20 @@ source reads, and `css` and `xpath` differ in what they can say:
 
 ### Long label values
 
-Label values are capped by `limits.max_label_value_length`, 500 bytes by
-default, and a value over the cap fails the whole scrape rather than one series:
-a silently shortened value would be a surprise. The failure names the metric,
-the label, the value's length in bytes and the cap, and the two ways out:
-`metric "statuspage_incident" label "message" value is 812 bytes, longer than
-limits.max_label_value_length 500; a label one of the collector's rules gives
-can be cut to fit with truncate: true on that label, or raise
-limits.max_label_value_length`. The metric and the label are named as the
-scrape exposes them, under the collector's `metrics_prefix` and the name
-`transform.rename_labels` gave the label, and the label may be one no rule
-gives — a directory collector's `file`, a label of a series a `prometheus`
-transform passes through as it is — for which the limit is the way out. A
+Label values are limited by `limits.max_label_value_length`, 500 bytes by
+default. A value over the limit fails the whole scrape, not just one series,
+because a silently shortened value would be a surprise. The failure names
+the metric, the label, the value's length in bytes and the limit, and gives
+the two remedies: `metric "statuspage_incident" label "message" value is 812
+bytes, longer than limits.max_label_value_length 500; a label one of the
+collector's rules gives can be cut to fit with truncate: true on that label,
+or raise limits.max_label_value_length`.
+
+The metric and the label are named as the scrape exposes them: under the
+collector's `metrics_prefix`, and with the name `transform.rename_labels`
+gave the label. The label may be one that no rule gives, such as a directory
+collector's `file`, or a label of a series that a `prometheus` transform
+passes through unchanged. For those, raising the limit is the remedy. A
 label that carries free text can ask to be cut instead:
 
 ```yaml
@@ -1935,90 +2018,111 @@ labels:
     truncate: true
 ```
 
-A longer value is then cut to the cap, on a character boundary, and ends in
-`…`, which counts towards the cap. A cap of 1 or 2 bytes has no room for the
-`…`, which is three, and the value is cut without it; when the value's first
-character does not fit either — `日本` under a cap of 2 — nothing is left,
-and the label is left off the series, as every label with an empty value is,
-where it used to be exported as `message=""`. Truncation applies to declared metrics from
-every transform, a `prometheus` rule without a `name` included, before any
-`metrics_prefix` is added and before `transform.rename_labels`, so a label
-keeps its `truncate: true` under the name a rename gives it, and after a
-label's [`value_map`](#mapping-text-to-values-and-scaling-them), for every kind of rule, so the
-value exported is the one cut, never a cut value mapped long again. Like a
-`value_map`, `truncate: true` goes by the metric's name: set on a label in
-one rule, it cuts that label of every series of the rule's name, those of
-the other rules of that name included, and those a `prometheus` rule
-without a `name` keeps under that name. Text that is not
-the UTF-8 it claims is [repaired](#character-encodings) first, so a value cut
-to the cap stays within it. A `python` script's labels are cut the same way
-when a rule of the collector names the script's metric and the label:
+A longer value is then cut to the limit, on a character boundary, and ends
+in `…`, which counts towards the limit.
+
+- A limit of 1 or 2 bytes has no room for the `…`, which is three bytes, so
+  the value is cut without it. When the value's first character does not fit
+  either (`日本` under a limit of 2), nothing is left, and the label is left
+  off the series, like every label with an empty value. It used to be
+  exported as `message=""`.
+- Truncation applies to declared metrics from every transform, including a
+  `prometheus` rule without a `name`. It happens before any `metrics_prefix`
+  is added and before `transform.rename_labels`, so a label keeps its
+  `truncate: true` under the name a rename gives it.
+- It happens after a label's
+  [`value_map`](#mapping-text-to-values-and-scaling-them), for every kind of
+  rule, so the exported value is the cut one, never a cut value mapped to a
+  long one again.
+- Like a `value_map`, `truncate: true` applies by the metric's name. Set on a
+  label in one rule, it cuts that label on every series with the rule's
+  name, including those of other rules with that name and those a
+  `prometheus` rule without a `name` keeps under that name.
+- Text that is not the UTF-8 it claims to be is
+  [repaired](#character-encodings) first, so a value cut to the limit stays
+  within it.
+- A static label whose value a
+  [probe's parameter](REQUESTS.md#in-label-values) fills is measured as the
+  filled text and, with `truncate: true`, cut as that text.
+
+**Python scripts.** A `python` script's labels are cut the same way when a
+rule of the collector names the script's metric and the label:
 `metrics: [{name: up, labels: [{name: note, expression: note, truncate:
-true}]}]` cuts the `note` label of the `up` series the script makes (the
-rule makes no series itself, and its `expression` is not read). Without such
-a rule the script cuts them, or the limit is raised. Naming a label to cut is
-all a `python` rule's label does, so one that sets `value`, and one that
-does not set `truncate: true`, is refused at startup: the script's series
-would not get the constant, nor the label an `expression` there seems to
-read, and nothing would say so. A constant for every series of the collector
-goes under [`transform.labels`](#collector-wide-labels), and one for some of
-them in the script's `metric(..., labels={...})`. The rule itself names the
-script's series and says nothing else: its `type`, `description`, `required`
-and `error_mode` are the script's to say and are refused, as a rule without
-a `name` is; see
+true}]}]` cuts the `note` label of the `up` series the script makes. The
+rule makes no series itself, and its `expression` is not read. Without such
+a rule, the script must cut the values itself, or the limit must be raised.
+
+Naming a label to cut is all that a `python` rule's label does. One that
+sets `value`, or that does not set `truncate: true`, is refused at startup:
+the script's series would not get the constant, nor the label that an
+`expression` there appears to read, and nothing would report it. A constant
+for every series of the collector belongs under
+[`transform.labels`](#collector-wide-labels), and one for some of them in the
+script's `metric(..., labels={...})`. The rule itself only names the script's
+series. Its `type`, `description`, `required` and `error_mode` are for the
+script to set and are refused, as is a rule without a `name`. See
 [What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for).
 
-A static label whose value a [probe's
-parameter](REQUESTS.md#in-label-values) fills is measured as the text it is
-filled to, and with `truncate: true` cut as that text is.
+**Other limits on a series.** They report in the same way when a scrape fails
+on them:
 
-The other limits on a series say the same when a scrape fails for them: more
-labels than `limits.max_labels_per_metric` (20 by default) as `metric "M" has
-24 labels, more than limits.max_labels_per_metric 20; drop labels it does not
-need or raise limits.max_labels_per_metric`, a help text over
-`limits.max_help_length` as `metric "M" help is 2100 bytes, longer than
-limits.max_help_length 2000; shorten it or raise limits.max_help_length`, and
-a name over `limits.max_metric_name_length` as `invalid metric name "M":
-longer than limits.max_metric_name_length 200` — a name the target or a
-script gives, since a rule's own name over it is refused at startup.
+- More labels than `limits.max_labels_per_metric` (20 by default): `metric
+  "M" has 24 labels, more than limits.max_labels_per_metric 20; drop labels
+  it does not need or raise limits.max_labels_per_metric`.
+- A help text over `limits.max_help_length`: `metric "M" help is 2100 bytes,
+  longer than limits.max_help_length 2000; shorten it or raise
+  limits.max_help_length`.
+- A name over `limits.max_metric_name_length`: `invalid metric name "M":
+  longer than limits.max_metric_name_length 200`. This is for a name the
+  target or a script gives; a rule's own name over the limit is refused at
+  startup.
 
 ### Long label names
 
-A label's name is capped by `limits.max_label_name_length`, 200 bytes by
-default, as a metric's name is by `limits.max_metric_name_length`. A name over
-the cap fails the whole scrape at validation, whatever gave the series the
-label — a series a `prometheus` transform passes through, a script's
-`labels={...}`, a rule — and whatever `error_handling` says, as a metric name
-over its cap does, and counts in `http_exporter_series_limit_exceeded_total`:
-`metric "M" label name "L" is longer than limits.max_label_name_length 200;
-rename the label with transform.rename_labels, or raise
-limits.max_label_name_length`. A name past 200 bytes is shown by its first 200
-and its length, `"lll..."... (10485760 bytes)`, so a target that writes a
-label name of megabytes is neither served nor quoted whole. The name is
-measured as the scrape exposes it, after `name_escaping`. A series whose
-metric name is over its cap as well fails on the metric name, and a label
-whose name and value are both over their caps fails on the name. `le` and
-`quantile`, which a histogram's buckets and a summary's quantiles carry, are
-label names too: a cap under 2 bytes fails every histogram, and one under 8
-every summary. A label name written in the configuration — a rule's label, a
-key of `transform.labels`, a `transform.rename_labels` target — that is over
-the cap as it would be exported is refused at startup; a rule's label or a key
-of `transform.labels` that `transform.rename_labels` renames or
-`transform.remove_labels` removes is not exported under that name, and is
-held neither to the cap, which its new name is, nor to its characters or the
-`__` Prometheus reserves ([UTF-8 names](#utf-8-names)). A static target's label over its
-collector's cap is refused when the target file is loaded, and so is every
-target of a collector whose cap is under 13 bytes: the static targets
-endpoint adds `static_target` to each of its series, and `collector` and
-`target` to its health series, after the cap is checked. The `file` label a
-collector reading a directory adds is checked with the rest, and fails the
-scrape under a cap of 4 bytes.
+A label's name is limited by `limits.max_label_name_length`, 200 bytes by
+default, as a metric's name is by `limits.max_metric_name_length`.
+
+- A name over the limit fails the whole scrape at validation, whatever gave
+  the series the label (a series a `prometheus` transform passes through, a
+  script's `labels={...}`, a rule) and whatever `error_handling` says, as a
+  metric name over its limit does. It counts in
+  `http_exporter_series_limit_exceeded_total`: `metric "M" label name "L" is
+  longer than limits.max_label_name_length 200; rename the label with
+  transform.rename_labels, or raise limits.max_label_name_length`.
+- A name longer than 200 bytes is shown by its first 200 bytes and its
+  length, `"lll..."... (10485760 bytes)`, so a target that writes a label
+  name of megabytes is neither served nor quoted in full.
+- The name is measured as the scrape exposes it, after `name_escaping`.
+- A series whose metric name is also over its limit fails on the metric
+  name. A label whose name and value are both over their limits fails on
+  the name.
+- `le` and `quantile`, which a histogram's buckets and a summary's quantiles
+  carry, are label names too. A limit under 2 bytes fails every histogram,
+  and one under 8 fails every summary.
+- The `file` label that a collector reading a directory adds is checked with
+  the rest, and fails the scrape under a limit of 4 bytes.
+
+Names written in the configuration are checked at startup:
+
+- A label name in the configuration (a rule's label, a key of
+  `transform.labels`, a `transform.rename_labels` target) that is over the
+  limit as it would be exported is refused at startup.
+- A rule's label or a key of `transform.labels` that
+  `transform.rename_labels` renames or `transform.remove_labels` removes is
+  not exported under that name. It is not checked against the limit (its
+  new name is), nor against the character rules or the `__` that Prometheus
+  reserves ([UTF-8 names](#utf-8-names)).
+- A static target's label over its collector's limit is refused when the
+  target file is loaded. So is every target of a collector whose limit is
+  under 13 bytes, because the static targets endpoint adds `static_target`
+  to each of its series, and `collector` and `target` to its health series,
+  after the limit is checked.
 
 ### Turning a status into metrics
 
-A status such as `operational` or `major_outage` is text, and a metric value is
-a number. Put the text in a label and the value `1` on one series per thing that
-has a status:
+A status such as `operational` or `major_outage` is text, and a metric value
+is a number. Put the text in a label and the value `1` on one series per
+thing that has a status:
 
 ```yaml
 - name: statuspage_component_status
@@ -2037,19 +2141,20 @@ has a status:
 statuspage_component_status{status="major_outage"}
 ```
 
-Only the current status has a series. When it changes, the old series ends and
-a new one starts, which Prometheus marks stale on the next scrape. The
-alternative is one series per possible status, `1` for the current one and `0`
-for the rest, which keeps every series alive at the cost of one series per
-status per component; choose it when you want `== 0` comparisons or an unbroken
-history per status. Counts — incidents by impact, say — are different: a `0`
-there is a real value, not a status that does not apply, so keep it.
+Only the current status has a series. When the status changes, the old
+series ends and a new one starts, and Prometheus marks the old one stale on
+the next scrape. The alternative is one series per possible status, `1` for
+the current one and `0` for the rest. That keeps every series alive, at the
+cost of one series per status per component. Choose it when you want `== 0`
+comparisons or an unbroken history per status. Counts, such as incidents by
+impact, are different: a `0` there is a real value, not a status that does
+not apply, so keep it.
 
-Keep free text — an incident's latest update, say — off such a series. Its
-value changes whenever the text does, and every change starts a new series, so
-an alert on the status would reset each time the page posts an update. Put the
-text on a separate series that exists only while it matters, with
-`truncate: true`, and join on it when you want it:
+Keep free text, such as an incident's latest update, off such a series. Its
+value changes whenever the text does, and every change starts a new series,
+so an alert on the status would reset each time the page posts an update.
+Put the text on a separate series that exists only while it matters, with
+`truncate: true`, and join on it when you need it:
 
 ```promql
 statuspage_component_status{status!="operational"}

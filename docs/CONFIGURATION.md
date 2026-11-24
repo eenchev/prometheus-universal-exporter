@@ -7650,93 +7650,112 @@ The editor reads a configured collector from
 
 A name that the configuration does not have is answered `404` with `error`.
 
-A run sends `collector`, the YAML, or `configured`, a name; and `body` with
-`content_type`, `status` and `headers`, or `target` with `params` and, for
-`collector`, `request_from`, the configured collector to fetch through, which
-the page fills with the one the playground was copied from; or
-`static_target`. `headers` and `params` are objects of names, each with a
-string, or a list of strings for a name given more than once,
-`{"X-Trace": ["one", "two"]}`: a pasted response then has the header once
-for each value, at most 100 values in all, a `header_<name>` parameter
-forwards each, and any other parameter given twice is refused, as `/probe`
-refuses it. It answers
-`200` with `ok`, `verdict` (what a probe would have answered), `series`
-(Prometheus text), `samples`, the same series one sample at a time as the
-table shows them, each with its `name` (a histogram's or summary's with its
-suffix), `metric` (the metric's name, as a lint finding names it), `type`,
-`labels` and `value` (as the text writes it, so `NaN` and `+Inf` are
-strings), `requests`, `response`, `stages`, `notes`, `lint`, the
-[metric lint](#metric-lint)'s findings, each with its `collector`, `rule`,
-`metric` and `message`, `report`, the text report, and, with OTLP enabled
-alone, `otlp`, what the *OTLP* tab shows: `metric_names`, `resource`
-(each a `key` and `value`), `resource_notes`, `scope`, `points` (each with
-`prometheus`, `name`, `kind`, `unit`, `attributes`, `value` and `notes`),
-`left_out` (each with its `reason`), `clashes`, `notes`, `body` and, with
-`otlp.logs`, `logs` (`level`, `records`, each with `time`,
-`severity_number`, `severity_text`, `body`, `attributes`, `exported`,
-`note` and, with `otlp.traces`, `trace_id`, `span_id` and `link`, `notes`
-and `body`), and with
-`otlp.traces`, `traces` (`threshold`, `errors`, `parent_based`,
-`sample_ratio`, `max_per_second`, `took`, `failed`, `exported`, `reason`
-when it would be, as `sampling.reason` names it, `why`, `spans`, each with `name`, `kind`, `depth`, `start_ms`,
-`duration_ms`, `status` and `attributes`, `notes` and `body`). A collector refused is answered `422` with `error`, a
-malformed run `400`, one too large `413`, a fetch or a scrape below `full`
-`403`. With `--web.debug.dangerous` an answer also has `dangerous: true`.
+**What a run sends.** A run sends the collector and one response:
 
-The endpoint test is `POST /debug/otlp-test` with `X-Debug-Run` and a
-JSON body `{"signal": "metrics"}`, `{"signal": "logs"}` or
-`{"signal": "traces"}`, answered with
-`ok`, `signal`, `endpoint`, `sent`, `body`, `status`, `took`, `failure`,
-`outcome`, `partial_success`, `headers`, `response` and `notes`; below
-`full` it is answered `403`, with the export off, or `logs` with
-`otlp.logs` off or `traces` with `otlp.traces` off, `409`, and while
-another test runs `429`, each with `error`.
+- the collector: `collector` (the YAML) or `configured` (a name);
+- the response, as one of:
+  - `body` with `content_type`, `status` and `headers`;
+  - `target` with `params` and, for `collector`, `request_from`: the
+    configured collector to fetch through, which the page fills with the one
+    the playground was copied from;
+  - `static_target`.
+
+`headers` and `params` are objects of names. Each name has a string, or a
+list of strings for a name given more than once,
+`{"X-Trace": ["one", "two"]}`. A pasted response then has the header once
+for each value, with at most 100 values in all. A `header_<name>` parameter
+forwards each value. Any other parameter given twice is refused, as `/probe`
+refuses it.
+
+**What it answers.** The answer is `200` with:
+
+- `ok`, and `verdict` (what a probe would have answered);
+- `series` (Prometheus text);
+- `samples`, the same series one sample at a time as the table shows them,
+  each with its `name` (a histogram's or summary's with its suffix),
+  `metric` (the metric's name, as a lint finding names it), `type`, `labels`
+  and `value` (as the text writes it, so `NaN` and `+Inf` are strings);
+- `requests`, `response`, `stages` and `notes`;
+- `lint`, the findings of the [metric lint](#metric-lint), each with its
+  `collector`, `rule`, `metric` and `message`;
+- `report`, the text report;
+- `otlp`, only with OTLP enabled: what the *OTLP* tab shows.
+
+`otlp` has `metric_names`, `resource` (each a `key` and `value`),
+`resource_notes`, `scope`, `points` (each with `prometheus`, `name`, `kind`,
+`unit`, `attributes`, `value` and `notes`), `left_out` (each with its
+`reason`), `clashes`, `notes` and `body`. It also has:
+
+- with `otlp.logs`, `logs`: `level`, `records` (each with `time`,
+  `severity_number`, `severity_text`, `body`, `attributes`, `exported`,
+  `note` and, with `otlp.traces`, `trace_id`, `span_id` and `link`), `notes`
+  and `body`;
+- with `otlp.traces`, `traces`: `threshold`, `errors`, `parent_based`,
+  `sample_ratio`, `max_per_second`, `took`, `failed`, `exported`, `reason`
+  when it would be exported (as `sampling.reason` names it), `why`, `spans`
+  (each with `name`, `kind`, `depth`, `start_ms`, `duration_ms`, `status`
+  and `attributes`), `notes` and `body`.
+
+A refused collector is answered `422` with `error`, a malformed run `400`, a
+run that is too large `413`, and a fetch or a scrape below `full` `403`.
+With `--web.debug.dangerous` an answer also has `dangerous: true`.
+
+The endpoint test is `POST /debug/otlp-test` with `X-Debug-Run` and a JSON
+body `{"signal": "metrics"}`, `{"signal": "logs"}` or
+`{"signal": "traces"}`. It is answered with `ok`, `signal`, `endpoint`,
+`sent`, `body`, `status`, `took`, `failure`, `outcome`, `partial_success`,
+`headers`, `response` and `notes`. Each refusal has `error`: `403` below
+`full`; `409` with the export off, or for `logs` with `otlp.logs` off or
+`traces` with `otlp.traces` off; and `429` while another test runs.
 
 ### Dangerous debug mode
 
 `--web.debug.dangerous`, off by default, lets the playground do what a
-configured collector does, for writing a collector whose script or files
-cannot be tried otherwise without putting it in the configuration. It
-needs `--web.debug=full`, and is refused at startup without it (exit status
-2); the exporter logs at `warn` when it starts with it on. The playground
+configured collector does. It is for writing a collector whose script or
+files cannot otherwise be tried without putting it in the configuration. It
+needs `--web.debug=full` and is refused at startup without it (exit status
+2). The exporter logs at `warn` when it starts with it on. The playground
 then:
 
-- **Runs Python**, a `python` transform and a `pre_script`, as a
-  configured collector's script runs: in the same worker pool and
-  [sandbox](PYTHON.md), which blocks opening files and sockets but is no
-  wall against a script written to get out, held to the same limits (`limits.script_timeout`, `max_script_memory`,
-  `max_output_bytes`, `--python.max-workers`) and to the run's deadline.
-  Its runs count in the pool-wide [Python worker
-  series](SELF-METRICS.md#python-workers) alone, under no collector's name,
-  and its worker is stopped once it has run, which those series count as a
-  stop for a reload.
-- **Names the server's files**: any request key ending in `_file` or
-  `_files`, and `request.login`, are taken.
-- **Makes its own request**: *Probe a target* with the playground, when it
-  is not a copy of a configured collector, fetches the target through the
+- **Runs Python**, both a `python` transform and a `pre_script`, as a
+  configured collector's script runs. It uses the same worker pool and
+  [sandbox](PYTHON.md), which blocks opening files and sockets but does not
+  stop a script written to escape it. It is held to the same limits
+  (`limits.script_timeout`, `max_script_memory`, `max_output_bytes`,
+  `--python.max-workers`) and to the run's deadline. Its runs count only in
+  the pool-wide [Python worker series](SELF-METRICS.md#python-workers),
+  under no collector's name. Its worker is stopped once it has run, which
+  those series count as a stop for a reload.
+- **Names the server's files**: any request key that ends in `_file` or
+  `_files`, and `request.login`, are accepted.
+- **Makes its own request**: *Probe a target* with a playground that is not
+  a copy of a configured collector fetches the target through the
   playground's own request block, as a probe of a configured collector
-  would, with the `allowed_targets`, `denied_targets` and credentials it
-  writes; it is then checked as a load checks a request, the files a
-  request needs required of it. This is what makes its files of use: a
-  `localfile` playground reads a file under the `root` it names, a
-  `bearer_token_file` or a TLS file is read for the request it is sent
-  with, and a `sql` playground connects to the database it names. A copy
-  of a configured collector still fetches through that collector, whose
-  credentials the copy does not have, and a pasted response still makes no
-  request. *Copy as* copies no probe of the playground's own request:
-  `/probe` runs only the configured collectors.
+  would, with the `allowed_targets`, `denied_targets` and credentials that
+  it writes. The playground is then checked as a load checks a request, and
+  the files that a request needs are required.
+  - This is what makes its files useful: a `localfile` playground reads a
+    file under the `root` it names, a `bearer_token_file` or a TLS file is
+    read for the request it is sent with, and a `sql` playground connects to
+    the database it names.
+  - A copy of a configured collector still fetches through that collector,
+    whose credentials the copy does not have, and a pasted response still
+    makes no request.
+  - *Copy as* copies no probe of the playground's own request, because
+    `/probe` runs only the configured collectors.
 
-`${NAME}` references are still left as written: the environment is where a
-deployment keeps its secrets, and a collector written on the page can name
-a file instead.
+`${NAME}` references are still left as written. The environment is where a
+deployment keeps its secrets, and a collector written on the page can name a
+file instead.
 
-The page then says so in a red banner in place of its usual note, every
-page's bar carries a *Dangerous debug mode* badge, and `/debug/run` answers
+The page then shows a red banner in place of its usual note, the bar of
+every page carries a *Dangerous debug mode* badge, and `/debug/run` answers
 `dangerous: true`. Whoever can open the page can run code on the server,
-read any file the exporter's user can through a playground's request, and
-reach any host the exporter can: use it
-on a machine of your own, or in a debugging session no one else can reach,
-and never on a shared deployment ([Debugging](AUTHENTICATION.md#debugging-collectors)).
+read any file that the exporter's user can read through a playground's
+request, and reach any host that the exporter can reach. Use this mode on
+your own machine, or in a debugging session that no one else can reach, and
+never on a shared deployment
+([Debugging](AUTHENTICATION.md#debugging-collectors)).
 
 ### Debug probes
 
@@ -7784,79 +7803,83 @@ Metrics a probe would have served
 
 The report lists:
 
-- **Requests:** every request the trip sent, retries and redirects included,
-  with its headers and how it ended. A redirect is listed with the headers it
-  was sent, and one to a host that is neither the request's origin nor in
-  [`redirect_trusted_hosts`](REQUESTS.md#what-a-followed-redirect-carries)
-  with a line of the headers it was not sent, by name: `not sent:
-  Authorization, X-Api-Key — the redirect leads to a host that is not the
-  origin the request was made to and is not in
-  request.redirect_trusted_hosts`. A `grpc` call is listed with its method,
-  metadata and status code. A `localfile` read, which sends nothing, is
-  listed as the file it reads. A URL longer than 512 bytes is listed by its
-  first 512. An `http` or `graphite` request that is retried ends the list
-  with how: `Retries: up to 2, 1s apart, on a failed connection and on an
-  answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
-  collector's [`retry`](REQUESTS.md#retries) or the static target's. Under
-  [`retry.retry_after`](REQUESTS.md#waiting-as-retry-after-asks) the line
-  adds that such an answer's `Retry-After` replaces the backoff, and each
-  request retried has a line of the wait taken and why, `then waited 3s, as
-  Retry-After asked`, or of why it was not retried: `not retried: its
-  Retry-After asks for 2m0s, longer than the 9.2s left of the probe's time`.
-  A request that waited for its turn under
-  [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line of how long
-  and why: `sent after waiting 500ms for its turn under the rate limit of 2
-  requests per second for http://legacy.example:80`, and so has one that
-  waited under an entry of [`rate_limits`](REQUESTS.md#rate-limits-per-host):
-  `sent after waiting 200ms for its turn under the rate limit of 5 requests
-  per second of rate_limits entry "billing_api" for api.billing.example`.
-- **Response:** the status, the headers — the first 100 of them, each value
-  by its first 1,024 bytes — and the body, up to 64 KiB, as the
-  target sent them: the `Content-Type` is the target's own, not the
-  `charset=utf-8` the rules see after the body is
-  [converted](#character-encodings). A body in another encoding is listed with
-  its size as sent and what it was converted from —
-  `Body: 3174 bytes in windows-1251, converted to UTF-8 before decoding and
-  shown here as UTF-8` — and shown as the same text in UTF-8, since the report
-  is UTF-8. A body that is not text is shown only by its length, and a
-  directory as its files.
-- **Stages:** each stage with how long it took and how it ended. A stage whose
-  `error_handling` carried on says so.
-- **Transform:** the series each metric got, the rules that got none, and the
-  rules that carried on without some of their series, each by itself with
-  how many and its first error, and with its expression where several rules
-  export its metric name. A `prometheus` rule without a name is listed as
-  `rule without a name`, and a metric's name longer than 200 bytes by its
-  first 200.
-- **Logs:** everything the trip logged at any level, whatever `--log.level`
-  is, including what a Python script printed, and what the transform took
-  of memory beside the limit it is held to: what a `jq` or `yq`
-  transform's expressions held at their most
+- **Requests:** every request that the trip sent, including retries and
+  redirects, with its headers and how it ended.
+  - A redirect is listed with the headers it was sent. A redirect to a host
+    that is neither the request's origin nor in
+    [`redirect_trusted_hosts`](REQUESTS.md#what-a-followed-redirect-carries)
+    also has a line that names the headers it was not sent: `not sent:
+    Authorization, X-Api-Key — the redirect leads to a host that is not the
+    origin the request was made to and is not in
+    request.redirect_trusted_hosts`.
+  - A `grpc` call is listed with its method, metadata and status code. A
+    `localfile` read, which sends nothing, is listed as the file it reads. A
+    URL longer than 512 bytes is listed by its first 512.
+  - For an `http` or `graphite` request that is retried, the list ends with
+    how: `Retries: up to 2, 1s apart, on a failed connection and on an
+    answer of 404, 408, 425, 429, 5xx that is not accepted.`, from the
+    collector's [`retry`](REQUESTS.md#retries) or the static target's.
+  - Under [`retry.retry_after`](REQUESTS.md#waiting-as-retry-after-asks) the
+    line adds that the `Retry-After` of such an answer replaces the backoff.
+    Each retried request has a line with the wait taken and why, `then
+    waited 3s, as Retry-After asked`, or with why it was not retried: `not
+    retried: its Retry-After asks for 2m0s, longer than the 9.2s left of the
+    probe's time`.
+  - A request that waited for its turn under
+    [`request.rate_limit`](REQUESTS.md#rate-limiting) has a line with how
+    long and why: `sent after waiting 500ms for its turn under the rate
+    limit of 2 requests per second for http://legacy.example:80`. So has one
+    that waited under an entry of
+    [`rate_limits`](REQUESTS.md#rate-limits-per-host): `sent after waiting
+    200ms for its turn under the rate limit of 5 requests per second of
+    rate_limits entry "billing_api" for api.billing.example`.
+- **Response:** the status, the headers (the first 100, each value by its
+  first 1,024 bytes) and the body, up to 64 KiB, as the target sent them.
+  The `Content-Type` is the target's own, not the `charset=utf-8` that the
+  rules see after the body is [converted](#character-encodings). A body in
+  another encoding is listed with its size as sent and what it was converted
+  from, `Body: 3174 bytes in windows-1251, converted to UTF-8 before
+  decoding and shown here as UTF-8`, and is shown as the same text in UTF-8,
+  because the report is UTF-8. A body that is not text is shown only by its
+  length, and a directory as its files.
+- **Stages:** each stage with how long it took and how it ended. A stage
+  whose `error_handling` carried on says so.
+- **Transform:** the series that each metric got, the rules that got none,
+  and the rules that carried on without some of their series. Each of the
+  last is listed separately with how many and its first error, and with its
+  expression where several rules export its metric name. A `prometheus` rule
+  without a name is listed as `rule without a name`, and a metric's name
+  longer than 200 bytes by its first 200.
+- **Logs:** everything that the trip logged at any level, whatever
+  `--log.level` is, including what a Python script printed. It also shows
+  the memory that the transform used beside the limit it is held to: the
+  peak that the expressions of a `jq` or `yq` transform held
   ([`limits.max_expression_memory`](#memory)), measured with garbage
-  collections a scrape is not worth, and the most address space a Python
-  script's worker has had
+  collections that a normal scrape does not spend, and the most address
+  space that a Python script's worker has had
   ([`limits.max_script_memory`](PYTHON.md#how-scripts-run)).
-- **Lint:** the [metric lint](#metric-lint)'s advice on the collector and on
-  the series the run made, one finding a line, or `none`, and the rules the
-  collector's `lint.ignore` silences. It changes nothing of what a probe
-  answers.
-- **Metrics:** the exposition a probe would have served, and before the
-  report, the status a probe would have answered. Where `cache.stale_if_error`
-  would have answered with the last good result, the report says so.
+- **Lint:** the advice of the [metric lint](#metric-lint) on the collector
+  and on the series that the run produced, one finding per line, or `none`,
+  and the rules that the collector's `lint.ignore` silences. It changes
+  nothing of what a probe answers.
+- **Metrics:** the exposition that a probe would have served and, before the
+  report, the status that a probe would have answered. Where
+  `cache.stale_if_error` would have answered with the last good result, the
+  report says so.
 - **Backoff:** where [`failure_backoff`](#backing-off-from-failing-targets)
   is backing off from the target, a line under the first two says so, with
-  the failures and the time of the next try — `The target is backing off
+  the failures and the time of the next try: `The target is backing off
   after 3 consecutive failed scrapes (failure_backoff): probes and scrapes
   fail without contacting it until 2026-10-23T09:14:05Z. This run contacted
-  it all the same, and changes nothing of that.` The debug probe contacts the
-  target whatever the backoff says, and its outcome neither starts, lengthens
-  nor ends one.
+  it all the same, and changes nothing of that.` The debug probe contacts
+  the target whatever the backoff says, and its outcome does not start,
+  lengthen or end a backoff.
 
-A target can make most of that as long as it likes — the URL a redirect led
-to, a header's value, the message of a gRPC status, a metric's name — and a
-report is read by a person and made in memory whole. So everything in it but
-the body has a bound, and what is cut says so with its whole length, as a
-long [error](LOGGING.md#repeated-failures) does:
+A target can make most of this arbitrarily long: the URL that a redirect led
+to, a header's value, the message of a gRPC status, a metric's name. A
+report is read by a person and is built whole in memory. Everything in it
+except the body therefore has a bound, and whatever is cut says so with its
+full length, as a long [error](LOGGING.md#repeated-failures) does:
 
 ```text
   2. GET http://10.0.0.7/LLLLLLLL... (921645 bytes) (redirect) -> 200 OK in 3ms
@@ -7866,177 +7889,191 @@ long [error](LOGGING.md#repeated-failures) does:
 ```
 
 - **A line** longer than 8,192 bytes is shown by its first 8,192 bytes, cut
-  between two characters, and `... (N bytes)`, the length of the whole line.
-  That holds for every line of the report but the body's, whatever it is: the
-  first line with a long target, a log line, a line of the exposition. The
-  bound is past what is bounded already, so an error at its 2,000 bytes keeps
-  its own length in the line that quotes it, and the 4,096 characters the log
-  keeps of what a script printed are shown whole.
+  between two characters, followed by `... (N bytes)`, the length of the
+  whole line. This applies to every line of the report except the body's:
+  the first line with a long target, a log line, a line of the exposition.
+  The bound is larger than the bounds that already apply, so an error cut at
+  its 2,000 bytes keeps its own length in the line that quotes it, and the
+  4,096 characters that the log keeps of what a script printed are shown
+  whole.
 - **The body** keeps its own bound, 64 KiB, and its lines are shown as they
   are, however long.
-- **A request's URL** is shown by its first 512 bytes and **a metric's name**
-  in the Transform section by its first 200, as an error shows them, each
-  with its length, so that how the request ended and how many series the
-  metric got are still on the line.
-- **A header's value** is shown by its first 1,024 bytes and its length, and
-  **the headers** of a request or a response are listed up to the first 100,
-  in the order of their names, and then how many there are.
-- **A line of the exposition** that is cut is no valid exposition any more,
-  so the section then starts with `Lines longer than 8192 bytes are cut below
+- **A request's URL** is shown by its first 512 bytes and **a metric's
+  name** in the Transform section by its first 200, as an error shows them,
+  each with its length. How the request ended and how many series the metric
+  got therefore remain on the line.
+- **A header's value** is shown by its first 1,024 bytes and its length.
+  **The headers** of a request or a response are listed up to the first 100,
+  in the order of their names, followed by how many there are.
+- **A line of the exposition** that is cut is no longer valid exposition, so
+  the section then starts with `Lines longer than 8192 bytes are cut below
   (3 of them), so this is not valid exposition as it stands; a probe serves
-  them whole.` Only the report is cut: the answer of the probe itself, the
+  them whole.` Only the report is cut. The answer of the probe itself, the
   line that says what a probe would have answered, the response cache, the
-  self-metrics and what is exported over OTLP are what they are without a
+  self-metrics and what is exported over OTLP are the same as without a
   debug probe.
 
-What the report redacts, listed below, is withheld before anything is cut,
-and no cut ends inside a `<redacted>`. The number of lines is
-bounded by the collector's own limits: the Transform section has a line for
-each metric name and the exposition one for each series, up to
-`limits.max_metrics`, and a directory one for each file read, up to
-`request.max_files`, and for each file skipped.
+What the report redacts (listed below) is withheld before anything is cut,
+and no cut ends inside a `<redacted>`. The number of lines is bounded by the
+collector's own limits. The Transform section has a line for each metric
+name and the exposition one for each series, up to `limits.max_metrics`. A
+directory has a line for each file read, up to `request.max_files`, and one
+for each file skipped.
 
 A [static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged
 at `/static-targets?debug=<name>`, and the [debug page](#the-debug-page)
 shows the same report for its runs.
 
 The report always answers `200` with `text/plain`, whatever the probe would
-have answered. It takes the same parameters as the probe. For debug, `true`,
-`1` or an empty value turn it on and `false` or `0` leave the probe as it is;
-any other value is answered `400`.
+have answered. It takes the same parameters as the probe. For `debug`,
+`true`, `1` or an empty value turn it on, and `false` or `0` leave the probe
+as it is. Any other value is answered `400`.
 
-A debug probe always goes to the target, and leaves nothing behind. It is
-not answered from the response cache and does not fill it — it only reads the
-stale result a probe would have answered with, and the response a probe
-would [revalidate](#revalidating-expired-responses), sending the same
-conditional request without refreshing the entry — it does not share an identical probe in
-flight, and it is not exported over OTLP or counted in the self-metrics but
-`http_exporter_debug_runs_total`, which is what the report's line "records
-no self-metric but http_exporter_debug_runs_total" says. One thing is
-counted all the same: a Python script it runs is run by the collector's
-workers, and the [Python worker series](SELF-METRICS.md#python-workers)
-count what the workers did, a debug probe's runs among them. Its
-failures go to its report, not to the exporter's log, which records only one
-`probe debug report served` line at `info` (a debug scrape's `static target
-debug report served`), on stderr alone: the [log export](OTLP.md#the-exporters-own-log)
-does not take it. The target's
-[`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
-[`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
-and [the probe's deadline](#probe-deadlines) apply as they do to any probe.
-A trip that panics — a bug, in a request type, a decoder or a transform — is
-reported as the `500` a probe would have answered, `probe failed: the scrape
-panicked; the exporter's log has the panic`, with the panic's message in the
-report's log, a URL's userinfo and anything else that reads as a credential
-in it withheld; it is logged with its stack, and its slot is given back as
-after any other trip.
+A debug probe always goes to the target and leaves nothing behind:
 
-Below `--web.debug=full`, `debug=true` is answered `403`, before the target
+- **Cache.** It is not answered from the response cache and does not fill
+  it. It only reads the stale result that a probe would have answered with,
+  and the response that a probe would
+  [revalidate](#revalidating-expired-responses), and sends the same
+  conditional request without refreshing the entry.
+- **Sharing.** It does not share an identical probe in flight.
+- **Export and self-metrics.** It is not exported over OTLP and not counted
+  in the self-metrics, except `http_exporter_debug_runs_total`. That is the
+  meaning of the report's line "records no self-metric but
+  http_exporter_debug_runs_total". One more thing is counted: a Python
+  script that it runs is run by the collector's workers, and the
+  [Python worker series](SELF-METRICS.md#python-workers) count what the
+  workers did, including a debug probe's runs.
+- **Log.** Its failures go to its report, not to the exporter's log. The log
+  records only one `probe debug report served` line at `info` (for a debug
+  scrape, `static target debug report served`), on stderr only: the
+  [log export](OTLP.md#the-exporters-own-log) does not take it.
+- **Limits.** The target's
+  [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
+  [`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
+  and [the probe's deadline](#probe-deadlines) apply as they do to any
+  probe.
+- **Panics.** A trip that panics (a bug in a request type, a decoder or a
+  transform) is reported as the `500` that a probe would have answered,
+  `probe failed: the scrape panicked; the exporter's log has the panic`. The
+  panic's message is in the report's log, with a URL's userinfo and anything
+  else in it that looks like a credential withheld. The panic is logged with
+  its stack, and its slot is released as after any other trip.
+
+Below `--web.debug=full`, `debug=true` is answered `403` before the target
 is contacted. When `web.basic_auth` is configured, a debug probe needs the
-same credentials as a probe. The report, and the page's JSON alike, redacts:
+same credentials as a probe. The report and the page's JSON both redact:
 
-- every query value in the errors that quote a URL, and in the requests
-  listed every one but those the collector's configuration sets as its file
-  writes them: a value of `request.query` without a placeholder, as `view=full`
-  above, a `graphite` collector's expressions without placeholders, `from`,
-  `until` and `format=json`, and a `kubernetes` listing's `limit` and
-  selectors. A value a probe parameter or a placeholder gives, as
-  `tenant={{param_tenant}}` above, one a `${NAME}` reference expanded to,
-  which is the environment's, the target's own query, a static target's
-  own keys, the API server's `continue` token and the value of any parameter
-  whose name reads as a credential's (below) stay masked, and so does a
-  pair next to a `;`, which a server may split. The query is otherwise
-  shown as it was sent: each pair where it stood and as it was written, a
-  pair with a `;` or a malformed escape included
+- every query value in the errors that quote a URL. In the requests listed,
+  every query value is masked except those that the collector's
+  configuration sets literally in its file: a value of `request.query`
+  without a placeholder (`view=full` above), a `graphite` collector's
+  expressions without placeholders, `from`, `until` and `format=json`, and a
+  `kubernetes` listing's `limit` and selectors. These stay masked:
+  - a value that a probe parameter or a placeholder gives
+    (`tenant={{param_tenant}}` above);
+  - a value that a `${NAME}` reference expanded to, which comes from the
+    environment;
+  - the target's own query, and a static target's own keys;
+  - the API server's `continue` token;
+  - the value of any parameter whose name looks like a credential's (below);
+  - a pair next to a `;`, which a server may split.
+
+  The query is otherwise shown as it was sent: each pair in its position and
+  as it was written, including a pair with a `;` or a malformed escape
   ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
-- the values of request and response headers whose names read as
-  credentials ([the rule](LOGGING.md#repeated-failures) the logs follow): a
-  name one of whose words contains, in any case, `auth`, `cookie`, `token`,
-  `secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`,
-  `session`, `signature`, `credential` or `jwt`, unless the word is an
-  ordinary one that only holds it, such as `author`, `authority`, `monkey`,
-  `keyboard` or `tokenizer`; or with `sig`, `pwd`, `pw`, `pass`, `sid`,
-  `hmac` or `otp` as a whole word of it, as in `X-Sig` or `X-Db-Pwd`. A
-  query parameter's name reads as a credential's also with `code` (OAuth's
-  authorization code) or `ticket` (a CAS ticket) as a whole word of it;
-- the value of a path parameter whose name reads as a query parameter's
-  would, `/app;jsessionid=<redacted>`, in every URL shown.
-- the URL of a header that carries one — `Location`, `Content-Location`,
-  `Refresh` and each `<…>` of `Link` — as a request line's: every query
-  value and a credential's path parameter masked, so a redirect's
-  `Location: /app;jsessionid=<redacted>?code=<redacted>` shows where it led
-  without what it carried.
+- the values of request and response headers whose names look like
+  credentials ([the rule](LOGGING.md#repeated-failures) that the logs
+  follow). That is a name with a word that contains, in any letter case,
+  `auth`, `cookie`, `token`, `secret`, `password`, `passwd`, `passphrase`,
+  `passcode`, `key`, `session`, `signature`, `credential` or `jwt`, unless
+  the word is an ordinary one that only contains it, such as `author`,
+  `authority`, `monkey`, `keyboard` or `tokenizer`. It is also a name with
+  `sig`, `pwd`, `pw`, `pass`, `sid`, `hmac` or `otp` as a whole word, as in
+  `X-Sig` or `X-Db-Pwd`. A query parameter's name also counts with `code`
+  (OAuth's authorization code) or `ticket` (a CAS ticket) as a whole word;
+- the value of a path parameter whose name would count for a query
+  parameter, `/app;jsessionid=<redacted>`, in every URL shown;
+- the URL of a header that carries one (`Location`, `Content-Location`,
+  `Refresh` and each `<…>` of `Link`), masked like a request line's: every
+  query value and a credential's path parameter. A redirect's
+  `Location: /app;jsessionid=<redacted>?code=<redacted>` therefore shows
+  where it led without what it carried.
 
 Request bodies are not shown. A secret under any other header name, or in
 the response itself, is shown as the target sent it.
 
 ## Readiness
 
-`/health` answers `200` for as long as the process runs. `/ready` answers `200`
-when the exporter should be sent probes, and `503` when it should not, with one
-`not ready:` line per reason:
+`/health` answers `200` for as long as the process runs. `/ready` answers
+`200` when the exporter should be sent probes and `503` when it should not,
+with one `not ready:` line per reason:
 
-- With `otlp.unready_after_failures` set, that many OTLP exports to the
-  current endpoint failed in a row, retries included (see
-  [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
-  is off by default, since an exporter whose exports fail still answers
-  probes, and at most 1000. It counts the metrics' exports alone: failing
-  exports of the exporter's own log ([`otlp.logs`](OTLP.md#the-exporters-own-log))
-  and of traces ([`otlp.traces`](OTLP.md#traces-of-slow-requests)) never make
-  the exporter unready.
-- The exporter received `SIGTERM` or `SIGINT` and is waiting out
-  `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
-  It never becomes ready again.
+- With `otlp.unready_after_failures` set: that many consecutive OTLP exports
+  to the current endpoint failed, including retries (see
+  [Delivery](OTLP.md#delivery)). The exporter is ready again once an export
+  succeeds. The setting is off by default, because an exporter whose exports
+  fail still answers probes, and is at most 1000. It counts only the exports
+  of metrics: failing exports of the exporter's own log
+  ([`otlp.logs`](OTLP.md#the-exporters-own-log)) and of traces
+  ([`otlp.traces`](OTLP.md#traces-of-slow-requests)) never make the exporter
+  unready.
+- The exporter received `SIGTERM` or `SIGINT` and is waiting for
+  `--web.shutdown-delay` to pass before it stops; see
+  [Shutting down](#shutting-down). It never becomes ready again.
 - In [allocator mode](#configuration-from-the-target-allocator), no bundle
   from the allocator is in force yet: `not ready: no configuration yet:
-  waiting for the allocator`. Ready once the first is.
+  waiting for the allocator`. The exporter is ready once the first one is.
 
 Neither endpoint needs credentials, so the reasons never include an error's
-text; the log and the [self-metrics](SELF-METRICS.md) have the details.
+text. The log and the [self-metrics](SELF-METRICS.md) have the details.
 
 A rejected reload, of the configuration or of the static target file, leaves
-the exporter ready: it keeps answering probes from the configuration in force.
-Every replica rejects the same ConfigMap edit, so making them unready would
-leave the Service with no endpoints and fail every probe the exporter could
-still answer. The rejection shows where it costs nothing:
-`http_exporter_config_last_reload_successful` reads `0` until a reload of the
-file is accepted, which is what to alert on (see
-[Configuration reloads](SELF-METRICS.md#configuration-reloads)), the reload
-logs an `ERROR` line with the reason, and `/-/reload` answers `500`.
+the exporter ready: it keeps answering probes from the configuration in
+force. Every replica rejects the same ConfigMap edit, so making them unready
+would leave the Service with no endpoints and fail every probe that the
+exporter could still answer. The rejection is reported in other ways:
 
-In Kubernetes, a pod that is not ready is taken out of its Service, and
-Prometheus stops probing through it. Setting `otlp.unready_after_failures`
-takes a pod out of its Service while its OTLP endpoint fails, which also stops
-Prometheus probing through it; set it only where OTLP delivery is the pod's
-job.
+- `http_exporter_config_last_reload_successful` reads `0` until a reload of
+  the file is accepted. Alert on this (see
+  [Configuration reloads](SELF-METRICS.md#configuration-reloads)).
+- The reload logs an `ERROR` line with the reason.
+- `/-/reload` answers `500`.
+
+In Kubernetes, a pod that is not ready is removed from its Service, and
+Prometheus stops probing through it. `otlp.unready_after_failures` therefore
+removes a pod from its Service while its OTLP endpoint fails, which also
+stops Prometheus from probing through it. Set it only where OTLP delivery is
+the pod's job.
 
 ### Health checks
 
-The image has no `curl` or `wget`, so the exporter asks itself:
-`--healthcheck` sends one `GET /ready` to the exporter listening at
-`--web.listen-address` and exits `0` when it answers `200`, and `1`
-otherwise, logging one JSON line to stderr saying why: the status and
-`/ready`'s reasons, or the error of a connection that failed.
-`--healthcheck=health` asks `/health` instead, for a liveness check, which
-stays `200` while the exporter is not ready.
+The image has no `curl` or `wget`, so the exporter checks itself.
+`--healthcheck` sends one `GET /ready` to the exporter that listens at
+`--web.listen-address`. It exits `0` when the answer is `200` and `1`
+otherwise, and logs one JSON line to stderr with the reason: the status and
+the reasons from `/ready`, or the error of a failed connection.
+`--healthcheck=health` requests `/health` instead, for a liveness check,
+which stays `200` while the exporter is not ready.
 
 ```sh
 prometheus-universal-exporter --healthcheck --web.listen-address=:8080
 prometheus-universal-exporter --healthcheck=health --web.listen-address=:8080
 ```
 
-A listen address with no host, or with a wildcard (`0.0.0.0`, `[::]` or
-`[::ffff:0.0.0.0]`), is asked on `127.0.0.1`: the exporter's `[::]` listener
-answers IPv4 too, and listens on IPv4 alone on a host without IPv6, where
-`[::1]` could not be reached. A name or a particular address is asked as it
-is, an IPv6 zone included (`[fe80::1%eth0]:8080`), and a named port such as
-`:http` by its number.
-The check gives up after 5 seconds. It starts no server, reads no file and
-loads no configuration, so it takes a few milliseconds. The other flags are
-checked as at a start, so the container's own arguments can be given with
-it, but only the listen address is used. It sends no credentials, since
-`/health` and `/ready` never ask for them, with `web.basic_auth` on too, and
-ignores `HTTP_PROXY`.
+- A listen address with no host, or with a wildcard (`0.0.0.0`, `[::]` or
+  `[::ffff:0.0.0.0]`), is requested on `127.0.0.1`. The exporter's `[::]`
+  listener answers IPv4 too, and listens on IPv4 only on a host without
+  IPv6, where `[::1]` could not be reached.
+- A name or a specific address is used as it is, including an IPv6 zone
+  (`[fe80::1%eth0]:8080`), and a named port such as `:http` by its number.
+- The check gives up after 5 seconds. It starts no server, reads no file and
+  loads no configuration, so it takes a few milliseconds.
+- The other flags are checked as at a start, so the container's own
+  arguments can be given with it, but only the listen address is used.
+- It sends no credentials, because `/health` and `/ready` never ask for
+  them, even with `web.basic_auth` on, and it ignores `HTTP_PROXY`.
 
 The image's `HEALTHCHECK` runs `--healthcheck` at `:8080`, the address its
 `CMD` gives, so `docker ps` shows the container `healthy` while the exporter
@@ -8050,32 +8087,39 @@ probes GET the endpoints, or run the check with
 
 ## Shutting down
 
-On `SIGTERM` or `SIGINT` the exporter first waits `--web.shutdown-delay`, 0 by
-default, still answering probes but with `/ready` answering `503` (`not ready:
-the exporter is shutting down`), so a load balancer or a Kubernetes Service
-takes it out of rotation before it stops listening. Kubernetes takes a few
-seconds to remove a terminating pod from its Service; without the delay,
-probes that arrive in that gap are refused and Prometheus records failed
-scrapes on every rollout. The Helm chart sets it to 5 seconds. Static targets
-keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
-through the delay.
+On `SIGTERM` or `SIGINT` the exporter first waits for `--web.shutdown-delay`
+(0 by default). During the delay it still answers probes, but `/ready`
+answers `503` (`not ready: the exporter is shutting down`), so a load
+balancer or a Kubernetes Service takes it out of rotation before it stops
+listening. Kubernetes takes a few seconds to remove a terminating pod from
+its Service. Without the delay, probes that arrive in that gap are refused,
+and Prometheus records failed scrapes on every rollout. The Helm chart sets
+the delay to 5 seconds. During the delay, static targets are still scraped
+and the [OTLP export](OTLP.md#shutting-down) keeps running.
 
-Then it stops accepting connections, cuts short the
-[static target](STATIC-TARGETS.md) scrapes in flight, lets the
-probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
-default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
-followed, with [`otlp.traces`](OTLP.md#traces-of-slow-requests), by the
-last export of the spans waiting and, with
-[`otlp.logs`](OTLP.md#the-exporters-own-log), by the last export of its own
-log within the same `otlp.timeout`,
-and exits `0`. The static target scrapes are not waited for: their results are
-served by this exporter alone, which is stopping, so a target that does not
-answer would only hold the shutdown up. A scrape cut short publishes nothing
-and logs nothing above `debug`; the target's last result stands, and the last
-OTLP export goes without what that scrape would have queued. Nothing else the
-exporter runs on its own holds the shutdown up: the configuration watch stops
-as the shutdown begins, and the [allocator](ALLOCATOR.md) client, which keeps
-saying the replica is shutting down, once the probes are done.
+After the delay, the exporter:
+
+1. stops accepting connections;
+2. cuts short the [static target](STATIC-TARGETS.md) scrapes in flight;
+3. lets the probes in progress finish for up to `--web.shutdown-timeout`
+   (15 seconds by default, long enough for a typical 10s scrape timeout);
+4. makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled. With
+   [`otlp.traces`](OTLP.md#traces-of-slow-requests) it is followed by the
+   last export of the waiting spans, and with
+   [`otlp.logs`](OTLP.md#the-exporters-own-log) by the last export of its
+   own log, within the same `otlp.timeout`;
+5. exits `0`.
+
+The static target scrapes are not waited for. Their results are served only
+by this exporter, which is stopping, so a target that does not answer would
+only delay the shutdown. A scrape that is cut short publishes nothing and
+logs nothing above `debug`. The target's last result stands, and the last
+OTLP export goes without what that scrape would have queued.
+
+Nothing else that the exporter runs on its own delays the shutdown. The
+configuration watch stops when the shutdown begins. The
+[allocator](ALLOCATOR.md) client, which keeps reporting that the replica is
+shutting down, stops once the probes are done.
 
 The log says what the shutdown waits for, and for how long at most:
 
@@ -8084,43 +8128,51 @@ The log says what the shutdown waits for, and for how long at most:
 {"level":"INFO","msg":"shutting down: still waiting for 1 probe in progress, 10s left","probes":1,"other_requests":0,"time_left":"10s"}
 ```
 
-`other_requests` counts the requests in progress that are not probes, such as
-a scrape of the self-metrics, which the shutdown waits for as well. While it
-waits it says every 5 seconds what it still waits for; with nothing in
-progress it says `shutting down: no probes in progress; exiting`, or that it
-sends the last OTLP export, and does not wait. When the timeout runs out with
-probes still in progress it logs an error saying it gave up on them and closed
-their connections — Prometheus records those as failed scrapes — and still
-exits `0`: the exporter stopped as asked, and a probe cut off is Prometheus's
-failed scrape, not the exporter's. Keep the timeout at least as long as the
-longest scrape timeout of the monitors that probe the exporter, so a rollout
-does not cut probes off:
+`other_requests` counts the requests in progress that are not probes, such
+as a scrape of the self-metrics. The shutdown waits for those too.
+
+- While it waits, the exporter logs every 5 seconds what it still waits for.
+- With nothing in progress it logs `shutting down: no probes in progress;
+  exiting`, or that it sends the last OTLP export, and does not wait.
+- When the timeout runs out with probes still in progress, it logs an error
+  that says it gave up on them and closed their connections. Prometheus
+  records those as failed scrapes. The exporter still exits `0`: it stopped
+  as requested, and a probe that was cut off is a failed scrape for
+  Prometheus, not a failure of the exporter.
+
+Keep the timeout at least as long as the longest scrape timeout of the
+monitors that probe the exporter, so that a rollout does not cut probes off:
 
 ```sh
 prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 ```
 
-In Kubernetes the pod must also be allowed to run that long: its
-`terminationGracePeriodSeconds`, 30 by default, has to cover a preStop
-hook's sleep, the delay, the timeout and the last OTLP export. The Helm
-chart's `server.shutdownDelay` and `server.shutdownTimeout` set the flags,
-its `preStop` the hook, and they raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time, the delay
-included, ends the process at once — the second Ctrl-C of an impatient
-operator, or a supervisor that signals twice — without waiting for the probes
-or the export. It logs one line first,
-`second signal: exiting now, 1 probe in progress left unfinished`, and the
-process is then ended by that signal, as an exporter that did not catch it
-would be: a shell reports `130` for `SIGINT` and `143` for `SIGTERM`, and
-Kubernetes the same exit codes. An exporter started with the signal ignored,
-as a script's background job is with `SIGINT`, exits with that same status
-instead, a second later. `SIGTERM` and `SIGINT` do the same throughout.
-A `SIGHUP` in that time [reloads](#reloading-on-demand) as at any other, and
-does not end the process.
+In Kubernetes the pod must also be allowed to run that long. Its
+`terminationGracePeriodSeconds`, 30 by default, must cover a preStop hook's
+sleep, the delay, the timeout and the last OTLP export. The Helm chart's
+`server.shutdownDelay` and `server.shutdownTimeout` set the flags, its
+`preStop` sets the hook, and they raise the grace period to match.
+
+A second `SIGTERM` or `SIGINT` during that time, including the delay, ends
+the process immediately, without waiting for the probes or the export. This
+covers the second Ctrl-C of an impatient operator and a supervisor that
+signals twice.
+
+- The exporter first logs one line, `second signal: exiting now, 1 probe in
+  progress left unfinished`.
+- The process is then ended by that signal, as an exporter that did not
+  catch it would be: a shell reports `130` for `SIGINT` and `143` for
+  `SIGTERM`, and Kubernetes reports the same exit codes.
+- An exporter started with the signal ignored, as a script's background job
+  is with `SIGINT`, exits with that same status instead, a second later.
+- `SIGTERM` and `SIGINT` behave the same throughout.
+- A `SIGHUP` during that time [reloads](#reloading-on-demand) as at any
+  other time and does not end the process.
 
 ## Sizes
 
-Every setting that is a number of bytes — `max_response_bytes`,
-`limits.max_output_bytes`, `max_total_bytes` — takes either a number of bytes
+Every setting that is a number of bytes (`max_response_bytes`,
+`limits.max_output_bytes`, `max_total_bytes`) takes either a number of bytes
 or a number with a unit:
 
 | Written | Bytes |
@@ -8132,65 +8184,79 @@ or a number with a unit:
 | `64MiB` | 67108864 |
 | `1.5GiB` | 1610612736 |
 
-`kB`, `MB`, `GB` and `TB` are powers of 1000, `KiB`, `MiB`, `GiB` and `TiB`
-powers of 1024, and `B` or no unit is bytes. The unit is case insensitive, and
-a fraction of a unit is rounded down to whole bytes. Anything else fails to
-load, naming the value and its line: text that is no size, such as `lots`; a
-negative size, such as `-1`; a fraction without a unit, such as `1.5`, since
-there is no half byte; space around the size in quotes, such as `" 10MiB"`;
-and a size of 2^63 bytes (`8388608TiB`) or more, which is past what a size
-can hold. The [schema](#editor-support) flags the same spellings, all but the
-last: the range is checked when the configuration loads.
+`kB`, `MB`, `GB` and `TB` are powers of 1000. `KiB`, `MiB`, `GiB` and `TiB`
+are powers of 1024. `B` or no unit means bytes. The unit is case
+insensitive, and a fraction of a unit is rounded down to whole bytes.
+Anything else fails to load, with an error that names the value and its
+line:
 
-The response limits, `request.max_response_bytes` and
-`limits.max_response_bytes`, are at least 1 KiB when they are set: a size
-without a unit is a number of bytes, and a limit under a kibibyte is one
-whose unit was left out, `max_response_bytes: 10` for 10 MiB, which would
-fail every scrape. A smaller one fails to load, and the schema flags it, as
-for `limits.max_output_bytes` below.
+- text that is not a size, such as `lots`;
+- a negative size, such as `-1`;
+- a fraction without a unit, such as `1.5`, because there is no half byte;
+- space around the size in quotes, such as `" 10MiB"`;
+- a size of 2^63 bytes (`8388608TiB`) or more, which is more than a size can
+  hold.
 
-`limits.max_output_bytes`, which bounds an answer of a
+The [schema](#editor-support) flags the same spellings except the last: the
+range is checked when the configuration loads.
+
+**Minimum sizes.** The response limits, `request.max_response_bytes` and
+`limits.max_response_bytes`, are at least 1 KiB when they are set. A size
+without a unit is a number of bytes, so a limit under a kibibyte is one
+whose unit was left out: `max_response_bytes: 10`, meant as 10 MiB, would
+fail every scrape. A smaller limit fails to load, and the schema flags it,
+as for `limits.max_output_bytes` below.
+
+`limits.max_output_bytes` bounds an answer of a
 [Python worker](PYTHON.md#how-scripts-run) and is 1 MiB when it is left out
-or `0`, is at least 38 bytes when it is set, the answer of a script that
-emits no metric: a smaller one — `26`, `2.6e1`, `"26"`, `26B`, `0.02KiB` —
-fails to load. The schema flags it too: written as a number, from 1 to 37
-however YAML writes the number, and written as text, in quotes or with a
-unit, by the digits of its number, so `20B`, `"26"` and `0.01KiB` are
-flagged, while `0.5B`, which comes to no byte, is `0`, the default, to both.
-`limits.max_script_memory`, at least 32 MiB when it is set, and
-`otlp.batch_max_bytes`, at least 64 KiB in a block switched on, are held to
-their least the same way.
+or `0`. When it is set, it is at least 38 bytes, the answer of a script that
+emits no metric. A smaller value (`26`, `2.6e1`, `"26"`, `26B`, `0.02KiB`)
+fails to load. The schema flags it too:
 
-A number of bytes written without quotes is the whole number it equals
-however YAML writes the number: `1e6`, `1E6`, `+1e6` and `1000000.0` are a
-million bytes and `2.5e8` is 250000000, as they are whole numbers at every
-other key that takes one, such as `limits.max_metrics`, and to the schema,
-which is handed the number and not how it was written. The number is read by
-its digits, not as the floating-point number nearest to it, so
-`9007199254740993.0` is that many bytes. What is not a whole number of bytes
-is refused as before, by the schema too: one with a fraction (`1.5`, `1e-1`)
-and `.inf`. A whole number that no size holds is refused for what it is,
-however it is written: `-1e3` and `-1.0` as negative, like `-1000`, and
-`1e19` and `9223372036854775808.0` as too large, like `9223372036854775808`.
-In quotes a number is text, and text is a
-whole number of bytes or a number with a unit: `"1e6"` and `"1.0"` are
-refused, by the schema too. The schema cannot tell a number's range, nor
-digits past the seventeen or so a floating-point number holds: a fraction
-written that far out (`1.00000000000000000001`) reaches it as the whole
-number, and is refused when the configuration loads.
+- written as a number, from 1 to 37, however YAML writes the number;
+- written as text, in quotes or with a unit, by the digits of its number.
+  `20B`, `"26"` and `0.01KiB` are therefore flagged. `0.5B`, which rounds
+  down to no byte, is `0`, the default, for both the exporter and the
+  schema.
 
-A response over `max_response_bytes` fails the scrape with `response size
-5000 exceeds limit 1024` when the target said its size in `Content-Length`,
-refused before the body is read, and with `response size exceeds limit 1024`
-when it did not, once reading passes the limit. The limit counts the answer
-decompressed. A `grpc` collector with `descriptors: reflection` holds the
-files of its reflection question to the same limit, or to 10 MiB when the
-limit is smaller ([gRPC](GRPC.md#descriptors)).
+`limits.max_script_memory` (at least 32 MiB when it is set) and
+`otlp.batch_max_bytes` (at least 64 KiB in a block that is switched on) are
+held to their minimum in the same way.
+
+**Numbers without quotes.** A number of bytes written without quotes is the
+whole number it equals, however YAML writes the number. `1e6`, `1E6`, `+1e6`
+and `1000000.0` are a million bytes, and `2.5e8` is 250000000. The same is
+true at every other key that takes a whole number, such as
+`limits.max_metrics`, and for the schema, which receives the number and not
+how it was written.
+
+- The number is read by its digits, not as the nearest floating-point
+  number, so `9007199254740993.0` is that many bytes.
+- What is not a whole number of bytes is refused, by the schema too: a
+  number with a fraction (`1.5`, `1e-1`) and `.inf`.
+- A whole number that no size can hold is refused for what it is, however it
+  is written: `-1e3` and `-1.0` as negative, like `-1000`, and `1e19` and
+  `9223372036854775808.0` as too large, like `9223372036854775808`.
+- In quotes a number is text, and text must be a whole number of bytes or a
+  number with a unit. `"1e6"` and `"1.0"` are refused, by the schema too.
+- The schema cannot check a number's range, or digits beyond the seventeen
+  or so that a floating-point number holds. A fraction written that far out
+  (`1.00000000000000000001`) reaches the schema as the whole number, and is
+  refused when the configuration loads.
+
+**Over the limit.** A response over `max_response_bytes` fails the scrape.
+When the target declared its size in `Content-Length`, the response is
+refused before the body is read, with `response size 5000 exceeds limit
+1024`. When it did not, the scrape fails with `response size exceeds limit
+1024` once reading passes the limit. The limit counts the decompressed
+answer. A `grpc` collector with `descriptors: reflection` holds the files of
+its reflection query to the same limit, or to 10 MiB when the limit is
+smaller ([gRPC](GRPC.md#descriptors)).
 
 ## Dry run
 
-`--dry-run` answers "would this start?" without starting anything. It runs the
-same validation startup runs, prints a JSON report on stdout, and exits:
+`--dry-run` answers "would this start?" without starting anything. It runs
+the same validation as startup, prints a JSON report on stdout, and exits:
 
 | Exit status | Meaning |
 | --- | --- |
@@ -8204,13 +8270,16 @@ prometheus-universal-exporter --dry-run \
   --config.file=config.yaml --static-targets-file=static-targets.yaml
 ```
 
-It checks everything startup checks, including that every expression compiles
-(see [Checked when the configuration loads](#checked-when-the-configuration-loads)).
-The [metric lint](#metric-lint)'s advice on the configuration is listed under
-`details.lint` of the `config` entry, each finding with its `collector`,
-`rule`, `metric` and `message`, and logged at WARN as `metric lint`, with the
-same as `collector`, `rule`, `metric` and `advice`; it never fails the check,
-so a configuration with advice exits `0`:
+It checks everything that startup checks, including that every expression
+compiles (see
+[Checked when the configuration loads](#checked-when-the-configuration-loads)).
+
+The advice of the [metric lint](#metric-lint) on the configuration is listed
+under `details.lint` of the `config` entry, each finding with its
+`collector`, `rule`, `metric` and `message`. It is also logged at WARN as
+`metric lint`, with the same content as `collector`, `rule`, `metric` and
+`advice`. It never fails the check, so a configuration with advice exits
+`0`:
 
 ```json
 "lint": [
@@ -8218,68 +8287,88 @@ so a configuration with advice exits `0`:
 ]
 ```
 
-A deprecated spelling does not fail the check; it is listed under
-`details.deprecations` of the `config` entry and logged. The
-[collector files](#collector-files) the configuration read are listed under
-`details.collector_files`, and a collector name defined twice fails the check.
-Each collector that took keys from its file's
-[defaults](#defaults-for-the-collectors-of-a-file) is listed under
-`details.collector_defaults`, by name, with the keys it took, in the order
-the block has them, such as `{"payments_api": ["request.allowed_targets",
-"limits.max_metrics"]}`; its values are the collector's, wherever they are
-written, and `request_policies` shows them as they will be applied.
-Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`,
-`accept_codes`, `retry.statuses`, `retry.retry_after`, `pagination`,
-`login` or `rate_limit` is listed under `details.request_policies`, by name, with those
-settings as they will be applied — `2XX` as `2xx`, `not_found` as
-`NOT_FOUND`, `retry.statuses` as `retry_statuses`, `[]` included,
-`retry.retry_after` as `retry_after: true`, a `pagination` with its defaults,
-`max_pages: 10` among them, a `login` with the `header` and `prefix` its
-token is sent with, a `rate_limit` with its `burst` — so a list that lets through more or less than meant, a
-pagination that asks the target for more pages than meant, or a token sent
-where it was not meant to go, shows before it is deployed. A login is shown
-with the files its secrets are read from, never what they hold, and a field
-or endpoint parameter whose name reads as a credential's without its value
-([Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target)).
-Every `http` and `graphite` collector is listed there too with how it
-connects: `unix_socket`, the socket it sends its requests over, or `proxy`,
-the proxy in force — its `proxy_url`, its own or its file's `defaults`',
-`direct`, or `environment` for one that names none and so follows
-`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` — with
-`proxy_basic_auth_file`'s files, never what they hold, and never what the
-environment names, which may hold a password
-([A collector's own proxy](REQUESTS.md#a-collectors-own-proxy)).
+The `config` entry's `details` also list:
 
-The files an [`sshfile`](SSHFILE.md#a-collector) collector, and a static
-target of one, reads when it connects — its private key, passphrase,
-password and `known_hosts` files — are read too, as a connection would read
-them, which startup does not do: what a scrape would fail on now is listed
-under `details.warnings` of the `config` entry, or of the `static_targets`
-entry for a target's own files, and logged, without failing the check, since
-a file may be put in place after the exporter starts. So are the files of
-every type that reads one at a scrape, a collector's and those a static
-target sets of its own: the password, private key and TLS files of a
-[`sql`](SQL.md#a-collector) collector; the password and TLS files of a
-[`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
-collector; the TLS files of a [`tcp`](TCP.md#static-targets),
-[`grpc`](GRPC.md#tls), [`tlscert`](TLSCERT.md) or, with `transport: tls`,
-[`dns`](DNS.md#dns-over-tls) one; the token and TLS files of a
-[`kubernetes`](KUBERNETES.md) collector; the credential files of an
-[`s3file`](S3FILE.md) one; the community and password files of an
-[`snmp`](SNMP.md#versions-and-accounts) one; the key, password and
-`known_hosts` files of an [`sshexec`](SSHEXEC.md) one, as `sshfile`'s; and
-of an `http` or `graphite` collector, its `tls` files, the secret files of
-its [`login`](AUTHENTICATION.md#logging-in-to-a-target) and the files of the
-login's own `tls` block.
+- **`details.deprecations`**: a deprecated spelling. It does not fail the
+  check, and it is logged.
+- **`details.collector_files`**: the [collector files](#collector-files)
+  that the configuration read. A collector name defined twice fails the
+  check.
+- **`details.collector_defaults`**: each collector that took keys from its
+  file's [defaults](#defaults-for-the-collectors-of-a-file), by name, with
+  the keys it took in the order of the block, such as
+  `{"payments_api": ["request.allowed_targets", "limits.max_metrics"]}`. Its
+  values are the collector's, wherever they are written, and
+  `request_policies` shows them as they will be applied.
+- **`details.request_policies`**: each collector that sets
+  `allowed_targets`, `denied_targets`, `accept_status`, `accept_codes`,
+  `retry.statuses`, `retry.retry_after`, `pagination`, `login` or
+  `rate_limit`, by name, with those settings as they will be applied:
+  - `2XX` as `2xx`, and `not_found` as `NOT_FOUND`;
+  - `retry.statuses` as `retry_statuses`, including `[]`;
+  - `retry.retry_after` as `retry_after: true`;
+  - a `pagination` with its defaults, including `max_pages: 10`;
+  - a `login` with the `header` and `prefix` that its token is sent with;
+  - a `rate_limit` with its `burst`.
 
-It takes the same flags a real start does, and they matter: `--config.file` and
-`--static-targets-file` choose what is checked, `--config.expand-env` and
-`--static-targets.expand-env` decide whether `${NAME}` references are expanded
-in each — so a check run where a referenced
-variable is not set fails, exactly as startup would — `--python.path` is the
-interpreter the Python scripts are compiled with, and `--config.watch` with
-`--config.watch-interval` are reported when the watch is on. It never binds a
-port, starts a watch or contacts a target.
+  A list that lets through more or less than intended, a pagination that
+  asks the target for more pages than intended, or a token sent where it was
+  not intended to go is therefore visible before it is deployed. A login is
+  shown with the files that its secrets are read from, never with their
+  content, and a field or endpoint parameter whose name looks like a
+  credential's is shown without its value
+  ([Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target)).
+
+  Every `http` and `graphite` collector is listed there too, with how it
+  connects: `unix_socket`, the socket that it sends its requests over, or
+  `proxy`, the proxy in force. The proxy is its `proxy_url` (its own or from
+  its file's `defaults`), `direct`, or `environment` for a collector that
+  names none and therefore follows `HTTP_PROXY`, `HTTPS_PROXY` and
+  `NO_PROXY`. The files of `proxy_basic_auth_file` are shown, never their
+  content, and never what the environment names, which may hold a password
+  ([A collector's own proxy](REQUESTS.md#a-collectors-own-proxy)).
+
+**Files read at a scrape.** The dry run also reads the files that an
+[`sshfile`](SSHFILE.md#a-collector) collector, and a static target of one,
+reads when it connects (its private key, passphrase, password and
+`known_hosts` files), as a connection would read them. Startup does not do
+this. What a scrape would fail on now is listed under `details.warnings` of
+the `config` entry, or of the `static_targets` entry for a target's own
+files, and logged. It does not fail the check, because a file may be put in
+place after the exporter starts.
+
+The same is done for the files of every type that reads one at a scrape,
+both a collector's files and those that a static target sets itself:
+
+- a [`sql`](SQL.md#a-collector) collector: the password, private key and TLS
+  files;
+- a [`redis`](REDIS.md#static-targets) or [`ldap`](LDAP.md#static-targets)
+  collector: the password and TLS files;
+- a [`tcp`](TCP.md#static-targets), [`grpc`](GRPC.md#tls),
+  [`tlscert`](TLSCERT.md) or, with `transport: tls`,
+  [`dns`](DNS.md#dns-over-tls) collector: the TLS files;
+- a [`kubernetes`](KUBERNETES.md) collector: the token and TLS files;
+- an [`s3file`](S3FILE.md) collector: the credential files;
+- an [`snmp`](SNMP.md#versions-and-accounts) collector: the community and
+  password files;
+- an [`sshexec`](SSHEXEC.md) collector: the key, password and `known_hosts`
+  files, as for `sshfile`;
+- an `http` or `graphite` collector: its `tls` files, the secret files of
+  its [`login`](AUTHENTICATION.md#logging-in-to-a-target) and the files of
+  the login's own `tls` block.
+
+The dry run takes the same flags as a real start, and they matter:
+
+- `--config.file` and `--static-targets-file` choose what is checked.
+- `--config.expand-env` and `--static-targets.expand-env` decide whether
+  `${NAME}` references are expanded in each file. A check run where a
+  referenced variable is not set therefore fails, exactly as startup would.
+- `--python.path` is the interpreter that the Python scripts are compiled
+  with.
+- `--config.watch` and `--config.watch-interval` are reported when the watch
+  is on.
+
+It never binds a port, starts a watch or contacts a target.
 
 The report lists one entry per startup step, in the order startup runs them:
 
@@ -8320,19 +8409,20 @@ The report lists one entry per startup step, in the order startup runs them:
 | `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |
 
 Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a
-`reason` when it depends on a step that failed: the Python scripts cannot be read
-from a configuration that did not load, and a target file that is valid on its
-own cannot be paired with it. A skipped check counts as not passing, and the
-report still shows it, so it is never shorter because something went wrong. The
-top-level `status` is `ok` only when every entry is. `request_types` lists the
-request types the binary was built with (see
+`reason` when it depends on a step that failed. The Python scripts cannot be
+read from a configuration that did not load, and a target file that is valid
+on its own cannot be paired with such a configuration. A skipped check
+counts as not passing, and the report still shows it, so the report is never
+shorter because something went wrong. The top-level `status` is `ok` only
+when every entry is. `request_types` lists the request types that the binary
+was built with (see
 [Choosing request types at build time](#choosing-request-types-at-build-time)).
 
-stderr carries one JSON log line per check — `configuration check passed` at
-INFO, `skipped` at WARN, `failed` at ERROR with its errors — and a final
-`configuration check complete`, so a job's log reads like the exporter's own.
-`--log.level` quietens the log; it never changes the report. Pipe the report
-through `jq` in CI:
+stderr carries one JSON log line per check (`configuration check passed` at
+INFO, `skipped` at WARN, `failed` at ERROR with its errors) and a final
+`configuration check complete`, so a job's log reads like the exporter's
+own. `--log.level` reduces the log and never changes the report. Pipe the
+report through `jq` in CI:
 
 ```sh
 prometheus-universal-exporter --dry-run --config.file=config.yaml \
@@ -8347,22 +8437,24 @@ docker run --rm -v "$PWD:/config:ro" \
   --dry-run --config.file=/config/config.yaml
 ```
 
-In Kubernetes, run it as a Job or an init container rather than as the exporter
-itself: a pod started with `--dry-run` validates and exits instead of serving,
-which is why the Helm chart rejects it in `extraArgs`.
+In Kubernetes, run it as a Job or an init container, not as the exporter
+itself. A pod started with `--dry-run` validates and exits instead of
+serving, which is why the Helm chart rejects it in `extraArgs`.
 
 ## Configuration from the target allocator
 
 With `--allocator.url`, the exporter takes its configuration from the
-[target allocator](ALLOCATOR.md) (`pue-allocator`) rather than from files of
-its own: allocator mode.
+[target allocator](ALLOCATOR.md) (`pue-allocator`) instead of from its own
+files. This is allocator mode.
+
 The allocator holds the configuration, its collector files and the static
-targets, splits the static targets among the exporters that heartbeat to it,
-and serves each its bundle: the configuration with its collector files, and
-its share of the static targets. The exporter writes the bundle into
-`--allocator.cache-dir` and loads it there as it loads mounted files, so
-`--config.expand-env`, `--static-targets.expand-env`, `--config.watch` and
-`SIGHUP` work as without the allocator, on the files in the cache directory.
+targets. It splits the static targets among the exporters that heartbeat to
+it, and serves each exporter its bundle: the configuration with its
+collector files, and its share of the static targets. The exporter writes
+the bundle into `--allocator.cache-dir` and loads it there as it loads
+mounted files. `--config.expand-env`, `--static-targets.expand-env`,
+`--config.watch` and `SIGHUP` therefore work as without the allocator, on
+the files in the cache directory.
 
 ```sh
 prometheus-universal-exporter \
@@ -8380,73 +8472,96 @@ prometheus-universal-exporter \
 | `--allocator.capacity` | `1` | This exporter's share of the targets' weight against the other members', from 0.1 to 100 with at most three decimals, said in every heartbeat: a member of capacity 2 is given about twice the weight of one of capacity 1. A change takes effect, as a restart does, once the allocator's member list has held for its `--settle` ([Weights and capacity](ALLOCATOR.md#weights-and-capacity)). |
 
 `--config.file` and `--static-targets-file` cannot be given with
-`--allocator.url`, nor the other `--allocator.` flags without it: the start is
-refused with exit status `2`, naming both flags. Files a configuration names,
-such as CA files, descriptor sets, `known_hosts` and credential files, are not
-in the bundle: they are mounted on the exporter as without the allocator, at
-the paths the configuration names.
+`--allocator.url`, and the other `--allocator.` flags cannot be given
+without it. The start is refused with exit status `2` and an error that
+names both flags. Files that a configuration names, such as CA files,
+descriptor sets, `known_hosts` and credential files, are not in the bundle.
+They are mounted on the exporter as without the allocator, at the paths that
+the configuration names.
 
-The exporter heartbeats to the allocator at the interval the allocator says
-in its heartbeat answers, its `--heartbeat.interval`, 10 seconds until an
-answer says one and when the instances answering differ, the shortest
-([Members and allocation](ALLOCATOR.md#members-and-allocation)); the exporter
-has no setting of it. It heartbeats to every address
-the URL's host name resolves to, so two instances of the allocator behind a
-headless Service both hear it, each on a schedule of its own, so an instance
-that hangs delays only the heartbeats to itself; each heartbeat says which bundle generation it
-has in force, and whether it refused the last one. It asks for its bundle with
-a request the allocator holds for up to 30 seconds until the bundle changes.
-A new bundle is written beside the one in force, checked as a reload would
-check it, and put in place by replacing one symbolic link, so nothing reading
-the directory finds part of one bundle and part of another; the exporter then
-reloads it, with `"trigger":"allocator"` in the log. Each file, the
-bundle's directories and the cache directory are synced to disk before the
-link is replaced, and the cache directory again after, so a crash leaves
-the bundle before or the whole new one. A bundle that does not load, or
-that names a file also as a directory of another, as `a` and `a/b`, is
-refused: the one in force stays, the refusal is logged and reported in
-the next heartbeat, and it is not asked for again until the allocator has
-another. A bundle whose reload is refused, when the files before it cannot be
-put back, is a failure to write: the exporter puts them back before it tries
-again. A request or write that fails is tried again after a wait that
-doubles from one second to 30, which a heartbeat does not cut short; a
-failure repeated at every try is logged once, for heartbeats once for each
-allocator address. An allocator that has just started answers `503` until its
-member list has formed, which is no failure: the exporter keeps what it has
-and asks again when the allocator's `Retry-After` says. On `SIGTERM` or `SIGINT` the exporter tells the allocator at
-once that it is shutting down, before [`--web.shutdown-delay`](#shutting-down),
-so its share of the targets moves to the others; a heartbeat on its way then
-is waited for first, so none saying otherwise reaches the allocator after
-it. Once the probes have finished, the exporter waits for a bundle it is
-writing to be put in force or refused before it exits.
+**Heartbeats.** The exporter heartbeats to the allocator at the interval
+that the allocator gives in its heartbeat answers (its
+`--heartbeat.interval`). The interval is 10 seconds until an answer gives
+one, and the shortest one when the answering instances differ
+([Members and allocation](ALLOCATOR.md#members-and-allocation)). The
+exporter has no setting for it.
 
-An exporter whose cache directory holds a bundle that it installed, and that
-loads, starts with it at once, ready, whether or not the allocator answers.
-At the start the exporter removes what a write cut short by a crash or a
-kill left in the cache directory; without a bundle it installed, it also
-removes a `config.yaml` or `static-targets.yaml` there, such as one put
-there by hand, and starts without a configuration: the cache directory is
-the exporter's, not a place to put files for it. Other files are left
-alone. One without a bundle, or whose
-bundle does not load, waits for the first: `/health` answers, `/ready`
-answers `503` (`not ready: no configuration yet: waiting for the
-allocator`), and every other endpoint — `/probe`, the self-metrics, the
-static targets endpoint, the landing and collectors pages, the debug page
-and `/-/reload` — answers `503` with `no configuration yet: waiting for the
-allocator at <url>`, whatever the method. `web.basic_auth` comes with the
-bundle, so until one is in force the exporter cannot tell whom to let in,
-and lets in no one rather than everyone. The cost is that the self-metrics,
-which would show the allocator's sync errors, are not served while it
-waits; the log says why each sync failed. An exporter that starts with a
-bundle from its cache directory has its credential from the start. The
-first bundle makes it ready. When the allocator
-sends again the bundle that did not load, it is checked and reloaded where
-it lies, not written again, and stays there when it is refused. The
-[self-metrics](SELF-METRICS.md#target-allocator) say how it keeps up with the
-allocator. `--dry-run` with `--allocator.url` checks the bundle in the cache
-directory, the one a restart would start with, and fails when there is none,
-or when the `config.yaml` there is not one the exporter installed; it changes
-nothing there.
+- It heartbeats to every address that the URL's host name resolves to, so
+  two instances of the allocator behind a headless Service both receive it.
+  Each address has its own schedule, so an instance that hangs delays only
+  the heartbeats to itself.
+- Each heartbeat reports which bundle generation the exporter has in force,
+  and whether it refused the last one.
+
+**Bundles.** The exporter requests its bundle with a request that the
+allocator holds for up to 30 seconds until the bundle changes.
+
+- A new bundle is written beside the one in force, checked as a reload would
+  check it, and put in place by replacing one symbolic link. Nothing that
+  reads the directory therefore finds part of one bundle and part of
+  another. The exporter then reloads it, with `"trigger":"allocator"` in the
+  log.
+- Each file, the bundle's directories and the cache directory are synced to
+  disk before the link is replaced, and the cache directory again
+  afterwards. A crash therefore leaves either the previous bundle or the
+  whole new one.
+- A bundle that does not load, or that names a file also as a directory of
+  another (`a` and `a/b`), is refused. The one in force stays, the refusal
+  is logged and reported in the next heartbeat, and the bundle is not
+  requested again until the allocator has another.
+- A bundle whose reload is refused, when the previous files cannot be put
+  back, is a failure to write: the exporter puts them back before it tries
+  again.
+
+**Failures.** A request or write that fails is tried again after a wait that
+doubles from one second to 30, and a heartbeat does not shorten that wait. A
+failure repeated at every try is logged once; for heartbeats, once for each
+allocator address. An allocator that has just started answers `503` until
+its member list has formed. That is not a failure: the exporter keeps what
+it has and asks again when the allocator's `Retry-After` says.
+
+**Shutdown.** On `SIGTERM` or `SIGINT` the exporter tells the allocator
+immediately that it is shutting down, before
+[`--web.shutdown-delay`](#shutting-down), so that its share of the targets
+moves to the others. A heartbeat already on its way is waited for first, so
+that none saying otherwise reaches the allocator afterwards. Once the probes
+have finished, the exporter waits for a bundle that it is writing to be put
+in force or refused before it exits.
+
+**Starting.** An exporter whose cache directory holds a bundle that it
+installed, and that loads, starts with it immediately and is ready, whether
+or not the allocator answers.
+
+- At the start the exporter removes what a write interrupted by a crash or a
+  kill left in the cache directory. Without a bundle that it installed, it
+  also removes a `config.yaml` or `static-targets.yaml` there, such as one
+  put there by hand, and starts without a configuration. The cache directory
+  belongs to the exporter and is not a place to put files for it. Other
+  files are left alone.
+- An exporter without a bundle, or whose bundle does not load, waits for the
+  first one. `/health` answers. `/ready` answers `503` (`not ready: no
+  configuration yet: waiting for the allocator`). Every other endpoint
+  (`/probe`, the self-metrics, the static targets endpoint, the landing and
+  collectors pages, the debug page and `/-/reload`) answers `503` with `no
+  configuration yet: waiting for the allocator at <url>`, whatever the
+  method.
+- `web.basic_auth` comes with the bundle. Until one is in force the exporter
+  cannot tell whom to let in, and it lets in no one instead of everyone. The
+  cost is that the self-metrics, which would show the allocator's sync
+  errors, are not served while it waits; the log says why each sync failed.
+  An exporter that starts with a bundle from its cache directory has its
+  credential from the start.
+- The first bundle makes the exporter ready. When the allocator sends again
+  the bundle that did not load, it is checked and reloaded where it lies,
+  not written again, and stays there when it is refused.
+
+The [self-metrics](SELF-METRICS.md#target-allocator) show how the exporter
+keeps up with the allocator.
+
+`--dry-run` with `--allocator.url` checks the bundle in the cache directory,
+which is the one a restart would start with. It fails when there is none, or
+when the `config.yaml` there is not one that the exporter installed. It
+changes nothing there.
 
 ## Related pages
 

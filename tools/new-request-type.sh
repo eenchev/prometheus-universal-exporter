@@ -791,7 +791,7 @@ fi
 # The repository tests' tables of how the README and the chart name each
 # type, whose words a person chooses.
 if [ -n "$optin" ]; then description='""'; else description="\"TODO(${name})\""; fi
-for table in "test/repository/readmesources_test.go readmeSourceNames {\"TODO(${name})\", \"TODO(${name})\"}" \
+for table in "test/repository/readmesources_test.go readmeSourceNames \"TODO(${name})\"" \
 	"test/repository/requesttypefacts_test.go chartSourceNames {\"TODO(${name})\", ${description}}"; do
 	set -- $table
 	file=$1
@@ -850,7 +850,7 @@ TestNoScaffoldPlaceholderIsLeftInTheTree fails on until it is gone:
   3. Its page, docs/${NAME}.md, the TODOs of the lists the documentation
      marks <!-- request-types -->, each moved to its place in its list, and
      the README's index line, moved beside the types it is like.
-  4. The README's tagline and sources paragraph, the chart README's opening
+  4. The README's table of sources, the chart README's opening
      and, for a type of the default build, Chart.yaml's description, naming
      the type in the words readmeSourceNames and chartSourceNames give.
   5. The prose that lists every type, which the script cannot write: each

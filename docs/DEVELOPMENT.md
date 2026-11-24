@@ -660,8 +660,8 @@ written. The script ends by printing what is left:
 2. its tests, in place of the not-implemented ones, and a schema row of
    each key the schema holds to allowed values, a pattern or a length;
 3. its page and the TODOs of the marked lists, the indexes and spec § 35;
-4. the README's tagline and sources paragraph, the chart README's opening
-   and, for a type of the default build, `Chart.yaml`'s description, in the
+4. the README's table of sources (in its build's column), the chart
+   README's opening and, for a type of the default build, `Chart.yaml`'s description, in the
    words it gave `readmeSourceNames` and `chartSourceNames`;
 5. the prose that lists every type, below, which the script cannot write,
    since each sentence says what the types it names have in common;
@@ -680,8 +680,8 @@ those that are true of it. Most have no test that fails when the type is
 left out (the README's and the chart's words do: `readmeSourceNames`,
 `chartSourceNames`).
 
-- `README.md`: the tagline, "Turn almost any source into a Prometheus
-  target …", and the sources paragraph after it, in the words of
+- `README.md`: the table of sources under "What it can read", in its
+  build's column and the row of what it reads, in the words of
   `readmeSourceNames`.
 - `charts/prometheus-universal-exporter/README.md`: the opening paragraph,
   in the words of `chartSourceNames`, and the features list's line of the

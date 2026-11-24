@@ -30,7 +30,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`), the registration of a domain (`whois`) and a SIP server that answers (`sip`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`), the registration of a domain (`whois`), a SIP server that answers (`sip`), the queues of an AMQP broker (`amqp`) and a NATS server and its JetStream (`nats`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, InfluxDB line protocol, binary layouts, protobuf messages, and Python.
 - Support jq transformations for JSON.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -8390,7 +8390,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` or `sip` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` or `nats` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An

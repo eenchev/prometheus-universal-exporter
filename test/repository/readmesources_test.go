@@ -42,8 +42,8 @@ var readmeSourceNames = map[string]struct{ tagline, sources string }{
 	"radius":     {"RADIUS server", "RADIUS servers"},
 	"whois":      {"domain's registration", "the registration of a domain over WHOIS"},
 	"sip":        {"SIP server", "SIP servers"},
-	"amqp":       {"TODO(amqp)", "TODO(amqp)"},
-	"nats":       {"TODO(nats)", "TODO(nats)"},
+	"amqp":       {"AMQP broker", "AMQP brokers"},
+	"nats":       {"NATS server", "NATS servers"},
 }
 
 // readmeOpening returns the README's tagline and its sources paragraph: the

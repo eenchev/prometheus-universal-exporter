@@ -3007,7 +3007,7 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has ten more: `smtp` holds a
+them](#choosing-request-types-at-build-time) has twelve more: `smtp` holds a
 mail server's session without sending — see [SMTP](SMTP.md) — `imap`
 counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
 counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
@@ -3016,8 +3016,10 @@ to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
 messages of an endpoint — see [WebSocket](WEBSOCKET.md) — `ftp` reads
 a file from an FTP server — see [Files over FTP](FTP.md) — `radius`
 authenticates an account against a RADIUS server — see [RADIUS](RADIUS.md)
-— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) — and
-`sip` asks a SIP server whether it answers — see [SIP](SIP.md).
+— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) —
+`sip` asks a SIP server whether it answers — see [SIP](SIP.md) — `amqp`
+asks an AMQP broker how deep its queues are — see [AMQP](AMQP.md) — and
+`nats` times a NATS server and reads its JetStream — see [NATS](NATS.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -3291,9 +3293,19 @@ Digest challenge is answered with; `max_response_bytes`, `allowed_targets`
 and `denied_targets` apply too. The decoder is `json`; its table is in
 [SIP](SIP.md#a-collector).
 
-For `amqp`, TODO(amqp): say here what this list says of each other type, and move it to its place among them.
+For `amqp`, an opt-in type, no key is required: the AMQP 0-9-1 broker that
+is the target is logged in to with `username` and `password_file`, `guest`
+when left out, its `vhost` opened, `/` when left out, and each queue of
+`queues` asked for its ready messages and its consumers; `tls` is for a
+target written `amqps://`, and `allowed_targets` and `denied_targets` apply
+too. The decoder is `json`; its table is in [AMQP](AMQP.md#a-collector).
 
-For `nats`, TODO(nats): say here what this list says of each other type, and move it to its place among them.
+For `nats`, an opt-in type, no key is required: the NATS server that is the
+target is logged in to with `username` and `password_file` or with the token
+of `bearer_token_file`, and a PING to it is timed; `jetstream: true` asks the
+account's JetStream state, and `streams` and `consumers` each one named;
+`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets` apply
+too. The decoder is `json`; its table is in [NATS](NATS.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3382,9 +3394,11 @@ requires a `target`, the domain.
 `sip`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the SIP server, `host` or `host:port`.
 
-`amqp`, TODO(amqp): say here what this list says of each other type, and move it to its place among them.
+`amqp`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the AMQP broker, `host`, `host:port` or `amqps://host`.
 
-`nats`, TODO(nats): say here what this list says of each other type, and move it to its place among them.
+`nats`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the NATS server, `host`, `host:port` or `tls://host`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3466,8 +3480,8 @@ new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-requ
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
-[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md) and [`sip`](SIP.md), each written with the standard library alone: about
-0.1 MB of a stripped binary each, and about 0.7 MB for the ten. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md), [`sip`](SIP.md), [`amqp`](AMQP.md) and [`nats`](NATS.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, and about 0.8 MB for the twelve. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is

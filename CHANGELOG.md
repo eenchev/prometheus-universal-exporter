@@ -245,6 +245,21 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   response is an answer whatever its status, and a Digest challenge is
   answered with `username` and `password_file`, MD5 or SHA-256. Build it
   with `OPT_IN_REQUEST_TYPES=sip`; it adds no dependency.
+- **[`amqp`](docs/AMQP.md), an opt-in request type**, asks an AMQP 0-9-1
+  broker, such as RabbitMQ, how deep its queues are over the protocol
+  itself, for a broker whose management API is closed: each queue named
+  with its ready messages and its consumers, and what the broker says of
+  itself, as a JSON document. A queue the broker does not have is
+  `exists: false`, not a failure, and nothing is published, consumed or
+  created. Build it with `OPT_IN_REQUEST_TYPES=amqp`; it adds no
+  dependency.
+- **[`nats`](docs/NATS.md), an opt-in request type**, asks a NATS server
+  over the client protocol: its INFO, the round trip of a PING, and, with
+  `jetstream: true`, the account's JetStream state and that of the
+  `streams` and `consumers` named, as a JSON document. It logs in with a
+  user and a password or a token, and turns to TLS when the server
+  requires it or the target says `tls://`. Build it with
+  `OPT_IN_REQUEST_TYPES=nats`; it adds no dependency.
 - **[`decoder.type: influx`](docs/CONFIGURATION.md#influxdb-line-protocol)**
   reads InfluxDB line protocol, as Telegraf writes it to a file, into a
   list of points for `jq`, `yq` and `python`: each with its measurement,

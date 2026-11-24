@@ -34,7 +34,9 @@ import (
 // ftp reads a file from an FTP server, imap counts the mail of an
 // account's mailboxes, pop3 that of a mailbox over POP3, radius
 // authenticates an account against a RADIUS server, whois reads a
-// domain's registration and sip asks a SIP server whether it answers. The type is required rather than defaulted so that no configuration means
+// domain's registration, sip asks a SIP server whether it answers, amqp
+// asks an AMQP broker how deep its queues are and nats times a NATS server
+// and reads its JetStream. The type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common

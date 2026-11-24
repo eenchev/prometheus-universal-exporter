@@ -23,7 +23,7 @@ GOVULNCHECK_VERSION := v1.8.0
 .PHONY: test-quick build run build-request-types build-sql-drivers build-opt-in-types test-opt-in-types lint-opt-in-types lint-request-types ci test test-request-types test-scaffold test-sql-drivers test-sql-live test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas lint-sql-drivers new-request-type
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type
-# but the opt-in ones: smtp, modbus, mqtt, websocket, ftp, imap, pop3, radius, whois and sip.
+# but the opt-in ones: smtp, modbus, mqtt, websocket, ftp, imap, pop3, radius, whois, sip, amqp and nats.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
 REQUEST_TYPES ?=
 # OPT_IN_REQUEST_TYPES adds opt-in request types, comma-separated, which no
@@ -31,7 +31,8 @@ REQUEST_TYPES ?=
 # OPT_IN=1`: smtp (docs/SMTP.md), modbus (docs/MODBUS.md), mqtt
 # (docs/MQTT.md), websocket (docs/WEBSOCKET.md), ftp (docs/FTP.md), imap
 # (docs/IMAP.md), pop3 (docs/POP3.md), radius (docs/RADIUS.md), whois
-# (docs/WHOIS.md) and sip (docs/SIP.md), as in
+# (docs/WHOIS.md), sip (docs/SIP.md), amqp (docs/AMQP.md) and nats
+# (docs/NATS.md), as in
 # `make build OPT_IN_REQUEST_TYPES=mqtt,modbus`. See
 # "Choosing request types at build time" in docs/CONFIGURATION.md.
 OPT_IN_REQUEST_TYPES ?=

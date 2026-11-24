@@ -32,6 +32,8 @@ that does it, usually with an example to copy. New here? Start with
 | Read a Google API with a service account, or the GitHub API as an App | [A service account's key](AUTHENTICATION.md#a-service-accounts-key) |
 | Read InfluxDB line protocol, as Telegraf writes it to a file | [InfluxDB line protocol](CONFIGURATION.md#influxdb-line-protocol) |
 | Check that a SIP server or PBX answers | [SIP](SIP.md), in a build with the opt-in type |
+| Read how deep a RabbitMQ queue is when its management API is closed | [AMQP](AMQP.md), in a build with the opt-in type |
+| Watch a NATS server, and a JetStream consumer's lag | [NATS](NATS.md), in a build with the opt-in type |
 | Remember something from one scrape to the next in a script | [State between runs](PYTHON.md#state-between-runs) |
 | Read series from Graphite | [Graphite](GRAPHITE.md) |
 | Read Kubernetes objects | [Kubernetes objects](KUBERNETES.md) |

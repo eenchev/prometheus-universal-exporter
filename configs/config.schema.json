@@ -3175,6 +3175,15 @@
                 },
                 "type": "object"
               },
+              "consumers": {
+                "description": "nats: the consumers asked about, each written stream/consumer, at most 100: each one's pending, unacknowledged and redelivered messages.",
+                "items": {
+                  "pattern": "^[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}/[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
               "context_name": {
                 "description": "snmp: with snmp_version 3, the context the objects are read in; the default context when left out.",
                 "type": [
@@ -3479,6 +3488,10 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "jetstream": {
+                "description": "nats: ask the account's JetStream state, its streams, consumers and storage, with the JetStream API; false when left out. Required for streams and consumers.",
+                "type": "boolean"
               },
               "keep_alive": {
                 "description": "mqtt: the keep alive told to the broker, 30s by default, in whole seconds as MQTT counts it: a part of a second is a second, and the most is 65535s. A kept connection is pinged twice in it, and is given up when the broker sent nothing for one and a half.",
@@ -6063,7 +6076,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest. amqp and nats, with username: the file of the account's password, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6227,6 +6240,17 @@
                 "maxLength": 64,
                 "pattern": "^[^\\x00-\\x1f\\x7f]*$",
                 "type": "string"
+              },
+              "queues": {
+                "description": "amqp: the queues asked about, by name, at most 100: each is declared passively, which creates nothing and answers its ready messages and its consumers. Left out, the scrape logs in and asks about none.",
+                "items": {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
               },
               "quota": {
                 "description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes.",
@@ -6994,6 +7018,15 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "streams": {
+                "description": "nats: the streams asked about, by name, at most 100: each one's messages, bytes, sequences and consumers.",
+                "items": {
+                  "pattern": "^[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
               "subprotocols": {
                 "description": "websocket: the subprotocols offered in Sec-WebSocket-Protocol, such as [graphql-transport-ws]; one the server chooses that is not among them fails the scrape.",
                 "items": {
@@ -7149,7 +7182,7 @@
                 "type": "string"
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. amqp and nats, optional, with password_file: the account logged in with, amqp's guest when left out. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -7164,6 +7197,12 @@
                 "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1.",
                 "maxLength": 63,
                 "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "vhost": {
+                "description": "amqp: the virtual host opened; / when left out.",
+                "maxLength": 255,
+                "pattern": "^[^\\x00-\\x1f\\x7f]*$",
                 "type": "string"
               },
               "walk": {

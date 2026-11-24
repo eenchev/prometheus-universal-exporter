@@ -2741,434 +2741,513 @@ A test file joins the suite by being listed in
 with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which does
 run by default, fails when either is missing.
 
-The default suite covers every example too, without the network. The tests in
-`test/repository` that check the examples — against the schemas, that each
-loads, that its scripts satisfy the contract, and that a static target file
-is valid with the configuration in its directory — walk `examples/` at any
-depth, so a new example, a file or a directory like `examples/open-meteo/`,
-is covered without a test naming it. A directory's collector files are read
-with its `config.yaml`, not as examples of their own, and one its
-`collector_files` does not name fails the tests. And nine examples run against a local
-stand-in answering in their service's documented shape, with every series
-asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`),
-Open-Meteo's (`internal/exporter/openmeteo_example_test.go`, which also checks
-the query the collector sent and scrapes the example's static targets), and
-the ECB's, the METAR one with its static targets, mempool.space's, the
-Prometheus demo server's, Frankfurter's, with its pre-script, the USGS
-earthquake feed's, with the warning its incomplete row is logged with, and
-scrapethissite.com's countries page
-(`ecb_example_test.go`, `metar_example_test.go`, `mempool_example_test.go`,
-`promdemo_example_test.go`, `frankfurter_example_test.go`,
-`usgs_example_test.go` and `scrapethissite_example_test.go` beside them, on
-the stand-in of `example_standin_test.go` or, for the last, the plain site of
-`htmlfixtures_test.go`). Their fixtures under `testdata/` are
-written in the shape each service documents, not captured from it, so it is
-the external suite that says whether a service still answers that way.
+The default suite also covers every example, without the network.
 
-The pages under `testdata/html` are written the same way, each in the shape
-of a page collectors are pointed at: a load balancer's statistics report,
-an appliance's layout tables around its data tables, lists and dashboard
-cards, markup no validator would pass, entities and typographic numbers,
-what is in a page and is not its content, attribute names of JavaScript
-frameworks, the forms a value takes, a hosted status page.
-`internal/exporter/htmlfixtures_test.go` lists every file with what it stands
-for, and a test fails on a file the list does not have and on one no test
-reads. The `htmlfixtures_*_test.go` files beside it read each page with `css`
-and with `xpath` collectors written as a configuration file holds them:
-through the decoder and the transform directly, through `/probe` from a local
-server sending the `Content-Type` a real one would, and from disk with the
-`localfile` request type, naming every series and every log line. The files
-under `testdata/html/charset` are one page in the encodings a target may
-answer in — windows-1251, Shift_JIS, UTF-16 and the rest — and are not UTF-8
-on purpose: an editor that saves them as UTF-8 breaks the tests that read
-them. Some of them hold what only looks like a declaration of the encoding
-before their own — a `<meta>` in a comment, a description that mentions a
-charset — and the `.xhtml` ones start with an XML declaration, which is the
-only declaration of one and names another encoding than the `<meta>` of the
-other.
+- The tests in `test/repository` that check the examples (against the
+  schemas, that each loads, that its scripts satisfy the contract, and that
+  a static target file is valid with the configuration in its directory)
+  walk `examples/` at any depth. A new example, a file or a directory like
+  `examples/open-meteo/`, is therefore covered without a test naming it.
+- A directory's collector files are read with its `config.yaml`, not as
+  examples of their own, and a collector file that its `collector_files`
+  does not name fails the tests.
+- Nine examples run against a local stand-in that answers in the documented
+  shape of their service, with every series asserted: Filebeat's
+  (`internal/exporter/filebeat_example_test.go`), Open-Meteo's
+  (`internal/exporter/openmeteo_example_test.go`, which also checks the query
+  that the collector sent and scrapes the example's static targets), and the
+  ECB's, the METAR one with its static targets, mempool.space's, the
+  Prometheus demo server's, Frankfurter's with its pre-script, the USGS
+  earthquake feed's with the warning that its incomplete row is logged with,
+  and scrapethissite.com's countries page (`ecb_example_test.go`,
+  `metar_example_test.go`, `mempool_example_test.go`,
+  `promdemo_example_test.go`, `frankfurter_example_test.go`,
+  `usgs_example_test.go` and `scrapethissite_example_test.go` next to them,
+  on the stand-in of `example_standin_test.go` or, for the last, the plain
+  site of `htmlfixtures_test.go`).
+- Their fixtures under `testdata/` are written in the shape that each
+  service documents, not captured from it, so it is the external suite that
+  tells whether a service still answers that way.
 
-Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
-CI run check exactly the same rules. Install the pinned version with `make
-lint-install`; the Makefile and the CI workflow pin the same version, and a test
-keeps them in step. `make lint` refuses to run with any other installed
-release: a different release enables different checks, so an older one passes
-locally what CI then fails (gosec's G705 taint check, for one, is newer than
-v2.5). `make lint-install` builds the linter with `go install`, which needs a Go
-at least as new as the one that release requires; Homebrew's `golangci-lint` or
-the release binary from GitHub work as well, as long as the version matches.
+The pages under `testdata/html` are written in the same way, each in the
+shape of a page that collectors are pointed at: a load balancer's statistics
+report, an appliance's layout tables around its data tables, lists and
+dashboard cards, markup that no validator would accept, entities and
+typographic numbers, what is in a page but is not its content, attribute
+names of JavaScript frameworks, the forms that a value takes, and a hosted
+status page.
 
-What VS Code and other editors underline comes from gopls, the Go language
-server, not from golangci-lint, and some of its analyzers exist only in gopls
-(`writestring`, which flags `b.WriteString(a + b)`, for one). `make
-gopls-check` runs `gopls check` over every Go file of the exporter's own,
-which the copy of gojq in `third_party` is not, and fails on any finding,
-and CI runs it too. Like the linter it is pinned (`GOPLS_VERSION`) and refuses
-another installed version; `make gopls-install` installs it, into the same
-`GOPATH/bin` the VS Code Go extension uses, so the editor then shows exactly
-what CI checks. Let the extension auto-update gopls and the editor may show
-findings of a newer release before CI has them; bump the pin to follow.
+- `internal/exporter/htmlfixtures_test.go` lists every file with what it
+  stands for, and a test fails on a file that the list does not have and on
+  one that no test reads.
+- The `htmlfixtures_*_test.go` files next to it read each page with `css`
+  and with `xpath` collectors written as a configuration file holds them:
+  through the decoder and the transform directly, through `/probe` from a
+  local server sending the `Content-Type` that a real one would, and from
+  disk with the `localfile` request type, naming every series and every log
+  line.
+- The files under `testdata/html/charset` are one page in the encodings that
+  a target may answer in (windows-1251, Shift_JIS, UTF-16 and the rest), and
+  are deliberately not UTF-8: an editor that saves them as UTF-8 breaks the
+  tests that read them. Some of them contain what only looks like a
+  declaration of the encoding before their own (a `<meta>` in a comment, a
+  description that mentions a charset), and the `.xhtml` ones start with an
+  XML declaration, which is their only real declaration and names a
+  different encoding from the other `<meta>`.
 
-helm is pinned the same way: `HELM_VERSION` in the Makefile, which every
-workflow that installs helm installs too, and a test keeps them equal. `make
-helm-test` refuses another installed release, since helm releases word the
-schema's errors and render details differently — a chart test that passes
-with one can fail with another. `make helm-install` installs it with `go
-install`, setting the version at link time as helm's release build does: built
-from source without that, helm reports only its release line, `v4.3`. `make
-helm-test` reads a release line alone as its `.0` release, so a helm built
-from source passes a `v4.3.0` pin, and refuses it against a `v4.3.1` one;
-a version with a patch is compared whole, `v4.3.1` against `v4.3.0` too. (Homebrew's `helm` works too
-when its version matches.) To move to a newer helm, change `HELM_VERSION` and
-the workflows' `version:` together.
+**golangci-lint.** Static analysis is configured in `.golangci.yml`, so a
+local `make lint` and the CI run check exactly the same rules. Install the
+pinned version with `make lint-install`; the Makefile and the CI workflow pin
+the same version, and a test keeps them in step.
 
-`make helm-test` makes every chart check `ci.yml` makes: the same renders, the
-same values that have to be rejected and the same lines looked for in what is
-rendered. A test (`TestMakeHelmTestChecksWhatTheCIWorkflowChecks`) reads both
-and fails when one has a case the other lacks, so add a chart case to both.
+- `make lint` refuses to run with any other installed release: a different
+  release enables different checks, so an older one passes locally what CI
+  then fails (gosec's G705 taint check, for example, is newer than v2.5).
+- `make lint-install` builds the linter with `go install`, which needs a Go
+  at least as new as the one that release requires. Homebrew's
+  `golangci-lint` or the release binary from GitHub work as well, as long as
+  the version matches.
 
-Both go beyond the plain renders: the Recreate strategy without a
-`rollingUpdate`, a monitor's `port` and `namespaceSelector` on both monitor
-types, the garbage collector's target (`goGC.percent` rendered as `GOGC`, and
-no `GOGC` by default), whole numbers given as `--set-json` gives them, as
-floating point, and rendered written out with no exponent (a count past
-2147483647 is refused), a configuration file whose first line is indented, the
-chart as a dependency of a parent chart, and the values that must be refused,
-among them a monitor's `auth` without a `type`, a monitor's `port` given as a
-number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
-Service, a mount at the configuration directory written with a trailing
-slash, a `goGC.percent` that is `off` with no Go memory limit, `0`, or
-set beside a `GOGC` entry in `env`, a `selfMetrics.path` at the static
-targets' status page, and an Ingress or a `LoadBalancer` or `NodePort`
-Service without `webAuth`, or with `webAuth` beside a configuration whose
-`web.basic_auth` does not read its files (the renders with
-`exposure.allowWithoutWebAuth`, and with `testdata/chart/web-auth.yaml`,
-which does, beside them). The Go tests in `test/repository`
-check the same behaviour in more detail, but are skipped without helm, so a
-case worth keeping goes into these two lists as well. Write a case that looks
-at what is rendered so that it keeps the render first
-(`out="$(helm template ...)"`) and then reads `"$out"`: neither `make` nor the
-workflow's shell fails a pipeline whose first command failed, so a check that
-some text is absent would pass on a render that failed. Every such check in
-the two lists is written that way; `tools/check-manifests.py`, which the
-render is piped into, refuses a render with no manifests for the same reason.
+**gopls.** What VS Code and other editors underline comes from gopls, the Go
+language server, not from golangci-lint, and some of its analyzers exist
+only in gopls (`writestring`, which flags `b.WriteString(a + b)`, for
+example). `make gopls-check` runs `gopls check` over every Go file of the
+exporter's own (which excludes the copy of gojq in `third_party`) and fails
+on any finding, and CI runs it too.
 
-A check also has to be able to fail, and the same reader says whether each
+- Like the linter, it is pinned (`GOPLS_VERSION`) and refuses any other
+  installed version.
+- `make gopls-install` installs it into the same `GOPATH/bin` that the VS
+  Code Go extension uses, so the editor then shows exactly what CI checks.
+- If you let the extension auto-update gopls, the editor may show findings of
+  a newer release before CI has them; bump the pin to follow.
+
+**helm.** helm is pinned the same way: `HELM_VERSION` in the Makefile, which
+every workflow that installs helm also installs, and a test keeps them equal.
+
+- `make helm-test` refuses any other installed release, because helm
+  releases word the schema's errors and render details differently: a chart
+  test that passes with one can fail with another.
+- `make helm-install` installs it with `go install`, setting the version at
+  link time as helm's release build does. Built from source without that,
+  helm reports only its release line, `v4.3`.
+- `make helm-test` reads a release line alone as its `.0` release, so a helm
+  built from source passes a `v4.3.0` pin and is refused against a `v4.3.1`
+  pin. A version with a patch is compared in full, `v4.3.1` against `v4.3.0`
+  too. (Homebrew's `helm` works too when its version matches.)
+- To move to a newer helm, change `HELM_VERSION` and the workflows'
+  `version:` together.
+
+`make helm-test` makes every chart check that `ci.yml` makes: the same
+renders, the same values that have to be rejected, and the same lines looked
+for in what is rendered. A test
+(`TestMakeHelmTestChecksWhatTheCIWorkflowChecks`) reads both and fails when
+one has a case that the other lacks, so add a chart case to both.
+
+Both go beyond the plain renders. They check:
+
+- the Recreate strategy without a `rollingUpdate`;
+- a monitor's `port` and `namespaceSelector` on both monitor types;
+- the garbage collector's target (`goGC.percent` rendered as `GOGC`, and no
+  `GOGC` by default);
+- whole numbers given as `--set-json` gives them, as floating point, and
+  rendered written out with no exponent (a count above 2147483647 is
+  refused);
+- a configuration file whose first line is indented;
+- the chart as a dependency of a parent chart;
+- the values that must be refused, among them: a monitor's `auth` without a
+  `type`, a monitor's `port` given as a number, a `scrapeTimeout` longer than
+  its `interval`, an Ingress without the Service, a mount at the
+  configuration directory written with a trailing slash, a `goGC.percent`
+  that is `off` with no Go memory limit, `0`, or set beside a `GOGC` entry
+  in `env`, a `selfMetrics.path` at the static targets' status page, and an
+  Ingress or a `LoadBalancer` or `NodePort` Service without `webAuth`, or
+  with `webAuth` beside a configuration whose `web.basic_auth` does not read
+  its files (with the renders with `exposure.allowWithoutWebAuth`, and with
+  `testdata/chart/web-auth.yaml`, which does read them, next to them).
+
+The Go tests in `test/repository` check the same behaviour in more detail,
+but are skipped without helm, so a case worth keeping also goes into these
+two lists.
+
+Write a case that inspects what is rendered so that it keeps the render
+first (`out="$(helm template ...)"`) and then reads `"$out"`. Neither `make`
+nor the workflow's shell fails a pipeline whose first command failed, so a
+check that some text is absent would pass on a render that failed. Every
+such check in the two lists is written that way, and
+`tools/check-manifests.py`, which the render is piped into, refuses a render
+with no manifests for the same reason.
+
+A check must also be able to fail, and the same reader reports whether each
 one can (`TestEveryHelmCheckOfMakeAndCIFailsWhenItShould`), naming the file,
-the line and the recipe or step of one that cannot. What it holds a check to
-is how the two files run their shell:
+the line, and the recipe or step of a check that cannot. What it requires of
+a check follows from how the two files run their shell:
 
-- make runs each recipe line, with the lines continued onto it, in a shell of
-  its own started without `-e`, and the line's result is its last command's.
-  So a line of more than one command starts with `set -eu`, and no line
-  starts with make's `-`, which ignores a failure. The Makefile leaves make's
-  way of running a recipe alone: `.IGNORE`, `.ONESHELL`, `.SHELLFLAGS`,
-  `MAKEFLAGS`, a `PATH`, a `SHELL` other than sh or bash, and a second rule
-  for `helm-test` are reported. GitHub starts a step's shell as `bash -e`, so
-  a step needs no `set -e`; a `shell:` — the step's, the job's default or the
-  workflow's — that is not bash or sh started with `-e`, `continue-on-error`
-  on a step or on the job, a step's `if` other than the chart steps', any
-  `if` on the job, and a `changes` step whose `chart` filter no longer holds
-  `charts/**` are reported.
-- A render that must succeed, or a line that must be found, is a command of
-  its own: nothing follows it with `||`, `&&` or `&`, each of which takes its
-  failure away, under `set -e` too. The one exception hands the failure to an
-  `exit`, which ends the shell there: `check || exit 1`, or
+- **How the shells run.** make runs each recipe line, with the lines
+  continued onto it, in its own shell started without `-e`, and the line's
+  result is that of its last command. A line of more than one command
+  therefore starts with `set -eu`, and no line starts with make's `-`, which
+  ignores a failure.
+  - The Makefile leaves make's way of running a recipe alone: `.IGNORE`,
+    `.ONESHELL`, `.SHELLFLAGS`, `MAKEFLAGS`, a `PATH`, a `SHELL` other than
+    sh or bash, and a second rule for `helm-test` are reported.
+  - GitHub starts a step's shell as `bash -e`, so a step needs no `set -e`.
+    These are reported: a `shell:` (the step's, the job's default or the
+    workflow's) that is not bash or sh started with `-e`;
+    `continue-on-error` on a step or on the job; a step's `if` other than the
+    chart steps'; any `if` on the job; and a `changes` step whose `chart`
+    filter no longer includes `charts/**`.
+- **A render that must succeed, or a line that must be found**, is a command
+  on its own: nothing follows it with `||`, `&&` or `&`, each of which
+  discards its failure, under `set -e` too. The one exception hands the
+  failure to an `exit`, which ends the shell there: `check || exit 1`, or
   `check || { echo "..." >&2; exit 1; }`, on one line or on several.
-- A render that must be refused, or a text that must be absent, is the one
-  condition of an `if` whose `then` branch runs `exit 1`:
+- **A render that must be refused, or a text that must be absent**, is the
+  only condition of an `if` whose `then` branch runs `exit 1`:
   `if helm template ... >/dev/null 2>&1; then echo "..." >&2; exit 1; fi`.
-  Without the `exit 1` the check prints its message and passes.
-- A check is made on every run of its block. It stands at the top of the
+  Without the `exit 1`, the check prints its message and passes.
+- **A check runs on every run of its block.** It stands at the top of the
   block, in the body of a `for name in value ...; do` loop whose values are
   written out, or is the condition of an `if` that stands there, and nowhere
-  else: there is no guard a check may stand behind. One in a branch of an
-  `if` — `if false`, `if [ -n "$SKIP" ]`, the `then` of a refusal — after
-  `&&` or `||`, or in a loop over a variable, a command or nothing is
-  reported. So is an `exit`, of any status, that is not a check's own: an
-  early `exit 0` ends the block before its checks.
-- Nothing in a block changes what its commands are or how it ends: a
-  function or an `alias` (either can stand in for `helm`, `grep`, `python3`
-  or `exit`), `.` or `source`, a `PATH`, `hash`, `return`, `exec`, `break`,
-  `continue`, `set +e`, a `set` option other than `-e`, `-u`, `-x`, `-v` and
-  `pipefail`, and a `trap` are reported. The one trap allowed is the
-  clean-up both lists have, `trap 'rm -rf "$tree"' EXIT`: an `rm` alone, on
-  `EXIT`.
-- helm is piped only into `grep -q` as a command of its own or into
-  `tools/check-manifests.py`, both of which fail on a render of nothing; a
-  kept render holds the one helm command, and is read as `echo "$out" |` or
-  `printf '%s\n' "$out" |` into `grep -q` and a pattern, `python3 -c` or
-  `tools/check-manifests.py`. Another way of looking at a render — a
-  here-string, `[[ "$out" == *X* ]]`, a `grep` of a file, `grep -c`, `-F` or
-  `-e` — is no check to the comparison, and is reported by name with the
-  line to write instead: `echo "$out" | grep -q -- 'X'`.
+  else: there is no guard that a check may stand behind. A check in a branch
+  of an `if` (`if false`, `if [ -n "$SKIP" ]`, the `then` of a refusal),
+  after `&&` or `||`, or in a loop over a variable, a command or nothing is
+  reported. So is an `exit`, of any status, that does not belong to a check:
+  an early `exit 0` ends the block before its checks.
+- **Nothing in a block changes what its commands are or how it ends.** These
+  are reported: a function or an `alias` (either can stand in for `helm`,
+  `grep`, `python3` or `exit`), `.` or `source`, a `PATH`, `hash`, `return`,
+  `exec`, `break`, `continue`, `set +e`, a `set` option other than `-e`,
+  `-u`, `-x`, `-v` and `pipefail`, and a `trap`. The only trap allowed is the
+  clean-up that both lists have, `trap 'rm -rf "$tree"' EXIT`: an `rm` alone,
+  on `EXIT`.
+- **How a render is read.** helm is piped only into `grep -q` as a command on
+  its own, or into `tools/check-manifests.py`, both of which fail on an empty
+  render. A kept render holds the one helm command, and is read as
+  `echo "$out" |` or `printf '%s\n' "$out" |` into `grep -q` and a pattern,
+  `python3 -c` or `tools/check-manifests.py`. Any other way of inspecting a
+  render (a here-string, `[[ "$out" == *X* ]]`, a `grep` of a file,
+  `grep -c`, `-F` or `-e`) does not count as a check, and is reported by name
+  with the line to write instead: `echo "$out" | grep -q -- 'X'`.
 
-The reader reports what it does not understand (`!`, `elif`, `while`, `case`,
-a subshell, `{` anywhere but after a check's `||`) rather than passing it.
-`TestAHelmCheckMadeToothlessIsNoticed` makes each such change — a `|| true`,
-a dropped `exit 1` or `set -eu`, a leading `-`, `continue-on-error`, an early
-`exit 0`, an `if false` around the checks, a `trap 'exit 0' EXIT`, a `helm`
-function, an `if` on the job and the like — to a copy of the Makefile's or
-the workflow's text in memory, and fails if the reader does not report it.
-`TestAHarmlessEditOfAHelmCheckIsTakenOrToldHowToBeWritten` does the same with
-edits that take nothing from a check, and fails if one is refused without a
-finding that names it and says what to write, or is called a check that can
-never fail. A finding that a list "does not make this check of the chart"
-is about one of the cases the Go tests make too (`chartCasesMissing` in
-`test/repository/helmtest_test.go` lists them, each with its command line):
-both lists make it with exactly that command line, so a case changed on
-purpose is changed there and in both lists.
+The reader reports what it does not understand (`!`, `elif`, `while`,
+`case`, a subshell, `{` anywhere except after a check's `||`) instead of
+passing it.
 
-The files those cases render are in `testdata/chart`: a static target
+- `TestAHelmCheckMadeToothlessIsNoticed` makes each such change (a
+  `|| true`, a dropped `exit 1` or `set -eu`, a leading `-`,
+  `continue-on-error`, an early `exit 0`, an `if false` around the checks, a
+  `trap 'exit 0' EXIT`, a `helm` function, an `if` on the job and the like)
+  to an in-memory copy of the Makefile's or the workflow's text, and fails if
+  the reader does not report it.
+- `TestAHarmlessEditOfAHelmCheckIsTakenOrToldHowToBeWritten` does the same
+  with edits that weaken no check, and fails if one is refused without a
+  finding that names it and says what to write, or is called a check that can
+  never fail.
+- A finding that a list "does not make this check of the chart" concerns one
+  of the cases that the Go tests make too (`chartCasesMissing` in
+  `test/repository/helmtest_test.go` lists them, each with its command line).
+  Both lists make it with exactly that command line, so a case changed on
+  purpose is changed there and in both lists.
+
+The files that those cases render are in `testdata/chart`: a static target
 document, `indented-first-line.yaml`, and `parent`, a chart whose one
-dependency is the exporter's chart by a `file://` path. `helm dependency
-build` writes a `charts` directory and a `Chart.lock` into the parent, so
-`make helm-test` and CI build it in a temporary copy of the two charts and the
-working tree stays as it is; it needs no network. The parent pins the chart's
-version, as a real parent does, and a test fails when a chart bump leaves it
-behind.
+dependency is the exporter's chart by a `file://` path.
+`helm dependency build` writes a `charts` directory and a `Chart.lock` into
+the parent, so `make helm-test` and CI build it in a temporary copy of the
+two charts and the working tree stays unchanged; it needs no network. The
+parent pins the chart's version, as a real parent does, and a test fails
+when a chart version bump leaves it behind.
 
-Run `make hooks` once in a clone. It points git at `.githooks`, whose
-`pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` and `gopls
-check` at the pinned versions, and `go vet` — and refuses the commit when any of them fails, so a
-commit CI would fail on those never gets made. `git commit --no-verify` skips
-it once. The tests are left to `make test` and CI, since the race run takes
-minutes.
+**The pre-commit hook.** Run `make hooks` once in a clone. It points git at
+`.githooks`, whose `pre-commit` hook runs `make precommit` (`gofmt`,
+`golangci-lint` and `gopls check` at the pinned versions, and `go vet`) and
+refuses the commit when any of them fails, so a commit that CI would fail on
+those checks is never made. `git commit --no-verify` skips it once. The tests
+are left to `make test` and CI, because the race run takes minutes.
 
-That pin is coupled to the Go toolchain in a way worth knowing about.
-golangci-lint type-checks with the `golang.org/x/tools` it was released with,
-which knows only the Go releases and export data formats that existed then — run
-an older release against a newer toolchain and it does not report a lint
-failure, it fails on the standard library: `file requires newer Go version` for a
-new minor, or, as v2.13.2 does against Go 1.27.2, `export data version 5 is
-greater than maximum supported version 4`. Building it from source with the new
-Go does not help, since the format reader comes from its pinned `x/tools`. Since
-the build uses the current stable Go, the pinned linter has to be a release that
-supports that Go (v2.14.0 for Go 1.27.2), and needs bumping when a Go release —
-usually a new minor, here a patch — outruns it. Beyond the standard linters it enables `bodyclose`, `errorlint`,
+**The linter and the Go toolchain.** The linter pin is coupled to the Go
+toolchain. golangci-lint type-checks with the `golang.org/x/tools` that it
+was released with, which knows only the Go releases and export data formats
+that existed then. Run an older release against a newer toolchain and it
+does not report a lint failure; it fails on the standard library:
+`file requires newer Go version` for a new minor, or, as v2.13.2 does against
+Go 1.27.2, `export data version 5 is greater than maximum supported version
+4`. Building it from source with the new Go does not help, because the
+format reader comes from its pinned `x/tools`. The build uses the current
+stable Go, so the pinned linter must be a release that supports that Go
+(v2.14.0 for Go 1.27.2), and needs a bump when a Go release (usually a new
+minor, here a patch) outruns it.
+
+In addition to the standard linters, it enables `bodyclose`, `errorlint`,
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
-`unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
-unformatted sources rather than rewriting them.
+`unconvert` and `usestdlibvars`. The repository is gofmt-clean, and CI fails
+on unformatted sources instead of rewriting them.
 
-Of gocritic's checks that are off by default one is on: `rangeValCopy`, from
-1,024 bytes. A collector's definition (`model.Collector`) is 1,224, and the
-largest other element a loop takes by value is 656, in a test, so what it
-reports is a loop over collectors by value, which copies every collector to
-look at it. Write `for i := range cfg.Collectors` and take
+Of gocritic's checks that are off by default, one is on: `rangeValCopy`, from
+1,024 bytes. A collector's definition (`model.Collector`) is 1,224 bytes, and
+the largest other element that a loop takes by value is 656, in a test, so
+what it reports is a loop over collectors by value, which copies every
+collector to inspect it. Write `for i := range cfg.Collectors` and take
 `c := &cfg.Collectors[i]`, or read `cfg.Collectors[i].Name`. A loop that
-wants the copy, to change it and leave the configuration alone, keeps it and
+needs the copy, to change it and leave the configuration alone, keeps it and
 says so beside a `//nolint:gocritic`, as the other exceptions in the code
-do. A test in `test/repository` fails when the threshold is raised past a
+do. A test in `test/repository` fails when the threshold is raised beyond a
 collector's size or the check is dropped.
 
-Known vulnerabilities are reported by `.github/workflows/govulncheck.yml`, on
-every push and pull request and weekly on Mondays, since an advisory is
-published against code that has not changed. It is for reference only: the job
-never fails, so a new advisory cannot block a merge. Findings are written to
-the run's summary page and raise a warning on the run; a govulncheck that could
-not complete (the vulnerability database unreachable, say) warns too. Keep it
-out of the branch protection's required checks. `make vulncheck` runs the same
-pinned version locally, and a test keeps the Makefile and the workflow in step
-and checks that the step cannot fail the job.
+**govulncheck.** Known vulnerabilities are reported by
+`.github/workflows/govulncheck.yml`, on every push and pull request and
+weekly on Mondays, because an advisory can be published against code that
+has not changed.
+
+- It is for information only: the job never fails, so a new advisory cannot
+  block a merge. Findings are written to the run's summary page and raise a
+  warning on the run. A govulncheck that could not complete (for example,
+  with the vulnerability database unreachable) warns too. Keep it out of the
+  branch protection's required checks.
+- `make vulncheck` runs the same pinned version locally, and a test keeps
+  the Makefile and the workflow in step and checks that the step cannot fail
+  the job.
 
 What is scanned is what ships and what the workflows run: the exporter, the
 package at the root, and the repository's tools (`. ./tools/...`), each with
-everything it imports. The packages only tests use — `internal/grpctest`, the
-stand-in gRPC server of the grpc tests, `internal/sshtest`, the stand-in SSH
-and SFTP server of the sshfile and sshexec tests, `internal/testutil` with its
-`alloctest`, and `test/repository` — are left out, so an advisory for code
-that only a test reaches, such as the gRPC server the exporter never is, raises
-no warning; the price is that such an advisory is not reported at all. A test
-(`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's and the
-workflow's packages equal, fails for a command of the module they do not
-cover, and holds the list of what is left out: a new package is either
-imported by something scanned or added to that list with its reason.
+everything it imports.
 
-`make test` also validates the GitHub Actions workflows: `test/repository/workflows_test.go`
-decodes every file under `.github/workflows` with a parser that rejects
-duplicate mapping keys, and checks that each step sets exactly one of `run` or
-`uses` and uses no unknown keys. GitHub refuses to create a run for a workflow
-it cannot parse, which produces no jobs at all, so a CI step cannot catch that
-mistake in the commit that introduces it — the checker would be in the file
-GitHub is refusing to read. Running the tests before pushing is what protects
-you.
+- The packages that only tests use are left out: `internal/grpctest`, the
+  stand-in gRPC server of the grpc tests; `internal/sshtest`, the stand-in
+  SSH and SFTP server of the sshfile and sshexec tests; `internal/testutil`
+  with its `alloctest`; and `test/repository`. An advisory for code that only
+  a test reaches, such as the gRPC server (which the exporter never is),
+  therefore raises no warning; the cost is that such an advisory is not
+  reported at all.
+- A test (`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's
+  and the workflow's packages equal, fails for a command of the module that
+  they do not cover, and holds the list of what is left out: a new package
+  is either imported by something scanned or added to that list with its
+  reason.
+
+**Workflow files.** `make test` also validates the GitHub Actions workflows:
+`test/repository/workflows_test.go` decodes every file under
+`.github/workflows` with a parser that rejects duplicate mapping keys, and
+checks that each step sets exactly one of `run` or `uses` and uses no unknown
+keys. GitHub refuses to create a run for a workflow that it cannot parse,
+which produces no jobs at all, so a CI step cannot catch that mistake in the
+commit that introduces it: the checker would be in the file that GitHub
+refuses to read. Running the tests before pushing is what protects you.
 
 Every `uses:` in a workflow names its action by a full commit SHA, with the
-release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. A tag can be
-moved to other code by whoever controls the action's repository; a SHA cannot.
-Write a new step in that form, looking the SHA up from the release's tag, and
-leave the updates to Dependabot, which moves the SHA and the comment together.
+release as a comment: `uses: actions/checkout@<sha> # v7.0.1`. Whoever
+controls the action's repository can move a tag to other code, but not a
+SHA. Write a new step in that form, looking up the SHA from the release's
+tag, and leave the updates to Dependabot, which moves the SHA and the comment
+together.
 `test/repository/workflowpins_test.go` fails for any other form, a
 commented-out `uses:` included, and for a `.github/dependabot.yml` without its
 `github-actions` update.
 
-It validates the chart templates the same way. `test/repository/charts_test.go` checks that
-every manifest a template renders begins its own YAML document. A template that
-renders more than one manifest — several declared, or one wrapped in a range —
-needs a `---` before each, and neither `helm lint` nor `helm template` notices a
-missing one: helm prints whatever the template produced, so two manifests merge
-into a single document and the chart only fails when someone applies it.
-`helm-test` and CI render the chart with monitors enabled and additionally fail
-when the number of manifests exceeds the number of documents the output parses
-into.
+**Chart templates.** `test/repository/charts_test.go` checks that every
+manifest a template renders begins its own YAML document. A template that
+renders more than one manifest (several declared, or one wrapped in a range)
+needs a `---` before each, and neither `helm lint` nor `helm template`
+notices a missing one: helm prints whatever the template produced, so two
+manifests merge into a single document, and the chart fails only when
+someone applies it. `helm-test` and CI render the chart with monitors
+enabled, and also fail when the number of manifests exceeds the number of
+documents that the output parses into.
 
-A template never prints a number of the values by itself. Helm reads the
+A template never prints a number from the values directly. Helm reads the
 numbers of a values file, and of `--set-json`, as floating point, and
 `{{ .Values.replicaCount }}`, `toString` and `printf "%v"` print one of a
-million or more with an exponent, `2e+06`; `--set` hands over an integer, so a
-test that sets the value with `--set` does not show it. A whole number goes
-through the `wholeNumber` helper of `_helpers.tpl`, with its name and its
-range, which writes it out and fails rendering for a fraction or a number
-outside the range, and the values schema carries the same maximum; a value
-that may also be text goes through the `text` helper before it is looked at.
-A sub-tree handed to `toYaml` needs neither: `toYaml` writes a whole number
-of up to eighteen digits out, since it goes through JSON, which does
-(`runAsUser: 1000680000`, and `2e9` as `2000000000`); only a fraction of a
-million or more, and a number past what 64 bits hold, come out with an
-exponent. `test/repository/chartwholenumbers_test.go` renders each such
-value from a values file, and a test there fails for an integer of the
-values schema that has no maximum and is not listed as one a sub-tree hands
-to `toYaml`.
+million or more with an exponent, `2e+06`. `--set` passes an integer, so a
+test that sets the value with `--set` does not reveal this.
 
-A few `gosec` findings are deliberate and are suppressed narrowly, with the
-reason stated at the suppression: `request.tls.insecure_skip_verify` is a
-documented opt-in, and the exporter necessarily reads the configuration, target
-document and credential files whose paths the operator supplies (G304).
+- A whole number goes through the `wholeNumber` helper of `_helpers.tpl`,
+  with its name and its range. The helper writes it out and fails rendering
+  for a fraction or a number outside the range, and the values schema has
+  the same maximum.
+- A value that may also be text goes through the `text` helper before it is
+  inspected.
+- A sub-tree passed to `toYaml` needs neither: `toYaml` writes out a whole
+  number of up to eighteen digits, because it goes through JSON, which does
+  (`runAsUser: 1000680000`, and `2e9` as `2000000000`). Only a fraction of a
+  million or more, and a number beyond what 64 bits hold, come out with an
+  exponent.
+- `test/repository/chartwholenumbers_test.go` renders each such value from a
+  values file, and a test there fails for an integer of the values schema
+  that has no maximum and is not listed as one that a sub-tree passes to
+  `toYaml`.
 
-Two more are scoped to the single file each applies to rather than excluded
-globally. G704 reports the outbound request as server-side request forgery,
-which is an accurate description of what this program is — an exporter whose job
-is to fetch a URL an operator supplied — so it is excluded on
-`internal/fetch/fetcher.go` only, with the exposure bounded by the scheme
-allowlist, the response size limit and each collector's
-`request.allowed_targets` and `request.denied_targets`, which the operator sets
-to say which hosts, addresses and networks its requests may reach, checked
-again on every redirect and connection (`internal/fetch/targetpolicy.go`). G703 reports the Dockerfile path that
-`tools/depupdate` takes on the command line as attacker-controlled; that is a
-developer tool with no untrusted caller, so it is excluded under `tools/`.
+**gosec suppressions.** A few `gosec` findings are deliberate and are
+suppressed narrowly, with the reason stated at the suppression:
+`request.tls.insecure_skip_verify` is a documented opt-in, and the exporter
+necessarily reads the configuration, target document and credential files
+whose paths the operator supplies (G304).
+
+Two more are limited to the one file each applies to instead of being
+excluded globally:
+
+- G704 reports the outbound request as server-side request forgery, which
+  accurately describes what this program is: an exporter whose job is to
+  fetch a URL that an operator supplied. It is excluded on
+  `internal/fetch/fetcher.go` only. The exposure is bounded by the scheme
+  allowlist, the response size limit and each collector's
+  `request.allowed_targets` and `request.denied_targets`, which the operator
+  sets to say which hosts, addresses and networks its requests may reach,
+  checked again on every redirect and connection
+  (`internal/fetch/targetpolicy.go`).
+- G703 reports the Dockerfile path that `tools/depupdate` takes on the
+  command line as attacker-controlled. That is a developer tool with no
+  untrusted caller, so it is excluded under `tools/`.
 
 ## The Go toolchain
 
-CI asks setup-go for `stable`, so the build always uses the current stable Go
-release and no workflow needs editing when Go ships a new one. The release
-builds its binaries with the Go the image is built with: it reads `GO_VERSION`
-from the Dockerfile and has setup-go resolve that minor to its newest patch
-release, so the archives and the image of one release carry the same Go. No
-workflow installs Go with `go-version-file`, which would pin the `go`
-directive's exact version, an old patch release without its security fixes;
-a test fails if one does. The `go` directive in `go.mod` is something different: it is the *minimum*
-the module requires, raised by dependency updates rather than by whichever
-toolchain builds it, so it stays where the dependencies put it. The Dockerfile
-pins `GO_VERSION` to a released minor, which `tools/depupdate` keeps moving
-within the major.
+CI asks setup-go for `stable`, so the build always uses the current stable
+Go release, and no workflow needs editing when Go ships a new one.
 
-The two can drift apart in a way that is hard to read: a dependency bump raises
-the go directive in a pull request that touches no workflow, and from then on
-every build fails with `go.mod requires go >= X` with nothing nearby to explain
-it. `test/repository/goversion_test.go` ties them together — it checks that every Go version the
-workflows request, and the one the Dockerfile pins, satisfies the go directive —
-so `go test ./...` catches the mismatch instead of the next red build.
+- The release builds its binaries with the Go that the image is built with:
+  it reads `GO_VERSION` from the Dockerfile and has setup-go resolve that
+  minor to its newest patch release, so the archives and the image of one
+  release use the same Go.
+- No workflow installs Go with `go-version-file`, which would pin the exact
+  version of the `go` directive, an old patch release without its security
+  fixes; a test fails if one does.
+- The `go` directive in `go.mod` is something different: it is the *minimum*
+  that the module requires, raised by dependency updates and not by
+  whichever toolchain builds it, so it stays where the dependencies put it.
+- The Dockerfile pins `GO_VERSION` to a released minor, which
+  `tools/depupdate` keeps moving within the major.
 
-GitHub Actions uses changed-path detection (`.github/workflows/ci.yml`): the
-checks of the whole repository — formatting, lint, gopls, vet and build (with
-each request type on its own too) and the repository's own tests,
-`test/repository` — run for changes to anything the repository tests read —
-Go sources, `go.mod` and `go.sum`, the workflows, `charts/`, `configs/`,
-`examples/`, `testdata/`, `docs/` and every top-level `*.md`, the
-`Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`, `.golangci.yml`,
-`test/python/`, `.github/dependabot.yml`, `.gitignore`, `.githooks/`,
-`LICENSE` and `.artifacthub-repo.yml` (the filter's `go` output) — so a
-documentation-only change runs the repository tests too, which check the
-docs. `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every
-string literal of `test/repository`'s Go files that names an existing path
-of the repository, from its root, and fails for a file no pattern of the
-`go` output matches: a file those tests read whose change alone skipped them
-would merge unchecked. When it fails, add the file to the `go` output in
-every job. Under the same output, `build` builds the code for `darwin` on
-`amd64` and `arm64`, linking both commands, since the release builds archives
-for macOS from it, and `image` builds the image from the `Dockerfile` with
-`docker/build-push-action`, pushing nothing, loads it and runs its
-`--version` to see the revision it was given; a change that breaks either
-fails on its pull request rather than at release time. The Helm lint/template
-checks run for changes under `charts/`, `configs/` and `testdata/chart/`, the
-files the chart steps render. A change under `charts/` runs the Go checks
-because the template guard above lives there and is worth least on exactly
-the changes that would break it. A tag push runs everything: the filter
-compares a tag with its merge base on `main`, which for a tag on `main`'s
-newest commit finds no change, so the steps run under the outputs of the
-step `changes` after the filter, all true on a tag push and the filter's own
-otherwise (`TestATagPushRunsEveryStepOfCI` runs that step's script); a step
-reads those, never the filter's own outputs.
+The two can drift apart in a confusing way: a dependency bump raises the go
+directive in a pull request that touches no workflow, and from then on every
+build fails with `go.mod requires go >= X`, with nothing nearby to explain
+it. `test/repository/goversion_test.go` ties them together: it checks that
+every Go version that the workflows request, and the one that the Dockerfile
+pins, satisfies the go directive, so `go test ./...` catches the mismatch
+instead of the next red build.
 
-The tests of the packages themselves are split in two sides, each run only
-when something it depends on changed. `tools/ci-packages.sh allocator` lists
-the target allocator's packages, `cmd/pue-allocator` and `internal/allocator`;
-`tools/ci-packages.sh exporter` every other package but `test/repository`, so
-a new package lands on the exporter's side by itself. The filter's
-`allocator` and `exporter` outputs list, for each side, the directories of
-the module's packages its packages and their tests are built from
-(`go list -deps -test`), the files outside those its tests open (the
-exporter's read `examples/`, `configs/`, `testdata/`, `charts/`, `docs/`, the
-README and the `Dockerfile`), and what CI runs them with (`go.mod`, `go.sum`,
-`ci.yml`, the scripts, and for the exporter `test/python/`). A change to only
-`internal/allocator` runs the allocator's tests and the repository checks,
-not the exporter's; a change to only `internal/exporter` runs both sides,
-since the allocator's end-to-end test runs the exporter.
-`test/repository/cisides_test.go` works the lists out again — every Go file,
-embedded file and `testdata/` file of those packages, and every existing path
-outside its own directory a string literal of a side's package names — and
-fails for a file a side needs that its list leaves out, for an entry that
-matches none of them, for a file a side's list matches that the `go` output
-does not (the setup steps run under `go`), and for a package tested by no
-side or by both. When it fails for a new package or a new file a test reads,
-add its directory or the file to the side's list in every job.
+**Changed paths.** GitHub Actions uses changed-path detection
+(`.github/workflows/ci.yml`).
 
-CI runs in jobs side by side, so it takes about as long as its longest job:
-`lint` runs gofmt, golangci-lint (the default build, the opt-in sql drivers'
-and the opt-in request types') and gopls; `build` runs `go vet`, the default
-build, darwin's, and the builds with the opt-in sql drivers and request types
-with their tests; `image` builds the image, its layers read from and written
-to the GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a
-change to the sources alone downloads no module and installs nothing in the
-runtime stage again; `race` runs the race suite of `internal/exporter`, which
-has by far the most tests, and `race-rest` that of every other package of the
-exporter's side (`tools/ci-packages.sh exporter-core` and `exporter-rest`,
-which together list the side once each, as a test checks);
-`request-types`, a matrix over the request types (its checks are named
-`test (<type>)`), vets, builds and lints each type on its own under the `go`
-output and runs the exporter's tests with it under `exporter`; `scaffold`
-runs `TestANewRequestTypeIsWiredByTheScaffold` alone under `go`, the
-minutes it takes to build a copy of the tree with two new request types,
-which the step of `test` that runs the repository tests skips with `-skip`;
-`allocator` runs the
-allocator's tests, once and then under the race detector, when the
-`allocator` output names a change. The allocator's tests are not run with
-each type on its own: those that need a type are built with it, so such a
-build runs a part of them alone, and each type's job already vets and builds
-the allocator with it. `test` keeps the repository tests, the exporter's
-tests (under `exporter`) and the chart steps; a test fails when it runs a
-linter or a build again. Each of the other jobs starts with `test`'s setup
-steps but helm's, written out again, and
-`TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when a copy differs from
-`test`'s, so change them in every job at once. `image` runs no Go and no
-Python, which the `Dockerfile` brings, so it starts with the first three of
-them alone, checkout, the filter and the step `changes`, and the test holds
-a job to the whole setup as soon as it sets up or runs Go or Python. They gate their steps on the changed-path filter's outputs rather than
-with a job-level `if`: a job whose steps are skipped still passes under its
-own name, while a matrix job skipped as a whole is reported under a name no
-check expects. `make ci` runs the same commands one after another, each over
-every package (`./...`) where CI names a side's packages, so it runs
-everything whatever changed: `make test` skips the scaffold test as `test`
-does and `make test-scaffold` runs it as `scaffold` does.
-`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test a go command of
-CI or of `make ci` skips that no other command there runs with `-run`, so a
-test moved out of a suite to a job of its own still runs.
+- The checks of the whole repository (formatting, lint, gopls, vet and build,
+  also with each request type on its own, and the repository's own tests,
+  `test/repository`) run for changes to anything that the repository tests
+  read: Go sources, `go.mod` and `go.sum`, the workflows, `charts/`,
+  `configs/`, `examples/`, `testdata/`, `docs/` and every top-level `*.md`,
+  the `Dockerfile`, `.dockerignore`, the `Makefile`, `tools/`,
+  `.golangci.yml`, `test/python/`, `.github/dependabot.yml`, `.gitignore`,
+  `.githooks/`, `LICENSE` and `.artifacthub-repo.yml` (the filter's `go`
+  output). A documentation-only change therefore runs the repository tests
+  too, which check the docs.
+- `TestTheGoFilterMatchesEveryFileTheRepositoryTestsRead` takes every string
+  literal of `test/repository`'s Go files that names an existing path of the
+  repository, from its root, and fails for a file that no pattern of the
+  `go` output matches: a file that those tests read, whose change alone
+  skipped them, would be merged unchecked. When it fails, add the file to the
+  `go` output in every job.
+- Under the same output, `build` builds the code for `darwin` on `amd64` and
+  `arm64`, linking both commands, because the release builds archives for
+  macOS from it. `image` builds the image from the `Dockerfile` with
+  `docker/build-push-action`, pushing nothing, loads it, and runs its
+  `--version` to check the revision that it was given. A change that breaks
+  either fails on its pull request instead of at release time.
+- The Helm lint and template checks run for changes under `charts/`,
+  `configs/` and `testdata/chart/`, the files that the chart steps render. A
+  change under `charts/` runs the Go checks because the template guard above
+  lives there, and is least useful on exactly the changes that would break
+  it.
+- A tag push runs everything. The filter compares a tag with its merge base
+  on `main`, which for a tag on `main`'s newest commit finds no change, so
+  the steps run under the outputs of the step `changes` after the filter:
+  all true on a tag push, and the filter's own otherwise
+  (`TestATagPushRunsEveryStepOfCI` runs that step's script). A step reads
+  those outputs, never the filter's own.
 
-Every workflow sets `permissions` at its top, read-only, so no job runs with
-the repository's default token, which may write to everything; a job that has
-to write grants itself the scopes it needs, and
-`test/repository/workflowpermissions_test.go` lists each job's write grants and
-fails for any other, so a new one is a deliberate change to that list. The
-release workflows publish only once CI has passed on the tagged commit:
+**Sides.** The tests of the packages themselves are split into two sides,
+each run only when something that it depends on changed.
+
+- `tools/ci-packages.sh allocator` lists the target allocator's packages,
+  `cmd/pue-allocator` and `internal/allocator`.
+  `tools/ci-packages.sh exporter` lists every other package except
+  `test/repository`, so a new package lands on the exporter's side by
+  default.
+- The filter's `allocator` and `exporter` outputs list, for each side: the
+  directories of the module's packages that its packages and their tests are
+  built from (`go list -deps -test`); the files outside those that its tests
+  open (the exporter's tests read `examples/`, `configs/`, `testdata/`,
+  `charts/`, `docs/`, the README and the `Dockerfile`); and what CI runs them
+  with (`go.mod`, `go.sum`, `ci.yml`, the scripts, and for the exporter
+  `test/python/`).
+- A change to only `internal/allocator` runs the allocator's tests and the
+  repository checks, not the exporter's. A change to only
+  `internal/exporter` runs both sides, because the allocator's end-to-end
+  test runs the exporter.
+- `test/repository/cisides_test.go` recomputes the lists (every Go file,
+  embedded file and `testdata/` file of those packages, and every existing
+  path outside its own directory that a string literal of a side's package
+  names). It fails for a file that a side needs and its list leaves out, for
+  an entry that matches none of them, for a file that a side's list matches
+  and the `go` output does not (the setup steps run under `go`), and for a
+  package tested by no side or by both. When it fails for a new package or a
+  new file that a test reads, add its directory or the file to the side's
+  list in every job.
+
+**Jobs.** CI runs its jobs side by side, so it takes about as long as its
+longest job:
+
+- `lint` runs gofmt, golangci-lint (the default build, the opt-in sql
+  drivers' and the opt-in request types') and gopls.
+- `build` runs `go vet`, the default build, darwin's, and the builds with
+  the opt-in sql drivers and request types with their tests.
+- `image` builds the image, with its layers read from and written to the
+  GitHub Actions cache (`type=gha`, `mode=max`) through buildx, so a change
+  to the sources alone downloads no module and installs nothing in the
+  runtime stage again.
+- `race` runs the race suite of `internal/exporter`, which has by far the
+  most tests, and `race-rest` that of every other package of the exporter's
+  side (`tools/ci-packages.sh exporter-core` and `exporter-rest`, which
+  together list each package of the side once, as a test checks).
+- `request-types`, a matrix over the request types (its checks are named
+  `test (<type>)`), vets, builds and lints each type on its own under the
+  `go` output, and runs the exporter's tests with it under `exporter`.
+- `scaffold` runs `TestANewRequestTypeIsWiredByTheScaffold` alone under
+  `go`: the minutes that it takes to build a copy of the tree with two new
+  request types. The step of `test` that runs the repository tests skips it
+  with `-skip`.
+- `allocator` runs the allocator's tests, once and then under the race
+  detector, when the `allocator` output reports a change. The allocator's
+  tests are not run with each type on its own: those that need a type are
+  built with it, so such a build runs only part of them, and each type's job
+  already vets and builds the allocator with it.
+- `test` keeps the repository tests, the exporter's tests (under `exporter`)
+  and the chart steps; a test fails when it runs a linter or a build again.
+
+Each of the other jobs starts with `test`'s setup steps except helm's,
+written out again, and `TestTheGoJobsOfCIStartWithTheSetupOfTest` fails when
+a copy differs from `test`'s, so change them in every job at once. `image`
+runs no Go and no Python, which the `Dockerfile` brings itself, so it starts
+with only the first three of them (checkout, the filter and the step
+`changes`), and the test requires the whole setup of a job as soon as it
+sets up or runs Go or Python.
+
+The jobs gate their steps on the changed-path filter's outputs instead of
+using a job-level `if`: a job whose steps are skipped still passes under its
+own name, while a matrix job skipped as a whole is reported under a name that
+no check expects.
+
+`make ci` runs the same commands one after another, each over every package
+(`./...`) where CI names a side's packages, so it runs everything whatever
+changed. `make test` skips the scaffold test as `test` does, and
+`make test-scaffold` runs it as `scaffold` does.
+`TestTheScaffoldTestRunsInAJobOfItsOwn` fails for a test that a go command of
+CI or of `make ci` skips and that no other command there runs with `-run`,
+so a test moved out of a suite into its own job still runs.
+
+**Permissions.** Every workflow sets `permissions` at its top, read-only, so
+no job runs with the repository's default token, which may write to
+everything. A job that has to write grants itself the scopes it needs, and
+`test/repository/workflowpermissions_test.go` lists each job's write grants
+and fails for any other, so a new grant is a deliberate change to that list.
+The release workflows publish only once CI has passed on the tagged commit:
 their `preflight` job runs `tools/ci-passed.py`, which `cipassed_test.go`
 runs against a stand-in of the GitHub API (`docs/RELEASING.md` says what
 counts as passed and how to release once it has).

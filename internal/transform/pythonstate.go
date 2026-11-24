@@ -77,6 +77,11 @@ type pythonStateStore struct {
 	// dropped is how many states of each collector went to keep the
 	// states within their bounds.
 	dropped map[string]uint64
+	// followed says the collectors of the configuration in force are
+	// known (FollowPythonStates), and keeping is those of them that keep
+	// a state: a script of no other leaves one.
+	followed bool
+	keeping  map[string]bool
 }
 
 type pythonStateEntry struct {
@@ -110,7 +115,9 @@ func (s *pythonStateStore) put(key pythonStateKey, state string) {
 		s.bytes -= len(was.json)
 		delete(s.kept, key)
 	}
-	if state == "{}" {
+	// A run that outlived its collector, which a reload removed, or took
+	// the key from, leaves nothing for a collector added under the name.
+	if state == "{}" || s.followed && !s.keeping[key.collector] {
 		return
 	}
 	s.clock++
@@ -134,6 +141,36 @@ func (s *pythonStateStore) put(key pythonStateKey, state string) {
 			s.dropped = map[string]uint64{}
 		}
 		s.dropped[oldest.collector]++
+	}
+}
+
+// FollowPythonStates tells the states which collectors are in force now:
+// the states of a collector that is gone, or no longer sets
+// transform.state, are dropped with their count, so one added again under
+// the name starts from an empty state and from zero. The states of a
+// collector a reload kept stay, whatever of its definition changed: a
+// script that was edited finds what the one before it left.
+func FollowPythonStates(collectors []model.Collector) {
+	keeping := map[string]bool{}
+	for i := range collectors {
+		if collectors[i].Transform.State {
+			keeping[collectors[i].Name] = true
+		}
+	}
+	s := pythonStates
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.followed, s.keeping = true, keeping
+	for key, entry := range s.kept {
+		if !keeping[key.collector] {
+			s.bytes -= len(entry.json)
+			delete(s.kept, key)
+		}
+	}
+	for collector := range s.dropped {
+		if !keeping[collector] {
+			delete(s.dropped, collector)
+		}
 	}
 }
 

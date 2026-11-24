@@ -578,7 +578,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, cacheRevalidationMetrics(names, values, requestTypes)...)
 	out = append(out, hostRateLimitMetrics()...)
 	out = append(out, secretStoreMetrics()...)
-	out = append(out, s.pythonStateMetrics()...)
+	out = append(out, s.pythonStateMetrics(values)...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
@@ -675,9 +675,10 @@ func secretStoreMetrics() []model.Metric {
 // pythonStateMetrics are the families of transform.state: a series of each
 // for every collector whose scripts keep a state, from zero, so a collector
 // without the key has none. The states are counted where they are kept
-// (transform.PythonStateCounts); the dropped ones count since the exporter
-// started.
-func (s *Server) pythonStateMetrics() []model.Metric {
+// (transform.PythonStateCounts), and follow a reload as the collector's
+// other counts do (transform.FollowPythonStates): the dropped ones count
+// since the collector's counters began, which values says.
+func (s *Server) pythonStateMetrics(values map[string]statsValues) []model.Metric {
 	var out []model.Metric
 	collectors := s.manager.Get().Collectors
 	var counts map[string]transform.PythonStateCount
@@ -702,7 +703,11 @@ func (s *Server) pythonStateMetrics() []model.Metric {
 		} {
 			m := model.Metric{Name: family.name, Help: exporterMetricHelp[family.name], Type: family.kind, Value: family.value, Labels: labels}
 			if family.kind == model.CounterMetricType {
-				m.Created = createdMillis(exporterStart())
+				created := exporterStart()
+				if v, counted := values[c.Name]; counted && !v.created.IsZero() {
+					created = v.created
+				}
+				m.Created = createdMillis(created)
 			}
 			out = append(out, m)
 		}

@@ -23,7 +23,7 @@ configured:
 | `http_exporter_script_errors_total` | counter | Python script failures. |
 | `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, as `limits.script_timeout` measures each: the script's own run, not counting starting an interpreter or handing it the response. |
 | `http_exporter_python_states`, `http_exporter_python_state_bytes` | gauge | Collectors with [`transform.state`](PYTHON.md#state-between-runs) only: the states the exporter keeps of the collector's scripts, one for each script, target and set of probe parameters that left one, and their bytes as JSON together. |
-| `http_exporter_python_states_dropped_total` | counter | Collectors with `transform.state` only: the states of the collector's scripts dropped to keep the states of every collector within 4,096 and 64 MiB, those used longest ago first, since the exporter started. Each cost a script what it remembered; one that rises says the collector keeps state for more targets, or more in each, than fits. |
+| `http_exporter_python_states_dropped_total` | counter | Collectors with `transform.state` only: the states of the collector's scripts dropped to keep the states of every collector within 4,096 and 64 MiB, those used longest ago first, since the collector's counters began. Each cost a script what it remembered; one that rises says the collector keeps state for more targets, or more in each, than fits. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
@@ -1141,7 +1141,7 @@ The time is when the series began to count:
 | Series | Created |
 | --- | --- |
 | The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total`, the [scrape-time histogram](#scrape-time-histograms) and the [Python worker](#python-workers) counters of a collector the exporter started with | The exporter's start. |
-| The [rate limits per host](#rate-limits-per-host) and the [secret stores](#secret-stores) of an entry the exporter started with, and `http_exporter_python_states_dropped_total` | The exporter's start. |
+| The [rate limits per host](#rate-limits-per-host) and the [secret stores](#secret-stores) of an entry the exporter started with | The exporter's start. |
 | The same, of an entry a reload added, or removed and brought back | When the reload put it in force. |
 | The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |

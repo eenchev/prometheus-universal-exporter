@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -34,7 +35,7 @@ import (
 //
 //	request:
 //	  type: whois
-//	  # server: whois.nic.example
+//	  # whois_server: whois.nic.example
 //
 // WHOIS has no format, so the document is what could be read: a date no
 // line holds is null, and the rule that reads it fails, rather than a
@@ -176,7 +177,7 @@ func parseWhoisDomain(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if net.ParseIP(domain) != nil || !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.Contains(domain, "..") {
+	if net.ParseIP(domain) != nil || !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") || strings.Contains(domain, "..") {
 		return "", fmt.Errorf("target %q is not a domain; a whois target is a name under a top-level domain, such as example.com", raw)
 	}
 	return domain, nil
@@ -342,6 +343,10 @@ func whoisExchange(ctx context.Context, guard *policyGuard, server, question str
 		return "", model.MarkError(model.Errorf("the answer of %s is larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", server, model.Size(limit)), model.ErrLimitExceeded)
 	case err != nil && ctx.Err() != nil:
 		return "", fmt.Errorf("reading the answer of %s: %w", server, ctx.Err())
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		// The connection's deadline is the scrape's, and its timer can
+		// fire before the context's own.
+		return "", fmt.Errorf("reading the answer of %s: %w", server, context.DeadlineExceeded)
 	case err != nil:
 		return "", fmt.Errorf("reading the answer of %s: %w", server, err)
 	case len(strings.TrimSpace(string(answer))) == 0:

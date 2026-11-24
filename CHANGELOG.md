@@ -194,8 +194,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   Python script a dict, `state`, that is kept between its runs for a
   target, so a script can tell what changed since the last scrape: a
   counter's increase, a value seen before, when something was first seen.
-  It is kept in memory, at most 64 KiB a script and target, and lost at a
-  restart; `http_exporter_python_states` and its two companions say what
+  It is kept in memory, at most 64 KiB a script and target, lost at a
+  restart and dropped when a reload removes the collector;
+  `http_exporter_python_states` and its two companions say what
   is kept of a collector's states, and how many were dropped.
 - A static target of an `smtp`, `imap` or `pop3` collector that logs in
   with a token names its own mailbox with `username` alone, so one

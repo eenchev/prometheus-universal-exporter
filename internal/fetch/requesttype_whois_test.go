@@ -288,17 +288,54 @@ func TestAWhoisScrapeIsHeldToThePolicyAndTheLimit(t *testing.T) {
 	}
 }
 
+// earlyDeadline is a context whose deadline has come while it is not yet
+// done, as a connection whose deadline is the context's finds it when its
+// own timer fires first.
+type earlyDeadline struct {
+	context.Context
+	at time.Time
+}
+
+func (c earlyDeadline) Deadline() (time.Time, bool) { return c.at, true }
+
+// A server that never answers ends the scrape at its deadline, and the
+// failure is the deadline's whichever timer said so first, the
+// connection's or the context's, so it is counted as a timeout.
+func TestAWhoisAnswerThatDoesNotComeIsADeadlinePassed(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+	ctx := earlyDeadline{context.Background(), time.Now().Add(50 * time.Millisecond)}
+	_, err = whoisExchange(ctx, nil, listener.Addr().String(), "example.com", 1024)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "reading the answer of 127.0.0.1:") {
+		t.Errorf("err=%v", err)
+	}
+}
+
 // A target is a domain and nothing else, and the keys are checked when the
 // configuration loads.
 func TestAWhoisTargetAndKeysAreChecked(t *testing.T) {
 	c := whoisCollector(t, WhoisConfig{}, nil)
-	for _, target := range []string{"https://example.com", "example.com:43", "example.com/path", "user@example.com", "localhost", "192.0.2.1", "exa mple.com", ".com", "bücher.test"} {
+	for _, target := range []string{"https://example.com", "example.com:43", "example.com/path", "user@example.com", "localhost", "192.0.2.1", "exa mple.com", ".com", "example.com..", "bücher.test"} {
 		if err := CheckTarget(c, target, false); err == nil {
 			t.Errorf("target %q was taken", target)
 		}
 	}
-	if err := CheckTarget(c, "Example.COM", false); err != nil {
-		t.Error(err)
+	for _, target := range []string{"Example.COM", "example.com."} {
+		if err := CheckTarget(c, target, false); err != nil {
+			t.Error(err)
+		}
 	}
 	if label, err := (whoisRequester{}).Label(" Example.COM ", c, RequestOverrides{}); err != nil || label != "whois://example.com" {
 		t.Errorf("label %q, %v", label, err)

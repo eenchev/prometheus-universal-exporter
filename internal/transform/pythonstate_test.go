@@ -19,6 +19,7 @@ func freshStates(t *testing.T) {
 	reset := func() {
 		pythonStates.mu.Lock()
 		pythonStates.kept, pythonStates.clock, pythonStates.bytes, pythonStates.dropped = map[pythonStateKey]*pythonStateEntry{}, 0, 0, nil
+		pythonStates.followed, pythonStates.keeping = false, nil
 		pythonStates.mu.Unlock()
 	}
 	reset()
@@ -189,4 +190,45 @@ func TestTheStatesKeptAreBounded(t *testing.T) {
 	if kept != pythonStatesKept-1 {
 		t.Fatalf("%d states are kept after one was emptied, want %d", kept, pythonStatesKept-1)
 	}
+}
+
+// The states follow a reload: those of a collector it removed, or took
+// transform.state from, are dropped with their count, a run that outlived
+// such a collector leaves none, and a collector added again under the name
+// starts from an empty state. A collector the reload kept keeps its states.
+func TestTheStatesOfACollectorThatIsGoneAreDropped(t *testing.T) {
+	requirePython(t)
+	freshStates(t)
+	script := `state["runs"] = state.get("runs", 0) + 1
+metric(name="runs", value=state["runs"])`
+	kept, gone := workerCollector("kept", script), workerCollector("gone", script)
+	kept.Transform.State, gone.Transform.State = true, true
+	run := func(c *model.Collector, want float64) {
+		t.Helper()
+		if got, err := runWithState(context.Background(), t, c, "a"); err != nil || got != want {
+			t.Fatalf("%s: %v, %v; want %v", c.Name, got, err, want)
+		}
+	}
+	FollowPythonStates([]model.Collector{*kept, *gone})
+	run(kept, 1)
+	run(gone, 1)
+	pythonStates.mu.Lock()
+	pythonStates.dropped = map[string]uint64{"kept": 2, "gone": 3}
+	pythonStates.mu.Unlock()
+
+	without := *gone
+	without.Transform.State = false
+	FollowPythonStates([]model.Collector{*kept, without})
+	if counts := PythonStateCounts(); len(counts) != 1 || counts["kept"] != (PythonStateCount{States: 1, Bytes: len(`{"runs": 1}`), Dropped: 2}) {
+		t.Fatalf("kept after the reload: %+v", counts)
+	}
+	// A run of the collector as it was, which the reload found under way.
+	run(gone, 1)
+	if counts := PythonStateCounts(); len(counts) != 1 {
+		t.Fatalf("a run that outlived its collector left a state: %+v", counts)
+	}
+	FollowPythonStates([]model.Collector{*kept, *gone})
+	run(gone, 1)
+	run(gone, 2)
+	run(kept, 2)
 }

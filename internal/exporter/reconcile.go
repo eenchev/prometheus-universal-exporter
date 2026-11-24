@@ -393,6 +393,7 @@ func (s *Server) applyFollowed(followed *followedConfig) {
 	fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
 	fetch.FollowHostRateLimits(hostRateLimits)
 	fetch.FollowSecretStores(secretStores)
+	transform.FollowPythonStates(collectors)
 }
 
 // followPlannedHook, set by tests, is called when a following has been

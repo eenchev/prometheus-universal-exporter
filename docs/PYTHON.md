@@ -430,6 +430,10 @@ transform:
   scrape's answer and no more.
 - Two scrapes of one target at the same moment each read the state as it
   was, and the one that ends last is the one kept.
+- A [reload](CONFIGURATION.md#reloading-on-demand) keeps the states of a collector
+  it keeps, of one whose script it changed too, so an edited script finds
+  what the one before it left. It drops those of a collector it removes or
+  takes the key from: one added again under the name starts empty.
 
 The key is refused on a collector with no Python script.
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -53,4 +55,44 @@ metric(name="runs", value=state["runs"])`)
 	if strings.Contains(metrics, `http_exporter_python_states{collector="stateless"}`) {
 		t.Error("a collector without transform.state has a series of states")
 	}
+}
+
+// A reload that removes a collector drops what its scripts kept, so one
+// added again under the name starts from an empty state, and a collector
+// the reload keeps finds its state as it left it.
+func TestAReloadDropsTheStatesOfTheCollectorsItRemoves(t *testing.T) {
+	requirePython(t)
+	testutil.CaptureLogs(t)
+	target := textTarget(t, "x")
+	counting := func(name string) string {
+		return `  - name: ` + name + `
+    request: {type: http}
+    decoder: {type: text}
+    transform:
+      type: python
+      state: true
+      script: |
+        state["runs"] = state.get("runs", 0) + 1
+        metric(name="runs", value=state["runs"])
+`
+	}
+	both := "collectors:\n" + counting("kept") + counting("gone")
+	r := newReloadable(t, both, "")
+	probe := func(collector, want string) {
+		t.Helper()
+		got := probeOnce(t, r.server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil)
+		if lines := strings.Join(seriesLines(got.Body.String()), "\n"); got.Code != http.StatusOK || lines != want {
+			t.Fatalf("%s: %d %q, want %q", collector, got.Code, lines, want)
+		}
+	}
+	probe("kept", "runs 1")
+	probe("gone", "runs 1")
+	for _, document := range []string{"collectors:\n" + counting("kept"), both} {
+		r.write(r.path, document)
+		if err := r.manager.Reload(config.ReloadTriggerHTTP); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe("gone", "runs 1")
+	probe("kept", "runs 2")
 }

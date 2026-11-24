@@ -3191,7 +3191,12 @@ alone. A script MUST fail when it ends with `state` bound to anything but
 a dict, holding what JSON cannot carry, or of more than 65,536 bytes
 written out, and what it left MUST NOT be kept. A debug probe MUST read
 the state and MUST NOT change it. The exporter MUST keep at most 4,096
-states and 64 MiB of them, those used last. Without the key a script MUST have no such name,
+states and 64 MiB of them, those used last. A reload MUST keep the states of
+a collector it keeps, whatever of its definition changed, and MUST drop
+those of a collector it removes or that no longer sets the key, with their
+count of dropped states, so a collector added again under the name starts
+from an empty state; a run such a reload found under way MUST NOT leave
+one. Without the key a script MUST have no such name,
 and the key on a collector that runs no Python script MUST be refused at
 load.
 
@@ -6151,7 +6156,7 @@ gauges, and `http_exporter_python_states_dropped_total`, a counter, MUST
 exist for every collector that sets `transform.state` and for no other,
 labelled `collector`, from 0: the states kept of its scripts, their bytes
 as JSON together, and the states of its scripts dropped to keep all states
-within their bounds, since the exporter started (§ 16).
+within their bounds, created as the collector's other counters are (§ 16).
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,

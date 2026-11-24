@@ -22,14 +22,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Allocator mode: --allocator.url has the exporter take its configuration
-// from the target allocator (cmd/pue-allocator) rather than from files of
-// its own. The allocator serves each replica a bundle, the configuration
-// with its collector files and the replica's share of the static targets;
-// the exporter writes it into --allocator.cache-dir and loads it there with
-// the same loader and manager as mounted files (internal/allocclient). A
-// restart resumes from the cache directory, and a replica that has no
-// bundle yet serves its endpoints, unready, until the first arrives.
+// Allocator mode: with --allocator.url, the exporter takes its configuration
+// from the target allocator (cmd/pue-allocator) instead of from files of its
+// own. The allocator serves each replica a bundle: the configuration with its
+// collector files, and the replica's share of the static targets. The
+// exporter writes it into --allocator.cache-dir and loads it there with the
+// same loader and manager as mounted files (internal/allocclient). A restart
+// resumes from the cache directory, and a replica that has no bundle yet
+// serves its endpoints, not ready, until the first one arrives.
 
 // allocatorFlags are the allocator mode's flags as given.
 type allocatorFlags struct {
@@ -65,10 +65,11 @@ var fileFlags = []string{"config.file", "static-targets-file"}
 // allocatorOnlyFlags are the flags read only in allocator mode.
 var allocatorOnlyFlags = []string{"allocator.cache-dir", "allocator.member", "allocator.advertise", "allocator.token-file", "allocator.capacity"}
 
-// setUp checks the allocator mode's flags and works out their defaults: nil
-// without --allocator.url. Allocator mode is refused with a flag that names
-// a configuration file, given explicitly, and the flags of allocator mode
-// without --allocator.url: either would be left unread without a word.
+// setUp checks the allocator mode's flags and works out their defaults; it
+// returns nil without --allocator.url. Allocator mode is refused together with
+// an explicitly given flag that names a configuration file, and the allocator
+// mode flags are refused without --allocator.url: either would silently go
+// unread.
 func (f allocatorFlags) setUp(flags *flag.FlagSet, listenAddress string) (*allocatorMode, error) {
 	given := map[string]bool{}
 	flags.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
@@ -120,11 +121,12 @@ func (f allocatorFlags) setUp(flags *flag.FlagSet, listenAddress string) (*alloc
 	return a, nil
 }
 
-// bracketedAdvertise is --allocator.advertise with an IPv6 address written
-// without brackets, fd00::12:8080, put in them, [fd00::12]:8080: the flag
-// always holds a port, so what is before the last colon is the address. A
-// pod's IP comes from the downward API bare, and a Deployment that writes
-// $(POD_IP):8080 cannot know whether it will be an IPv6 one.
+// bracketedAdvertise puts an IPv6 address in --allocator.advertise that was
+// written without brackets, such as fd00::12:8080, in brackets:
+// [fd00::12]:8080. The flag always holds a port, so what is before the last
+// colon is the address. A pod's IP comes from the downward API without
+// brackets, and a Deployment that writes $(POD_IP):8080 cannot know whether
+// it will be an IPv6 address.
 func bracketedAdvertise(advertise string) string {
 	last := strings.LastIndexByte(advertise, ':')
 	if last <= 0 || strings.HasPrefix(advertise, "[") {
@@ -174,11 +176,11 @@ func defaultAdvertise(listenAddress string) (string, error) {
 	return "", errors.New("the host has no address other than a loopback one; set --allocator.advertise")
 }
 
-// checkFiles are the files --dry-run checks in allocator mode: the bundle in
-// the cache directory, which a restart would start with, and its static
-// targets when it has any. A config.yaml there that is not a bundle the
-// client installed is not checked, but fails: a start would ignore it.
-// Nothing in the cache directory is changed.
+// checkFiles returns the files that --dry-run checks in allocator mode: the
+// bundle in the cache directory, which a restart would start with, and its
+// static targets when it has any. A config.yaml there that is not a bundle
+// installed by the client is not checked but fails, since a start would
+// ignore it. Nothing in the cache directory is changed.
 func (a *allocatorMode) checkFiles() (configFile, staticTargetsFile string, configErr error) {
 	if allocclient.CachedGeneration(a.cacheDir) == "" {
 		if exists(a.configFile()) {
@@ -192,12 +194,12 @@ func (a *allocatorMode) checkFiles() (configFile, staticTargetsFile string, conf
 	return a.configFile(), staticTargetsFile, nil
 }
 
-// startManager makes the manager of allocator mode. The cache directory is
-// tidied first (allocclient.Tidy): only a bundle the client installed is
-// started with, and what else is there, such as a config.yaml put there by
-// hand, is removed. With a bundle that loads the manager starts with it,
-// and its generation is returned; with none, or one that does not load,
-// the manager awaits the first bundle from the allocator
+// startManager makes the manager for allocator mode. The cache directory is
+// tidied first (allocclient.Tidy): only a bundle that the client installed is
+// used at startup, and anything else there, such as a config.yaml put there
+// by hand, is removed. With a bundle that loads, the manager starts with it
+// and its generation is returned. With none, or one that does not load, the
+// manager waits for the first bundle from the allocator
 // (config.NewAwaitingManager).
 func (a *allocatorMode) startManager(logger *slog.Logger, pythonPath string, loadOptions, staticTargetsLoadOptions []config.LoadOption, watch bool) (*config.Manager, string) {
 	configFile, targetsFile := a.configFile(), a.staticTargetsFile()

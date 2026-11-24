@@ -1,8 +1,8 @@
 // Command pue-allocator is the target allocator of
-// prometheus-universal-exporter: it serves every exporter replica run with
+// prometheus-universal-exporter. It serves every exporter replica run with
 // --allocator.url its configuration and its share of the static targets, and
-// Prometheus the probe targets, each already pointed at a replica, through
-// HTTP service discovery. See docs/ALLOCATOR.md.
+// it serves Prometheus the probe targets, each already pointed at a replica,
+// through HTTP service discovery. See docs/ALLOCATOR.md.
 package main
 
 import (
@@ -236,10 +236,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Info("shutting down; a second signal exits at once")
 		alloc.BeginShutdown()
 		if peerOptions != nil {
-			// The peers check /v1/peer every --peers.check-interval: serving
+			// The peers check /v1/peer every --peers.check-interval. Serving
 			// on, with 503 there, until each has checked lets the next
-			// instance lead at once, where a closed listener would only be
-			// counted out after --peers.failure-threshold refused checks.
+			// instance lead at once; a closed listener would only be counted
+			// out after --peers.failure-threshold refused checks.
 			delay := peerOptions.ShutdownDelay()
 			logger.Info("answering the peers that this instance shuts down before stopping the server", "delay", delay.String())
 			time.Sleep(delay)
@@ -277,8 +277,8 @@ const (
 	startLoadPause = time.Second
 )
 
-// loadStartInputs reads the input files at the start with load, again after
-// sleep(startLoadPause) while they change under the read
+// loadStartInputs reads the input files at startup with load, and again
+// after sleep(startLoadPause) while they change during the read
 // (allocator.ErrChanged), up to startLoadTries times. Any other error is
 // returned at once.
 func loadStartInputs(load func(allocator.Paths) (*allocator.Inputs, error), p allocator.Paths, sleep func(time.Duration)) (*allocator.Inputs, error) {
@@ -296,11 +296,11 @@ func loadStartInputs(load func(allocator.Paths) (*allocator.Inputs, error), p al
 
 // newServer is the allocator's HTTP server: the exporter's, with its header
 // and read timeouts and its header size bound. The read timeout, 30s, is
-// shorter than a bundle long poll may wait (allocator.MaxWait), and does not
-// cut one: net/http lifts the read deadline once a request's body has been
-// read, before the handler's background read of the connection begins, so
-// only reading the request is bounded by it. A test holds this to the server
-// built here.
+// shorter than a bundle long poll may wait (allocator.MaxWait), but does not
+// cut one short: net/http lifts the read deadline once a request's body has
+// been read, before the handler's background read of the connection begins,
+// so only reading the request is bounded by it. A test checks this against
+// the server built here.
 func newServer(address string, handler http.Handler) *http.Server {
 	return exporter.NewHTTPServer(address, handler)
 }

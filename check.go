@@ -16,22 +16,23 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// --dry-run validates what the exporter would load and exits, without binding a
-// port, starting a watch or contacting a single target. It is for CI, for a
-// pre-deploy hook and for an init container: the question "would this start?"
-// answered without starting it.
+// --dry-run validates what the exporter would load and exits, without binding
+// a port, starting a watch or contacting any target. It is for CI, a
+// pre-deploy hook or an init container: it answers "would this start?"
+// without starting it.
 //
-// Every check below calls the function startup calls for the same step —
-// config.Load, config.CheckPythonScripts, validateWatchInterval,
-// config.LoadStaticTargets, config.ValidateStaticTargets and config.ValidateStaticTargetsAgainst —
-// so the verdict cannot drift from what a real
-// start would do. A check that passes means the same files, with the same
-// flags, would start; one that fails names the step and the reason.
+// Every check below calls the function that startup calls for the same step
+// (config.Load, config.CheckPythonScripts, validateWatchInterval,
+// config.LoadStaticTargets, config.ValidateStaticTargets and
+// config.ValidateStaticTargetsAgainst), so the verdict cannot drift from what
+// a real start would do. A check that passes means that the same files, with
+// the same flags, would start; one that fails names the step and the reason.
 //
-// The report goes to stdout as one JSON document, so `--dry-run | jq` works and
-// a pipeline can read it without parsing log lines. The log lines go to stderr
-// as JSON, like every other line the exporter writes, so a log collector
-// watching a pre-deploy job sees the same shape it sees from a running pod.
+// The report goes to stdout as one JSON document, so `--dry-run | jq` works,
+// and a pipeline can read it without parsing log lines. The log lines go to
+// stderr as JSON, like every other line the exporter writes, so a log
+// collector watching a pre-deploy job sees the same shape as from a running
+// pod.
 
 const (
 	checkOK      = "ok"
@@ -67,10 +68,10 @@ type checkReport struct {
 	RequestTypes []string `json:"request_types"`
 }
 
-// checkResult is one step of startup. Errors lists every fault the step found
-// — the Python check can find several at once — and Reason says why a step
-// that depends on a failed one was not run. Details summarise what an ok step
-// loaded, so a passing report still says what it passed.
+// checkResult is one step of startup. Errors lists every fault that the step
+// found (the Python check can find several at once), and Reason says why a
+// step that depends on a failed one was not run. Details summarise what an ok
+// step loaded, so a passing report still says what it passed.
 type checkResult struct {
 	Check   string         `json:"check"`
 	File    string         `json:"file,omitempty"`
@@ -159,10 +160,10 @@ func checkStartup(in checkInputs) checkReport {
 		}
 	}
 
-	// The watch is reported only when it is asked for, exactly as at
-	// startup, where an interval without --config.watch is never read. A
-	// non-positive interval never gets here: it is a command-line error
-	// (exit 2) before the check, as at startup.
+	// The watch is reported only when it is asked for, as at startup, where
+	// an interval without --config.watch is never read. A non-positive
+	// interval never gets here: like at startup, it is a command-line error
+	// (exit 2) before the check.
 	if in.Watch {
 		results = append(results, checkResult{Check: "config_watch", Status: checkOK, Details: map[string]any{"interval": in.WatchInterval.String()}})
 	}
@@ -184,12 +185,12 @@ func checkStartup(in checkInputs) checkReport {
 	return checkReport{Status: status, Checks: results, RequestTypes: fetch.BuiltRequestTypes()}
 }
 
-// requestPolicy is what a collector's request lets through: the targets it
-// may and may not reach, the statuses it decodes and those it retries,
-// whether a retry waits as the target's Retry-After asks, and how it
-// connects, over a Unix socket or through which proxy, as they will be
-// applied, so a list that says less or more than meant, or a proxy taken
-// from where it was not meant to come from, shows before it is deployed.
+// requestPolicy is what a collector's request lets through, as it will be
+// applied: the targets that it may and may not reach, the statuses that it
+// decodes and those that it retries, whether a retry waits as the target's
+// Retry-After asks, and how it connects (over a Unix socket, or through
+// which proxy). A list that says less or more than intended, or a proxy
+// taken from an unintended place, then shows up before it is deployed.
 type requestPolicy struct {
 	AllowedTargets []string `json:"allowed_targets,omitempty"`
 	DeniedTargets  []string `json:"denied_targets,omitempty"`
@@ -207,10 +208,10 @@ type requestPolicy struct {
 	// filled in: max_pages above all, which bounds what one trip asks of
 	// the target.
 	Pagination *model.PaginationConfig `json:"pagination,omitempty"`
-	// Login is request.login as it will be applied: where it goes, where
-	// the token is read from and how it is sent, its header and prefix
-	// filled in, and the files its secrets are read from, never what they
-	// hold; a field or endpoint parameter whose name reads as a
+	// Login is request.login as it will be applied: where it goes, where the
+	// token is read from and how it is sent (with its header and prefix
+	// filled in), and the files that its secrets are read from, never their
+	// contents. A field or endpoint parameter whose name reads as a
 	// credential's is shown without its value.
 	Login *model.LoginConfig `json:"login,omitempty"`
 	// RateLimit is request.rate_limit as it will be applied, its burst
@@ -230,20 +231,20 @@ type requestPolicy struct {
 	ProxyBasicAuthFile *model.ProxyBasicAuthFile `json:"proxy_basic_auth_file,omitempty"`
 }
 
-// proxyFromEnvironment is requestPolicy.Proxy of a collector that names no
-// proxy: its requests go through the proxy HTTP_PROXY or HTTPS_PROXY names,
-// for the target's scheme, but to a host NO_PROXY lists, as the
-// environment says when the exporter starts (fetch's environmentProxy). The
-// environment's values are not shown: a proxy URL there may hold a
+// proxyFromEnvironment is requestPolicy.Proxy for a collector that names no
+// proxy. Its requests go through the proxy that HTTP_PROXY or HTTPS_PROXY
+// names for the target's scheme, except to a host that NO_PROXY lists, as
+// the environment says when the exporter starts (fetch's environmentProxy).
+// The environment's values are not shown: a proxy URL there may hold a
 // password, which --dry-run never prints.
 const proxyFromEnvironment = "environment"
 
-// requestProxy is requestPolicy.Proxy of c, which the transport goes by
-// (fetch.transportProxy): "" for a collector whose type takes no proxy or
-// that sends its requests to a Unix socket, proxyFromEnvironment for one
-// that names none, and else its proxy_url, direct or a proxy's URL, which
-// the load holds to a scheme, a host and a port without credentials, so it
-// is shown as written.
+// requestProxy is requestPolicy.Proxy for c, which the transport follows
+// (fetch.transportProxy). It is "" for a collector whose type takes no proxy
+// or that sends its requests to a Unix socket, proxyFromEnvironment for one
+// that names none, and otherwise its proxy_url: direct, or a proxy's URL,
+// which the load limits to a scheme, a host and a port without credentials,
+// so it is shown as written.
 func requestProxy(c *model.Collector, socket string) string {
 	if rt := fetch.RequestTypes[c.Request.Type]; rt == nil || !rt.Takes("proxy_url") || socket != "" {
 		return ""
@@ -343,12 +344,13 @@ func defaultsTaken(conf *model.Config) map[string][]string {
 	return out
 }
 
-// configDetails summarises a configuration that loaded. A deprecated spelling,
-// a warning or the metric lint's advice still passes, so the check stays ok; the report lists them so
-// the operator knows what to change before a deprecated spelling is removed.
-// The warnings are the configuration's, and what reading the files a request
-// reads, which loading leaves to the request, finds wrong with them now
-// (fetch.FileWarnings): those are the check's alone, not startup's.
+// configDetails summarises a configuration that loaded. A deprecated
+// spelling, a warning or the metric lint's advice still passes, so the check
+// stays ok, and the report lists them so the operator knows what to change
+// before a deprecated spelling is removed. The warnings are the
+// configuration's, plus what is wrong now with the files that a request
+// reads, which loading leaves to the request (fetch.FileWarnings); those are
+// the check's alone, not startup's.
 func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	names := make([]string, 0, len(conf.Collectors))
 	for i := range conf.Collectors {
@@ -482,7 +484,7 @@ func skippedCheck(check, file, reason string) checkResult {
 
 // validateWatchInterval checks the watch flags with the other flags, before
 // startup or --dry-run. A non-positive interval with the watch on is a
-// command-line error rather than a silently disabled watch that was
+// command-line error, instead of a silently disabled watch that was
 // explicitly requested.
 func validateWatchInterval(watch bool, interval time.Duration) error {
 	if watch && interval <= 0 {

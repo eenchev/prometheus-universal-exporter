@@ -1,9 +1,9 @@
-// Command prometheus-universal-exporter turns HTTP endpoints and files that
-// were never meant for Prometheus into Prometheus targets, as configured by
-// collectors. See README.md and docs/.
+// Command prometheus-universal-exporter turns sources that were never meant
+// for Prometheus, such as HTTP endpoints and files, into Prometheus targets,
+// as configured by collectors. See README.md and docs/.
 //
-// The command line and the process lifecycle are here, the --dry-run
-// report in check.go and --healthcheck in healthcheck.go; everything else is
+// The command line and the process lifecycle are here, the --dry-run report
+// is in check.go and --healthcheck in healthcheck.go; everything else is
 // under internal/.
 package main
 
@@ -38,9 +38,9 @@ import (
 //
 //	go build -ldflags "-X main.version=1.4.0"
 //
-// Left empty, the module version Go stamps into the binary is used: the tag
-// of a build from a tagged checkout, or "(devel)". The revision is always
-// the commit Go stamps, when it built from a git checkout.
+// Left empty, the module version that Go stamps into the binary is used: the
+// tag for a build from a tagged checkout, or "(devel)". The revision is
+// always the commit that Go stamps, when it built from a git checkout.
 var version string
 
 // revision is the commit, set at build time with -X main.revision where Go
@@ -55,24 +55,27 @@ func applyVersion() { exporter.Version, exporter.Revision = version, revision }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
-// run owns the exporter lifecycle and returns the process exit status. Keeping
-// it separate from main means every deferred cleanup still executes on the
-// paths that terminate early, and taking the arguments and output streams as
+// run owns the exporter lifecycle and returns the process exit status.
+// Keeping it separate from main means that every deferred cleanup still runs
+// on the paths that end early, and taking the arguments and output streams as
 // parameters lets the command line be tested end to end.
 //
-// Exit statuses: 0 on a clean shutdown, one whose --web.shutdown-timeout ran
-// out included, a passing --dry-run or a passing --healthcheck, 1 when the
-// configuration is invalid, a --dry-run or a --healthcheck fails or the
-// server stops with an error, and 2 when the command line itself cannot be
-// parsed. A second SIGTERM or SIGINT during the shutdown ends the process by
-// that signal instead (exitOnSecondSignal).
+// Exit statuses:
+//   - 0 on a clean shutdown (including one whose --web.shutdown-timeout ran
+//     out), a passing --dry-run, or a passing --healthcheck;
+//   - 1 when the configuration is invalid, a --dry-run or a --healthcheck
+//     fails, or the server stops with an error;
+//   - 2 when the command line itself cannot be parsed.
+//
+// A second SIGTERM or SIGINT during the shutdown ends the process by that
+// signal instead (exitOnSecondSignal).
 func run(args []string, stdout, stderr io.Writer) int {
 	// SIGHUP is caught before anything else, and until run returns. Its
-	// default action ends the process, and a start can take seconds — the
-	// configuration is read and its Python scripts are checked — in which a
-	// reload sidecar or an operator's kill -HUP may already send one. It
-	// waits in the channel, which holds one, and is the first thing the
-	// reload loop finds: one reload once the exporter has started.
+	// default action ends the process, and a start can take seconds (the
+	// configuration is read and its Python scripts are checked), during
+	// which a reload sidecar or an operator's kill -HUP may already send
+	// one. It waits in the channel, which holds one, and is the first thing
+	// that the reload loop finds: one reload once the exporter has started.
 	hup := exporter.ReloadSignals()
 	defer signal.Stop(hup)
 	flags := flag.NewFlagSet("prometheus-universal-exporter", flag.ContinueOnError)
@@ -131,11 +134,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	// The flag package stops reading at the first argument that is not a
-	// flag and leaves every flag after it unread, without a word:
-	// "--config.watch true --static-targets-file=targets.yaml" would start
-	// an exporter with no static targets. No argument is taken that way, so
-	// one is a mistake, most often a value written after its flag rather
-	// than with it.
+	// flag, and silently leaves every flag after it unread:
+	// "--config.watch true --static-targets-file=targets.yaml" would start an
+	// exporter with no static targets. No argument is taken that way, so one
+	// is a mistake, most often a value written after its flag instead of
+	// with it.
 	if flags.NArg() > 0 {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", fmt.Sprintf("unexpected argument %q; flags take --name=value", flags.Arg(0)))
 		return 2
@@ -217,8 +220,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	// A non-positive watch interval is a flag's value, not the
-	// configuration's, so it is a command-line error like a negative
-	// duration, before --dry-run or startup; without --config.watch the
+	// configuration's, so it is a command-line error, like a negative
+	// duration, before --dry-run or startup. Without --config.watch the
 	// interval is never read, and is not checked.
 	if err := validateWatchInterval(*watchConfig, *watchInterval); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
@@ -302,11 +305,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		*configFile = alloc.configFile()
 		manager, generation = alloc.startManager(logger, *pythonPath, loadOptions, staticTargetsLoadOptions, *watchConfig)
 	} else {
-		// Stamped before they are read, so an edit made while they are is seen
-		// by the first watch tick; with the watch on, the descriptor files the
-		// configuration names are stamped as it is read, before it is checked
-		// against them. Without the watch nothing would compare that stamp, and
-		// the configuration is read without it.
+		// The files are stamped before they are read, so an edit made while
+		// they are read is seen by the first watch tick. With the watch on,
+		// the descriptor files that the configuration names are stamped as it
+		// is read, before it is checked against them. Without the watch
+		// nothing would compare that stamp, so the configuration is read
+		// without it.
 		configStamp := config.TakeStamp(*configFile, true, loadOptions...)
 		targetsStamp := config.TakeStamp(*targetFile, false)
 		load := config.Load
@@ -381,7 +385,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	transform.PythonWorkers().SetIdleTimeout(*pythonIdleTimeout)
 	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkers().ReapInterval())
 	// SIGHUP is caught until the process exits, not only until the first
-	// SIGTERM: a reload sidecar sending one during the shutdown would
+	// SIGTERM. A reload sidecar sending one during the shutdown would
 	// otherwise meet Go's default action and end the process at once,
 	// cutting off the probes in flight and the last OTLP export. It has been
 	// caught since run began; one sent during the start reloads now.
@@ -390,8 +394,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go exporter.ReloadOn(reloadCtx, hup, manager, logger)
 	// The static targets keep being scraped, and what they and the probes
 	// queue keeps being exported, through --web.shutdown-delay, while the
-	// endpoints are still served, so the two loops have a context of their
-	// own rather than the signal's.
+	// endpoints are still served. The two loops therefore have a context of
+	// their own instead of the signal's.
 	loopsCtx, stopLoops := context.WithCancel(context.Background())
 	defer stopLoops()
 	exportLoopDone := make(chan struct{})
@@ -460,10 +464,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case <-ctx.Done():
-		// From here a second SIGTERM or Ctrl-C ends the process at once,
-		// saying so, rather than being swallowed while the probes finish and
+		// From here, a second SIGTERM or Ctrl-C ends the process at once,
+		// saying so, instead of being swallowed while the probes finish and
 		// the last OTLP export is sent. It is caught before the first
-		// signal's handler is let go, so none falls between the two.
+		// signal's handler is released, so no signal falls between the two.
 		exitOnSecondSignal(server, logger)
 		stop()
 		// /ready answers 503 from now, and connections are no longer kept
@@ -484,13 +488,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			waitOutShutdownDelay(*shutdownDelay)
 		}
 		// No static target scrape and no periodic export starts from here,
-		// and the scrapes in flight are cut short at once, without
-		// publishing anything, so a target is never reported down only
-		// because the exporter stopped. They are not waited for: what they
-		// would publish is served by this process alone, which is stopping,
-		// and a target that does not answer would hold the shutdown for
-		// all of --web.shutdown-timeout. The last OTLP export goes without
-		// them, with what the scrapes before them queued.
+		// and the scrapes in flight are cut short at once, without publishing
+		// anything, so a target is never reported down only because the
+		// exporter stopped. They are not waited for: what they would publish
+		// is served by this process alone, which is stopping, and a target
+		// that does not answer would hold the shutdown for all of
+		// --web.shutdown-timeout. The last OTLP export goes without them, with
+		// what the earlier scrapes queued.
 		stopLoops()
 		server.AbortStaticScrapes()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
@@ -545,13 +549,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// waitOutShutdownDelay waits out --web.shutdown-delay. It is a variable for
-// the tests alone, which run the exporter in a child process and have it wait
-// there for as long and then until the test says the delay may end
-// (TestRunHelperProcess): what a test has the exporter do in its delay then
-// has no bound but the test's own, where a delay of a few seconds is over
-// before a machine busy enough has done it. Nothing but a test may set it,
-// which a repository test holds (TestOnlyTestsHoldTheShutdownDelay).
+// waitOutShutdownDelay waits out --web.shutdown-delay. It is a variable only
+// for the tests, which run the exporter in a child process and have it wait
+// there for as long, and then until the test says that the delay may end
+// (TestRunHelperProcess). What a test has the exporter do during its delay
+// then has no bound but the test's own, whereas a delay of a few seconds can
+// be over before a busy enough machine has done it. Only a test may set it,
+// which a repository test checks (TestOnlyTestsHoldTheShutdownDelay).
 var waitOutShutdownDelay = time.Sleep
 
 // parseLogLevel reads --log.level: debug, info, warn or error, in any case.
@@ -562,14 +566,14 @@ func parseLogLevel(level string) (slog.Level, error) {
 	return slog.LevelInfo, fmt.Errorf("--log.level %q is not a level; use debug, info, warn or error", level)
 }
 
-// newLogger builds the exporter's logger, JSON lines to out at level, which
-// parseLogLevel has checked, and installs it as the default. Every line the
-// exporter writes has to be JSON, and not all of them come from a logger
-// passed down through the call chain: metric extraction reports a failed rule
-// from deep inside a transform, where threading a logger through seven
-// signatures would buy nothing. Those lines go through slog's default logger,
-// which without this would be the text handler and would emit a differently
-// shaped line into the middle of an otherwise machine-readable stream.
+// newLogger builds the exporter's logger, writing JSON lines to out at level
+// (which parseLogLevel has checked), and installs it as the default. Every
+// line that the exporter writes has to be JSON, and not all of them come from
+// a logger passed down through the call chain: metric extraction reports a
+// failed rule from deep inside a transform, where threading a logger through
+// seven signatures would buy nothing. Those lines go through slog's default
+// logger, which without this would be the text handler, and would emit a
+// differently shaped line into an otherwise machine-readable stream.
 func newLogger(level string, out io.Writer) *slog.Logger {
 	l, _ := parseLogLevel(level)
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
@@ -588,13 +592,13 @@ func newExporterLogger(level string, out io.Writer) (*slog.Logger, *exporter.OTL
 	return logger, logs
 }
 
-// shutdownMessage is the line the graceful shutdown begins with: what it
-// waits for, the probes and the other requests in progress, for at most
+// shutdownMessage is the line that the graceful shutdown begins with: what it
+// waits for (the probes and the other requests in progress), for at most
 // timeout, and, when OTLP export is on, that the last export is sent. It
-// names the export only then, as FlushOTLP sends one only then: an exporter
-// without OTLP said it would send an export it never sends. With nothing to
-// wait for and no export to send the exporter exits at once, and says only
-// that.
+// mentions the export only then, since FlushOTLP sends one only then; an
+// exporter without OTLP used to say it would send an export that it never
+// sent. With nothing to wait for and no export to send, the exporter exits at
+// once and says only that.
 func shutdownMessage(otlp model.OTLPConfig, probes, others int, timeout time.Duration) string {
 	export := otlp.Enabled && otlp.Endpoint != ""
 	switch {
@@ -642,10 +646,11 @@ func signalExitStatus(sig os.Signal) int {
 
 // exitOnSecondSignal ends the process on the next SIGTERM or SIGINT, after
 // logging what that leaves unfinished. The process is ended by that signal,
-// with the signal's default action, as it was before it logged: a shell
-// reports 130 for SIGINT and 143 for SIGTERM, and a supervisor sees a
-// process killed by the signal rather than one that exited 0. One that
-// started with the signal ignored exits with that same status instead.
+// with the signal's default action, as it would have been without the
+// handler: a shell reports 130 for SIGINT and 143 for SIGTERM, and a
+// supervisor sees a process killed by the signal, not one that exited 0. A
+// process that started with the signal ignored exits with that same status
+// instead.
 func exitOnSecondSignal(server *exporter.Server, logger *slog.Logger) {
 	second := make(chan os.Signal, 1)
 	signal.Notify(second, syscall.SIGTERM, syscall.SIGINT)
@@ -661,8 +666,8 @@ func exitOnSecondSignal(server *exporter.Server, logger *slog.Logger) {
 		if self, err := os.FindProcess(os.Getpid()); err == nil && self.Signal(sig) == nil {
 			// The signal ends the process as soon as it is delivered; this
 			// goroutine only waits for that. A process started with the
-			// signal ignored, as a shell starts a background job with
-			// SIGINT, goes back to ignoring it, and exits below instead.
+			// signal ignored, as a shell starts a background job with SIGINT,
+			// goes back to ignoring it, and exits below instead.
 			time.Sleep(time.Second)
 		}
 		os.Exit(signalExitStatus(sig))

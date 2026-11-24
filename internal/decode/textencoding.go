@@ -14,42 +14,42 @@ import (
 	"golang.org/x/text/encoding/unicode"
 )
 
-// Everything the exporter does with a response — decoding, transforms, the
-// exposition Prometheus reads — works in UTF-8, and Prometheus refuses a whole
+// Everything the exporter does with a response (decoding, transforms, the
+// exposition Prometheus reads) works in UTF-8, and Prometheus refuses a whole
 // scrape over one label value that is not valid UTF-8. A target that answers
 // in another encoding is converted first. The encoding is, in this order:
 //
 //  1. a byte order mark (UTF-8, UTF-16LE or UTF-16BE), which is removed;
 //  2. the collector's response.charset, for a target that declares none, or
 //     declares the wrong one, and for local files, which declare none;
-//  3. the charset parameter of the Content-Type header, which is read from
-//     a header that is not well formed too (contentTypeCharset);
+//  3. the charset parameter of the Content-Type header, read also from a
+//     header that is not well formed (contentTypeCharset);
 //  4. for HTML, a <meta charset> or a <meta http-equiv="Content-Type"
 //     content="…; charset=…"> in the first 1024 bytes, found as browsers
-//     find it (htmlprescan.go), and, in a page without one, the encoding
-//     of an XML declaration the document starts with, as XHTML has one,
-//     where, as browsers read them, a UTF-16 name means UTF-8 and
-//     x-user-defined windows-1252; for XML, the encoding of the XML
-//     declaration.
+//     find it (htmlprescan.go). In a page without one, it is the encoding of
+//     an XML declaration the document starts with, as XHTML has one. As
+//     browsers read these, a UTF-16 name means UTF-8 and x-user-defined
+//     means windows-1252. For XML, it is the encoding of the XML declaration.
 //
 // Names are the WHATWG Encoding Standard's, which browsers use: utf-8,
 // iso-8859-1 (read, as browsers do, as windows-1252), windows-1251, koi8-r,
 // shift_jis, gbk, euc-kr, utf-16le and the rest. An unknown name fails the
-// decode stage naming it, but in an HTML page, where, as in a browser, a
-// declaration naming no encoding declares nothing: such a <meta> is passed
-// over, and such an XML declaration is none. The converted body is what
-// decoders, transforms and Python scripts see, and its Content-Type says
-// charset=utf-8. An XML declaration naming another encoding is rewritten to
-// say UTF-8, so the XML parser does not convert it a second time.
+// decode stage, naming it. The exception is an HTML page, where, as in a
+// browser, a declaration naming no encoding declares nothing: such a <meta>
+// is passed over, and such an XML declaration is none. The converted body is
+// what decoders, transforms and Python scripts see, and its Content-Type
+// says charset=utf-8. An XML declaration naming another encoding is
+// rewritten to say UTF-8, so the XML parser does not convert it a second
+// time.
 //
 // Converting replaces the body and the Content-Type of the response it is
-// given and leaves the bytes of the body it was given alone, so whoever
-// wants what the target sent, as a debug report does, keeps a copy of the
-// response made before the decode, sharing its body, and ConvertedFrom tells
-// it which encoding that body was converted from.
+// given, and leaves the bytes of the original body alone. So whoever wants
+// what the target sent, as a debug report does, keeps a copy of the
+// response made before the decode, sharing its body. ConvertedFrom tells it
+// which encoding that body was converted from.
 //
-// Whatever still is not valid UTF-8 after that — a target that says UTF-8 and
-// is not — is replaced with U+FFFD in label values and help text after the
+// Whatever is still not valid UTF-8 after that (a target that says UTF-8 and
+// is not) is replaced with U+FFFD in label values and help text after the
 // transform (SanitizeUTF8), and counted, rather than failing the scrape.
 
 var xmlEncodingRE = regexp.MustCompile(`^(\s*<\?xml[^>]*?encoding\s*=\s*["'])([^"']+)(["'])`)
@@ -96,15 +96,15 @@ func declaredCharset(contentType string) string {
 }
 
 // contentTypeCharset is the charset parameter of a Content-Type that
-// mime.ParseMediaType refuses, and where its value stands in the header. A
-// header with a parameter that has no value ("text/html; charset=koi8-r; q")
-// and one with two values a proxy joined with a comma ("text/html;
-// charset=koi8-r, text/html") still say what the body is written in, and
-// browsers read them. It is the first charset parameter of the first of
-// the comma-separated values, its name in any case, its value between
-// quotes or a bare token. A header that does not start with a type and a
-// subtype is no Content-Type and names nothing, and neither does a charset
-// whose value is empty, is no token or opens a quote nothing closes.
+// mime.ParseMediaType refuses, and where its value stands in the header.
+// Some such headers still say what the body is written in, and browsers
+// read them: one with a parameter that has no value ("text/html;
+// charset=koi8-r; q") and one with two values a proxy joined with a comma
+// ("text/html; charset=koi8-r, text/html"). The result is the first charset
+// parameter of the first comma-separated value: its name in any case, its
+// value between quotes or a bare token. A header that does not start with a
+// type and a subtype is no Content-Type and names nothing. Neither does a
+// charset whose value is empty, is no token, or opens a quote nothing closes.
 func contentTypeCharset(contentType string) (name string, start, end int) {
 	first := contentType[:unquotedIndex(contentType, ',')]
 	at := unquotedIndex(first, ';')
@@ -203,13 +203,14 @@ func namedCharset(r *fetch.HTTPResponse, c *model.Collector) string {
 
 // documentCharset is the encoding an HTML or XML body declares in itself,
 // empty when it declares none or is of another kind. An HTML document is
-// read by its <meta>, as a browser reads it. One without a <meta> that
-// declares an encoding, which starts with an XML declaration naming one, as
-// XHTML may, is read by that: it is the only declaration of a page written
-// as XML and served as HTML, and the standard's prescan, finding no <meta>,
-// falls back on it ("get an XML encoding"). The declaration is one only
-// where the document starts, at its first byte: after a blank or anything
-// else "<?xml" is a processing instruction to an HTML parser, and none.
+// read by its <meta>, as a browser reads it. A document without a <meta>
+// that declares an encoding, which starts with an XML declaration naming
+// one, as XHTML may, is read by that declaration. It is the only declaration
+// of a page written as XML and served as HTML, and the standard's prescan,
+// finding no <meta>, falls back on it ("get an XML encoding"). The
+// declaration counts only at the document's first byte: after a blank or
+// anything else, "<?xml" is a processing instruction to an HTML parser, and
+// no declaration.
 func documentCharset(r *fetch.HTTPResponse, kind string) string {
 	head := r.Body[:min(len(r.Body), 1024)]
 	switch kind {
@@ -266,12 +267,12 @@ func convertFromDocument(r *fetch.HTTPResponse, kind string) error {
 	return nil
 }
 
-// ConvertedFrom is the encoding Decode converts the body of sent from, by
-// its WHATWG name, for a response the collector c reads as the decoder kind:
-// what its byte order mark, response.charset, its Content-Type or the
-// document itself names, in Decode's own order. It is empty for a body that
-// is not converted: one that nothing names an encoding for, or that is
-// UTF-8 already. sent is the response as the target sent it, before Decode
+// ConvertedFrom is the encoding, by its WHATWG name, that Decode converts the
+// body of sent from, for a response the collector c reads as the decoder
+// kind. It is what the byte order mark, response.charset, the Content-Type or
+// the document itself names, in Decode's own order. It is empty for a body
+// that is not converted: one that nothing names an encoding for, or that is
+// already UTF-8. sent is the response as the target sent it, before Decode
 // replaced its body.
 func ConvertedFrom(sent *fetch.HTTPResponse, c *model.Collector, kind string) string {
 	if kind == model.DecoderNone {
@@ -294,12 +295,12 @@ func ConvertedFrom(sent *fetch.HTTPResponse, c *model.Collector, kind string) st
 	return canonical
 }
 
-// metaCharset is the encoding a <meta> charset, or the XML declaration of
-// an HTML document, names, as the WHATWG HTML standard's prescan takes it: a
-// page whose <meta> could be read as ASCII is not UTF-16, whatever it says,
-// so a UTF-16 name means UTF-8; x-user-defined means windows-1252; and a
-// name that is no encoding's names nothing, where one in response.charset
-// or a Content-Type fails. A byte order mark, response.charset and the
+// metaCharset is the encoding that a <meta> charset, or the XML declaration
+// of an HTML document, names, as the WHATWG HTML standard's prescan takes it.
+// A page whose <meta> could be read as ASCII is not UTF-16, whatever it says,
+// so a UTF-16 name means UTF-8. x-user-defined means windows-1252. A name
+// that is no encoding's names nothing, where one in response.charset or a
+// Content-Type fails. A byte order mark, response.charset and the
 // Content-Type header are taken as they say.
 func metaCharset(name string) string {
 	enc, err := htmlindex.Get(strings.TrimSpace(name))

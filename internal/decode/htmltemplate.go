@@ -12,16 +12,17 @@ import (
 // what the parser makes of the body, with the content of every template
 // element taken out of it.
 //
-// A template holds markup a script copies into the page, a row with {{name}}
-// where a name goes. To a browser its content is no part of the document: it
-// stands in a fragment of its own, which no selector matches and whose text
-// is no element's. The parser here builds it as ordinary children of the
-// template element, where `table tr` and //td found the placeholder row
-// among the real ones, and a rule failed on a value that is "{{n}}". Rules
-// are written against what a browser's inspector shows, so the content is
-// detached once, here, for every reader alike: selectors, items, XPath
-// expressions and labels do not match it, and it is no part of the text of
-// an element around it. The template element itself stays, empty.
+// A template holds markup that a script copies into the page, such as a row
+// with {{name}} where a name goes. To a browser its content is not part of
+// the document: it sits in a fragment of its own, which no selector matches
+// and whose text belongs to no element. The parser here builds it as
+// ordinary children of the template element. There `table tr` and //td
+// found the placeholder row among the real ones, and a rule failed on a
+// value that is "{{n}}". Rules are written against what a browser's
+// inspector shows, so the content is detached once, here, for every reader
+// alike. Selectors, items, XPath expressions and labels do not match it, and
+// it is not part of the text of an element around it. The template element
+// itself stays, empty.
 //
 // A template with a shadowrootmode attribute, or the shadowroot one browsers
 // read before it, is a declarative shadow root: a browser attaches its
@@ -39,11 +40,11 @@ func ParseHTML(body []byte) (*goquery.Document, error) {
 
 // emptyTemplates detaches the children of every template element beneath
 // root. It walks the tree by its links, as ParseXML measures one, and asks
-// of each node one thing, so a page without a template costs a pass over
-// its nodes. A template inside svg or math is an element of theirs and no
-// HTML template: it keeps its content, as it does in a browser. So does a
-// declarative shadow root, whose content is walked like any other, a
-// template inside it being emptied.
+// one thing of each node, so a page without a template costs one pass over
+// its nodes. A template inside svg or math is their element, not an HTML
+// template, and keeps its content, as it does in a browser. So does a
+// declarative shadow root. Its content is walked like any other, and a
+// template inside it is emptied.
 func emptyTemplates(root *html.Node) {
 	for node := root; ; {
 		switch {

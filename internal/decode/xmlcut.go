@@ -26,20 +26,20 @@ import (
 //   - `xmlquery: invalid XML document, namespace prefix is missing`
 //     (xmlquery, parse.go).
 //
-// The parser's other errors are fixed texts. So those are read here, and
-// only here, in the forms the libraries write them, and each name is cut as
-// model.QuoteValue cuts a value, to its first 64 bytes and its length: what
+// The parser's other errors are fixed texts. So those forms are parsed here,
+// and only here, as the libraries write them. Each name is cut as
+// model.QuoteValue cuts a value, to its first 64 bytes and its length. What
 // the error says after the name, and the second name, are kept. A name the
-// libraries write bare has no blank and no angle bracket in it, the bytes a
-// name ends at, so it ends where the words after it start; a quoted one ends
-// with its quote. An error in none of the forms, and one whose names are all
-// within 64 bytes, is left as it is, and is bounded with every other decode
-// error (boundedFailure).
+// libraries write bare has no blank and no angle bracket in it (the bytes a
+// name ends at), so it ends where the words after it start. A quoted name
+// ends with its quote. An error in none of the forms, or one whose names are
+// all within 64 bytes, is left as it is, and is bounded with every other
+// decode error (boundedFailure).
 
-// xmlForm is one form of error that holds names of the document: the words
-// of it, which are what the library writes before the first name, between
-// two names and after the last, and whether the names are quoted as Go
-// quotes a text.
+// xmlForm is one form of error that holds names of the document. words are
+// what the library writes before the first name, between two names and
+// after the last. quoted says whether the names are quoted as Go quotes a
+// text.
 type xmlForm struct {
 	words  []string
 	quoted bool
@@ -65,14 +65,14 @@ var xmlOtherErrors = []xmlForm{
 	{words: []string{"xmlquery: invalid XML document, namespace ", " is missing"}},
 }
 
-// xmlNamesCut is text, when it is of one of forms and holds a name longer
-// than model.QuoteValue shows, with each such name cut to its start and its
-// length; the same with the mark for each length, which is what the failure
-// is recognised by; and whether that is so. Both are made anew, and hold
-// nothing of text. The text is of the first form it reads as, and of no
-// other. caller is text, when it is of a form, as a probe's caller is told
-// it: each name withheld (model.WithheldMark), as a name of the document is
-// a value of the answer; empty when text is of no form.
+// xmlNamesCut checks whether text is of one of forms and holds a name longer
+// than model.QuoteValue shows. If so, short is text with each such name cut
+// to its start and its length, same is the same with the mark for each
+// length (which the failure is recognised by), and cut is true. Both are
+// new strings that hold nothing of text. The text is of the first form it
+// reads as, and of no other. caller is text, when it is of a form, as a
+// probe's caller is told it: each name withheld (model.WithheldMark), since
+// a name of the document is a value of the answer. Otherwise it is empty.
 func xmlNamesCut(forms []xmlForm, text string) (short, same, caller string, cut bool) {
 	for _, form := range forms {
 		if short, same, caller, cut, is := form.namesCut(text); is {

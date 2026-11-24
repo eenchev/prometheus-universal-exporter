@@ -10,12 +10,12 @@ import (
 )
 
 // The YAML library reads a whole number beyond 64 bits as a float, which
-// keeps its first 17 digits: an identifier of 20 became another one, where
-// the same digits in JSON are a number that keeps every one of them
-// (model.Normalize). So such a number is read as JSON's is: before the
-// library decodes the document it is marked as text that begins with
-// yamlWholeMark, and what the library made of the document has each such
-// text turned into the json.Number of its digits, which model.Normalize
+// keeps only its first 17 digits: an identifier of 20 became another one.
+// The same digits in JSON are a number that keeps every digit
+// (model.Normalize). So such a number is read as JSON's is. Before the
+// library decodes the document, the number is marked as text that begins
+// with yamlWholeMark. In what the library made of the document, each such
+// text is turned into the json.Number of its digits, which model.Normalize
 // makes a *big.Int of, or leaves as text beyond model.MaxWholeNumberDigits.
 
 // yamlWholeMark begins the text a whole number is marked as. It is drawn
@@ -30,9 +30,9 @@ var yamlWholeMark = func() string {
 
 // markYAMLWholeNumbers marks each whole number under n that the library
 // would read as a float, and reports whether there was one. Only a plain
-// scalar is one: a quoted one is text, and one with a tag of its own is what
-// the tag says. A mapping's key is left as it was, a key being text however
-// it is written; key says n is one.
+// scalar can be one: a quoted scalar is text, and one with its own tag is
+// what the tag says. A mapping's key is left as it was, since a key is text
+// however it is written; key says that n is a key.
 func markYAMLWholeNumbers(n *yaml.Node, key bool) (marked bool) {
 	switch n.Kind {
 	case yaml.ScalarNode:

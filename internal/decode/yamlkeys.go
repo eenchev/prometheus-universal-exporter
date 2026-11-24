@@ -14,78 +14,77 @@ import (
 )
 
 // The YAML library (gopkg.in/yaml.v3 v3.0.1, decode.go, mapping) refuses a
-// key written twice by comparing every two keys of a mapping, and nothing
-// switches that off: a mapping of n keys costs n(n-1)/2 comparisons, 5 s for
-// the 40,000 keys of a 600 kB body, and where keys are written twice it
-// makes a text for each two of them, 137 MB for a key written 1200 times in
+// key written twice by comparing every two keys of a mapping. Nothing
+// switches that off. A mapping of n keys costs n(n-1)/2 comparisons: 5 s for
+// the 40,000 keys of a 600 kB body. Where keys are written twice, it also
+// makes a text for each two of them: 137 MB for a key written 1200 times in
 // 6 kB. limits.max_response_bytes bounds the body, not what the library
 // makes of it, so a target's answer could stall the exporter or exhaust its
 // memory.
 //
-// A document is therefore looked through once before it is decoded
-// (yamlLearnt), and only one the library would handle badly is decoded
-// otherwise than by the library as a whole:
+// So a document is scanned once before it is decoded (yamlLearnt). Only a
+// document the library would handle badly is decoded some other way than
+// by the library as a whole:
 //
-//   - A document with no key written twice and no mapping of more than
-//     yamlLargeMapping keys is decoded by the library, as it always was, and
-//     so is one with keys written twice but no such mapping, whose problems
-//     the library lists in no more than yamlProblemTextDecoded bytes.
-//   - A document with keys written twice otherwise is refused here
-//     (yamlRefusal) with the error the library would have made of them, its
-//     first problems worded and the rest counted, without making the list.
-//   - A document with no key written twice and a large mapping is decoded
-//     by yamlWalk, which decodes the large mappings a part at a time and
-//     hands everything else to the library.
+//   - The library decodes a document with no duplicate key and no mapping
+//     of more than yamlLargeMapping keys, as it always did. It also decodes
+//     one with duplicate keys but no such mapping, if the library lists its
+//     problems in no more than yamlProblemTextDecoded bytes.
+//   - Any other document with duplicate keys is refused here (yamlRefusal)
+//     with the error the library would have made. Its first problems are
+//     worded and the rest counted, without making the list.
+//   - A document with no duplicate key and a large mapping is decoded by
+//     yamlWalk. It decodes the large mappings a part at a time and hands
+//     everything else to the library.
 //
-// Either way a document costs time and memory linear in its size, and
-// looking through it a stack no deeper than it is written nested, which the
-// library's parser, a call for each level itself, bounds at 10,000 levels of
-// indentation and 10,000 of brackets: learn, yamlRefusal.read and
-// yamlWalk.learn call themselves for what a node holds and follow no alias,
-// and what the problems come to is added up without a call for each node
-// (listed). yamlWalk calls itself as the library's own decoding does, for
-// each node in another and for what an alias stands for, each such node
-// counted against what the library allows the aliases of a document.
+// Either way a document costs time and memory linear in its size. The scan
+// uses a stack no deeper than the document is nested. The library's parser,
+// which itself makes a call for each level, bounds that at 10,000 levels of
+// indentation and 10,000 of brackets. learn, yamlRefusal.read and
+// yamlWalk.learn call themselves for what a node holds and follow no alias.
+// The problem total is added up without a call for each node (listed).
+// yamlWalk calls itself as the library's own decoding does: for each node
+// in another and for what an alias stands for. Each such node is counted
+// against what the library allows the aliases of a document.
 //
 // A document decodes into a value nested MaxDepth deep at most, as every
-// response does: one whose sequences and mappings nest deeper, an alias
-// counted as what it stands for, is refused before anything decodes it
-// (yamlTooDeep). The parser does not keep a document within that, and
-// neither does the library's decoding, which follows an alias into what it
-// stands for, so that a chain of anchors that each hold an alias of the one
-// before is a stack as deep as the chain is long, with no bound on it. The
-// one count bounds both the value and the stack. It is found in the one
-// look through the document where there is no alias (learn), and added up
-// through the aliases like the problems, without a call for each node,
-// where there is one (deepest).
+// response does. A document whose sequences and mappings nest deeper,
+// counting an alias as what it stands for, is refused before anything
+// decodes it (yamlTooDeep). Neither the parser nor the library's decoding
+// keeps a document within that. The decoding follows an alias into what it
+// stands for, so a chain of anchors that each hold an alias of the previous
+// one is a stack as deep as the chain is long, with no bound. The one count
+// bounds both the value and the stack. Where there is no alias, it is found
+// in the single scan (learn). Where there is one, it is added up through the
+// aliases like the problems, without a call for each node (deepest).
 
-// yamlLargeMapping is how many keys a mapping may have for the library to
-// decode it whole, and how many keys of a larger one it is handed at a
-// time: of 128 keys the library compares each with 64 others on average,
-// which is a small part of what decoding the key and its value costs.
-// Measured on a mapping of 200,000 keys, parts of 8 to 128 keys decode in
-// the same time, about 1 µs a key; parts of 256 take 1.3 times as long, of
-// 512 1.7 times and of 1024 2.5 times. And few documents have a mapping of
-// more than 128 keys, so few are decoded otherwise than they were.
+// yamlLargeMapping is the most keys a mapping may have for the library to
+// decode it whole. It is also how many keys of a larger mapping are handed
+// to the library at a time. With 128 keys the library compares each key with
+// 64 others on average, a small part of the cost of decoding the key and its
+// value. Measured on a mapping of 200,000 keys, parts of 8 to 128 keys
+// decode in the same time, about 1 µs a key. Parts of 256 take 1.3 times as
+// long, of 512 1.7 times and of 1024 2.5 times. Few documents have a mapping
+// of more than 128 keys, so few are decoded differently than before.
 const yamlLargeMapping = 128
 
-// yamlProblemTextDecoded is how much text the problems of a document may
-// come to for the library to be left to list them, counted as
-// yamlProblemText bytes and the key for each: about a thousand problems of
-// short keys, which is a key of one or two bytes written 45 times, and one
-// of three bytes written 44 times. Past it the list is not made. The text
-// is bounded rather than the number of problems because a problem holds its
-// key: a thousand problems of a key of 200 kB would be 200 MB.
+// yamlProblemTextDecoded is the most text the problems of a document may
+// come to for the library to be left to list them. Each problem counts as
+// yamlProblemText bytes plus its key. That is about a thousand problems of
+// short keys: a key of one or two bytes written 45 times, and one of three
+// bytes written 44 times. Past it the list is not made. The text is bounded
+// rather than the number of problems because a problem holds its key: a
+// thousand problems of a key of 200 kB would be 200 MB.
 const (
 	yamlProblemTextDecoded = 64 << 10
 	yamlProblemText        = 64
 )
 
-// yamlKeysCompared is how many keys a mapping may have for its keys to be
-// compared two by two, as the library compares them, when it is looked
-// through for one written twice: that allocates nothing, and costs less
-// than a table of the keys up to here. Measured, 24 keys are compared in
-// 0.7 µs and put in a table in 1.0, 32 in 1.5 and 1.2. Most mappings of a
+// yamlKeysCompared is the most keys a mapping may have for its keys to be
+// compared two by two, as the library does, when it is scanned for a
+// duplicate key. That allocates nothing and, up to this size, costs less
+// than a table of the keys. Measured: 24 keys are compared in 0.7 µs and put
+// in a table in 1.0 µs; 32 keys in 1.5 µs and 1.2 µs. Most mappings of a
 // document are that small.
 const yamlKeysCompared = 24
 
@@ -127,13 +126,13 @@ type yamlTwice struct {
 	problems, text uint64
 }
 
-// yamlLearnt is what looking through a document once tells of it: whether
-// any mapping is large, how many problems the keys written twice come to,
-// and which mappings have them.
+// yamlLearnt is what one scan of a document tells about it: whether any
+// mapping is large, how many problems the duplicate keys come to, and which
+// mappings have them.
 //
-// The problems are counted as the library lists them where nothing else
-// stops it: a mapping with a key written twice is not read further, and
-// neither is the value of a key that is such a mapping.
+// The problems are counted as the library lists them when nothing else
+// stops it. A mapping with a duplicate key is not read further. Neither is
+// the value of a key that is itself such a mapping.
 type yamlLearnt struct {
 	large    int
 	hasLarge bool
@@ -156,11 +155,11 @@ type yamlLearnt struct {
 	depths map[*yaml.Node]uint64
 	// compared counts the comparisons of two keys, for the tests.
 	compared int
-	// notScalar is the first key, in the order the document is written,
-	// that is a sequence or a mapping or an alias of one, nil when there is
-	// none (yamlNotScalarKey); notScalarLines is the lines such keys are on,
-	// true for a sequence or a mapping and false for what an alias stands
-	// for, which is where the library says such a key is (ofNotScalarKey).
+	// notScalar is the first key, in document order, that is a sequence, a
+	// mapping or an alias of one; nil when there is none (yamlNotScalarKey).
+	// notScalarLines holds the lines such keys are on: true for a sequence
+	// or a mapping, false for what an alias stands for. Those lines are
+	// where the library reports such a key (ofNotScalarKey).
 	notScalar      *yaml.Node
 	notScalarLines map[int]bool
 }
@@ -221,14 +220,14 @@ func (l *yamlLearnt) writtenTwice(n *yaml.Node) yamlTwice {
 	return twice
 }
 
-// learn looks through n and everything under it. counted is whether the
-// library, reading the document in its order, reads n at all. A scalar and
-// an alias have nothing under them, and are not looked at but as keys.
+// learn scans n and everything under it. counted is whether the library,
+// reading the document in its order, reads n at all. A scalar and an alias
+// have nothing under them and are only looked at as keys.
 //
-// A sequence and a mapping are each a level of nesting, and the document
-// that holds them is none: the level is carried here, where every node is
-// passed once anyway, so that a document without an alias costs no second
-// look for its depth.
+// A sequence and a mapping are each a level of nesting; the document that
+// holds them is none. The level is tracked here, where every node is
+// visited once anyway, so a document without an alias needs no second pass
+// for its depth.
 func (l *yamlLearnt) learn(n *yaml.Node, counted bool) {
 	if n.Kind != yaml.MappingNode {
 		outside := l.inside
@@ -291,18 +290,18 @@ func (l *yamlLearnt) isWrittenTwice(n *yaml.Node) bool {
 }
 
 // listed is how much text the problems come to that the library lists when
-// it decodes root: those of every mapping under it, and those of a mapping
-// an alias stands for once more at each alias. It is never less than what
-// the library makes, which reads no further than the first anchor that
-// holds itself.
+// it decodes root. That is the problems of every mapping under root, plus
+// those of a mapping an alias stands for once more at each alias. It is
+// never less than what the library makes, which reads no further than the
+// first anchor that holds itself.
 //
 // A node is added up with what it holds and with what its aliases stand
-// for, which is as deep as the aliases of the document follow one another
-// and not as its nodes are nested: of anchors written in a mapping with a
-// key written twice, which is read no further, each may be met first
-// through an alias in the one written after it. So the nodes being added
-// up are kept in a list, and no call waits for another: a call for each
-// would be a stack as deep as there are anchors.
+// for. That goes as deep as the aliases follow one another, not as deep as
+// the nodes nest. A mapping with a duplicate key is read no further, so
+// each anchor written in it may first be met through an alias in the anchor
+// written after it. So the nodes being added up are kept in a list, and no
+// call waits on another. A call for each node would make a stack as deep as
+// there are anchors.
 func (l *yamlLearnt) listed(root *yaml.Node) uint64 {
 	// The document is added up as the one node a list of itself holds.
 	whole := yaml.Node{Content: []*yaml.Node{root}}
@@ -391,44 +390,42 @@ func yamlDepthChild(n *yaml.Node, i int) *yaml.Node {
 }
 
 // deepest is how deep the document under root is nested, counting what its
-// aliases stand for: a scalar is no level, a sequence and a mapping are 1
-// more than the deepest of the nodes they hold, and an alias is what it
-// stands for. It is the count the JSON decoder keeps of its arrays and
-// objects, so a document is refused over MaxDepth whichever of the two
-// formats it is written in. The decoded value nests that deep and no deeper;
-// it nests less deep only where it is not nested as the document is
-// written: the value of a merge key is a node its mapping holds, and counts
-// as it is written, one level in, though its keys become the mapping's own,
-// and so does a key that is a sequence or a mapping, with which no document
-// decodes.
+// aliases stand for. A scalar is no level. A sequence or a mapping is 1 more
+// than the deepest node it holds. An alias is what it stands for. This is
+// the count the JSON decoder keeps of its arrays and objects, so a document
+// is refused over MaxDepth in either format. The decoded value nests that
+// deep and no deeper. It nests less deep only where it is not nested as the
+// document is written. The value of a merge key is a node its mapping holds
+// and counts as written, one level in, though its keys become the mapping's
+// own. The same goes for a key that is a sequence or a mapping, with which
+// no document decodes.
 //
-// That counting is what lets the one number bound the stack of the decoding
-// too. The library calls itself for each sequence and mapping in another,
-// for what an alias stands for and for a merge (decode.go: unmarshal,
-// sequence, mapping, alias, merge), and it bounds none of them: 100,000
-// anchors that each hold an alias of the one before — `a0: &a0 [x]`, `a1:
-// &a1 [*a0]`, ... — are a 64 MB stack and 320,000, which fit in a 10 MiB
-// body, a 256 MB one, and past about 100 MiB of body the stack would pass
-// Go's own 1 GB limit, which is fatal and caught by no recover. A level
-// here is a sequence or a mapping, with no more than one alias and one merge
-// on the way to it, which is the most the library calls itself for one. A
-// document within MaxDepth is therefore decoded in under 10 MB of stack,
-// which Go, growing a stack by doubling it, holds in one of 16 MB:
-// measured, 10,000 sequences or mappings nested plainly are decoded in a
-// stack grown to 4 or 8 MB, 10,000 that each hold an alias of the one
-// before in one of 8 MB, and 10,000 mappings each merged into the next
-// through an alias, the most a level costs at about 950 bytes, in one of
-// 16 MB. yamlWalk, which calls itself as the library does, takes less a
-// level.
+// This counting also lets the one number bound the decoding's stack. The
+// library calls itself for each sequence and mapping in another, for what
+// an alias stands for and for a merge (decode.go: unmarshal, sequence,
+// mapping, alias, merge). It bounds none of them. 100,000 anchors that each
+// hold an alias of the previous one (`a0: &a0 [x]`, `a1: &a1 [*a0]`, ...)
+// are a 64 MB stack. 320,000 of them, which fit in a 10 MiB body, are a
+// 256 MB one. Past about 100 MiB of body the stack would pass Go's own 1 GB
+// limit, which is fatal and caught by no recover. A level here is a
+// sequence or a mapping, with at most one alias and one merge on the way to
+// it. That is the most the library calls itself for one level. So a document
+// within MaxDepth decodes in under 10 MB of stack, which Go, growing a stack
+// by doubling it, holds in one of 16 MB. Measured: 10,000 plainly nested
+// sequences or mappings decode in a stack grown to 4 or 8 MB. 10,000 that
+// each hold an alias of the previous one decode in 8 MB. 10,000 mappings
+// each merged into the next through an alias decode in 16 MB; that is the
+// most a level costs, about 950 bytes. yamlWalk, which calls itself as the
+// library does, takes less per level.
 //
 // It is added up without a call for each node, in a stack no deeper than the
-// document is nested: the nodes being added up are kept in a list, as listed
-// keeps them, so that an alias chain costs a long list on the heap and not a
-// deep stack of the goroutine, which no recover catches when it is too deep.
-// The depth of a node with an anchor is memoised, so an alias of it is not
-// followed again and the whole is linear in the document; a node met again
-// while its depth is still being found is part of a cycle — an anchor that
-// holds itself — and counts as 0 there, so the adding up terminates and the
+// document is nested. As in listed, the nodes being added up are kept in a
+// list. An alias chain then costs a long list on the heap, not a deep
+// goroutine stack, which no recover catches when it is too deep. The depth
+// of a node with an anchor is memoised, so an alias of it is not followed
+// again and the whole is linear in the document. A node met again while its
+// depth is still being found is part of a cycle (an anchor that holds
+// itself). It counts as 0 there, so the adding up terminates and the
 // library is left to refuse the document (yamlHoldsItself).
 func (l *yamlLearnt) deepest(root *yaml.Node) uint64 {
 	// The document is the one node a list of itself holds.
@@ -478,11 +475,10 @@ func (l *yamlLearnt) deepest(root *yaml.Node) uint64 {
 	}
 }
 
-// tooDeep reports whether the document under root, looked through, is
-// nested deeper than a response may be, MaxDepth. As it is written it is
-// nested as deep as learn found it; only a document with an alias, which
-// may stand for something nested deeper than where it is written, is gone
-// through again for it.
+// tooDeep reports whether the scanned document under root is nested deeper
+// than a response may be, MaxDepth. As written, it nests as deep as learn
+// found. Only a document with an alias, which may stand for something nested
+// deeper than where it is written, is walked again for this.
 func (l *yamlLearnt) tooDeep(root *yaml.Node) bool {
 	return l.nested > MaxDepth || l.aliases && l.deepest(root) > MaxDepth
 }
@@ -494,11 +490,11 @@ func yamlTooDeep() error {
 }
 
 // yamlTooDeepAt is yamlTooDeep for a document the library's parser refused
-// for its depth (yamlParserDepth), after the line the parser names, as the
-// library writes a line, when it names one: where the level too many opens.
-// The failure is recognised by its words without the line, as every error
-// of the library is (yamlFailure), so it is one failure to the log whichever
-// of the two refused the document, and wherever in it.
+// for its depth (yamlParserDepth). It is prefixed with the line the parser
+// names, written as the library writes a line, when it names one: where the
+// level too many opens. Like every error of the library, the failure is
+// recognised by its words without the line (yamlFailure). So the log shows
+// one failure whichever of the two refused the document, and wherever in it.
 func yamlTooDeepAt(line string) error {
 	const library = "yaml: "
 	problem := fmt.Sprintf("the document is nested more than %[1]d deep, counting what its aliases stand for; a response may nest %[1]d deep at most", MaxDepth)
@@ -508,20 +504,19 @@ func yamlTooDeepAt(line string) error {
 	return model.SameFailureAs(errors.New(library+"line "+line+": "+problem), library+problem)
 }
 
-// yamlNotScalarKey is the error for a document with a mapping key that is
-// a sequence or a mapping, or an alias of one, that the library refused for
-// such a key: key, the first such key in the order the document is written.
+// yamlNotScalarKey is the error for a document that the library refused for
+// a mapping key that is a sequence, a mapping, or an alias of one. key is
+// the first such key in document order.
 //
 // A decoded document is read as JSON, whose object keys are text, and a
 // sequence or a mapping has no text to be one. The library refuses such a
-// key in words of its own types, `invalid map key: []interface {}{"a"}`,
-// with no line; two of them in one mapping as one key written twice,
-// `mapping key "" already defined`, as it tells keys apart by their text
-// and these have none; and in a mapping that is merged into another it
+// key in terms of its own types, `invalid map key: []interface {}{"a"}`,
+// with no line. It refuses two of them in one mapping as a key written
+// twice, `mapping key "" already defined`, since it tells keys apart by
+// their text and these have none. In a mapping merged into another it
 // panics (decode.go, mapping). None of these says what is wrong, so the
-// document is refused in words that do (ofNotScalarKey). The failure is
-// recognised without the line, as every error of the library is
-// (yamlFailure).
+// document is refused in words that do (ofNotScalarKey). Like every error
+// of the library, the failure is recognised without the line (yamlFailure).
 func yamlNotScalarKey(key *yaml.Node) error {
 	const library = "yaml: "
 	kind := key
@@ -635,22 +630,21 @@ func (l *yamlLearnt) failure(err error) error {
 }
 
 // ofNotScalarKey reports whether the document has a key that is no scalar
-// and err is what the library makes of such a key, which it reads where it
-// decodes the mapping (decode.go, mapping and merge): a key decoded into an
-// interface is `invalid map key: ` and the value, with no line; two in a
-// mapping are `line N: mapping key "" already defined at line M`, with the
-// lines of the two; and one decoded into text, as a key tagged !!str is and
-// a key of a mapping merged into one of text keys, `line N: cannot
+// and err is what the library makes of such a key. The library reads it
+// where it decodes the mapping (decode.go, mapping and merge). A key decoded
+// into an interface gives `invalid map key: ` and the value, with no line.
+// Two in a mapping give `line N: mapping key "" already defined at line M`,
+// with the lines of the two. One decoded into text, as a key tagged !!str is
+// and a key of a mapping merged into one of text keys, gives `line N: cannot
 // unmarshal !!seq into string`, or !!map, or the node's tag followed by its
-// text, which is empty, in back quotes, where for an alias N is the line of
-// what it stands for. A problem is taken as one of such a key only where its
-// lines are those of such keys, so that two keys "" that are text are not:
-// an alias of such a key, which the library tells apart by its anchor's
-// name, is never one written twice.
+// empty text in back quotes; for an alias, N is the line of what it stands
+// for. A problem counts as one of such a key only where its lines are those
+// of such keys, so two text keys "" do not. An alias of such a key, which
+// the library tells apart by its anchor's name, is never a duplicate.
 //
 // A document with such a key that is refused for anything else, or that
-// decodes, as one does whose key is in a value a merge leaves out, which the
-// library never reads, is refused, or decoded, as it was.
+// decodes, is refused or decoded as before. One decodes when its key is in
+// a value a merge leaves out, which the library never reads.
 func (l *yamlLearnt) ofNotScalarKey(err error) bool {
 	if l.notScalar == nil {
 		return false
@@ -699,38 +693,37 @@ func (l *yamlLearnt) refusal(root *yaml.Node) error {
 
 // yamlWrittenTwice is the library's problem with a key written twice
 // (decode.go, mapping): the later key's line, its text, the earlier key's
-// line. The text is the key as yamlKeyText quotes it, which is as the library
-// does (%#v) but for a key that is cut: the problem of a long key is made
-// short, without the whole key being quoted first.
+// line. The text is the key as yamlKeyText quotes it. That matches the
+// library (%#v) except for a cut key: the problem of a long key is made
+// short without quoting the whole key first.
 const yamlWrittenTwice = "line %d: mapping key %s already defined at line %d"
 
-// yamlRefusal makes the error for a document with keys written twice that
-// the library is not given: what yamlProblems makes of the library's list,
+// yamlRefusal makes the error for a document with duplicate keys that is
+// not given to the library: what yamlProblems makes of the library's list,
 // without the list. The library lists the problems of a mapping by the
 // earlier key and then by the later, and the mappings in the order it reads
-// them; the first yamlProblemsShown are worded and the rest are counted,
-// which is arithmetic, and the failure is recognised by one problem for
-// each different key, which is all that tells two such problems apart once
+// them. The first yamlProblemsShown are worded and the rest are counted,
+// which is arithmetic. The failure is recognised by one problem for each
+// different key, since only the key tells two such problems apart once
 // their lines are left out.
 //
-// The document is read in the order it is written, as the library reads
-// one that has nothing but keys written twice wrong with it. Where the
-// library leaves that order the error can differ from the one it made,
-// which is accepted, since the document is refused either way but in the
-// last case:
+// The document is read in written order, as the library reads one whose
+// only fault is duplicate keys. Where the library leaves that order, the
+// error can differ from the library's. This is accepted, since in all but
+// the last case below the document is refused either way:
 //
-//   - Where the library met an error that ends the decoding, in any part of
-//     the document — a value that does not fit its tag, a key that is a
-//     sequence, an anchor that holds itself, a merge of something that is no
-//     mapping — it reported that one and no key written twice; and a problem
-//     of another kind, which only a sequence or a mapping merged as a key
-//     into a mapping of text keys is, was listed among them.
+//   - Where the library met an error that ends the decoding, anywhere in the
+//     document (a value that does not fit its tag, a key that is a sequence,
+//     an anchor that holds itself, a merge of something that is no mapping),
+//     it reported that error and no duplicate key. A problem of another
+//     kind, which only a sequence or a mapping merged as a key into a
+//     mapping of text keys is, was listed among them.
 //   - It lists the problems of a mapping again at each alias of it, and
-//     those of a mapping that is merged after those of the other keys.
-//   - It does not read a value a merge leaves out, that of a key the
-//     merging mapping has itself, so it lists no key written twice there,
-//     and decodes a document that has them nowhere else. Such a document is
-//     refused here, when it has a large mapping.
+//     those of a merged mapping after those of the other keys.
+//   - It does not read a value a merge leaves out (that of a key the merging
+//     mapping has itself). So it lists no duplicate key there, and decodes a
+//     document that has them nowhere else. Such a document is refused here
+//     when it has a large mapping.
 type yamlRefusal struct {
 	// first is the first yamlProblemsShown problems, as the library words
 	// them.
@@ -741,10 +734,10 @@ type yamlRefusal struct {
 	same  []string
 }
 
-// yamlKind is what a key written twice is recognised by: its text, or the
-// start of it that its problem shows and that it was cut. Two keys of the
-// same start that are both cut are one kind, as their problems read the same
-// without their lines and lengths.
+// yamlKind is what a duplicate key is recognised by: its text, or the start
+// of it that its problem shows, and whether it was cut. Two cut keys with
+// the same start are one kind, as their problems read the same without
+// their lines and lengths.
 type yamlKind struct {
 	head string
 	cut  bool
@@ -837,9 +830,9 @@ func (r *yamlRefusal) failure(problems uint64) error {
 // yamlKnown is what yamlWalk knows of a node before it decodes it.
 type yamlKnown struct {
 	// mine is whether the walk decodes the node itself: it holds a large
-	// mapping, or an alias of something it is in, which the walk tells as
-	// the library does, or so much aliasing that the library, handed the
-	// node alone, could refuse for it a document it decodes as a whole.
+	// mapping, or an alias of something it is in (told as the library tells
+	// it), or so much aliasing that the library, handed the node alone,
+	// could refuse a document it decodes as a whole.
 	mine bool
 	// open is whether the node is still being looked through.
 	open bool
@@ -889,10 +882,10 @@ func (k yamlKnown) aliases() bool {
 	return k.steps > yamlDecodedFree && k.aliased > yamlAliasedFree
 }
 
-// part is what the library counts of so much handed to it as what a node
-// made for the purpose holds, a mapping of some pairs or a sequence of some
-// items: it decodes that node too, and one node more can be the one its
-// count is over at.
+// part is what the library counts of this much handed to it inside a node
+// made for the purpose: a mapping of some pairs or a sequence of some
+// items. The library decodes that node too, so one node more can be the
+// one where its count goes over.
 func (k yamlKnown) part() yamlKnown {
 	k.steps = yamlPlus(k.steps, 1)
 	return k
@@ -972,68 +965,67 @@ func (m *yamlMap) merged(key any) bool {
 	return has
 }
 
-// yamlWalk decodes a document that has a large mapping and no key written
-// twice anywhere, in time linear in it, into what the library decodes it
-// into. It decodes only the nodes that hold a large mapping, and the few
-// the library cannot be handed apart from the rest of the document
-// (yamlKnown.mine), and hands every other to the library, so every scalar,
-// every tag, every small collection and every error of those is the
-// library's own:
+// yamlWalk decodes a document that has a large mapping and no duplicate key
+// anywhere, in time linear in it, into what the library decodes it into. It
+// decodes only the nodes that hold a large mapping and the few the library
+// cannot be handed apart from the rest of the document (yamlKnown.mine). It
+// hands every other node to the library, so every scalar, every tag, every
+// small collection and every error of those is the library's own:
 //
-//   - a sequence is the list of its items, those the walk does not decode
-//     handed to the library yamlLargeMapping at a time, as a sequence of
-//     them (sequence), and an alias is what it stands for, refused as the
-//     library refuses it when that holds the alias itself or when the
-//     aliases of the document expand to too much;
-//   - a mapping is a map of the type the library makes of its keys. Its
+//   - A sequence is the list of its items. Items the walk does not decode
+//     are handed to the library yamlLargeMapping at a time, as a sequence
+//     of them (sequence). An alias is what it stands for. It is refused as
+//     the library refuses it when its target holds the alias itself or when
+//     the document's aliases expand to too much.
+//   - A mapping is a map of the type the library makes of its keys. Its
 //     pairs are handed to the library yamlLargeMapping at a time, as a
-//     mapping of those pairs decoded into the same map, so that the keys,
-//     the values and what an empty value is are the library's and its
-//     comparing of every two keys is of no more than that many; a pair whose
-//     value the walk decodes has its key decoded by the library alone;
-//   - a merge key is applied after the other pairs, as the library applies
-//     it: the mappings merged in their order, each key only if the mapping
-//     does not have it yet, a merged mapping's own merge after its keys. The
-//     pairs of a merged mapping are handed to the library yamlLargeMapping
-//     at a time too, their keys as a sequence of them and then the values of
-//     the keys the merge gives the mapping as another (mergedTogether).
+//     mapping of those pairs decoded into the same map. So the keys, the
+//     values and what an empty value is are the library's, and it compares
+//     every two keys of no more than that many. A pair whose value the walk
+//     decodes has its key decoded by the library alone.
+//   - A merge key is applied after the other pairs, as the library applies
+//     it: the merged mappings in their order, each key only if the mapping
+//     does not have it yet, and a merged mapping's own merge after its keys.
+//     The pairs of a merged mapping are also handed to the library
+//     yamlLargeMapping at a time: their keys as one sequence, then the
+//     values of the keys the merge gives the mapping as another
+//     (mergedTogether).
 //
-// No mapping has a key written twice here, so the library's comparing would
-// have found nothing, and the result is the library's, with two things
-// that are not:
+// No mapping here has a duplicate key, so the library's comparing would
+// have found nothing. The result is the library's, with two exceptions:
 //
 //   - For a merge the library decodes the mapping's keys once more, each
 //     into any value, and holds them in a table. A key that is a sequence
 //     or a mapping, of the mapping or of a merged one, is then read, which
-//     it was not among text keys, and the library fails with what is wrong
-//     in it (`invalid map key`, `cannot decode ... as a !!int`, `anchor ...
+//     it was not among text keys. The library fails with what is wrong in
+//     it (`invalid map key`, `cannot decode ... as a !!int`, `anchor ...
 //     value contains itself`), or outright (`runtime error: hash of
 //     unhashable type`) when it puts it in the table. The walk counts the
-//     keys once more and decodes them once: where it decodes that mapping
-//     it refuses the document with the error it meets in its own order —
+//     keys once more and decodes them once. Where it decodes that mapping,
+//     it refuses the document with the error it meets in its own order:
 //     the key's, as the library refuses it without a merge (`invalid map
 //     key`, or `cannot unmarshal !!seq into string` among text keys), a
 //     later value's, or the merge's (`map merge requires map or sequence of
-//     maps as the value`). The document is refused either way, with an
-//     error that may be another; in a part handed to the library, the
-//     library fails as it did.
-//   - The library counts the nodes it decodes one at a time, and refuses the
-//     document at the node where its aliases stand for too much; the walk
+//     maps as the value`). The document is refused either way, possibly
+//     with another error. In a part handed to the library, the library
+//     fails as it did.
+//   - The library counts the nodes it decodes one at a time and refuses the
+//     document at the node where its aliases stand for too much. The walk
 //     counts a part handed to the library at once, by what yamlKnown says
-//     of it, which for a mapping with a merge key is no less than the
-//     library counts: the library decodes the keys once more of a mapping
-//     with a merge that is not itself merged, and yamlKnown says so of
-//     every one. A document is refused for its aliases at the same share
-//     of them, but one within a part of that share may be refused where
-//     the library decoded it, or decoded where the library refused it.
+//     of it. For a mapping with a merge key, that is no less than the
+//     library counts: the library decodes once more the keys of a mapping with a
+//     merge that is not itself merged, and yamlKnown says so of every one.
+//     A document is refused for its aliases at the same share of them. But
+//     one within a part of that share may be refused where the library
+//     decoded it, or decoded where the library refused it.
 type yamlWalk struct {
 	large int
 	hands func(n *yaml.Node)
-	// aliases is whether the document has an alias anywhere. In one that
-	// has none nothing is counted, since nothing is decoded for an alias, and
-	// known holds only the nodes the walk decodes: an entry for every
-	// sequence and mapping of a document cost more than a third of what
-	// decoding one of small mappings does.
+	// aliases is whether the document has an alias anywhere. If it has
+	// none, nothing is counted, since nothing is decoded for an alias, and
+	// known holds only the nodes the walk decodes. An entry for every
+	// sequence and mapping cost more than a third of decoding a document of
+	// small mappings.
 	aliases bool
 	known   map[*yaml.Node]yamlKnown
 	// expanding is the aliases being decoded, as the library keeps them, to
@@ -1048,9 +1040,9 @@ type yamlWalk struct {
 	// decoding.
 	problems []string
 	// part is the sequence made of the items handed to the library
-	// together, and of the keys and the values of a merged mapping, which
-	// together holds while they are handed, and places where in their run the
-	// values are.
+	// together, and of the keys and the values of a merged mapping. together
+	// holds those while they are handed, and places holds where in their run
+	// the values are.
 	part     yaml.Node
 	together []*yaml.Node
 	places   []int
@@ -1208,15 +1200,15 @@ func (w *yamlWalk) value(n *yaml.Node) (any, error) {
 }
 
 // sequence decodes a sequence the walk decodes itself. An item the walk
-// decodes is decoded alone; the items between two of those are handed to
+// decodes is decoded alone. The items between two such items are handed to
 // the library together, yamlLargeMapping at a time, as a sequence of them
-// (items): a call of the library for each item, a scalar among them, cost
-// several times what the item does.
+// (items). A call of the library for each item, even a scalar, cost several
+// times what the item does.
 //
-// The items are counted one by one as they are taken, as they were when
-// each was handed alone, and what the library counts of a part stays under
-// what it could refuse the part for (yamlKnown.aliases). An item that alone
-// comes to that with the sequence made for it is handed as the node it is.
+// The items are counted one by one as they are taken, as when each was
+// handed alone. What the library counts of a part stays under what it could
+// refuse the part for (yamlKnown.aliases). An item that alone comes to that
+// with the sequence made for it is handed as the node it is.
 func (w *yamlWalk) sequence(n *yaml.Node) (any, error) {
 	items := make([]any, 0, len(n.Content))
 	// held is what is known of the items n.Content[from:i], which the
@@ -1449,15 +1441,15 @@ func (w *yamlWalk) merge(merge *yaml.Node, m *yamlMap) error {
 }
 
 // merged decodes mapping n, or the mapping alias n stands for, into m as a
-// mapping merged into it: a key m has is left out, and its value is not
-// decoded.
+// mapping merged into it. A key m already has is left out, and its value is
+// not decoded.
 //
-// The pairs are decoded a run of them at a time wherever the library can be
-// handed them together (mergedRun, mergedTogether), and one at a time, a
-// call of the library for the key and one for the value, where it cannot.
+// The pairs are decoded a run at a time wherever the library can be handed
+// them together (mergedRun, mergedTogether). Elsewhere they are decoded one
+// at a time, with a call of the library for the key and one for the value.
 // Measured on a merge of a mapping of 20,000 keys, a merged pair cost 540
-// bytes in ten allocations and 1.5 µs one at a time, and costs 230 bytes in
-// four and 0.6 µs in runs, where a pair of the mapping itself is 320 bytes in
+// bytes in ten allocations and 1.5 µs one at a time. In runs it costs 230
+// bytes in four and 0.6 µs. A pair of the mapping itself is 320 bytes in
 // four and 0.9 µs.
 func (w *yamlWalk) merged(n *yaml.Node, m *yamlMap) error {
 	if err := w.step(); err != nil {
@@ -1522,13 +1514,13 @@ func (w *yamlWalk) merged(n *yaml.Node, m *yamlMap) error {
 	return nil
 }
 
-// mergedRun is where the run of pairs of merged mapping n ends that starts
-// at the pair n.Content[from] and that the library can be handed together:
-// no more than a part of a large mapping has, each with a key that is a
-// scalar and no merge key, so that the keys alone are never more than the
-// library decodes without counting their aliases, and a value the walk does
-// not decode and that the library could not refuse alone in a part made for
-// it. The run is empty where the first pair is not such a one.
+// mergedRun is the end of the run of pairs of merged mapping n that starts
+// at pair n.Content[from] and that the library can be handed together. The
+// run has no more pairs than a part of a large mapping has. Each key is a
+// scalar and no merge key, so the keys alone are never more than the library
+// decodes without counting their aliases. Each value is one the walk does
+// not decode and the library could not refuse alone in a part made for it.
+// The run is empty where the first pair is not such a pair.
 func (w *yamlWalk) mergedRun(n *yaml.Node, from int) int {
 	to := from
 	for ; to+1 < len(n.Content) && (to-from)/2 < max(w.large, 1); to += 2 {
@@ -1542,31 +1534,31 @@ func (w *yamlWalk) mergedRun(n *yaml.Node, from int) int {
 	return to
 }
 
-// mergedTogether decodes the pairs n.Content[from:to] of merged mapping n, a
-// run as mergedRun finds it, into m, in two calls of the library where
-// decoding them one at a time is two for each pair: the keys as a sequence
-// of them, into the key type of m, and then the values of the keys m does
-// not have, as a sequence of those. It reports whether it did. It did not,
-// and nothing came of it, where a key is not decoded as the library decodes
-// a key of that type without a word — a null among text keys, which the
-// library leaves out, a tag the key does not fit — and the pairs of the run
+// mergedTogether decodes the pairs n.Content[from:to] of merged mapping n,
+// a run as mergedRun finds it, into m. It takes two calls of the library,
+// where decoding one pair at a time takes two for each pair: the keys as a
+// sequence, into the key type of m, then the values of the keys m does not
+// have, as another sequence. It reports whether it did. It did not, and
+// nothing came of it, where a key is not decoded the way the library
+// silently decodes a key of that type: a null among text keys, which the
+// library leaves out, or a tag the key does not fit. The pairs of the run
 // are then decoded one at a time, with whatever that makes of such a key
 // where it stands among the others.
 //
-// What is decoded is what one pair at a time is. A key is decoded into the
-// same type by the same code of the library, as an item of a sequence of
-// that type and not as the one key of a mapping, and a value into any value
-// either way; the library makes a list of the items of a sequence whatever
-// they are and leaves none out that is decoded into any value. Each key and
-// each value taken is counted where it stands, in the order of the pairs,
-// and what the values before it fail with comes before a refusal for the
-// aliases, as it did when each was handed alone; what the library counts of
-// the values handed together stays under what it could refuse them for
-// (yamlKnown.aliases). A key the merge gives the mapping is put in the map
-// as it is taken, before its value is decoded, so that a later key of the
-// run that decodes into the same, as 1 and 0x1 do, is left out as it was;
-// but for a key that is `.nan`, which no key of a map is the same as, itself
-// included: it is put there once, with its value.
+// The result is what one pair at a time gives. A key is decoded into the
+// same type by the same library code, as an item of a sequence of that type
+// and not as the one key of a mapping, and a value into any value either
+// way. The library makes a list of a sequence's items whatever they are and
+// leaves out none decoded into any value. Each key and value taken is
+// counted where it stands, in the order of the pairs. What the values before
+// it fail with comes before a refusal for the aliases, as when each was
+// handed alone. What the library counts of the values handed together stays
+// under what it could refuse them for (yamlKnown.aliases). A key the merge
+// gives the mapping is put in the map as it is taken, before its value is
+// decoded. So a later key of the run that decodes into the same key, as 1
+// and 0x1 do, is left out as before. The exception is a key that is `.nan`,
+// which equals no key of a map, itself included: it is put there once, with
+// its value.
 func (w *yamlWalk) mergedTogether(n *yaml.Node, from, to int, m *yamlMap) (bool, error) {
 	w.together = w.together[:0]
 	for i := from; i < to; i += 2 {

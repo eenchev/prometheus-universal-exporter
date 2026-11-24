@@ -12,44 +12,43 @@ import (
 // readCSV reads every record of a CSV body.
 //
 // A quote inside a field that does not start with one, as in `5" disk`, is
-// taken as written rather than failing the whole file. encoding/csv offers
-// that only together with a second leniency, for quoted fields: with its
-// LazyQuotes a quoted field with a stray quote, or left open, reads on to the
-// next quote it finds, or to the end of the body, taking the rows on the way
-// as part of the one field, without a word. So a body the strict reader
-// refuses for a bare quote is read again leniently, and every quoted field of
-// that reading is then held against the body (checkQuotedField): one that is
-// not written as the strict reader requires fails the decode with the error
-// the strict reader gives it, whatever the other rows hold.
+// kept as written instead of failing the whole file. encoding/csv allows
+// that only through LazyQuotes, which also relaxes quoted fields: a quoted
+// field with a stray quote, or one left open, then reads on to the next
+// quote or to the end of the body. The rows on the way silently become part
+// of that one field. So when the strict reader refuses a body for a bare
+// quote, the body is read again leniently. Every quoted field of that
+// reading is then checked against the body (checkQuotedField). A field not
+// written as the strict reader requires fails the decode with the strict
+// reader's error for it, whatever the other rows hold.
 //
-// trimSpace has the reader skip the white space a field starts with, which
-// lets a quoted field begin after blanks; the fields are trimmed on both
-// sides once read (decodeCSV). With a delimiter that is white space itself
-// the reader takes a delimiter at the start of a field for such a blank:
+// trimSpace makes the reader skip the white space at the start of a field,
+// so a quoted field can begin after blanks. Fields are trimmed on both sides
+// once read (decodeCSV). If the delimiter is itself white space, the reader
+// takes a delimiter at the start of a field for such a blank:
 //
-//   - A space is left to it, as it always was: a run of spaces is then one
-//     delimiter, which is how columns aligned with spaces are read, and an
-//     empty field cannot be written.
-//   - A tab, or another blank that is no space, is not: the delimiter after
-//     an empty field would be skipped, and every later field of the row move
-//     a column to the left. The reader then skips nothing, and the blanks
-//     that stand between the start of a field and the quote of a quoted one
-//     are taken out of the body before it is read (withoutBlanksAroundQuotes),
-//     so such a field is still read as a quoted one, the delimiters in it
-//     kept.
+//   - A space is left to the reader, as before. A run of spaces is then one
+//     delimiter. This is how space-aligned columns are read, and an empty
+//     field cannot be written.
+//   - A tab, or another blank that is not a space, is not: the delimiter
+//     after an empty field would be skipped, and every later field of the
+//     row would move one column left. The reader then skips nothing. Instead,
+//     the blanks between the start of a field and the quote of a quoted one
+//     are removed from the body before it is read (withoutBlanksAroundQuotes).
+//     Such a field is still read as quoted, with its delimiters kept.
 //
-// The reader knows no blanks after a quoted field at all: what follows the
-// closing quote is the delimiter or the line's end, or the field is refused.
-// So the blanks between a closing quote and the delimiter or line end after
-// them are taken out of the body too, whatever the delimiter. An error's
-// column is given as the body has it (originalColumn), for which the body is
-// gone through a second time, to learn what was taken out and where: only an
-// error asks, and keeping that for every body cost a body padded with such
-// blanks several times its size.
+// The reader accepts no blanks after a quoted field: the closing quote must
+// be followed by the delimiter or the line end, or the field is refused. So
+// the blanks between a closing quote and the delimiter or line end after it
+// are removed from the body too, whatever the delimiter. An error's column
+// is given as in the original body (originalColumn). For that the body is
+// scanned a second time, to learn what was removed and where. Only an error
+// needs this: recording it for every body cost several times the body's
+// size for a body padded with such blanks.
 //
-// A carriage return alone ends a record too (carriageReturnsAsLineEnds),
-// which the reader does not know: it is made a line feed before anything
-// else reads the body.
+// A lone carriage return also ends a record (carriageReturnsAsLineEnds).
+// The reader does not support this, so it is made a line feed before
+// anything else reads the body.
 func readCSV(body []byte, delimiter rune, trimSpace bool) ([][]string, error) {
 	body = carriageReturnsAsLineEnds(body, delimiter, trimSpace)
 	if !trimSpace {
@@ -110,34 +109,35 @@ func readCSVBody(body []byte, delimiter rune, trimLeadingSpace bool) ([][]string
 }
 
 // carriageReturnsAsLineEnds returns body with every carriage return that
-// ends a record on its own, with no line feed after it, made a line feed:
-// the line end of a spreadsheet's "CSV (Macintosh)" and of some instruments,
-// which Python's csv module reads as one and encoding/csv as a character of
-// the field, so that a body written with it was a header and no rows. One
-// inside a quoted field is the field's text and stays. The byte takes the
-// place of the other, so every line and column of the body is where it was,
-// and the lines the reader counts in an error are the lines such a file has.
+// ends a record on its own (no line feed after it) made a line feed. This is
+// the line end of a spreadsheet's "CSV (Macintosh)" and of some instruments.
+// Python's csv module reads it as a line end; encoding/csv reads it as a
+// character of the field, so such a body read as a header and no rows. A
+// carriage return inside a quoted field is the field's text and stays. One
+// byte replaces the other, so every line and column of the body stays where
+// it was, and the lines the reader counts in an error match the file.
 //
-// A body without such a carriage return is returned as it is, at the cost of
-// looking for one: nothing for a body without any carriage return, and a
-// look at the byte after each for one with CRLF line ends. Only a body that
-// has one is copied, and only one that has a quote as well is gone through
-// field by field, as withoutBlanksAroundQuotes follows them and with what it
-// takes for a quoted field: one that starts with a quote, after blanks under
-// trim_space. A carriage return is no such blank where it ends the record.
+// A body without such a carriage return is returned as it is. Looking for
+// one costs nothing for a body without any carriage return, and a look at
+// the byte after each one for a body with CRLF line ends. Only a body that
+// has one is copied. Only a body that also has a quote is scanned field by
+// field, following the fields as withoutBlanksAroundQuotes does, with the
+// same rule for a quoted field: one that starts with a quote, after blanks
+// under trim_space. A carriage return that ends the record is not such a
+// blank.
 //
-// The carriage return a body ends with is left to the reader, which drops
-// it: no body is copied for that one.
+// A carriage return at the end of the body is left to the reader, which
+// drops it. No copy is made for that one.
 //
 // A quoted field left open has no end, so every carriage return after its
-// quote would be its text, and the reader, which fails on such a field at
-// the end of the body, would name that end as a column of the field's own
-// line: the length of the rest of the file. The decode fails either way, so
-// the carriage returns after the quote of a field that is still open at the
-// end of the body end lines as well, the last byte among them, and the
-// error is the one the same body gives with line feeds: the line the body
-// ends on, and the column there. A body the reader accepts has no such
-// field, so none of those is read otherwise.
+// quote would be its text. The reader fails on such a field at the end of
+// the body, and would report that end as a column of the field's own line:
+// the length of the rest of the file. The decode fails either way. So the
+// carriage returns after the quote of a field still open at the end of the
+// body also end lines, the last byte among them. The error is then the one
+// the same body gives with line feeds: the line the body ends on, and the
+// column there. A body the reader accepts has no such field, so no body
+// it accepts is read differently.
 func carriageReturnsAsLineEnds(body []byte, delimiter rune, trimSpace bool) []byte {
 	last := len(body) - 1
 	first := loneCarriageReturn(body, 0)
@@ -248,36 +248,36 @@ func loneCarriageReturn(body []byte, from int) int {
 // is at offset at in what is left.
 type csvRemoved struct{ at, n int }
 
-// withoutBlanksAroundQuotes returns body without the white space, other than
-// the delimiter and a line feed, that stands between a quoted field's closing
-// quote and the delimiter or line end after it and, when leading is set,
-// between the start of a field and the quote it opens with, which the reader
-// skips itself when it is not; and what it took out, in rising order. A body
-// that has none is returned as it is. With leading, `a<tab>  "b<tab>c" <tab>d`
-// becomes `a<tab>"b<tab>c"<tab>d`, which the reader reads as three fields,
-// the second a quoted one.
+// withoutBlanksAroundQuotes returns body without some of its white space
+// (never the delimiter or a line feed), and what it removed, in rising
+// order. It removes the blanks between a quoted field's closing quote and
+// the delimiter or line end after it. When leading is set, it also removes
+// the blanks between the start of a field and its opening quote; when it is
+// not set, the reader skips those itself. A body with none is returned as it
+// is. With leading, `a<tab>  "b<tab>c" <tab>d` becomes `a<tab>"b<tab>c"<tab>d`,
+// which the reader reads as three fields, the second one quoted.
 //
-// It follows the fields as the reader does: a field starts at the start of
-// the body, after a delimiter and after a line feed; one that starts with a
-// quote, after blanks or without, runs to its closing quote, a doubled quote
-// being a quote in it, over delimiters and line ends; any other runs to the
-// next delimiter or line feed, whatever quotes it holds. So blanks inside a
-// quoted field, and around a quote inside a field, are left alone, and so
-// are blanks after a closing quote that something other than the delimiter
-// or the line's end follows, which the reader refuses as it did. The
-// carriage return of a line's end is no blank after the quote before it.
-// With a space as the delimiter the blanks after a closing quote are tabs
-// and their like: a space there is the delimiter. In a quoted field that is
-// not written as the reader requires the two may part; the reader fails on
-// that field (readCSVBody), before what follows it is of any consequence.
+// It follows the fields as the reader does. A field starts at the start of
+// the body, after a delimiter and after a line feed. A field that starts with
+// a quote (after blanks or not) runs to its closing quote, over delimiters
+// and line ends; a doubled quote is a quote inside it. Any other field runs
+// to the next delimiter or line feed, whatever quotes it holds. So these
+// blanks are left alone: blanks inside a quoted field, blanks around a quote
+// inside a field, and blanks after a closing quote that something other than
+// the delimiter or line end follows (the reader still refuses those). The
+// carriage return of a line end is not a blank after the quote before it.
+// With a space as the delimiter, the blanks after a closing quote are tabs
+// and similar: a space there is the delimiter. In a quoted field not written
+// as the reader requires, the two may disagree. The reader fails on that
+// field (readCSVBody) before what follows it matters.
 func withoutBlanksAroundQuotes(body []byte, delimiter rune, leading bool) ([]byte, []csvRemoved) {
 	return takeBlanksAroundQuotes(body, delimiter, leading, true)
 }
 
-// takeBlanksAroundQuotes is withoutBlanksAroundQuotes, which says what it
-// took out only when record is set. Without, the copy of the body is all it
-// allocates, however many runs of blanks it takes out; a list of them is
-// four times the size of a body of `"" ,` over and over.
+// takeBlanksAroundQuotes is withoutBlanksAroundQuotes, but it reports what
+// it removed only when record is set. Without record, the copy of the body
+// is its only allocation, however many runs of blanks it removes. A list of
+// them is four times the size of a body of `"" ,` repeated over and over.
 func takeBlanksAroundQuotes(body []byte, delimiter rune, leading, record bool) ([]byte, []csvRemoved) {
 	// Only a quoted field has blanks to take out.
 	if bytes.IndexByte(body, '"') < 0 {
@@ -383,9 +383,9 @@ func takeBlanksAroundQuotes(body []byte, delimiter rune, leading, record bool) (
 	return append(out, body[kept:]...), removed
 }
 
-// originalColumn gives the error of reading a body that
-// withoutBlanksAroundQuotes shortened the column it has in the body as it
-// was: what was taken out of the error's line before it is counted again.
+// originalColumn turns the column of an error from reading a body that
+// withoutBlanksAroundQuotes shortened into the column in the original body.
+// It adds back what was removed from the error's line before that column.
 // The lines are the same in both.
 func originalColumn(err error, body []byte, removed []csvRemoved) error {
 	var parse *csv.ParseError
@@ -427,10 +427,10 @@ func (l *lineOffsets) offset(line int) int {
 
 // checkQuotedField reports whether the quoted field starting at body[start],
 // which a lenient reading took as value, is written as the strict reader
-// requires: every quote in it doubled, and a quote closing it. Then the two
-// readings agree, and the field ends where its closing quote is. Otherwise
-// the lenient reading took a stray quote as text and read on, or ran into the
-// end of the body, and the error is the strict reader's, at the place it
+// requires: every quote in it doubled, and a closing quote. If so, the two
+// readings agree, and the field ends at its closing quote. If not, the
+// lenient reading took a stray quote as text and read on, or reached the end
+// of the body. The error is then the strict reader's, at the place where it
 // would have stopped.
 func checkQuotedField(body []byte, start int, value string, recordLine, fieldLine int) error {
 	pos := start + 1
@@ -474,10 +474,10 @@ func quoteError(body []byte, start, pos, recordLine, fieldLine int) error {
 	}
 }
 
-// csvFieldLine is the line of a body, from 1, on which field field of record
-// record starts, both from 0, in the body as readCSV read it; 0 when the body
-// has no such field. It reads the body again, which only an error's message
-// is worth: the reader keeps where its fields are for one record at a time.
+// csvFieldLine returns the line (from 1) on which field number field of
+// record number record (both from 0) starts, in the body as readCSV read it,
+// or 0 when the body has no such field. It reads the body again, which only
+// an error message is worth: the reader tracks fields one record at a time.
 func csvFieldLine(body []byte, delimiter rune, trimSpace bool, record, field int) int {
 	body = carriageReturnsAsLineEnds(body, delimiter, trimSpace)
 	readerSkips := trimSpace

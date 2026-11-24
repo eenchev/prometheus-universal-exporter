@@ -2,33 +2,33 @@ package decode
 
 import "bytes"
 
-// What an HTML page says of its own encoding is found as the WHATWG HTML
-// standard finds it before it parses a page ("prescan a byte stream to
-// determine its encoding"), since that is what the page's author tested it
-// against, in a browser. A search for "charset=" anywhere in the head takes
-// a meta in a comment, the description of a page about encodings and the
-// query string of a refresh for declarations.
+// An HTML page's declaration of its own encoding is found as the WHATWG
+// HTML standard finds it before parsing a page ("prescan a byte stream to
+// determine its encoding"), since the page's author tested the page against
+// that, in a browser. A search for "charset=" anywhere in the head would
+// take for declarations a meta in a comment, the description of a page
+// about encodings, and the query string of a refresh.
 //
-// The prescan reads tags, not text. A comment is passed over whole. A
-// <meta> tag declares an encoding with a charset attribute, or with a
-// content attribute holding "charset=" when the same tag has
-// http-equiv="content-type"; a content attribute of any other meta declares
-// nothing. Attribute names and http-equiv's value are read in any case, a
-// value quoted either way or bare, with blanks around the equals sign, and
-// the first attribute of a name is the one that counts. Any other tag, a
-// closing tag, a doctype and a processing instruction are passed over with
-// their attributes, so a "charset=" in a title's text or in another
-// element's attribute is nothing; the text of a script is read as any other
-// text is, as the standard reads it. The first meta that declares an
-// encoding is the answer. A meta naming what is no encoding's name — a name
-// nobody knows, the "utf-8/" a bare value run into the slash of a self-closed
-// tag is, a name with a semicolon after it — declares nothing, as in the
-// standard, and the next meta is looked at: a page a browser reads is not
-// refused over it.
+// The prescan reads tags, not text. A comment is skipped whole. A <meta> tag
+// declares an encoding with a charset attribute, or with a content attribute
+// holding "charset=" when the same tag has http-equiv="content-type". A
+// content attribute of any other meta declares nothing. Attribute names and
+// http-equiv's value are read in any case. A value may be quoted either way
+// or bare, with blanks around the equals sign. The first attribute of a name
+// is the one that counts. Any other tag, a closing tag, a doctype and a
+// processing instruction are skipped with their attributes, so a "charset="
+// in a title's text or in another element's attribute counts for nothing.
+// The text of a script is read like any other text, as the standard reads
+// it. The first meta that declares an encoding is the answer. A meta that
+// names something that is not an encoding's name declares nothing, as in the
+// standard, and the next meta is looked at: for example a name nobody knows,
+// the "utf-8/" that a bare value run into the slash of a self-closed tag
+// becomes, or a name with a semicolon after it. A page a browser reads is
+// not refused over it.
 //
-// The head is the first 1024 bytes, which the standard allows: a
-// declaration that is not whole within them, an attribute's value cut off by
-// their end, is none.
+// The head is the first 1024 bytes, which the standard allows. A
+// declaration that is not whole within them, such as an attribute's value
+// cut off by their end, does not count.
 
 // metaDeclaredCharset is the encoding the first <meta> of head that names
 // one declares, as the prescan takes the name (metaCharset), or empty when
@@ -141,10 +141,10 @@ func metaTagCharset(head []byte, at int) (string, int) {
 	return string(charset), at
 }
 
-// prescanAttribute reads the attribute at at of a tag, as the standard's
-// "get an attribute" does: its name and value as written, where the next
-// one starts, and whether there was one. There is none at the tag's > and
-// none in what the end of head cuts off.
+// prescanAttribute reads the attribute at position at of a tag, as the
+// standard's "get an attribute" does. It returns the name and value as
+// written, where the next attribute starts, and whether there was one. There
+// is none at the tag's > and none in what the end of head cuts off.
 func prescanAttribute(head []byte, at int) (name, value []byte, next int, found bool) {
 	for at < len(head) && (isPrescanSpace(head[at]) || head[at] == '/') {
 		at++

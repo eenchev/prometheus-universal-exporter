@@ -11,26 +11,25 @@ import (
 
 // The logfmt decoder reads logfmt, the key=value lines of Heroku's logs and
 // of the Go loggers that write them, as github.com/go-logfmt/logfmt reads
-// them; the module is not a dependency, the grammar being a few lines. Its
+// them. The module is not a dependency, as the grammar is a few lines. The
 // document is the list of the records, one for each line that holds one, in
 // the order of their lines, so that a jq rule reads it as it reads a JSON
 // array of objects.
 //
-//   - A line is what lies between two line feeds. A line of nothing but
-//     spaces and control characters, any byte up to and including the space,
-//     is passed over; those bytes are also what separates the pairs of a
-//     line.
+//   - A line is what lies between two line feeds. A line of only spaces and
+//     control characters (any byte up to and including the space) is
+//     skipped. Those bytes also separate the pairs of a line.
 //   - A pair is a key, then = and its value. A key is a run of bytes above
 //     the space other than = and ". A value is a run of the same bytes, or a
 //     quoted string: in double quotes, with the escapes of a JSON string (\"
 //     \\ \/ \b \f \n \r \t \uXXXX), and no raw line feed.
-//   - A record is a mapping of the line's keys to their values, as text: a
-//     number is a value the rules read as a number (What counts as a number
-//     in docs/CONFIGURATION.md). A key written without = is null, so that
-//     has("key") tells it from a key the line does not write, and a key
-//     written with = and nothing after it is the empty string.
+//   - A record maps the line's keys to their values, as text. A number is a
+//     value the rules read as a number (What counts as a number in
+//     docs/CONFIGURATION.md). A key written without = is null, so that
+//     has("key") tells it from a key the line does not write. A key written
+//     with = and nothing after it is the empty string.
 //   - Of a key written twice on one line, the later is kept, as the json
-//     decoder keeps the later member: a logger may well add a key a caller
+//     decoder keeps the later member. A logger may well add a key a caller
 //     already gave, and refusing the whole body over one such line would
 //     lose every other record.
 //   - An error names the line and column, as model.Position, and the byte

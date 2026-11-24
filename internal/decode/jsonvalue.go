@@ -12,63 +12,64 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The json decoder reads a body in one pass, here, into the values the
-// transforms use: an object as a map[string]any, an array as a []any, text,
-// true, false and null as a string, a bool and nil, and a number as
-// model.Normalize makes it — a whole number an int, or a *big.Int beyond
-// int64, so an ID of any length keeps every digit, or its text beyond
-// model.MaxWholeNumberDigits digits; any other number a float64, or its text
-// when no float64 holds it, as 1e400.
+// The json decoder reads a body in one pass into the values the transforms
+// use:
 //
-// It was encoding/json's Decoder with UseNumber, decoding into an any, and
-// then model.Normalize over what it made, and that is what it still accepts,
-// refuses and returns (jsondiff_test.go compares the two): the standard
-// library built every object and array through reflection, every number
-// first as its text and every key as a string of its own, and Normalize
-// walked the whole document a second time to rewrite the numbers. Half the
-// time of a jq probe over a large document went there. The grammar is the
-// one of RFC 8259 as encoding/json reads it:
+//   - an object as a map[string]any, and an array as a []any;
+//   - text, true, false and null as a string, a bool and nil;
+//   - a number as model.Normalize makes it: a whole number as an int, as a
+//     *big.Int beyond int64 so that an ID of any length keeps every digit,
+//     or as its text beyond model.MaxWholeNumberDigits digits; any other
+//     number as a float64, or as its text when no float64 holds it, as 1e400.
+//
+// It used to be encoding/json's Decoder with UseNumber, decoding into an
+// any, followed by model.Normalize over the result. It still accepts,
+// refuses and returns what that did (jsondiff_test.go compares the two).
+// The standard library built every object and array through reflection,
+// every number first as its text and every key as a string of its own, and
+// Normalize walked the whole document a second time to rewrite the numbers.
+// Half the time of a jq probe over a large document went there. The grammar
+// is RFC 8259 as encoding/json reads it:
 //
 //   - One value, with nothing but spaces, tabs and line ends before and
 //     after it. An empty body is io.EOF, a body that ends inside its value
-//     io.ErrUnexpectedEOF, and any other error says the line and column of
+//     io.ErrUnexpectedEOF, and any other error gives the line and column of
 //     the byte that cannot be there.
 //   - Arrays and objects nest 10,000 deep at most.
-//   - Of two members of an object with one key, the later is kept.
+//   - Of two members of an object with the same key, the later is kept.
 //   - Bytes that are not UTF-8 inside a string are each read as U+FFFD, as
-//     is a \u escape of half a surrogate pair; a control character must be
+//     is a \u escape of half a surrogate pair. A control character must be
 //     escaped, and the only escapes are \" \\ \/ \b \f \n \r \t and \uXXXX.
 //   - A number has no leading zero, no leading +, and a digit on each side
 //     of its point and after its e.
 
-// MaxDepth is how deep the lists and mappings of a decoded value nest at
-// most, one inside another, whichever decoder made it: a response whose
-// value would nest deeper is refused when it is decoded, saying so. It is
-// encoding/json's limit on arrays and objects, which the json decoder had
-// from the start, and one limit for every format so that what reads a value
-// need not ask which decoder made it. What has to follow a value as deep as
-// it goes takes the depth from here: a value is handed to a Python script,
-// and what a script leaves is read back, to this depth
-// (transform/pythonrequest.go, pythonanswer.go, pythonworker.go), with no
-// limit of the hand-over's own for a response to decode within and then
-// fail on. Each decoder is within it:
+// MaxDepth is the maximum nesting depth of the lists and mappings of a
+// decoded value, whichever decoder made it. A response whose value would
+// nest deeper is refused when it is decoded, with an error that says so. It
+// is encoding/json's limit on arrays and objects, which the json decoder had
+// from the start. There is one limit for every format, so code that reads a
+// value need not ask which decoder made it. Code that must follow a value to
+// its full depth takes the depth from here: a value is handed to a Python
+// script, and what a script leaves is read back, to this depth
+// (transform/pythonrequest.go, pythonanswer.go, pythonworker.go). The
+// hand-over has no limit of its own that a response could decode within and
+// then fail on. Each decoder stays within it:
 //
 //   - JSON counts the arrays and objects around what it is reading, and
 //     refuses the document at one more (enter).
-//   - YAML refuses a document whose sequences and mappings nest deeper, an
-//     alias counted as what it stands for, before anything decodes it
+//   - YAML refuses a document whose sequences and mappings nest deeper, with
+//     an alias counted as what it stands for, before anything decodes it
 //     (yamlkeys.go, yamlTooDeep). The library's parser does not keep a
-//     document within the limit: it bounds what is nested by indentation and
-//     what is nested in brackets apart, at 10,000 levels each (scannerc.go,
-//     max_indents and max_flow_level), and a level of indentation is two
-//     collections where a mapping's value is a sequence written no further
-//     in than its key, so a document without an alias parses nested up to
-//     30,000 deep; and it bounds what aliases expand to by its size, not by
-//     its depth.
-//   - CSV is a list of rows, each a list or a mapping of its fields;
-//     Graphite's series and a Prometheus exposition as a script reads it
+//     document within the limit. It bounds nesting by indentation and
+//     nesting in brackets separately, at 10,000 levels each (scannerc.go,
+//     max_indents and max_flow_level). One level of indentation is two
+//     collections where a mapping's value is a sequence indented no further
+//     than its key, so a document without an alias parses nested up to
+//     30,000 deep. It also bounds what aliases expand to by size, not depth.
+//   - CSV is a list of rows, each a list or a mapping of its fields.
+//     Graphite's series, and a Prometheus exposition as a script reads it,
 //     nest a few levels, of the exporter's own making.
-//   - Text is text, and so are HTML and XML to a script; as documents their
+//   - Text is text, and so are HTML and XML to a script. As documents, their
 //     elements nest MaxXMLDepth deep at most.
 //   - What a pre-script leaves in data is read by JSONValue, to this depth,
 //     and the worker refuses to write it nested deeper (pythonworker.go,
@@ -87,12 +88,12 @@ func decodeJSON(body []byte) (any, error) {
 	return d.document()
 }
 
-// sniffJSON decodes body as decodeJSON does, for the detection of a format
-// (detectFormat), and reports whether body is the JSON the detection takes
-// for JSON: one value, with no number in it beyond a float64. The detection
-// asked encoding/json's Unmarshal, which reads every number into a float64
-// and refuses the document over one that none holds, 1e400 or a whole
-// number past 1.8e308, and what it took for JSON then it takes for JSON
+// sniffJSON decodes body as decodeJSON does, for format detection
+// (detectFormat). It reports whether the detection takes body for JSON: one
+// value, with no number in it beyond a float64. The detection used
+// encoding/json's Unmarshal, which reads every number into a float64 and
+// refuses the document over a number no float64 holds, such as 1e400 or a
+// whole number past 1.8e308. What it took for JSON then, it takes for JSON
 // now. The value is what decodeJSON returns for body, so the decode that
 // follows a detection need not read the body a second time.
 func sniffJSON(body []byte) (any, bool) {
@@ -101,11 +102,11 @@ func sniffJSON(body []byte) (any, bool) {
 	return v, err == nil && !d.beyondFloat
 }
 
-// JSONValue reads the JSON value body starts with as the json decoder reads
-// a document, and returns it and what of body follows it. It is how the
-// answer of a Python worker is read (transform/pythonanswer.go): what a
-// pre-script leaves in data is a value inside the answer, and is read as a
-// response's JSON is, nested MaxDepth deep at most whatever lies around it
+// JSONValue reads the JSON value at the start of body, as the json decoder
+// reads a document, and returns it and the rest of body after it. It is how
+// the answer of a Python worker is read (transform/pythonanswer.go). What a
+// pre-script leaves in data is a value inside the answer. It is read as a
+// response's JSON is, nested MaxDepth deep at most, whatever lies around it
 // in the answer: a script may leave what it was given, as deep as a decoder
 // made it.
 func JSONValue(body []byte) (value any, rest []byte, err error) {
@@ -156,12 +157,12 @@ type jsonDecoder struct {
 	pos int
 	// depth is how many arrays and objects the value being read is inside.
 	depth int
-	// values holds the elements of the arrays, and the member values of the
-	// objects, being read, innermost last, and names the keys of those
-	// members. An array or an object is made when its closing bracket is
-	// read, of exactly the size it has, rather than grown an element at a
-	// time: growing a slice copies it again and again, and a map of more
-	// than eight keys is rebuilt as it fills.
+	// values holds the elements of the arrays being read and the member
+	// values of the objects being read, innermost last; names holds the keys
+	// of those members. An array or an object is made when its closing
+	// bracket is read, at exactly its size, instead of growing one element
+	// at a time: growing a slice copies it again and again, and a map of
+	// more than eight keys is rebuilt as it fills.
 	values []any
 	names  []string
 	// unquoted is where a string with escapes, or with bytes that are not
@@ -189,13 +190,12 @@ type jsonCached struct {
 const jsonCachedLength = 32
 
 // remembered returns the cache's slot for text, holding it. The items of an
-// array mostly have the same keys, and many of the same values: making one
-// string of each, where encoding/json made one for every occurrence, saves
-// most of the strings of a large document. The cache is a table of fixed
-// size in which a string has one slot, by its hash, and replaces what the
-// slot held, so a document of ten thousand different IDs costs it nothing
-// but the lookups, and the keys those IDs push out come back at their next
-// use.
+// array mostly have the same keys and many of the same values. Making one
+// string for each, where encoding/json made one per occurrence, saves most
+// of the strings of a large document. The cache is a fixed-size table in
+// which a string has one slot, chosen by its hash, and replaces what the
+// slot held. So a document of ten thousand different IDs costs it only the
+// lookups, and the keys those IDs push out come back at their next use.
 func (d *jsonDecoder) remembered(text []byte) *jsonCached {
 	// FNV-1a, which needs no seed: the same document makes the same
 	// strings, and allocates as much, on every run.
@@ -256,10 +256,10 @@ func (d *jsonDecoder) invalid(pos int, where string) error {
 	return model.Errorf("invalid character %s %s, at line %d, column %d", quoteJSONByte(d.data[pos]), where, line, column)
 }
 
-// position says where pos is, for an error: its line and, counted in bytes
-// from 1, its column, which in a document written on one line is how far
-// into the document it is. It is no part of what the failure is to the log
-// (model.SameFailureText).
+// position gives the place of pos for an error: its line and its column,
+// counted in bytes from 1. In a document written on one line, the column is
+// how far into the document pos is. It is not part of what identifies the
+// failure in the log (model.SameFailureText).
 func (d *jsonDecoder) position(pos int) (line, column model.Position) {
 	before := d.data[:pos]
 	return model.Position(1 + bytes.Count(before, []byte("\n"))), model.Position(pos - bytes.LastIndexByte(before, '\n'))
@@ -514,9 +514,9 @@ func (d *jsonDecoder) number() (any, error) {
 	return n, nil
 }
 
-// quoted reads the string whose opening quote is at pos, and returns what
-// it says: a part of the body when it is written without escapes and is
-// UTF-8, which nearly every string is, and otherwise d.unquoted, which the
+// quoted reads the string whose opening quote is at pos and returns its
+// content. That is a part of the body when the string has no escapes and is
+// UTF-8, which nearly every string is. Otherwise it is d.unquoted, which the
 // next string with escapes overwrites.
 func (d *jsonDecoder) quoted() ([]byte, error) {
 	data := d.data

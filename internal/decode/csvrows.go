@@ -8,19 +8,19 @@ import (
 )
 
 // CSVRows is what the csv decoder makes of a response: its rows, each the
-// cells its line holds, and, with a header row, the header's names, once for
-// all the rows. A row read by name has every column the header names, and
-// those a short row lacks are empty in it, but they are not made: the
-// decoder once gave each row a map with an entry for every column the
-// header names, so a header of 5,000 columns over 5,000 lines of one field,
-// a body of 39 kB, was 25 million entries and 2 GB, and a plain body of one
-// short column held 175 times its size. The rows now cost the cells the
-// body holds.
+// cells its line holds, and, with a header row, the header's names, stored
+// once for all the rows. A row read by name has every column the header
+// names, and the columns a short row lacks are empty in it, but they are not
+// stored. The decoder once gave each row a map with an entry for every
+// column the header names. A header of 5,000 columns over 5,000 lines of one
+// field, a body of 39 kB, was then 25 million entries and 2 GB, and a plain
+// body of one short column held 175 times its size. The rows now cost only
+// the cells the body holds.
 //
-// What a rule, an error and a script read of the rows is what they read of
-// those maps: a row read by name as a mapping of every column the header
-// names, the cells it lacks empty (Cell, Document), and without a header row
-// a list of the row's fields, read by number from 1.
+// A rule, an error and a script read the rows as they read those maps. With
+// a header row, a row read by name is a mapping of every column the header
+// names, with the cells it lacks empty (Cell, Document). Without a header
+// row, a row is a list of its fields, read by number from 1.
 type CSVRows struct {
 	// named says the rows are read by the header's names.
 	named bool
@@ -64,10 +64,10 @@ func (t *CSVRows) Columns() []CSVColumn {
 	return columns
 }
 
-// Cell is the cell of row i in column, and whether the row has the column:
-// with a header, a column the header names, the cell "" where the row is
-// short of it; without one, a column number from 1, written as a rule names
-// it, up to the row's own length.
+// Cell returns the cell of row i in column, and whether the row has the
+// column. With a header, column is a column the header names, and the cell
+// is "" where the row is short of it. Without one, column is a column
+// number from 1, written as a rule names it, up to the row's own length.
 func (t *CSVRows) Cell(i int, column string) (string, bool) {
 	row := t.rows[i]
 	if t.named {
@@ -118,11 +118,11 @@ func csvColumnNumber(column string) int {
 	return 0
 }
 
-// Document is the rows as the decoder once gave them: a list of maps of
-// every column the header names to its cell, "" where the row is short of
-// it, or without a header a list of lists of fields. It costs what that
-// cost, the header's columns times the rows, and is for json.Marshal, which
-// writes the rows as a script reads them, and for tests.
+// Document returns the rows as the decoder once gave them: with a header, a
+// list of maps of every column the header names to its cell, "" where the
+// row is short of it; without one, a list of lists of fields. It costs what
+// that cost, the header's columns times the rows. It is for json.Marshal,
+// which writes the rows as a script reads them, and for tests.
 func (t *CSVRows) Document() []any {
 	out := make([]any, 0, len(t.rows))
 	for i, row := range t.rows {

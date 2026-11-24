@@ -39,45 +39,44 @@ import (
 // It is more lenient than expfmt in three ways that real endpoints trip over:
 // the last line need not end in a newline, lines may end in \r\n, and trailing
 // blanks after the value or timestamp are ignored. It is stricter where expfmt
-// produced nonsense: a histogram or summary count, or a bucket count, that is
+// produced nonsense. A histogram or summary count, or a bucket count, that is
 // negative, NaN, infinite or a fraction is an error instead of an arbitrary
-// integer; a
-// label set with no metric name is an error instead of joining the previous
-// line's family; and a name that mixes bare and quoted parts, such as a"b", is
-// an error instead of being spliced together. It never panics, where expfmt
-// did on input such as {b="c",} 1.
+// integer. A label set with no metric name is an error instead of joining the
+// previous line's family. A name that mixes bare and quoted parts, such as
+// a"b", is an error instead of being spliced together. It never panics, where
+// expfmt did on input such as {b="c",} 1.
 //
-// A histogram or a summary is kept as the source wrote it (settle): one
+// A histogram or a summary is kept as the source wrote it (settle). One
 // without _sum or without _count, which OpenMetrics allows and expfmt read as
-// a sum or a count of 0, is marked as having none, a histogram's count then
-// being its +Inf bucket's. A histogram whose +Inf bucket and _count differ
+// a sum or a count of 0, is marked as having none; a histogram's count is
+// then its +Inf bucket's. A histogram whose +Inf bucket and _count differ
 // keeps both numbers, and one with neither of the two has neither
-// (model.Histogram): a target that updates its buckets and its count without
-// a lock is read between the two now and then, and one such series must not
+// (model.Histogram). A target that updates its buckets and its count without
+// a lock is now and then read between the two, and one such series must not
 // fail every family of the scrape. What cannot be one series is an error
-// naming it: a second _sum or _count, and two buckets with one bound or two
+// naming it: a second _sum or _count, two buckets with one bound, or two
 // values of one quantile.
 //
-// A sample line that is no part of its family is left out, and counted
-// (PrometheusReport): a sample of a histogram that is neither a bucket with
-// an le label, a _sum nor a _count, such as one named as the family itself,
-// and a sample named as its summary family without a quantile label. Client
-// libraries write such lines, and Prometheus ingests them: Micrometer writes
-// a timer's percentiles as x{quantile="0.95"} under "# TYPE x histogram", and
-// VictoriaMetrics' library its buckets as x_bucket{vmrange="..."}. Failing
-// the decode over one lost every family of such a target. The line cannot be
-// passed on either: its series would be a second family named as the
-// histogram, which an exposition cannot hold. expfmt made an empty series of
-// it.
+// A sample line that is no part of its family is left out and counted
+// (PrometheusReport). That is a sample of a histogram that is neither a
+// bucket with an le label, a _sum nor a _count, such as one named as the
+// family itself, and a sample named as its summary family without a quantile
+// label. Client libraries write such lines, and Prometheus ingests them:
+// Micrometer writes a timer's percentiles as x{quantile="0.95"} under
+// "# TYPE x histogram", and VictoriaMetrics' library writes its buckets as
+// x_bucket{vmrange="..."}. Failing the decode over one such line lost every
+// family of such a target. The line cannot be passed on either: its series
+// would be a second family named as the histogram, which an exposition
+// cannot hold. expfmt made an empty series of it.
 //
 // A label written with an empty value is left off its series (promParser.
 // empty): to Prometheus m{l=""} is the series m, and the exporter leaves an
-// empty label off wherever one comes from. The label is read and checked as
-// any other first, so a name written twice is still an error, and so is a
-// histogram's le or a summary's quantile that is empty, which is no number.
-// Two series that differ only in such a label are one series: a histogram's
+// empty label off wherever one comes from. The label is first read and
+// checked like any other, so a name written twice is still an error. So is
+// an empty le of a histogram or quantile of a summary, which is no number.
+// Two series that differ only in such a label are one series. A histogram's
 // or a summary's samples are then one series' samples, refused where that
-// series has a sample twice, and two plain series are the duplicates the
+// series has a sample twice. Two plain series are the duplicates that the
 // check of every scrape refuses (model.MetricSet.Validate).
 //
 // Families come back in the order they were first seen, and series in the
@@ -89,10 +88,10 @@ func parsePrometheusText(body []byte) ([]model.Metric, error) {
 // PrometheusReport is what the prometheus decoder left out of an exposition.
 type PrometheusReport struct {
 	// LeftOutLines counts the sample lines left out as no part of their
-	// histogram or summary family, in the families that are kept, and
-	// FirstLeftOut says which was first and what was expected in its place:
-	// an error, so that the log takes it for the same when only the line it
-	// names differs (model.SameFailureText).
+	// histogram or summary family, in the families that are kept.
+	// FirstLeftOut says which line was first and what was expected in its
+	// place. It is an error, so the log takes it for the same failure when
+	// only the line it names differs (model.SameFailureText).
 	LeftOutLines int
 	FirstLeftOut error
 }
@@ -110,38 +109,37 @@ type promOptions struct {
 	// at the first one past it with model.MetricCountError.
 	limit int
 	// counts, when set, says whether the kept series of a metric name and
-	// type count against limit: those of a family it answers false for are
-	// kept without being counted, for whoever is given the series to count
-	// what it makes of them.
+	// type count against limit. The series of a family it answers false for
+	// are kept uncounted, for whoever is given the series to count what it
+	// makes of them.
 	counts func(name string, typ model.MetricType) bool
 }
 
 // parseExposition parses body as options say.
 //
 // A large exposition is most of what a pass-through probe costs, so the
-// parser is written to do little for each line and to keep little of it:
+// parser does little for each line and keeps little of it:
 //
-//   - The body is read where it lies, a line at a time, as bytes: no line is
-//     copied to a string, and no slice of every line is made first. Only
-//     what a kept series holds is copied out of the body, so that the series
-//     of a scrape that keeps ten of a million do not hold on to the rest.
-//   - A sample's labels are read into a list the parser uses again for every
-//     line (promParser.labels), and are made the series' map only when a
-//     series is made of them: not for a sample of a family that is not
-//     kept, and not for the second and later buckets of a histogram, which
-//     find their series by a signature written over the same buffer every
-//     time.
-//   - The text of a label's name, and of its value, is the previous line's
-//     where it is the same (promParser.previous), as the names nearly always
-//     are and the values often; where it is not, it is put in a chunk of
-//     text that many series share, one allocation for all of them
-//     (promParser.keepText). The map of a series' labels is its own: it is
-//     what the series is handed on with (model.Metric.Labels), and two
-//     allocations a series is what it costs.
+//   - The body is read in place, a line at a time, as bytes. No line is
+//     copied to a string, and no slice of all lines is made first. Only
+//     what a kept series holds is copied out of the body, so the series of
+//     a scrape that keeps ten of a million do not hold on to the rest.
+//   - A sample's labels are read into a list the parser reuses for every
+//     line (promParser.labels). They become the series' map only when a
+//     series is made of them. That is not done for a sample of a family
+//     that is not kept, nor for the second and later buckets of a
+//     histogram, which find their series by a signature written over the
+//     same buffer every time.
+//   - A label's name or value reuses the previous line's text where it is
+//     the same (promParser.previous), as the names nearly always are and
+//     the values often. Otherwise it is put in a chunk of text that many
+//     series share, one allocation for all of them (promParser.keepText).
+//     The map of a series' labels is its own: the series is handed on with
+//     it (model.Metric.Labels). A series costs two allocations.
 //   - Series are held in one slice in the order they were read
 //     (promParser.series), sized from the number of lines when every series
-//     is kept, and are put in the families' order at the end only when they
-//     were not read in it, which is rare.
+//     is kept. They are put in the families' order at the end only when
+//     they were not read in it, which is rare.
 func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
 	metrics, _, err := parseExpositionReporting(body, options)
 	return metrics, err
@@ -290,15 +288,15 @@ type promParser struct {
 	// names, and often some of the same values, and takes these strings
 	// rather than making its own.
 	previous []promLabelText
-	// text holds the text of the label names and values the series made
-	// have that the series before them did not: each is a part of the
-	// string the builder holds, so that a chunk of them costs one
-	// allocation, where each cost one of its own (promParser.keepText).
+	// text holds the text of label names and values that the series made
+	// have and the series before them did not. Each is a part of the string
+	// the builder holds, so a chunk of them costs one allocation, where each
+	// cost one of its own (promParser.keepText).
 	text strings.Builder
-	// sampleName, sampleFamily and sampleRole are the name of the sample
-	// read last and what family found it to be, which the next sample has
-	// too when it has the same name, as within a family it has. No comment
-	// line may lie between the two: a TYPE line changes what a name is.
+	// sampleName, sampleFamily and sampleRole are the name of the last
+	// sample read and the family found for it. The next sample has them too
+	// when it has the same name, as it does within a family. No comment line
+	// may lie between the two: a TYPE line changes what a name is.
 	sampleName   []byte
 	sampleFamily *promFamily
 	sampleRole   int
@@ -569,10 +567,10 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 		}
 	}
 	if p.empty {
-		// A label with an empty value is no label of the series. It is left
-		// off here, once le or quantile is taken out, which is refused when
-		// it is empty rather than left off, and before anything is made of
-		// the labels: the series' map and a histogram's signature.
+		// A label with an empty value is not a label of the series. It is
+		// left off here, after le or quantile is taken out (those are
+		// refused when empty rather than left off), and before anything is
+		// made of the labels: the series' map and a histogram's signature.
 		p.labels = slices.DeleteFunc(p.labels, func(l promLabel) bool { return len(l.value) == 0 })
 	}
 	if role == promRoleCreated {
@@ -692,10 +690,10 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 	return nil
 }
 
-// leaveOut counts the sample being read, which belongs to the histogram or
-// summary family f by its name and is none of the samples such a family has,
-// as left out. Of the first such line the report names the line, the sample
-// and what was expected in its place; the others are only counted, as an
+// leaveOut counts as left out the sample being read. By its name it belongs
+// to the histogram or summary family f, but it is none of the samples such a
+// family has. For the first such line the report names the line, the sample
+// and what was expected in its place. The others are only counted, as an
 // exposition has one such line for every series of the family.
 func (p *promParser) leaveOut(f *promFamily) {
 	if p.report == nil {
@@ -721,14 +719,14 @@ func (p *promParser) stray(f *promFamily) error {
 }
 
 // settle checks every histogram and summary read, once all their samples
-// are, and gives a histogram without a _count its +Inf bucket's
+// are read, and gives a histogram without a _count its +Inf bucket's
 // (model.Histogram.Settle). Its error names the series and the line of its
 // first sample, since what is wrong with a series is not on one line.
 //
-// It first puts the series in the order they come back in, the families'
-// and within a family the series', which is the order they are checked in.
-// An exposition writes a family's series together, after its HELP and TYPE,
-// so they nearly always were read in that order.
+// It first puts the series in the order they come back in: the families'
+// order, and within a family the series' order. That is the order they are
+// checked in. An exposition writes a family's series together, after its
+// HELP and TYPE, so they were nearly always read in that order.
 func (p *promParser) settle() error {
 	if p.unordered {
 		slices.SortStableFunc(p.series, func(a, b promSeries) int { return a.family.index - b.family.index })
@@ -807,12 +805,12 @@ const (
 	promTextChunkMost = 64 << 10
 )
 
-// keepText is b as a string a series keeps: a part of the chunk of text
-// p.text holds, which is only ever appended to, so that the strings taken
-// from it before stay as they were. A chunk without room for b is left to
-// the strings taken from it, and the next one is made.
+// keepText is b as a string a series keeps. The string is a part of the
+// chunk of text p.text holds. That chunk is only ever appended to, so the
+// strings taken from it before stay as they were. A chunk without room for
+// b is left to the strings taken from it, and the next one is made.
 //
-// The series of an exposition are kept together, and let go of together, so
+// The series of an exposition are kept together and let go of together, so
 // a chunk holds on to no text a kept series does not have: only the text of
 // kept series is put in it.
 func (p *promParser) keepText(b []byte) string {
@@ -826,10 +824,10 @@ func (p *promParser) keepText(b []byte) string {
 	return p.text.String()[start:]
 }
 
-// labelMap makes p.labels the label set of a series: a map of the size it
-// has, filled once. A name or a value that the series made before this one
-// had in the same place is that series' string, and the others are made in
-// the chunk of text of the series (keepText).
+// labelMap makes p.labels the label set of a series: a map of its size,
+// filled once. A name or value that the previous series had in the same
+// place is that series' string. The others are made in the chunk of text of
+// the series (keepText).
 func (p *promParser) labelMap() map[string]string {
 	labels := make(map[string]string, len(p.labels))
 	for len(p.previous) < len(p.labels) {
@@ -879,9 +877,9 @@ type promLabelText struct{ name, value string }
 const promLabelsCompared = 16
 
 // duplicateLabel reports whether name is the name of one of p.labels. A
-// sample has a few labels, and comparing each new name with those before it
-// costs less than the set the parser made of them for every line; a sample
-// with many has its names in a set, so that a line of a million labels is
+// sample has few labels, and comparing each new name with those before it
+// costs less than the set the parser made of them for every line. A sample
+// with many labels has its names in a set, so a line of a million labels is
 // not compared a million times a million.
 func (p *promParser) duplicateLabel(name []byte) bool {
 	if len(p.labels) < promLabelsCompared {
@@ -1109,11 +1107,11 @@ func parsePromFloat(s []byte) (float64, error) {
 }
 
 // promSignature identifies a label set regardless of the order of its
-// labels, which it puts in the order of their names; it is written after
+// labels, which it puts in the order of their names. It is written after
 // signature, which is returned. Each name and each value is written after
-// its length, so no two sets have one signature: a value may hold any byte,
-// as one that is not UTF-8 is kept until the transform repairs it, so no
-// byte can end one.
+// its length, so no two sets have one signature. No byte can end a value,
+// since a value may hold any byte: one that is not UTF-8 is kept until the
+// transform repairs it.
 func promSignature(signature []byte, labels []promLabel) []byte {
 	slices.SortFunc(labels, func(a, b promLabel) int { return bytes.Compare(a.name, b.name) })
 	for _, l := range labels {

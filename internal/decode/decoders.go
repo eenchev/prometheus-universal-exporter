@@ -24,13 +24,13 @@ import (
 // answer, as a decoder's name is.
 const KindRows = "sql"
 
-// Decoded is a response decoded for a transform. Kind names the decoder, and
+// Decoded is a response decoded for a transform. Kind names the decoder.
 // Data holds what it produced: normalized JSON or YAML values, the same
-// values of NDJSON, logfmt, TOML, INI and InfluxDB line protocol (ndjson.go,
-// logfmt.go, toml.go, ini.go, influx.go), CSV rows, an
-// *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
-// Graphite series document (graphite.go), the body as a string, or nil for
-// decoder none. Raw is the body the decoder read.
+// values for NDJSON, logfmt, TOML, INI and InfluxDB line protocol
+// (ndjson.go, logfmt.go, toml.go, ini.go, influx.go), CSV rows, an
+// *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text,
+// the Graphite series document (graphite.go), the body as a string, or nil
+// for decoder none. Raw is the body the decoder read.
 type Decoded struct {
 	// Kind is the decoder's name, or KindRows for the rows a driver read.
 	Kind string
@@ -107,17 +107,17 @@ func detectFormatKeeping(r *fetch.HTTPResponse) (string, *sniffedJSON) {
 	// Prometheus exposition, which starts with a comment or a name, never
 	// parses as JSON.
 	//
-	// Whether it parses is found by decoding it, with the decoder the json
-	// decoder is (sniffJSON), and what that made is kept: the body was
-	// parsed here by encoding/json, the result thrown away, and then
+	// To find whether it parses, the body is decoded with the json decoder's
+	// own decoder (sniffJSON), and the result is kept. Before, encoding/json
+	// parsed the body here, the result was thrown away, and then the body was
 	// decoded, so a JSON answer without a JSON Content-Type was read twice.
 	if len(b) > 0 && (b[0] == '{' || b[0] == '[') {
 		if value, ok := sniffJSON(b); ok {
 			// The value is the body's when the decoder reads the body as
-			// it read b: when nothing but the whitespace of JSON was
-			// trimmed. A form feed or a no-break space before or after the
-			// document is none, and the decode that follows refuses the
-			// body over it, saying where it is.
+			// it read b, that is, when only JSON whitespace was trimmed. A
+			// form feed or a no-break space before or after the document is
+			// not JSON whitespace; the decode that follows refuses the body
+			// over it and says where it is.
 			if len(bytes.Trim(r.Body, " \t\r\n")) == len(b) {
 				return "json", &sniffedJSON{body: r.Body, value: value}
 			}
@@ -175,10 +175,11 @@ func isNameByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':'
 }
 
-// Decode converts r's body to UTF-8 and decodes it with the decoder c's
-// configuration, the response's content type or its content selects. The
-// error of a body that cannot be decoded is no longer than maxFailureBytes,
-// whatever the body holds and whichever decoder read it (failurebound.go).
+// Decode converts r's body to UTF-8 and decodes it with the decoder that
+// c's configuration, the response's content type or its content selects.
+// The error for a body that cannot be decoded is no longer than
+// maxFailureBytes, whatever the body holds and whichever decoder read it
+// (failurebound.go).
 func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	decoded, err := decodeBody(r, c)
 	return decoded, boundedFailure(err)
@@ -351,10 +352,10 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// given an entry for a column it is short of (CSVRows).
 	if header {
 		heads := rows[0]
-		// A header naming one column twice, or leaving two unnamed, would
-		// have the later column overwrite the earlier in every row, without
-		// a word. An unnamed column empty in every row, as a delimiter
-		// ending each line leaves, holds nothing to lose and is left out.
+		// A header that names one column twice, or leaves two unnamed, would
+		// let the later column silently overwrite the earlier in every row.
+		// An unnamed column that is empty in every row, as a delimiter at the
+		// end of each line leaves, holds nothing to lose and is left out.
 		column := map[string]int{}
 		var filled []bool
 		for i := range heads {
@@ -362,11 +363,11 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 				heads[i] = strings.TrimSpace(heads[i])
 			}
 			if heads[i] == "" {
-				// Which columns hold a value is found once, by one pass
-				// over the cells, at the first unnamed column: looking
-				// through every row for each one cost the unnamed columns
-				// times the rows, and a body of 450 kB of empty columns
-				// held a processor for longer than a probe may take.
+				// Which columns hold a value is found once, in one pass
+				// over the cells, at the first unnamed column. Scanning
+				// every row for each one cost the unnamed columns times the
+				// rows: a body of 450 kB of empty columns held a processor
+				// longer than a probe may take.
 				if filled == nil {
 					filled = filledColumns(rows[1:], len(heads), cfg.TrimSpace)
 				}
@@ -383,10 +384,10 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		data := rows[1:]
 		for n, row := range data {
 			// A field past the header's last column has no name to be read
-			// by, and went unseen: a delimiter the header's line was split
-			// by and the rows' were not, or a quote read as text, showed
-			// only as values in the wrong columns. Empty fields there are
-			// what a delimiter ending the line leaves, and are no cells of
+			// by, and went unseen. A delimiter that split the header's line
+			// but not the rows', or a quote read as text, showed only as
+			// values in the wrong columns. Empty fields there are what a
+			// delimiter at the end of the line leaves, and are not cells of
 			// the row.
 			if len(row) > len(heads) {
 				if i := len(heads) + firstValue(row[len(heads):], cfg.TrimSpace); i < len(row) {
@@ -464,13 +465,13 @@ var filledColumnsLooked func(cells int)
 func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	options := promOptions{openMetrics: isOpenMetrics(r)}
 	// A prometheus transform passes on only the series its rules, or its
-	// include and exclude, pick, so the decoder keeps only those, and
-	// stops at the first past limits.max_metrics, as the transform would
-	// have: a body of a million series costs a scrape that keeps ten what
-	// the ten cost. It stops for the series the transform is sure to make
-	// a series of, and for no other: a series a rule may carry on without
-	// is kept and not counted here (prometheusCounts), and the transform
-	// counts those it makes. A pre-script, or a python transform, is given
+	// include and exclude, pick. So the decoder keeps only those and stops
+	// at the first one past limits.max_metrics, as the transform would
+	// have. A body of a million series then costs a scrape that keeps ten
+	// only what the ten cost. It stops only for the series the transform is
+	// sure to make a series of. A series a rule may carry on without is
+	// kept and not counted here (prometheusCounts), and the transform
+	// counts those it makes. A pre-script, or a python transform, gets
 	// every series, and the transform counts what it makes of them.
 	if c.Transform.Type == "prometheus" && strings.TrimSpace(c.Transform.PreScript) == "" {
 		options.keep = prometheusKeeps(c)
@@ -493,25 +494,26 @@ func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, erro
 
 // prometheusCounts says which of the series the decoder keeps for a
 // prometheus transform count against limits.max_metrics while they are
-// decoded, by their metric's name and type: those of which the transform is
-// sure to make a series each, so that a scrape the decoder stops for them
-// is one the transform would have stopped. A rule that carries on without a
-// series it fails on, its error_mode log or ignore, is not sure to: its
-// type and its scale cannot apply to every metric, and a label it requires
-// may be missing on a series (applyPrometheusTransform in the transform
-// package). The series such a rule alone matches took room for what the
-// scrape never exported, and a response of twenty series of which the rule
-// kept five failed under a limit of ten. So they are kept uncounted, as
-// what any other response describes is decoded whole, and the transform,
+// decoded, by their metric's name and type. Those are the series the
+// transform is sure to make a series of each, so a scrape the decoder stops
+// for them is one the transform would have stopped. A rule that carries on
+// without a series it fails on (error_mode log or ignore) is not sure to.
+// Its type and its scale cannot apply to every metric, and a label it
+// requires may be missing on a series (applyPrometheusTransform in the
+// transform package). The series only such a rule matches took room for
+// what the scrape never exported: a response of twenty series of which the
+// rule kept five failed under a limit of ten. So they are kept uncounted,
+// as what any other response describes is decoded whole. The transform,
 // which stops at the first series it makes past the limit, counts those it
 // makes. A metric counts when one of the rules that match its name keeps
 // every series of it (prometheusRuleKeeps).
 //
-// It is nil when every kept series counts: without rules, where include
-// and exclude pass a series on or leave it out and nothing fails on one,
-// with rules none of which carries on without a series, as nearly every
-// collector's are, and with a rule whose expression does not compile, for
-// which the decoder keeps everything (prometheusKeeps).
+// It is nil when every kept series counts. That is the case without rules,
+// where include and exclude pass a series on or leave it out and nothing
+// fails on one. It is also the case with rules none of which carries on
+// without a series, as nearly every collector's are, and with a rule whose
+// expression does not compile, for which the decoder keeps everything
+// (prometheusKeeps).
 func prometheusCounts(c *model.Collector) func(name string, typ model.MetricType) bool {
 	carriesOn := false
 	for i := range c.Metrics {
@@ -551,12 +553,12 @@ func prometheusCounts(c *model.Collector) func(name string, typ model.MetricType
 
 // prometheusRuleKeeps says whether a prometheus rule makes a series of
 // every series of a metric of a type that its expression, or its name,
-// matches. A rule whose error_mode is fail does, or fails the scrape. One
-// that carries on does unless it can fail on a series of the metric: its
-// type on a histogram or a summary, which keeps its own, and on any other
-// metric when it is one of those two, which no other can become; its scale
-// on a histogram or a summary; and a label it requires, which is read from
-// each series, on any metric.
+// matches. A rule whose error_mode is fail does, or fails the scrape. A rule
+// that carries on does unless it can fail on a series of the metric. It can
+// fail through its type on a histogram or a summary, which keeps its own,
+// and on any other metric when the type is one of those two, which no other
+// can become. It can fail through its scale on a histogram or a summary, and
+// through a label it requires, read from each series, on any metric.
 func prometheusRuleKeeps(rule *model.MetricRule, typ model.MetricType) bool {
 	if rule.ErrorMode != model.ErrorModeLog && rule.ErrorMode != model.ErrorModeIgnore {
 		return true
@@ -582,11 +584,11 @@ func requiresALabel(rule *model.MetricRule) bool {
 }
 
 // prometheusKeeps says which metric names a prometheus transform passes on,
-// as applyPrometheusTransform decides: with rules, the names a rule's
-// expression, or its name when it has none, matches; without, the names
-// include matches, or every name when it is empty, less those exclude
-// matches. An expression that does not compile keeps everything, and the
-// transform reports it.
+// as applyPrometheusTransform decides. With rules, those are the names a
+// rule's expression matches, or its name when it has none. Without rules,
+// those are the names include matches (every name when it is empty), less
+// those exclude matches. An expression that does not compile keeps
+// everything, and the transform reports it.
 func prometheusKeeps(c *model.Collector) func(string) bool {
 	compile := func(patterns []string) ([]*regexp.Regexp, bool) {
 		out := make([]*regexp.Regexp, 0, len(patterns))
@@ -636,27 +638,26 @@ func prometheusKeeps(c *model.Collector) func(string) bool {
 }
 
 // decodeYAML decodes a YAML document as the transforms read it. A scalar
-// that YAML reads as a timestamp, such as updated: 2024-06-01, is kept as the
-// text it was written as: decoded, it would be a time.Time, which neither jq
-// nor a label can use as written.
+// that YAML reads as a timestamp, such as updated: 2024-06-01, is kept as
+// the text it was written as. Decoded, it would be a time.Time, which
+// neither jq nor a label can use as written.
 //
-// The body must be one document: a stream of several is refused, as JSON
+// The body must be one document. A stream of several is refused, as JSON
 // with trailing data is, rather than every document after the first being
-// dropped unseen. A leading --- and an empty document after the first, as a
-// trailing --- makes, are not a second document.
+// silently dropped. A leading --- and an empty document after the first, as
+// a trailing --- makes, are not a second document.
 //
-// The document is decoded by the YAML library, but for one with a mapping of
-// very many keys or with many keys written twice, which the library takes
-// time and memory that grow with the square of the document for: those are
+// The YAML library decodes the document, except one with a mapping of very
+// many keys or with many keys written twice. For those the library takes
+// time and memory that grow with the square of the document, so they are
 // decoded, and refused, in time and memory linear in it (yamlkeys.go).
 //
-// The library panics on some documents it should refuse: a merge into a
-// mapping that has a sequence or a mapping for a key, `<<: {[x]: 1}` beside a
-// key that is no text, hashes what cannot be hashed. The panic took the probe
-// with it, answered as an internal error with a stack in the log on every
-// scrape; it is the decode's failure instead (yamlPanicked), and so is a
-// panic of the exporter's own code here, which says that it is one and
-// where.
+// The library panics on some documents it should refuse. A merge into a
+// mapping that has a sequence or a mapping for a key, `<<: {[x]: 1}` beside
+// a key that is no text, hashes what cannot be hashed. The panic took the
+// probe with it: an internal error with a stack in the log on every scrape.
+// Now it is the decode's failure instead (yamlPanicked). So is a panic of
+// the exporter's own code here, which says that it is one and where.
 func decodeYAML(body []byte) (any, error) {
 	return yamlReading{large: yamlLargeMapping}.decode(body)
 }
@@ -704,16 +705,16 @@ func (r yamlReading) decode(body []byte) (v any, err error) {
 	return v, err
 }
 
-// documents is the body as the list of its documents, in their order, for
-// response.yaml.documents: list. A document that holds nothing, as the one
-// a trailing --- begins, is none of them, so a body of nothing is the empty
-// list; one written null is a null among them. Each is decoded as the one
-// document of a body is, and the first that is refused refuses the body.
+// documents is the body as the list of its documents, in order, for
+// response.yaml.documents: list. A document that holds nothing, such as the
+// one a trailing --- begins, is not in the list, so an empty body is the
+// empty list. A document written null is a null in it. Each is decoded as
+// the one document of a body is, and the first refused one refuses the body.
 //
 // The library keeps a document's anchors for the documents after it, so an
-// alias may stand for a node of an earlier one, which was marked when that
-// one was decoded (markYAMLWholeNumbers): once a document had a whole number
-// marked, every later one is looked through for marked text.
+// alias may stand for a node of an earlier one. That node was marked when
+// its document was decoded (markYAMLWholeNumbers). So once a document had a
+// whole number marked, every later one is checked for marked text.
 func (r yamlReading) documents(decoder *yaml.Decoder) (any, error) {
 	list := []any{}
 	marked := false
@@ -772,18 +773,18 @@ const (
 	yamlRaisesAgain = "yaml.v3.handleErr"
 )
 
-// yamlPanicPlace is where the panic that is being recovered was raised. It
-// is for the deferred function that recovers it, during which what
-// panicked is still on the stack: under that function is the runtime, which
-// called it, and under the runtime what was running.
+// yamlPanicPlace is where the panic being recovered was raised. It is for the
+// deferred function that recovers it. During that function, what panicked is
+// still on the stack: below that function is the runtime, which called it,
+// and below the runtime is what was running.
 //
 // The place is the innermost function there of the YAML library or of the
-// exporter. The standard library's are passed over — the runtime's own, which
+// exporter. Standard library functions are skipped: the runtime's own, which
 // raises a runtime error, reflect's, which the library sets a map through,
-// and any other one of the two called — and so is the library's function
-// that passes a panic on, under which is what raised it. So a panic is the
-// library's when the library was running, and the exporter's own, a defect
-// here, when the exporter was.
+// and any other one the two called. So is the library's function that passes
+// a panic on, below which is what raised it. So a panic is the library's
+// when the library was running, and the exporter's own, a defect here, when
+// the exporter was.
 func yamlPanicPlace() yamlPlace {
 	for size := 64; ; size *= 8 {
 		callers := make([]uintptr, size)
@@ -810,11 +811,11 @@ func yamlPanicPlace() yamlPlace {
 }
 
 // yamlFunction is the path of the package of a function named as the
-// runtime names it, `gopkg.in/yaml%2ev3.(*decoder).mapping`, and the
-// function's name with its package's, `yaml.v3.(*decoder).mapping`. The
-// package's path ends at the first dot after its last slash, and the name of
-// a method or of a function with type arguments may hold both after a
-// bracket; a dot in the last part of the path is written %2e.
+// runtime names it (`gopkg.in/yaml%2ev3.(*decoder).mapping`), and the
+// function's name with its package's (`yaml.v3.(*decoder).mapping`). The
+// package path ends at the first dot after its last slash. The name of a
+// method or of a function with type arguments may hold both after a
+// bracket. A dot in the last part of the path is written %2e.
 func yamlFunction(name string) (in, function string) {
 	path := name
 	if bracket := strings.IndexAny(name, "(["); bracket >= 0 {
@@ -829,23 +830,23 @@ func yamlFunction(name string) (in, function string) {
 }
 
 // yamlPanicked is the error for a document the decoding panicked on with
-// failed, at a place: in the words of the panic and without a stack.
+// failed, at a place: in the panic's words and without a stack.
 //
 // A panic of the YAML library is the library failing on the document. A
-// panic of the exporter's own code is a defect of the exporter, and says so,
-// with the place for whoever is to find it: the document may be a good one,
-// and nothing the operator changes in it is known to help.
+// panic of the exporter's own code is a defect of the exporter. The error
+// says so and gives the place for whoever is to find it: the document may
+// be a good one, and nothing the operator changes in it is known to help.
 //
-// A runtime error's words can hold numbers of the document, an index or a
-// length, so such a failure is recognised (model.SameFailureAs) by its text
-// up to there and by the place, and is one failure to the log whatever the
-// numbers, and another than a runtime error raised elsewhere. No line is in
-// what a failure is recognised by: the file and the function are the place
-// whichever build it is.
+// A runtime error's words can hold numbers from the document, an index or a
+// length. So such a failure is recognised (model.SameFailureAs) by its text
+// up to there and by the place. It is one failure to the log whatever the
+// numbers, and a different one from a runtime error raised elsewhere. No
+// line is part of what a failure is recognised by: the file and the
+// function are the place in any build.
 //
-// The words of a panic are whatever was raised, which may be long: no more
-// than their first yamlPartBytes bytes are said, with how long they were, so
-// that what the error says after them is still read.
+// The panic's words are whatever was raised, which may be long. Only their
+// first yamlPartBytes bytes are shown, with their full length, so that what
+// the error says after them is still read.
 func yamlPanicked(failed any, at yamlPlace) error {
 	said := fmt.Sprint(failed)
 	_, ours := failed.(runtime.Error)
@@ -875,37 +876,39 @@ func yamlPanicked(failed any, at yamlPlace) error {
 }
 
 // yamlFailure gives an error of the YAML library the text the failure is
-// recognised by (model.SameFailureAs): its text without the lines it names,
-// which are where in the body it happened and no part of what the failure is
-// to the log. The message is unchanged, but for a list of problems longer
-// than yamlProblemsShown (yamlProblems).
+// recognised by (model.SameFailureAs). That is its text without the lines it
+// names: they are where in the body it happened, not part of what the
+// failure is to the log. The message is unchanged, except for a list of
+// problems longer than yamlProblemsShown (yamlProblems).
 //
-// The library keeps the line nowhere but in the text it writes, so here, and
-// only here, the text is read for it, in the forms the library itself writes
-// (gopkg.in/yaml.v3 v3.0.1, decode.go): a scanner's or a parser's error is
-// `yaml: line N: problem`; a *yaml.TypeError lists its problems, each `line N:
-// problem`, and the one such problem a document decoded into plain values
-// has, a key written twice, ends with the line of the first, `already
-// defined at line N`. Every other error of the library has no line: an
-// unknown anchor, an anchor that holds itself, excessive aliasing, a merge
-// of something that is no mapping, a tagged value that does not fit its
-// tag. A text in none of these forms is recognised by the whole of it, as
-// it was.
+// The library keeps the line only in the text it writes, so here, and only
+// here, the text is read for it, in the forms the library itself writes
+// (gopkg.in/yaml.v3 v3.0.1, decode.go):
 //
-// The library counts lines from nought and writes no line at all for one
-// that is nought (decode.go, fail): a scanner's or a parser's error on the
-// document's first line is `yaml: problem`, where on any other it is `yaml:
-// line N: problem`. Were the line only marked, as it is in a list of
-// problems, a failure that moved to the first line, or from it, would read
-// as another failure to the log. So such an error is recognised by its
-// problem alone, `yaml: problem`, which is what the first line's reads as
-// already: the words `line N: ` are left out, not replaced.
+//   - A scanner's or a parser's error is `yaml: line N: problem`.
+//   - A *yaml.TypeError lists its problems, each `line N: problem`. The one
+//     such problem a document decoded into plain values has, a key written
+//     twice, ends with the line of the first, `already defined at line N`.
+//   - Every other error of the library has no line: an unknown anchor, an
+//     anchor that holds itself, excessive aliasing, a merge of something
+//     that is no mapping, a tagged value that does not fit its tag.
 //
-// An error that holds a part of the document in full holds no more than the
-// start of it (yamlPartCut), and a problem with a key written twice no more
-// than the start of the key (yamlKeyCut); a document the parser refuses for
-// its depth is refused in the exporter's words for one (yamlParserDepth);
-// every other error reads as the library wrote it.
+// A text in none of these forms is recognised by all of it, as before.
+//
+// The library counts lines from nought and writes no line at all for line
+// nought (decode.go, fail). A scanner's or a parser's error on the
+// document's first line is `yaml: problem`; on any other it is `yaml: line
+// N: problem`. If the line were only marked, as in a list of problems, a
+// failure that moved to or from the first line would read as another
+// failure to the log. So such an error is recognised by its problem alone,
+// `yaml: problem`, which is how the first line's already reads: the words
+// `line N: ` are left out, not replaced.
+//
+// An error that holds a part of the document in full holds only its start
+// (yamlPartCut). A problem with a key written twice holds only the start of
+// the key (yamlKeyCut). A document the parser refuses for its depth is
+// refused in the exporter's words (yamlParserDepth). Every other error reads
+// as the library wrote it.
 func yamlFailure(err error) error {
 	if problems, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the library returns its list of problems as it is, wrapped in nothing
 		return yamlProblems(problems)
@@ -933,23 +936,23 @@ func yamlFailure(err error) error {
 // refusing a document for its depth, and the line it names, "" when it
 // names none.
 //
-// The parser bounds what is nested by indentation and what is nested in
-// brackets, each at 10,000 levels (gopkg.in/yaml.v3 v3.0.1, scannerc.go,
-// max_indents and max_flow_level), and refuses a document past either in
-// the same words, `exceeded max depth of 10000`, after a line unless that
-// is the document's first: the line the level too many opens on, or, of
-// levels of indentation, that of the last key or value written before them
-// (the scanner's mark of its last simple key). Such a document is
-// nested deeper than a response may be (MaxDepth), every level of either
-// kind being a sequence or a mapping, and so is one the parser lets
-// through because it is nested both ways, or through an alias, which the
-// exporter refuses itself (yamlTooDeep): one mistake, which read as two,
-// the library's words not saying what the 10000 bounds. So the parser's
-// refusal is given the exporter's words.
+// The parser bounds nesting by indentation and nesting in brackets, each at
+// 10,000 levels (gopkg.in/yaml.v3 v3.0.1, scannerc.go, max_indents and
+// max_flow_level). It refuses a document past either in the same words,
+// `exceeded max depth of 10000`, after a line unless that is the document's
+// first. The line is where the level too many opens or, for indentation
+// levels, that of the last key or value written before them (the scanner's
+// mark of its last simple key). Every level of either kind is a sequence or
+// a mapping, so such a document nests deeper than a response may
+// (MaxDepth). So does one the parser lets through because it nests both
+// ways, or through an alias, which the exporter refuses itself
+// (yamlTooDeep). That was one mistake read as two, and the library's words
+// do not say what the 10000 bounds. So the parser's refusal is given the
+// exporter's words.
 //
 // Only that text is recognised, whole, and only with the depth that is
-// MaxDepth: a library that came to bound a document elsewhere, or to word
-// its refusal otherwise, would have its error read as it wrote it.
+// MaxDepth. If the library came to bound a document elsewhere, or to word
+// its refusal differently, its error would read as the library wrote it.
 func yamlParserDepth(problem string) (line string, deep bool) {
 	rest, deep := strings.CutSuffix(problem, fmt.Sprintf("exceeded max depth of %d", MaxDepth))
 	if !deep || rest == "" {
@@ -972,24 +975,24 @@ const yamlProblemsShown = 10
 // list of problems, and what that failure is recognised by.
 //
 // The library lists a key written k times as k(k-1)/2 problems, one for
-// each two of them, so the list grows with the square of the document: 1200
-// lines of `a: 1`, 6 kB, are 719,400 problems and 40 MB of text, which would
+// each two of them, so the list grows with the square of the document. 1200
+// lines of `a: 1` (6 kB) are 719,400 problems and 40 MB of text, which would
 // be logged as one line and answered to the scraper. So the error lists the
-// first yamlProblemsShown problems, as the library words them, and says how
-// many more there were; a list no longer than that is the library's own
+// first yamlProblemsShown problems as the library words them, and says how
+// many more there were. A list no longer than that is the library's own
 // error, untouched. The text of the whole list is never made.
 //
 // The failure is recognised by its problems without their lines, each
-// written once however many times it is listed: a list of items that each
-// write a key twice has one problem an item, and is the same failure when it
-// grows by an item. No more than yamlProblemsShown different problems are
-// told apart: past that the recognised text ends, as the error does, with
+// written once however many times it is listed. So a list of items that
+// each write a key twice has one problem per item, and is the same failure
+// when it grows by an item. At most yamlProblemsShown different problems
+// are told apart. Past that the recognised text ends, like the error, with
 // the mark for how many more there are.
 //
-// A problem with a key written twice holds the key, of which no more than
-// the start is shown (yamlKeyCut), so that ten problems of a long key are
-// all ten read; the error is then a list of the problems so cut, and the
-// library's, which holds the keys whole, is let go of.
+// A problem with a key written twice holds the key, of which only the start
+// is shown (yamlKeyCut), so that all ten problems of a long key are read.
+// The error is then a list of the cut problems, and the library's error,
+// which holds the keys whole, is let go of.
 func yamlProblems(problems *yaml.TypeError) error {
 	var err error = problems
 	// moved is whether the failure is recognised by another text than its

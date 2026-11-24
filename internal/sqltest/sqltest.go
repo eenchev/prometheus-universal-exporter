@@ -141,7 +141,7 @@ func (db *DB) FailPings(err error) {
 	db.pingErr = err
 }
 
-// HangPings, when hang is true, makes every ping from now on hang until its
+// HangPings makes every ping from now on hang, when hang is true, until its
 // context ends, like a ping to a host that stopped answering, and then fail
 // with the context's error. When hang is false, pings answer again. If
 // started is not nil, it is told of each ping that hangs, without waiting

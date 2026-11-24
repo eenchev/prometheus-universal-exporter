@@ -652,6 +652,9 @@ func TestASharedTripIsSentUnderItsStartersTraceparent(t *testing.T) {
 	<-arrived
 	doneB := probeAsync(context.Background(), server, path, nil)
 	waitForWaiters(t, server, 2)
+	// The probe that joined is traced only when it lasted the threshold, a
+	// millisecond, which it has not yet on a machine that is quick to it.
+	time.Sleep(5 * time.Millisecond)
 	close(held)
 	waitOutcome(t, doneA, "the probe that started the trip")
 	waitOutcome(t, doneB, "the probe that joined")

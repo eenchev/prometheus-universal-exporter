@@ -195,7 +195,7 @@ it ended:
 
 ```text
 Requests
-  1. PING nats://nats1.example.com:4222 -> PONG after 600µs
+  1. PING nats://nats1.example.com:4222 -> PONG after 600µs in 9ms
 ```
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)

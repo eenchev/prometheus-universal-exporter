@@ -183,7 +183,7 @@ it ended:
 
 ```text
 Requests
-  1. DECLARE-PASSIVE amqp://rabbit1.example.com:5672 -> 2 queues asked of RabbitMQ 4.0.2
+  1. DECLARE-PASSIVE amqp://rabbit1.example.com:5672 -> 2 queues asked of RabbitMQ 4.0.2 in 15ms
      Amqp-Vhost: /
 ```
 

@@ -226,6 +226,16 @@ func TestASIPScrapeAsksWithOPTIONS(t *testing.T) {
 	if len(requests) != 1 || requests[0].Method != "OPTIONS" || requests[0].URL != "sip://"+s.addr || requests[0].Outcome != "200 OK, sent once" || requests[0].Header.Get("Sip-Transport") != "udp" {
 		t.Errorf("traced %+v", requests)
 	}
+	// A datagram that does not say how long its body is has the rest of it
+	// for one, however long.
+	long := strings.Repeat("a=x\r\n", 2000)
+	nolength := startSIP(t, func(_ int, request sipSeen) []string {
+		reply := sipReply(request, "200 OK", nil, "")
+		return []string{strings.Replace(reply, "Content-Length: 0\r\n", "", 1) + long}
+	})
+	if doc, err := sipDoc(t, c, nolength.addr, 5*time.Second); err != nil || doc.BodyBytes != len(long) {
+		t.Errorf("a body without its length: %d bytes, %v; want %d", doc.BodyBytes, err, len(long))
+	}
 	if label, err := RequestLabelFor(s.addr, c, RequestOverrides{}); err != nil || label != "sip://"+s.addr {
 		t.Errorf("label %q, %v", label, err)
 	}
@@ -500,6 +510,9 @@ func TestASIPTargetAndKeysAreChecked(t *testing.T) {
 		if err := CheckTarget(c, target, false); err == nil {
 			t.Errorf("target %q was taken", target)
 		}
+	}
+	if err := CheckTarget(c, "SIPS:1000@pbx.example.com", false); err == nil || !strings.Contains(err.Error(), "is a SIP URI; a sip target is the server, host or host:port, and the URI asked is request.request_uri") {
+		t.Errorf("a URI for a target: %v", err)
 	}
 	for target, label := range map[string]string{"PBX.example.com": "sip://pbx.example.com:5060", "10.0.0.1:5080": "sip://10.0.0.1:5080", "[2001:db8::1]": "sip://[2001:db8::1]:5060"} {
 		if got, err := RequestLabelFor(target, c, RequestOverrides{}); err != nil || got != label {

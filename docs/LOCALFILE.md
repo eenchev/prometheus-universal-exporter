@@ -334,8 +334,10 @@ extension.
 
 A file with another extension whose every line is a carbon line — a path, a
 value and a timestamp, some path with a dot or a tag — is read as Graphite
-series too. A `.ini` file, and a logfmt log, is read with `decoder.type: ini`
-or `logfmt`: no extension says either.
+series too. A `.ini` file, a logfmt log and a file of [InfluxDB line
+protocol](CONFIGURATION.md#influxdb-line-protocol), as Telegraf's `file`
+output writes, are read with `decoder.type: ini`, `logfmt` or `influx`: no
+extension says any of them.
 
 `decoder.type` overrides the choice, as for `http`. A file
 declares no encoding: one in anything but UTF-8 needs `response.charset`, such

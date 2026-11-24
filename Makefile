@@ -30,7 +30,8 @@ REQUEST_TYPES ?=
 # build carries unless asked: a type made with `make new-request-type
 # OPT_IN=1`: smtp (docs/SMTP.md), modbus (docs/MODBUS.md), mqtt
 # (docs/MQTT.md), websocket (docs/WEBSOCKET.md), ftp (docs/FTP.md), imap
-# (docs/IMAP.md) and pop3 (docs/POP3.md), as in
+# (docs/IMAP.md), pop3 (docs/POP3.md), radius (docs/RADIUS.md), whois
+# (docs/WHOIS.md) and sip (docs/SIP.md), as in
 # `make build OPT_IN_REQUEST_TYPES=mqtt,modbus`. See
 # "Choosing request types at build time" in docs/CONFIGURATION.md.
 OPT_IN_REQUEST_TYPES ?=

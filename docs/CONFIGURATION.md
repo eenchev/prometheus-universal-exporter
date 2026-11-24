@@ -3427,7 +3427,7 @@ new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-requ
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
-[`pop3`](POP3.md), [`radius`](RADIUS.md) and [`whois`](WHOIS.md), each written with the standard library alone: about
+[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md) and [`sip`](SIP.md), each written with the standard library alone: about
 0.1 MB of a stripped binary each, and about 0.7 MB for the ten. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,

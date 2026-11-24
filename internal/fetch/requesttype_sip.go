@@ -280,6 +280,11 @@ func (sipRequester) Fetch(ctx context.Context, target string, c *model.Collector
 // parseSIPTarget reads a target of c: host or host:port, the port its
 // transport's when it names none.
 func parseSIPTarget(c *model.Collector, target string) (netAddress, error) {
+	// A SIP URI reads as a host named sip with a port that is no number;
+	// what is wrong with it is that it is a URI.
+	if lower := strings.ToLower(strings.TrimSpace(target)); strings.HasPrefix(lower, "sip:") || strings.HasPrefix(lower, "sips:") {
+		return netAddress{}, fmt.Errorf("target %q is a SIP URI; a sip target is the server, host or host:port, and the URI asked is request.request_uri", target)
+	}
 	return parseNetTarget("sip", target, sipPorts(sipRequest(c).Transport), false)
 }
 
@@ -789,7 +794,11 @@ func readSIPMessage(r *bufio.Reader, limit int64, whole bool) (*sipMessage, erro
 	case length < 0 && !whole:
 		return nil, fmt.Errorf("%w: it has no Content-Length, which a message over a stream must", errSIPMalformed)
 	case length < 0:
-		length = r.Buffered()
+		// The body of a datagram that does not say its length is the rest
+		// of it, which is more than the reader has buffered.
+		rest, _ := io.Copy(io.Discard, r)
+		m.body = int(rest)
+		return m, nil
 	}
 	if int64(length) > limit {
 		return nil, model.MarkError(model.Errorf("its body is %d bytes, larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", model.Size(int64(length)), model.Size(limit)), model.ErrLimitExceeded)

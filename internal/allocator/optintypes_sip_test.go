@@ -45,7 +45,7 @@ func TestTheAllocatorTakesSIPCollectors(t *testing.T) {
 		t.Fatalf("got %d static targets and %d probe jobs", len(in.Targets.Targets), len(in.Probes.Jobs))
 	}
 	p.StaticTargets = testutil.WriteIn(t, dir, "targets.yaml", strings.Replace(targets, "TARGET", "sip:monitor@pbx1.example.com", 1))
-	if _, err := LoadInputs(p); err == nil || !strings.Contains(err.Error(), "has a user in it") {
+	if _, err := LoadInputs(p); err == nil || !strings.Contains(err.Error(), "is a SIP URI") {
 		t.Errorf("a sip target that is a URI: %v", err)
 	}
 }

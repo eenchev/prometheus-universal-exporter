@@ -18,12 +18,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// A probe and a static target's scrape make the same trip: fetch the
-// target, decode the response, transform it and validate the result, with
-// the collector's error_handling deciding what a failed stage does. collect
-// is that trip, for both. What differs is around it: how a probe waits for a
-// slot, what it answers and where a static target's result goes, which
-// the callers keep (server.go, statictarget.go).
+// A probe and a static target's scrape make the same trip: fetch the target,
+// decode the response, transform it and validate the result. The collector's
+// error_handling decides what a failed stage does. collect is that trip, for
+// both. What differs is around it: how a probe waits for a slot, what it
+// answers, and where a static target's result goes. The callers keep that
+// (server.go, statictarget.go).
 
 // collectJob is what one trip needs.
 type collectJob struct {
@@ -36,9 +36,9 @@ type collectJob struct {
 	display  string
 	cacheKey string
 	// revalidateKey is the key of the cache entry whose response the trip
-	// revalidates (revalidatesFor): cacheKey for a trip that fills the
-	// cache, and the key the same probe would have for a debug probe, which
-	// reads the entry but writes nothing.
+	// revalidates (revalidatesFor). It is cacheKey for a trip that fills the
+	// cache. For a debug probe, which reads the entry but writes nothing, it is
+	// the key the same probe would have.
 	revalidateKey string
 	// budget bounds the trip when the probe has a deadline (scrapetimeout.go);
 	// a failure that ran out of it says so, and where it came from.
@@ -57,16 +57,16 @@ type collectJob struct {
 	// collector's response limit as a fetched one is.
 	pasted *fetch.HTTPResponse
 	// requester, when set, is the collector whose request block fetches the
-	// target — with its target policy, credentials and accept_status — while
-	// collector decodes and transforms the response: a debug page's run of
-	// one collector on what another fetched sets it to the configured
-	// collector that fetches. For every other trip it is nil, and collector
-	// makes the request.
+	// target, with its target policy, credentials and accept_status. collector
+	// then decodes and transforms the response. A debug page's run of one
+	// collector on what another fetched sets it to the configured collector
+	// that fetches. For every other trip it is nil, and collector makes the
+	// request.
 	requester *model.Collector
 	// backingOff, when set, is why failure_backoff keeps the trip from the
-	// target (backoff.go): the trip contacts nothing and fails with it in
-	// the fetch stage, under on_fetch_error, as the fetch it stands for
-	// would have.
+	// target (backoff.go). The trip then contacts nothing and fails with it in
+	// the fetch stage, under on_fetch_error, as the fetch it stands for would
+	// have.
 	backingOff error
 	// lastSuccess is the key the trip's last success is kept under
 	// (lastsuccess.go), "" when its clock placeholders read none.
@@ -74,25 +74,25 @@ type collectJob struct {
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
-// itself, and when its text is longer than a failure's may be
-// (model.MaxFailureBytes), a new one of the start of the text and its
+// itself, or, when its text is longer than a failure's may be
+// (model.MaxFailureBytes), a new error with the start of the text and its
 // length. The text of a stage's error goes into the answer to the scraper,
-// into the log line, into a debug probe's report and, as what the failure is
-// recognised by, into the failure log's memory, where it stays for as long as
-// the failure repeats; and it is made of what the target sent, what the
-// scraper asked for and what a script raised, none of which the limits on a
-// response bound once an error has quoted them. So every error a trip
-// reports passes here first, once, where the stage's failure is known for
-// what it is and before anything is made of its text: what a stage of
-// collect failed with (stageFailed, the target policy's refusal, a rule
-// under error_mode fail), what a file of a directory failed with
-// (collectDirectory), and what a static target's scrape failed with before
-// its trip (logCollectFailure). What the error was to errors.Is and
-// errors.As is read before: a cut error is no longer the one it was cut
-// from.
+// the log line, a debug probe's report and, as what the failure is recognised
+// by, the failure log's memory, where it stays as long as the failure repeats.
+// It is made of what the target sent, what the scraper asked for and what a
+// script raised, and the limits on a response bound none of these once an
+// error has quoted them. So every error a trip reports passes here first,
+// once, where the stage's failure is known for what it is and before anything
+// is made of its text. This covers:
+//   - what a stage of collect failed with (stageFailed, the target policy's
+//     refusal, a rule under error_mode fail);
+//   - what a file of a directory failed with (collectDirectory);
+//   - what a static target's scrape failed with before its trip
+//     (logCollectFailure).
 //
-// An error within the bound is returned as it is, and costs the reading of
-// its text.
+// What the error was to errors.Is and errors.As is read before: a cut error
+// is no longer the one it was cut from. An error within the bound is returned
+// as it is, and costs only the reading of its text.
 func boundedTripFailure(err error) error { return model.BoundedFailure(err) }
 
 // collectLog is how a caller's failures are logged: under which key of the
@@ -103,10 +103,10 @@ type collectLog struct {
 	attrs                        []any
 }
 
-// logCollectFailure logs a failure of stage at error level, for a caller
-// that read its collector as read says (tripFailed), with ctx, the trip's. The error is bounded
-// here (boundedTripFailure): it is that of a stage before the trip, which
-// collect has not seen.
+// logCollectFailure logs a failure of stage at error level, with ctx, the
+// trip's, for a caller that read its collector as read says (tripFailed). The
+// error is bounded here (boundedTripFailure), because it is that of a stage
+// before the trip, which collect has not seen.
 func (s *Server) logCollectFailure(ctx context.Context, read configRead, l collectLog, stage string, err error, extra ...any) {
 	s.logTripFailure(ctx, read, l, stage, boundedTripFailure(err), extra...)
 }
@@ -130,19 +130,19 @@ func printedBefore(err error) []any {
 
 // collected is how a trip ended.
 type collected struct {
-	// set is the validated result and answer the same with its freshness
-	// series, when the trip went through whole. fetched is when it did: the
-	// time its cache entry has, so the result is exported over OTLP as of
+	// set is the validated result, and answer is the same with its freshness
+	// series, when the trip went through whole. fetched is when it did. It is
+	// the time its cache entry has, so the result is exported over OTLP as of
 	// the same moment now and when the cache answers with it later.
 	set     *model.MetricSet
 	answer  model.MetricSet
 	fetched time.Time
 	// carriedOn is set when a stage failed under error_handling log or
-	// ignore: the trip has nothing to export, and counts as a success
-	// unless the collector has report_failures, which makes it a failure
-	// (probeTrip). stage names that stage and carriedErr its error, which
-	// the log has had; err is nil, so that nothing that reads a failure in
-	// err takes the trip for one.
+	// ignore. The trip has nothing to export, and counts as a success unless
+	// the collector has report_failures, which makes it a failure (probeTrip).
+	// stage names that stage and carriedErr holds its error, which the log has
+	// had. err is nil, so nothing that reads a failure in err takes the trip
+	// for one.
 	carriedOn  bool
 	carriedErr error
 	// stage and err say why the trip failed, when it did; metric names the
@@ -166,9 +166,9 @@ type collected struct {
 	// (unauthorizedFailure).
 	unauthorized bool
 	// fetchFailed is set when the fetch failed, or answered with a status
-	// the collector does not accept, whatever error_handling made of it:
-	// what failure_backoff counts as the target's failure (backoff.go). A
-	// trip the target policy refused is not one.
+	// the collector does not accept, whatever error_handling made of it.
+	// failure_backoff counts it as the target's failure (backoff.go). A trip
+	// the target policy refused is not one.
 	fetchFailed bool
 	// outOfBudget is set when the fetch failed because the trip ran out of
 	// its budget, which budget was: failure_backoff counts such a failure
@@ -190,11 +190,11 @@ func cutShort(ctx context.Context) bool {
 func (r collected) failed() bool { return r.err != nil }
 
 // ranOutOfBudget reports whether the fetch that failed with err did so
-// because the trip's deadline, ctx's, came: ctx says so, or err is a
-// deadline's and the deadline has passed, as when a request type set it on
-// a socket, whose timeout can come before the context's timer fires. A
-// timeout of the request's own, such as its timeout parameter, is not the
-// trip's budget running out.
+// because the trip's deadline (ctx's) came. That is so when ctx says so, or
+// when err is a deadline's error and the deadline has passed. The latter
+// happens when a request type set the deadline on a socket, whose timeout can
+// come before the context's timer fires. A timeout of the request's own, such
+// as its timeout parameter, is not the trip's budget running out.
 func ranOutOfBudget(ctx context.Context, err error) bool {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return true
@@ -234,12 +234,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			s.observeTargetScrape(rec.collector, time.Since(start), traceLinkFrom(ctx))
 		}
 	}()
-	// stageFailed applies a stage's error policy to the stage's error,
-	// which it bounds first (boundedTripFailure); reported is the same for
-	// an error that is bounded already.
-	// extra attributes go to the log only, never into the probe's answer.
-	// mark is when the stage in progress started, for a debug probe's
-	// report.
+	// stageFailed applies a stage's error policy to the stage's error, which
+	// it bounds first (boundedTripFailure). reported is the same for an error
+	// that is bounded already. extra attributes go to the log only, never into
+	// the probe's answer. mark is when the stage in progress started, for a
+	// debug probe's report.
 	mark := start
 	reported := func(stage string, err error, policy string, extra ...any) collected {
 		if cutShort(ctx) {
@@ -289,9 +288,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	var err error
 	revalidates := revalidatesFor(j)
 	// The trip's clock placeholders are filled from one reading of the
-	// clock, and those that read ~last_success from the last success kept;
-	// a trip that succeeds is kept as the last success, when it is not a
-	// debug run, which keeps nothing.
+	// clock, and those that read ~last_success from the last success kept.
+	// A trip that succeeds is kept as the last success, unless it is a debug
+	// run, which keeps nothing.
 	var clock fetch.ScrapeClock
 	if j.lastSuccess != "" || requester.Clock.Any || c.TransformClock.Any {
 		clock = fetch.NewScrapeClock(s.lastSuccesses.get(j.lastSuccess))
@@ -458,19 +457,19 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		recordScriptDuration(rec, timer)
 		stages.scripts(timer, mark)
 		if errors.Is(err, model.ErrLimitExceeded) {
-			// A transform stops at the first series past
-			// limits.max_metrics, which is the validation's failure,
-			// found sooner (transform/serieslimit.go), and so is a jq
-			// transform stopped for its memory (expressionmemory.go).
+			// A transform stops at the first series past limits.max_metrics,
+			// which is the validation's failure found sooner
+			// (transform/serieslimit.go). The same holds for a jq transform
+			// stopped for its memory (expressionmemory.go).
 			rec.update(func(x *serverStats) { x.limitExceeded(err) })
 			return stageFailed("validation", err, model.ErrorPolicyFail)
 		}
 		if err != nil {
 			// A transform that ended because its trip was cancelled did not
 			// fail: nobody waited for the answer, and its error is the
-			// cancellation, wherever in a rule or a script it was met. It is
-			// counted as no failure of the transform, as a trip cancelled in
-			// another stage is counted as none of that stage's.
+			// cancellation, wherever in a rule or a script it was met. It is not
+			// counted as a failure of the transform, just as a trip cancelled in
+			// another stage is not counted as a failure of that stage.
 			if !cutShort(ctx) {
 				rec.update(func(x *serverStats) {
 					if errors.Is(err, model.ErrMissingValue) {
@@ -519,11 +518,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	stages.step("validation", "ok", mark, "")
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(set.Metrics)) })
 	s.tripRecovered(ctx, rec.read, j.log.key, j.log.recovery, j.log.attrs...)
-	// A directory read the deadline cut short answers this probe with what
-	// it read, but is not kept: the files it did not reach are fine as far
-	// as anyone knows, and a cached copy would serve them failed. A debug
-	// probe's result is not kept either, nor that of a collector a reload
-	// removed or changed since the trip read it (PutFor).
+	// A directory read that the deadline cut short answers this probe with
+	// what it read, but is not kept. The files it did not reach are fine as
+	// far as anyone knows, and a cached copy would serve them as failed. A
+	// debug probe's result is not kept either, nor that of a collector that a
+	// reload removed or changed since the trip read it (PutFor).
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
 		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, kept, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	}
@@ -534,11 +533,12 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 }
 
 // revalidatesFor reports whether j's trip revalidates a cached response, and
-// keeps the response it gets for the next trip to revalidate: the
-// collector caches and revalidates (cache.revalidate), its request is one a
-// validator speaks for (fetch.Revalidable), and the collector that makes the
-// request is the one that decodes it, which is not so of a debug page's run
-// on what another collector fetched, nor of a pasted response.
+// keeps the response it gets for the next trip to revalidate. That is so when:
+//   - the collector caches and revalidates (cache.revalidate);
+//   - its request is one a validator speaks for (fetch.Revalidable);
+//   - the collector that makes the request is the one that decodes it, which
+//     is not so for a debug page's run on what another collector fetched, nor
+//     for a pasted response.
 func revalidatesFor(j collectJob) bool {
 	c := j.collector
 	return j.revalidateKey != "" && j.pasted == nil && j.requester == nil &&
@@ -599,27 +599,27 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 
 // logRuleFailures logs the rules under error_mode log that carried on without
 // some series, at warning level since the scrape was answered. A rule failing
-// on every scrape of a target is one failing thing (failurelog.go), told
-// apart by collector, target and rule, so it is logged once and then only
-// as a repeat or when it changes, and its recovery is logged when a complete
-// transform produces its series again; one that failed as a whole may not
-// have reached the rule. The rules of fail need nothing here: they fail the
+// on every scrape of a target is one failing thing (failurelog.go), told apart
+// by collector, target and rule. So it is logged once, and then only as a
+// repeat or when it changes. Its recovery is logged when a complete transform
+// produces its series again; a transform that failed as a whole may not have
+// reached the rule. The rules of fail need nothing here: they fail the
 // scrape, whose failure names the metric.
 //
-// Each rule is logged, remembered and recovered by itself, and not with the
-// collector's other rules of its metric name (appendRuleFailureKey): one that
-// starts to fail beside one that has been failing is a new failure, and one
-// that works again recovers while the other is still remembered. Where
+// Each rule is logged, remembered and recovered by itself, not with the
+// collector's other rules of its metric name (appendRuleFailureKey). So a rule
+// that starts to fail beside one that has been failing is a new failure, and
+// one that works again recovers while the other is still remembered. Where
 // several rules export the name, the lines say which rule it is
 // (sharedRuleNames). Rules alike in name, expression and items are one rule,
 // logged when either is under log (transform.RuleFailure).
 func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.Collector, failures []transform.RuleFailure, l collectLog, complete bool) {
-	// failing are the rules that failed on this scrape, by the keys their
-	// failures are remembered under, and unremembered counts those whose
-	// failure is not remembered, which have no key: one that started while
-	// the log was full, and one the log does not take, a debug probe's or
-	// that of a collector that no longer stands, when no earlier scrape's
-	// is remembered.
+	// failing holds the rules that failed on this scrape, by the keys their
+	// failures are remembered under. unremembered counts those whose failure
+	// is not remembered, which have no key: one that started while the log
+	// was full, and one the log does not take (a debug probe's, or that of a
+	// collector that no longer stands) when no earlier scrape's is
+	// remembered.
 	failing, unremembered := map[string]bool{}, 0
 	var shared sharedRuleNames
 	for _, f := range failures {
@@ -636,11 +636,11 @@ func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.
 			unremembered++
 		}
 	}
-	// A scrape of a trip none of whose rules has a failure remembered, as
-	// nearly every one is, has no rule to recover, and neither has one whose
-	// remembered failures are all of rules that failed again: it asks the
-	// log once. No scrape makes a key to ask, whose cost would grow with the
-	// rules' expressions.
+	// Nearly every scrape is of a trip with no rule failure remembered. Such
+	// a scrape has no rule to recover, and neither has one whose remembered
+	// failures are all of rules that failed again. It asks the log once. No
+	// scrape makes a key to ask, because that cost would grow with the rules'
+	// expressions.
 	if !complete || !s.failures.remembersRules(l.key, failing) {
 		return
 	}
@@ -654,10 +654,9 @@ func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.
 		if !remembered || failing[key] {
 			continue
 		}
-		// A failure remembered now that was not when this scrape reported
-		// it is one another scrape of the trip reported since, at the same
-		// time as this one: the rule failed here too, and has not
-		// recovered.
+		// If a failure is remembered now that was not when this scrape
+		// reported it, another scrape of the trip reported it since, at the same
+		// time as this one. The rule failed here too, and has not recovered.
 		if unremembered > 0 && failedAmong(failures, rule.Name, rule.Expression, rule.Items) {
 			continue
 		}
@@ -679,21 +678,20 @@ func failedAmong(failures []transform.RuleFailure, metric, expression, items str
 }
 
 // appendRuleFailureKey appends to dst the bytes of the failure log's key for
-// a rule on the trip or file whose key's bytes are key (subjectKey). The
-// rule is told apart as the transform tells it apart
-// (transform.RuleFailure): by its metric name, its expression and its
-// items.
+// a rule on the trip or file whose key's bytes are key (subjectKey). The rule
+// is told apart as the transform tells it apart (transform.RuleFailure): by
+// its metric name, its expression and its items.
 //
 // The name and the expression are each written after their length, as the
 // parts of every key are (appendKeyPart), so where one ends is not read from
-// what it holds: a jq or css expression may have a NUL in a comment or a
-// string, and with only a NUL between them an expression and items that
-// hold one would read as those of another rule, whose failures and
-// recoveries would then be this rule's. The items are the rest of the key.
+// what it holds. A jq or css expression may have a NUL in a comment or a
+// string. With only a NUL between them, an expression and items that hold one
+// would read as those of another rule, whose failures and recoveries would
+// then be this rule's. The items are the rest of the key.
 //
-// The bytes are made here and nowhere else, where the failure log keeps
-// those of the last rule it looked for (ruleLocked), and the key a failure
-// is remembered under is a string of them (failedOf): so it is the key the
+// The bytes are made here and nowhere else. The failure log keeps those of
+// the last rule it looked for (ruleLocked), and the key a failure is
+// remembered under is a string of them (failedOf). So it is the key the
 // failure is looked up by.
 func appendRuleFailureKey(dst []byte, key, metric, expression, items string) []byte {
 	dst = append(dst, key...)
@@ -703,15 +701,16 @@ func appendRuleFailureKey(dst []byte, key, metric, expression, items string) []b
 	return append(dst, items...)
 }
 
-// sharedRuleNames are the metric names several rules of a collector export,
-// whose failures are told apart in the log and in a debug probe's report by
-// naming the rule's expression, and its items when it has any, beside the
-// metric. They are worked out when first asked for, which a scrape whose
-// rules neither fail nor recover never does.
+// sharedRuleNames are the metric names that several rules of a collector
+// export. Their failures are told apart in the log and in a debug probe's
+// report by naming the rule's expression, and its items when it has any,
+// beside the metric. They are worked out when first asked for, which never
+// happens for a scrape whose rules neither fail nor recover.
 //
-// A name is shared by what the collector's rules are, and not by which of
-// them failed on a scrape, so a rule's lines read the same on every scrape.
-// Rules alike in name, expression and items are one rule, and share nothing.
+// Whether a name is shared depends on what the collector's rules are, not on
+// which of them failed on a scrape, so a rule's lines read the same on every
+// scrape. Rules alike in name, expression and items are one rule, and share
+// nothing.
 type sharedRuleNames struct {
 	names map[string]bool
 }
@@ -782,11 +781,11 @@ const bodyExcerptBytes = 256
 const bodyRedactBytes = 4 * bodyExcerptBytes
 
 // bodyExcerpt is the start of a response body for a log line: at most
-// bodyExcerptBytes, with invalid UTF-8 and
-// control characters replaced, runs of whitespace collapsed, and what reads
-// as a credential masked (fetch.RedactText), so an HTML error page or a
-// binary body reads as one tidy line, and an error page that echoes a token
-// does not put it in the log. It ends in … when cut.
+// bodyExcerptBytes, with invalid UTF-8 and control characters replaced, runs
+// of whitespace collapsed, and what reads as a credential masked
+// (fetch.RedactText). So an HTML error page or a binary body reads as one
+// tidy line, and an error page that echoes a token does not put it in the
+// log. It ends in … when cut.
 func bodyExcerpt(body []byte) string {
 	// Credentials are masked in more than is shown, so one the cut runs
 	// through is found whole.

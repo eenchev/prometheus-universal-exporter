@@ -9,21 +9,21 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The self-metrics answer a scraper that asks for it in Prometheus's protobuf
-// exposition format: length-delimited io.prometheus.client.MetricFamily
-// messages. It is the only format that carries native histograms — the text
-// format cannot, and OpenMetrics 2.0, which will, is still a draft — so it is
-// what lets Prometheus store the exporter's own durations as native
-// histograms, with buckets that follow the durations observed. Only the
-// self-metrics answer it: /probe and the static targets pass on what targets
-// answered, whose histograms have classic buckets alone, so protobuf would
-// add nothing there.
+// The self-metrics answer a scraper that asks for it in Prometheus's
+// protobuf exposition format: length-delimited io.prometheus.client.MetricFamily
+// messages. It is the only format that carries native histograms. The text
+// format cannot, and OpenMetrics 2.0, which will, is still a draft. So this
+// format lets Prometheus store the exporter's own durations as native
+// histograms, with buckets that follow the observed durations. Only the
+// self-metrics answer in it: /probe and the static targets pass on what
+// targets answered, whose histograms have only classic buckets, so protobuf
+// would add nothing there.
 //
-// The messages are written field by field with encoding/binary rather than
-// from generated types or with google.golang.org/protobuf, which only the
-// grpc request type may link (a build without it carries no protobuf code):
-// the wire format of these few messages is varints, zigzag varints, 64-bit
-// doubles and length-prefixed bytes. The field numbers are those of
+// The messages are written field by field with encoding/binary. They are not
+// built from generated types or with google.golang.org/protobuf, which only
+// the grpc request type may link (a build without it carries no protobuf
+// code). The wire format of these few messages is varints, zigzag varints,
+// 64-bit doubles and length-prefixed bytes. The field numbers are those of
 // client_model's metrics.proto:
 //
 //	MetricFamily  name 1, help 2, type 3, metric 4
@@ -40,20 +40,21 @@ import (
 //	Exemplar      label 1, value 2, timestamp 3
 //	Timestamp     seconds 1, nanos 2
 //
-// A histogram with exponential buckets is written with both: its classic
-// buckets, which a Prometheus that scrapes classic histograms (or
-// always_scrape_classic_histograms) stores, and its native ones, as Prometheus'
-// Go client writes a histogram given a NativeHistogramBucketFactor.
+// A histogram with exponential buckets is written with both kinds, as
+// Prometheus' Go client writes a histogram given a
+// NativeHistogramBucketFactor: its classic buckets, which a Prometheus that
+// scrapes classic histograms (or always_scrape_classic_histograms) stores,
+// and its native ones.
 
 // protobufContentType is the media type of the delimited protobuf format,
 // which a scraper asks for and the answer says it is.
 const protobufContentType = "application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited"
 
 // nativeHistogramSchema is the finest schema the native histograms are
-// written at, the one of Prometheus' Go client's usual bucket factor of
-// 1.1: eight buckets per doubling, each 9% wider than the one before. The
-// recorder keeps a finer scale while its durations fit 160 buckets, which
-// is lowered to this one when written; a scraper can ask for a coarser one
+// written at: the schema of the usual bucket factor of 1.1 in Prometheus' Go
+// client, eight buckets per doubling, each 9% wider than the one before.
+// The recorder keeps a finer scale while its durations fit 160 buckets, and
+// lowers it to this one when writing. A scraper can ask for a coarser one
 // still with Prometheus' native_histogram_min_bucket_factor.
 const nativeHistogramSchema int32 = 3
 
@@ -225,11 +226,11 @@ func appendProtoSummary(b []byte, m model.Metric) []byte {
 	return appendProtoCreated(b, 4, m.Created)
 }
 
-// appendProtoHistogram appends a histogram's classic buckets and its native
-// buckets when it has exponential ones. The +Inf bucket is sample_count, and
-// is written only when it has an exemplar, as client_golang writes it: the
-// format has no other place for that bucket's exemplar, and a Prometheus that
-// keeps the classic histogram reads exemplars from the classic buckets alone.
+// appendProtoHistogram appends a histogram's classic buckets, and its native
+// buckets when it has exponential ones. The +Inf bucket is sample_count. As
+// client_golang does, it is written only when it has an exemplar: the
+// format has no other place for that bucket's exemplar, and a Prometheus
+// that keeps the classic histogram reads exemplars only from classic buckets.
 func appendProtoHistogram(b []byte, m model.Metric) []byte {
 	h := m.Histogram
 	count, _ := h.InfBucket()
@@ -252,9 +253,9 @@ func appendProtoHistogram(b []byte, m model.Metric) []byte {
 	if h.Exponential != nil {
 		b = appendNativeBuckets(b, h.Exponential.AtMostScale(nativeHistogramSchema))
 		// A native histogram's exemplars are a list of their own, which
-		// Prometheus reads when it stores the histogram as a native one:
-		// the classic buckets', the +Inf one's among them, in the order of
-		// their values, as the buckets have them.
+		// Prometheus reads when it stores the histogram as native. They are
+		// the classic buckets' exemplars, the +Inf one's included, in the
+		// order of their values, as the buckets have them.
 		for _, x := range histogramExemplars(h) {
 			b = appendProtoTag(b, 16, wireBytes)
 			b = appendProtoBytes(b, appendProtoExemplar(nil, x))
@@ -318,11 +319,11 @@ func appendProtoExemplar(b []byte, x *model.Exemplar) []byte {
 }
 
 // appendNativeBuckets appends the native fields of exponential buckets.
-// Prometheus numbers a bucket one above OpenTelemetry, whose bucket i is
-// Prometheus's i+1 (model.ExponentialHistogram). The buckets are written as
-// spans of buckets that are not empty, each span's offset counted from where
-// the one before ended, the first's from 0, and their counts as deltas: the
-// first count, then each less the one before it.
+// Prometheus numbers a bucket one above OpenTelemetry: OpenTelemetry's
+// bucket i is Prometheus's i+1 (model.ExponentialHistogram). The buckets
+// are written as spans of non-empty buckets. Each span's offset counts from
+// where the one before ended, the first one's from 0. Their counts are
+// written as deltas: the first count, then each minus the one before it.
 func appendNativeBuckets(b []byte, x *model.ExponentialHistogram) []byte {
 	b = appendProtoTag(b, 5, wireVarint)
 	b = binary.AppendUvarint(b, zigzag(int64(x.Scale)))

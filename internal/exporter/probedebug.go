@@ -27,34 +27,39 @@ import (
 )
 
 // A debug probe, /probe?...&debug=true, makes one trip to the target and
-// answers with a plain-text report of it instead of the metrics: the
-// requests sent, the response, each stage and how long it took, the series
-// each metric got and the rules that carried on without theirs, what was
-// logged, and what a probe would have answered. It is for finding out why a
-// collector does not give what it should, from a browser or curl. The debug
+// answers with a plain-text report of it instead of the metrics. The report
+// shows the requests sent, the response, each stage and how long it took, the
+// series each metric got, the rules that carried on without theirs, what was
+// logged, and what a probe would have answered. It is for finding out, from a
+// browser or curl, why a collector does not give what it should. The debug
 // page's runs (debugpage.go) are the same trip, made by the same function
 // (runDebug), and answered as JSON.
 //
-// It shows a target's response, so it answers only with --web.debug=full,
-// and is otherwise refused 403 (debuglevel.go). The target policy, the trip
+// It shows a target's response, so it answers only with --web.debug=full and
+// is otherwise refused with 403 (debuglevel.go). The target policy, the trip
 // limits and web.basic_auth apply as to any probe. A debug probe always goes
-// to the target, alone, and leaves nothing behind: it neither reads nor
-// fills the response cache, shares no trip with an identical probe, records
-// no self-metric but http_exporter_debug_runs_total, queues nothing for
-// OTLP, and logs its failures to its report rather than the exporter's log,
-// where they would take part in the failure log's reckoning of what is
-// failing (failurelog.go). Its scripts, though, run in the collector's
-// Python workers, whose series count what the workers did, a debug probe's
-// runs among them (pythonstats.go). Its report always answers 200, whatever
-// the probe would have answered, which it says.
+// to the target, alone, and leaves nothing behind. It:
+//   - neither reads nor fills the response cache;
+//   - shares no trip with an identical probe;
+//   - records no self-metric but http_exporter_debug_runs_total;
+//   - queues nothing for OTLP;
+//   - logs its failures to its report instead of the exporter's log, where
+//     they would count in the failure log's view of what is failing
+//     (failurelog.go).
+//
+// Its scripts, though, run in the collector's Python workers, whose series
+// count what the workers did, a debug probe's runs among them
+// (pythonstats.go). Its report always answers 200, whatever the probe would
+// have answered, and it says what that is.
 //
 // The trace rides in the trip's context (probeTraceFrom), so the stages of
-// collect, several frames down, record into it; a trip without one records
+// collect, several frames down, record into it. A trip without one records
 // nothing and logs as it always does (tripFailed, tripRecovered, tripDebug).
 //
-// Credentials are kept out of the report: request and response header values
-// under a name that reads as a credential, every query value, a URL's
-// userinfo, and request bodies are never shown (fetch/redact.go).
+// Credentials are kept out of the report. These are never shown
+// (fetch/redact.go): request and response header values under a name that
+// reads as a credential, every query value, a URL's userinfo, and request
+// bodies.
 
 // probeDebugParam turns a probe into a debug probe.
 const probeDebugParam = "debug"
@@ -62,45 +67,43 @@ const probeDebugParam = "debug"
 // debugBodyLimit is how much of the response body a report shows.
 const debugBodyLimit = 64 << 10
 
-// What a report shows is the target's to make long, and a script's: the
-// request a redirect led to is for the URL its Location named, most of a
-// megabyte of it; a response header's value, and the message of a gRPC
+// The target, and a script, decide how long the parts of a report are. The
+// request a redirect led to is for the URL its Location named, which can be
+// most of a megabyte. A response header's value, and the message of a gRPC
 // status the collector accepts, are as long as the target sends them, and
-// the headers as many; a metric's name is as long as the response. The
-// report wrote each whole, in one line. It is read by a person, in a browser
-// or a terminal, and is made in memory whole, so beside the body, which has
-// its bound (debugBodyLimit), no line of it is longer than debugLineLimit:
-// a longer one is shown by its start and its length, as a failure's text is
-// (model.CutMark). That is done to the lines once they are written,
-// whatever section wrote them and whatever they are made of (cutLongLines),
-// and costs a report without such a line the reading of it. Four things are
-// bounded before it, where the line says more after them, where the length
-// that tells the reader something is theirs and not the line's, or where
-// there is no end of them:
+// there are as many headers as it sends. A metric's name is as long as the
+// response. The report wrote each whole, in one line. It is read by a person,
+// in a browser or a terminal, and is built whole in memory. So apart from the
+// body, which has its own bound (debugBodyLimit), no line of it is longer than
+// debugLineLimit. A longer one is shown by its start and its length, as a
+// failure's text is (model.CutMark). This is done to the lines after they are
+// written, whatever section wrote them and whatever they hold (cutLongLines).
+// A report without such a line pays only for reading it. Four things are
+// bounded before that: where the line says more after them, where the length
+// that tells the reader something is theirs and not the line's, or where they
+// have no end:
 //
 //   - the URL of a request is shown as a failure shows one, by its first
 //     debugURLLimit bytes and its length, and how the request ended is said
 //     after it;
 //   - a metric's name in the Transform section is shown as a failure shows
-//     one, by its first debugNameLimit bytes and its length, and its count
-//     is said after it, so the section is no longer than limits.max_metrics
-//     such lines;
-//   - a header's value is shown by its first debugHeaderValueLimit bytes
-//     and its length, and is not copied whole to be cut;
-//   - of the headers of a request or a response the first debugHeaderLimit
+//     one, by its first debugNameLimit bytes and its length, and its count is
+//     said after it, so the section is no longer than limits.max_metrics such
+//     lines;
+//   - a header's value is shown by its first debugHeaderValueLimit bytes and
+//     its length, and is not copied whole to be cut;
+//   - of the headers of a request or a response, the first debugHeaderLimit
 //     are listed, and then how many there are.
 //
-// What is withheld is withheld before anything is cut, so a cut shows
-// nothing redaction hides, and none ends inside the <redacted> that stands
-// for a credential, where the part shown would read as the start of one
-// (shownHead).
+// Redaction happens before any cut, so a cut shows nothing that redaction
+// hides. No cut ends inside the <redacted> that stands for a credential,
+// where the part shown would read as the start of one (shownHead).
 
-// debugLineLimit is how long a line of a report may be, the body's aside.
-// It is past every line whose parts the exporter bounds already, which are
-// not to be cut twice: a failure's text, 2,000 bytes with its own length at
-// its end (model.MaxFailureBytes), in the sentence or the log line that
-// quotes it, and the log line of what a script printed, the first 4,096
-// characters of it.
+// debugLineLimit is how long a line of a report may be, apart from the body.
+// It is above every line whose parts the exporter already bounds, which must
+// not be cut twice: a failure's text, 2,000 bytes with its own length at its
+// end (model.MaxFailureBytes), in the sentence or log line that quotes it; and
+// the log line of what a script printed, its first 4,096 characters.
 const debugLineLimit = 8 << 10
 
 // debugURLLimit and debugNameLimit are how much of a request's URL and of a
@@ -112,9 +115,9 @@ const (
 )
 
 // debugHeaderValueLimit is how much of a header's value a report shows, and
-// debugHeaderLimit how many headers of a request or a response it lists:
-// several times what an API sends, and a small part of what fits in the
-// megabyte a response's headers may take.
+// debugHeaderLimit is how many headers of a request or response it lists. Both
+// are several times what an API sends, and a small part of what fits in the
+// megabyte that a response's headers may take.
 const (
 	debugHeaderValueLimit = 1 << 10
 	debugHeaderLimit      = 100
@@ -138,10 +141,10 @@ func probeDebugRequested(query url.Values) (bool, error) {
 	return debug, nil
 }
 
-// probeTrace is what a debug probe's trip recorded. response is the
-// response as the target sent it (sentResponse), and convertedFrom the
-// encoding its body was converted from before it was decoded, empty when it
-// was not converted.
+// probeTrace is what a debug probe's trip recorded. response is the response
+// as the target sent it (sentResponse). convertedFrom is the encoding its body
+// was converted from before it was decoded, or empty when it was not
+// converted.
 type probeTrace struct {
 	mu            sync.Mutex
 	logs          bytes.Buffer
@@ -161,13 +164,12 @@ type probeTrace struct {
 	otlpRecords *debugLogRecords
 }
 
-// sentResponse is a copy of a response as it was fetched, for a report to
-// show after the decode has converted the response's body to UTF-8 and
-// rewritten its Content-Type to say so (decode/textencoding.go). The decode
-// replaces the body rather than changing its bytes, so the copy shares them:
-// only a trip that is reported keeps the body the target sent, and only for
-// a body that was converted is that a second one. A directory's files are
-// copied the same way.
+// sentResponse is a copy of a response as it was fetched. A report shows it
+// after the decode has converted the response's body to UTF-8 and rewritten
+// its Content-Type to say so (decode/textencoding.go). The decode replaces the
+// body instead of changing its bytes, so the copy shares them. Only a trip
+// that is reported keeps the body the target sent, and only for a converted
+// body is that a second one. A directory's files are copied the same way.
 func sentResponse(r *fetch.HTTPResponse) *fetch.HTTPResponse {
 	if r == nil {
 		return nil
@@ -262,8 +264,8 @@ func (t *probeTrace) record(change func(*probeTrace)) {
 }
 
 // converted records the encoding the decode converted the response's body
-// from, which the report says beside the body the target sent; t may be nil.
-// decoded is what the decode gave, nil when it failed, where the encoding is
+// from, which the report shows beside the body the target sent. t may be nil.
+// decoded is what the decode gave, or nil when it failed; the encoding is then
 // the one the collector's own decoder type would have had converted.
 func (t *probeTrace) converted(c *model.Collector, decoded *decode.Decoded) {
 	if t == nil {
@@ -281,9 +283,9 @@ func (t *probeTrace) converted(c *model.Collector, decoded *decode.Decoded) {
 	t.convertedFrom = decode.ConvertedFrom(t.response, c, kind)
 }
 
-// tripFailed logs a failure of a trip: to the failure log, or for a debug
-// probe to its report alone. read is the configuration the trip read its
-// collector in: the failure log remembers nothing of a collector that no
+// tripFailed logs a failure of a trip to the failure log, or for a debug
+// probe only to its report. read is the configuration in which the trip read
+// its collector. The failure log remembers nothing of a collector that no
 // longer stands (failedFor).
 func (s *Server) tripFailed(ctx context.Context, read configRead, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
 	if t := probeTraceFrom(ctx); t != nil {
@@ -303,14 +305,14 @@ func (t *probeTrace) failed(ctx context.Context, level slog.Level, msg string, e
 }
 
 // ruleFailed is tripFailed for the failure of a rule of the trip or file
-// whose key is trip, the rule told apart by its metric name, its expression
-// and its items: the failure log is told which trip the rule is of, and
-// does not read it out of a key, and makes the rule's key itself, when it
-// first remembers the failure (ruleFailedFor). What is returned is the
-// bytes of the key a failure of the rule is remembered under, and nothing
-// when none is. A debug probe's failure is remembered nowhere, so for one
-// it is the key an earlier scrape's is remembered under, which is asked
-// for without a key (rememberedRule).
+// whose key is trip. The rule is told apart by its metric name, expression
+// and items. The failure log is told which trip the rule belongs to, instead
+// of reading it from a key, and it makes the rule's key itself when it first
+// remembers the failure (ruleFailedFor). It returns the bytes of the key that
+// a failure of the rule is remembered under, or nothing when there is none. A
+// debug probe's failure is remembered nowhere. For one, it returns the key an
+// earlier scrape's failure is remembered under, which is asked for without a
+// key (rememberedRule).
 func (s *Server) ruleFailed(ctx context.Context, read configRead, level slog.Level, trip subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
 	if t := probeTraceFrom(ctx); t != nil {
 		key, _ := s.failures.rememberedRule(trip, metric, expression, items)
@@ -404,11 +406,11 @@ func (p debugProbe) slotOf() *model.Collector {
 	return p.collector
 }
 
-// debugReport is what one run of the debug engine found: the run, the
-// trace of its trip, what a probe or the scrape would have answered and the
-// series it would have served. The text renderer (report) writes it for
-// /probe?debug=true and /static-targets?debug=<name>, and the JSON one
-// (debugAnswerOf) for the debug page.
+// debugReport is what one run of the debug engine found: the run, the trace
+// of its trip, what a probe or the scrape would have answered, and the series
+// it would have served. The text renderer (report) writes it for
+// /probe?debug=true and /static-targets?debug=<name>. The JSON renderer
+// (debugAnswerOf) writes it for the debug page.
 type debugReport struct {
 	probe   debugProbe
 	trace   *probeTrace
@@ -434,11 +436,11 @@ func (r *debugReport) text() []byte {
 	return r.trace.report(r.probe, r.verdict, r.answer, r.took, r.lint)
 }
 
-// runDebug makes a run's trip, with its trace, and reports it. The caller
-// has resolved everything the run needs and checked it as /probe checks a
-// probe's. A probe or a page's fetch is answered at once when the collector
-// that makes the request is at its trip limit; a static target's scrape
-// waits for a slot within its budget, as the scrape itself would.
+// runDebug makes a run's trip, with its trace, and reports it. The caller has
+// resolved everything the run needs and checked it as /probe checks a probe.
+// A probe or a page's fetch is answered at once when the collector that makes
+// the request is at its trip limit. A static target's scrape waits for a slot
+// within its budget, as the scrape itself would.
 func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	start := time.Now()
 	// A run always contacts the target, and what it finds changes nothing
@@ -455,10 +457,10 @@ func (s *Server) runDebug(ctx context.Context, p debugProbe) *debugReport {
 	// the export would make of it; nothing of it is queued.
 	var spans *tripSpans
 	if cfg := s.manager.Get().OTLP; p.kind == debugKindPage && otlpTracesOn(cfg) {
-		// Its ids are made now, as a probe's are, so that its log lines,
-		// and with otlp.traces.propagate its requests, show the links a
-		// probe's would carry (otlptraceslink.go); the run's trace is never
-		// exported, and nothing is linked to it.
+		// Its ids are made now, as a probe's are, so that its log lines (and,
+		// with otlp.traces.propagate, its requests) show the links a probe's
+		// would carry (otlptraceslink.go). The run's trace is never exported,
+		// and nothing is linked to it.
 		link := newTraceLink(traceParent{})
 		link.run = true
 		ctx, spans = withTripSpans(withTraceLink(ctx, link), trace.requests)
@@ -555,11 +557,11 @@ func debugLog(p debugProbe) collectLog {
 	}
 }
 
-// debugTrip makes a run's trip, holding the slot runDebug took for it, and
-// says what it would have answered and whether it went through whole. The
-// slot is given back however the trip ends: a panic in a request type, a
-// decoder or a transform would otherwise keep it for good, and after
-// max_concurrent_probes of them every probe of the collector would be
+// debugTrip makes a run's trip, holding the slot runDebug took for it. It
+// says what the trip would have answered and whether it went through whole.
+// The slot is given back however the trip ends. Otherwise a panic in a
+// request type, a decoder or a transform would keep it for good, and after
+// max_concurrent_probes such panics every probe of the collector would be
 // refused. The panic is recovered, as a probe's is (probeFlights.run), and
 // the report shows it.
 func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe) (verdict string, answer *model.MetricSet, ok, failed bool) {
@@ -599,10 +601,10 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		// and shows the conditional request; it keeps nothing.
 		revalidateKey: p.staleKey,
 	}
-	// An edited collector is no collector of the configuration whose
-	// workers would count it: the Python it runs with --web.debug.dangerous
-	// counts for the pool as a whole alone, under no collector, and its
-	// worker is stopped once it has run, leaving none idle.
+	// An edited collector does not belong to the configuration whose workers
+	// would count it. The Python it runs with --web.debug.dangerous counts only
+	// for the pool as a whole, under no collector. Its worker is stopped once
+	// it has run, leaving none idle.
 	if !p.edited {
 		job.python = s.pythonStatsSince(p.generation, p.collector)
 	} else if runsPython(p.collector) {
@@ -617,9 +619,9 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 }
 
 // debugVerdict is what a probe would have answered, as probeTrip and
-// probeUpstream would answer it, and the series it would have served;
+// probeUpstream would answer it, and the series it would have served.
 // staleAge is the age of the last good result that stands in for a failed
-// trip, empty when none does.
+// trip, or empty when none does.
 func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.MetricSet, string) {
 	name := p.collector.Name
 	if p.static != nil {
@@ -739,12 +741,12 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 // says with which status to refuse a name it cannot.
 func (s *Server) staticDebugProbe(name string) (debugProbe, int, error) {
 	// The target and its collector are read together, as its scrape reads
-	// them, and with them the generation of the configuration they are in
-	// (followedInForce), which says below whose worker statistics the
-	// scrape's scripts count in. Asked for once the target's credential
-	// files are read, it would be that of another configuration when a
-	// reload came meanwhile, or of none: the scripts of a collector the
-	// reload kept would be counted under no collector, in its own worker.
+	// them, along with the generation of the configuration they are in
+	// (followedInForce). That generation says, below, under whose worker
+	// statistics the scrape's scripts count. If it were asked for after the
+	// target's credential files are read, a reload in between would make it
+	// that of another configuration, or of none: the scripts of a collector the
+	// reload kept would then be counted under no collector, in its own worker.
 	followed := s.followedInForce()
 	cfg := followed.config
 	target, c := staticDebugTarget(followed, name)
@@ -783,16 +785,16 @@ func (s *Server) staticDebugProbe(name string) (debugProbe, int, error) {
 	return p, 0, nil
 }
 
-// staticDebugTarget is the static target of followed named name, the first
-// so named, nil when its file has none, and the collector of followed's
-// configuration it references, nil when the configuration has none of that
-// name. The target is the one in the file in force, not a copy: going
-// through the targets by value copied each of them on the heap, its pointer
-// being kept, which for 10,000 targets took milliseconds before the one
+// staticDebugTarget is the static target of followed named name (the first so
+// named, or nil when its file has none), and the collector of followed's
+// configuration that it references (nil when the configuration has none of
+// that name). The target is the one in the file in force, not a copy. Going
+// through the targets by value copied each of them to the heap, because its
+// pointer was kept. For 10,000 targets that took milliseconds before the one
 // asked for was found. Nothing the debug scrape does with it writes to it.
 // The collector is found where followed keeps its place
-// (followedConfig.collectorOf), as a scrape finds it, and the collectors
-// are not gone through for it.
+// (followedConfig.collectorOf), as a scrape finds it, without going through
+// the collectors.
 func staticDebugTarget(followed *followedConfig, name string) (*model.StaticTarget, *model.Collector) {
 	targets := staticTargetsOf(followed.targets)
 	for i := range targets {
@@ -932,10 +934,10 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		cutLongLines(&b, uncut)
 		return b.Bytes()
 	}
-	// The exposition is what a probe serves, to the byte, unless a line of
-	// it is cut, which makes it no exposition: the section then says so
-	// before it. It is not written to the report to be cut there, which
-	// would hold every long line of it twice.
+	// The exposition is what a probe serves, to the byte, unless a line of it
+	// is cut, which makes it no exposition; the section then says so before
+	// it. It is not written to the report to be cut there, because the report
+	// would then hold every long line of it twice.
 	exposition := debugExposition(answer)
 	long := longLines(exposition)
 	if long > 0 {
@@ -971,9 +973,9 @@ func writeLint(b *bytes.Buffer, c *model.Collector, findings []transform.LintFin
 	}
 }
 
-// cutLongLines cuts the lines of the report from the byte uncut on that are
-// longer than debugLineLimit (appendCutLines). A report without one, as
-// nearly every report is, is read for its new-lines and left as it was
+// cutLongLines cuts the lines of the report, from the byte uncut on, that are
+// longer than debugLineLimit (appendCutLines). A report without such a line,
+// as nearly every report is, is only read for its newlines and left as it was
 // written.
 func cutLongLines(b *bytes.Buffer, uncut int) {
 	written := b.Bytes()[uncut:]
@@ -985,10 +987,10 @@ func cutLongLines(b *bytes.Buffer, uncut int) {
 	appendCutLines(b, written)
 }
 
-// appendCutLines appends text to the report line by line: a line of
-// debugLineLimit bytes or fewer as it is, and a longer one as its first
-// debugLineLimit bytes (shownHead) and its length, as a failure's text says
-// where it was cut (model.CutMark).
+// appendCutLines appends text to the report line by line. A line of
+// debugLineLimit bytes or fewer is appended as it is. A longer one is
+// appended as its first debugLineLimit bytes (shownHead) and its length, as a
+// failure's text says where it was cut (model.CutMark).
 func appendCutLines(b *bytes.Buffer, text []byte) {
 	for len(text) > 0 {
 		line, rest, ended := bytes.Cut(text, []byte("\n"))
@@ -1027,11 +1029,11 @@ func shownStart(text string, limit int) string {
 	return text[:shownHead(text, limit)] + model.CutMark(len(text), false)
 }
 
-// shownHead is how many bytes of a text longer than limit a report shows:
-// limit, or up to three fewer where the text would be cut inside a
-// character, as a failure's text is cut (model.HeadOf); and where that ends
-// inside a <redacted>, the few bytes more that show it whole, since
-// `token=<red` reads as the start of a token.
+// shownHead is how many bytes of a text longer than limit a report shows. It
+// is limit, or up to three fewer where the cut would fall inside a character,
+// as a failure's text is cut (model.HeadOf). Where that ends inside a
+// <redacted>, it is the few bytes more that show it whole, since `token=<red`
+// reads as the start of a token.
 func shownHead[T ~string | ~[]byte](text T, limit int) int {
 	head := limit
 	for start := limit; start > 0 && start > limit-utf8.UTFMax; start-- {
@@ -1076,14 +1078,14 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, configured func(name,
 	return true
 }
 
-// tripLines are the jq variables that say what the request was besides its
-// answer, each as its name and its value as JSON, for the request of an
-// http or graphite collector (fetch.HTTPTrip): what the rules read of it
+// tripLines are the jq variables that describe the request apart from its
+// answer, each as its name and its value as JSON, for the request of an http
+// or graphite collector (fetch.HTTPTrip). They are what the rules read of it
 // beside the status, which a report shows. $url is shown as the rules read
-// it, with its query values masked as the report masks a request's, but for
-// those configured says the configuration set, and cut as a request line
-// is; it is not parsed again, which would change its path's escapes
-// (fetch.RedactShownURLQuery).
+// it: its query values are masked as the report masks a request's, except
+// that configured ones say the configuration set them, and it is cut as a
+// request line is. It is not parsed again, because that would change its
+// path's escapes (fetch.RedactShownURLQuery).
 func tripLines(r *fetch.HTTPResponse, configured func(name, value string) bool) []string {
 	if r.Trip == nil {
 		return nil
@@ -1141,12 +1143,12 @@ func pagesLine(p *fetch.PagesRead) string {
 }
 
 // writeBody renders a body, up to debugBodyLimit, text only. The report is
-// UTF-8, so a body in another encoding, whose bytes it cannot show as they
-// are, is shown as the same text in UTF-8, under a line that gives its size
-// as sent and says what it was converted from: convertedFrom, when not
-// empty, is the encoding the body was converted from before it was decoded,
-// which the report says, since the rules read the converted text and not the
-// bytes shown.
+// UTF-8, so it cannot show the bytes of a body in another encoding as they
+// are. Such a body is shown as the same text in UTF-8, under a line that gives
+// its size as sent and says what it was converted from. convertedFrom, when
+// not empty, is the encoding the body was converted from before it was
+// decoded. The report says so, since the rules read the converted text and
+// not the bytes shown.
 func writeBody(b *bytes.Buffer, body []byte, convertedFrom string) {
 	shown := shownBody(body, convertedFrom)
 	if !shown.text {
@@ -1197,12 +1199,12 @@ func shownBody(body []byte, convertedFrom string) debugBody {
 	return out
 }
 
-// writeTransform renders the series each metric got, a derived one marked
-// with what it computes, the rules and derived entries that got none, a
-// derived entry with the operands of it that had no series (absent), and
-// the rules that carried on without some: each rule by itself,
-// under its metric name, and with its expression, and its items when it has
-// any, where several of the collector's rules export the name
+// writeTransform renders the series each metric got, with a derived one
+// marked with what it computes. It also renders the rules and derived entries
+// that got none, a derived entry with its operands that had no series
+// (absent), and the rules that carried on without some. Each rule is shown by
+// itself, under its metric name, and with its expression, and its items when
+// it has any, where several of the collector's rules export the name
 // (sharedRuleNames). A prometheus rule without a name is shown as that.
 func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, failures []transform.RuleFailure, absent map[string][]string, decoded string) {
 	if decoded != "" {
@@ -1342,12 +1344,12 @@ func headerLines(h http.Header) []string {
 	return lines
 }
 
-// shownHeaderValue is a header's value as a report writes it: a control
-// character other than a tab written as Go writes it in a quoted string,
-// \r, \x01 or \u0085, and the rest as it is. An HTTP answer's header holds
-// none, since net/http refuses them, so its value is shown unchanged; a tcp
-// answer's X-Tcp-Greeting holds what the server greeted with, which may
-// hold a carriage return or an escape sequence a terminal would act on, or
+// shownHeaderValue is a header's value as a report writes it. A control
+// character other than a tab is written as Go writes it in a quoted string
+// (\r, \x01 or \u0085), and the rest as it is. An HTTP answer's header holds
+// none, since net/http refuses them, so its value is shown unchanged. A tcp
+// answer's X-Tcp-Greeting holds what the server greeted with. That may hold a
+// carriage return or an escape sequence that a terminal would act on or that
 // would end the report's line.
 func shownHeaderValue(value string) string {
 	if !strings.ContainsFunc(value, headerControl) {

@@ -29,13 +29,14 @@ import (
 // collector without a cache too.
 //
 // Identical also means of the same stay of the collector (flightKey). A trip
-// writes under the collector's name what the probe that started it may: its
-// result in the cache, its failure in the failure log, only while the
-// collector that probe read stands (configRead). A probe of the collector in
-// force that joined the trip of a probe which read the collector before a
-// reload changed it and another changed it back — the same definition, so
-// the same key — would have its result left uncached and its failure
-// unlogged, though its own collector stands. It makes a trip of its own.
+// writes under the collector's name only what the probe that started it may
+// write: its result in the cache and its failure in the failure log, and
+// only while the collector that probe read stands (configRead). Suppose a
+// probe read the collector before a reload changed it and another reload
+// changed it back: the same definition, so the same key. A probe of the
+// collector in force that joined that probe's trip would have its result
+// left uncached and its failure unlogged, though its own collector stands.
+// So it makes a trip of its own.
 //
 // The shared work belongs to no single caller. It runs detached from the probe
 // that started it, so that probe's client going away does not fail the others,
@@ -121,18 +122,18 @@ type probeFlight struct {
 	waiters int
 	cancel  context.CancelFunc
 	// spans is the trip's own record for the traces of the probes that use
-	// it (otlptraces.go), nil when the probe that started it records no
-	// trace. It is the trip's rather than the starting probe's, which may
-	// leave while the trip goes on for the others.
+	// it (otlptraces.go), or nil when the probe that started it records no
+	// trace. It belongs to the trip rather than to the starting probe, which
+	// may leave while the trip goes on for the others.
 	spans *tripSpans
 }
 
-// flightKey is what probes share a trip by: probe, the key the response
-// cache uses (probeCacheKey), and defined, the generation their collector has
-// had its definition from in the configuration each read
-// (followedConfig.defined). Probes of one stay of a collector have the same,
-// whichever configuration they read it in; a collector a reload removed and
-// brought back, or changed and changed back, has another.
+// flightKey is what probes share a trip by. probe is the key the response
+// cache uses (probeCacheKey). defined is the generation their collector has
+// had its definition from in the configuration each probe read
+// (followedConfig.defined). Probes of one stay of a collector have the same
+// flightKey, whichever configuration they read it in. A collector that a
+// reload removed and brought back, or changed and changed back, has another.
 type flightKey struct {
 	probe   string
 	defined uint64
@@ -156,11 +157,11 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 	return result, shared, err
 }
 
-// doTraced is do, but that a run it starts with traced set records its
-// stages and requests in a recorder of its own, which it returns to every
-// caller of the run, the one that started it included, and to one that
-// leaves before it ends too: each copies what it needs into its own trace.
-// A run joined returns the recorder its starter asked for, or nil.
+// doTraced is like do, except that a run it starts with traced set records
+// its stages and requests in a recorder of its own. It returns that
+// recorder to every caller of the run: the one that started it, and also
+// one that leaves before it ends. Each copies what it needs into its own
+// trace. A joined run returns the recorder its starter asked for, or nil.
 func (f *probeFlights) doTraced(ctx context.Context, key flightKey, traced bool, work func(context.Context) *probeResult) (result *probeResult, shared bool, spans *tripSpans, err error) {
 	f.mu.Lock()
 	flight, joining := f.flights[key]
@@ -210,17 +211,17 @@ func panicText(recovered any) string {
 }
 
 // redactedPanicText is what a recovered panic said, as a debug report shows
-// it: an operator's tool may show the panic, but not a credential it quotes,
-// which fetch.RedactText withholds as it does in any text the exporter did
-// not write. The text is redacted before it is cut, so that a cut cannot
-// leave the start of a password the redaction no longer recognises.
+// it. An operator's tool may show the panic, but not a credential it
+// quotes: fetch.RedactText withholds that, as it does in any text the
+// exporter did not write. The text is redacted before it is cut, so a cut
+// cannot leave the start of a password the redaction no longer recognises.
 func redactedPanicText(recovered any) string {
 	return model.CutTo(fetch.RedactText(fmt.Sprint(recovered)), model.MaxFailureBytes, false)
 }
 
-// stagePanicked is the stage of a probe that panicked, whichever stage it
-// was in: report_failures answers it (probereport.go) and the trace's
-// error.type is it, as a probe that failed in a stage is answered and
+// stagePanicked is the stage of a probe that panicked, whatever stage it
+// was in. report_failures answers it (probereport.go), and the trace's
+// error.type is it, just as a probe that failed in a stage is answered and
 // traced with that stage.
 const stagePanicked = "panic"
 
@@ -230,9 +231,9 @@ func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlig
 		// whole exporter down rather than one request as it would in a handler.
 		if recovered := recover(); recovered != nil {
 			// The answer and the status page say only that it panicked, as
-			// for a static target's scrape: a panic says whatever its code
+			// for a static target's scrape. A panic says whatever its code
 			// had at hand, a target's URL with its password as much as
-			// anything, which no redaction is written for, and the caller
+			// anything, and no redaction is written for that. The caller
 			// keeps the answer as the scrape's error, out of the exporter's
 			// hands. The panic and its stack are in the log.
 			recorder := newProbeRecorder()

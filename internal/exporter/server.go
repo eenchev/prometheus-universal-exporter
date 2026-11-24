@@ -89,10 +89,10 @@ type Server struct {
 	stats               map[string]*serverStats
 	otlpMu              sync.Mutex
 	otlpPending         map[string]*otlpBatch
-	// otlpPoints counts the pending data points, and otlpSeq orders them by
-	// age for otlp.max_pending_points: each point queued takes the next
-	// number, and keeps it when a failed export queues it again, so the
-	// oldest points are dropped first however many exports have failed.
+	// otlpPoints counts the pending data points. otlpSeq orders them by age
+	// for otlp.max_pending_points: each queued point takes the next number
+	// and keeps it when a failed export queues it again. So the oldest
+	// points are dropped first, however many exports have failed.
 	otlpPoints int
 	otlpSeq    int64
 	// otlpStarts remembers when each cumulative series exported over OTLP
@@ -141,10 +141,10 @@ type Server struct {
 	// answering and probing count the requests being answered, and the
 	// probes among them: what a shutdown waits for (InProgress).
 	answering, probing atomic.Int64
-	// followed is the configuration the per-collector state was last
-	// reconciled with, with the static target file in force with it, and its
-	// generation (reconcile.go). It is replaced under statsMu, together with
-	// the state it describes, and under staticMu.
+	// followed is the configuration that the per-collector state was last
+	// reconciled with, together with the static target file in force with
+	// it and its generation (reconcile.go). It is replaced under statsMu,
+	// together with the state it describes, and under staticMu.
 	followed atomic.Pointer[followedConfig]
 	// appliedGeneration is the generation of the last configuration whose
 	// connections and rate limits the request types follow (applyFollowed),
@@ -196,12 +196,12 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 		collectors = cfg.Collectors
 	}
 	transform.FollowPythonStates(collectors)
-	// The state kept per collector follows a reload when it is made
-	// (reconcile.go), and what following it needs that takes long is worked
-	// out before the reload puts its configuration in force (prepareReload).
-	// Asked for once statsMu is released: the manager tells under the lock
-	// that serializes reloads, and the following takes statsMu under that
-	// one.
+	// The per-collector state follows a reload when the reload is made
+	// (reconcile.go). The slow parts of following it are worked out before
+	// the reload puts its configuration in force (prepareReload).
+	// This is asked for once statsMu is released: the manager calls it under
+	// the lock that serializes reloads, and the following takes statsMu
+	// under that lock.
 	m.OnPrepare(s.prepareReload)
 	m.OnInstall(s.followReload)
 	// A reload that switches the trace export off drops what waits for it.
@@ -219,12 +219,12 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 // --web.self-metrics-path says otherwise.
 const DefaultSelfMetricsPath = "/self-metrics"
 
-// endpointPathRE, for the self-metrics and static targets paths, is a path of
-// plain segments: no query, fragment, trailing slash or ServeMux wildcard, any
-// of which would make the endpoint something other than one fixed path, and no
-// segment of dots alone. ServeMux cleans a request's path before routing it,
-// so /metrics/.. is asked for as / and an endpoint registered there is never
-// reached; a segment needs a character other than a dot.
+// endpointPathRE matches a path of plain segments, for the self-metrics and
+// static targets paths. It allows no query, fragment, trailing slash or
+// ServeMux wildcard, since any of these would make the endpoint something
+// other than one fixed path. It also allows no segment of dots alone:
+// ServeMux cleans a request's path before routing it, so /metrics/.. is
+// requested as / and an endpoint registered there is never reached.
 var endpointPathRE = regexp.MustCompile(`^(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$`)
 
 // SelfMetricsPath checks --web.self-metrics-path and returns it with its
@@ -267,30 +267,30 @@ func (s *Server) selfMetricsEndpoint() string {
 // statistics, so a test can put a reload between the two.
 var probeConfigReadHook atomic.Pointer[func(string)]
 
-// statsFor returns the statistics of the collector name of the configuration
-// in force: for a reader of them, and for a caller that names a collector of
-// the configuration as it is now. A probe or scrape, which may have read its
-// collector some time ago, says when (statsSince).
+// statsFor returns the statistics of the collector name in the configuration
+// in force. It is for readers of the statistics, and for callers that name a
+// collector of the current configuration. A probe or scrape may have read its
+// collector some time ago, so it says when (statsSince).
 func (s *Server) statsFor(name string) *serverStats {
 	return s.statsSince(s.reconcile().generation, name)
 }
 
-// statsSince returns the statistics a probe or scrape of the collector name
-// counts in, when it read the collector in the configuration followed at
+// statsSince returns the statistics that a probe or scrape of the collector
+// name counts in, when it read the collector in the configuration followed at
 // generation (reconcile). They are the collector's own while it has been in
-// every configuration followed from that one on, and are made at its first
-// use. A collector a reload has removed since has none, though it may be
-// back under the name: its statistics were dropped, and those now kept under
-// the name, or made at the next use of it, are of the collector brought back,
-// which starts from zero and counts nothing begun before its return. The
-// caller is then given statistics of its own, retired from the start, that
-// no answer shows and nothing inherits.
+// every configuration followed since that one, and are made at first use. A
+// collector that a reload removed since then has none, even if it is back
+// under the name. Its statistics were dropped. Those now kept under the name,
+// or made at its next use, belong to the collector brought back, which starts
+// from zero and counts nothing begun before its return. The caller then gets
+// statistics of its own, retired from the start, that no answer shows and
+// nothing inherits.
 //
-// A caller that asked later, by name alone, could not tell the collector it
-// read from one brought back since, and one whose collector was dropped
-// between its reading of the configuration and its asking would make
-// statistics for a collector that is gone: its request would be shown until
-// it expired, and a collector brought back would inherit what it counted.
+// A caller that asked later, by name alone, could not tell its collector from
+// one brought back since. If its collector was dropped between reading the
+// configuration and asking, it would make statistics for a collector that is
+// gone: its request would be shown until it expired, and a collector brought
+// back would inherit what it counted.
 func (s *Server) statsSince(generation uint64, name string) *serverStats {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
@@ -318,9 +318,10 @@ func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
 
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
-// targets path and its status page, /health, /ready and /-/reload, and with --web.debug on
-// /debug, /debug/run and /debug/collector. Whatever answers, its client has
-// AnswerWriteTimeout to read the answer (middleware.go).
+// targets path and its status page, /health, /ready and /-/reload. With
+// --web.debug on, it also routes /debug, /debug/run and /debug/collector.
+// Whatever answers, its client has AnswerWriteTimeout to read the answer
+// (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -352,10 +353,10 @@ func (s *Server) Handler() http.Handler {
 	return s.countInProgress(s.writeBounded(mux))
 }
 
-// readOnly reports whether r is a GET or a HEAD, which an endpoint that
-// only reads — /probe, the static targets, the self-metrics — serves, and
-// answers anything else 405, with the methods it allows and refusal, which
-// says what to use.
+// readOnly reports whether r is a GET or a HEAD. Endpoints that only read
+// (/probe, the static targets, the self-metrics) serve only those. Any other
+// method is answered 405, with the allowed methods and refusal, which says
+// what to use.
 func readOnly(w http.ResponseWriter, r *http.Request, refusal string) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return true
@@ -408,10 +409,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the collector parameter is required: /probe?collector=<name>&target=<target>", http.StatusBadRequest)
 		return
 	}
-	// The configuration is read with its generation, which says below which
-	// statistics the probe counts in (statsSince), and the collector is found
-	// by its name where the configuration followed keeps its place
-	// (collectorOf): its collectors are not gone through for every probe.
+	// The configuration is read with its generation, which tells below which
+	// statistics the probe counts in (statsSince). The collector is found by
+	// its name, where the followed configuration keeps its position
+	// (collectorOf), so its collectors are not scanned for every probe.
 	followed := s.reconcile()
 	cfg := followed.config
 	c := followed.collectorOf(cfg, name)
@@ -505,10 +506,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// (configRead).
 	rec.read = s.readAt(followed.generation)
 	rec.update(func(x *serverStats) { x.probes++ })
-	// With otlp.traces on, the probe records its trace, which is exported
-	// at its end when a sampling rule keeps it (otlptracesampling.go). A
-	// caller's traceparent makes it a span of the caller's trace, its
-	// sampled flag and tracestate read for the rules and the spans.
+	// With otlp.traces on, the probe records its trace. The trace is exported
+	// at the end when a sampling rule keeps it (otlptracesampling.go). A
+	// caller's traceparent makes the probe a span of the caller's trace; its
+	// sampled flag and tracestate are read for the rules and the spans.
 	var parent traceParent
 	if otlpTracesOn(cfg.OTLP) || cfg.OTLP.Traces.Propagate {
 		parent = callerTrace(r.Header)
@@ -518,13 +519,13 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// trace, or with the trace export off the caller's as it came.
 	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), parent, r.Header)
 	var traced probeTraceEnd
-	// finish counts the probe's outcome and ends its per-request record: a
-	// probe the target policy refused, or whose caller went away, leaves no
-	// new request tracked. It is called once the answer is ready, before it
-	// is written, and ends the probe's trace then too, which traced says
-	// the end of: the time a caller takes to read the answer is neither the
-	// probe's duration nor its span's. It returns the probe's duration,
-	// which report_failures answers (probereport.go).
+	// finish counts the probe's outcome and ends its per-request record. A
+	// probe that the target policy refused, or whose caller went away, leaves
+	// no new tracked request. finish is called once the answer is ready,
+	// before it is written. It also ends the probe's trace then, and traced
+	// records that end. The time a caller takes to read the answer is not
+	// part of the probe's duration or its span's. It returns the probe's
+	// duration, which report_failures answers (probereport.go).
 	finish := func(ok, refused bool) time.Duration {
 		ready := time.Now()
 		duration := ready.Sub(start)
@@ -592,12 +593,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
 			forwarded: forwarded, rec: trip, cacheKey: cacheKey,
 			budget: budget, budgetSource: budgetSource,
-			// Probes of one target differing in their parameters or
-			// forwarded headers — tenants, paths — fail apart in the log.
-			// The collector's name is the configuration's, which the
-			// probe's matches: the one read from the query is a piece of
-			// the request's line, which the failure log's entry, keeping
-			// it for an hour, would keep whole, target and all.
+			// Probes of one target that differ in their parameters or
+			// forwarded headers (tenants, paths) fail separately in the
+			// log. The collector name is the configuration's, which the
+			// probe's matches. The name read from the query is part of the
+			// request line, and the failure log entry, kept for an hour,
+			// would keep it whole, target and all.
 			failure: probeFailureKey(c.Name, target, key), requestURL: requestURL,
 			// A probe backs off by the identity it shares a trip by.
 			backoffKey: key,
@@ -623,12 +624,13 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A shared trip is counted apart from the probe that happens to start it
-	// (forTrip), which may leave while the trip goes on for the others. What
-	// it counted is the request's when it ends, before any probe is answered
-	// by it, unless the target policy refused it or it was cancelled because
-	// every probe left, without the policy's verdict. It is shared by the
-	// probes of this stay of the collector only (flightKey): the trip writes
-	// under the collector's name as the probe that started it may.
+	// (forTrip), since that probe may leave while the trip goes on for the
+	// others. What the trip counted belongs to the request when it ends,
+	// before any probe is answered by it. The exceptions: the target policy
+	// refused it, or it was cancelled because every probe left, without the
+	// policy's verdict. Only probes of this stay of the collector share it
+	// (flightKey): the trip writes under the collector's name, as the probe
+	// that started it may.
 	trip := rec.forTrip()
 	mark := time.Now()
 	// The trip records its own trace, which the trace of every probe that
@@ -640,12 +642,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return result
 	})
 	if err != nil {
-		// This caller went away while it waited; there is nobody to answer,
-		// and no verdict of the target policy to go by. The probe starts no
-		// tracked request, whatever becomes of the trip. Its trace has what
-		// the trip had done by then, the requests still unanswered marked
-		// unfinished; the trip goes on for the probes still waiting for it,
-		// whose traces have the rest.
+		// This caller went away while it waited. There is nobody to answer
+		// and no target policy verdict to go by. The probe starts no tracked
+		// request, whatever happens to the trip. Its trace has what the trip
+		// had done by then, with the requests still unanswered marked
+		// unfinished. The trip goes on for the probes still waiting for it,
+		// and their traces have the rest.
 		cut := time.Now()
 		failure := "the caller went away while the probe waited for an identical probe's trip"
 		if shared {
@@ -691,10 +693,10 @@ type upstreamProbe struct {
 	// came from.
 	budget       time.Duration
 	budgetSource string
-	// failure tells the probe apart in the failure log (probeFailureKey):
-	// by its target with everything else that makes it the probe it is,
-	// parameters and forwarded headers; by the target alone when it is not
-	// set. requestURL is its url label, which logs show.
+	// failure identifies the probe in the failure log (probeFailureKey): its
+	// target plus everything else that makes it the probe it is, parameters
+	// and forwarded headers. When not set, it is the target alone.
+	// requestURL is its url label, which logs show.
 	failure    subjectKey
 	requestURL string
 	// backoffKey is what failure_backoff tells the target apart by
@@ -738,10 +740,10 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		s.logger.Debug("probe failed on its credential; no stale result served", p.logAttrs()...)
 		return result
 	}
-	// Nor is a target the collector may not reach answered for: the refusal
-	// is the answer, whatever an earlier probe, made before allowed_targets
-	// or denied_targets changed or before the target's name resolved
-	// elsewhere, left in the cache.
+	// A target the collector may not reach is not answered from the cache
+	// either. The refusal is the answer, whatever an earlier probe left in
+	// the cache, even one made before allowed_targets or denied_targets
+	// changed or before the target's name resolved elsewhere.
 	if result.refused {
 		s.logger.DebugContext(ctx, "probe refused by the target policy; no stale result served", p.logAttrs()...)
 		return result
@@ -782,10 +784,11 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	c, name, rec, logTarget := p.collector, p.collector.Name, p.rec, p.logTarget
 	out := newProbeRecorder()
-	// A probe that finished while this one was waiting to start may have just
-	// filled the cache. One that finds nothing there is a miss once it goes
-	// to the target: one the concurrency limit turns away is a rejection,
-	// and no miss, since nothing was fetched in place of a cache entry.
+	// A probe that finished while this one waited to start may have just
+	// filled the cache. A probe that finds nothing there is a miss once it
+	// goes to the target. One that the concurrency limit turns away is a
+	// rejection, not a miss, since nothing was fetched in place of a cache
+	// entry.
 	missed := false
 	if p.cacheKey != "" && model.CacheTTL(c) > 0 {
 		if cached, fetched, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
@@ -795,10 +798,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			})
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			out.metrics = &answer
-			// Queued for OTLP as a hit before the trip is (probeHandler):
-			// once, since the probes sharing this trip queue nothing of
-			// their own, and the probe that filled the entry queued its own
-			// answer, not this one's.
+			// Queued for OTLP as a hit before the trip is (probeHandler).
+			// It is queued once, since the probes sharing this trip queue
+			// nothing of their own. The probe that filled the entry queued
+			// its own answer, not this one.
 			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			hit := out.result(true)
 			hit.outcome = probeCached
@@ -816,10 +819,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			attrs: p.logAttrs(),
 		},
 	}
-	// A target failure_backoff is backing off from is not contacted: the
-	// trip fails at once, as its fetch would have, and takes no slot
-	// (backoff.go). A trip it lets through records its outcome, and one
-	// that ends without any — turned away below, or panicking — gives the
+	// A target that failure_backoff is backing off from is not contacted.
+	// The trip fails at once, as its fetch would have, and takes no slot
+	// (backoff.go). A trip it lets through records its outcome. A trip that
+	// ends without an outcome (turned away below, or panicking) gives the
 	// target's next trip back.
 	turn := s.backoffs.admit(c, p.backoffKey, logTarget)
 	defer turn.settle(rec.read, backoffUnknown)
@@ -896,20 +899,20 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		}
 		return failure
 	case result.carriedOn:
-		// The stage's policy said to carry on: answered as a probe whose
-		// rules produced no series is, by the same writer (writeMetricSet).
-		// An exposition is identified by its Content-Type, and an
-		// OpenMetrics one ends in # EOF: an answer with neither is in no
-		// format a scraper could read, which carrying on is there to
-		// prevent.
+		// The stage's policy said to carry on. The probe is answered like a
+		// probe whose rules produced no series, by the same writer
+		// (writeMetricSet). An exposition is identified by its Content-Type,
+		// and an OpenMetrics one ends in # EOF. An answer with neither is in
+		// no format a scraper could read, and carrying on exists to prevent
+		// that.
 		//
 		// Under report_failures the probe is a failure, as its answer says
-		// (probereport.go): counted as one, shown failed with its error on
-		// the status page, answered with the last good result under
-		// cache.stale_if_error (probeUpstream) and exported as a failed
-		// trace, so that nothing the exporter says of the probe disagrees
-		// with its http_exporter_probe_success 0. It is logged as its
-		// policy says, still.
+		// (probereport.go). It is counted as one, shown failed with its
+		// error on the status page, answered with the last good result
+		// under cache.stale_if_error (probeUpstream) and exported as a
+		// failed trace. So nothing the exporter says about the probe
+		// disagrees with its http_exporter_probe_success 0. It is still
+		// logged as its policy says.
 		answer := carriedOnAnswer(c)
 		out.metrics = &answer
 		carried := out.result(!c.ReportFailures)
@@ -946,14 +949,14 @@ func (s *Server) settleBackoff(turn *backoffTurn, read configRead, result collec
 	}
 }
 
-// carriedOnAnswer is what a probe of c that carried on past a failed stage,
-// under error_handling log or ignore, is answered with: what a trip that went
-// through whole and produced no series is answered with, so nothing of the
-// collector's, and the freshness series of a collector with
-// cache.stale_if_error, which every answer of such a collector has: the
-// answer is no stale result, and the trip was just made. Unlike that trip's
-// result it is neither cached nor exported over OTLP: no result was read from
-// the target, and a failed stage is never kept as a good one.
+// carriedOnAnswer is the answer for a probe of c that carried on past a failed
+// stage, under error_handling log or ignore. It is the answer of a trip that
+// went through whole and produced no series: nothing of the collector's, plus
+// the freshness series of a collector with cache.stale_if_error, which every
+// answer of such a collector has. The answer is not a stale result, and the
+// trip was just made. Unlike that trip's result, it is neither cached nor
+// exported over OTLP: no result was read from the target, and a failed stage
+// is never kept as a good one.
 func carriedOnAnswer(c *model.Collector) model.MetricSet {
 	now := time.Now()
 	// No series, so none whose name the freshness series could clash with.
@@ -1031,17 +1034,17 @@ type utf8Repairs struct {
 	first string
 }
 
-// noteUTF8Repairs counts and logs what the transform repaired for invalid
-// UTF-8 (transform.Transform repairs it before labels are mapped and
-// truncated), so the one scrape still reaches Prometheus and the problem is
-// still seen. file is the directory's file the transform was of, or empty;
-// target is what the lines name, keyTarget the address as the failure log
-// tells addresses apart.
+// noteUTF8Repairs counts and logs the invalid UTF-8 that the transform
+// repaired (transform.Transform repairs it before labels are mapped and
+// truncated). So the scrape still reaches Prometheus and the problem is still
+// seen. file is the directory's file the transform was of, or empty. target
+// is what the lines name. keyTarget is the address as the failure log tells
+// addresses apart.
 //
 // The first metric is named before the set is validated, so its name is as
-// long as the target or a script made it: the line shows it as an error
-// shows a name (model.ShownName), and one within that bound as it is. The
-// name is no part of what the warning is remembered by, which is the
+// long as the target or a script made it. The line shows it the way an error
+// shows a name (model.ShownName), and a name within that bound as it is. The
+// name is not part of what the warning is remembered by: that is the
 // collector, the address and the file.
 func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec statsRecorder, c *model.Collector, target, keyTarget, file string) {
 	key := aspectKey(c.Name, keyTarget, file, utf8Aspect)

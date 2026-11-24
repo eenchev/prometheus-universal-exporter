@@ -14,26 +14,26 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The debug page's endpoint test, at --web.debug=full with otlp.enabled:
-// one empty export, an ExportMetricsServiceRequest without a resource, or
-// with otlp.logs an ExportLogsServiceRequest and with otlp.traces an
-// ExportTraceServiceRequest, sent to the endpoint the
-// configuration in force names — never to one the visitor names — as an
-// export is sent (postOTLP): with otlp.headers, otlp.tls, otlp.compression
-// and otlp.timeout. What it answers is reported whole: its status, how long
-// it took, an error of the connection or of TLS as Go's client gives it, the
-// response's headers and the start of its body, the partialSuccess a 2xx
-// carries, and what an export would make of it (otlpAnswerOf).
+// The debug page's endpoint test runs at --web.debug=full with
+// otlp.enabled. It sends one empty export: an ExportMetricsServiceRequest
+// without a resource, or with otlp.logs an ExportLogsServiceRequest, and
+// with otlp.traces an ExportTraceServiceRequest. It goes to the endpoint the
+// configuration in force names, never to one the visitor names, and is sent
+// as an export is (postOTLP): with otlp.headers, otlp.tls, otlp.compression
+// and otlp.timeout. The answer is reported in full: its status, how long it
+// took, a connection or TLS error as Go's client gives it, the response's
+// headers and the start of its body, the partialSuccess a 2xx carries, and
+// what an export would make of it (otlpAnswerOf).
 //
 // It is one attempt, never retried, so a test takes otlp.timeout at most.
-// It is no export: it counts in none of the export's self-metrics, changes
-// nothing of what the status page shows of the exports or of readiness
-// under otlp.unready_after_failures, and is not logged to the log export.
-// One test is in progress at a time, the server's whole; another asked
-// meanwhile is refused, so the page cannot be made to send the endpoint
+// It is not an export. It counts in none of the export's self-metrics. It
+// changes nothing the status page shows of the exports, or of readiness
+// under otlp.unready_after_failures, and it is not logged to the log export.
+// One test runs at a time for the whole server, and another one asked for
+// meanwhile is refused. So the page cannot be made to send the endpoint
 // requests one after another as fast as it is clicked.
 //
-// It is asked for as a run is (debugSameOrigin): a POST carrying the
+// It is requested the same way as a run (debugSameOrigin): a POST with the
 // X-Debug-Run header and a JSON body, which a page of another site cannot
 // send, behind web.basic_auth.
 
@@ -168,9 +168,9 @@ func (s *Server) testOTLPEndpoint(ctx context.Context, cfg model.OTLPConfig, sig
 		sent.Set("Content-Encoding", "gzip")
 	}
 	// otlp.headers carry the endpoint's API key under whatever name the
-	// vendor gave it — x-honeycomb-team, uptrace-dsn — which no rule for a
-	// credential's name can tell, so each is shown by its name alone; what
-	// the export sets itself is shown as sent.
+	// vendor chose (x-honeycomb-team, uptrace-dsn). No rule for credential
+	// names can recognise them, so each is shown by its name only. Headers
+	// the export sets itself are shown as sent.
 	shown := sent.Clone()
 	for k, v := range cfg.Headers {
 		sent.Set(k, v)

@@ -10,17 +10,19 @@ import (
 
 // An exporter in allocator mode (--allocator.url) that starts without a
 // bundle in its cache directory has no configuration until the allocator
-// serves it one. Its manager then holds an empty one and says it is awaiting
-// (config.NewAwaitingManager): /health answers, /ready answers 503, and
-// every other endpoint — /probe, the static targets, the self-metrics, the
-// landing and collectors pages, the debug page and /-/reload — answers 503
-// with a sentence that says what it waits for. The bundle carries
-// web.basic_auth, so until one is in force nothing says which requests to
-// let in, and none is (basicAuthMiddleware). The self-metrics would show the
-// allocator's sync errors while waiting, but they are what the credential
-// protects; the exporter's log has those errors. The first bundle put in
-// force ends it, whatever reload put it in force; one in the cache directory
-// that loads at start is in force from the start.
+// serves one. Until then its manager holds an empty configuration and
+// reports that it is awaiting one (config.NewAwaitingManager):
+//   - /health answers, and /ready answers 503;
+//   - every other endpoint (/probe, the static targets, the self-metrics,
+//     the landing and collectors pages, the debug page and /-/reload)
+//     answers 503 with a sentence that says what it waits for.
+//
+// The bundle carries web.basic_auth, so until one is in force nothing says
+// which requests to let in, and none is let in (basicAuthMiddleware). The
+// self-metrics would show the allocator's sync errors while waiting, but the
+// credential protects them; the exporter's log has those errors. Waiting
+// ends with the first bundle put in force, whatever reload did it. A bundle
+// in the cache directory that loads at start is in force from the start.
 
 // SetAwaitingReason sets what the endpoints answer while the manager is
 // awaiting its first configuration: a plain sentence naming what it waits
@@ -46,22 +48,23 @@ func (s *Server) awaitingConfiguration(w http.ResponseWriter) bool {
 // first configuration.
 const awaitingReadyReason = "no configuration yet: waiting for the allocator"
 
-// AllocatorStatus is how an exporter in allocator mode is keeping up with
-// the allocator, for the self-metrics: when it last heard which bundle is
-// its own; its sync errors by stage, each stage listed from zero; and the
-// bundles it refused. The generation in force is not part of it: it is the
-// manager's (config.Manager.Generation), stored with the configuration in
-// force, so the self-metrics never name a generation other than that of the
-// configuration the probes are answered from, as the client, which learns
-// of it once the reload has returned, could.
+// AllocatorStatus is how an exporter in allocator mode keeps up with the
+// allocator, for the self-metrics. It holds when the exporter last heard
+// which bundle is its own, its sync errors by stage (each stage listed from
+// zero), and the bundles it refused. The generation in force is not part of
+// it. That belongs to the manager (config.Manager.Generation) and is stored
+// with the configuration in force. So the self-metrics never name a
+// generation other than that of the configuration the probes are answered
+// from. The client could, since it learns of it only after the reload has
+// returned.
 type AllocatorStatus struct {
 	LastSync   time.Time
 	SyncErrors map[string]uint64
 	Refused    uint64
-	// URL is the allocator's (--allocator.url) and Member this replica's
-	// member name, for the status page's link to the allocator's view of
-	// the member. Generation is the bundle the client last saw put in
-	// force and InForceAt when it was: the status page says it beside the
+	// URL is the allocator's URL (--allocator.url) and Member is this
+	// replica's member name, for the status page's link to the allocator's
+	// view of the member. Generation is the bundle the client last saw put
+	// in force, and InForceAt is when. The status page shows it beside the
 	// manager's generation only when the two are the same bundle.
 	URL, Member, Generation string
 	InForceAt               time.Time

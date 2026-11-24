@@ -9,56 +9,63 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A target that is down fails every scrape, and each of those scrapes goes
-// to it all the same: a connection that hangs until its timeout holds a
-// trip slot of the collector (max_concurrent_probes) and of the exporter
-// (--probe.max-concurrent) for the whole of it, so a handful of dead
-// endpoints can keep the slots full and turn away the probes of targets
-// that answer. failure_backoff stops contacting such a target for a while:
-// after `after` consecutive failed trips, its probes and static target
-// scrapes fail at once, as a failed fetch, for `initial`, the wait doubling
-// with each further failure up to `max`.
+// A target that is down fails every scrape, yet each of those scrapes still
+// goes to it. A connection that hangs until its timeout holds a trip slot of
+// the collector (max_concurrent_probes) and of the exporter
+// (--probe.max-concurrent) the whole time. So a handful of dead endpoints
+// can keep the slots full and turn away the probes of targets that answer.
+// failure_backoff stops contacting such a target for a while. After `after`
+// consecutive failed trips, its probes and static target scrapes fail at
+// once, as a failed fetch, for `initial`. The wait doubles with each further
+// failure, up to `max`.
 //
-// A trip failed for backoff's purposes when its fetch did: the connection,
-// a timeout, TLS, a status the collector does not accept, a request type's
+// For backoff, a trip failed when its fetch failed: the connection, a
+// timeout, TLS, a status the collector does not accept, or a request type's
 // own fetch error. A target that answered with something the decoder or the
-// transform could not read is up, and its trips go on. Nothing is known of
-// the target from a trip the target policy refused, one a trip limit turned
-// away before it started, or one cancelled because every probe waiting for
-// it went away or the exporter shut down: such a trip changes nothing here.
+// transform could not read is up, and its trips go on. These trips tell
+// nothing about the target and change nothing here:
 //
-// Nor from a trip that ran out of a budget below min_budget. A probe's
-// budget comes from its caller, from Prometheus's scrape timeout header,
-// which is no part of the key a target is told apart by: without the floor,
-// a caller asking for less time than the target needs to answer would back
-// the target off for every probe and static target scrape sharing its key.
-// A target that does not answer at all still backs off, since the budgets
-// Prometheus gives are above the floor. Failures that are not the deadline's
-// — a refused connection, TLS, a status — count whatever the budget.
+//   - a trip the target policy refused;
+//   - a trip a trip limit turned away before it started;
+//   - a trip cancelled because every probe waiting for it went away or the
+//     exporter shut down.
 //
-// A skipped trip fails in the fetch stage, under error_handling
-// on_fetch_error and with cache.stale_if_error answering for it, exactly as
-// the fetch it stands for would have, so not when that fetch was refused
-// its credential, which no stale result answers; it takes no trip slot, and is counted
-// in http_exporter_backoff_skipped_total. When the wait has passed, the
-// next trip goes to the target alone: one trip at a time, so that a wait
-// running out does not let every probe waiting for it through at once. A
-// probe identical to it shares it as any probe shares a trip in flight
-// (probeflight.go); any other, such as one of a collector with coalesce:
-// false, fails at once as during the wait. Its failure doubles the wait,
-// and its success, or any trip's, forgets the target.
+// The same holds for a trip that ran out of a budget below min_budget. A
+// probe's budget comes from its caller, through Prometheus's scrape timeout
+// header, which is not part of the key that identifies a target. Without
+// the floor, a caller asking for less time than the target needs to answer
+// would back off the target for every probe and static target scrape that
+// shares its key. A target that does not answer at all still backs off,
+// since the budgets Prometheus gives are above the floor. Failures other
+// than the deadline (a refused connection, TLS, a status) count whatever
+// the budget.
 //
-// A target is told apart as the response cache and the shared trips tell
-// probes apart (probeCacheKey): by the collector's definition, the target,
-// the probe parameters and the forwarded headers, so probes with different
-// param_ values back off apart, and a static target and the identical probe
-// share their state. Probe targets come from the query string, so the
-// targets remembered are bounded per collector (maxBackoffTargets), the one
-// that failed longest ago forgotten first, and a target is forgotten as
-// soon as a trip to it succeeds. A reload that removes or changes a
-// collector forgets its targets with its other state (reconcile.go).
+// A skipped trip fails in the fetch stage, exactly as the fetch it stands
+// for would have: under error_handling on_fetch_error, with
+// cache.stale_if_error answering for it, but not when that fetch was
+// refused its credential, which no stale result answers. It takes no trip
+// slot and is counted in http_exporter_backoff_skipped_total.
 //
-// A debug run neither asks nor tells: it always contacts the target, its
+// When the wait has passed, the next trip goes to the target alone, one trip
+// at a time, so the end of a wait does not let every waiting probe through
+// at once. A probe identical to it shares it, as any probe shares a trip in
+// flight (probeflight.go). Any other probe, such as one of a collector with
+// coalesce: false, fails at once as during the wait. If this trip fails,
+// the wait doubles. If it or any other trip succeeds, the target is
+// forgotten.
+//
+// A target is identified the way the response cache and the shared trips
+// identify probes (probeCacheKey): by the collector's definition, the
+// target, the probe parameters and the forwarded headers. So probes with
+// different param_ values back off separately, and a static target and the
+// identical probe share their state. Probe targets come from the query
+// string, so the remembered targets are bounded per collector
+// (maxBackoffTargets), and the one that failed longest ago is forgotten
+// first. A target is forgotten as soon as a trip to it succeeds. A reload
+// that removes or changes a collector forgets its targets along with its
+// other state (reconcile.go).
+//
+// A debug run neither asks nor tells. It always contacts the target, its
 // outcome changes nothing here, and its report says when the target is
 // backing off (probedebug.go).
 
@@ -104,10 +111,10 @@ func newFailureBackoffs() *failureBackoffs {
 	return &failureBackoffs{collectors: map[string]*collectorBackoffs{}, now: time.Now, limit: maxBackoffTargets}
 }
 
-// backoffTurn is what admit decided for one trip: refusal, when the trip
-// must not contact the target, and otherwise what settle needs to record its
-// outcome. A nil turn is a trip of a collector without failure_backoff, or
-// without a key, and records nothing.
+// backoffTurn is what admit decided for one trip: refusal when the trip must
+// not contact the target, and otherwise what settle needs to record the
+// outcome. A nil turn belongs to a trip of a collector without
+// failure_backoff, or without a key, and records nothing.
 type backoffTurn struct {
 	b         *failureBackoffs
 	collector string
@@ -125,9 +132,9 @@ type backoffTurn struct {
 }
 
 // backoffError is the failure of a skipped trip. Its text names the number
-// of failures and the time of the next try, both of which move from one
-// skip to the next: the failure log recognises it by the target alone
-// (model.SameFailureAs), so its repeats are one failure.
+// of failures and the time of the next try, and both change from one skip
+// to the next. The failure log recognises it by the target alone
+// (model.SameFailureAs), so its repeats count as one failure.
 func backoffError(display string, failures int, until time.Time, trial bool) error {
 	if display == "" {
 		// A localfile collector reading its own path has no target named.
@@ -186,10 +193,10 @@ const (
 	backoffSucceeded
 )
 
-// outcomeOf is what the trip that ended as r says of its target, for a
-// collector whose min_budget is floor: a trip that ran out of a budget
-// below it says nothing (a budget of 0 is no bound the caller set, and its
-// timeout counts).
+// outcomeOf is what the trip that ended as r says about its target, for a
+// collector whose min_budget is floor. A trip that ran out of a budget
+// below floor says nothing. A budget of 0 is not a bound the caller set, so
+// its timeout counts.
 func outcomeOf(r collected, floor time.Duration) backoffOutcome {
 	switch {
 	case r.aborted, r.refused, r.skipped:
@@ -202,13 +209,13 @@ func outcomeOf(r collected, floor time.Duration) backoffOutcome {
 	return backoffSucceeded
 }
 
-// settle records the outcome of the trip admit let through, for a trip
-// that read its collector as read says: nothing, once a reload has removed
-// or changed the collector since, whose targets were forgotten with it and
-// must not be remembered again for a definition that is gone. started is
-// set when this failure is the one that makes the target back off, with
-// the failures and the end of the wait for the log. A turn is settled once;
-// a later call does nothing, so a caller can defer one with backoffUnknown
+// settle records the outcome of the trip that admit let through; read is
+// how that trip read its collector. If a reload has since removed or
+// changed the collector, settle records nothing: its targets were forgotten
+// with it and must not be remembered again for a definition that is gone.
+// started is set when this failure makes the target back off, together with
+// the failures and the end of the wait for the log. A turn is settled once
+// and later calls do nothing, so a caller can defer one with backoffUnknown
 // for a trip that panicked or was turned away.
 func (t *backoffTurn) settle(read configRead, outcome backoffOutcome) (started bool, failures int, until time.Time) {
 	if t == nil || t.settled || t.refusal != nil {
@@ -336,10 +343,10 @@ func (b *failureBackoffs) describe(collector, key string) string {
 	return ""
 }
 
-// backoffState is what failure_backoff holds of one target, for the status
-// page: its consecutive failed trips, and whether its trips are kept from it
-// now, until when, or because the trip let through after the wait is in
-// progress.
+// backoffState is what failure_backoff holds about one target, for the
+// status page: its consecutive failed trips, and whether its trips are held
+// back now, and until when, or because the trip let through after the wait
+// is in progress.
 type backoffState struct {
 	failures   int
 	backingOff bool

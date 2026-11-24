@@ -24,9 +24,9 @@ var answerEndpointLabels = [answerEndpoints]string{
 }
 
 // answerCounter adds up the answers of one endpoint: the bytes their
-// handler wrote, before compression, and those written on to the client,
-// after it. They are atomic, added to once per answer when it is done, so
-// that answers written at once take no lock.
+// handler wrote before compression, and the bytes written on to the client
+// after it. The counters are atomic and are added to once per answer, when
+// it is done, so concurrent answers take no lock.
 type answerCounter struct {
 	written atomic.Uint64
 	sent    atomic.Uint64
@@ -46,10 +46,10 @@ func (c *answerCounter) add(written, sent int64) {
 type answerCounters [answerEndpoints]answerCounter
 
 // answerMetrics are http_exporter_answer_bytes_total and
-// http_exporter_answer_sent_bytes_total, a series for each endpoint, whose
-// handlers are always served: each is there from the start, at 0, whether
-// or not the endpoint has answered yet, or the exporter has static targets,
-// so a rate of each can be taken from the first scrape.
+// http_exporter_answer_sent_bytes_total, with a series for each endpoint
+// whose handlers are always served. Each series is there from the start, at
+// 0, whether or not the endpoint has answered yet or the exporter has static
+// targets, so a rate of each can be taken from the first scrape.
 func (s *Server) answerMetrics() []model.Metric {
 	out := make([]model.Metric, 0, 2*answerEndpoints)
 	for i := range s.answers {
@@ -62,9 +62,9 @@ func (s *Server) answerMetrics() []model.Metric {
 }
 
 // answerGzipLevelMetric is http_exporter_answer_gzip_level, --web.gzip-level,
-// published with the verbose self-metrics only: it is configuration, which
-// the command line already says, and only of use to tell the two counters
-// above apart.
+// published with the verbose self-metrics only. It is configuration, which
+// the command line already shows, and is only useful to tell the two
+// counters above apart.
 func (s *Server) answerGzipLevelMetric() model.Metric {
 	return model.Metric{Name: "http_exporter_answer_gzip_level", Help: answerGzipLevelHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.compression.level)}
 }

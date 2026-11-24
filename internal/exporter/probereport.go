@@ -23,25 +23,25 @@ import (
 //	http_exporter_probe_failed_stage{stage}  1, naming the stage that failed,
 //	                                         on a failure alone
 //
-// A failed probe is answered 200 with them alone; a stale result standing in
-// for a failed trip (cache.stale_if_error) keeps its series beside them and
-// is a failure, as it is to the self-metrics. A stage error_handling carried
-// on past failed too: the answer says so, and so does everything else that
-// counts the probe, the self-metrics, the status page, a stale result
-// standing in and the trace export (probeTrip), where without the key such a
-// probe is a success. Nothing of the
-// error's text is answered, so nothing of the target's answer is: the stage
-// names where it failed, and the log has the rest as before.
+// A failed probe is answered 200 with these series alone. A stale result
+// standing in for a failed trip (cache.stale_if_error) keeps its series
+// beside them and is a failure, as it is to the self-metrics. A stage that
+// error_handling carried on past also failed. The answer says so, and so
+// does everything else that counts the probe: the self-metrics, the status
+// page, a stale result standing in, and the trace export (probeTrip).
+// Without the key, such a probe is a success. None of the error's text is
+// answered, so nothing of the target's answer is: the stage names where it
+// failed, and the log has the rest as before.
 //
-// What the target was not asked for answers as before: a probe the target
-// policy refused (403) is the caller's to change, one the concurrency limit
-// turned away (503) and one whose caller went away are the exporter's, and
-// none says anything of the target.
+// What the target was not asked for answers as before. A probe the target
+// policy refused (403) is the caller's to change. One the concurrency limit
+// turned away (503) and one whose caller went away are the exporter's. None
+// of them says anything of the target.
 //
-// The series are added to each probe's answer as it is written: the
+// The series are added to each probe's answer as it is written. So the
 // response cache and the OTLP export keep the collector's own series, the
-// probes sharing a trip each answer their own duration, and the self-metrics
-// count a failure as one. Static targets have
+// probes sharing a trip each answer their own duration, and the
+// self-metrics count a failure as one. Static targets have
 // http_exporter_target_up and are not changed by it.
 
 // probeSeriesHelp is the help of each series of report_failures.
@@ -70,12 +70,12 @@ func reportedSeries(result *probeResult) int {
 }
 
 // reportedAnswer is the answer of a probe with report_failures: the series
-// of answer, which may be nil, and after them the probe's own. success is
+// of answer, which may be nil, followed by the probe's own. success is
 // whether the probe succeeded, as the self-metrics count it, and
-// failedStage the stage that failed, of a failure. A probe is not a success
-// for having no stage: one that panicked failed as much as one whose stage
-// did, and the answer may not say otherwise than the self-metrics. answer
-// is not changed: the probes sharing a trip each make their own from it.
+// failedStage is the stage that failed, for a failure. Having no stage does
+// not make a probe a success: one that panicked failed as much as one whose
+// stage did, and the answer may not contradict the self-metrics. answer is
+// not changed: the probes sharing a trip each make their own from it.
 func reportedAnswer(answer *model.MetricSet, success bool, failedStage string, elapsed time.Duration) model.MetricSet {
 	var own []model.Metric
 	if answer != nil {
@@ -108,14 +108,14 @@ func writeProbeAnswer(w http.ResponseWriter, r *http.Request, c *model.Collector
 	writeMetricSet(w, r, &answer, utf8Names)
 }
 
-// reportedTrace says in end, the end of the trace of a probe of c whose trip
-// ended as result, what report_failures answered: 200 and its series. The
-// probe stays failed in it, as it is to the self-metrics, and its
-// error.type is the stage that failed, which the answer names, rather than
-// the status it would have been answered without the key, which would
-// contradict the 200 beside it. A stale result standing in and a probe
-// failure_backoff kept from the target keep their own, stale and backoff,
-// which are no status either.
+// reportedTrace records in end, the end of the trace of a probe of c whose
+// trip ended as result, what report_failures answered: 200 and its series.
+// The probe stays failed in the trace, as it is to the self-metrics. Its
+// error.type is the stage that failed, which the answer names. It is not
+// the status the probe would have been answered without the key, which
+// would contradict the 200 beside it. A stale result standing in, and a
+// probe that failure_backoff kept from the target, keep their own, stale
+// and backoff, which are not statuses either.
 func reportedTrace(c *model.Collector, result *probeResult, end *probeTraceEnd) {
 	if !reportsProbe(c, result) {
 		return
@@ -136,12 +136,12 @@ func reportedRecent(c *model.Collector, result *probeResult, recent recentProbe)
 	return recent
 }
 
-// reportedVerdict is what a debug run says a probe of c would have
-// answered, verdict and answer as debugVerdict says them, with
-// report_failures: the same answer with the probe's series, 200 in place of
-// a failure. staleAge is the age of the last good result standing in for
-// the failure, which the answer is then, empty when none does. elapsed is
-// the run's trip, which stands for the probe's duration.
+// reportedVerdict is what a debug run says a probe of c would have answered
+// with report_failures, given verdict and answer as debugVerdict says them:
+// the same answer with the probe's series, and 200 in place of a failure.
+// staleAge is the age of the last good result standing in for the failure,
+// which is then the answer, or empty when none does. elapsed is the run's
+// trip, which stands for the probe's duration.
 func reportedVerdict(c *model.Collector, result collected, verdict string, answer *model.MetricSet, staleAge string, elapsed time.Duration) (string, *model.MetricSet) {
 	if !c.ReportFailures || result.aborted || result.refused {
 		return verdict, answer
@@ -159,10 +159,10 @@ func reportedVerdict(c *model.Collector, result collected, verdict string, answe
 	return fmt.Sprintf("200 with %s 0 and the %s stage failed (report_failures), in place of %s", model.ProbeSuccessMetric, result.stage, verdict), &reported
 }
 
-// checkProbeNames refuses, of a collector with report_failures, a result
-// with a series of a name of the probe's own series: one a Python script or
-// a prometheus transform made on the scrape, which the load could not see
-// (config.checkProbeSeriesNames refuses a rule's).
+// checkProbeNames refuses, for a collector with report_failures, a result
+// with a series named like one of the probe's own series. Such a series is
+// made on the scrape by a Python script or a prometheus transform, which
+// the load could not see (config.checkProbeSeriesNames refuses a rule's).
 func checkProbeNames(c *model.Collector, set model.MetricSet) error {
 	if !c.ReportFailures {
 		return nil

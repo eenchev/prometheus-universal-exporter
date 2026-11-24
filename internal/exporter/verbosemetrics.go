@@ -26,42 +26,45 @@ import (
 //     not, so the pool's status can be read and alerted on without knowing
 //     which collectors use it.
 //
-// Besides, without a collector label, the trips waiting for a slot and
-// http_exporter_answer_gzip_level, --web.gzip-level (answermetrics.go).
+// Verbose mode also adds, without a collector label, the trips waiting for
+// a slot and http_exporter_answer_gzip_level, --web.gzip-level
+// (answermetrics.go).
 //
 // Both are bounded: fixed buckets per collector, and fixed sets of states,
-// stop reasons and run outcomes. The histogram is only recorded while verbose
-// self-metrics are on; the worker counters are kept regardless, since the pool
-// counts them anyway, and only published when verbose. A collector's are kept
-// for as long as the collector's statistics are, and dropped with them when a
-// reload removes the collector (pythonstats.go).
+// stop reasons and run outcomes. The histogram is recorded only while
+// verbose self-metrics are on. The worker counters are kept regardless,
+// since the pool counts them anyway, and are published only in verbose
+// mode. A collector's are kept for as long as the collector's statistics
+// are, and dropped with them when a reload removes the collector
+// (pythonstats.go).
 
 // scrapeDurationBuckets are the upper bounds in seconds of this histogram and
 // of http_exporter_probe_duration_seconds (probedurations.go), from a fast
 // local endpoint to the slowest scrape a Prometheus timeout allows.
 var scrapeDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
-// durationHistogram is one collector's histogram, of its trips or, in
+// durationHistogram is one collector's histogram of its trips or, in
 // http_exporter_probe_duration_seconds, of its probes or static scrapes. It
-// is part of the collector's statistics (serverStats), whose lock guards it,
-// and not kept by the collector's name: a trip records its duration where it records its
-// counters, so a trip that ends after a reload removed its collector, and
-// dropped those statistics, cannot be observed in the histogram of a collector
-// brought back under the name, which would then hold an observation older
-// than its creation time (selfcreated.go).
+// is part of the collector's statistics (serverStats), whose lock guards
+// it, and is not kept by the collector's name. A trip records its duration
+// where it records its counters. So a trip that ends after a reload removed
+// its collector, and dropped those statistics, cannot be observed in the
+// histogram of a collector brought back under the name. That histogram
+// would then hold an observation older than its creation time
+// (selfcreated.go).
 //
-// The same observations are kept in exponential buckets too
-// (model.ExponentialHistogram), which the protobuf answer of the self-metrics
-// writes as a native histogram and the OTLP export, with
-// otlp.exponential_histograms, as an exponential histogram. They cost at most
-// 160 counters a collector, and resolve a duration to within a few percent
-// wherever it falls, where the fixed buckets can only say it was between 2.5
-// and 5 seconds.
+// The same observations are also kept in exponential buckets
+// (model.ExponentialHistogram). The protobuf answer of the self-metrics
+// writes them as a native histogram, and the OTLP export, with
+// otlp.exponential_histograms, as an exponential histogram. They cost at
+// most 160 counters a collector and resolve a duration to within a few
+// percent wherever it falls, where the fixed buckets can only say it was
+// between 2.5 and 5 seconds.
 //
-// With otlp.traces on, each bucket keeps an exemplar: the latest
-// observation in it of a trip whose trace was exported, with that trace's
-// id and its root span's (otlptraceslink.go), as Prometheus' Go client
-// keeps the latest exemplar of each bucket. The +Inf bucket has its own.
+// With otlp.traces on, each bucket keeps an exemplar: its latest
+// observation of a trip whose trace was exported, with that trace's id and
+// its root span's (otlptraceslink.go). Prometheus' Go client likewise keeps
+// the latest exemplar of each bucket. The +Inf bucket has its own.
 type durationHistogram struct {
 	counts      []uint64 // per bucket, not cumulative; made by the first observation
 	sum         float64
@@ -134,11 +137,11 @@ func (s *serverStats) tripHistogram() *model.Histogram {
 	return durationsOf(s, tripDurations)
 }
 
-// observeTargetScrape records a trip to the target in the statistics the trip
-// counts in, when verbose self-metrics are on, and makes it its bucket's
-// exemplar once the trace of the probe or the scrape that made the trip,
-// link, is exported (nil for none). A trip shared by several probes is
-// the trace of the probe that started it, whose context it runs in.
+// observeTargetScrape records a trip to the target in the statistics the
+// trip counts in, when verbose self-metrics are on. Once link, the trace of
+// the probe or the scrape that made the trip, is exported (nil for none),
+// the trip becomes its bucket's exemplar. A trip shared by several probes
+// is the trace of the probe that started it, whose context it runs in.
 func (s *Server) observeTargetScrape(stats *serverStats, elapsed time.Duration, link *traceLink) {
 	if !s.verboseSelfMetrics() {
 		return
@@ -191,10 +194,11 @@ func pythonPoolMetrics() []model.Metric {
 }
 
 // verboseCollectorMetrics builds the verbose-only families above for the
-// configured collectors, whose statistics are stats: a collector's histogram
-// is part of those, and counts since they do (selfcreated.go), as the
-// counters of its Python workers do, which are dropped when those are. It
-// returns nothing unless verbose self-metrics are on.
+// configured collectors, whose statistics are stats. A collector's
+// histogram is part of those statistics and counts since they do
+// (selfcreated.go), as do the counters of its Python workers, which are
+// dropped when those are. It returns nothing unless verbose self-metrics
+// are on.
 func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.Metric {
 	if !s.verboseSelfMetrics() {
 		return nil
@@ -213,8 +217,8 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 	var out []model.Metric
 	since, read := make([]int64, len(names)), make([]*serverStats, len(names))
 	for i, name := range names {
-		// The configuration is read again here, and a reload may have added a
-		// collector since stats were taken: its statistics are made now, as
+		// The configuration is read again here, and a reload may have added
+		// a collector since stats were taken. Its statistics are made now, as
 		// its first probe would make them, so its histogram has at once the
 		// creation time it keeps.
 		collector := stats[name]
@@ -232,10 +236,10 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 		if !python[name] {
 			continue
 		}
-		// What the workers counted is read from the statistics kept for the
-		// collector whose own were read above, and from no others
-		// (pythonStatsShown): the counts and their creation time are one
-		// collector's, whatever reloads came between the two readings.
+		// The worker counts are read from the statistics kept for the
+		// collector whose own statistics were read above, and from no others
+		// (pythonStatsShown). So the counts and their creation time belong
+		// to one collector, whatever reloads came between the two readings.
 		snap := transform.PythonWorkers().SnapshotOf(s.pythonStatsShown(read[i], name))
 		labels := func(extra ...string) map[string]string {
 			l := map[string]string{"collector": name}

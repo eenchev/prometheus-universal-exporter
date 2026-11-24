@@ -6,28 +6,27 @@ import (
 	"sync"
 )
 
-// The static target file's concurrency bounds the scrapes in progress of
-// every collector together, and a scrape holds its slot until it ends, at
-// its deadline at the latest. Handed out first come, first served, the
-// slots would all go to whichever collector's targets are slow: a database
-// that hangs, scraped every minute with a timeout of a minute, would hold
-// every slot, and every other collector's targets would be skipped turn
-// after turn. So the slots are shared between the collectors the file
-// names:
+// The static target file's concurrency bounds the scrapes in progress of all
+// collectors together. A scrape holds its slot until it ends, at its
+// deadline at the latest. Handed out first come, first served, all slots
+// would go to whichever collector's targets are slow. A database that hangs,
+// scraped every minute with a timeout of a minute, would hold every slot,
+// and every other collector's targets would be skipped turn after turn. So
+// the slots are shared between the collectors the file names:
 //
-//   - each collector may hold its share, concurrency divided by the number
-//     of collectors the file names, at least one, whenever it asks;
-//   - beyond its share it takes a slot only while that leaves one free for
-//     every other collector holding none, half the slots at most, so that a
-//     collector that comes for a slot finds one at once, however the
-//     others' targets behave;
-//   - a slot freed goes to the scrape waiting whose collector holds the
-//     fewest, the first to wait of those, so a collector with many slots
-//     does not take it from one with few.
+//   - Each collector may hold its share whenever it asks: concurrency
+//     divided by the number of collectors the file names, at least one.
+//   - Beyond its share, a collector takes a slot only while that leaves one
+//     free for every other collector holding none, and at most half the
+//     slots. So a collector that comes for a slot finds one at once, however
+//     the others' targets behave.
+//   - A freed slot goes to the waiting scrape whose collector holds the
+//     fewest slots, and among those to the first to wait. So a collector
+//     with many slots does not take it from one with few.
 //
-// A file of a single collector, and one whose collectors are all busy
-// within their shares, uses every slot, as before. A file of more
-// collectors than slots gives each one slot at least, and lets one take
+// A file with a single collector, or one whose collectors are all busy
+// within their shares, uses every slot, as before. A file with more
+// collectors than slots gives each at least one slot, and lets one take
 // half of them while the others are idle.
 
 // staticSlots are the static target file's slots.
@@ -131,10 +130,10 @@ func (s *staticSlots) releaseLocked(collector string) {
 	s.grantLocked()
 }
 
-// grantLocked hands free slots to the scrapes waiting that may take them:
-// each to the one whose collector holds the fewest, the first to wait of
-// those, so that a collector over its share does not win a slot from one
-// under it by having waited longer.
+// grantLocked hands free slots to the waiting scrapes that may take them.
+// Each goes to the scrape whose collector holds the fewest, and among those
+// to the first to wait. So a collector over its share does not win a slot
+// from one under it by having waited longer.
 func (s *staticSlots) grantLocked() {
 	for {
 		best := -1

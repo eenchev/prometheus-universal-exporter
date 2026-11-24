@@ -7,17 +7,17 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The status page's OTLP section says whether exports get through: the
-// endpoint, its last export and its last success, the failures in a row
-// and the readiness, as /ready answers it, the last failure's error, and what waits,
-// what was dropped and what was retried. It reads the counters the
-// self-metrics read (otlpStatus) and the points pending, and keeps of its
-// own only what nothing else did: the last export's details and the last
-// failure's error, one record of the endpoint in force (otlpHistory). A
-// reload that points OTLP elsewhere starts that record again, as it starts
-// the failures that make the exporter unready, so the page never blames the
-// new endpoint for the old one's failures; the counters since the start, as
-// the self-metrics have them, go on.
+// The status page's OTLP section says whether exports get through. It shows
+// the endpoint, its last export and last success, the failures in a row,
+// the readiness as /ready answers it, the last failure's error, and what
+// waits, what was dropped and what was retried. It reads the counters the
+// self-metrics read (otlpStatus) and the pending points. It keeps only what
+// nothing else keeps: the last export's details and the last failure's
+// error, as one record of the endpoint in force (otlpHistory). A reload that
+// points OTLP elsewhere starts that record again, as it restarts the
+// failures that make the exporter unready. So the page never blames the new
+// endpoint for the old one's failures. The counters since the start, as the
+// self-metrics have them, continue.
 
 // statusPartialSuccess is the result of an export the endpoint accepted
 // without some of its data points.
@@ -55,10 +55,10 @@ type OTLPStatusDetails struct {
 	LastExport  *otlpLastExport `json:"last_export,omitempty"`
 	LastSuccess string          `json:"last_success,omitempty"`
 	Failures    int             `json:"consecutive_failures"`
-	// UnreadyAfter is otlp.unready_after_failures, and Readiness, with it
-	// set, what /ready answers: ready, or unready for UnreadyReasons, the
-	// reasons /ready gives, and since UnreadySince when the failed exports
-	// are what made it so.
+	// UnreadyAfter is otlp.unready_after_failures. When it is set, Readiness
+	// is what /ready answers: ready, or unready for UnreadyReasons (the
+	// reasons /ready gives), and since UnreadySince when the failed exports
+	// caused it.
 	UnreadyAfter   int      `json:"unready_after_failures,omitempty"`
 	Readiness      string   `json:"readiness,omitempty"`
 	UnreadyReasons []string `json:"unready_reasons,omitempty"`
@@ -437,9 +437,9 @@ func (s *Server) otlpStatusSectionFor(cfg model.OTLPConfig, exportedTargets int,
 	d.LastErrorRecovered = errorRecovered(d.LastError, !d.Failing)
 	if d.UnreadyAfter > 0 {
 		// What /ready answers, from the same reasons, not from the failed
-		// exports alone: the exporter is also unready while it shuts down
-		// and, in allocator mode, before its first bundle. Read after
-		// o.mu is released, which notReadyReasons takes.
+		// exports alone. The exporter is also unready while it shuts down
+		// and, in allocator mode, before its first bundle. It is read after
+		// o.mu is released, because notReadyReasons takes it.
 		d.Readiness = "ready"
 		if reasons := s.notReadyReasons(); len(reasons) > 0 {
 			d.Readiness, d.UnreadyReasons = "unready", reasons

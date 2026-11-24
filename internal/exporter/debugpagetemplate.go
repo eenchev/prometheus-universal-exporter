@@ -2,17 +2,21 @@ package exporter
 
 import "github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 
-// The debug page (debugpage.go): a collector, the playground, one written in
-// an editor, or one chosen from the configuration in force, the response it
-// is run on — pasted, or at --web.debug=full a target fetched through a
-// configured collector or a static target's scrape — and what the run gave:
-// the series a probe would answer, as a table and as text, and with OTLP on
-// what the next export would send of them, the requests, the response, the stages,
-// the metric lint's advice, what was logged and the whole debug report. It
-// runs when Run is pressed, and only then; a run cancels the one before it.
+// The debug page (debugpage.go) shows:
+//
+//   - a collector: the playground (one written in an editor) or one chosen
+//     from the configuration in force;
+//   - the response it is run on: pasted, or at --web.debug=full a target
+//     fetched through a configured collector, or a static target's scrape;
+//   - what the run gave: the series a probe would answer, as a table and as
+//     text, and with OTLP on, what the next export would send of them; the
+//     requests, the response, the stages, the metric lint's advice, the log
+//     lines and the whole debug report.
+//
+// It runs only when Run is pressed, and a run cancels the one before it.
 // The collectors page links each collector here as ?collector=<name>, with
-// &target=<target> at full, and the page starts from what the link names;
-// at full ?static_target=<name> opens it on that static target, its
+// &target=<target> at full, and the page starts from what the link names.
+// At full, ?static_target=<name> opens it on that static target, with its
 // collector chosen.
 
 type debugPage struct {
@@ -27,10 +31,10 @@ type debugPage struct {
 	// scrape timeout Prometheus would send.
 	ProbeTimeoutSeconds  int
 	Example, ExampleBody string
-	// Chosen is the configured collector the page's address names, which
-	// it opens with, and ChosenYAML that collector as the page shows it
-	// (debugcollector.go); ChosenCopy is what Edit a copy puts in the
-	// playground in its place, and ChosenCopyNote what the page says of it
+	// Chosen is the configured collector named in the page's address, which
+	// the page opens with. ChosenYAML is that collector as the page shows it
+	// (debugcollector.go). ChosenCopy is what Edit a copy puts in the
+	// playground instead, and ChosenCopyNote is what the page says about it
 	// (debugcopy.go).
 	Chosen, ChosenYAML         string
 	ChosenCopy, ChosenCopyNote string

@@ -18,25 +18,25 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 )
 
-// Prometheus asks for gzip on every scrape, and a probe answer can be large: a
-// passed-through target's whole exposition, or the verbose self-metrics with a
-// series per request. The answers of /probe, the self-metrics path and the
-// static targets path are gzipped for a client that accepts it, as Prometheus's own client library
-// does; an answer is text that typically shrinks to a tenth. --web.gzip-level
-// sets the level, or turns compression off. Other
-// endpoints answer a line or two, and /health and /ready are read by kubelets
-// that do not ask.
+// Prometheus asks for gzip on every scrape, and a probe answer can be large:
+// a passed-through target's whole exposition, or the verbose self-metrics with
+// a series per request. The answers of /probe, the self-metrics path and the
+// static targets path are gzipped for a client that accepts it, as
+// Prometheus's own client library does. An answer is text that typically
+// shrinks to a tenth. --web.gzip-level sets the level, or turns compression
+// off. Other endpoints answer a line or two, and /health and /ready are read
+// by kubelets that do not ask.
 
-// acceptsGzip reports whether an Accept-Encoding header allows gzip: named,
-// or covered by *, with a quality above zero. gzip or x-gzip named decides,
-// whatever * says, as RFC 9110 has a coding named override *: gzip;q=0, *
-// refuses gzip.
+// acceptsGzip reports whether an Accept-Encoding header allows gzip, named or
+// covered by *, with a quality above zero. If gzip or x-gzip is named, that
+// decides, whatever * says: RFC 9110 has a named coding override *, so
+// gzip;q=0, * refuses gzip.
 //
-// The header is read where it lies, its parts cut off one by one and their
-// names compared in any case, rather than split into slices and lower-cased
-// copies: it is read on every scrape of a compressing endpoint, and the
-// splitting allocated on each. Only a quality that is no number allocates,
-// in strconv's error, and is then taken as 1, as it was.
+// The header is read in place: its parts are cut off one by one and their
+// names compared in any case. It is not split into slices and lower-cased
+// copies, because it is read on every scrape of a compressing endpoint and
+// the splitting allocated each time. Only a quality that is no number
+// allocates, in strconv's error, and it is then taken as 1, as before.
 func acceptsGzip(header string) bool {
 	named, wildcard := -1.0, -1.0
 	for rest, more := header, true; more; {
@@ -74,9 +74,9 @@ func acceptsGzip(header string) bool {
 // DefaultGzipLevel is the level of --web.gzip-level when it is not given:
 // gzip.BestSpeed. A probe's answer is compressed on every scrape and read
 // once, so the time spent compressing it is spent again on the next scrape,
-// while the bytes it saves are a few percent of a level-6 answer: in the
-// probe benchmarks (probe_bench_test.go) level 1 compressed in a fifth or less
-// of level 6's time, and its answers were at most about a tenth larger.
+// while the bytes saved are a few percent of a level-6 answer. In the probe
+// benchmarks (probe_bench_test.go), level 1 compressed in a fifth or less of
+// level 6's time, and its answers were at most about a tenth larger.
 const DefaultGzipLevel = gzip.BestSpeed
 
 // ValidateGzipLevel refuses a --web.gzip-level that is not 0, for answers
@@ -96,10 +96,10 @@ type answerCompression struct {
 	// level is from 1 to 9, or 0 for answers sent as they are.
 	level   int
 	writers sync.Pool
-	// counting are the writers that count the bytes of an answer sent as
-	// it is (countingResponseWriter), pooled too: one made for every such
-	// answer was an allocation of every scrape that compressing nothing
-	// did not otherwise make.
+	// counting holds the writers that count the bytes of an answer sent
+	// uncompressed (countingResponseWriter). They are pooled too: making
+	// one for every such answer was an allocation on every scrape that
+	// compressing nothing did not otherwise make.
 	counting sync.Pool
 }
 
@@ -205,15 +205,15 @@ func (w *countingResponseWriter) Unwrap() http.ResponseWriter { return w.Respons
 
 // wrap gzips a handler's answer for a client that accepts gzip. At level 0
 // every answer is sent as it is, which every client accepts, Prometheus
-// included; it does not vary with Accept-Encoding, and does not say it does.
+// included. The answer then does not vary with Accept-Encoding, and does not
+// say it does.
 //
-// It counts every answer in counter, compressed or not, error and refusal
-// alike: what the handler wrote, and what was written on to the client. The
-// two are counted in the writer the answer has to itself, and added to
-// counter once the answer is done, gzip's last bytes included, so a write
-// takes no lock and costs no atomic operation; and the self-metrics, which
-// are rendered before they are written, show their own answer in the next
-// one.
+// It counts every answer in counter, compressed or not, errors and refusals
+// alike: what the handler wrote, and what was written on to the client. Both
+// are counted in the answer's own writer and added to counter once the answer
+// is done, gzip's last bytes included. So a write takes no lock and costs no
+// atomic operation. The self-metrics are rendered before they are written, so
+// they show their own answer in the next one.
 func (c *answerCompression) wrap(counter *answerCounter, next http.HandlerFunc) http.HandlerFunc {
 	plain := func(w http.ResponseWriter, r *http.Request) {
 		cw := c.counting.Get().(*countingResponseWriter)
@@ -255,13 +255,13 @@ func (c *answerCompression) wrap(counter *answerCounter, next http.HandlerFunc) 
 // AnswerWriteTimeout is how long a client has to read an answer, from the
 // moment the exporter starts writing it.
 //
-// Nothing else bounds the write. An answer can be megabytes — a passed-through
-// exposition, the static targets, the verbose self-metrics, a debug report —
-// and a client that asks for one and stops reading would hold its handler,
-// and the rendered answer with it, for as long as it kept the connection
-// open: the server has no write timeout (lifecycle.go), and a probe's budget
-// ends with the trip to the target. Prometheus reads an answer as fast as the
-// network carries it, and gives up at its scrape timeout in any case.
+// Nothing else bounds the write. An answer can be megabytes: a passed-through
+// exposition, the static targets, the verbose self-metrics, a debug report. A
+// client that asks for one and stops reading would hold its handler, and the
+// rendered answer, for as long as it kept the connection open. The server has
+// no write timeout (lifecycle.go), and a probe's budget ends with the trip to
+// the target. Prometheus reads an answer as fast as the network carries it,
+// and gives up at its scrape timeout in any case.
 const AnswerWriteTimeout = 30 * time.Second
 
 // answerWriter sets the connection's write deadline when the first byte of an
@@ -307,12 +307,12 @@ func (w *answerWriter) Write(p []byte) (int, error) {
 func (w *answerWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // writeBounded gives the client of every answer next writes
-// AnswerWriteTimeout to read it. A client that has not is dropped: the write
-// fails, net/http closes the connection, which cannot carry another answer
-// after half of this one, and the handler returns. It is no failure of the
-// exporter's or of a target's, so it is logged at debug level only. The
-// deadline is the answer's alone: net/http clears it before the connection's
-// next request.
+// AnswerWriteTimeout to read it. A client that does not is dropped: the write
+// fails, and net/http closes the connection, which cannot carry another
+// answer after half of this one. The handler returns. This is no failure of
+// the exporter or of a target, so it is logged at debug level only. The
+// deadline is this answer's alone: net/http clears it before the
+// connection's next request.
 func (s *Server) writeBounded(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(&answerWriter{ResponseWriter: w, timeout: s.answerWriteTimeout, dropped: func() {
@@ -321,13 +321,13 @@ func (s *Server) writeBounded(next http.Handler) http.Handler {
 	})
 }
 
-// credentialsMatch reports whether a presented username and password are
-// the exporter's own, comparing their SHA-256 digests with want's through
-// compare, subtle.ConstantTimeCompare but in a test. Digests are all of one
-// length, so the comparison takes the same time whatever the length of what
-// was presented and of the credential, which comparing the credentials
-// themselves gave away; and both are compared whatever the first found, so
-// the time taken does not say which one was wrong.
+// credentialsMatch reports whether a presented username and password are the
+// exporter's own. It compares their SHA-256 digests with want's through
+// compare, which is subtle.ConstantTimeCompare except in tests. Digests all
+// have one length, so the comparison takes the same time whatever the length
+// of what was presented and of the credential. Comparing the credentials
+// themselves gave that away. Both are compared whatever the first comparison
+// found, so the time taken does not say which one was wrong.
 func credentialsMatch(compare func(x, y []byte) int, username, password string, want config.WebAuthDigest) bool {
 	presentedUser := sha256.Sum256([]byte(username))
 	presentedPassword := sha256.Sum256([]byte(password))
@@ -337,14 +337,14 @@ func credentialsMatch(compare func(x, y []byte) int, username, password string, 
 }
 
 // basicAuthMiddleware authenticates every endpoint but /health and /ready
-// with web.basic_auth, and refuses them all with 503 while the manager is
+// with web.basic_auth. It refuses them all with 503 while the manager is
 // awaiting its first configuration in allocator mode (allocatormode.go).
-// web.basic_auth is part of the bundle, so until one is in force the
-// exporter does not know whether it should ask for a credential, and the
-// empty configuration it holds asks for none: the landing page, the
-// collectors page, the self-metrics, a pasted debug run and /-/reload were
-// served to anyone while the allocator could not be reached. Refusing them
-// cannot let in a request the bundle would refuse.
+// web.basic_auth is part of the bundle, so until one is in force the exporter
+// does not know whether to ask for a credential, and the empty configuration
+// it holds asks for none. The landing page, the collectors page, the
+// self-metrics, a pasted debug run and /-/reload were then served to anyone
+// while the allocator could not be reached. Refusing them cannot let in a
+// request the bundle would refuse.
 func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.awaitingConfiguration(w) {
@@ -357,12 +357,12 @@ func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		want, err := config.WebAuthDigests(auth)
 		if err != nil {
-			// Logged as a repeated failure is (failurelog.go): every
+			// Logged the way a repeated failure is (failurelog.go): every
 			// request fails on the file, unauthenticated ones and
 			// Prometheus's scrapes alike, and a line for each buried the
-			// log. The first is an error, the repeats are at debug
-			// level, and the first request that reads the file again
-			// logs the recovery.
+			// log. The first is an error, the repeats are at debug level,
+			// and the first request that reads the file again logs the
+			// recovery.
 			s.failures.failed(s.logger, slog.LevelError, webAuthKey, "the exporter's Basic Auth credential cannot be read; refusing every request", "web_auth", err, "path", r.URL.Path)
 			http.Error(w, "the exporter's credential cannot be read", http.StatusInternalServerError)
 			return

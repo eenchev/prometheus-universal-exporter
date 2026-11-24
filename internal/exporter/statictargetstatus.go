@@ -18,38 +18,40 @@ import (
 )
 
 // The status page, at the static targets path followed by /status, shows
-// how each static target's last scrape went, and the probes the exporter
+// how each static target's last scrape went and the probes the exporter
 // answered lately (recentprobes.go), for people who have no Prometheus to
-// ask. Of a static target: when its last scrape began and how long it took,
-// whether it succeeded, came from the cache, failed and served a stale
-// result, or was skipped by failure_backoff, the error of the last failed
-// scrape, and whether the target is backing off. ?format=json serves the
-// same as JSON, and ?format=fragment the page's content section alone,
-// which the page fetches to refresh itself (statusrefresh.go).
+// ask. For a static target it shows when its last scrape began and how long
+// it took; whether it succeeded, came from the cache, failed and served a
+// stale result, or was skipped by failure_backoff; the error of the last
+// failed scrape; and whether the target is backing off. ?format=json serves
+// the same as JSON, and ?format=fragment serves only the page's content
+// section, which the page fetches to refresh itself (statusrefresh.go).
 //
-// It shows what the static targets endpoint's series, the self-metrics and
-// the exporter's log already show, read by whoever may read the endpoints:
+// It shows only what the static targets endpoint's series, the self-metrics
+// and the exporter's log already show, to whoever may read the endpoints:
 // the same Basic Auth protects it. A target is shown as its health series
 // and the log show it (fetch.DisplayTarget), with any credential in it
-// withheld, and an error as the log has it, the URLs it quotes redacted
-// (fetch.RedactURLErrors, which the fetch has mostly done already), masked
-// once more for anything reading as a credential, a URL's userinfo among it
-// (fetch.RedactText), and cut to model.MaxFailureBytes. A probe's error is
-// shown by the same rule (shownStatusError), and so is a panic's: by a fixed
-// text, the panic itself being only in the log. What an error holds for the
-// operator alone is shown only with --web.debug=full; below it, as the
-// probe's caller is answered it. What is kept of each
-// static target is one record, replaced by its next scrape, so the page
-// holds no more than the targets are many; what is kept of the probes is
-// bounded apart (recentprobes.go). The path is the static targets path's,
-// so it needs no flag of its own, and moves with --web.static-targets-path:
-// it was the static targets' alone, and both flags and the chart already
-// keep the self-metrics off it.
+// withheld. An error is shown as the log has it: the URLs it quotes are
+// redacted (fetch.RedactURLErrors, which the fetch has mostly done already),
+// it is masked again for anything that reads as a credential, a URL's
+// userinfo included (fetch.RedactText), and it is cut to
+// model.MaxFailureBytes. A probe's error is shown by the same rule
+// (shownStatusError), and so is a panic's, as a fixed text; the panic itself
+// is only in the log. What an error holds for the operator alone is shown
+// only with --web.debug=full. Below that, it is shown as the probe's caller
+// is answered.
+//
+// What is kept of each static target is one record, replaced by its next
+// scrape, so the page holds no more records than there are targets. What is
+// kept of the probes is bounded separately (recentprobes.go). The path is
+// under the static targets path, so it needs no flag of its own and moves
+// with --web.static-targets-path. That path was the static targets' alone,
+// and both flags and the chart already keep the self-metrics off it.
 //
 // The page is served with or without static targets: the recent probes are
-// there either way, and most exporters have no static target. So is its
-// OTLP section (otlpstatuspage.go), which says OTLP export is off when it
-// is.
+// there either way, and most exporters have no static target. The same goes
+// for its OTLP section (otlpstatuspage.go), which says so when OTLP export
+// is off.
 
 // staticTargetsStatusSuffix follows the static targets path to make the
 // status page's.
@@ -86,10 +88,10 @@ type staticScrapeStatus struct {
 // scrape, and of its failures the run it is in and the last one's error.
 type staticTargetStatus struct {
 	last staticScrapeStatus
-	// errorText is the shown error of the last failed scrape, which
-	// failedAt began; failures counts the consecutive failed scrapes up to
-	// the last, 0 when it succeeded. A scrape skipped by failure_backoff is
-	// neither: it leaves both as they were.
+	// errorText is the shown error of the last failed scrape, which began
+	// at failedAt. failures counts the consecutive failed scrapes up to the
+	// last one, 0 when it succeeded. A scrape skipped by failure_backoff
+	// changes neither: it leaves both as they were.
 	errorText string
 	failedAt  time.Time
 	failures  int
@@ -138,10 +140,10 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 	case status.ok:
 		st.failures = 0
 	case status.skipped:
-		// A scrape failure_backoff kept from the target tried nothing: the
-		// error shown stays that of the last scrape that did, which is why
-		// the target is backed off from, and the run of failures is of the
-		// scrapes that failed, which the backoff counts apart.
+		// A scrape that failure_backoff kept from the target tried nothing.
+		// The error shown stays that of the last scrape that did try, which
+		// is why the target is backed off from. The run of failures counts the
+		// scrapes that failed, which the backoff counts separately.
 	default:
 		st.failures++
 		st.errorText = s.shownStatusError(status.err)
@@ -155,13 +157,13 @@ func (s *Server) noteStaticStatusLocked(name string, status staticScrapeStatus) 
 	st.recent = append(st.recent, staticRecentScrape{started: status.started, duration: status.duration, result: staticResult(status)})
 }
 
-// shownStatusError is err as the status page shows it. The page is read by
-// whoever may call /probe, behind the same Basic Auth, so what an error
-// holds for the operator alone (model.WithOperatorDetail) is shown as the
-// probe's caller is answered it (model.CallerText) unless --web.debug is
-// full, the level that already shows those callers what a target answers.
-// The caller's text is taken before the error is bounded, which keeps only
-// its text and with it would lose the mark.
+// shownStatusError returns err as the status page shows it. The page is
+// readable by whoever may call /probe, behind the same Basic Auth. So what
+// an error holds for the operator alone (model.WithOperatorDetail) is shown
+// as the probe's caller is answered (model.CallerText), unless --web.debug
+// is full, the level that already shows those callers what a target
+// answers. The caller's text is taken before the error is bounded, because
+// bounding keeps only the error's text and would lose the mark.
 func (s *Server) shownStatusError(err error) string {
 	if err == nil {
 		return "the scrape failed"
@@ -194,12 +196,12 @@ type staticStatusScrape struct {
 	Good     bool    `json:"-"`
 }
 
-// stripText is a strip of the results, oldest first, of scrapes or probes
-// (noun), as a screen reader is told it: its marks, ✓ and ✗, read as
-// symbols one at a time, say nothing of what they stand for, so the strip
-// is told as how many it holds of each result, in the order each first
-// came, and how the latest went: "last 3 scrapes, oldest first: 2 success,
-// 1 failed; the latest failed". Empty for no strip.
+// stripText describes a strip of the results of scrapes or probes (noun),
+// oldest first, for a screen reader. Its marks, ✓ and ✗, read as symbols
+// one at a time, say nothing of what they stand for. So the strip is told
+// as how many of each result it holds, in the order each first came, and
+// how the latest went: "last 3 scrapes, oldest first: 2 success,
+// 1 failed; the latest failed". It is empty for no strip.
 func stripText(results []string, noun string) string {
 	if len(results) == 0 {
 		return ""
@@ -283,10 +285,10 @@ type staticStatusRow struct {
 	// page writes it.
 	LastErrorAge string `json:"-"`
 	// IntervalSeconds, ScrapedAt (Unix seconds, 0 before the first scrape)
-	// and RecentBad (the strip's scrapes not a success) are the values the
-	// page's script sorts the row's numbers by, and Match is the text its
-	// filter matches: name, collector, target, labels and result, one a
-	// line.
+	// and RecentBad (the strip's scrapes that were not a success) are the
+	// values the page's script sorts the row's numbers by. Match is the text
+	// its filter matches: name, collector, target, labels and result, one
+	// per line.
 	IntervalSeconds float64 `json:"-"`
 	// StripText is the strip as a screen reader is told it (stripText).
 	StripText string `json:"-"`
@@ -320,13 +322,13 @@ type staticStatusPage struct {
 	// says them.
 	PerKey  int `json:"-"`
 	MaxKeys int `json:"-"`
-	// StaticTargetsPath is the static targets endpoint, and SeriesLink
-	// the endpoint relative to the page, which is served at its path
-	// followed by /status: a target's name links to the endpoint narrowed
-	// to it, ?targets=, so the link holds behind a proxy that serves the
+	// StaticTargetsPath is the static targets endpoint. SeriesLink is the
+	// endpoint relative to the page, which is served at its path followed
+	// by /status. A target's name links to the endpoint narrowed to it
+	// (?targets=), so the link holds behind a proxy that serves the
 	// exporter under a prefix, as the bar's links do. DebugLinks says
-	// --web.debug is full, under which a scraped target's row links its
-	// debug scrape too, ?debug=.
+	// --web.debug is full; then a scraped target's row also links its
+	// debug scrape (?debug=).
 	StaticTargetsPath string `json:"-"`
 	SeriesLink        string `json:"-"`
 	DebugLinks        bool   `json:"-"`
@@ -477,11 +479,11 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 	return page
 }
 
-// allocatorBundleStatus is what the status page says of the allocator in
-// allocator mode: the member this replica is, with a link to the
-// allocator's view of it; the generation of the bundle in force, the
-// manager's, and since when, which the client says when the bundle it last
-// saw put in force is that one; and when the allocator was last heard
+// allocatorBundleStatus is what the status page shows about the allocator
+// in allocator mode. It holds the member this replica is, with a link to
+// the allocator's view of it; the generation of the bundle in force (the
+// manager's) and since when, which the client reports when the bundle it
+// last saw put in force is that one; and when the allocator was last heard
 // from. A time is RFC 3339, in UTC.
 type allocatorBundleStatus struct {
 	Member       string `json:"member"`
@@ -512,9 +514,9 @@ func allocatorBundleFor(st AllocatorStatus, generation string, now time.Time) *a
 	return b
 }
 
-// lastErrorCell is a Last error cell of the status page as the template
-// "lasterror" writes it: Text, the error, of an attempt that began At, Age
-// ago, and Recovered when a later attempt, the latest, succeeded. A
+// lastErrorCell is a Last error cell of the status page, as the template
+// "lasterror" writes it. Text is the error of an attempt that began At, Age
+// ago. Recovered is set when a later attempt, the latest, succeeded. A
 // recovered error is still shown, muted and said to be past, so the cell
 // does not contradict the result beside it.
 type lastErrorCell struct {

@@ -13,9 +13,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Which traces otlp.traces exports is decided once, at the end of a probe
-// or a scrape, by rules taken in order, the first that keeps the trace
-// saying why:
+// otlp.traces decides which traces to export once, at the end of a probe or
+// a scrape. The rules are tried in order, and the first one that keeps the
+// trace gives the reason:
 //
 //   - slow: it took otlp.traces.threshold or longer;
 //   - error: it failed, and otlp.traces.errors is on;
@@ -24,19 +24,20 @@ import (
 //   - ratio: its trace id falls in the otlp.traces.sample_ratio share, as
 //     OpenTelemetry's consistent probability sampling decides it.
 //
-// A trace no rule keeps is dropped. One kept is then held to
+// A trace that no rule keeps is dropped. A kept trace is then held to
 // otlp.traces.max_per_second, a token bucket, before it is queued.
 //
 // The ratio is decided as OpenTelemetry's TraceIdRatioBased sampler and its
-// consistent probability sampling decide it, so that the exporter and every
-// tracer of the same trace sampling at the same ratio keep the same traces:
-// the trace's randomness, the trace id's last 56 bits as W3C trace context
-// level 2 makes them random (or the caller's explicit randomness, ot=rv in
-// its tracestate), is compared with a rejection threshold of
-// (1 - ratio) * 2^56, and the trace is kept when it is not under it. A
-// trace kept so carries the threshold, ot=th, in its tracestate, by which a
-// backend counts what each kept trace stands for; one kept for another
-// reason was not kept by a probability and carries none of its own.
+// consistent probability sampling decide it. So the exporter and every
+// tracer of the same trace that samples at the same ratio keep the same
+// traces. The trace's randomness is the last 56 bits of the trace id, which
+// W3C trace context level 2 makes random, or the caller's explicit
+// randomness (ot=rv in its tracestate). It is compared with a rejection
+// threshold of (1 - ratio) * 2^56, and the trace is kept when it is not
+// under it. A trace kept this way carries the threshold, ot=th, in its
+// tracestate, so a backend can count what each kept trace stands for. A
+// trace kept for another reason was not kept by a probability: it carries
+// no threshold of its own.
 
 // samplingReason is why a trace is exported, or keptNone that it is not.
 type samplingReason int
@@ -54,10 +55,10 @@ const (
 // and the status page name them.
 var samplingReasonNames = [samplingReasons]string{"", "slow", "error", "parent", "ratio"}
 
-// otlpTraceSamplingOn says whether a rule beside the threshold and errors
-// can keep a trace: only then does a kept trace say why on its span
-// (sampling.reason), so that the export of a configuration without them is
-// what it was before them.
+// otlpTraceSamplingOn says whether a rule other than the threshold and
+// errors can keep a trace. Only then does a kept trace record the reason on
+// its span (sampling.reason), so a configuration without those rules
+// exports what it did before they existed.
 func otlpTraceSamplingOn(cfg model.OTLPConfig) bool {
 	return cfg.Traces.ParentBased || cfg.Traces.SampleRatio > 0
 }
@@ -67,9 +68,9 @@ func otlpTraceSamplingOn(cfg model.OTLPConfig) bool {
 const otlpMaxRandomness = uint64(1) << 56
 
 // ratioThreshold is the rejection threshold of ratio: a trace whose
-// randomness is under it is not kept. It is 2^56 less ratio's share of
-// 2^56 rounded, as OpenTelemetry's sampling packages work it out, so that
-// the threshold written in ot=th is theirs for the same ratio: 0.01 is
+// randomness is under it is not kept. It is 2^56 minus ratio's share of
+// 2^56, rounded, worked out as OpenTelemetry's sampling packages do. So the
+// threshold written in ot=th matches theirs for the same ratio: 0.01 is
 // fd70a3d70a3d71.
 func ratioThreshold(ratio float64) uint64 {
 	if ratio <= 0 {
@@ -92,10 +93,10 @@ func thresholdText(threshold uint64) string {
 	return text
 }
 
-// traceRandomness is a trace's randomness: the caller's explicit one, rv in
-// the ot member of its tracestate, where it sent a valid one, and otherwise
-// the trace id's last seven bytes, which trace context level 2 makes random,
-// as crypto/rand makes the exporter's own ids.
+// traceRandomness is a trace's randomness. It is the caller's explicit
+// randomness (rv in the ot member of its tracestate) when the caller sent a
+// valid one. Otherwise it is the trace id's last seven bytes, which trace
+// context level 2 makes random, as crypto/rand makes the exporter's own ids.
 func traceRandomness(id [16]byte, state traceState) uint64 {
 	if rv, ok := state.otValue("rv"); ok && len(rv) == 14 {
 		if n, err := strconv.ParseUint(rv, 16, 64); err == nil {
@@ -118,10 +119,10 @@ type traceDecision struct {
 	ratioTried            bool
 }
 
-// decideTrace applies the rules to a probe's or a scrape's trace that took
-// elapsed and failed as failed says, whose caller sent parent, if any.
-// It is run at the end of every probe while the trace export is on, and
-// makes nothing of the trace's spans: they are made only of one kept.
+// decideTrace applies the rules to the trace of a probe or a scrape. The
+// trace took elapsed, failed as failed says, and its caller sent parent, if
+// any. It runs at the end of every probe while the trace export is on. It
+// builds none of the trace's spans: spans are built only for a kept trace.
 func decideTrace(cfg model.OTLPConfig, elapsed time.Duration, failed bool, parent traceParent) traceDecision {
 	id := parent.traceID
 	if !parent.ok {
@@ -210,10 +211,10 @@ type traceState []string
 const traceStateMaxMembers = 32
 
 // parseTraceState reads the tracestate headers a caller sent, joined by
-// commas as several are read. One that cannot be read — a member without a
-// key or with one that is no key, a value that is no value, a key twice, or
-// more than 32 members — is no tracestate, as the W3C asks of a header it
-// cannot parse: it is not propagated.
+// commas when there are several. A header that cannot be read is no
+// tracestate and is not propagated, as the W3C asks for a header it cannot
+// parse. That is a member without a key or with an invalid key, an invalid
+// value, a repeated key, or more than 32 members.
 func parseTraceState(values []string) traceState {
 	if len(values) == 0 {
 		return nil
@@ -240,10 +241,10 @@ func parseTraceState(values []string) traceState {
 	return members
 }
 
-// traceStateKey says whether key is a tracestate key: a simple key of up to
-// 256 of a-z, 0-9, _, -, *, / beginning with a letter, or a tenant's,
-// tenant@system, its tenant of up to 241 and its system of up to 14 that
-// begins with a letter.
+// traceStateKey says whether key is a tracestate key. That is a simple key
+// of up to 256 of a-z, 0-9, _, -, *, / that begins with a letter, or a
+// tenant key, tenant@system, with a tenant of up to 241 and a system of up
+// to 14 that begins with a letter.
 func traceStateKey(key string) bool {
 	simple := func(s string, most int, digitFirst bool) bool {
 		if s == "" || len(s) > most {
@@ -300,11 +301,11 @@ func (s traceState) otValue(key string) (string, bool) {
 	return "", false
 }
 
-// withOT is the state with its ot member's th set to th, or left out when
-// th is "", the ot member's other fields kept in their order, and the ot
-// member moved to the front, as the W3C asks of a member changed; the
-// rightmost members are dropped past 32. An ot member left with no field is
-// left out.
+// withOT returns the state with its ot member's th set to th, or removed
+// when th is "". The ot member's other fields keep their order, and the ot
+// member moves to the front, as the W3C asks for a changed member. Members
+// past 32 are dropped from the right. An ot member left with no field is
+// removed.
 func (s traceState) withOT(th string) traceState {
 	var fields []string
 	if th != "" {
@@ -343,13 +344,13 @@ func (s traceState) withOT(th string) traceState {
 
 func (s traceState) String() string { return strings.Join(s, ",") }
 
-// spanTraceState is the tracestate the spans of a trace kept for reason
-// carry: a trace the ratio kept carries its threshold, ot=th, before the
-// caller's members; one its caller's sampled flag kept, the caller's
-// tracestate as it came, whose threshold, if any, is the probability its
-// caller kept it by and so the exporter's span too; and one kept for being
-// slow or failed the caller's without a threshold, since no probability
-// kept it, and a backend that counts what a trace stands for by its
+// spanTraceState is the tracestate that the spans of a trace kept for
+// reason carry. A trace the ratio kept carries its threshold, ot=th, before
+// the caller's members. A trace its caller's sampled flag kept carries the
+// caller's tracestate as it came; its threshold, if any, is the probability
+// the caller kept it by, and so the exporter's span too. A trace kept for
+// being slow or failed carries the caller's without a threshold, since no
+// probability kept it: a backend that counts what a trace stands for by its
 // threshold would count it too many times.
 func spanTraceState(reason samplingReason, ratio float64, caller traceState) string {
 	switch reason {
@@ -361,15 +362,15 @@ func spanTraceState(reason samplingReason, ratio float64, caller traceState) str
 	return caller.withOT("").String()
 }
 
-// traceRate is otlp.traces.max_per_second: a token bucket of perSecond
-// tokens a second and as many at most, so that a burst of perSecond traces
-// goes through at once and then perSecond a second. A trace exported takes
-// a token, and one that finds none is dropped. One kept by parent_based or
-// sample_ratio takes a token only while half the bucket, rounded down,
-// would be left after it, so that those, which are many when the ratio is
-// high, cannot spend what a slow or a failed trace, the reason the export
-// is there, would find: a slow or failed one may take the last token. A
-// bucket of 1 keeps nothing back. The lock is held for a few sums.
+// traceRate is otlp.traces.max_per_second: a token bucket that gains
+// perSecond tokens a second and holds at most perSecond. A burst of
+// perSecond traces goes through at once, then perSecond a second. An
+// exported trace takes a token; one that finds none is dropped. A trace kept
+// by parent_based or sample_ratio takes a token only while half the bucket,
+// rounded down, would be left after it. Those traces are many when the ratio
+// is high, and must not spend what a slow or failed trace (the reason the
+// export exists) would find. A slow or failed trace may take the last token.
+// A bucket of 1 keeps nothing back. The lock is held for a few sums.
 type traceRate struct {
 	mu        sync.Mutex
 	perSecond int
@@ -419,10 +420,10 @@ func (r *traceRate) take(perSecond int, reason samplingReason, now time.Time) bo
 	return true
 }
 
-// otlpTraceTally counts the traces the rules and the cap decided of since
-// the start, by why: kept by reason and handed to the queue, and dropped as
-// not sampled, over the rate, or for want of room in the queue, which a
-// kept trace may be after. They are counted at the end of every probe while
+// otlpTraceTally counts, by reason, the traces the rules and the cap decided
+// on since the start: kept by reason and handed to the queue, or dropped as
+// not sampled, over the rate, or for lack of room in the queue (which can
+// happen to a kept trace). They are counted at the end of every probe while
 // the export is on, and so without a lock.
 type otlpTraceTally struct {
 	kept    [samplingReasons]atomic.Int64

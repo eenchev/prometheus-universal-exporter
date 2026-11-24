@@ -16,9 +16,9 @@ import (
 
 // probeError is the body of a probe that failed because a metric rule with
 // error_mode fail could not produce its value. Prometheus only looks at the
-// status code, which already fails the scrape; the body is for the person who
-// runs the probe by hand to find out why, so it names the collector, the rule
-// and the error rather than leaving them to be dug out of the exporter's log.
+// status code, which already fails the scrape. The body is for a person who
+// runs the probe by hand to find out why. So it names the collector, the rule
+// and the error, instead of leaving them to be dug out of the exporter's log.
 type probeError struct {
 	Status    string `json:"status"`
 	Stage     string `json:"stage"`
@@ -43,25 +43,25 @@ func writeProbeError(w http.ResponseWriter, code int, body probeError) {
 // shows them as they are.
 const expositionContentType = "text/plain; version=0.0.4; charset=utf-8"
 
-// expositionBuffers keeps the buffers answers are rendered into, so a busy
-// endpoint does not allocate one, and grow it, for every answer. A buffer
-// that grew past maxPooledExposition is left to the garbage collector rather
-// than kept for ever for one large answer.
+// expositionBuffers keeps the buffers that answers are rendered into, so a
+// busy endpoint does not allocate and grow a buffer for every answer. A buffer
+// that grew past maxPooledExposition is left to the garbage collector, so it
+// is not kept forever for one large answer.
 var expositionBuffers = sync.Pool{New: func() any { b := make([]byte, 0, 16<<10); return &b }}
 
 const maxPooledExposition = 4 << 20
 
-// writeMetricSet answers r with s, in the format r's Accept header prefers
-// (negotiateFormat): the Prometheus text format, or OpenMetrics. Label values
-// and help come from scraped targets, so the answer carries text a target
-// chose; it is served as plain text with nosniff, so a browser shows it as
-// text and never renders it as HTML. r may be nil, which answers in the text
-// format.
+// writeMetricSet answers r with s, in the format that r's Accept header
+// prefers (negotiateFormat): the Prometheus text format or OpenMetrics. Label
+// values and help come from scraped targets, so the answer carries text that a
+// target chose. It is served as plain text with nosniff, so a browser shows it
+// as text and never renders it as HTML. r may be nil; the answer is then in
+// the text format.
 //
-// utf8Names says the set may hold a name that is not classic, coming from a
-// collector whose metric_name_validation_scheme is utf8: only then are its
-// names looked at, and such a name escaped as the scraper asks
-// (nameescaping.go). Any other set's names are classic, validated so.
+// utf8Names says that the set may hold a non-classic name, from a collector
+// whose metric_name_validation_scheme is utf8. Only then are its names
+// checked, and such a name is escaped as the scraper asks (nameescaping.go).
+// The names of any other set are classic, because they were validated so.
 func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet, utf8Names bool) {
 	format := formatText
 	if r != nil {
@@ -87,20 +87,20 @@ func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet, 
 }
 
 // appendMetricSet appends the exposition text of a metric set to b, so the
-// verbose self-metrics are rendered by exactly the same code as collector
-// output. It writes with strconv's append functions rather than fmt, and
-// keeps one slice for sorting every series' label names, so rendering
-// allocates little beyond the text itself.
+// verbose self-metrics are rendered by the same code as collector output. It
+// writes with strconv's append functions instead of fmt, and keeps one slice
+// for sorting the label names of every series, so rendering allocates little
+// beyond the text itself.
 //
-// The text format wants the lines of a metric in one group, under its HELP
-// and TYPE, and nearly every set has them so: the series are written in the
-// set's order, and a name that differs from the one before it is looked up
-// once. One that was written already, with another metric's series since,
-// says the set has a metric's series apart, as a script may emit them, a
-// target a pass-through reads may write them, and two rules of one name with
-// another rule between them make them. What was written is then dropped and
-// the set written again metric by metric (appendGroupedMetricSet), which
-// costs only such a set anything.
+// The text format wants all lines of a metric in one group, under its HELP
+// and TYPE, and nearly every set is already grouped. The series are written in
+// the set's order, and a name that differs from the previous one is looked up
+// once. If that name was written already, with another metric's series since,
+// the set has a metric's series apart. A script may emit them so, a target
+// that a pass-through reads may write them so, and two rules of one name with
+// another rule between them produce them so. The written text is then dropped
+// and the set is written again metric by metric (appendGroupedMetricSet).
+// Only such a set pays this cost.
 func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
 	return e.appendMetricSet(b, s)
@@ -148,10 +148,10 @@ func (e *expositionWriter) appendFamilyLines(b []byte, m model.Metric) []byte {
 }
 
 // appendGroupedMetricSet is appendMetricSet for a set that has a metric's
-// series apart: the metrics in the order each first appears in the set, each
-// with its series together in the order the set has them, under the HELP and
-// TYPE of its first. Nothing is sorted, so a set that has every metric's
-// series together is written as appendMetricSet writes it.
+// series apart. It writes the metrics in the order each first appears in the
+// set. Each metric has its series together, in the set's order, under the HELP
+// and TYPE of its first one. Nothing is sorted, so a set that has every
+// metric's series together is written as appendMetricSet writes it.
 func (e *expositionWriter) appendGroupedMetricSet(b []byte, s *model.MetricSet) []byte {
 	last := ""
 	for _, i := range seriesByFamily(s) {
@@ -176,10 +176,10 @@ func (e *expositionWriter) appendGroupedMetricSet(b []byte, s *model.MetricSet) 
 // metrics in the order each first appears, and the series of each in the
 // order the set has them.
 func seriesByFamily(s *model.MetricSet) []int {
-	// family is which metric a name is, in the order they first appear, and
-	// starts where each metric's series begin in the order returned: the
-	// number of its series while they are counted, and then the sum of those
-	// before it.
+	// family maps each name to its metric, in the order the names first
+	// appear. starts holds where each metric's series begin in the returned
+	// order: first the number of its series while they are counted, then the
+	// sum of the counts before it.
 	family := map[string]int{}
 	var starts []int
 	for _, m := range s.Metrics {
@@ -332,14 +332,13 @@ func appendEscaped(b []byte, text string, quotes bool) []byte {
 	return b
 }
 
-// appendHistogram writes a histogram's lines: its buckets, in ascending order
-// of their bounds whatever order the source had them in (ascendingBuckets),
-// and its _sum and _count unless the source it was read from had none
-// (model.Histogram), so a histogram goes out as it came in rather than with a
-// sum or a count of 0 it never had. The +Inf bucket and the _count are each
-// written with the number the source gave it, also when the two differ; a
-// histogram that has a _count and no +Inf bucket is given the bucket, and one
-// with neither is written without both.
+// appendHistogram writes a histogram's lines. Its buckets are written in
+// ascending order of their bounds, whatever order the source had
+// (ascendingBuckets). Its _sum and _count are written unless the source it was
+// read from had none (model.Histogram), so a histogram goes out as it came in,
+// without a sum or count of 0 it never had. The +Inf bucket and the _count each
+// get the number the source gave, even when the two differ. A histogram with a
+// _count and no +Inf bucket is given the bucket; one with neither gets neither.
 func (e *expositionWriter) appendHistogram(b []byte, m model.Metric) []byte {
 	for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
 		// The +Inf bucket is written below, last and once, whether the
@@ -373,13 +372,13 @@ func appendTimestamp(b []byte, m model.Metric) []byte {
 }
 
 // ascendingBuckets returns a histogram's buckets in ascending order of their
-// upper bounds, which is the order both formats are written in: a target may
-// write its buckets in any order, the Prometheus text format asking for none,
-// while OpenMetrics, and a reader that takes the first bucket a value fits
-// in, need them ascending. A bound that is not a number comes first, and
-// +Inf, which is written from the count, last. Buckets nearly always arrive
-// in order, and are then returned as they are; others are sorted in the
-// writer's own copy, the metric set being shared with the cache.
+// upper bounds, the order both formats are written in. A target may write its
+// buckets in any order, since the Prometheus text format requires none. But
+// OpenMetrics, and a reader that takes the first bucket a value fits in, need
+// them ascending. A bound that is not a number comes first, and +Inf, which is
+// written from the count, comes last. Buckets nearly always arrive in order and
+// are then returned as they are. Others are sorted in the writer's own copy,
+// because the metric set is shared with the cache.
 func (e *expositionWriter) ascendingBuckets(buckets []model.Bucket) []model.Bucket {
 	if slices.IsSortedFunc(buckets, compareBuckets) {
 		return buckets
@@ -404,27 +403,27 @@ func compareBuckets(a, b model.Bucket) int { return cmp.Compare(a.UpperBound, b.
 
 func compareQuantiles(a, b model.Quantile) int { return cmp.Compare(a.Quantile, b.Quantile) }
 
-// typedValues reports whether the values of m are ones a series of its type
-// may have in OpenMetrics, and in OTLP, which follows it. The Prometheus text
-// format asks nothing of them, so a target may write, and the exporter
-// passes on, what a strict OpenMetrics parser refuses, failing the scrape:
+// typedValues reports whether the values of m are allowed for a series of its
+// type in OpenMetrics, and in OTLP, which follows it. The Prometheus text
+// format sets no such rules. So a target may write, and the exporter passes
+// on, values that a strict OpenMetrics parser refuses, failing the scrape:
 //
 //   - a counter that is NaN or negative;
-//   - a histogram whose _sum is NaN or negative, or is there beside a bucket
-//     with a negative bound, which makes it no counter; one with a bound that
-//     is not a number; one whose bucket counts fall from one bound to the
-//     next higher, or to its +Inf bucket's; one whose +Inf bucket and _count
-//     differ, as a target read between its updating the one and the other
-//     writes them (model.Histogram); and one with neither of the two, which
-//     has no +Inf bucket;
-//   - a summary whose _sum is NaN or negative, with a quantile that is not
-//     within 0 to 1, or with a negative value for a quantile. NaN is a
-//     quantile's value when nothing was observed, and is allowed.
+//   - a histogram whose _sum is NaN or negative, or is present beside a bucket
+//     with a negative bound (which makes it no counter); one with a bound that
+//     is not a number; one whose bucket counts fall from one bound to the next
+//     higher one, or to its +Inf bucket's; one whose +Inf bucket and _count
+//     differ, as when a target is read between updating the one and the other
+//     (model.Histogram); and one with neither of the two, which has no +Inf
+//     bucket;
+//   - a summary whose _sum is NaN or negative, with a quantile outside 0 to 1,
+//     or with a negative value for a quantile. NaN is a quantile's value when
+//     nothing was observed, and is allowed.
 //
-// A gauge and an untyped series may have any value, and a count, being
-// unsigned, is never NaN or negative. A family with such a series is written
-// as unknown in OpenMetrics (planOpenMetrics) and exported as gauges over
-// OTLP (otlpMetrics), with the same series and values, rather than left out
+// A gauge and an untyped series may have any value. A count is unsigned, so
+// it is never NaN or negative. A family with such a series is written as
+// unknown in OpenMetrics (planOpenMetrics) and exported as gauges over OTLP
+// (otlpMetrics), with the same series and values, instead of being left out
 // or refused.
 func typedValues(m model.Metric) bool {
 	switch {
@@ -534,12 +533,12 @@ func (f expositionFormat) appendMetricSet(b []byte, s *model.MetricSet) []byte {
 	return e.appendMetricSet(b, s)
 }
 
-// negotiateFormat chooses the format an Accept header prefers: OpenMetrics
-// when it gives application/openmetrics-text, of version 1.0.0 or 0.0.1 or
-// none, a higher quality than any type the text format answers (text/plain,
-// text/*, */*). Prometheus asks for OpenMetrics first. The text format is
-// the answer to anything else: no Accept, a browser's, a tie, or only types
-// the exporter does not write, such as Prometheus' protobuf format.
+// negotiateFormat chooses the format that an Accept header prefers. It is
+// OpenMetrics when the header gives application/openmetrics-text (version
+// 1.0.0, 0.0.1 or none) a higher quality than any type the text format
+// answers (text/plain, text/*, */*). Prometheus asks for OpenMetrics first.
+// Anything else gets the text format: no Accept, a browser's, a tie, or only
+// types the exporter does not write, such as Prometheus' protobuf format.
 func negotiateFormat(accept string) expositionFormat {
 	a := acceptQualities(accept)
 	if a.om > a.text {
@@ -548,11 +547,11 @@ func negotiateFormat(accept string) expositionFormat {
 	return expositionFormat{escaping: answerEscaping(a.textEscaping)}
 }
 
-// acceptance is what an Accept header asks of the text formats: the highest
-// quality it gives OpenMetrics, of a version the exporter writes, with the
-// version and the escaping that media range asks for, and the highest it
-// gives a type the text format answers, with that range's escaping; a
-// quality of -1 where it gives none.
+// acceptance is what an Accept header asks of the text formats. It holds the
+// highest quality given to OpenMetrics of a version the exporter writes, with
+// the version and escaping that media range asks for. It also holds the
+// highest quality given to a type the text format answers, with that range's
+// escaping. A quality is -1 where the header gives none.
 type acceptance struct {
 	om, text                            float64
 	omVersion, omEscaping, textEscaping string
@@ -640,13 +639,12 @@ func parseMediaRange(entry string) (string, map[string]string) {
 // In both formats a histogram's buckets and a summary's quantiles are
 // written in ascending order (ascendingBuckets).
 //
-// A _created sample follows a counter, a histogram or a summary series that
-// has a creation time (model.Metric.Created), in the family that keeps its
-// type; one written as unknown has no such sample. Only the exporter's own
-// series have that time, and only when the self-metrics are asked to write
-// it (selfcreated.go): the exporter reads counters from targets and does not
-// know when they started, and OpenMetrics leaves _created out when it is not
-// known.
+// A _created sample follows a counter, histogram or summary series that has a
+// creation time (model.Metric.Created), in a family that keeps its type. A
+// series written as unknown has no such sample. Only the exporter's own series
+// have that time, and only when the self-metrics are asked to write it
+// (selfcreated.go). The exporter reads counters from targets and does not know
+// when they started, and OpenMetrics leaves _created out when it is not known.
 func appendOpenMetrics(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
 	return e.appendOpenMetrics(b, s)
@@ -728,55 +726,57 @@ type omFamily struct {
 
 // planOpenMetrics groups the series of s into OpenMetrics families.
 //
-// OpenMetrics names a counter family without _total and gives a histogram's
-// and a summary's samples suffixes, and every family claims its name and the
-// names of the samples its type may have: a counter foo claims foo,
-// foo_total and foo_created, a histogram foo claims foo, foo_bucket,
-// foo_count, foo_sum and foo_created, a summary foo claims foo, foo_count,
-// foo_sum and foo_created, and a gauge or an unknown family only its name. A
-// name claimed twice is invalid OpenMetrics, and Prometheus fails the scrape:
-// the counter foo_total and the gauge foo, which the text format writes side
-// by side, would both be the family foo.
+// OpenMetrics names a counter family without _total, and gives the samples of
+// a histogram and a summary suffixes. Every family claims its name and the
+// names of the samples its type may have:
+//   - a counter foo claims foo, foo_total and foo_created;
+//   - a histogram foo claims foo, foo_bucket, foo_count, foo_sum and
+//     foo_created;
+//   - a summary foo claims foo, foo_count, foo_sum and foo_created;
+//   - a gauge or an unknown family claims only its name.
 //
-// So a family is written in its natural form (above) unless a name it would
-// claim is claimed by another family, and then as unknown under the names
+// A name claimed twice is invalid OpenMetrics, and Prometheus fails the
+// scrape. For example, the counter foo_total and the gauge foo, which the text
+// format writes side by side, would both be the family foo.
+//
+// So a family is written in its natural form (above), unless another family
+// claims a name it would claim. It is then written as unknown under the names
 // its samples have in the text format, which keeps every sample name as the
-// text format has it. Counters give way first: a counter whose claims meet
-// another family's is written as the unknown family of its own name, whose
-// one sample has that name. Then a histogram or summary whose claims still
-// meet another family's is written as one unknown family for each of its
-// sample names (foo_bucket, foo_sum and foo_count, or foo, foo_sum and
-// foo_count). Gauges and untyped series claim only their own names and keep
-// their form. Families written as unknown claim only their sample names,
-// which differ from family to family except where the text format itself
-// writes two families' samples under one name (the gauge foo_count beside
-// the histogram foo); those share one unknown family.
+// text format has it. Counters give way first: a counter whose claims clash
+// with another family's is written as the unknown family of its own name,
+// with one sample of that name. Then a histogram or summary whose claims still
+// clash is written as one unknown family per sample name (foo_bucket, foo_sum
+// and foo_count, or foo, foo_sum and foo_count). Gauges and untyped series
+// claim only their own names and keep their form. Families written as unknown
+// claim only their sample names. These differ between families, except where
+// the text format itself writes the samples of two families under one name
+// (the gauge foo_count beside the histogram foo); those share one unknown
+// family.
 //
-// A counter not named _total in the text format is still written with
-// _total in its natural form, as OpenMetrics requires of a counter's
-// samples. One that has no natural form, the counter named _total, whose
-// family would have no name, is written as unknown under its own name from
-// the start.
+// A counter not named _total in the text format is still written with _total
+// in its natural form, as OpenMetrics requires of a counter's samples. The
+// counter named _total has no natural form, since its family would have no
+// name. It is written as unknown under its own name from the start.
 //
 // A histogram or summary read without a _sum or a _count (model.Histogram)
 // has no such line in either form, and a family that would hold only such
-// lines is not written. OpenMetrics has a histogram's _sum and _count
-// together or not at all, so a histogram with one of the two, as a target
-// may write it in the text format, is no OpenMetrics histogram, and its
-// family is written as unknown families from the start as well.
+// lines is not written. OpenMetrics has a histogram's _sum and _count together
+// or not at all. So a histogram with one of the two, as a target may write it
+// in the text format, is not an OpenMetrics histogram. Its family is also
+// written as unknown families from the start.
 //
-// So is every family with a series whose values OpenMetrics does not allow
-// its type (typedValues): a counter that is NaN or negative, a histogram
-// whose bucket counts fall or whose +Inf bucket is not its _count, a summary
-// with a quantile of 1.5. The text format allows them, a target may write
-// them, and a strict OpenMetrics parser refuses the whole answer over one of
-// them. Written as unknown, the family keeps every series and value, and
-// loses only a type it does not meet. That is decided for the family, not
-// the series, since a family has one type; a histogram with a label of its
-// own named le, whose _sum and _count would carry it and so be no part of
-// the series its buckets are, is treated the same. These families are
-// unknown before any gives way, so the names they claim are their samples'
-// alone and the planning above holds.
+// The same holds for every family with a series whose values OpenMetrics does
+// not allow for its type (typedValues): a counter that is NaN or negative, a
+// histogram whose bucket counts fall or whose +Inf bucket is not its _count,
+// a summary with a quantile of 1.5. The text format allows them, a target may
+// write them, and a strict OpenMetrics parser refuses the whole answer over
+// one of them. Written as unknown, the family keeps every series and value,
+// and loses only a type it does not meet. This is decided per family, not per
+// series, since a family has one type. A histogram with its own label named
+// le is treated the same: its _sum and _count would carry that label, and so
+// would not be part of the series its buckets are. These families are unknown
+// before any family gives way, so they claim only their samples' names, and
+// the planning above holds.
 func planOpenMetrics(s *model.MetricSet) []*omFamily {
 	type textFamily struct {
 		name    string
@@ -917,10 +917,10 @@ func hasLabel(m model.Metric, name string) bool {
 	return has
 }
 
-// hasOpenMetricsLine reports whether a histogram or a summary has the kind
-// of line: its _sum or _count, which the source it was read from may not have
-// had, a quantile, or a bucket, which a histogram read with neither a +Inf
-// bucket nor a _count may have none of.
+// hasOpenMetricsLine reports whether a histogram or a summary has the kind of
+// line: its _sum or _count (which the source it was read from may not have
+// had), a quantile, or a bucket (a histogram read with neither a +Inf bucket
+// nor a _count may have none).
 func hasOpenMetricsLine(m model.Metric, kind omPartKind) bool {
 	switch {
 	case kind == omBuckets && m.Histogram != nil:
@@ -940,23 +940,24 @@ func hasOpenMetricsLine(m model.Metric, kind omPartKind) bool {
 	return true
 }
 
-// openMetricsCounter is the natural OpenMetrics form of the counter the text
-// format names name: its family, named without _total, its sample, named
-// with it, and the _created sample the family also claims. natural is false
-// for a counter that has no such form: the one named _total, whose family
-// would have no name.
+// openMetricsCounter is the natural OpenMetrics form of the counter that the
+// text format names name: its family, named without _total, its sample, named
+// with _total, and the _created sample the family also claims. natural is
+// false for a counter that has no such form: the one named _total, whose
+// family would have no name.
 //
-// The suffix is the plain text _total whatever the name is, also for one
-// escaped by name_escaping values (transform/nameescaping.go), where the
-// _total of the original name reads __total: my.requests_total, exported as
-// U__my_2e_requests__total, is the family U__my_2e_requests_ with the sample
-// U__my_2e_requests__total, and my.errors, exported as U__my_2e_errors, is
-// the family U__my_2e_errors with the sample U__my_2e_errors_total. That is
-// how Prometheus writes an escaped counter, and it is the one form in which a
-// reader of OpenMetrics, which knows a counter's sample as its family and
-// _total, finds the sample in its family: a suffix written in escaped form,
-// __total, gave a strict parser, and this exporter's own, a counter family
-// without samples and a sample of no family beside it.
+// The suffix is the plain text _total whatever the name is. This also holds
+// for a name escaped by name_escaping values (transform/nameescaping.go),
+// where the _total of the original name reads __total. For example,
+// my.requests_total, exported as U__my_2e_requests__total, is the family
+// U__my_2e_requests_ with the sample U__my_2e_requests__total. my.errors,
+// exported as U__my_2e_errors, is the family U__my_2e_errors with the sample
+// U__my_2e_errors_total. This is how Prometheus writes an escaped counter. It
+// is also the only form in which an OpenMetrics reader, which knows a
+// counter's sample as its family plus _total, finds the sample in its family.
+// A suffix written in escaped form, __total, gave a strict parser, and this
+// exporter's own, a counter family without samples and beside it a sample of
+// no family.
 func openMetricsCounter(name string) (family, sample, created string, natural bool) {
 	family = strings.TrimSuffix(name, "_total")
 	if family == "" {
@@ -997,11 +998,11 @@ func (e *expositionWriter) appendOpenMetricsHistogram(b []byte, family string, m
 	return b
 }
 
-// appendOpenMetricsBuckets writes a histogram's bucket lines as samples
-// named name: the +Inf bucket last, with its own count (model.Histogram), and
-// none for a histogram that has none, which is written as unknown families.
-// A bucket's exemplar, which only the exporter's own durations have, follows
-// its count (appendOpenMetricsExemplar).
+// appendOpenMetricsBuckets writes a histogram's bucket lines as samples named
+// name. The +Inf bucket comes last, with its own count (model.Histogram). A
+// histogram that has none gets none, and is written as unknown families. A
+// bucket's exemplar, which only the exporter's own durations have, follows its
+// count (appendOpenMetricsExemplar).
 func (e *expositionWriter) appendOpenMetricsBuckets(b []byte, name string, m model.Metric) []byte {
 	for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
 		if math.IsInf(x.UpperBound, 1) {
@@ -1017,12 +1018,12 @@ func (e *expositionWriter) appendOpenMetricsBuckets(b []byte, name string, m mod
 	return b
 }
 
-// appendOpenMetricsExemplar writes x, when there is one, on the line b ends
-// with, as OpenMetrics writes an exemplar after a bucket's count and its
-// timestamp: " # {trace_id="…",span_id="…"} value timestamp", the timestamp
-// in seconds. Its labels are 32 and 16 hex digits under their names, 63
+// appendOpenMetricsExemplar writes x, if there is one, on the line that b ends
+// with. OpenMetrics writes an exemplar after a bucket's count and timestamp:
+// " # {trace_id="…",span_id="…"} value timestamp", with the timestamp in
+// seconds. Its labels are 32 and 16 hex digits under their names, 63
 // characters, within the 128 an exemplar's labels may have. The Prometheus
-// text format has no exemplars, and writes none.
+// text format has no exemplars, so none is written there.
 func appendOpenMetricsExemplar(b []byte, x *model.Exemplar) []byte {
 	if x == nil {
 		return b
@@ -1060,13 +1061,14 @@ func (e *expositionWriter) appendOpenMetricsQuantiles(b []byte, name string, m m
 }
 
 // appendOpenMetricsCreated writes the _created sample of a series with a
-// creation time, after the series' other samples: the family's name with
-// _created, which a counter, a histogram and a summary family claim
-// (planOpenMetrics), the series' labels, and the time in seconds. Families of
-// other types have no such sample, and nothing is written for them, nor for
-// a histogram with a label of its own named le or a summary with one named
-// quantile, which model.MetricSet.Validate refuses: the sample would carry
-// the label, and so be no part of the series its buckets or quantiles are.
+// creation time, after the series' other samples. The sample has the family's
+// name with _created (claimed by counter, histogram and summary families, see
+// planOpenMetrics), the series' labels, and the time in seconds. Families of
+// other types have no such sample, and nothing is written for them. Nothing is
+// written either for a histogram with its own label named le, or a summary
+// with one named quantile, which model.MetricSet.Validate refuses: the sample
+// would carry the label, and so not be part of the series of its buckets or
+// quantiles.
 func (e *expositionWriter) appendOpenMetricsCreated(b []byte, f *omFamily, m model.Metric) []byte {
 	switch f.typ {
 	case "counter", "histogram", "summary":

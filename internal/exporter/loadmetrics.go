@@ -10,11 +10,11 @@ import (
 // loadCounters add up the time the exporter spends on static target scrapes
 // and on probes, for autoscaling (docs/SELF-METRICS.md#autoscaling). Their
 // rate is the average number of scrapes or probes in progress, which a
-// HorizontalPodAutoscaler can average over the pods; the gauges of what is in
-// progress (http_exporter_trips_in_flight) are only what a scrape happens to
-// catch. They are two numbers for the whole exporter, never labelled by
-// collector or target, so they cost the same however many targets there are,
-// and kept in nanoseconds so they add up without a lock.
+// HorizontalPodAutoscaler can average over the pods. The in-progress gauges
+// (http_exporter_trips_in_flight) show only what a scrape happens to catch.
+// The counters are two numbers for the whole exporter, never labelled by
+// collector or target, so they cost the same however many targets there
+// are. They are kept in nanoseconds so they add up without a lock.
 type loadCounters struct {
 	staticNanos atomic.Int64
 	probeNanos  atomic.Int64

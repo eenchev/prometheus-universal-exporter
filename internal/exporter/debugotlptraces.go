@@ -14,15 +14,16 @@ import (
 )
 
 // With otlp.traces on, the debug page's OTLP tab shows the spans the trace
-// export would make of the run — by the code that makes a probe's or a
-// scrape's (buildSpans, queuedSpans, otlpTraceRequests), from the stages and
-// requests the run recorded as they do — and whether the export would send
-// them, by the sampling rules a probe's or a scrape's trace is decided by
-// (decideTrace): the run's duration against otlp.traces.threshold, whether
-// it failed against otlp.traces.errors, and its trace id against
-// otlp.traces.sample_ratio. The rate cap is not taken: what it would leave
-// depends on the traces exported before. The run's own trace is never
-// exported: a run is never seen by the export.
+// export would make of the run. They are made by the code that makes a
+// probe's or a scrape's spans (buildSpans, queuedSpans, otlpTraceRequests),
+// from the stages and requests the run recorded the same way. The tab also
+// shows whether the export would send them, by the sampling rules that
+// decide a probe's or a scrape's trace (decideTrace): the run's duration
+// against otlp.traces.threshold, whether it failed against
+// otlp.traces.errors, and its trace id against otlp.traces.sample_ratio.
+// The rate cap is not applied, since what it would leave depends on the
+// traces exported before. The run's own trace is never exported: the export
+// never sees a run.
 
 // debugOTLPTraces is the run's trace as the trace export would make it.
 type debugOTLPTraces struct {

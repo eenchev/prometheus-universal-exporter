@@ -10,28 +10,29 @@ import (
 // Every probe of a caching collector keys its cached result, and its
 // in-flight trip, by the collector's definition (collectorFingerprint), so a
 // reload retires what the old definition produced. Encoding the definition
-// and hashing it on every probe cost more than the rest of the key; a
-// configuration never changes once loaded — a reload publishes a new one —
-// so each collector's fingerprint is worked out once per configuration, on
-// first use, and remembered until the next configuration takes its place.
-// The configuration a reload is about to put in force has every fingerprint
-// worked out before it is in force (prepare), on the path that reloads: what
-// uses the configuration first, the following of the reload (reconcile.go) or
-// a probe that comes before that is done, then finds them made, and so does
+// and hashing it on every probe cost more than the rest of the key. A
+// configuration never changes once loaded (a reload publishes a new one), so
+// each collector's fingerprint is worked out once per configuration, on first
+// use, and remembered until the next configuration takes its place.
+// For the configuration a reload is about to put in force, every fingerprint
+// is worked out before it is in force (prepare), on the reload path. The
+// first user of the configuration then finds them made: the following of the
+// reload (reconcile.go), or a probe that comes before that is done. So does
 // the schedule of the static targets when it next looks
 // (statictargetschedule.go).
 
 // fingerprintedHook, set by tests, is called whenever a collector's
-// definition is encoded and hashed (collectorFingerprint), which is what
-// following a reload costs (reconcile.go): so a test can count the times,
-// and see where they happen.
+// definition is encoded and hashed (collectorFingerprint). That is what
+// following a reload costs (reconcile.go), so a test can count the times and
+// see where they happen.
 var fingerprintedHook atomic.Pointer[func()]
 
 // fingerprintMemo remembers the fingerprints of one configuration's
-// collectors, and those of the configuration a reload last prepared, which
-// is the one that reload put in force: so it never holds more than the two,
-// however many reloads there were, and those of a configuration no longer
-// in force only while a probe that still read it was the last to ask (of).
+// collectors, and those of the configuration a reload last prepared, which is
+// the one that reload put in force. So it never holds more than the two,
+// however many reloads there were. It holds those of a configuration no
+// longer in force only while a probe that still read it was the last to ask
+// (of).
 type fingerprintMemo struct {
 	current  atomic.Pointer[fingerprintGeneration]
 	prepared atomic.Pointer[fingerprintGeneration]
@@ -39,9 +40,9 @@ type fingerprintMemo struct {
 
 // fingerprintGeneration is the fingerprints of one configuration, each worked
 // out the first time it is asked for. whole says that all of them have been,
-// the configuration having been prepared. places says where the
-// configuration has each collector, by its name (place): made once, under
-// placed, and never changed, so whoever reads it finds it whole.
+// because the configuration was prepared. places says where the configuration
+// has each collector, by name (place). It is made once, under placed, and
+// never changed, so whoever reads it finds it whole.
 type fingerprintGeneration struct {
 	config *model.Config
 	once   []sync.Once
@@ -56,23 +57,23 @@ func newFingerprintGeneration(cfg *model.Config) *fingerprintGeneration {
 }
 
 // A probe, the scrape of a static target and the schedule of the static
-// targets each have a collector's name and need the collector, or its
+// targets each have a collector's name and need the collector or its
 // fingerprint. Going through the configuration's collectors for it costs as
-// much as the configuration is large, at every probe and every scrape, and
-// for a look of the schedule after a reload once for every collector with a
-// static target: for 2,000 collectors with a target each that was more than
-// half the look. So the place of each collector is kept by its name with the
-// configuration's fingerprints, which live as long as the configuration
-// does and are shared by the same callers: the collectors are gone through
-// once for a configuration, when a reload prepares it (prepare) or, for the
-// one the exporter started with, when a name is first asked for.
+// much as the configuration is large, at every probe and every scrape. For a
+// look of the schedule after a reload, it costs that once for every collector
+// with a static target: for 2,000 collectors with a target each, that was
+// more than half the look. So each collector's place is kept by its name with
+// the configuration's fingerprints, which live as long as the configuration
+// and are shared by the same callers. The collectors are gone through once
+// per configuration: when a reload prepares it (prepare), or, for the one the
+// exporter started with, when a name is first asked for.
 
-// collectorsScannedHook, set by tests, is called whenever the collectors of
-// a configuration are gone through, to find one of them (placeByScan,
-// fingerprintMemo.fingerprint) or to note where each is (makePlaces): once
-// for each time, not for each collector, so a test can count the times and
-// see that it is once for a configuration, not once for each probe, scrape
-// or static target.
+// collectorsScannedHook, set by tests, is called whenever the collectors of a
+// configuration are gone through, to find one of them (placeByScan,
+// fingerprintMemo.fingerprint) or to note where each is (makePlaces). It is
+// called once per pass, not per collector, so a test can count the passes and
+// see that there is one per configuration, not one per probe, scrape or
+// static target.
 var collectorsScannedHook atomic.Pointer[func()]
 
 // collectorsScanned tells a test that the collectors of a configuration are
@@ -97,10 +98,10 @@ func placeByScan(cfg *model.Config, name string) int {
 }
 
 // place is the index of the configuration's collector named name, and false
-// when it has none of that name: what placeByScan finds, read from places.
-// The names of a loaded configuration are all different (config.Validate);
-// were two collectors to share one, the first is the one named, as it is
-// for a scan.
+// when it has none of that name. It is what placeByScan finds, read from
+// places. The names of a loaded configuration are all different
+// (config.Validate). If two collectors did share one, the first is the one
+// named, as in a scan.
 func (g *fingerprintGeneration) place(name string) (int, bool) {
 	g.placed.Do(g.makePlaces)
 	index, found := g.places[name]
@@ -121,9 +122,9 @@ func (g *fingerprintGeneration) makePlaces() {
 
 // fingerprint is collectorFingerprint(c), remembered when c is one of cfg's
 // collectors. A collector that is not, such as a copy, is fingerprinted
-// afresh. While the fingerprints remembered are cfg's, as they are but for a
-// probe that still holds the configuration before a reload, c is found by
-// its name (place) and the collectors are not gone through.
+// afresh. While the remembered fingerprints are cfg's, c is found by its name
+// (place) and the collectors are not gone through. They are cfg's except for
+// a probe that still holds the configuration from before a reload.
 func (m *fingerprintMemo) fingerprint(cfg *model.Config, c *model.Collector) string {
 	if generation := m.current.Load(); c != nil && generation != nil && generation.config == cfg {
 		if index, found := generation.place(c.Name); found && &cfg.Collectors[index] == c {
@@ -147,14 +148,13 @@ func (m *fingerprintMemo) fingerprint(cfg *model.Config, c *model.Collector) str
 }
 
 // prepare works out every fingerprint of cfg, a configuration that is about
-// to be put in force and that nothing reads yet, and keeps them for of to
-// find once it is. The probes of the configuration still in force are left
+// to be put in force and that nothing reads yet. It keeps them for of to find
+// once cfg is in force. The probes of the configuration still in force keep
 // the fingerprints they use: what is remembered for them is not replaced
-// until something asks for those of cfg. A configuration whose fingerprints
-// are kept already, prepared or remembered, has those that are left worked
-// out, and none again. Where each collector is, by its name, is noted with
-// them (place), so that no probe of cfg is the one to go through its
-// collectors.
+// until something asks for those of cfg. For a configuration whose
+// fingerprints are kept already, prepared or remembered, only those left are
+// worked out, and none again. Each collector's place, by name, is noted with
+// them (place), so no probe of cfg is the one to go through its collectors.
 func (m *fingerprintMemo) prepare(cfg *model.Config) {
 	generation := m.prepared.Load()
 	if generation == nil || generation.config != cfg {
@@ -170,11 +170,12 @@ func (m *fingerprintMemo) prepare(cfg *model.Config) {
 	m.prepared.Store(generation)
 }
 
-// of is the fingerprints of cfg's collectors: those remembered, when they
-// are cfg's, and otherwise those prepared for it or, when none were, new
-// ones, none worked out yet, remembered in their place. A caller that goes
-// through all of a configuration's collectors, as the following of a reload
-// does (reconcile.go), asks once and reads each by its index.
+// of is the fingerprints of cfg's collectors. They are those remembered, when
+// they are cfg's. Otherwise they are those prepared for it, or, when none
+// were, new ones with none worked out yet, remembered in their place. A
+// caller that goes through all of a configuration's collectors, as the
+// following of a reload does (reconcile.go), asks once and reads each by its
+// index.
 func (m *fingerprintMemo) of(cfg *model.Config) *fingerprintGeneration {
 	generation := m.current.Load()
 	if generation == nil || generation.config != cfg {
@@ -204,15 +205,15 @@ func (g *fingerprintGeneration) at(index int) string {
 	return g.values[index]
 }
 
-// keptFingerprint is the fingerprint of cfg's collector at index for the
+// keptFingerprint is the fingerprint of cfg's collector at index, for the
 // configuration manager, which tells by it what a reload changed
-// (config.Manager's SetFingerprint), between the reload's preparing its
-// configuration (prepareReload) and its putting it in force: those prepared
-// for the configuration the reload read, and those kept with the one
-// followed, which the preparing worked out for every collector the new
-// configuration still names. So it encodes no definition, but for a
-// configuration that is neither, which only a manager reloading without the
-// server following it has.
+// (config.Manager's SetFingerprint). It is asked for between the reload's
+// preparing its configuration (prepareReload) and its putting it in force.
+// It reads those prepared for the configuration the reload read, and those
+// kept with the followed one, which the preparing worked out for every
+// collector the new configuration still names. So it encodes no definition,
+// except for a configuration that is neither, which only a manager reloading
+// without the server following it has.
 func (s *Server) keptFingerprint(cfg *model.Config, index int) string {
 	if prepared := s.fingerprints.prepared.Load(); prepared != nil && prepared.config == cfg {
 		return prepared.at(index)

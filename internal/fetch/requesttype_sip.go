@@ -148,7 +148,7 @@ func init() {
 			if _, err := netPassword(c); err != nil {
 				warnings = append(warnings, fmt.Sprintf("collector %q: %v; %s", c.Name, err, later))
 			}
-			if _, err := netTLSConfig(c, sipRequest(c).Transport == sipTLS); err != nil {
+			if _, err := sipTLSConfig(c); err != nil {
 				warnings = append(warnings, fmt.Sprintf("collector %q: %v; %s", c.Name, err, later))
 			}
 			return warnings
@@ -190,11 +190,49 @@ func (sipRequester) Validate(c *model.Collector) error {
 			return fmt.Errorf("collector %q request.%s %w", c.Name, uri.key, err)
 		}
 	}
-	if err := checkNetAccount(c); err != nil {
-		return err
+	// The tls block and the account, held to what the other types that
+	// take them hold theirs to.
+	t := c.Request.TLS
+	switch {
+	case (t.CertFile == "") != (t.KeyFile == ""):
+		return fmt.Errorf("collector %q request.tls sets only one of cert_file and key_file; a client certificate needs both", c.Name)
+	case HasPathParams(c.Request.Username) || HasPathParams(c.Request.PasswordFile):
+		return fmt.Errorf("collector %q request.username or password_file has a placeholder; the account is used as it is written", c.Name)
+	case strings.ContainsFunc(c.Request.Username, sipNotHeaderText):
+		return fmt.Errorf("collector %q request.username holds a control character", c.Name)
+	}
+	if t.ServerName != "" {
+		if _, err := canonicalHost(t.ServerName); err != nil {
+			return fmt.Errorf("collector %q request.tls.server_name %q: %w", c.Name, t.ServerName, err)
+		}
 	}
 	c.Request.Own = r
 	return nil
+}
+
+// sipTLSConfig is the tls block's configuration when the collector's
+// requests go over TLS, nil otherwise.
+func sipTLSConfig(c *model.Collector) (*tls.Config, error) {
+	if sipRequest(c).Transport != sipTLS {
+		return nil, nil
+	}
+	cfg, err := tlsConfig(c.Request.TLS)
+	if err != nil {
+		return nil, fmt.Errorf("request.tls: %w", err)
+	}
+	return cfg, nil
+}
+
+// sipShown is text a server sent, as an error or a debug report shows it:
+// its control characters written as ?, and no longer than a failure is.
+func sipShown(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, text)
+	return model.CutTo(RedactText(text), 200, false)
 }
 
 // sipNotHeaderText says whether r may not stand in a header's value.
@@ -341,7 +379,7 @@ func fetchSIP(ctx context.Context, target string, c *model.Collector, overrides 
 	if err != nil {
 		return nil, err
 	}
-	tlsSettings, err := netTLSConfig(c, r.Transport == sipTLS)
+	tlsSettings, err := sipTLSConfig(c)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +514,7 @@ func sipAsk(ctx context.Context, link *sipLink, address netAddress, c *model.Col
 		if attempts > 1 {
 			sent = "sent " + strconv.Itoa(attempts) + " times"
 		}
-		at.outcome(fmt.Sprintf("%d %s, %s", response.status, netShown(response.reason), sent), false)
+		at.outcome(fmt.Sprintf("%d %s, %s", response.status, sipShown(response.reason), sent), false)
 		challenged := doc.Challenged
 		doc = response.describe()
 		doc.Requests, doc.Attempts, doc.ResponseSeconds = request, attempts, elapsed.Seconds()
@@ -800,7 +838,7 @@ func (m *sipMessage) answers(exchange sipExchange) string {
 	case number != strconv.Itoa(exchange.cseq) || !strings.EqualFold(strings.TrimSpace(method), sipMethod):
 		return "its CSeq is " + sipShownLine(m.first("cseq")) + ", not this request's"
 	case m.status < 200:
-		return fmt.Sprintf("it is provisional, %d %s", m.status, netShown(m.reason))
+		return fmt.Sprintf("it is provisional, %d %s", m.status, sipShown(m.reason))
 	}
 	return ""
 }

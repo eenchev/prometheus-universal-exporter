@@ -47,6 +47,10 @@ func TestTheInfluxDecoderReadsAPointALine(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []any{map[string]any{"measurement": "m", "tags": map[string]any{"a": "2"}, "fields": map[string]any{"f": 2}, "timestamp": nil}}) {
 		t.Errorf("a key twice: %v, %v", got, err)
 	}
+	// A carriage return that ends the body ends its last line.
+	if got, err := decodeInflux([]byte("m v=1\r\nn v=2 7\r")); err != nil || len(got) != 2 || got[1].(map[string]any)["timestamp"] != 7 {
+		t.Errorf("a body that ends in a carriage return: %v, %v", got, err)
+	}
 	// A line feed in quoted text is part of the text, and the lines after
 	// it are counted from it.
 	got, err = decodeInflux([]byte("log msg=\"two\nlines\" 1\nbad"))

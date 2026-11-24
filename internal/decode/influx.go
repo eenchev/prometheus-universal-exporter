@@ -97,7 +97,9 @@ func (d *influxDecoder) lineEnd() bool {
 	switch {
 	case d.at >= len(d.body):
 		return true
-	case d.body[d.at] == '\r' && d.at+1 < len(d.body) && d.body[d.at+1] == '\n':
+	case d.body[d.at] == '\r' && d.at+1 == len(d.body):
+		// A carriage return that ends the body ends its last line.
+	case d.body[d.at] == '\r' && d.body[d.at+1] == '\n':
 		d.at++
 	case d.body[d.at] != '\n':
 		return false

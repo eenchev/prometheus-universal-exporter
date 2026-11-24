@@ -1,4 +1,4 @@
-//go:build request_type_sip
+//go:build request_type_sip && (!select_request_types || request_type_http)
 
 package repository
 

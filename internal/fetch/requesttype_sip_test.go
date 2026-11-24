@@ -510,14 +510,19 @@ func TestASIPTargetAndKeysAreChecked(t *testing.T) {
 		"request.sip_transport is \"sctp\"":             func(_ *model.Collector, r *SIPConfig) { r.Transport = "sctp" },
 		"sets request.tls with sip_transport: udp":      func(c *model.Collector, _ *SIPConfig) { c.Request.TLS.CAFile = "/ca.pem" },
 		"sets only one of request.username and passwor": func(c *model.Collector, _ *SIPConfig) { c.Request.Username = "monitor" },
-		"request.username has a quote":                  func(c *model.Collector, _ *SIPConfig) { c.Request.Username, c.Request.PasswordFile = `a"b`, "/p" },
-		"request.user_agent is longer than 128 bytes":   func(_ *model.Collector, r *SIPConfig) { r.UserAgent = "a\r\nVia: x" },
-		"request.request_uri is \"pbx.example.com\"":    func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "pbx.example.com" },
-		"request.request_uri is \"sip:\"":               func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "sip:" },
-		"request.from_uri is \"sip:a b@example.com\"":   func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:a b@example.com" },
-		"request.from_uri is \"sip:a>\\r\\nVia: x\"":    func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:a>\r\nVia: x" },
-		"request.from_uri is 259 bytes":                 func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:" + strings.Repeat("a", 255) },
-		"which has a placeholder":                       func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "sip:{{param_user}}@example.com" },
+		"request.tls sets only one of cert_file":        func(c *model.Collector, r *SIPConfig) { r.Transport, c.Request.TLS.CertFile = "tls", "/c.pem" },
+		"request.username or password_file has a place": func(c *model.Collector, _ *SIPConfig) {
+			c.Request.Username, c.Request.PasswordFile = "{{param_user}}", "/p"
+		},
+		"request.tls.server_name":                     func(c *model.Collector, r *SIPConfig) { r.Transport, c.Request.TLS.ServerName = "tls", "bad name" },
+		"request.username has a quote":                func(c *model.Collector, _ *SIPConfig) { c.Request.Username, c.Request.PasswordFile = `a"b`, "/p" },
+		"request.user_agent is longer than 128 bytes": func(_ *model.Collector, r *SIPConfig) { r.UserAgent = "a\r\nVia: x" },
+		"request.request_uri is \"pbx.example.com\"":  func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "pbx.example.com" },
+		"request.request_uri is \"sip:\"":             func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "sip:" },
+		"request.from_uri is \"sip:a b@example.com\"": func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:a b@example.com" },
+		"request.from_uri is \"sip:a>\\r\\nVia: x\"":  func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:a>\r\nVia: x" },
+		"request.from_uri is 259 bytes":               func(_ *model.Collector, r *SIPConfig) { r.FromURI = "sip:" + strings.Repeat("a", 255) },
+		"which has a placeholder":                     func(_ *model.Collector, r *SIPConfig) { r.RequestURI = "sip:{{param_user}}@example.com" },
 	} {
 		own := SIPConfig{}
 		c := &model.Collector{Name: "pbx", Request: model.RequestConfig{Type: RequestTypeSIP}}

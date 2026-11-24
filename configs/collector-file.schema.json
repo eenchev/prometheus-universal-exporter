@@ -1300,6 +1300,13 @@
                           "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
                         },
                         "type": "object"
+                      },
+                      "value_map_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
                       }
                     },
                     "required": [
@@ -1377,6 +1384,13 @@
                     "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
                   },
                   "type": "object"
+                },
+                "value_map_file": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
                 }
               },
               "then": {

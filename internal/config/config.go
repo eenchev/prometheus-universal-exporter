@@ -602,6 +602,11 @@ func checkGraphiteResponse(x *model.Collector) error {
 // the name another passes on the metric of with the same labels
 // (checkRulesDiffer, checkNoPatternRepeatsAName).
 func validateMetricRules(c *model.Config, x *model.Collector) error {
+	// The maps of the files the rules name are part of the rules from here
+	// on (valuemapfiles.go).
+	if err := readValueMapFiles(x); err != nil {
+		return err
+	}
 	var errs []error
 	sound := make([]bool, len(x.Metrics))
 	for i := range x.Metrics {

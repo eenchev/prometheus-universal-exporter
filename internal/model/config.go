@@ -1236,7 +1236,11 @@ type MetricRule struct {
 	// value, mapped or read as a number, such as 0.001 for milliseconds to
 	// seconds.
 	ValueMap map[string]float64 `yaml:"value_map"`
-	Scale    *float64           `yaml:"scale"`
+	// ValueMapFile names a file that holds more of the map, a YAML or JSON
+	// mapping, read when the configuration loads and joined with ValueMap,
+	// whose entries win (config/valuemapfiles.go).
+	ValueMapFile string   `yaml:"value_map_file"`
+	Scale        *float64 `yaml:"scale"`
 	// TimeFormat says the text the expression gives is a time, and the value
 	// that time in Unix seconds: rfc3339, rfc1123, or a layout, the reference
 	// time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times,
@@ -1317,6 +1321,9 @@ type LabelRule struct {
 	// {"1": running, "2": stopped}, with "*" for any other value; a value it
 	// maps to "" leaves the label off.
 	ValueMap map[string]string `yaml:"value_map"`
+	// ValueMapFile names a file that holds more of the map, as a rule's
+	// does.
+	ValueMapFile string `yaml:"value_map_file"`
 }
 
 // Static reports whether the label has a static value rather than an

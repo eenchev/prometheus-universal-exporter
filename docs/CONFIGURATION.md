@@ -2214,6 +2214,34 @@ histogram's or summary's bounds are values too — and not `value_map`, since it
 values are numbers already; a `python` script sets its values itself, and
 takes neither. `scale` must be a finite number other than 0.
 
+A map that is long, or the same for many rules, goes in a file:
+`value_map_file` names one, on a rule or on a label, beside `value_map` or in
+its place:
+
+```yaml
+- name: device_state
+  items: .devices[]
+  expression: .state
+  value_map_file: /etc/exporter/maps/states.yaml
+  labels:
+    - name: site
+      expression: .site_id
+      value_map: {"0": unknown}
+      value_map_file: /etc/exporter/maps/sites.yaml
+```
+
+The file is a YAML or JSON mapping, a key and its value a line
+(`"17": Frankfurt`), of at most 10,000 entries and 1 MiB; a rule's maps to
+numbers, a label's to text. It is read when the configuration loads and
+joined with the `value_map` beside it, whose entries win, and from there on
+the rule is as if the whole map were written in it. The path is absolute.
+With `--config.watch` an edit of the file reloads the configuration, and a
+file that is missing or is no mapping refuses the load, naming the rule and
+the file. The [target allocator](ALLOCATOR.md) does not open it: mount it
+on every replica. A collector written on the [debug
+page](#debugging-collectors) names none, outside [dangerous debug
+mode](#dangerous-debug-mode).
+
 Rules of one `name` make one metric, so a label they share must map alike:
 two such rules giving one label different `value_map`s are refused at load,
 since the same value would read as two names in one series. Give them one

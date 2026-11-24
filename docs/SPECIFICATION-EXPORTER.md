@@ -4390,6 +4390,22 @@ rule MUST refuse both at load. A `scale` of 0 or one that is not finite, and a
 `value_map` key that is empty or has surrounding blanks, MUST be refused at
 load.
 
+A rule and a label MAY set `value_map_file`, the absolute path of a file
+that holds a YAML or JSON mapping of at most 10,000 entries and 1 MiB, each
+key and each value text, a number or a boolean. It MUST be read when the
+configuration loads and joined with the `value_map` beside it, an entry
+written there keeping its value, a rule's values read as numbers; every
+rule of `value_map` MUST then hold of the map so made. A path that is
+relative or holds a placeholder, a file that cannot be read, is no such
+mapping, writes a key twice or maps a rule's value to what is no number
+MUST refuse the load, naming the rule and the file and nothing the file
+holds but a key. The file MUST be among those the watch stamps, so an edit
+reloads the configuration, and its map MUST be part of the collector's
+definition. A load that opens no named file, as the target allocator's is, MUST keep the key
+and read nothing. A reference to a secret store there MUST be refused, and
+so MUST the key on a collector written on the debug page outside dangerous
+mode.
+
 A rule MAY set `time_format`, and with it `time_zone`. The text its
 expression gives, without surrounding blanks, MUST then be read as a time, and
 the value MUST be that time in Unix seconds, as a float64 with its fraction of

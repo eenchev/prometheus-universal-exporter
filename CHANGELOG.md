@@ -249,6 +249,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   reads InfluxDB line protocol, as Telegraf writes it to a file, into a
   list of points for `jq`, `yq` and `python`: each with its measurement,
   its tags, its fields by their types and its timestamp.
+- **[`value_map_file`](docs/CONFIGURATION.md#mapping-text-to-values-and-scaling-them)**
+  reads a rule's or a label's value map from a YAML or JSON file, so a long
+  table of codes and their names is written once and shared by rules;
+  entries of the `value_map` beside it win, and an edit of the file reloads
+  the configuration under `--config.watch`.
 
 ### Fixed
 

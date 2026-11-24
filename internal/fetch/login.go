@@ -115,6 +115,7 @@ var (
 var loginKindKeys = map[string][]string{
 	"json":   jsonLoginKeys,
 	"oauth2": oauth2LoginKeys,
+	"jwt":    append([]string{"token", "expires_in", "scopes"}, jwtLoginKeys...),
 	"steps":  append([]string{"token", "expires_in"}, stepsLoginKeys...),
 }
 
@@ -131,9 +132,9 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, 
 	order = loginKeyOrder(order)
 	if !slices.Contains(model.LoginTypes, l.Type) {
 		if l.Type == "" {
-			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, type: oauth2, for the OAuth 2.0 client credentials or refresh token grant, or type: steps, for a login of several requests", where)
+			return fmt.Errorf("%s has no type; write type: json, to post a JSON login and read the token from its answer, type: oauth2, for the OAuth 2.0 client credentials or refresh token grant, type: jwt, to sign a JWT with a key and exchange it for a token, or type: steps, for a login of several requests", where)
 		}
-		return fmt.Errorf("%s.type is %q; it is json, oauth2 or steps", where, l.Type)
+		return fmt.Errorf("%s.type is %q; it is json, oauth2, jwt or steps", where, l.Type)
 	}
 	if l.Type != "steps" {
 		if err := checkLoginURL(l.URL, allowedSchemes); err != nil {
@@ -168,6 +169,10 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, 
 		}
 	case "oauth2":
 		if err := checkOAuth2Login(l, where); err != nil {
+			return err
+		}
+	case "jwt":
+		if err := checkJWTLogin(l, where); err != nil {
 			return err
 		}
 	}
@@ -723,6 +728,8 @@ func logIn(ctx context.Context, c *model.Collector, l *model.LoginConfig, u *url
 	switch l.Type {
 	case "oauth2":
 		token, err = oauth2Login(ctx, &traced, l, u, host, start)
+	case "jwt":
+		token, err = jwtLogin(ctx, &traced, l, u, start)
 	default:
 		token, err = jsonLogin(ctx, &traced, l, u, start)
 	}
@@ -850,6 +857,12 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 	if len(answer) > loginAnswerLimit {
 		return loginToken{}, fmt.Errorf("the login's answer is larger than %d bytes", loginAnswerLimit)
 	}
+	return loginAnswerToken(ctx, l, resp, answer, start)
+}
+
+// loginAnswerToken reads the token, and its lifetime, from a login's answer
+// as the login's token, token_header, token_cookie and expires_in say.
+func loginAnswerToken(ctx context.Context, l *model.LoginConfig, resp *http.Response, answer []byte, start time.Time) (loginToken, error) {
 	var document any
 	decoded := false
 	decode := func() (any, error) {
@@ -1509,7 +1522,7 @@ func loginFiles(l *model.LoginConfig, who string) []string {
 	if l == nil {
 		return nil
 	}
-	files := map[string]string{"client_id_file": l.ClientIDFile, "client_secret_file": l.ClientSecretFile, "refresh_token_file": l.RefreshTokenFile}
+	files := map[string]string{"client_id_file": l.ClientIDFile, "client_secret_file": l.ClientSecretFile, "refresh_token_file": l.RefreshTokenFile, "signing_key_file": l.SigningKeyFile}
 	for name, path := range l.FieldFiles {
 		files["field_files."+name] = path
 	}

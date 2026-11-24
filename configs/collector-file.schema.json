@@ -1300,6 +1300,13 @@
                           "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
                         },
                         "type": "object"
+                      },
+                      "value_map_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
                       }
                     },
                     "required": [
@@ -1377,6 +1384,13 @@
                     "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
                   },
                   "type": "object"
+                },
+                "value_map_file": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
                 }
               },
               "then": {
@@ -2806,6 +2820,50 @@
                 ],
                 "type": "string"
               },
+              "aws_sigv4": {
+                "additionalProperties": false,
+                "description": "http: sign each request with AWS Signature Version 4, with the credentials the AWS SDK's default chain finds, so the collector reads an AWS API. In the builds that have the s3file request type. See docs/AUTHENTICATION.md#signing-requests-for-aws.",
+                "properties": {
+                  "access_key_id_file": {
+                    "description": "The file of a static access key's id, with secret_access_key_file, in place of the credentials the AWS SDK's default chain finds.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "region": {
+                    "description": "The region signed for, such as eu-west-1; the AWS SDK's configuration, such as AWS_REGION, says it when left out.",
+                    "pattern": "^([a-z0-9][a-z0-9-]*)?$",
+                    "type": "string"
+                  },
+                  "secret_access_key_file": {
+                    "description": "The file of a static access key's secret, with access_key_id_file.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "service": {
+                    "description": "Required. The name the API signs under, such as sqs, monitoring (CloudWatch), ce (Cost Explorer), ecs, lambda or execute-api.",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$",
+                    "type": "string"
+                  },
+                  "session_token_file": {
+                    "description": "The file of a temporary access key's session token, with the other two.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "service"
+                ],
+                "type": "object"
+              },
               "basic_auth": {
                 "additionalProperties": false,
                 "properties": {
@@ -3086,6 +3144,15 @@
                   }
                 },
                 "type": "object"
+              },
+              "consumers": {
+                "description": "nats: the consumers asked about, each written stream/consumer, at most 100: each one's pending, unacknowledged and redelivered messages.",
+                "items": {
+                  "pattern": "^[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}/[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
               },
               "context_name": {
                 "description": "snmp: with snmp_version 3, the context the objects are read in; the default context when left out.",
@@ -3391,6 +3458,10 @@
                   ""
                 ],
                 "type": "string"
+              },
+              "jetstream": {
+                "description": "nats: ask the account's JetStream state, its streams, consumers and storage, with the JetStream API; false when left out. Required for streams and consumers.",
+                "type": "boolean"
               },
               "keep_alive": {
                 "description": "mqtt: the keep alive told to the broker, 30s by default, in whole seconds as MQTT counts it: a part of a second is a second, and the most is 65535s. A kept connection is pinged twice in it, and is given up when the broker sent nothing for one and a half.",
@@ -3786,6 +3857,102 @@
                                 "required": [
                                   "auth_style"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
                               }
                             ]
                           }
@@ -4028,6 +4195,268 @@
                                 "required": [
                                   "auth_style"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "jwt"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "properties": {
+                            "signing_key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "signing_key_file"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
                               }
                             ]
                           }
@@ -4149,6 +4578,102 @@
                                 },
                                 "required": [
                                   "expires_in"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
                                 ]
                               }
                             ]
@@ -4297,6 +4822,14 @@
                 ],
                 "description": "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.",
                 "properties": {
+                  "audience": {
+                    "description": "jwt: whom the JWT is meant for, its aud claim; the login's url when left out, as RFC 7523 has it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "auth_style": {
                     "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form.",
                     "enum": [
@@ -4305,6 +4838,30 @@
                       ""
                     ],
                     "type": "string"
+                  },
+                  "claims": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "jwt: further claims of the JWT, each text; not those the login sets itself.",
+                    "propertyNames": {
+                      "minLength": 1,
+                      "not": {
+                        "enum": [
+                          "iss",
+                          "sub",
+                          "aud",
+                          "iat",
+                          "exp",
+                          "scope"
+                        ]
+                      }
+                    },
+                    "type": "object"
                   },
                   "client_id": {
                     "description": "oauth2: the client's id. Exactly one of client_id and client_id_file.",
@@ -4352,6 +4909,15 @@
                       }
                     },
                     "type": "object"
+                  },
+                  "exchange": {
+                    "description": "jwt: how the JWT is handed to url: form, the default, as the assertion of a JWT bearer grant (RFC 7523), answered as an OAuth 2.0 token is; or bearer, as the request's own credential, Authorization: Bearer, with no body, as a GitHub App asks for an installation's token.",
+                    "enum": [
+                      "form",
+                      "bearer",
+                      ""
+                    ],
+                    "type": "string"
                   },
                   "expires_at": {
                     "description": "steps: the name of the value that is when the token expires: seconds or milliseconds since 1970, RFC 3339 or an HTTP date. Not with expires_in.",
@@ -4405,6 +4971,14 @@
                     "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
                     "type": "string"
                   },
+                  "issuer": {
+                    "description": "jwt: who the JWT is from, its iss claim: a service account's address, an app's id. Required unless the key file is a service account's JSON key.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "keep": {
                     "additionalProperties": {
                       "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
@@ -4423,6 +4997,24 @@
                     "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
                     "pattern": "^$|^/",
                     "type": "string"
+                  },
+                  "key_id": {
+                    "description": "jwt: the kid of the JWT's header, which tells the endpoint which of the issuer's keys signed it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "lifetime": {
+                    "description": "jwt: how long the JWT is valid, at most 1h; 5m when left out. It is not the lifetime of the token the endpoint answers, which the answer, or ttl, says.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
                   },
                   "prefix": {
                     "description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie.",
@@ -4654,7 +5246,7 @@
                     "type": "array"
                   },
                   "scopes": {
-                    "description": "oauth2: the scopes asked for, sent as the scope parameter.",
+                    "description": "oauth2: the scopes asked for, sent as the scope parameter. jwt: the scopes asked for, the JWT's scope claim.",
                     "items": {
                       "pattern": "^[^\\s\"\\\\]+$",
                       "type": "string"
@@ -4674,6 +5266,14 @@
                       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
                     },
                     "type": "object"
+                  },
+                  "signing_key_file": {
+                    "description": "jwt: required. The file of the private key the JWT is signed with, read at every login: a PEM key, RSA (RS256), elliptic curve P-256 or P-384 (ES256, ES384) or Ed25519 (EdDSA), or the JSON key file of a Google service account, whose client_email and private_key_id are the issuer and the key's id unless the login says its own.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
                   },
                   "steps": {
                     "description": "steps: required, the requests of a whole login, made in order, at most 16. Each step's query, headers, form, json and oauth1 values may hold {{login.\u003cname\u003e}}, a value given or read by a step before it.",
@@ -4879,6 +5479,14 @@
                     },
                     "type": "array"
                   },
+                  "subject": {
+                    "description": "jwt: who the JWT is about, its sub claim, such as the user a service account acts for; none when left out.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "tls": {
                     "additionalProperties": false,
                     "allOf": [
@@ -5004,6 +5612,7 @@
                     "enum": [
                       "json",
                       "oauth2",
+                      "jwt",
                       "steps"
                     ],
                     "type": "string"
@@ -5437,7 +6046,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest. amqp and nats, with username: the file of the account's password, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -5601,6 +6210,17 @@
                 "maxLength": 64,
                 "pattern": "^[^\\x00-\\x1f\\x7f]*$",
                 "type": "string"
+              },
+              "queues": {
+                "description": "amqp: the queues asked about, by name, at most 100: each is declared passively, which creates nothing and answers its ready messages and its consumers. Left out, the scrape logs in and asks about none.",
+                "items": {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
               },
               "quota": {
                 "description": "imap: also ask for the quota of the first mailbox's root, with GETQUOTAROOT, where the server has QUOTA: each resource's usage and limit, STORAGE also in bytes.",
@@ -6132,6 +6752,87 @@
                   "boolean"
                 ]
               },
+              "signature": {
+                "additionalProperties": false,
+                "description": "http: sign each request with an HMAC of a shared secret, sent in a header or a query parameter, as APIs that take no token ask. See docs/AUTHENTICATION.md#signing-requests.",
+                "properties": {
+                  "algorithm": {
+                    "description": "The HMAC's hash: hmac-sha256, the default, hmac-sha1, hmac-sha384 or hmac-sha512.",
+                    "enum": [
+                      "hmac-sha256",
+                      "hmac-sha1",
+                      "hmac-sha384",
+                      "hmac-sha512",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "description": "How the signature is written: hex, the default, base64 or base64url.",
+                    "enum": [
+                      "hex",
+                      "base64",
+                      "base64url",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "header": {
+                    "description": "The header the signature is sent in. Exactly one of header and query_param.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "payload": {
+                    "description": "Required. What is signed, of the request as it is sent: text with {{method}}, {{path}}, {{query}}, {{body}}, {{host}}, {{url}} and {{header:Name}} in it, such as \"{{query}}\" or \"{{header:X-Timestamp}}{{method}}{{path}}{{body}}\".",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "prefix": {
+                    "description": "What the signature is sent after in its header, such as \"sha256=\".",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "query_param": {
+                    "description": "The query parameter the signature is sent in, added after every other, so the payload's {{query}} is the query before it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "secret_encoding": {
+                    "description": "How the file writes the secret: text, the default, base64 or hex.",
+                    "enum": [
+                      "text",
+                      "base64",
+                      "hex",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "secret_file": {
+                    "description": "Required. The file of the secret the requests are signed with, read at each request.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "payload"
+                ],
+                "type": "object"
+              },
               "sip_transport": {
                 "description": "sip: what the request is sent over: udp, the default, where it is sent again while no response comes; tcp; or tls, verified as request.tls says. See docs/SIP.md#the-transport.",
                 "enum": [
@@ -6286,6 +6987,15 @@
                 "maximum": 1000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "streams": {
+                "description": "nats: the streams asked about, by name, at most 100: each one's messages, bytes, sequences and consumers.",
+                "items": {
+                  "pattern": "^[^\\s.*\u003e/\\\\\\x00-\\x1f\\x7f]{1,255}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
               },
               "subprotocols": {
                 "description": "websocket: the subprotocols offered in Sec-WebSocket-Protocol, such as [graphql-transport-ws]; one the server chooses that is not among them fails the scrape.",
@@ -6442,7 +7152,7 @@
                 "type": "string"
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. amqp and nats, optional, with password_file: the account logged in with, amqp's guest when left out. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6457,6 +7167,12 @@
                 "description": "kubernetes: the resource's API version, such as v1 or v1beta1. Defaults to v1.",
                 "maxLength": 63,
                 "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "vhost": {
+                "description": "amqp: the virtual host opened; / when left out.",
+                "maxLength": 255,
+                "pattern": "^[^\\x00-\\x1f\\x7f]*$",
                 "type": "string"
               },
               "walk": {

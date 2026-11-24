@@ -116,7 +116,8 @@ own checks:
   dot and one, as `*/x.yaml` does — since on the replica it would match
   `..data/config.yaml` too. Begin such an entry with a directory's name.
 - Files the configuration names by path — a grpc collector's descriptor
-  files and a `protobuf` decoder's, a sql collector's `statement_file`,
+  files and a `protobuf` decoder's, a sql collector's `statement_file`, a
+  rule's `value_map_file`,
   `otlp.tls` files, `web.basic_auth` files, credential files, the files a
   secret store logs in with and its `tls` files — travel
   as paths, never as content. They must be mounted on every replica at the

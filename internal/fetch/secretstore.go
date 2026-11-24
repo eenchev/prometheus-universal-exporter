@@ -623,7 +623,7 @@ func SecretStoreCounts() []SecretStoreCount {
 // the TLS and SSH libraries read, descriptors and statements, which are no
 // credentials, and the file a login keeps its token in. A reference to a
 // secret store in one of them is refused.
-var secretFileKeys = []string{"ca_file", "cert_file", "key_file", "kubelet_ca_file", "private_key_file", "known_hosts_file", "protoset_file", "proto_files", "statement_file", "keep_file", "collector_files"}
+var secretFileKeys = []string{"ca_file", "cert_file", "key_file", "kubelet_ca_file", "private_key_file", "known_hosts_file", "protoset_file", "proto_files", "statement_file", "keep_file", "collector_files", "value_map_file"}
 
 // SecretReferences checks the references to secret stores in a
 // configuration or a static target file against the stores it was made

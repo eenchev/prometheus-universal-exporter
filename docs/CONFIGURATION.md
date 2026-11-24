@@ -2214,6 +2214,34 @@ histogram's or summary's bounds are values too — and not `value_map`, since it
 values are numbers already; a `python` script sets its values itself, and
 takes neither. `scale` must be a finite number other than 0.
 
+A map that is long, or the same for many rules, goes in a file:
+`value_map_file` names one, on a rule or on a label, beside `value_map` or in
+its place:
+
+```yaml
+- name: device_state
+  items: .devices[]
+  expression: .state
+  value_map_file: /etc/exporter/maps/states.yaml
+  labels:
+    - name: site
+      expression: .site_id
+      value_map: {"0": unknown}
+      value_map_file: /etc/exporter/maps/sites.yaml
+```
+
+The file is a YAML or JSON mapping, a key and its value a line
+(`"17": Frankfurt`), of at most 10,000 entries and 1 MiB; a rule's maps to
+numbers, a label's to text. It is read when the configuration loads and
+joined with the `value_map` beside it, whose entries win, and from there on
+the rule is as if the whole map were written in it. The path is absolute.
+With `--config.watch` an edit of the file reloads the configuration, and a
+file that is missing or is no mapping refuses the load, naming the rule and
+the file. The [target allocator](ALLOCATOR.md) does not open it: mount it
+on every replica. A collector written on the [debug
+page](#debugging-collectors) names none, outside [dangerous debug
+mode](#dangerous-debug-mode).
+
 Rules of one `name` make one metric, so a label they share must map alike:
 two such rules giving one label different `value_map`s are refused at load,
 since the same value would read as two names in one series. Give them one
@@ -2979,7 +3007,7 @@ server for the time — see [NTP](NTP.md) — `icmp` pings a host — see [Ping
 over ICMP](ICMP.md) — `snmp` reads an SNMP agent's objects and tables — see
 [SNMP agents](SNMP.md) — and `kubernetes` lists Kubernetes objects — see
 [Kubernetes objects](KUBERNETES.md). A build that [asks for
-them](#choosing-request-types-at-build-time) has ten more: `smtp` holds a
+them](#choosing-request-types-at-build-time) has twelve more: `smtp` holds a
 mail server's session without sending — see [SMTP](SMTP.md) — `imap`
 counts the mail of an account's mailboxes — see [IMAP](IMAP.md) — `pop3`
 counts the mail of a mailbox over POP3 — see [POP3](POP3.md) — `modbus`
@@ -2988,8 +3016,10 @@ to a broker's topics — see [MQTT](MQTT.md) — `websocket` reads the
 messages of an endpoint — see [WebSocket](WEBSOCKET.md) — `ftp` reads
 a file from an FTP server — see [Files over FTP](FTP.md) — `radius`
 authenticates an account against a RADIUS server — see [RADIUS](RADIUS.md)
-— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) — and
-`sip` asks a SIP server whether it answers — see [SIP](SIP.md).
+— `whois` reads a domain's registration — see [WHOIS](WHOIS.md) —
+`sip` asks a SIP server whether it answers — see [SIP](SIP.md) — `amqp`
+asks an AMQP broker how deep its queues are — see [AMQP](AMQP.md) — and
+`nats` times a NATS server and reads its JetStream — see [NATS](NATS.md).
 An uptime check of HTTP and HTTPS sites, as blackbox_exporter's `http`
 prober makes, is an `http` collector — see [Uptime
 probes](REQUESTS.md#uptime-probes).
@@ -3036,7 +3066,9 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
-| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's; `type: steps` makes a list of requests, each reading values from its answer for the steps after it, one of them the token, with `refresh_steps` and `keep_file` for a sign-in made seldom. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401`, or a status of `relogin_on`, makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
+| `login` | — | Log in before the request and send the token the login gives: `type: json` posts a JSON object to `url` and reads the token from the answer's body, a header or a cookie; `type: oauth2` asks a token endpoint with the client credentials grant, or, with `grant_type: refresh_token`, the refresh token of `refresh_token_file`, for an API on a user's account such as Gmail's; `type: jwt` signs a JWT with a service account's key and exchanges it for a token, for Google's APIs and GitHub Apps; `type: steps` makes a list of requests, each reading values from its answer for the steps after it, one of them the token, with `refresh_steps` and `keep_file` for a sign-in made seldom. Secrets are read from files at each login; the token is kept until shortly before it expires, and a `401`, or a status of `relogin_on`, makes one new login. See [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target). |
+| `signature` | — | `http` alone: sign each request with an HMAC of a shared secret, sent in a header or a query parameter; see [Signing requests](AUTHENTICATION.md#signing-requests). |
+| `aws_sigv4` | — | `http` alone: sign each request with AWS Signature Version 4, to read an AWS API; see [Signing requests for AWS](AUTHENTICATION.md#signing-requests-for-aws). |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | `attempts`, `backoff`, `non_idempotent`, `statuses`, the statuses retried: `[408, 425, 429, "5xx"]` when left out, and a list replaces that set, and `retry_after`, off by default: a retried answer's `Retry-After` is waited in place of `backoff`. See [Target requests](REQUESTS.md#retries) and [Waiting as Retry-After asks](REQUESTS.md#waiting-as-retry-after-asks). |
@@ -3260,6 +3292,20 @@ request's User-Agent; `username` and `password_file` are the account a
 Digest challenge is answered with; `max_response_bytes`, `allowed_targets`
 and `denied_targets` apply too. The decoder is `json`; its table is in
 [SIP](SIP.md#a-collector).
+
+For `amqp`, an opt-in type, no key is required: the AMQP 0-9-1 broker that
+is the target is logged in to with `username` and `password_file`, `guest`
+when left out, its `vhost` opened, `/` when left out, and each queue of
+`queues` asked for its ready messages and its consumers; `tls` is for a
+target written `amqps://`, and `allowed_targets` and `denied_targets` apply
+too. The decoder is `json`; its table is in [AMQP](AMQP.md#a-collector).
+
+For `nats`, an opt-in type, no key is required: the NATS server that is the
+target is logged in to with `username` and `password_file` or with the token
+of `bearer_token_file`, and a PING to it is timed; `jetstream: true` asks the
+account's JetStream state, and `streams` and `consumers` each one named;
+`tls`, `max_response_bytes`, `allowed_targets` and `denied_targets` apply
+too. The decoder is `json`; its table is in [NATS](NATS.md#a-collector).
 <!-- /request-types -->
 
 Of several keys a request block may not set (a key of another type, a key
@@ -3347,6 +3393,12 @@ requires a `target`, the domain.
 
 `sip`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the SIP server, `host` or `host:port`.
+
+`amqp`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the AMQP broker, `host`, `host:port` or `amqps://host`.
+
+`nats`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, the NATS server, `host`, `host:port` or `tls://host`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters is given once. A second
@@ -3381,10 +3433,11 @@ go build -tags "$(sh tools/request-type-tags.sh http)" .
 `make build` writes the binary to `bin/prometheus-universal-exporter`; plain
 `go build .` writes it to the current directory.
 
-Two things that are no request types come with one, for the libraries they
+Three things that are no request types come with one, for the libraries they
 share with it: the [`protobuf` decoder](#protobuf-responses) is in the
 builds that have `grpc`, and the `aws`
-[secret store](AUTHENTICATION.md#secret-stores) in those that have
+[secret store](AUTHENTICATION.md#secret-stores) and an `http` collector's
+[`aws_sigv4`](AUTHENTICATION.md#signing-requests-for-aws) in those that have
 `s3file`. A build without the type refuses a configuration that uses them,
 saying which type to build with.
 
@@ -3427,8 +3480,8 @@ new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-requ
 for a type few deployments want in the binary. They are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
-[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md) and [`sip`](SIP.md), each written with the standard library alone: about
-0.1 MB of a stripped binary each, and about 0.7 MB for the ten. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md), [`sip`](SIP.md), [`amqp`](AMQP.md) and [`nats`](NATS.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, and about 0.8 MB for the twelve. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says, and its tag alone,
 `request_type_<name>`, adds one to a default build; a collector of one is
@@ -7564,6 +7617,8 @@ nothing there.
 - [RADIUS.md](RADIUS.md) — the opt-in `radius` request type.
 - [WHOIS.md](WHOIS.md) — the opt-in `whois` request type.
 - [SIP.md](SIP.md) — the opt-in `sip` request type.
+- [AMQP.md](AMQP.md) — the opt-in `amqp` request type.
+- [NATS.md](NATS.md) — the opt-in `nats` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

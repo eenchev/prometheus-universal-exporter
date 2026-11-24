@@ -245,10 +245,45 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   response is an answer whatever its status, and a Digest challenge is
   answered with `username` and `password_file`, MD5 or SHA-256. Build it
   with `OPT_IN_REQUEST_TYPES=sip`; it adds no dependency.
+- **[`amqp`](docs/AMQP.md), an opt-in request type**, asks an AMQP 0-9-1
+  broker, such as RabbitMQ, how deep its queues are over the protocol
+  itself, for a broker whose management API is closed: each queue named
+  with its ready messages and its consumers, and what the broker says of
+  itself, as a JSON document. A queue the broker does not have is
+  `exists: false`, not a failure, and nothing is published, consumed or
+  created. Build it with `OPT_IN_REQUEST_TYPES=amqp`; it adds no
+  dependency.
+- **[`nats`](docs/NATS.md), an opt-in request type**, asks a NATS server
+  over the client protocol: its INFO, the round trip of a PING, and, with
+  `jetstream: true`, the account's JetStream state and that of the
+  `streams` and `consumers` named, as a JSON document. It logs in with a
+  user and a password or a token, and turns to TLS when the server
+  requires it or the target says `tls://`. Build it with
+  `OPT_IN_REQUEST_TYPES=nats`; it adds no dependency.
 - **[`decoder.type: influx`](docs/CONFIGURATION.md#influxdb-line-protocol)**
   reads InfluxDB line protocol, as Telegraf writes it to a file, into a
   list of points for `jq`, `yq` and `python`: each with its measurement,
   its tags, its fields by their types and its timestamp.
+- **[`value_map_file`](docs/CONFIGURATION.md#mapping-text-to-values-and-scaling-them)**
+  reads a rule's or a label's value map from a YAML or JSON file, so a long
+  table of codes and their names is written once and shared by rules;
+  entries of the `value_map` beside it win, and an edit of the file reloads
+  the configuration under `--config.watch`.
+- **[A service account's login](docs/AUTHENTICATION.md#a-service-accounts-key)**:
+  `login.type: jwt` signs a JWT with a private key, RSA, elliptic curve or
+  Ed25519, or a Google service account's JSON key file, and exchanges it
+  for a token. It opens Google's APIs, such as Sheets, Analytics and
+  BigQuery, and GitHub Apps to an `http` collector.
+- **[Signed requests](docs/AUTHENTICATION.md#signing-requests)**:
+  `request.signature` signs each request of an `http` collector with an
+  HMAC of a shared secret over a payload made of the request, its query,
+  body, path or headers, sent in a header or a query parameter, as
+  exchanges and payment APIs ask.
+- **[AWS APIs](docs/AUTHENTICATION.md#signing-requests-for-aws)**:
+  `request.aws_sigv4` signs each request of an `http` collector with AWS
+  Signature Version 4, with the credentials the SDK's chain finds or a
+  static access key, so a collector reads CloudWatch, SQS, Cost Explorer
+  and the rest. In the builds that have `s3file`.
 
 ### Fixed
 

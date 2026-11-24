@@ -33,7 +33,9 @@ import (
 //     enabled (validateWebAuth);
 //   - the files a collector's request names that checking it reads
 //     (fetch.NamedFiles): a grpc collector's request.protoset_file and
-//     request.proto_files, which its method and message are checked against.
+//     request.proto_files, which its method and message are checked against;
+//   - the files the value_map_file keys of a collector's rules name
+//     (valueMapFiles), whose maps are part of the rules.
 //
 // A collector's own credential and TLS files are not among them: they are
 // read at a request, not at the load, so they refuse no configuration. The
@@ -62,6 +64,7 @@ func namedFiles(configs ...*model.Config) []string {
 		}
 		for i := range c.Collectors {
 			add(fetch.NamedFiles(&c.Collectors[i])...)
+			add(valueMapFiles(&c.Collectors[i])...)
 		}
 	}
 	return files

@@ -546,6 +546,20 @@ type LoginConfig struct {
 	Scopes           []string          `yaml:"scopes" json:"scopes,omitempty"`
 	EndpointParams   map[string]string `yaml:"endpoint_params" json:"endpoint_params,omitempty"`
 	AuthStyle        string            `yaml:"auth_style" json:"auth_style,omitempty"`
+	// SigningKeyFile, Issuer, Subject, Audience, KeyID, Claims, Lifetime
+	// and Exchange are a jwt login's (fetch/loginjwt.go): the private key
+	// a JWT is signed with, its iss, sub and aud claims, the kid of its
+	// header, further claims, how long it is valid, and how it is handed
+	// in for a token, form, as the assertion of RFC 7523, or bearer, as
+	// the request's own credential.
+	SigningKeyFile string            `yaml:"signing_key_file" json:"signing_key_file,omitempty"`
+	Issuer         string            `yaml:"issuer" json:"issuer,omitempty"`
+	Subject        string            `yaml:"subject" json:"subject,omitempty"`
+	Audience       string            `yaml:"audience" json:"audience,omitempty"`
+	KeyID          string            `yaml:"key_id" json:"key_id,omitempty"`
+	Claims         map[string]string `yaml:"claims" json:"claims,omitempty"`
+	Lifetime       Duration          `yaml:"lifetime" json:"lifetime,omitempty"`
+	Exchange       string            `yaml:"exchange" json:"exchange,omitempty"`
 	// TTL is how long a token is used when the answer does not say how
 	// long it lasts; unset, until the target answers 401.
 	TTL Duration `yaml:"ttl" json:"ttl,omitempty"`
@@ -620,7 +634,9 @@ type LoginExtract struct {
 
 // The values of request.login.type and request.login.auth_style.
 var (
-	LoginTypes      = []string{"json", "oauth2", "steps"}
+	LoginTypes = []string{"json", "oauth2", "jwt", "steps"}
+	// LoginExchanges are how a jwt login hands its JWT in.
+	LoginExchanges  = []string{"form", "bearer"}
 	LoginAuthStyles = []string{"header", "params"}
 	// LoginGrantTypes are request.login.grant_type's of an oauth2 login.
 	LoginGrantTypes = []string{"client_credentials", "refresh_token"}
@@ -1236,7 +1252,11 @@ type MetricRule struct {
 	// value, mapped or read as a number, such as 0.001 for milliseconds to
 	// seconds.
 	ValueMap map[string]float64 `yaml:"value_map"`
-	Scale    *float64           `yaml:"scale"`
+	// ValueMapFile names a file that holds more of the map, a YAML or JSON
+	// mapping, read when the configuration loads and joined with ValueMap,
+	// whose entries win (config/valuemapfiles.go).
+	ValueMapFile string   `yaml:"value_map_file"`
+	Scale        *float64 `yaml:"scale"`
 	// TimeFormat says the text the expression gives is a time, and the value
 	// that time in Unix seconds: rfc3339, rfc1123, or a layout, the reference
 	// time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times,
@@ -1317,6 +1337,9 @@ type LabelRule struct {
 	// {"1": running, "2": stopped}, with "*" for any other value; a value it
 	// maps to "" leaves the label off.
 	ValueMap map[string]string `yaml:"value_map"`
+	// ValueMapFile names a file that holds more of the map, as a rule's
+	// does.
+	ValueMapFile string `yaml:"value_map_file"`
 }
 
 // Static reports whether the label has a static value rather than an

@@ -28,6 +28,12 @@ type HTTPConfig struct {
 	// FastCGI is request.fastcgi, nil for none: the requests are sent to a
 	// FastCGI application in place of an HTTP server (fastcgi.go).
 	FastCGI *FastCGIConfig `yaml:"fastcgi,omitempty"`
+	// Signature is request.signature, nil for none: each request is signed
+	// with an HMAC of a secret (httpsign.go). AWSSigV4 is
+	// request.aws_sigv4: each is signed with AWS Signature Version 4
+	// (httpsigv4_keys.go).
+	Signature *SignatureConfig `yaml:"signature,omitempty"`
+	AWSSigV4  *SigV4Config     `yaml:"aws_sigv4,omitempty"`
 }
 
 // httpRequest is an http collector's own request keys: the zero HTTPConfig
@@ -111,6 +117,15 @@ func (httpRequester) Validate(c *model.Collector) error {
 		return err
 	}
 	own := httpRequest(c)
+	if own.Signature != nil && own.AWSSigV4 != nil {
+		return fmt.Errorf("collector %q %w", c.Name, errBothSignatures)
+	}
+	if err := validateSignature(c, own.Signature); err != nil {
+		return err
+	}
+	if err := validateSigV4(c, own.AWSSigV4); err != nil {
+		return err
+	}
 	if own.Method == "" {
 		own.Method = http.MethodGet
 	}
@@ -148,6 +163,18 @@ func (httpRequester) CheckTarget(c *model.Collector, target string, static bool)
 // httpKeyRules is what the configuration schema says of a http
 // collector's own keys.
 func httpKeyRules() map[string]map[string]any {
+	rules := httpOwnKeyRules()
+	for key, rule := range signatureKeyRules() {
+		rules[key] = rule
+	}
+	for key, rule := range sigV4KeyRules() {
+		rules[key] = rule
+	}
+	return rules
+}
+
+// httpOwnKeyRules are the rules of the keys but those that sign a request.
+func httpOwnKeyRules() map[string]map[string]any {
 	return map[string]map[string]any{
 		"method":                {"enum": SchemaOptionalEnum(HTTPMethodSpellings()), "description": "HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case. Defaults to GET."},
 		"body":                  {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},

@@ -460,6 +460,13 @@ func refusedOnDebugPage(x *model.Collector) error {
 	if files := serverFileKeys(x.Request); len(files) > 0 {
 		return fmt.Errorf("collector %q sets request.%s, which names a file on the server; a collector written on the debug page reads no file of the server's. Leave it out: a pasted response needs no credential, and a target is fetched through a configured collector (request_from), with its credentials", x.Name, strings.Join(files, ", request."))
 	}
+	// A value_map_file is a file of the server's too, and its entries are
+	// what the series it maps are labelled with.
+	for i := range x.Metrics {
+		if x.Metrics[i].ValueMapFile != "" || slices.ContainsFunc(x.Metrics[i].Labels, func(l model.LabelRule) bool { return l.ValueMapFile != "" }) {
+			return fmt.Errorf("collector %q sets value_map_file, which names a file on the server; a collector written on the debug page reads no file of the server's. Write the entries in value_map instead", x.Name)
+		}
+	}
 	// The protobuf decoder reads the files that describe its message, and
 	// what is wrong with one is said with what it holds.
 	if p := x.Response.Protobuf; p.ProtosetFile != "" || len(p.ProtoFiles) > 0 || len(p.ProtoImportPaths) > 0 {

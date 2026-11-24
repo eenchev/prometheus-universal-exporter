@@ -30,7 +30,7 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`), the registration of a domain (`whois`) and a SIP server that answers (`sip`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`), the registration of a domain (`whois`), a SIP server that answers (`sip`), the queues of an AMQP broker (`amqp`) and a NATS server and its JetStream (`nats`).
 - Support multiple response decoders as first-class peers.
 - Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, InfluxDB line protocol, binary layouts, protobuf messages, and Python.
 - Support jq transformations for JSON.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` and `sip` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` and `nats` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -1252,6 +1252,7 @@ what is the type's alone — its keys, what a target is for it, its fetch and
 what it answers — and is held to the rules above, which every type shares,
 as it is to the rest of this specification:
 
+- [`amqp`](SPECIFICATION-AMQP.md)
 - [`dns`](SPECIFICATION-DNS.md)
 - [`ftp`](SPECIFICATION-FTP.md)
 - [`graphite`](SPECIFICATION-GRAPHITE.md)
@@ -1263,6 +1264,7 @@ as it is to the rest of this specification:
 - [`localfile`](SPECIFICATION-LOCALFILE.md)
 - [`modbus`](SPECIFICATION-MODBUS.md)
 - [`mqtt`](SPECIFICATION-MQTT.md)
+- [`nats`](SPECIFICATION-NATS.md)
 - [`ntp`](SPECIFICATION-NTP.md)
 - [`pop3`](SPECIFICATION-POP3.md)
 - [`radius`](SPECIFICATION-RADIUS.md)
@@ -4389,6 +4391,22 @@ histogram or summary, and `value_map` MUST be refused at load; a `python`
 rule MUST refuse both at load. A `scale` of 0 or one that is not finite, and a
 `value_map` key that is empty or has surrounding blanks, MUST be refused at
 load.
+
+A rule and a label MAY set `value_map_file`, the absolute path of a file
+that holds a YAML or JSON mapping of at most 10,000 entries and 1 MiB, each
+key and each value text, a number or a boolean. It MUST be read when the
+configuration loads and joined with the `value_map` beside it, an entry
+written there keeping its value, a rule's values read as numbers; every
+rule of `value_map` MUST then hold of the map so made. A path that is
+relative or holds a placeholder, a file that cannot be read, is no such
+mapping, writes a key twice or maps a rule's value to what is no number
+MUST refuse the load, naming the rule and the file and nothing the file
+holds but a key. The file MUST be among those the watch stamps, so an edit
+reloads the configuration, and its map MUST be part of the collector's
+definition. A load that opens no named file, as the target allocator's is, MUST keep the key
+and read nothing. A reference to a secret store there MUST be refused, and
+so MUST the key on a collector written on the debug page outside dangerous
+mode.
 
 A rule MAY set `time_format`, and with it `time_zone`. The text its
 expression gives, without surrounding blanks, MUST then be read as a time, and
@@ -8372,7 +8390,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois` or `sip` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp` or `nats` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9684,7 +9702,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, `sip` in `docs/SIP.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, `sip` in `docs/SIP.md`, `amqp` in `docs/AMQP.md`, `nats` in `docs/NATS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -10971,6 +10989,27 @@ kinds MUST be supported, `steps` as § 42.6b says:
   send the file's until its own endpoint answers one. `refresh_token_file` MUST be
   refused without `grant_type: refresh_token`, and a `grant_type` other than
   `client_credentials`, the default, and `refresh_token` MUST be refused.
+- `type: jwt` MUST sign a JSON Web Token with the private key of
+  `signing_key_file`, which is required and read at every login as a
+  credential file is: PEM, an RSA key signing RS256, an elliptic curve key
+  of P-256 or P-384 signing ES256 or ES384, or an Ed25519 key signing
+  EdDSA; or a Google service account's JSON key file, whose `private_key`
+  signs and whose `client_email` and `private_key_id` are the issuer and
+  the key's id unless `issuer` and `key_id` say their own. Its claims MUST
+  be `iss`, the issuer, without which the login MUST fail; `aud`,
+  `audience` or else the login's URL; `sub`, when `subject` is set;
+  `scope`, the `scopes` joined by blanks, when there are any; `iat`, 30
+  seconds before the login, and `exp`, `lifetime` after it, 5m unless set
+  and at most 1h; and each of `claims`, which MUST NOT name one of those.
+  With `exchange: form`, the default, it MUST be posted to `url` as the
+  `assertion` of a form with `grant_type`
+  `urn:ietf:params:oauth:grant-type:jwt-bearer` (RFC 7523), and with
+  `exchange: bearer` posted with no body and the JWT in `Authorization:
+  Bearer`. The token MUST be read from the answer's JSON body by `token`,
+  `.access_token` of a form exchange and `.token` of a bearer one unless
+  set, and its lifetime by `expires_in`, `.expires_in` of a form exchange
+  unless set. A failure MUST NOT hold the key or the JWT, a server's
+  answer that says the JWT back included.
 
 A key of another kind MUST be refused, and so MUST a login without `type`,
 or, but for `steps`, without `url`, at load, naming the collector or the target and the key. A secret
@@ -11151,6 +11190,44 @@ values from its answer, and send the value `token` names as the token.
   login's `fields` are, and an OAuth 1.0a secret written in them withheld.
   The states of a login MUST be dropped as its tokens are (§ 42.6a), and at
   most 1000 kept.
+
+## 42.6d Signed requests
+
+An `http` collector MAY sign its requests, with `request.signature` or with
+`request.aws_sigv4`, and not with both. Every request of a trip MUST be
+signed, a retry and each page of a paginated answer its own, last, over the
+request as it is sent; a request that cannot be signed MUST NOT be sent,
+and its failure MUST NOT hold the secret.
+
+- `request.signature` MUST sign with an HMAC, `algorithm` `hmac-sha256`
+  unless set to `hmac-sha1`, `hmac-sha384` or `hmac-sha512`, of the secret
+  of `secret_file`, read at each request as a credential file is and
+  written as `secret_encoding` says, `text` unless `base64` or `hex`, over
+  `payload`: its text with `{{method}}`, `{{path}}`, the path as the URL
+  writes it, `{{query}}`, the query as the URL writes it, `{{body}}`,
+  `{{host}}`, `{{url}}` and `{{header:Name}}`, the request's header of that
+  name or nothing, each as it is sent. The signature, written as `encoding`
+  says, `hex` unless `base64` or `base64url`, MUST be set in `header` after
+  `prefix`, or added to the query as `query_param` after every other
+  parameter, so that `{{query}}` is the query without it. A signature in the
+  query MUST be escaped as a parameter's value is. `secret_file` and
+  `payload` are required, and exactly one of `header` and `query_param`; a
+  payload with another `{{`, a `prefix` beside `query_param`, and a
+  signature sent in `Authorization` beside a credential or a login sent
+  there MUST be refused at load.
+- `request.aws_sigv4` MUST sign with AWS Signature Version 4 for `service`,
+  which is required, and `region`, the AWS SDK's own configuration's when
+  left out, over the request's method, path, query, headers and body, with
+  the static access key of `access_key_id_file` and
+  `secret_access_key_file`, and the session token of `session_token_file`,
+  when they are set, both or neither, and otherwise the credentials the AWS
+  SDK's default chain finds. It MUST be refused at load beside
+  `basic_auth`, `bearer_token`, `forward_authorization`, a login sent in
+  `Authorization`, and `Authorization`, `X-Amz-Date` or
+  `X-Amz-Security-Token` among `request.headers`. It MUST be in the builds
+  that have the `s3file` request type and no other, linking no module that
+  type does not, and a build without it MUST refuse the key at load, saying
+  which type brings it.
 
 ## 42.6c Secret stores
 

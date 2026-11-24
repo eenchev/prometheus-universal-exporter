@@ -9,9 +9,9 @@ import (
 
 // The Dockerfile declares every pinned version as a build argument with a
 // default, and interpolates the defaults into the FROM lines and the pip
-// install. The later stage repeats some of those names without a default so the
-// values cross the stage boundary; those lines carry no version and must be left
-// alone, which is why only `ARG NAME=value` is matched here.
+// install. The later stage repeats some of those names without a default, so
+// the values cross the stage boundary. Those lines carry no version and must
+// be left alone. That is why only `ARG NAME=value` is matched here.
 var argDefault = regexp.MustCompile(`(?m)^ARG[ \t]+([A-Za-z_][A-Za-z0-9_]*)=([^\s#]+)[ \t]*$`)
 
 // parseArgDefaults returns the pinned value of every build argument that
@@ -118,10 +118,10 @@ func (h heldRelease) sentence() string {
 		h.Product, h.Available, h.Arg, h.Current, h.Because)
 }
 
-// summaryMarkdown renders the updates for a pull request body. The empty string
-// means nothing moved, which the caller treats as "do not open a pull request":
-// a held release is a note in a summary that is written anyway, never a reason
-// to write one.
+// summaryMarkdown renders the updates for a pull request body. The empty
+// string means nothing moved, and the caller treats it as "do not open a pull
+// request". A held release is a note in a summary that is written anyway,
+// never a reason to write one.
 func summaryMarkdown(updates []update, held []heldRelease) string {
 	if len(updates) == 0 {
 		return ""

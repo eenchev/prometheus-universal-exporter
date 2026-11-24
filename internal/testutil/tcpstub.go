@@ -16,9 +16,9 @@ import (
 
 // TCPStub is a stand-in server of a text protocol over TCP, plain or TLS,
 // for the tests of the tcp request type in internal/fetch and
-// internal/exporter: each connection is handed to the test's answer, which
+// internal/exporter. Each connection is handed to the test's answer. Answer
 // reads what the client sent and writes back what a memcached, a ZooKeeper
-// or a server that never answers would, and the connection is closed when
+// or a server that never answers would. The connection is closed when
 // answer returns. It imports nothing but the standard library.
 type TCPStub struct {
 	// Addr is the server's host:port, on 127.0.0.1.
@@ -60,11 +60,10 @@ func NewTLSTCPStub(t testing.TB, answer func(conn net.Conn)) *TCPStub {
 	return startTCPStub(t, tls.NewListener(listener, config), caFile, answer)
 }
 
-// NewStartTLSStub starts a plain stub whose answer may turn a connection to
-// TLS, as a server speaking STARTTLS does once it has said to begin it:
-// upgrade makes the server's side of the handshake, with the certificate a
-// TLS stub presents, whose file is CAFile, and returns the TLS connection,
-// which answer goes on with.
+// NewStartTLSStub starts a plain stub whose answer may switch a connection
+// to TLS, as a STARTTLS server does once it has said to begin. upgrade runs
+// the server's side of the handshake with the TLS stub's certificate (whose
+// file is CAFile). It returns the TLS connection, and answer continues on it.
 func NewStartTLSStub(t testing.TB, answer func(conn net.Conn, upgrade func() (net.Conn, error))) *TCPStub {
 	t.Helper()
 	config, caFile := stubTLS(t)

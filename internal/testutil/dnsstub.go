@@ -16,11 +16,11 @@ import (
 )
 
 // The DNS wire format is not vendored (golang.org/x/net/dns/dnsmessage is
-// not among the modules), so the stand-in server below reads a question and
-// writes its answer by hand: RFC 1035's header, one question, and answers
-// whose owner names are written out, never compressed, apart from a pointer
-// to the question's name. The dns request type's tests and the allocator's
-// dns_sd tests share it.
+// not among the modules). So the stand-in server below reads a question and
+// writes its answer by hand: an RFC 1035 header, one question, and answers.
+// Answer owner names are written out in full, never compressed, except for a
+// pointer to the question's name. The dns request type's tests and the
+// allocator's dns_sd tests share it.
 
 // DNS record types, by number.
 const (

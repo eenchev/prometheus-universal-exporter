@@ -23,13 +23,15 @@ import (
 	"time"
 )
 
-// SNMPAgent is a stand-in SNMP agent over UDP, for the tests of the snmp
-// request type: it answers Get, GetNext and GetBulk of v1 and v2c to its
-// community, and of v3 to its users, with discovery, the signatures and
-// the encryption of the User-based Security Model (RFC 3414, RFC 3826,
-// RFC 7860), from a table of values. It is written apart from the
-// exporter's own encoding, from the RFCs, so that a test of the two
-// together is a test of either against what the RFCs say. It imports
+// SNMPAgent is a stand-in SNMP agent over UDP for the tests of the snmp
+// request type. It answers Get, GetNext and GetBulk from a table of values:
+//   - v1 and v2c requests with its community;
+//   - v3 requests from its users, with discovery and the User-based
+//     Security Model's signatures and encryption (RFC 3414, RFC 3826,
+//     RFC 7860).
+//
+// It is written from the RFCs, apart from the exporter's own encoding, so a
+// test of the two together checks each one against the RFCs. It imports
 // nothing but the standard library.
 type SNMPAgent struct {
 	// Addr is the agent's host:port, on 127.0.0.1.
@@ -80,10 +82,10 @@ type SNMPAgentConfig struct {
 	Late time.Duration
 }
 
-// SNMPAgentUser is an SNMPv3 user: its authentication protocol (MD5,
-// SHA, SHA224, SHA256, SHA384 or SHA512) and password, and its privacy
-// protocol (DES, AES, AES192, AES256, AES192C or AES256C) and password,
-// "" for a user without.
+// SNMPAgentUser is an SNMPv3 user. It has an authentication protocol (MD5,
+// SHA, SHA224, SHA256, SHA384 or SHA512) and password, and a privacy
+// protocol (DES, AES, AES192, AES256, AES192C or AES256C) and password.
+// A protocol is "" for a user without one.
 type SNMPAgentUser struct {
 	Auth, AuthPassword string
 	Priv, PrivPassword string
@@ -692,11 +694,11 @@ func (a *SNMPAgent) answerV3(msg []byte, parts []agentNode) []byte {
 		} else {
 			scoped = agentCFB(key, iv, sealed, false)
 		}
-		// The scoped PDU is the first value of what was decrypted: DES's
-		// padding comes after it. What a wrong key decrypts is garbage
-		// that may yet read as the start of a value, so anything that is
-		// no scoped PDU of this engine is a decryption error, as an agent
-		// that cannot decode it reports.
+		// The scoped PDU is the first value of the decrypted data. DES
+		// padding comes after it. A wrong key decrypts to garbage that may
+		// still look like the start of a value. So anything that is not a
+		// scoped PDU of this engine is a decryption error, as an agent that
+		// cannot decode it reports.
 		end := agentFirstEnd(scoped)
 		if end < 0 || !agentScoped(scoped[:end], a.config.EngineID) {
 			return report(0, SNMPAgentUser{}, nil, "1.3.6.1.6.3.15.1.1.6.0")

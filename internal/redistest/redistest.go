@@ -1,13 +1,17 @@
 // Package redistest is a stand-in Redis server for the tests of the redis
-// request type: a TCP server, or a TLS one with a self-signed certificate
-// whose file it writes, that answers RESP2 commands as Redis and Valkey do.
-// It answers AUTH, with a username or without, against the password it was
-// given, NOAUTH to anything else before it, SELECT of the databases 0 to
-// 15, INFO of the sections it was given, all of them or one by name, and
-// any other command with the reply the test set for it, or the error of an
-// unknown command; a test may answer a command itself, with any bytes it
-// likes, to play a broken or hostile server. It records every command it
-// was sent. It imports nothing but the standard library.
+// request type. It is a TCP server, or a TLS one with a self-signed
+// certificate whose file it writes. It answers RESP2 commands as Redis and
+// Valkey do:
+//   - AUTH, with or without a username, against the password it was given,
+//     and NOAUTH to anything else before it;
+//   - SELECT of the databases 0 to 15;
+//   - INFO of the sections it was given, all of them or one by name;
+//   - any other command with the reply the test set for it, or else the
+//     error of an unknown command.
+//
+// A test may answer a command itself, with any bytes it likes, to play a
+// broken or hostile server. It records every command it was sent. It imports
+// nothing but the standard library.
 package redistest
 
 import (

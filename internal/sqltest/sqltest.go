@@ -1,11 +1,11 @@
 // Package sqltest is a stand-in database for the tests of the sql request
-// type: a database/sql/driver implementation that answers each statement
-// with the rows a test gave it, and records what the exporter asked of it —
-// the transactions it began and how, the statements it ran before the query,
-// the values it bound, the connections it opened and closed, the pings. The
-// exporter reaches it through the same pools and connectors as a real
-// driver (fetch.UseSQLTestDriver), only the making of a connection being
-// the test's.
+// type. It is a database/sql/driver implementation that answers each
+// statement with the rows a test gave it. It records what the exporter asked
+// of it: the transactions it began and how, the statements it ran before the
+// query, the values it bound, the connections it opened and closed, and the
+// pings. The exporter reaches it through the same pools and connectors as a
+// real driver (fetch.UseSQLTestDriver). Only making a connection is up to
+// the test.
 package sqltest
 
 import (
@@ -19,9 +19,9 @@ import (
 )
 
 // Result is what a statement returns: its columns, with their types as a
-// driver names them, and its rows; or Err, which the query fails with.
+// driver names them, and its rows. Or it is Err, which the query fails with.
 // RowsErr, when set, is what reading the rows fails with after the last
-// of them, as a server's error in the middle of a result is.
+// row, like a server error in the middle of a result.
 type Result struct {
 	Columns []string
 	Types   []string
@@ -94,7 +94,7 @@ type DB struct {
 
 // EndSessions has the server end every connection open now, as an
 // administrator or an idle-session timeout does, without closing its
-// network connection first: the connection is found out at its next
+// network connection first. The connection finds out at its next
 // transaction, which fails to begin with err, as pgx reads the server's
 // last words there. A connection made afterwards is not ended.
 func (db *DB) EndSessions(err error) {
@@ -141,11 +141,11 @@ func (db *DB) FailPings(err error) {
 	db.pingErr = err
 }
 
-// HangPings makes every ping from now on hang until its context ends, as one
-// to a host that stopped answering does, and fail then with the context's
-// error, when hang is true, and answer again when it is false; started,
-// when it is not nil, is told each ping that hangs, without waiting for it
-// to be read. It may be called while the exporter pings.
+// HangPings, when hang is true, makes every ping from now on hang until its
+// context ends, like a ping to a host that stopped answering, and then fail
+// with the context's error. When hang is false, pings answer again. If
+// started is not nil, it is told of each ping that hangs, without waiting
+// for it to be read. It may be called while the exporter pings.
 func (db *DB) HangPings(hang bool, started chan struct{}) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -154,9 +154,9 @@ func (db *DB) HangPings(hang bool, started chan struct{}) {
 
 // HangRollbacks makes the rollback of a transaction on a connection made
 // over a network connection (ConnectOver) wait for the server's answer from
-// now on, reading the network connection with no context and no deadline,
-// as go-sql-driver/mysql's Rollback does (transaction.go, exec("ROLLBACK")):
-// it fails, with driver.ErrBadConn, only when the network connection is
+// now on. It reads the network connection with no context and no deadline,
+// as go-sql-driver/mysql's Rollback does (transaction.go, exec("ROLLBACK")).
+// It fails, with driver.ErrBadConn, only when the network connection is
 // closed or the server writes to it. False makes rollbacks answer again. It
 // may be called while the exporter runs statements.
 func (db *DB) HangRollbacks(hang bool) {

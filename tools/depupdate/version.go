@@ -9,7 +9,7 @@ import (
 
 // The Dockerfile pins every dependency through an ARG, so the only safe
 // automatic move is one that cannot change behaviour in a way the test suite
-// would not notice. Two rules encode that:
+// would not notice. Three rules encode that:
 //
 //   - The major version never moves. A major bump is deliberate work.
 //   - A pin whose policy holds the minor keeps it too, for a dependency whose
@@ -145,11 +145,12 @@ func minorOf(raw string) string {
 	return strconv.Itoa(parsed.release[0]) + "." + strconv.Itoa(parsed.release[1])
 }
 
-// heldMinor returns the newest minor release, in the same major, that the
-// policy keeps the pin from, such as `3.14` for a pin at `3.12`; the empty
-// string when the policy lets the minor move or no newer one exists. It answers
-// from the same candidates an update is chosen from, so the release it names
-// exists in the image form and granularity the build pulls.
+// heldMinor returns the newest minor release in the same major that the
+// policy keeps the pin from, such as `3.14` for a pin at `3.12`. It returns
+// the empty string when the policy lets the minor move or no newer one
+// exists. It answers from the same candidates an update is chosen from, so
+// the release it names exists in the image form and granularity the build
+// pulls.
 func heldMinor(current string, candidates []string, p policy) string {
 	if p.AllowMinor {
 		return ""

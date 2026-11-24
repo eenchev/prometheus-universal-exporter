@@ -1,15 +1,19 @@
 // Package ldaptest is a stand-in LDAP server for the tests of the ldap
-// request type: a TCP server, or a TLS one for ldaps://, with a self-signed
-// certificate whose file it writes, that answers LDAPv3 messages in BER as a
-// directory server does. It answers a simple bind, anonymous or as one of
-// the accounts it was given, invalidCredentials to a wrong password,
-// StartTLS, unless told to refuse it, and a search of the entries it was
-// given, by base, scope and filter, with the attributes asked for, a page at
-// a time when the Simple Paged Results control asks for pages, unless told
-// to ignore it, and the references it was given; a test may answer a request
-// itself, with any bytes it likes, to play a broken or hostile server. It
-// records every request it was sent, the filter written back as RFC 4515
-// text. It imports nothing but the standard library.
+// request type. It is a TCP server, or a TLS one for ldaps:// with a
+// self-signed certificate whose file it writes. It answers LDAPv3 messages
+// in BER as a directory server does:
+//   - a simple bind, anonymous or as one of the accounts it was given, with
+//     invalidCredentials for a wrong password;
+//   - StartTLS, unless told to refuse it;
+//   - a search of the entries it was given, by base, scope and filter, with
+//     the attributes asked for, and the references it was given. It answers
+//     a page at a time when the Simple Paged Results control asks for pages,
+//     unless told to ignore it.
+//
+// A test may answer a request itself, with any bytes it likes, to play a
+// broken or hostile server. The server records every request it was sent,
+// with the filter written back as RFC 4515 text. It imports nothing but the
+// standard library.
 package ldaptest
 
 import (
@@ -186,9 +190,9 @@ func (s *Server) IgnorePaging() {
 
 // SetRangeSize has the server answer an attribute of more than size values
 // in ranges, as Active Directory answers member past its MaxValRange:
-// asked for by its name, the first size values as name;range=0-<size-1>;
-// asked for as name;range=<low>-*, size values from low, as
-// name;range=<low>-<high>, or name;range=<low>-* with the last of them.
+//   - asked for by its name: the first size values, as name;range=0-<size-1>;
+//   - asked for as name;range=<low>-*: size values from low, as
+//     name;range=<low>-<high>, or as name;range=<low>-* with the last of them.
 func (s *Server) SetRangeSize(size int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -429,9 +433,9 @@ func (s *Server) search(sess *session, req Request, write func([]byte) bool) boo
 }
 
 // entryOp is a SearchResultEntry of e with the attributes asked for: none
-// for 1.1, every one for * or for none asked, and those named otherwise,
-// in any case; with rangeSize, one of more values than it in ranges
-// (SetRangeSize).
+// for 1.1, every one for * or when none are asked, and otherwise those named,
+// in any case. With rangeSize, an attribute of more values than rangeSize
+// is given in ranges (SetRangeSize).
 func entryOp(e Entry, asked []string, rangeSize int) []byte {
 	var attributes [][]byte
 	for name, values := range e.Attributes {
@@ -918,9 +922,9 @@ func (f *filter) match(e Entry) bool {
 	return false
 }
 
-// extensibleMatch matches an extensible match: Active Directory's bitwise
-// AND and OR rules, 1.2.840.113556.1.4.803 and .804, on numbers, and any
-// other rule as equality in any case; with no attribute, any attribute's
+// extensibleMatch matches an extensible match. It applies Active Directory's
+// bitwise AND and OR rules (1.2.840.113556.1.4.803 and .804) to numbers, and
+// any other rule as equality in any case. With no attribute, any attribute's
 // value matches.
 func (f *filter) extensibleMatch(e Entry) bool {
 	var candidates []string

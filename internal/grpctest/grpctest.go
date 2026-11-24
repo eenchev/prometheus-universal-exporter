@@ -236,16 +236,16 @@ var (
 	ports   = map[int]bool{}
 )
 
-// Listen listens on a free local port that it has given no listener before in
-// this process, for a test's server or for whatever else a test has the
-// exporter call as a gRPC target.
+// Listen listens on a free local port that it has not given to any listener
+// before in this process. It is for a test's server, or for anything else a
+// test has the exporter call as a gRPC target.
 //
-// The exporter keeps a connection per target address, and a reflection answer
-// per connection, for minutes, and the kernel gives a port out again as soon
-// as it is free. A test whose server got the port a stopped server of an
-// earlier test had was served from what the exporter had kept of that one:
-// its descriptors came from the kept answer, and the test's own reflection
-// service was never asked.
+// The exporter keeps a connection per target address, and a reflection
+// answer per connection, for minutes. The kernel gives a port out again as
+// soon as it is free. So a test whose server got the port of an earlier
+// test's stopped server was served from what the exporter had kept of that
+// one. Its descriptors came from the kept answer, and the test's own
+// reflection service was never asked.
 func Listen(t testing.TB) net.Listener {
 	t.Helper()
 	// A port given out before is held until a new one is found, so the
@@ -273,10 +273,11 @@ func Listen(t testing.TB) net.Listener {
 	}
 }
 
-// listenAgain listens on an address a test's stopped server had. Whatever
-// else on the machine was given the port in the meantime, another test's
-// client or server, has it for as long as that test runs, so the address is
-// waited for: half a minute bounds a port that never comes free.
+// listenAgain listens on an address that a test's stopped server had. If
+// anything else on the machine got the port in the meantime, such as
+// another test's client or server, it holds it for as long as that test
+// runs. So the address is waited for, with half a minute as the bound for a
+// port that never comes free.
 func listenAgain(t testing.TB, addr string) net.Listener {
 	t.Helper()
 	return listenWhenFree(t, func() (net.Listener, error) {

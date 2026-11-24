@@ -10,13 +10,13 @@ import (
 )
 
 // RefusingAddress is a local TCP address that refuses every connection for
-// as long as the test runs: a socket bound to it that never listens, so a
-// connection is answered with a reset at once. The address of a listener
-// that was closed refuses connections too, but only until another server,
-// often the test's own next httptest server, is handed the same port: a
-// redirect to it then reached that server and went round until the client
-// gave up after ten redirects, in place of the refusal the test waited for.
-// A bound socket keeps the port from every other socket until the test ends.
+// as long as the test runs. It is a socket that is bound but never listens,
+// so a connection gets a reset at once. A closed listener's address refuses
+// connections too, but only until another server is given the same port,
+// often the test's own next httptest server. A redirect to the address then
+// reached that server and looped until the client gave up after ten
+// redirects, instead of the refusal the test expected. A bound socket keeps
+// the port from every other socket until the test ends.
 func RefusingAddress(t testing.TB) string {
 	t.Helper()
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)

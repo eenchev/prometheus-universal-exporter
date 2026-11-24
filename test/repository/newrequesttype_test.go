@@ -171,7 +171,7 @@ func TestANewRequestTypeIsWiredByTheScaffold(t *testing.T) {
 		"internal/exporter/requesttype_ozdefault_test.go": {"func TestAProbeOfAnOzdefaultCollectorFailsUntilTheTypeIsWritten("},
 		"docs/OZDEFAULT.md":                               {"of an `ozdefault` collector may set"},
 		"internal/fetch/requesttype_zzdemo.go":            {"is a zzdemo collector's own request keys"},
-		"docs/ZZDEMO.md":                                  {"A configuration with a `zzdemo` collector", "of a `zzdemo` collector may set"},
+		"docs/ZZDEMO.md":                                  {"configuration with a `zzdemo` collector", "of a `zzdemo` collector may set"},
 	} {
 		text := read(t, filepath.Join(dir, file))
 		for _, w := range want {

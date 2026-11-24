@@ -10987,6 +10987,27 @@ kinds MUST be supported, `steps` as § 42.6b says:
   send the file's until its own endpoint answers one. `refresh_token_file` MUST be
   refused without `grant_type: refresh_token`, and a `grant_type` other than
   `client_credentials`, the default, and `refresh_token` MUST be refused.
+- `type: jwt` MUST sign a JSON Web Token with the private key of
+  `signing_key_file`, which is required and read at every login as a
+  credential file is: PEM, an RSA key signing RS256, an elliptic curve key
+  of P-256 or P-384 signing ES256 or ES384, or an Ed25519 key signing
+  EdDSA; or a Google service account's JSON key file, whose `private_key`
+  signs and whose `client_email` and `private_key_id` are the issuer and
+  the key's id unless `issuer` and `key_id` say their own. Its claims MUST
+  be `iss`, the issuer, without which the login MUST fail; `aud`,
+  `audience` or else the login's URL; `sub`, when `subject` is set;
+  `scope`, the `scopes` joined by blanks, when there are any; `iat`, 30
+  seconds before the login, and `exp`, `lifetime` after it, 5m unless set
+  and at most 1h; and each of `claims`, which MUST NOT name one of those.
+  With `exchange: form`, the default, it MUST be posted to `url` as the
+  `assertion` of a form with `grant_type`
+  `urn:ietf:params:oauth:grant-type:jwt-bearer` (RFC 7523), and with
+  `exchange: bearer` posted with no body and the JWT in `Authorization:
+  Bearer`. The token MUST be read from the answer's JSON body by `token`,
+  `.access_token` of a form exchange and `.token` of a bearer one unless
+  set, and its lifetime by `expires_in`, `.expires_in` of a form exchange
+  unless set. A failure MUST NOT hold the key or the JWT, a server's
+  answer that says the JWT back included.
 
 A key of another kind MUST be refused, and so MUST a login without `type`,
 or, but for `steps`, without `url`, at load, naming the collector or the target and the key. A secret

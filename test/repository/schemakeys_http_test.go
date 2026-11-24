@@ -375,6 +375,7 @@ func httpSchemaKeys() []schemaKey {
 		}
 		json := logged("login:", "  type: json", "  url: /login", "  token: .t", "  field_files: {password: /p}", "  # login")
 		oauth2 := logged("login:", "  type: oauth2", "  url: https://idp.example/token", "  client_id: x", "  client_secret_file: /s", "  # login")
+		jwt := logged("login:", "  type: jwt", "  url: https://idp.example/token", "  signing_key_file: /k", "  issuer: me", "  # login")
 		in := func(text string) string { return indent + "  " + text }
 		mark := in("# login\n")
 		// The first step of each list is where a row writes a key; the
@@ -390,6 +391,9 @@ func httpSchemaKeys() []schemaKey {
 			{key: prefix + ".login.ttl", document: json, at: mark, setting: in("ttl: %s\n"), valid: "15m", invalid: "soon", absent: true, duration: true},
 			{key: prefix + ".login.auth_style", document: oauth2, at: mark, setting: in("auth_style: %s\n"), valid: "params", invalid: "auto", absent: true, empty: true, emptyWas: refused},
 			{key: prefix + ".login.grant_type", document: oauth2, at: mark, setting: in("grant_type: %s\n"), valid: "client_credentials", invalid: "password", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.exchange", document: jwt, at: mark, setting: in("exchange: %s\n"), valid: "bearer", invalid: "header", absent: true, empty: true, emptyWas: refused},
+			{key: prefix + ".login.lifetime", document: jwt, at: mark, setting: in("lifetime: %s\n"), valid: "10m", invalid: "soon", absent: true, duration: true},
+			{key: prefix + ".login.claims{}", document: jwt, at: mark, setting: in("claims: {%s: x}\n"), valid: "tenant", invalid: "exp", absent: true},
 			{key: prefix + ".login.scopes[]", document: oauth2, at: mark, setting: in("scopes: [%s]\n"), valid: "metrics", invalid: `"a b"`, absent: true},
 			{key: prefix + ".login.endpoint_params{}", document: oauth2, at: mark, setting: in("endpoint_params: {%s: x}\n"), valid: "audience", invalid: "grant_type", absent: true},
 			// A steps login: its values and secret_files are named as a

@@ -147,8 +147,8 @@ out a token at a login, and want it on every request. An `http` or
 sends the token it was given, in `Authorization` as a bearer token unless
 the login says otherwise. The login is made once and its token kept for the
 requests after it (see [How long a token is kept](#how-long-a-token-is-kept)).
-There are three kinds, `json`, `oauth2` and
-[`steps`](#a-login-of-several-steps). A `grpc` collector does not log
+There are four kinds, `json`, `oauth2`, [`jwt`](#a-service-accounts-key)
+and [`steps`](#a-login-of-several-steps). A `grpc` collector does not log
 in: its credential is `bearer_token_file` or basic authentication. A secret
 of a login is never written in the configuration: it is read from a file at
 each login, so a rotated Secret is used by the next one.
@@ -323,6 +323,82 @@ gets refresh tokens that expire after seven days; publish it, or keep it
 internal to a Workspace, for one that lasts. Mail itself is never read:
 `gmail.readonly` reads a label's counts, and nothing in the collector asks
 for a message.
+
+### A service account's key
+
+`type: jwt` is the login of an identity that has no password and no client
+secret, only a private key: a Google service account, a GitHub App. The
+exporter signs a JSON Web Token with the key, saying who it is and for how
+long, hands it to `url`, and sends its requests with the token `url`
+answers.
+
+A Google service account reads any Google API its scopes cover, a
+spreadsheet here:
+
+```yaml
+collectors:
+  - name: sheet
+    request:
+      type: http
+      path: /v4/spreadsheets/{{param_sheet}}/values/A1:B10
+      login:
+        type: jwt
+        url: https://oauth2.googleapis.com/token
+        signing_key_file: /var/run/secrets/google/service-account.json
+        scopes: [https://www.googleapis.com/auth/spreadsheets.readonly]
+    transform:
+      type: jq
+    metrics:
+      - name: sheet_rows
+        expression: .values | length
+```
+
+```text
+/probe?collector=sheet&target=https://sheets.googleapis.com&param_sheet=<spreadsheet id>
+```
+
+A GitHub App asks for an installation's token with the JWT as the
+request's own credential:
+
+```yaml
+collectors:
+  - name: github_rate
+    request:
+      type: http
+      path: /rate_limit
+      login:
+        type: jwt
+        url: https://api.github.com/app/installations/12345678/access_tokens
+        exchange: bearer
+        signing_key_file: /var/run/secrets/github/app.private-key.pem
+        issuer: "123456"            # the App's id, or its client id
+        ttl: 50m                    # an installation's token lasts an hour
+    transform:
+      type: jq
+    metrics:
+      - name: github_rate_remaining
+        expression: .rate.remaining
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `signing_key_file` | — | **Required.** The private key, read at every login: PEM, an RSA key (RS256), an elliptic curve key of P-256 or P-384 (ES256, ES384) or an Ed25519 key (EdDSA), not encrypted; or the JSON key file Google Cloud gives for a service account. It may be a reference to a [secret store](#secret-stores). |
+| `issuer` | the key file's `client_email` | The JWT's `iss`, who it is from. Required with a PEM key. |
+| `subject` | — | The JWT's `sub`, such as the user a service account acts for. |
+| `audience` | `url` | The JWT's `aud`, whom it is meant for. |
+| `key_id` | the key file's `private_key_id` | The `kid` of the JWT's header. |
+| `scopes` | — | The JWT's `scope` claim, the scopes joined by blanks. |
+| `claims` | — | Further claims, each text; not those the login sets itself. |
+| `lifetime` | `5m` | How long the JWT is valid, at most `1h`. It is issued 30 seconds in the past, for a server whose clock is behind. |
+| `exchange` | `form` | `form` posts the JWT as the `assertion` of a JWT bearer grant (RFC 7523), and the token is the answer's `access_token`, kept for its `expires_in`. `bearer` posts with the JWT in `Authorization: Bearer` and no body, and the token is the answer's `token`. |
+| `token`, `expires_in` | by `exchange` | jq expressions of the token and of its lifetime in seconds in the answer, for an endpoint that names them otherwise. |
+
+`lifetime` is the JWT's, not the token's: how long the token is kept is
+what the answer's `expires_in` says, or [`ttl`](#how-long-a-token-is-kept)
+when the answer says none, as a GitHub App's does. A failure says what was
+wrong with the key file, or the status the endpoint answered, and never the
+key or the JWT. The JWT is always exchanged at `url`: an API that takes a
+signed JWT itself as the token is not served.
 
 ### A login of several steps
 

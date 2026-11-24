@@ -3830,6 +3830,102 @@
                                 "required": [
                                   "auth_style"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
                               }
                             ]
                           }
@@ -4072,6 +4168,268 @@
                                 "required": [
                                   "auth_style"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "jwt"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "properties": {
+                            "signing_key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "signing_key_file"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
                               }
                             ]
                           }
@@ -4193,6 +4551,102 @@
                                 },
                                 "required": [
                                   "expires_in"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
                                 ]
                               }
                             ]
@@ -4341,6 +4795,14 @@
                 ],
                 "description": "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.",
                 "properties": {
+                  "audience": {
+                    "description": "jwt: whom the JWT is meant for, its aud claim; the login's url when left out, as RFC 7523 has it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "auth_style": {
                     "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form.",
                     "enum": [
@@ -4349,6 +4811,30 @@
                       ""
                     ],
                     "type": "string"
+                  },
+                  "claims": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "jwt: further claims of the JWT, each text; not those the login sets itself.",
+                    "propertyNames": {
+                      "minLength": 1,
+                      "not": {
+                        "enum": [
+                          "iss",
+                          "sub",
+                          "aud",
+                          "iat",
+                          "exp",
+                          "scope"
+                        ]
+                      }
+                    },
+                    "type": "object"
                   },
                   "client_id": {
                     "description": "oauth2: the client's id. Exactly one of client_id and client_id_file.",
@@ -4396,6 +4882,15 @@
                       }
                     },
                     "type": "object"
+                  },
+                  "exchange": {
+                    "description": "jwt: how the JWT is handed to url: form, the default, as the assertion of a JWT bearer grant (RFC 7523), answered as an OAuth 2.0 token is; or bearer, as the request's own credential, Authorization: Bearer, with no body, as a GitHub App asks for an installation's token.",
+                    "enum": [
+                      "form",
+                      "bearer",
+                      ""
+                    ],
+                    "type": "string"
                   },
                   "expires_at": {
                     "description": "steps: the name of the value that is when the token expires: seconds or milliseconds since 1970, RFC 3339 or an HTTP date. Not with expires_in.",
@@ -4449,6 +4944,14 @@
                     "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
                     "type": "string"
                   },
+                  "issuer": {
+                    "description": "jwt: who the JWT is from, its iss claim: a service account's address, an app's id. Required unless the key file is a service account's JSON key.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "keep": {
                     "additionalProperties": {
                       "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
@@ -4467,6 +4970,24 @@
                     "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
                     "pattern": "^$|^/",
                     "type": "string"
+                  },
+                  "key_id": {
+                    "description": "jwt: the kid of the JWT's header, which tells the endpoint which of the issuer's keys signed it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "lifetime": {
+                    "description": "jwt: how long the JWT is valid, at most 1h; 5m when left out. It is not the lifetime of the token the endpoint answers, which the answer, or ttl, says.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
                   },
                   "prefix": {
                     "description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie.",
@@ -4698,7 +5219,7 @@
                     "type": "array"
                   },
                   "scopes": {
-                    "description": "oauth2: the scopes asked for, sent as the scope parameter.",
+                    "description": "oauth2: the scopes asked for, sent as the scope parameter. jwt: the scopes asked for, the JWT's scope claim.",
                     "items": {
                       "pattern": "^[^\\s\"\\\\]+$",
                       "type": "string"
@@ -4718,6 +5239,14 @@
                       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
                     },
                     "type": "object"
+                  },
+                  "signing_key_file": {
+                    "description": "jwt: required. The file of the private key the JWT is signed with, read at every login: a PEM key, RSA (RS256), elliptic curve P-256 or P-384 (ES256, ES384) or Ed25519 (EdDSA), or the JSON key file of a Google service account, whose client_email and private_key_id are the issuer and the key's id unless the login says its own.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
                   },
                   "steps": {
                     "description": "steps: required, the requests of a whole login, made in order, at most 16. Each step's query, headers, form, json and oauth1 values may hold {{login.\u003cname\u003e}}, a value given or read by a step before it.",
@@ -4923,6 +5452,14 @@
                     },
                     "type": "array"
                   },
+                  "subject": {
+                    "description": "jwt: who the JWT is about, its sub claim, such as the user a service account acts for; none when left out.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
                   "tls": {
                     "additionalProperties": false,
                     "allOf": [
@@ -5048,6 +5585,7 @@
                     "enum": [
                       "json",
                       "oauth2",
+                      "jwt",
                       "steps"
                     ],
                     "type": "string"

@@ -1306,13 +1306,16 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 			// A steps login sends each step to its own url.
 			map[string]any{"if": kind("steps"), "then": map[string]any{"allOf": []any{
 				writtenKey("token"), map[string]any{"required": []string{"steps"}, "properties": map[string]any{"steps": map[string]any{"minItems": 1}}},
-				none("url", "fields", "field_files", "token_header", "token_cookie", "client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style"),
+				none("url", "fields", "field_files", "token_header", "token_cookie", "client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style", "signing_key_file", "issuer", "subject", "audience", "key_id", "claims", "lifetime", "exchange"),
 				map[string]any{"not": map[string]any{"allOf": []any{writtenKey("expires_in"), writtenKey("expires_at")}}},
 				// keep and refresh_steps go together.
 				map[string]any{"if": writtenKey("refresh_steps"), "then": writtenKey("keep"), "else": none("keep")},
 			}}, "else": map[string]any{"allOf": []any{writtenKey("url"), none("steps", "refresh_steps", "values", "secret_files", "expires_at", "keep", "keep_file")}}},
-			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style")}}},
-			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in"),
+			map[string]any{"if": kind("json"), "then": map[string]any{"allOf": []any{oneOf("token", "token_header", "token_cookie"), map[string]any{"required": []string{"field_files"}, "properties": map[string]any{"field_files": map[string]any{"minProperties": 1}}}, none("client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "scopes", "endpoint_params", "auth_style", "signing_key_file", "issuer", "subject", "audience", "key_id", "claims", "lifetime", "exchange")}}},
+			// A jwt login signs with its key, and reads the token as a
+			// json login's answer is read, from the body alone.
+			map[string]any{"if": kind("jwt"), "then": map[string]any{"allOf": []any{writtenKey("signing_key_file"), none("fields", "field_files", "token_header", "token_cookie", "client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "endpoint_params", "auth_style")}}},
+			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in", "signing_key_file", "issuer", "subject", "audience", "key_id", "claims", "lifetime", "exchange"),
 				// The refresh token grant sends the refresh token of its
 				// file, and a public client of it has no secret, sending
 				// its id as a parameter; the client credentials grant,
@@ -1378,10 +1381,18 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 		"client_secret_file": {"description": "oauth2: the file holding the client's secret, read at every login. Required with the client credentials grant; with refresh_token, left out for a public client, which sends its id as a form parameter."},
 		"grant_type":         {"enum": optionalEnum(model.LoginGrantTypes), "description": "oauth2: client_credentials, the default, for a service's own access, or refresh_token, to act on a user's account with the refresh token of refresh_token_file, which the user's consent gave once, such as Gmail's API's. See docs/AUTHENTICATION.md#a-users-refresh-token."},
 		"refresh_token_file": {"description": "oauth2, with grant_type: refresh_token: required. The file holding the refresh token, read at every login; one the endpoint answers in its place is used until the file changes."},
-		"scopes":             {"description": "oauth2: the scopes asked for, sent as the scope parameter."},
+		"scopes":             {"description": "oauth2: the scopes asked for, sent as the scope parameter. jwt: the scopes asked for, the JWT's scope claim."},
 		"scopes[]":           {"type": "string", "pattern": `^[^\s"\\]+$`},
 		"endpoint_params":    {"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{"grant_type", "scope", "client_id", "client_secret", "refresh_token"}}}, "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id, client_secret or refresh_token, which the grant sets."},
 		"auth_style":         {"enum": optionalEnum(model.LoginAuthStyles), "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form."},
+		"signing_key_file":   {"description": "jwt: required. The file of the private key the JWT is signed with, read at every login: a PEM key, RSA (RS256), elliptic curve P-256 or P-384 (ES256, ES384) or Ed25519 (EdDSA), or the JSON key file of a Google service account, whose client_email and private_key_id are the issuer and the key's id unless the login says its own."},
+		"issuer":             {"description": "jwt: who the JWT is from, its iss claim: a service account's address, an app's id. Required unless the key file is a service account's JSON key."},
+		"subject":            {"description": "jwt: who the JWT is about, its sub claim, such as the user a service account acts for; none when left out."},
+		"audience":           {"description": "jwt: whom the JWT is meant for, its aud claim; the login's url when left out, as RFC 7523 has it."},
+		"key_id":             {"description": "jwt: the kid of the JWT's header, which tells the endpoint which of the issuer's keys signed it."},
+		"claims":             {"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{"iss", "sub", "aud", "iat", "exp", "scope"}}}, "description": "jwt: further claims of the JWT, each text; not those the login sets itself."},
+		"lifetime":           {"description": "jwt: how long the JWT is valid, at most 1h; 5m when left out. It is not the lifetime of the token the endpoint answers, which the answer, or ttl, says."},
+		"exchange":           {"enum": optionalEnum(model.LoginExchanges), "description": "jwt: how the JWT is handed to url: form, the default, as the assertion of a JWT bearer grant (RFC 7523), answered as an OAuth 2.0 token is; or bearer, as the request's own credential, Authorization: Bearer, with no body, as a GitHub App asks for an installation's token."},
 		"ttl":                {"description": "How long a token is used when the answer does not say: no expires_in, an oauth2 answer without expires_in, a cookie without Max-Age or Expires, a token_header. Left out, such a token is used until the target answers 401."},
 		"header":             {"pattern": optionalPattern("^[" + headerNameChars + "]+$"), "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie."},
 		"prefix":             {"description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie."},

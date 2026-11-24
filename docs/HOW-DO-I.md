@@ -27,6 +27,7 @@ that does it, usually with an example to copy. New here? Start with
 | Search an LDAP directory | [LDAP directories](LDAP.md) |
 | Call a gRPC method | [gRPC](GRPC.md) |
 | Read an HTTP answer that is a protobuf message | [Protobuf responses](CONFIGURATION.md#protobuf-responses) |
+| Read a Google API with a service account, or the GitHub API as an App | [A service account's key](AUTHENTICATION.md#a-service-accounts-key) |
 | Read InfluxDB line protocol, as Telegraf writes it to a file | [InfluxDB line protocol](CONFIGURATION.md#influxdb-line-protocol) |
 | Check that a SIP server or PBX answers | [SIP](SIP.md), in a build with the opt-in type |
 | Remember something from one scrape to the next in a script | [State between runs](PYTHON.md#state-between-runs) |

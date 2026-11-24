@@ -254,6 +254,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   table of codes and their names is written once and shared by rules;
   entries of the `value_map` beside it win, and an edit of the file reloads
   the configuration under `--config.watch`.
+- **[A service account's login](docs/AUTHENTICATION.md#a-service-accounts-key)**:
+  `login.type: jwt` signs a JWT with a private key, RSA, elliptic curve or
+  Ed25519, or a Google service account's JSON key file, and exchanges it
+  for a token. It opens Google's APIs, such as Sheets, Analytics and
+  BigQuery, and GitHub Apps to an `http` collector.
 
 ### Fixed
 

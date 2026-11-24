@@ -46,229 +46,292 @@ func (s *Server) scrapeTargetSince(ctx context.Context, cfg *model.Config, gener
 // on the static targets endpoint. With export_via_otlp, it also queues it for
 // OTLP under the target's own resource (statictargetsendpoint.go).
 func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarget, cfg *model.Config, generation uint64, c *model.Collector) {
-	start := time.Now()
+	sc := &staticScrape{s: s, target: target, cfg: cfg, c: c, start: time.Now()}
 	// A static target scrape runs on a goroutine of the scrape loop. A panic
 	// there would take the whole exporter down, not just one scrape as a
 	// probe's panic does (probeflight.go). The panic is logged and the scrape
 	// ends as failed, once the scrape has got far enough to be counted.
-	var failedOnPanic func()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			s.logger.Error("static target scrape panicked", "target", target.Name, "collector", c.Name, "panic", panicText(recovered), "stack", string(debug.Stack()))
-			if failedOnPanic != nil {
-				failedOnPanic()
-			}
-		}
-	}()
-	identity := targetResource(&target, cfg.OTLP)
-	address := fetch.DisplayTarget(c, target.Target)
-	overrides := fetch.TargetOverrides(&target)
-	method := fetch.RequestMethodFor(c, overrides)
-	requestURL := ""
-	if label, err := fetch.RequestLabelFor(target.Target, c, overrides); err == nil {
-		requestURL = label
-	}
-	// The request is identified before anything is counted, so every counter
-	// this collection raises lands on the target's own series as well as on the
-	// collector's.
-	rec := s.recorderFor(s.statsSince(generation, c.Name), c.Name, requestURL, method)
-	// Once a reload has removed or changed the collector read at generation
-	// (configRead), what the scrape caches and what the failure log
-	// remembers of it go nowhere. Neither does the result it publishes. The
-	// result is also held to the target (targetStands), and so is what the
-	// failure log remembers (logStands).
-	rec.read = s.readTargetAt(generation, target.Name)
-	count := rec.update
-	count(func(st *serverStats) { st.probes++ })
-	// With otlp.traces on, the scrape records its trace, exported at its
-	// end when it was slow, or failed under otlp.traces.errors
-	// (otlptraces.go).
-	ctx, spans := beginTrace(ctx, cfg.OTLP, traceParent{})
-	// With otlp.traces.propagate too, its requests carry its trace; a
-	// scrape has no caller whose trace it could pass on.
-	ctx = withPropagation(ctx, cfg.OTLP, spans.traceLink(), traceParent{}, nil)
+	defer sc.recoverPanic()
+	ctx = sc.begin(ctx, generation)
+	sc.failedOnPanic = func() { sc.failed(errScrapePanicked) }
 
-	// Repeats of the same failure are logged sparingly (failurelog.go).
-	log := collectLog{
-		key:    staticTargetKey(c.Name, target.Name),
-		failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
-		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
-	}
-	// result is what the scrape publishes besides the health metrics: the
-	// target's metrics, or a stale result in their place.
-	var result model.MetricSet
-	// fetched is when the data in result came from the target: now for a
-	// trip just made, the cache entry's time for a cached or stale result.
-	var fetched time.Time
-	// status is what the status page shows of this scrape
-	// (statictargetstatus.go), filled in as the scrape goes.
-	status := staticScrapeStatus{started: start, collector: target.Collector, target: target.Target}
-	finish := func(up float64) {
-		// The scrape is counted once, even when what follows panics.
-		failedOnPanic = nil
-		elapsed := time.Since(start)
-		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
-		observeStaticScrape(rec.collector, elapsed, spans.traceLink())
-		// The time was spent whether or not the result is published below:
-		// it is load all the same.
-		s.load.addStaticScrape(elapsed)
-		// If a reload has removed, changed or brought back the target or
-		// its collector since the scrape read them, the scrape is another
-		// target's under the name. Its outcome is not that target's, and
-		// its result would replace the one that target's own scrape
-		// published.
-		status.duration = elapsed
-		status.ok = up == 1
-		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, status, time.Now())
-		if !stands {
-			s.logger.Debug("static target scrape ended after a reload removed or changed its target or its collector; its result is not published", "target", target.Name, "collector", c.Name, "superseded", true)
-			return
-		}
-		// A new slice, so the health metrics are never appended into one the
-		// result shares with a set that was cached.
-		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
-		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
-		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
-		// Over OTLP the result is as of when it came from the target, the
-		// health metrics after it as of now (scrapeTime).
-		at := scraped(result, c, fetched)
-		if model.StaleIfError(c) <= 0 || len(result.Metrics) == 0 {
-			fetched = time.Time{}
-		}
-		s.publishStaticResult(rec.read, target, identity, published, fetched, at)
-		if spans != nil {
-			s.endScrapeTrace(cfg.OTLP, spans, &target, c, address, start, len(result.Metrics), status.cached, status.err)
-		}
-	}
-	// cacheKey is set once the request is known; a failure before it has no
-	// cached result to fall back on.
-	var cacheKey string
-	// failed ends a scrape that failed with err, and was logged. With
-	// cache.stale_if_error the last good result is exported in place of
-	// nothing, marked stale; http_exporter_target_up still says the scrape
-	// failed.
-	failed := func(err error) {
-		status.err = err
-		if model.StaleIfError(c) > 0 && cacheKey != "" {
-			now := time.Now()
-			if cached, cachedAt, ok := s.cache.GetStale(cacheKey, now); ok {
-				if answer, err := withFreshness(cached, c, true, cachedAt, now); err == nil {
-					fetched = cachedAt
-					status.stale = true
-					count(func(st *serverStats) {
-						st.staleServed++
-						st.emitted += uint64(len(cached.Metrics))
-					})
-					result = withTargetLabels(answer, target.Labels)
-				}
-			}
-		}
-		finish(0)
-	}
-	failedOnPanic = func() { failed(errScrapePanicked) }
-
-	headers, err := fetch.TargetHeaders(&target)
+	headers, err := fetch.TargetHeaders(&sc.target)
 	if err != nil {
-		s.logCollectFailure(ctx, rec.read, log, "credentials", err)
-		failed(err)
+		s.logCollectFailure(ctx, sc.rec.read, sc.log, "credentials", err)
+		sc.failed(err)
 		return
 	}
 	if model.UsesCache(c) {
-		cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
+		sc.cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&sc.target), headers, targetOwnRequest(&sc.target)...)
 	}
-	if model.CacheTTL(c) > 0 {
-		mark := time.Now()
-		if cached, cachedAt, ok := s.cache.Get(cacheKey, mark); ok {
-			spans.step("cache", "hit", mark, time.Now(), "")
-			count(func(st *serverStats) {
-				st.cacheHits++
-				st.success++
-				st.emitted += uint64(len(cached.Metrics))
-			})
-			fetched = cachedAt
-			status.cached = true
-			answer, _ := withFreshness(cached, c, false, cachedAt, time.Now())
-			result = withTargetLabels(answer, target.Labels)
-			finish(1)
-			return
-		}
-		spans.step("cache", "miss", mark, time.Now(), "")
+	if sc.answeredFromCache() {
+		return
 	}
 
 	job := collectJob{
-		collector: c, target: target.Target, overrides: overrides, headers: headers,
-		rec: rec, display: address, cacheKey: cacheKey, revalidateKey: cacheKey, log: log,
+		collector: c, target: target.Target, overrides: sc.overrides, headers: headers,
+		rec: sc.rec, display: sc.address, cacheKey: sc.cacheKey, revalidateKey: sc.cacheKey, log: sc.log,
 		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
-		lastSuccess: lastSuccessKey(c, &target, target.Target, overrides),
+		lastSuccess: lastSuccessKey(c, &sc.target, target.Target, sc.overrides),
 	}
 	// A target that failure_backoff is backing off from is not contacted,
 	// and its scrape waits for no slot. It fails at once, as its fetch would
 	// have (backoff.go). It is identified like the identical probe, by the
 	// key of its request, whether or not the collector caches.
-	backoffKey := cacheKey
+	backoffKey := sc.cacheKey
 	if c.FailureBackoff != nil && backoffKey == "" {
-		backoffKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
+		backoffKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&sc.target), headers, targetOwnRequest(&sc.target)...)
 	}
 	if c.FailureBackoff != nil {
-		status.backoffKey = backoffKey
+		sc.status.backoffKey = backoffKey
 	}
-	turn := s.backoffs.admit(c, backoffKey, address)
-	defer turn.settle(rec.read, backoffUnknown)
+	turn := s.backoffs.admit(c, backoffKey, sc.address)
+	defer turn.settle(sc.rec.read, backoffUnknown)
 	var trip collected
 	if turn != nil && turn.refusal != nil {
 		job.backingOff = turn.refusal
 		trip = s.collect(ctx, job)
 		trip.unauthorized = turn.unauthorized
 	} else {
-		// A static target scrape shares the collector's max_concurrent_probes
-		// with its probes. It waits for a slot within its budget rather than
-		// failing. A scrape that finds no cache entry is a miss once it has
-		// its slot and goes to the target. One turned away, or cut short by
-		// the shutdown while it waited, fetched nothing in place of an entry.
-		mark := time.Now()
-		if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
-			spans.step("slot", "failed", mark, time.Now(), err.Error())
-			if shuttingDown(ctx) {
-				s.abortedByShutdown(target, c)
-				return
-			}
-			count(func(st *serverStats) { countRejection(st, err) })
-			s.logCollectFailure(ctx, rec.read, log, "concurrency", err)
-			failed(err)
+		if !sc.acquireSlot(ctx) {
 			return
 		}
 		defer s.trips.release(c.Name)
-		spans.step("slot", "ok", mark, time.Now(), "")
 		if model.CacheTTL(c) > 0 {
-			count(func(st *serverStats) { st.cacheMisses++ })
+			sc.count(func(st *serverStats) { st.cacheMisses++ })
 		}
 		trip = s.collect(ctx, job)
-		s.settleBackoff(turn, rec.read, trip, log.attrs)
+		s.settleBackoff(turn, sc.rec.read, trip, sc.log.attrs)
 	}
+	sc.ended(trip)
+}
+
+// staticScrape is the state of one scrape of scrapeStaticTarget.
+type staticScrape struct {
+	s      *Server
+	target model.StaticTarget
+	cfg    *model.Config
+	c      *model.Collector
+	start  time.Time
+
+	identity  otlpResourceIdentity
+	address   string
+	overrides fetch.RequestOverrides
+	rec       statsRecorder
+	spans     *tripSpans
+	log       collectLog
+	// result is what the scrape publishes besides the health metrics: the
+	// target's metrics, or a stale result in their place.
+	result model.MetricSet
+	// fetched is when the data in result came from the target: now for a
+	// trip just made, the cache entry's time for a cached or stale result.
+	fetched time.Time
+	// status is what the status page shows of this scrape
+	// (statictargetstatus.go), filled in as the scrape goes.
+	status staticScrapeStatus
+	// cacheKey is set once the request is known; a failure before it has no
+	// cached result to fall back on.
+	cacheKey string
+	// failedOnPanic ends the scrape as failed when it panics, once it has
+	// got far enough to be counted.
+	failedOnPanic func()
+}
+
+// recoverPanic logs a panic of the scrape, and ends the scrape as failed.
+func (sc *staticScrape) recoverPanic() {
+	if recovered := recover(); recovered != nil {
+		sc.s.logger.Error("static target scrape panicked", "target", sc.target.Name, "collector", sc.c.Name, "panic", panicText(recovered), "stack", string(debug.Stack()))
+		if sc.failedOnPanic != nil {
+			sc.failedOnPanic()
+		}
+	}
+}
+
+// count counts in the scrape's statistics.
+func (sc *staticScrape) count(f func(*serverStats)) { sc.rec.update(f) }
+
+// begin counts the scrape and begins its trace, which the context it
+// returns carries.
+func (sc *staticScrape) begin(ctx context.Context, generation uint64) context.Context {
+	s, c, target := sc.s, sc.c, &sc.target
+	sc.identity = targetResource(target, sc.cfg.OTLP)
+	sc.address = fetch.DisplayTarget(c, target.Target)
+	sc.overrides = fetch.TargetOverrides(target)
+	method := fetch.RequestMethodFor(c, sc.overrides)
+	requestURL := ""
+	if label, err := fetch.RequestLabelFor(target.Target, c, sc.overrides); err == nil {
+		requestURL = label
+	}
+	// The request is identified before anything is counted, so every counter
+	// this collection raises lands on the target's own series as well as on the
+	// collector's.
+	sc.rec = s.recorderFor(s.statsSince(generation, c.Name), c.Name, requestURL, method)
+	// Once a reload has removed or changed the collector read at generation
+	// (configRead), what the scrape caches and what the failure log
+	// remembers of it go nowhere. Neither does the result it publishes. The
+	// result is also held to the target (targetStands), and so is what the
+	// failure log remembers (logStands).
+	sc.rec.read = s.readTargetAt(generation, target.Name)
+	sc.count(func(st *serverStats) { st.probes++ })
+	// With otlp.traces on, the scrape records its trace, exported at its
+	// end when it was slow, or failed under otlp.traces.errors
+	// (otlptraces.go).
+	ctx, sc.spans = beginTrace(ctx, sc.cfg.OTLP, traceParent{})
+	// With otlp.traces.propagate too, its requests carry its trace; a
+	// scrape has no caller whose trace it could pass on.
+	ctx = withPropagation(ctx, sc.cfg.OTLP, sc.spans.traceLink(), traceParent{}, nil)
+
+	// Repeats of the same failure are logged sparingly (failurelog.go).
+	sc.log = collectLog{
+		key:    staticTargetKey(c.Name, target.Name),
+		failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
+		attrs: []any{"target", target.Name, "collector", c.Name, "address", sc.address},
+	}
+	sc.status = staticScrapeStatus{started: sc.start, collector: target.Collector, target: target.Target}
+	return ctx
+}
+
+// finish ends the scrape, up or down, and publishes its result.
+func (sc *staticScrape) finish(up float64) {
+	s, c, target := sc.s, sc.c, sc.target
+	// The scrape is counted once, even when what follows panics.
+	sc.failedOnPanic = nil
+	elapsed := time.Since(sc.start)
+	sc.count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
+	observeStaticScrape(sc.rec.collector, elapsed, sc.spans.traceLink())
+	// The time was spent whether or not the result is published below:
+	// it is load all the same.
+	s.load.addStaticScrape(elapsed)
+	// If a reload has removed, changed or brought back the target or
+	// its collector since the scrape read them, the scrape is another
+	// target's under the name. Its outcome is not that target's, and
+	// its result would replace the one that target's own scrape
+	// published.
+	sc.status.duration = elapsed
+	sc.status.ok = up == 1
+	lastSuccess, stands := s.recordStaticTargetOutcome(sc.rec.read, target, sc.status, time.Now())
+	if !stands {
+		s.logger.Debug("static target scrape ended after a reload removed or changed its target or its collector; its result is not published", "target", target.Name, "collector", c.Name, "superseded", true)
+		return
+	}
+	// A new slice, so the health metrics are never appended into one the
+	// result shares with a set that was cached.
+	health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
+	published := model.MetricSet{Metrics: make([]model.Metric, 0, len(sc.result.Metrics)+len(health))}
+	published.Metrics = append(append(published.Metrics, sc.result.Metrics...), health...)
+	// Over OTLP the result is as of when it came from the target, the
+	// health metrics after it as of now (scrapeTime).
+	at := scraped(sc.result, c, sc.fetched)
+	if model.StaleIfError(c) <= 0 || len(sc.result.Metrics) == 0 {
+		sc.fetched = time.Time{}
+	}
+	s.publishStaticResult(sc.rec.read, target, sc.identity, published, sc.fetched, at)
+	if sc.spans != nil {
+		s.endScrapeTrace(sc.cfg.OTLP, sc.spans, &target, c, sc.address, sc.start, len(sc.result.Metrics), sc.status.cached, sc.status.err)
+	}
+}
+
+// failed ends a scrape that failed with err, and was logged. With
+// cache.stale_if_error the last good result is exported in place of
+// nothing, marked stale; http_exporter_target_up still says the scrape
+// failed.
+func (sc *staticScrape) failed(err error) {
+	c := sc.c
+	sc.status.err = err
+	if model.StaleIfError(c) > 0 && sc.cacheKey != "" {
+		now := time.Now()
+		if cached, cachedAt, ok := sc.s.cache.GetStale(sc.cacheKey, now); ok {
+			if answer, err := withFreshness(cached, c, true, cachedAt, now); err == nil {
+				sc.fetched = cachedAt
+				sc.status.stale = true
+				sc.count(func(st *serverStats) {
+					st.staleServed++
+					st.emitted += uint64(len(cached.Metrics))
+				})
+				sc.result = withTargetLabels(answer, sc.target.Labels)
+			}
+		}
+	}
+	sc.finish(0)
+}
+
+// answeredFromCache ends the scrape with the collector's cached result, and
+// says whether it did.
+func (sc *staticScrape) answeredFromCache() bool {
+	c := sc.c
+	if model.CacheTTL(c) <= 0 {
+		return false
+	}
+	mark := time.Now()
+	cached, cachedAt, ok := sc.s.cache.Get(sc.cacheKey, mark)
+	if !ok {
+		sc.spans.step("cache", "miss", mark, time.Now(), "")
+		return false
+	}
+	sc.spans.step("cache", "hit", mark, time.Now(), "")
+	sc.count(func(st *serverStats) {
+		st.cacheHits++
+		st.success++
+		st.emitted += uint64(len(cached.Metrics))
+	})
+	sc.fetched = cachedAt
+	sc.status.cached = true
+	answer, _ := withFreshness(cached, c, false, cachedAt, time.Now())
+	sc.result = withTargetLabels(answer, sc.target.Labels)
+	sc.finish(1)
+	return true
+}
+
+// acquireSlot waits for the scrape's slot of the collector's
+// max_concurrent_probes, which a static target scrape shares with its
+// probes. It waits within its budget rather than failing. A scrape that finds
+// no cache entry is a miss once it has its slot and goes to the target. One
+// turned away, or cut short by the shutdown while it waited, fetched nothing
+// in place of an entry, and is ended here: acquireSlot returns false then.
+func (sc *staticScrape) acquireSlot(ctx context.Context) bool {
+	s, c := sc.s, sc.c
+	mark := time.Now()
+	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
+		sc.spans.step("slot", "failed", mark, time.Now(), err.Error())
+		if shuttingDown(ctx) {
+			s.abortedByShutdown(sc.target, c)
+			return false
+		}
+		sc.count(func(st *serverStats) { countRejection(st, err) })
+		s.logCollectFailure(ctx, sc.rec.read, sc.log, "concurrency", err)
+		sc.failed(err)
+		return false
+	}
+	sc.spans.step("slot", "ok", mark, time.Now(), "")
+	return true
+}
+
+// ended ends the scrape with what its trip collected.
+func (sc *staticScrape) ended(trip collected) {
 	if trip.aborted {
-		failedOnPanic = nil
-		s.abortedByShutdown(target, c)
+		sc.failedOnPanic = nil
+		sc.s.abortedByShutdown(sc.target, sc.c)
 		return
 	}
 	if trip.failed() {
 		if trip.unauthorized || trip.refused {
 			// As for a probe: a refused credential, or a target the
 			// collector's target policy refused, gets no stale result.
-			cacheKey = ""
+			sc.cacheKey = ""
 		}
-		status.skipped = trip.skipped
-		failed(trip.err)
+		sc.status.skipped = trip.skipped
+		sc.failed(trip.err)
 		return
 	}
 	// Under error_handling log or ignore a failed stage leaves the target up
 	// with nothing of the collector's to export, as it answers a probe 200
 	// with an empty exposition.
-	count(func(st *serverStats) { st.success++ })
+	sc.count(func(st *serverStats) { st.success++ })
 	if !trip.carriedOn {
-		result = withTargetLabels(trip.answer, target.Labels)
-		fetched = trip.fetched
+		sc.result = withTargetLabels(trip.answer, sc.target.Labels)
+		sc.fetched = trip.fetched
 	}
-	finish(1)
+	sc.finish(1)
 }
 
 // abortedByShutdown notes a scrape the shutdown cut short
